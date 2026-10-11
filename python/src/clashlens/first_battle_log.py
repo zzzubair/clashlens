@@ -277,6 +277,8 @@ def queue_unplayed_days(
     as a 0/0 day at 5,000. Queued from each such new profile and from the
     player's first battle log, which proves those days' battles, whichever
     is processed last, once per day and triggering ``observation_id``."""
+    if _first_log(connection, player_id) is None:
+        return
     profile_id, seen_at = _first_seen_at_5000(
         connection, player_id, domain.ranked_day_for(observed_at).season_start
     )

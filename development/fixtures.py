@@ -428,9 +428,11 @@ class ClashHandler(QuietHandler):
                         payload.pop("leagueTier")
                     elif lookup == "season_zero":
                         # Legend I but no Season, as 1,357 players were on 2026-10-03.
+                        # At 5,000 they have not played yet and get a normal page,
+                        # so this one shows another total to be explained.
                         payload.update(
                             name="Lookup Season 0 Clasher",
-                            trophies=5_000,
+                            trophies=5_123,
                             currentLeagueSeasonId=0,
                         )
                     self.send_json(200, payload)
