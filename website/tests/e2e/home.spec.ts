@@ -285,6 +285,31 @@ test("new search does not show suggestions from the previous query", async ({ pa
   }
 });
 
+test("search typed before the page's scripts start still shows suggestions", async ({
+  page,
+}) => {
+  let releaseScripts!: () => void;
+  const scriptsReleased = new Promise<void>((resolve) => {
+    releaseScripts = resolve;
+  });
+  await page.route("**/assets/*.js", async (route) => {
+    await scriptsReleased;
+    await route.continue();
+  });
+  try {
+    await page.goto("/", { waitUntil: "commit" });
+    await page
+      .getByRole("searchbox", { name: "Search players and Clash Lens profiles" })
+      .fill("Synthetic Clasher 001");
+    releaseScripts();
+    await expect(
+      page.getByRole("region", { name: "Player and profile search suggestions" }),
+    ).toContainText("Synthetic Clasher 001");
+  } finally {
+    releaseScripts();
+  }
+});
+
 test("public pages render without browser JavaScript", async ({ browser }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();

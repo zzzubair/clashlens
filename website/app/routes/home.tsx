@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   Form,
   Link,
@@ -87,6 +87,15 @@ export default function Home() {
     setQuery(data.query);
   }, [data.query, setQuery]);
 
+  // The browser can show the page and accept typing before its scripts start.
+  // Once they take over, pick up anything typed then, or it sits in the box
+  // with no suggestions.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const typed = inputRef.current?.value ?? data.query;
+    if (typed !== data.query) suggestions.change(typed);
+  }, []);
+
   const seasonExpired = useSeasonReread(
     data.leaderboard?.generatedAt,
     !!data.leaderboard?.seasonResetPending,
@@ -157,6 +166,7 @@ export default function Home() {
                 <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
               </svg>
               <input
+                ref={inputRef}
                 id="player-search"
                 name="q"
                 type="search"
