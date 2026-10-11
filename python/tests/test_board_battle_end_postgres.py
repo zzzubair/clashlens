@@ -50,8 +50,8 @@ def test_board_leaves_out_battles_that_end_after_the_reset(
     and so do their end-of-day totals, but the board shows both players
     without it. #9PP's attack on #2PP ended at 04:50, so it stays on both
     players' board values. #YPP's report of #QPP's attack is stamped
-    04:57:30 and #QPP's own report is never saved, so the attack is taken to
-    end 155 seconds later, at 05:00:05: it comes off too, and the entry is
+    04:57:30 and #QPP's own report is never saved, so the battle stays
+    counted, but its attack may have ended after the Reset, so the entry is
     uncertain."""
     late_defense_at = DAY_END - timedelta(seconds=90)
     late_attack_at = DAY_END + timedelta(minutes=1)
@@ -203,6 +203,6 @@ def test_board_leaves_out_battles_that_end_after_the_reset(
     assert board == [
         ("#9PP", 6011, "confirmed"),
         ("#8PP", 6000, "confirmed"),  # 5,960 before this rule
-        ("#YPP", 6000, "uncertain"),  # 5,974 before this rule
         ("#2PP", 5989, "confirmed"),  # 6,029 before this rule
+        ("#YPP", 5974, "uncertain"),
     ]

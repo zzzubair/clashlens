@@ -1231,7 +1231,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
             ("offense", 40, _october(7, 4, 57), False),  # a second report of it
         ]),
         2: (True, [("defense", 32, _october(7, 4, 57), True)]),
-        # Day 2 counts it, but it ended after the Reset, so the board doesn't.
+        # Stamped after the Reset, but it finished on Day 2.
         3: (True, [("defense", 40, datetime(2026, 10, 7, 5, 0, 2, tzinfo=UTC), True)]),
         4: (False, [("offense", 40, _october(7, 4, 50), True)]),
         5: (True, [("offense", 40, _october(7, 4, 50), True)]),
@@ -1243,10 +1243,10 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
         try:
             assert _build_board(connection_info, database, generation_id) == [
                 ("#29QUQC8QL", 5168, "uncertain"),
-                ("#QVCU9PJCR", 5155, "uncertain"),
                 ("#2222222", 5150, "uncertain"),
                 ("#8888888", 5140, "uncertain"),
                 ("#YYPUCVJUP", 5128, "uncertain"),
+                ("#QVCU9PJCR", 5115, "uncertain"),
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             # A board built under this rule is not rebuilt; one frozen before

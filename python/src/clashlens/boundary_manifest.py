@@ -740,15 +740,15 @@ def reset_trophies(
     The total is taken at exactly the Reset, as the game's own Reset rank
     is: a battle whose attack ended at or after it still counts for the
     ended day, but not in this total. The attacker's report time is the
-    attack's end. A defense whose attacker's report is not saved yet ends an
-    estimated 155 seconds after the defender's report, the median on 11
-    October 2026, and when that defense is reported in the 4 minutes before
-    the Reset, the estimate decides, so the total is not proven. Only
-    battles the total counts come off it: a reading never holds one, so a
-    reading's total loses only the battles after it. On 11 October 2026, 42
-    battles ending 05:00:00 to 05:03:10 moved 83 players' totals, and taking
-    them off cut order breaks against the game's country Reset ranks from
-    400 to 40 of 342,472 pairs.
+    attack's end, so only a battle with that report saved at or after the
+    Reset comes off. A defense whose attacker's report is not saved stays
+    in the total, and when that defense is reported in the 4 minutes before
+    the Reset, its attack may have ended after it, so the total is not
+    proven. Only battles the total counts come off it: a reading never
+    holds one, so a reading's total loses only the battles after it. On 11
+    October 2026, 42 battles ending 05:00:00 to 05:03:10 moved 83 players'
+    totals, and taking them off cut order breaks against the game's country
+    Reset ranks from 400 to 40 of 342,472 pairs.
     """
     if not readings:
         return {}
@@ -768,7 +768,7 @@ def reset_trophies(
                    AND NOT ranked.failure_reasons ?| %s::text[]
                    AND battles.every_battle_proven IS NOT FALSE,
                    battles.after_reading, battles.after_reset,
-                   battles.after_reset_after_reading, battles.end_estimated
+                   battles.after_reset_after_reading, battles.end_unknown
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -799,7 +799,7 @@ def reset_trophies(
                            WHERE ending.after_reset
                              AND battle.stamped_at > reading.observed_at
                        ), 0),
-                       COALESCE(bool_or(ending.estimated), false)
+                       COALESCE(bool_or(ending.unknown), false)
                 FROM jsonb_array_elements(ranked.input_evidence->'contributions')
                     AS contribution
                 CROSS JOIN LATERAL (
@@ -826,23 +826,20 @@ def reset_trophies(
                       AND side.perspective = 'attacker'
                 ) AS attack (reported_at) ON true
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(
-                               attack.reported_at,
-                               battle.stamped_at
-                               + CASE WHEN battle.lens = 'defense'
-                                      THEN interval '155 seconds'
-                                      ELSE interval '0' END
-                           ) >= ranked.ranked_day_end,
+                    SELECT CASE WHEN battle.lens = 'defense'
+                                THEN attack.reported_at
+                                ELSE battle.stamped_at END
+                           >= ranked.ranked_day_end,
                            battle.lens = 'defense'
                            AND attack.reported_at IS NULL
                            AND battle.stamped_at
                                >= ranked.ranked_day_end - interval '4 minutes'
                            AND battle.stamped_at < ranked.ranked_day_end
-                ) AS ending (after_reset, estimated)
+                ) AS ending (after_reset, unknown)
                 WHERE contribution.value->>'included' = 'true'
             ) AS battles (
                 after_reading, every_battle_proven, after_reset,
-                after_reset_after_reading, end_estimated
+                after_reset_after_reading, end_unknown
             )
             """,
             (
@@ -869,7 +866,7 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
         battles_proven, after_reading, after_reset, after_reset_after_reading,
-        end_estimated,
+        end_unknown,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
     if _text_value(state) == "Complete" and final is not None:
@@ -883,7 +880,7 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
         if not end_reset or total == settled:
             return settled - int(after_reset), (
                 _text_value(confidence) == "exact" or bool(read_clean)
-            ) and not end_estimated
+            ) and not end_unknown
     if total is None:
         return reading, False
     return total - int(after_reset_after_reading), False
