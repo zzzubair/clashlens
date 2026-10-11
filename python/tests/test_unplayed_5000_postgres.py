@@ -23,6 +23,7 @@ from test_first_battle_log_postgres import (
     _log,
     _new_season_profile,
 )
+from test_frozen_board_locator_postgres import _rows_read
 from test_reconciliation_postgres import _processor, _profile
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
@@ -498,3 +499,86 @@ def test_a_malformed_season_at_5000_stays_rejected(
     assert [row[0] for row in live.rows] == [ORDINARY]
     assert boards[DAY_3] == [(ORDINARY, 5000)]
     assert page is None
+
+
+def test_the_live_board_reads_only_saved_days_of_players_at_5000(
+    database_url: str, monkeypatch
+) -> None:
+    # 11 October 2026: the Live Leaderboard looked for a battle among every
+    # saved Legend day of the Season, about 370,000 with their battles, and
+    # every read passed the API's 10 second limit. It should read only the
+    # days of players a 5,000 profile could rank: here 12 unplayed and 6
+    # playing at 5,000, beside 300 others.
+    now, days = DAY_4 + timedelta(hours=1), 4
+    season = ranked_day_for(now)
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("SET session_replication_role = replica")
+            connection.execute(
+                """
+                INSERT INTO players (id, normalized_tag, active, eligibility_state,
+                                     current_profile_version_id, current_observed_at)
+                OVERRIDING SYSTEM VALUE
+                SELECT i, '#LIVE' || i, true, 'eligible', i, %(now)s
+                FROM generate_series(1, 318) AS i
+                """,
+                {"now": now},
+            )
+            # Players 1 to 12 name Season 0 at 5,000; from 13, every 50th
+            # player is at 5,000 after playing.
+            connection.execute(
+                """
+                INSERT INTO player_profile_versions (
+                    id, player_id, observation_id, normalized_tag, endpoint_version,
+                    schema_version, parser_version, observed_at, source_http_status,
+                    name, trophies, league_tier_id, league_tier_name,
+                    eligibility_state, current_league_season_id, eligibility_reason,
+                    source_contract_state, profile_json)
+                OVERRIDING SYSTEM VALUE
+                SELECT i, i, i, '#LIVE' || i, 'v1', 'v1', 'p1', %(now)s, 200,
+                       'Player ' || i,
+                       CASE WHEN i <= 12 OR i %% 50 = 0 THEN 5000 ELSE 5000 + i END,
+                       105000034, 'Legend League', 'eligible',
+                       CASE WHEN i <= 12 THEN '0' ELSE %(season)s END,
+                       'confirmed_legend_i',
+                       CASE WHEN i <= 12 THEN 'conflict' ELSE 'accepted' END, '{}'
+                FROM generate_series(1, 318) AS i
+                """,
+                {"now": now, "season": season.official_season_id},
+            )
+            connection.execute(
+                """
+                INSERT INTO api_player_daily_logs (
+                    player_id, ranked_day_start, version, state, coverage, battles)
+                SELECT i, %(start)s + day * interval '1 day', 1, 'Complete', 'complete',
+                       CASE WHEN i <= 12 THEN '[]'::jsonb ELSE '[{"stars": 3}]' END
+                FROM generate_series(1, 318) AS i, generate_series(0, %(days)s - 1) AS day
+                """,
+                {"start": season.season_start, "days": days},
+            )
+            connection.execute("ANALYZE")
+        queries: list[tuple[str, dict]] = []
+        execute = psycopg.Connection.execute
+
+        def record(connection, query, params=None, **kwargs):
+            if "WITH candidates AS MATERIALIZED" in str(query):
+                queries.append((str(query), params))
+            return execute(connection, query, params, **kwargs)
+
+        monkeypatch.setattr(psycopg.Connection, "execute", record)
+        with psycopg.connect(connection_info) as connection:
+            live = _read_live_board(connection, now)
+        monkeypatch.undo()
+        (query, params), = queries
+        with psycopg.connect(connection_info) as connection:
+            plan = connection.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + query, params
+            ).fetchone()[0]
+        if isinstance(plan, str):
+            plan = json.loads(plan)
+
+    assert len(live.rows) == 318
+    assert {row[0] for row in live.rows if row[2] == 5000} == {
+        f"#LIVE{i}" for i in [*range(1, 13), 50, 100, 150, 200, 250, 300]
+    }
+    assert _rows_read(plan[0]["Plan"], "api_player_daily_logs") <= 18 * days, plan
