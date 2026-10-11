@@ -32,7 +32,7 @@ CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
 # Reset readings, ended-day results, board builds; only other work gains 10 a minute,
-# so live jobs in the claim window pass it at 20 minutes; retried live jobs may not.
+# so live jobs in the claim window, retried ones included, pass it at 20 minutes.
 PYTHON_RESET_PRIORITY = 300
 
 
