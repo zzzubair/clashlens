@@ -1009,6 +1009,9 @@ class Collector:
                         interactive=is_interactive,
                         held=self.held_work(),
                     )
+                    # A stop can arrive during any wait above; start nothing after it.
+                    if stop_requested.is_set():
+                        break
                     for intent in intents:
                         lane = (
                             "interactive"

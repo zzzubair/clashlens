@@ -50,7 +50,10 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
                 SELECT work.status, work.failure_category,
                        COALESCE(processing.status, CASE
                            WHEN work.profile_observation_id IS NOT NULL THEN 'complete'
-                       END)
+                       END),
+                       -- A profile saved since the read above, committed with its job.
+                       EXISTS (SELECT 1 FROM player_profile_versions AS profile
+                               WHERE profile.player_id = %s)
                 FROM (
                     SELECT status, failure_category, profile_observation_id
                     FROM collector_work
@@ -65,10 +68,12 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
                     ORDER BY id DESC LIMIT 1
                 ) AS processing ON true
                 """,
-                (player_id,),
+                (player_id, player_id),
             ).fetchone()
             if work_row is not None:
-                work, failure, processing = work_row
+                work, failure, processing, saved_since = work_row
+                if saved_since:
+                    return _lookup(connection, tag)
                 if failure == "player_not_found":
                     state = "not_found"
                 elif work in ("pending", "waiting_retry") or processing in (

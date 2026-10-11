@@ -138,6 +138,70 @@ def test_first_profile_retains_real_identity_and_uses_existing_eligibility(
             database.close()
 
 
+@pytest.mark.parametrize(
+    ("tier", "state"),
+    [(None, "uncertain"), ({"id": 105000036, "name": "Legend I"}, "tracking")],
+)
+def test_a_profile_processed_while_the_lookup_reads_is_never_a_failed_check(
+    database_url, archive_server, tier, state
+):
+    # Until 11 Oct 2026 the lookup read "no saved profile" first and "its
+    # processing is complete" second, so a profile saved in between read as a
+    # failed check, and the page stopped checking on that answer.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        worker, processor = _processor(info, archive_server)
+        try:
+            assert submit(database)["state"] == "checking"
+            body = json.loads(
+                (
+                    Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+                ).read_bytes()
+            )
+            body["leagueTier"] = tier
+            observation_id, _job_id = store_observation(
+                info,
+                archive_server,
+                occurrence_key="lookup-profile",
+                endpoint="profile",
+                body=json.dumps(body).encode(),
+                observed_at=NOW,
+                normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION,
+            )
+            with database.pool.connection() as connection:
+                # Collection has finished; only the profile's processing is left.
+                connection.execute(
+                    """
+                    UPDATE collector_work SET profile_observation_id = %s,
+                        status = 'complete', completed_at = clock_timestamp()
+                    """,
+                    (observation_id,),
+                )
+
+            class ProcessedAfterFirstRead:
+                def __init__(self, connection) -> None:
+                    self.connection, self.reads = connection, 0
+
+                def execute(self, *args):
+                    self.reads += 1
+                    if self.reads == 2:
+                        result = processor.process_once(owner="lookup-test")
+                        assert result is not None and result.outcome == "processed"
+                    return self.connection.execute(*args)
+
+            with database.pool.connection() as connection:
+                lookup = api_player_lookup._lookup(
+                    ProcessedAfterFirstRead(connection), "#2PP"
+                )
+            assert lookup["state"] == state
+        finally:
+            worker.close()
+            database.close()
+
+
 def test_official_not_found_is_distinct_from_transport_failure_and_retries_are_bounded(
     database_url,
 ):
