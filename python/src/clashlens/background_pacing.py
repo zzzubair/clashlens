@@ -9,10 +9,11 @@ worker processes run, at most ``BACKGROUND_JOB_LIMIT`` background jobs hold
 a lease at once, and none starts while live data is behind. Background work
 claims come last, so it still runs whenever live work leaves room.
 
-A day's recheck after new evidence (``queue_refresh``) is background work in
-its own lane, at ``DAY_RECHECK_PRIORITY``, with its own limit: from 16:41 on
-9 Oct 2026 about 530 a minute were queued, two at a time finished about 350,
-and Season repair would have waited behind them, or they behind it.
+A day's recheck after new evidence, or in the twice-daily recheck
+(``queue_refresh``), is background work in its own lane, at
+``DAY_RECHECK_PRIORITY``, with its own limit: from 16:41 on 9 Oct 2026 about
+530 a minute were queued, two at a time finished about 350, and Season
+repair would have waited behind them, or they behind it.
 
 Both limits are settings, so more can run while live work keeps up, and each
 halves, rounded up, as soon as live work strains: live jobs waiting

@@ -15,6 +15,7 @@ from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
 from clashlens import queue_refresh, reconciliation_db
+from clashlens.background_pacing import DAY_RECHECK_PRIORITY
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.domain import ranked_day_for
@@ -524,6 +525,10 @@ def test_a_third_shielded_day_in_a_row_is_saved(database_url: str, archive_serve
 def test_the_daily_recheck_queues_the_last_two_ended_days(
     database_url: str, archive_server
 ) -> None:
+    # In the day recheck lane, not backfill's, where about 25,000 at once
+    # held Season repair and day-end recalculations back for hours, and due
+    # over the next hours, so a recheck for new evidence waits behind only
+    # the ones already due.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
@@ -531,10 +536,82 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
             count = queue_refresh.queue_recheck(database, "night", DAY_D)
         finally:
             database.close()
-        queued = _queued(connection_info, "reconcile:recheck:night:")
+        with psycopg.connect(connection_info) as connection:
+            queued = connection.execute(
+                "SELECT input_json ->> 'player_id', input_json ->> 'ranked_day_start',"
+                " priority, due_at <= clock_timestamp(),"
+                " extract(epoch FROM due_at - min(due_at) OVER ())"
+                " FROM python_processing_jobs WHERE deduplication_key LIKE"
+                " 'reconcile:recheck:night:%' ORDER BY due_at"
+            ).fetchall()
 
     assert count == 2
-    assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
+    assert [row[:4] for row in queued] == [
+        (str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}", DAY_RECHECK_PRIORITY, due)
+        for day, due in ((DAY_B, True), (DAY_C, False))
+    ]
+    assert 1 < float(queued[1][4]) <= queue_refresh.RECHECK_SPREAD.total_seconds()
+
+
+def test_evidence_merges_only_into_a_daily_recheck_already_due(
+    database_url: str, archive_server
+) -> None:
+    # The pass's first day is due now and reads the evidence when it runs;
+    # one due hours later would leave that evidence waiting behind it.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        database = Database(connection_info)
+        try:
+            queue_refresh.queue_recheck(database, "night", DAY_D)
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            queue_refresh.queue_for_reading(
+                connection, player_id, "log:1", DAY_C + timedelta(hours=1))
+            waiting = connection.execute(
+                "SELECT deduplication_key, priority, due_at <= clock_timestamp()"
+                " FROM python_processing_jobs"
+                " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+            ).fetchall()
+
+    day_b, day_c = (f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C))
+    assert sorted(waiting) == [
+        (f"reconcile:log:1:{player_id}:{day_c}", DAY_RECHECK_PRIORITY, True),
+        (f"reconcile:recheck:night:{player_id}:{day_b}", DAY_RECHECK_PRIORITY, True),
+        (f"reconcile:recheck:night:{player_id}:{day_c}", DAY_RECHECK_PRIORITY, False),
+    ]
+
+
+def test_an_evidence_recheck_due_before_a_daily_one_is_claimed_first(
+    database_url: str, archive_server
+) -> None:
+    # The claim ranks a lane's jobs by time since creation, so a daily pass
+    # created at once but due over hours must not rank a recheck that came
+    # due later ahead of evidence that came due before it.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        database = Database(connection_info)
+        try:
+            queue_refresh.queue_recheck(database, "night", DAY_D)
+            with psycopg.connect(connection_info) as connection:
+                queue_refresh.queue_for_reading(
+                    connection, player_id, "log:1", DAY_C + timedelta(hours=1))
+                for key, back in (("reconcile:recheck:%", 3), ("reconcile:log:%", 2)):
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET due_at = due_at - %(back)s,"
+                        " created_at = created_at - %(back)s WHERE deduplication_key LIKE %(key)s",
+                        {"back": timedelta(hours=back), "key": key},
+                    )
+            claimed = [claim.deduplication_key for _ in range(3)
+                       for claim in database.claim_jobs(
+                           owner="worker-1", work_types=["reconcile_ranked_day"])]
+        finally:
+            database.close()
+
+    day_b, day_c = (f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C))
+    assert claimed == [f"reconcile:recheck:night:{player_id}:{day_b}",
+                       f"reconcile:log:1:{player_id}:{day_c}",
+                       f"reconcile:recheck:night:{player_id}:{day_c}"]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:
