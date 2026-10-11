@@ -607,6 +607,11 @@ def test_an_evidence_recheck_goes_before_the_daily_pass_due_before_it(
                     " generate_series(1000, 1039) AS other"
                     " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
                 )
+                # Evidence before any of the pass is due merges into none of it.
+                connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = now() + interval '1 hour'"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
+                )
                 queue_refresh.queue_for_reading(
                     connection, player_id, "log:1", DAY_C + timedelta(hours=1))
                 # The pass came due a second apart from 3 hours ago, the
@@ -629,9 +634,10 @@ def test_an_evidence_recheck_goes_before_the_daily_pass_due_before_it(
         finally:
             database.close()
 
-    day_c = f"{DAY_C:%Y-%m-%dT%H:%M:%SZ}"
     assert len(pass_order) == 82
-    assert claimed == [f"reconcile:log:1:{player_id}:{day_c}", *pass_order[:3]]
+    assert set(claimed[:2]) == {f"reconcile:log:1:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}"
+                                for day in (DAY_B, DAY_C)}
+    assert claimed[2:] == pass_order[:2]
 
 
 def test_evidence_merged_into_a_due_daily_recheck_goes_before_the_pass(
