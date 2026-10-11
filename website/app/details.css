@@ -496,6 +496,9 @@
   align-content: start;
   gap: 0.4rem;
 }
+.analytics-page .analytics-show-filter[hidden] {
+  display: none;
+}
 .analytics-page .analytics-cc-toggle {
   display: flex;
   align-items: center;

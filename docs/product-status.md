@@ -36,8 +36,9 @@ arrivals, deploying alerts with tracking, warm-up before Reset and safe stop.
 4. **Expanded history by November 2 at 05:00 UTC at the latest, ideally during
    October.** Protect required detail until the new views are ready and
    verified, even if cleanup is delayed.
-5. **Later:** the Jev army-classification experiment. Private group comparison
-   was brought forward on 2026-10-03 after player feedback.
+5. **Later:** a possible Jev accuracy check of army types. Level-1 army types
+   now use fixed rules; private group comparison was brought forward on
+   2026-10-03 after player feedback.
 
 The start date does not waive accuracy, delivered alerts, backup/restore proof,
 capacity or cost checks. Smaller runs are tests, not a reduced launch population.
@@ -182,11 +183,11 @@ existing eligibility processing locally; live import and capacity are pending.
   how cleaned-up days are shown. Compact history still does not retain all
   daily destruction/star data, so do not promise full 14-day cross-season
   detail or extend storage silently.
-- Jev remains a later experiment for comparing named army types by usage and
-  three-star rate. One main type per army, uncertain results unclassified,
-  current season only. A labeled evaluation, reusable classifications and
-  measured accuracy, latency and cost are prerequisites; no integration or
-  paid trial is approved. Full compositions are not permanent current history.
+- Level-1 army types now ship with fixed rules and no AI, keeping Other and
+  Unreadable in every total; [Army types](domain.md#army-types) owns the rules.
+  Jev remains only a possible later accuracy check of those types; no
+  integration or paid trial is approved. Full compositions are not permanent
+  current history.
 
 ## Acceptance to carry into implementation
 

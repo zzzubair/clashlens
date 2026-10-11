@@ -14,6 +14,7 @@ from typing import Any
 import psycopg
 from psycopg_pool import ConnectionPool, PoolTimeout
 
+from . import army_types
 from .api_db import (
     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
@@ -594,7 +595,7 @@ def get_army_analytics(
                         (resolved.season, covered_days, resolved.lens),
                     ).fetchone()[0]
                 )
-            component_column = _ARMY_ANALYTICS_COMPONENT_COLUMN[resolved.category]
+            component_column = _ARMY_ANALYTICS_COMPONENT_COLUMN.get(resolved.category)
             fact_filters = [
                 "official_season_id = %s",
                 "season_day_number = ANY(%s::integer[])",
@@ -611,7 +612,7 @@ def get_army_analytics(
                 fact_params.append(member_ids)
             banded = None
             band_digest: str | None = None
-            if band_by_player is not None:
+            if band_by_player is not None and resolved.category != army_types.CATEGORY:
                 banded = read_rank_band_totals(
                     connection,
                     snapshot_ids[0],
@@ -626,6 +627,17 @@ def get_army_analytics(
                 # Same numbers as counting the facts, from at most 28 x 17
                 # saved rows.
                 result, band_digest = finish_army_result(banded[0], resolved), banded[1]
+            elif resolved.category == army_types.CATEGORY:
+                if not army_types.rules_ready(connection):
+                    raise ArmyAnalyticsUnavailable(covered_days)
+                result, source_hash = army_types.type_result(
+                    connection,
+                    resolved,
+                    days={day: day_starts[day] for day in covered_days},
+                    day_markers=dict(completed_day_signature),
+                    member_ids=member_ids,
+                    trophy_range=None if member_ids is not None else (minimum, maximum),
+                )
             elif resolved.category == "troops":
                 result, source_hash = _query_troops_aggregates(
                     connection,

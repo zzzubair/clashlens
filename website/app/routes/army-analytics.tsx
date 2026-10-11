@@ -23,6 +23,7 @@ export function links() {
 
 const allowed = {
   category: [
+    "army-types",
     "troops",
     "spells",
     "siege",
@@ -79,10 +80,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if ((source.get("category") ?? "troops") === "troops" && source.get("cc") === "1") {
     source.set("category", "cc-troops");
   }
+  const season = source.get("season") ?? "current";
+  // Armies show first, attacks only; past Seasons have unit usage only.
+  const requestedCategory = source.get("category") ?? "army-types";
+  const category =
+    season !== "current" && requestedCategory === "army-types"
+      ? "troops"
+      : requestedCategory;
   if (
     recentAvailable &&
     source.get("saved") !== "1" &&
-    (source.get("recent") === "1" || source.has("sample") || !source.has("season"))
+    source.get("category") !== "army-types" &&
+    (source.get("recent") === "1" ||
+      source.has("sample") ||
+      (!source.has("season") && category !== "army-types"))
   ) {
     if (source.get("sample") === "1") {
       for (const key of ["sample", "season", "start_day", "end_day"]) source.delete(key);
@@ -122,8 +133,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   // Attacks only, over the whole Season: the API's defaults are the attack
   // view and every finished Legend day from Day 1.
-  const season = source.get("season") ?? "current";
-  const category = source.get("category") ?? "troops";
   const sort = source.get("sort") ?? "usage-rate";
   const python = await import("../services/python.server");
   let pastSeasonsRead: Promise<string[]> = Promise.resolve([]);
@@ -270,6 +279,7 @@ export function headers() {
 }
 
 const filterLabels: Record<string, string> = {
+  "army-types": "Armies",
   troops: "Troops",
   spells: "Spells",
   siege: "Siege machines",
@@ -293,6 +303,7 @@ const rankRanges = [
   [5001, 10000],
 ];
 const usageLabels: Record<string, string> = {
+  "army-types": "Army",
   troops: "Troop",
   spells: "Spell",
   siege: "Siege machine",
@@ -469,7 +480,13 @@ const ArmyResultRow = memo(function ArmyResultRow({
   );
 });
 
-const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow }) {
+const ArmyBreakdownRow = memo(function ArmyBreakdownRow({
+  row,
+  exclusions,
+}: {
+  row: ArmyRow;
+  exclusions: boolean;
+}) {
   return (
     <tr>
       <th scope="row">{row.label}</th>
@@ -478,7 +495,7 @@ const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow 
           {count.toLocaleString()} ({formatRate(row.starRates![index])})
         </td>
       ))}
-      <td>{row.unknownExcludedAttacks?.toLocaleString()}</td>
+      {exclusions ? <td>{row.unknownExcludedAttacks?.toLocaleString()}</td> : null}
     </tr>
   );
 });
@@ -522,12 +539,23 @@ export default function ArmyAnalyticsRoute() {
   const [customTrophies, setCustomTrophies] = useState(playerGroup === "trophies");
   const [incompleteTrophies, setIncompleteTrophies] = useState(false);
   const [trophyProblem, setTrophyProblem] = useState<string | null>(null);
-  const category =
+  const requestedCategory =
     selected?.category ??
     ((params.get("category") ?? "troops") === "troops" && params.get("cc") === "1"
       ? "cc-troops"
       : params.get("category")) ??
-    "troops";
+    "army-types";
+  const category =
+    requestedSeason !== "current" && requestedCategory === "army-types"
+      ? "troops"
+      : requestedCategory;
+  const armyTypes = category === "army-types";
+  const viewQuery = (view: string) => {
+    const query = new URLSearchParams(params);
+    for (const key of ["category", "cc", "offset", "recent", "sample"]) query.delete(key);
+    query.set("category", view);
+    return `?${query}`;
+  };
   const showCategory = category === "cc-troops" ? "troops" : category;
   const clanCastle = category === "cc-troops";
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
@@ -548,9 +576,13 @@ export default function ArmyAnalyticsRoute() {
   const recordedBattleRecords = analytics
     ? analytics.totalAttacks + (snapshot?.invalidBattleRows ?? 0)
     : 0;
-  const excludedBattleRecords = analytics
-    ? recordedBattleRecords - analytics.usableArmySample
+  // Armies keep unreadable attacks as their own row.
+  const includedBattleRecords = analytics
+    ? armyTypes
+      ? analytics.totalAttacks
+      : analytics.usableArmySample
     : 0;
+  const excludedBattleRecords = recordedBattleRecords - includedBattleRecords;
   const partialArmies = analytics?.armyStates.partial ?? 0;
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
   const [breakdownSort, setBreakdownSort] = useState<TableSort | null>(null);
@@ -652,6 +684,26 @@ export default function ArmyAnalyticsRoute() {
           Compare usage and battle results across tracked Legend League armies.
         </p>
       </section>
+      {!isHistorical ? (
+        <nav aria-label="Armies view" className="leaderboard-view-switch">
+          <Link
+            className="button secondary"
+            to={viewQuery("army-types")}
+            aria-current={armyTypes ? "page" : undefined}
+            preventScrollReset
+          >
+            Armies
+          </Link>
+          <Link
+            className="button secondary"
+            to={viewQuery("troops")}
+            aria-current={armyTypes ? undefined : "page"}
+            preventScrollReset
+          >
+            Unit usage
+          </Link>
+        </nav>
+      ) : null}
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
           <div>
@@ -758,13 +810,14 @@ export default function ArmyAnalyticsRoute() {
           </span>
         </div>
         <div className="filter-grid analytics-main-filters">
-          <div className="analytics-show-filter">
+          <div className="analytics-show-filter" hidden={armyTypes}>
             <label className="filter-field">
               Show
               <select name="category" defaultValue={showCategory}>
                 {allowed.category
                   .filter(
                     (value) =>
+                      (value !== "army-types" || armyTypes) &&
                       value !== "cc-troops" &&
                       value !== "cc-composition" &&
                       (!isHistorical ||
@@ -1039,8 +1092,12 @@ export default function ArmyAnalyticsRoute() {
             </article>
             <article className="analytics-kpi">
               <span>Records included</span>
-              <strong>{analytics.usableArmySample.toLocaleString()}</strong>
-              <small>Enough army details to use in these stats</small>
+              <strong>{includedBattleRecords.toLocaleString()}</strong>
+              <small>
+                {armyTypes
+                  ? "Every attack, Unreadable included"
+                  : "Enough army details to use in these stats"}
+              </small>
             </article>
             <article className="analytics-kpi">
               <span>Records excluded</span>
@@ -1071,8 +1128,9 @@ export default function ArmyAnalyticsRoute() {
             </p>
           ) : null}
           <p className="section-note analytics-coverage-note" id="army-rate-help">
-            Star rates show how often battles using each component ended with that result.
-            Each battle counts once per component.
+            {armyTypes
+              ? "Each attack counts once, under the army its home troops make, so usage adds up to 100%. Other is every army no type fits; Unreadable is every army we could not read. Heroes, equipment, spells, siege machines and Clan Castle troops do not change the army. These numbers show what was used and how it went, not which army is best."
+              : "Star rates show how often battles using each component ended with that result. Each battle counts once per component."}
           </p>
           <div
             className="table-wrap analytics-table-wrap"
@@ -1119,19 +1177,25 @@ export default function ArmyAnalyticsRoute() {
                 {snapshot
                   ? "Recent battle logs can omit older battles and include unfinished days."
                   : `${analytics.collectionCoverage.completedDays} completed Legend ${analytics.collectionCoverage.completedDays === 1 ? "day" : "days"}.`}{" "}
-                {analytics.perspectiveDisagreementCount.toLocaleString()}{" "}
-                {analytics.perspectiveDisagreementCount === 1
-                  ? "battle has"
-                  : "battles have"}{" "}
-                conflicting reports. {unreadableArmyRecords.toLocaleString()} battle{" "}
-                {unreadableArmyRecords === 1 ? "record had" : "records had"} missing or
-                unreadable army details and {unreadableArmyRecords === 1 ? "is" : "are"}{" "}
-                excluded from every row.{" "}
-                {snapshot?.invalidBattleRows
-                  ? `${snapshot.invalidBattleRows} other battle ${snapshot.invalidBattleRows === 1 ? "record had" : "records had"} no opponent and ${snapshot.invalidBattleRows === 1 ? "was" : "were"} excluded. `
-                  : ""}
-                Additional exclusions below apply when unknown details prevent a
-                particular combination from being identified.
+                {armyTypes ? (
+                  `${unreadableArmyRecords.toLocaleString()} ${unreadableArmyRecords === 1 ? "attack had" : "attacks had"} missing or unreadable army details and ${unreadableArmyRecords === 1 ? "counts" : "count"} as Unreadable.`
+                ) : (
+                  <>
+                    {analytics.perspectiveDisagreementCount.toLocaleString()}{" "}
+                    {analytics.perspectiveDisagreementCount === 1
+                      ? "battle has"
+                      : "battles have"}{" "}
+                    conflicting reports. {unreadableArmyRecords.toLocaleString()} battle{" "}
+                    {unreadableArmyRecords === 1 ? "record had" : "records had"} missing
+                    or unreadable army details and{" "}
+                    {unreadableArmyRecords === 1 ? "is" : "are"} excluded from every row.{" "}
+                    {snapshot?.invalidBattleRows
+                      ? `${snapshot.invalidBattleRows} other battle ${snapshot.invalidBattleRows === 1 ? "record had" : "records had"} no opponent and ${snapshot.invalidBattleRows === 1 ? "was" : "were"} excluded. `
+                      : ""}
+                    Additional exclusions below apply when unknown details prevent a
+                    particular combination from being identified.
+                  </>
+                )}
               </p>
               {analytics.rows.length === 0 ? (
                 <p className="section-note">
@@ -1160,19 +1224,21 @@ export default function ArmyAnalyticsRoute() {
                           "three-star-rate",
                           "exclusions",
                         ] as const
-                      ).map((column) => (
-                        <SortHeading
-                          key={column}
-                          column={column}
-                          sort={breakdownSort ?? tableSort}
-                          onSort={setBreakdownSort}
-                        />
-                      ))}
+                      )
+                        .filter((column) => !armyTypes || column !== "exclusions")
+                        .map((column) => (
+                          <SortHeading
+                            key={column}
+                            column={column}
+                            sort={breakdownSort ?? tableSort}
+                            onSort={setBreakdownSort}
+                          />
+                        ))}
                     </tr>
                   </thead>
                   <tbody>
                     {sortedRows(analytics.rows, breakdownSort ?? tableSort).map((row) => (
-                      <ArmyBreakdownRow key={row.key} row={row} />
+                      <ArmyBreakdownRow key={row.key} row={row} exclusions={!armyTypes} />
                     ))}
                   </tbody>
                 </table>

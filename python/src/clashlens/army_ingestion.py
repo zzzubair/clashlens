@@ -10,7 +10,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, boundary_publication
+from . import army_types, battle_day_repair, boundary, boundary_publication
 from .army_decoder import (
     CURRENT_DECODES,
     DECODER_VERSION,
@@ -274,6 +274,9 @@ def _upsert_army_decodes(
                 ).fetchone()
                 assert inserted is not None
                 exact_army_id = int(inserted[0])
+                army_types.label_new_army(
+                    connection, exact_army_id, sorted(troop_quantities.items())
+                )
             else:
                 exact_army_id = int(existing[0])
             connection.execute(
@@ -902,14 +905,13 @@ def _finish_army_fact_day(
     ).fetchone()
     if marker_day is None:
         # Totals from an earlier build of this day no longer describe it.
-        connection.execute(
-            "DELETE FROM army_analytics_day_totals WHERE ranked_day_start = %s",
-            (ranked_day_start,),
-        )
-        connection.execute(
-            "DELETE FROM army_analytics_rank_band_totals WHERE ranked_day_start = %s",
-            (ranked_day_start,),
-        )
+        for table in (
+            "army_analytics_day_totals", "army_analytics_rank_band_totals",
+            "army_type_counted_days",
+        ):
+            connection.execute(
+                f"DELETE FROM {table} WHERE ranked_day_start = %s", (ranked_day_start,)
+            )
     else:
         marker = connection.execute(
             f"""

@@ -33,6 +33,7 @@ from . import (
     analytics,
     army_ingestion,
     army_rank_bands,
+    army_types,
     battle_ingestion,
     boundary_publication,
     collector_uploads,
@@ -331,7 +332,7 @@ class TimedMaintenance:
     """Reset publication checks and queue maintenance, each every 10 seconds.
 
     The publication checks also count the newest leaderboard's army rank-band
-    totals once they are missing or stale, and every five minutes recount the
+    totals and army types once missing or stale, and every five minutes recount the
     Season's attacks the Live Leaderboard orders equal trophies by. They run
     only in the worker process holding the maintenance permit.
 
@@ -378,6 +379,7 @@ class TimedMaintenance:
                 self.daily_recheck.run_when_due()
                 if isinstance(self.database, Database):
                     army_rank_bands.refresh_rank_band_totals(self.database)
+                    army_types.refresh_army_types(self.database)
                     analytics.refresh_live_attack_tallies(self.database)
             finally:
                 if derived_turns is not None:
