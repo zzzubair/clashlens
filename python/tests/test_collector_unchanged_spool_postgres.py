@@ -247,7 +247,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
 
 
 def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
-    database_url: str, tmp_path: Path
+    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A Clasher who finished the Legend day is checked less often; that
     # scheduling update must not wait for the worker either.
@@ -257,6 +257,23 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         collector = _collector(spool, database, _Profiles([_profile(1), _profile(2)]))  # type: ignore[arg-type]
         work = CollectorWork(player_id, "#2PP", datetime.now(UTC))
+        defer = database.defer_regular_check
+
+        def late(player: int, until: datetime) -> None:
+            # Reach the scheduling update only once the saved response's
+            # background retry is queued for the player ahead of it.
+            waiting = (
+                "SELECT count(*) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+            with psycopg.connect(connection_info, autocommit=True) as watcher:
+                for _ in range(100):
+                    if watcher.execute(waiting).fetchone()[0]:  # type: ignore[index]
+                        break
+                    time.sleep(0.05)
+            defer(player, until)
+
+        monkeypatch.setattr(database, "defer_regular_check", late)
 
         async def scenario() -> None:
             first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))

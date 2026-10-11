@@ -794,7 +794,9 @@ picked until they land. Starting a Reset sweep also waits at most 3 seconds,
 then tries again on a later pass. Restart replay, the update that checks a Clasher who
 finished the Legend day less often, and marking work finished wait the same 3
 seconds: replay leaves the rest to the background, the Clasher keeps the normal
-check cadence, and finishing is retried. A shared body already sighted earlier the same UTC day
+check cadence, and finishing is retried. The update for a finished Clasher
+gives up after 3 seconds in total, even when it first queues behind its own
+saved response's background retry and then waits for the worker. A shared body already sighted earlier the same UTC day
 keeps its earlier latest sighting time, which only orders spool cleanup and
 sets the archive retention deadline, the same for every sighting that day. A
 body already marked for deletion is never recorded this way; it is saved
