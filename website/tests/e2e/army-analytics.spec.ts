@@ -75,7 +75,7 @@ test("the saved-data page shows attacks over the whole season with no day range"
   await expect(form.getByText("Defenses", { exact: true })).toHaveCount(0);
   await expect(form.getByLabel("From Legend day")).toHaveCount(0);
   await expect(form.getByLabel("To Legend day")).toHaveCount(0);
-  const season = form.getByLabel("Season", { exact: true });
+  const season = form.getByRole("combobox", { name: "Season", exact: true });
   await expect(season).toBeVisible();
   await expect(season).toHaveValue("current");
   await expect(form.getByLabel("Show")).toContainText("Hero equipment combos");
