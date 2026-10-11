@@ -487,6 +487,45 @@ def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:
     assert max(removed, default=0) < 100, plan
 
 
+def test_a_recheck_claim_finds_evidence_without_reading_the_pass_due_before_it(
+    database_url: str,
+) -> None:
+    # 2,000 rechecks of the twice-daily pass came due before one for evidence.
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, priority, due_at,
+                    parser_version, processing_version, domain_rule_version,
+                    analytics_rule_version
+                )
+                SELECT 'reconcile_ranked_day', 'recheck:' || player,
+                       jsonb_build_object('player_id', player, 'trigger',
+                                          CASE WHEN player = 1 THEN 'evidence' ELSE 'recheck' END,
+                                          'ranked_day_start', '2026-10-08T05:00:00Z'),
+                       %s, clock_timestamp() - interval '1 second' * player, %s, %s, %s, %s
+                FROM generate_series(1, 2001) AS player
+                """,
+                (DAY_RECHECK_PRIORITY, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+                 DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            statement, params = _claim_select_statement(
+                "python_processing_jobs_worker", backfill=(DAY_RECHECK_PRIORITY,)
+            )
+            first = connection.execute(statement, params).fetchone()
+            plan = "\n".join(text(row[0]) for row in connection.execute(
+                f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
+            ).fetchall())
+
+    removed = [int(rows) for rows in re.findall(r"Rows Removed by Filter: (\d+)", plan)]
+    assert first[2] == "recheck:1"
+    assert "python_processing_jobs_evidence_recheck_claim" in plan, plan
+    assert "Seq Scan on python_processing_jobs" not in plan, plan
+    assert max(removed, default=0) < 100, plan
+
+
 def _seed_redecode(
     connection_info: str, archive_server, database, processor, *, readable: bool = False
 ) -> list[int]:

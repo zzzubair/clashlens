@@ -8,12 +8,11 @@ read too early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,08
 rechecks in 39 minutes were for 3,782 player days. A recheck of every active
 player's last two ended days twice a day catches anything else, in the same
 lane: about 25,000 at once at backfill priority held Season repair and the
-Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). The
-lane takes the earliest due first, so each pass is queued in full with due
-times spread evenly over ``RECHECK_SPREAD`` and each created when due, and
-a recheck for new evidence waits behind only the daily ones that came due
-before it, not the whole pass. Evidence merges only into a recheck already
-due; one not yet due still runs later."""
+Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). So
+each pass is queued in full with due times spread evenly over
+``RECHECK_SPREAD`` and each created when due, and in the lane a recheck for
+new evidence goes before it (``background_pacing``). Evidence merges only
+into a recheck already due; one not yet due still runs later."""
 
 from __future__ import annotations
 
@@ -198,8 +197,7 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
     Reset before, once per ``slot``, unless already waiting, due evenly over
     ``RECHECK_SPREAD`` from now; count them. Each is created when it falls
-    due, as the claim ranks a lane's jobs by time since creation: a recheck
-    for evidence that came due earlier goes first."""
+    due, so the backlog metrics count it from then."""
     with database.pool.connection() as connection, connection.transaction():
         return connection.execute(
             """
