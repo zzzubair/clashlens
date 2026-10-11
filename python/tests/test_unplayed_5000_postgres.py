@@ -14,7 +14,12 @@ import json
 from datetime import timedelta
 
 import psycopg
-from domain_test_support import domain_database, repair_season, store_observation
+from domain_test_support import (
+    domain_database,
+    repair_season,
+    store_observation,
+)
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_first_battle_log_postgres import (
     DAY_1,
     DAY_2,
@@ -28,6 +33,7 @@ from test_reconciliation_postgres import _processor, _profile
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import (
+    api_leaderboard,
     api_player_lookup,
     boundary_manifest,
     domain_repair,
@@ -121,6 +127,12 @@ def _run(connection_info, archive_server, jobs) -> None:
                 processor.process_job(int(pending[0]), owner="day")
     finally:
         database.close()
+
+
+def _live(connection, now):
+    """The Live board after the worker saves who it ranks at 5,000."""
+    api_leaderboard.save_live_unplayed(connection, now)
+    return _read_live_board(connection, now)
 
 
 def _days(connection) -> dict:
@@ -217,7 +229,7 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
                 WHERE failure_reasons ? 'profile_invalid'
                 """
             ).fetchall()
-            live = _read_live_board(connection, DAY_4 + timedelta(hours=1))
+            live = _live(connection, DAY_4 + timedelta(hours=1))
         api = ApiDatabase(connection_info)
         try:
             pages = {
@@ -355,7 +367,7 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
         now = DAY_3 + timedelta(hours=1)
         with psycopg.connect(connection_info) as connection:
             lookup = api_player_lookup._lookup(connection, UNPLAYED, now)
-            live = _read_live_board(connection, now)
+            live = _live(connection, now)
             board = connection.execute(
                 """
                 SELECT entry.trophies, entry.trophy_observed_at
@@ -487,7 +499,7 @@ def test_a_malformed_season_at_5000_stays_rejected(
                 """,
                 (UNPLAYED,),
             ).fetchone()[0]
-            live = _read_live_board(connection, now)
+            live = _live(connection, now)
             boards = _boards(connection)
         api = ApiDatabase(connection_info)
         try:
@@ -506,9 +518,11 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
 ) -> None:
     # 11 October 2026: the Live Leaderboard looked for a battle among every
     # saved Legend day of the Season, about 370,000 with their battles, and
-    # every read passed the API's 10 second limit. It should read only the
-    # days of players a 5,000 profile could rank: here 12 unplayed and 6
-    # playing at 5,000, beside 300 others.
+    # every read passed the API's 10 second limit. Later it searched each
+    # 5,000 player's profiles and days on every read: 8 s from disk for 1,365
+    # players. The worker's search should read only the profiles and days of
+    # players a 5,000 profile could rank: here 12 unplayed and 6 playing at
+    # 5,000, beside 300 others. The board read should search nothing.
     now, days = DAY_4 + timedelta(hours=1), 4
     season = ranked_day_for(now)
     with domain_database(database_url) as connection_info:
@@ -557,6 +571,13 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
                 {"start": season.season_start, "days": days},
             )
             connection.execute("ANALYZE")
+        with psycopg.connect(connection_info) as connection:
+            # The worker's search, measured in a transaction it rolls back.
+            search = connection.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + api_leaderboard._REFRESH_UNPLAYED_SQL,
+                api_leaderboard._season_params(now),
+            ).fetchone()[0]
+            connection.rollback()
         queries: list[tuple[str, dict]] = []
         execute = psycopg.Connection.execute
 
@@ -565,20 +586,34 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
                 queries.append((str(query), params))
             return execute(connection, query, params, **kwargs)
 
+        # The worker's refresh, as the production worker role.
+        options = conninfo_to_dict(connection_info).get("options", "")
+        worker = Database(make_conninfo(
+            connection_info, options=f"{options} -c role=clashlens_python_worker"
+        ))
+        monkeypatch.setattr(api_leaderboard, "_next_unplayed_refresh_at", float("-inf"))
+        try:
+            api_leaderboard.refresh_live_unplayed(worker, now=now)
+        finally:
+            worker.close()
         monkeypatch.setattr(psycopg.Connection, "execute", record)
         with psycopg.connect(connection_info) as connection:
             live = _read_live_board(connection, now)
         monkeypatch.undo()
         (query, params), = queries
         with psycopg.connect(connection_info) as connection:
-            plan = connection.execute(
+            board = connection.execute(
                 "EXPLAIN (ANALYZE, FORMAT JSON) " + query, params
             ).fetchone()[0]
-        if isinstance(plan, str):
-            plan = json.loads(plan)
+    search, board = (json.loads(plan) if isinstance(plan, str) else plan
+                     for plan in (search, board))
 
     assert len(live.rows) == 318
     assert {row[0] for row in live.rows if row[2] == 5000} == {
         f"#LIVE{i}" for i in [*range(1, 13), 50, 100, 150, 200, 250, 300]
     }
-    assert _rows_read(plan[0]["Plan"], "api_player_daily_logs") <= 18 * days, plan
+    # 18 players at 5,000, one profile and `days` saved days each.
+    assert _rows_read(search[0]["Plan"], "api_player_daily_logs") <= 18 * days, search
+    assert _rows_read(search[0]["Plan"], "player_profile_effects") <= 18, search
+    assert _rows_read(board[0]["Plan"], "api_player_daily_logs") == 0, board
+    assert _rows_read(board[0]["Plan"], "player_profile_effects") == 0, board

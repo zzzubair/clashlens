@@ -593,6 +593,9 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             ) == []
 
             def on_board() -> bool:
+                # After the worker saves who the board ranks at 5,000 unplayed.
+                with database.pool.connection() as connection:
+                    api_leaderboard.save_live_unplayed(connection, NOW)
                 board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
                 return '"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 5000' in json.dumps(board)
 
