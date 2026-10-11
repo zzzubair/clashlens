@@ -363,6 +363,18 @@ def recalculate_ranked_day(
     )
     if start_dropped and start_baseline is not None:
         start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
+    # A profile read on a Season's first day before the game's reset to 5,000
+    # lands still shows the previous Season's total: the official one, when
+    # league history saved it, which the day before's calculated end can
+    # miss. On 5 October 2026, 14 of 17 such readings that disagreed matched
+    # only the official total (5,343 against a calculated 5,378 for one).
+    # Day 1 still starts at 5,000.
+    season_first_day = season_day is not None and season_day.day_number == 1
+    pre_reset_official = (
+        _official_final(connection, player_id, ranked_day.start)
+        if season_first_day
+        else None
+    )
 
     # A day whose Reset reading cannot start it, rejected, late or missing,
     # starts from the day before's calculated end once that day's battles are
@@ -495,11 +507,11 @@ def recalculate_ranked_day(
         perspective_disagreement=perspective_disagreement,
         malformed_evidence=malformed_evidence,
         unclassified_evidence=unclassified_evidence,
-        start_baseline_evidence=(
-            start_baseline["evidence"]
-            if start_baseline is not None
-            else {}
-        ),
+        start_baseline_evidence={
+            **(start_baseline["evidence"] if start_baseline is not None else {}),
+            **({"official_final_trophies": pre_reset_official}
+               if pre_reset_official is not None else {}),
+        },
         end_baseline_evidence=(
             end_baseline["evidence"] if end_baseline is not None else {}
         ),
@@ -508,7 +520,7 @@ def recalculate_ranked_day(
         domain_rule_version=domain_rule_version,
         season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
         trophy_allocation_rule_versions=trophy_rule_versions,
-        season_first_day=season_day is not None and season_day.day_number == 1,
+        season_first_day=season_first_day,
         zero_result_attack_slots=zero_result_attacks,
         zero_result_defense_slots=zero_result_defenses,
         readings=readings,

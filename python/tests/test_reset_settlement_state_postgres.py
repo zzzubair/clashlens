@@ -1213,3 +1213,52 @@ def test_official_total_leaves_an_older_seasons_last_day_as_saved(
     assert before
     assert queued == 0
     assert after == before
+
+
+def test_day_1_is_judged_with_the_official_total_of_the_season_before(
+    database_url: str, archive_server,
+) -> None:
+    # A Day 1 profile read before the game's reset to 5,000 shows the
+    # previous Season's official total, which Day 1 is judged with; it still
+    # starts at 5,000.
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, boundary - timedelta(days=1),
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON),
+                            log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=5),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": 5965, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 0, "attackLosses": 0,
+                "attackStars": 0, "defenseWins": 0, "defenseLosses": 0,
+                "defenseStars": 0, "maxBattles": 8,
+            }]}).encode(),
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary, now=boundary,
+                request_key="opening",
+            )
+            assert processor.process_job(job, owner="opening") is not None
+        finally:
+            database.close()
+        day_1 = _rows(connection_info, f"""
+            SELECT DISTINCT ON (ranked_day_start) start_trophies,
+                   input_evidence -> 'start_baseline_evidence' ->> 'official_final_trophies'
+            FROM ranked_day_versions WHERE ranked_day_start = '{boundary.isoformat()}'
+            ORDER BY ranked_day_start, version DESC""")
+
+    assert day_1 == [(5000, "5965")]
