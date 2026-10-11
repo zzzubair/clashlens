@@ -10,6 +10,7 @@ from . import first_battle_log, job_outcomes, queue_refresh, reset_baselines
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
+    SEASON_START_TROPHIES,
     DomainRuleError,
     ranked_day_for,
     validate_season_anchor,
@@ -227,10 +228,11 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     connection, player[0], profile.observed_at
                 )
             if (
-                profile.eligibility_state == "eligible"
-                and profile.current_league_season_id == "0"
+                created_profile
+                and profile.eligibility_state == "eligible"
+                and profile.trophies == SEASON_START_TROPHIES
             ):
-                first_battle_log.queue_not_enrolled(
+                first_battle_log.queue_unplayed_days(
                     connection, player[0], profile.observed_at
                 )
             connection.execute(

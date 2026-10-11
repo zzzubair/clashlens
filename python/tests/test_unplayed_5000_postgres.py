@@ -358,3 +358,34 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
     # The Day 3 board ranks them from the renamed profile read after the
     # Day 2 Reset.
     assert board == (5000, DAY_2 + READ_AFTER)
+
+
+def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
+    database_url: str, archive_server
+) -> None:
+    # First seen at the Day 8 Reset at 5,000 with no battle: one already
+    # naming the Season, one not signed up who signs up by the Day 10 Reset,
+    # and one never signed up.
+    signed, joins, never = "#2PP", "#8QQ", "#9YY"
+    day_8, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 9))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        for boundary, joined in ((day_8, _season_zero(joins)),
+                                 (day_10, _new_season_profile(5000, joins))):
+            _run(connection_info, archive_server, _sweep(
+                connection_info, archive_server, boundary, {
+                    signed: (_new_season_profile(5000, signed), _log()),
+                    joins: (joined, _log()),
+                    never: (_season_zero(never), _log()),
+                },
+            ))
+        with psycopg.connect(connection_info) as connection:
+            days = _days(connection)
+            not_enrolled = connection.execute(
+                "SELECT count(*) FROM ranked_day_versions"
+                " WHERE failure_reasons ? 'not_enrolled'"
+            ).fetchone()[0]
+
+    for tag in (signed, joins, never):
+        for day in range(9):
+            assert days[tag, DAY_1 + timedelta(days=day)][:4] == (0, 0, 5000, 5000)
+    assert not_enrolled == 0

@@ -32,36 +32,6 @@ def _not_signed_up() -> bytes:
     return json.dumps(payload).encode()
 
 
-def test_every_proven_day_before_a_late_sign_up_is_a_0_0_day_at_5000(
-    database_url: str, archive_server
-) -> None:
-    day_8, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 9))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        # First found on Day 8, not signed up and with no battles.
-        jobs = _reset_work(connection_info, archive_server, day_8,
-                           profile=_not_signed_up(), log=_log())
-        _process(connection_info, archive_server, jobs)
-        jobs = _reset_work(connection_info, archive_server, day_10,
-                           profile=_new_season_profile(5000), log=_log())
-        _process(connection_info, archive_server, jobs)
-        with psycopg.connect(connection_info) as connection:
-            days = {
-                row[0]: row[1:]
-                for row in connection.execute(
-                    """
-                    SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
-                           attack_count, defense_count, start_trophies,
-                           next_start_trophies, failure_reasons ? 'not_enrolled'
-                    FROM ranked_day_versions
-                    ORDER BY ranked_day_start, version DESC
-                    """
-                )
-            }
-
-    for day in range(9):
-        assert days[DAY_1 + timedelta(days=day)] == (0, 0, 5000, 5000, False)
-
-
 def _sign_up_day(connection_info: str) -> tuple:
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
