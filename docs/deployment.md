@@ -1190,7 +1190,7 @@ higher-priority work that thread can claim is due; a thread that does not proces
 responses can run one while responses still wait. All worker processes together
 run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
 2), and beside them at most `CLASHLENS_DAY_RECHECK_JOB_LIMIT` day rechecks after
-new evidence (priority 26, `queue_refresh.py`; default 4); see
+new evidence or twice a day (priority 26, `queue_refresh.py`; default 4); see
 [Worker processes](#worker-processes). A claim takes any live work it can
 first, then fills the rest of its size with background jobs, each kind up to
 its own free room, the kind using less of its limit first, ties going at
