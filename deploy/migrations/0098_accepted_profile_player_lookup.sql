@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0097.
+-- Clash Lens deployment migration 0098.
 -- Freezing a Reset's Daily board inputs finds each member's newest accepted
 -- profile at the Reset. It read every one of the member's profile versions
 -- through the (player, semantic projection) index and then every version's
@@ -32,5 +32,5 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS player_profile_versions_accepted_player_
     ON player_profile_versions (player_id, observed_at DESC, id DESC)
     WHERE source_contract_state = 'accepted';
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (97)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (98)
 ON CONFLICT (version) DO NOTHING;

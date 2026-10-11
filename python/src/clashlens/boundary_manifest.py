@@ -479,7 +479,7 @@ def _snapshot_rows(
     # profile's sightings (its effects, or the profile itself when it has
     # none) up to the Reset, ordered by time and then id. Each profile's
     # newest sighting comes from the effects' own time index and the
-    # profiles from migration 0097's index, so the query reads index entries
+    # profiles from migration 0098's index, so the query reads index entries
     # instead of every profile's and sighting's row. On 10 October 2026
     # reading those rows took over 6 of the freeze's 10 minutes.
     profiles = {
