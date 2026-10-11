@@ -482,9 +482,7 @@ def _snapshot_rows(
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            _NEWEST_PROFILES_SQL.replace(
-                "{accepted}", "AND version.source_contract_state = 'accepted'"
-            ),
+            _NEWEST_PROFILES_SQL.replace("{versions}", _ACCEPTED_VERSIONS),
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
@@ -652,7 +650,15 @@ def _snapshot_rows(
 # profiles from migration 0098's index, so the query reads index entries
 # instead of every profile's and sighting's row. On 10 October 2026
 # reading those rows took over 6 of the freeze's 10 minutes.
-# The same lookup of any source state replaces {accepted} with nothing.
+# The same lookup of any source state lists the player's profiles from the
+# (tag, time) index instead.
+_ACCEPTED_VERSIONS = (
+    "version.player_id = member.player_id"
+    " AND version.source_contract_state = 'accepted'"
+)
+_ANY_VERSIONS = """version.normalized_tag = (
+            SELECT owner.normalized_tag FROM players AS owner
+            WHERE owner.id = member.player_id)"""
 _NEWEST_PROFILES_SQL = """
     SELECT member.player_id, profile.id,
            COALESCE(effect.observation_id, profile.observation_id),
@@ -673,8 +679,7 @@ _NEWEST_PROFILES_SQL = """
             ORDER BY effect.observed_at DESC, effect.id DESC
             LIMIT 1
         ) AS sighting ON true
-        WHERE version.player_id = member.player_id
-          {accepted}
+        WHERE {versions}
           AND (sighting.id IS NOT NULL
                OR version.observed_at <= %(boundary)s
                   AND NOT EXISTS (
@@ -704,7 +709,7 @@ def unplayed_profiles(
         int(row[0]): row[1:]
         for row in connection.execute(
             f"""
-            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{accepted}", "")})
+            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{versions}", _ANY_VERSIONS)})
                 AS newest (player_id, id, observation_id, observed_at,
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)
