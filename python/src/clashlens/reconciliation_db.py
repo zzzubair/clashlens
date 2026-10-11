@@ -229,8 +229,17 @@ def recalculate_ranked_day(
             end_battle_log_observation_id = start_battle_log_observation_id
     if start_baseline is None:
         start_baseline = first_battle_log.season_rule_start(
-            connection, player_id, ranked_day,
+            connection, player_id, ranked_day.start,
             complete=start_battle_log_observation_id is not None,
+        )
+    # Within the Season, a player who has not played yet ends the day at
+    # 5,000 too.
+    if end_baseline is None and ranked_day.end <= now and (
+        ranked_day.end < ranked_day.season_end
+    ):
+        end_baseline = first_battle_log.season_rule_start(
+            connection, player_id, ranked_day.end,
+            complete=end_battle_log_observation_id is not None,
         )
     coverage = ranked_day_inputs.load_coverage(
         database,
@@ -781,7 +790,7 @@ def _dropped_after_reading(
     without one, and before the next Reset, shows a league below Legend I:
     the player dropped at ``reset``."""
     reading_at = (
-        baseline["evidence"]["profile"]["observed_at"]
+        baseline["evidence"].get("profile", {}).get("observed_at")
         if baseline is not None
         else None
     )

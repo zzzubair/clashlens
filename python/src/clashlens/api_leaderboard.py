@@ -15,7 +15,7 @@ from .api_db import (
     _season_reset_waiting_sql,
     _text,
 )
-from .domain import ranked_day_for, season_opening_reset
+from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -69,8 +69,10 @@ _UNPLAYED_PROFILE_SQL = f"""
             ORDER BY effect.observed_at DESC, effect.id DESC
             LIMIT 1
         ) AS sighting ON true
-        -- Look only for players the current profile leaves off the board.
-        WHERE NOT current.season_current
+        -- Look only for players the current profile leaves off the board
+        -- or shows at 5,000, which a newer profile may show instead.
+        WHERE (NOT current.season_current
+               OR profile.trophies = {SEASON_START_TROPHIES})
           AND version.normalized_tag = player.normalized_tag
         ORDER BY 2 DESC, version.id DESC
         LIMIT 1

@@ -360,7 +360,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     )
     official_end = "official_final_trophies" in data.end_baseline_evidence
     end_available = _baseline_available(
-        data.end_baseline_id is not None or official_end,
+        data.end_baseline_id is not None or official_end
+        or data.end_baseline_evidence.get("start_trophies_source") == "season_rule",
         data.next_start_trophies,
         data.end_baseline_complete,
         "end",

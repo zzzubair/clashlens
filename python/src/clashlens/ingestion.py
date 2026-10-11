@@ -226,6 +226,13 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 first_battle_log.queue_weekly_drop(
                     connection, player[0], profile.observed_at
                 )
+            if (
+                profile.eligibility_state == "eligible"
+                and profile.current_league_season_id == "0"
+            ):
+                first_battle_log.queue_not_enrolled(
+                    connection, player[0], profile.observed_at
+                )
             connection.execute(
                 """
                 WITH candidate AS (

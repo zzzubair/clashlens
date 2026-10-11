@@ -25,7 +25,12 @@ from psycopg.types.json import Jsonb
 from .analytics import latest_trophy_changes, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_START_TROPHIES,
+    ranked_day_for,
+    season_is_current,
+)
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -488,6 +493,7 @@ def _snapshot_rows(
         [
             player_id for player_id in player_ids
             if player_id not in profiles
+            or profiles[player_id][6] == SEASON_START_TROPHIES
             or not season_is_current(
                 _text_value(profiles[player_id][8]),
                 boundary_at - RANKED_DAY_DURATION,

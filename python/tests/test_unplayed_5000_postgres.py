@@ -26,7 +26,12 @@ from test_first_battle_log_postgres import (
 from test_reconciliation_postgres import _processor, _profile
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import boundary_manifest, domain_repair, reset_baselines
+from clashlens import (
+    api_player_lookup,
+    boundary_manifest,
+    domain_repair,
+    reset_baselines,
+)
 from clashlens.api_db import ApiDatabase
 from clashlens.api_leaderboard import _read_live_board
 from clashlens.api_players import get_player_page
@@ -305,3 +310,51 @@ def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(
     # Both boards that left the player out are queued for a rebuild.
     assert boards["phase"] == "boards"
     assert corrections == [(DAY_2,), (DAY_3,)]
+
+
+def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
+    database_url: str, archive_server
+) -> None:
+    # Accepted at 5,000 naming the Season at the Day 1 Reset, then renamed
+    # in a profile naming Season 0, still at 5,000 and with no battle.
+    renamed = json.loads(_season_zero(UNPLAYED))
+    renamed["name"] = "Renamed"
+    renamed = json.dumps(renamed).encode()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        for boundary, profile in (
+            (DAY_1, _new_season_profile(5000, UNPLAYED)),
+            (DAY_2, renamed),
+            (DAY_3, renamed),
+        ):
+            _run(connection_info, archive_server, _sweep(
+                connection_info, archive_server, boundary, {UNPLAYED: (profile, _log())},
+            ))
+        now = DAY_3 + timedelta(hours=1)
+        with psycopg.connect(connection_info) as connection:
+            lookup = api_player_lookup._lookup(connection, UNPLAYED, now)
+            live = _read_live_board(connection, now)
+            board = connection.execute(
+                """
+                SELECT entry.trophies, entry.trophy_observed_at
+                FROM leaderboard_snapshots AS snapshot
+                JOIN leaderboard_snapshot_entries AS entry
+                  ON entry.snapshot_id = snapshot.id
+                WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.boundary_at = %s
+                ORDER BY snapshot.version DESC, snapshot.id DESC LIMIT 1
+                """,
+                (DAY_3,),
+            ).fetchone()
+        api = ApiDatabase(connection_info)
+        try:
+            page = get_player_page(api, UNPLAYED, now=now, freshness_seconds=900)
+        finally:
+            api.close()
+
+    assert "reason" not in lookup
+    assert (page["name"], page["trophies"]) == ("Renamed", 5000)
+    assert [(row[0], row[1], row[2]) for row in live.rows] == [
+        (UNPLAYED, "Renamed", 5000),
+    ]
+    # The Day 3 board ranks them from the renamed profile read after the
+    # Day 2 Reset.
+    assert board == (5000, DAY_2 + READ_AFTER)
