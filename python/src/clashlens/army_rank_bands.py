@@ -15,7 +15,8 @@ the page reads facts instead, and the next check here counts again.
 A Reset's leaderboard is republished every 10-15 minutes, mostly with the same
 players in every band, and counting takes minutes. A band's totals depend only
 on its players and their facts, so totals counted for one version serve every
-version whose bands hold the same players.
+version whose bands hold the same players, and a recount counts only the bands
+whose players changed.
 """
 
 from __future__ import annotations
@@ -156,12 +157,30 @@ def _refresh(database: Any) -> int | None:
                 snapshot_id,
             ):
                 return None
-            if band_players(
-                connection, saved_snapshot, 1, _LAST_POSITION
-            ) == band_players(connection, snapshot_id, 1, _LAST_POSITION):
+            saved_players = band_players(connection, saved_snapshot, 1, _LAST_POSITION)
+            band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
+            if saved_players == band_by_player:
                 _same_players = (saved_snapshot, snapshot_id)
                 return None
-        _count(connection, snapshot_id, season_id, days)
+            # Bands holding the same players keep their totals.
+            kept_from, kept = saved_snapshot, {
+                first
+                for first, _last in BANDS
+                if {p for p, b in saved_players.items() if b == first}
+                == {p for p, b in band_by_player.items() if b == first}
+            }
+        else:
+            kept_from, kept = None, set()
+            band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
+        _count(
+            connection,
+            snapshot_id,
+            season_id,
+            days,
+            {p: b for p, b in band_by_player.items() if b not in kept},
+            kept_from,
+            sorted(kept),
+        )
         return snapshot_id
 
 
@@ -170,8 +189,11 @@ def _count(
     snapshot_id: int,
     season_id: str,
     days: dict[int, tuple[Any, str]],
+    band_by_player: dict[int, int],
+    kept_from: int | None,
+    kept: list[int],
 ) -> None:
-    band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
+    """Count the bands of ``band_by_player``; copy ``kept`` from ``kept_from``."""
     players = sorted(band_by_player)
     fact_filter = """
         fact.is_current AND fact.official_season_id = %s
@@ -185,6 +207,7 @@ def _count(
         for day in days
         for lens in LENSES
         for first, _last in BANDS
+        if first not in kept
         for category in CATEGORIES
     }
     with connection.cursor(name="army_rank_band_facts") as cursor:
@@ -218,8 +241,27 @@ def _count(
             for category in CATEGORIES:
                 add_army_fact(totals[(*key, category)], fact, category)
     connection.execute(
-        "DELETE FROM army_analytics_rank_band_totals WHERE official_season_id = %s",
-        (season_id,),
+        """
+        INSERT INTO army_analytics_rank_band_totals (
+            snapshot_id, lens, category, season_day_number, first_position,
+            official_season_id, ranked_day_start, fact_input_hash,
+            source_digest, totals
+        )
+        SELECT %s, lens, category, season_day_number, first_position,
+               official_season_id, ranked_day_start, fact_input_hash,
+               source_digest, totals
+        FROM army_analytics_rank_band_totals
+        WHERE snapshot_id = %s AND first_position = ANY(%s::integer[])
+        """,
+        (snapshot_id, kept_from, kept),
+    )
+    connection.execute(
+        """
+        DELETE FROM army_analytics_rank_band_totals
+        WHERE official_season_id = %s
+          AND (snapshot_id <> %s OR first_position <> ALL(%s::integer[]))
+        """,
+        (season_id, snapshot_id, kept),
     )
     with connection.cursor() as cursor:
         cursor.executemany(

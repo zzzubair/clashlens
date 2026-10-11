@@ -358,12 +358,12 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             # A Reset's board is republished every few minutes. With the same
             # players in every band (#9PP moves within ranks 101-200), the
             # page and the worker keep the saved totals.
-            counted: list[int] = []
+            counted: list[tuple[int, list[int]]] = []
             count = army_rank_bands._count
 
-            def counting(connection, snapshot_id, *rest) -> None:
-                counted.append(snapshot_id)
-                count(connection, snapshot_id, *rest)
+            def counting(connection, snapshot_id, season_id, days, players, *rest):
+                counted.append((snapshot_id, sorted(players)))
+                count(connection, snapshot_id, season_id, days, players, *rest)
 
             monkeypatch.setattr(army_rank_bands, "_count", counting)
             board = DAY_START + timedelta(days=2)
@@ -376,8 +376,9 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             assert fact_queries == []
 
             # #9PP moves to ranks 201-300: views holding either band read
-            # facts until the worker counts the new board; others keep totals.
-            # Every Top N and rank range the page offers loads either way.
+            # facts until the worker counts those two bands, which hold only
+            # #9PP; the other bands keep their totals. Every Top N and rank
+            # range the page offers loads either way.
             moved = _republish(database, board, {ids["#9PP"]: 250})
             selections = {
                 population: _selection(population=population, start_day=24, end_day=24)
@@ -403,7 +404,7 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                         not refreshed and population in HOLDING_RANKS_101_300
                     )
                 army_rank_bands.refresh_rank_band_totals(database)
-                assert counted == [moved]
+                assert counted == [(moved, [ids["#9PP"]])]
         finally:
             api.close()
             cached_api.close()
