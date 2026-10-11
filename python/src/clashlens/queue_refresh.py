@@ -10,9 +10,10 @@ player's last two ended days twice a day catches anything else, in the same
 lane: about 25,000 at once at backfill priority held Season repair and the
 Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). The
 lane takes the earliest due first, so each pass is queued in full with due
-times spread evenly over ``RECHECK_SPREAD``, and a recheck for new evidence
-waits behind only the daily ones already due, not the whole pass. Evidence
-merges only into a recheck already due; one not yet due still runs later."""
+times spread evenly over ``RECHECK_SPREAD`` and each created when due, and
+a recheck for new evidence waits behind only the daily ones that came due
+before it, not the whole pass. Evidence merges only into a recheck already
+due; one not yet due still runs later."""
 
 from __future__ import annotations
 
@@ -196,36 +197,41 @@ def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Itera
 def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
     Reset before, once per ``slot``, unless already waiting, due evenly over
-    ``RECHECK_SPREAD`` from now; count them."""
+    ``RECHECK_SPREAD`` from now; count them. Each is created when it falls
+    due, as the claim ranks a lane's jobs by time since creation: a recheck
+    for evidence that came due earlier goes first."""
     with database.pool.connection() as connection, connection.transaction():
         return connection.execute(
             """
             INSERT INTO python_processing_jobs_worker (observation_id, work_type,
-                deduplication_key, input_json, state, due_at, parser_version,
+                deduplication_key, input_json, state, due_at, created_at, parser_version,
                 processing_version, domain_rule_version, analytics_rule_version, priority)
             SELECT NULL, 'reconcile_ranked_day',
                    concat_ws(':', 'reconcile:recheck', %(slot)s::text, player_id, day_text),
                    jsonb_build_object('player_id', player_id, 'trigger', 'recheck',
                                       'ranked_day_start', day_text),
-                   'pending', clock_timestamp() + %(spread)s::interval
-                       * (row_number() OVER (ORDER BY player_id, day_text) - 1)
-                       / count(*) OVER (),
+                   'pending', due_at, due_at,
                    %(parser)s, %(processing)s, %(domain)s, %(analytics)s, %(priority)s
             FROM (
-                SELECT DISTINCT saved.player_id, to_char(
-                    saved.ranked_day_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
-                ) AS day_text
-                FROM ranked_day_versions AS saved
-                JOIN players AS player ON player.id = saved.player_id AND player.active
-                WHERE saved.ranked_day_start IN (%(last)s, %(before)s)
-                  AND saved.reconciliation_rule_version = %(rule)s
-            ) AS day
-            WHERE NOT EXISTS (
-                SELECT 1 FROM python_processing_jobs_worker AS job
-                WHERE job.work_type = 'reconcile_ranked_day'
-                  AND job.state IN ('pending', 'waiting_retry')
-                  AND job.input_json ->> 'player_id' = day.player_id::text
-                  AND job.input_json ->> 'ranked_day_start' = day.day_text)
+                SELECT player_id, day_text, clock_timestamp() + %(spread)s::interval
+                    * (row_number() OVER (ORDER BY player_id, day_text) - 1)
+                    / count(*) OVER () AS due_at
+                FROM (
+                    SELECT DISTINCT saved.player_id, to_char(
+                        saved.ranked_day_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                    ) AS day_text
+                    FROM ranked_day_versions AS saved
+                    JOIN players AS player ON player.id = saved.player_id AND player.active
+                    WHERE saved.ranked_day_start IN (%(last)s, %(before)s)
+                      AND saved.reconciliation_rule_version = %(rule)s
+                ) AS day
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM python_processing_jobs_worker AS job
+                    WHERE job.work_type = 'reconcile_ranked_day'
+                      AND job.state IN ('pending', 'waiting_retry')
+                      AND job.input_json ->> 'player_id' = day.player_id::text
+                      AND job.input_json ->> 'ranked_day_start' = day.day_text)
+            ) AS spread
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
             {**_VERSIONS, "priority": DAY_RECHECK_PRIORITY, "slot": slot,
