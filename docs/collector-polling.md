@@ -184,7 +184,8 @@ board the website shows, including one a later correction or Season repair
 republished, and one with no entries. Scoring a board republished later is
 best effort: the location list a Reset used can be up to 7 days older than
 its Reset and is deleted 28 days after its own, so once it is gone that
-board's country part is `unknown`, never scored. The score is kept forever in
+board's country part is `unknown`, never scored. A board for a Reset older
+than the oldest pull still kept is not scored at all. The score is kept forever in
 `game_ranking_scores` (about 2 KB a day per board version). A score is `unknown`, never a pass, when any pull
 above failed or is missing, including a day with no pulls since collection
 began; its numbers then cover only what arrived. The game's own faults are
