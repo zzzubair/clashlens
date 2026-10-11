@@ -9,10 +9,10 @@ rechecks in 39 minutes were for 3,782 player days. A recheck of every active
 player's last two ended days twice a day catches anything else, in the same
 lane: about 25,000 at once at backfill priority held Season repair and the
 Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). The
-lane takes the oldest first, so the recheck fills it only up to
-``RECHECK_BATCH`` waiting, topped up each ``BATCH_INTERVAL_SECONDS``: all at
-once, four at a time at the 60 to 70 a minute measured two at a time, a
-recheck for evidence of any other day would wait up to about 3 hours."""
+lane takes the earliest due first, so each pass is queued in full with due
+times spread evenly over ``RECHECK_SPREAD``, and a recheck for new evidence
+waits behind only the daily ones already due, not the whole pass. Evidence
+merges only into a recheck already due; one not yet due still runs later."""
 
 from __future__ import annotations
 
@@ -31,8 +31,7 @@ from .season_retirement import SEASON_CLOSE_WAIT
 
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600
-RECHECK_BATCH = 500
-BATCH_INTERVAL_SECONDS = 60
+RECHECK_SPREAD = timedelta(hours=4)
 _VERSIONS = {
     "parser": db.DEFAULT_PARSER_VERSION, "processing": db.PROCESSING_VERSION,
     "domain": db.DOMAIN_RULE_VERSION, "analytics": db.ANALYTICS_RULE_VERSION,
@@ -75,6 +74,7 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
             SELECT FROM {relation} AS job
             WHERE job.work_type = 'reconcile_ranked_day' AND job.{state} = 'pending'
               AND job.priority = {DAY_RECHECK_PRIORITY}
+              AND job.due_at <= clock_timestamp()
               AND job.input_json ->> 'player_id' = %(player)s
               AND job.input_json ->> 'ranked_day_start' = %(day)s
             LIMIT 1 FOR SHARE SKIP LOCKED)
@@ -193,20 +193,11 @@ def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Itera
                    f"reconcile:report:{observation_id}:{player_id}")
 
 
-def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> tuple[int, int]:
+def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
-    Reset before, once per ``slot``, unless already waiting, while fewer than
-    ``RECHECK_BATCH`` day rechecks wait; return how many were queued and how
-    many could have been. Fewer queued than could have been ends the slot."""
+    Reset before, once per ``slot``, unless already waiting, due evenly over
+    ``RECHECK_SPREAD`` from now; count them."""
     with database.pool.connection() as connection, connection.transaction():
-        room = max(0, RECHECK_BATCH - connection.execute(
-            f"""SELECT count(*) FROM (SELECT FROM python_processing_jobs_worker
-                WHERE work_type = 'reconcile_ranked_day' AND state = 'pending'
-                  AND priority = {DAY_RECHECK_PRIORITY} LIMIT %s) AS capped""",
-            (RECHECK_BATCH,),
-        ).fetchone()[0])
-        if not room:
-            return 0, 0
         return connection.execute(
             """
             INSERT INTO python_processing_jobs_worker (observation_id, work_type,
@@ -216,8 +207,10 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> tuple
                    concat_ws(':', 'reconcile:recheck', %(slot)s::text, player_id, day_text),
                    jsonb_build_object('player_id', player_id, 'trigger', 'recheck',
                                       'ranked_day_start', day_text),
-                   'pending', clock_timestamp(), %(parser)s, %(processing)s,
-                   %(domain)s, %(analytics)s, %(priority)s
+                   'pending', clock_timestamp() + %(spread)s::interval
+                       * (row_number() OVER (ORDER BY player_id, day_text) - 1)
+                       / count(*) OVER (),
+                   %(parser)s, %(processing)s, %(domain)s, %(analytics)s, %(priority)s
             FROM (
                 SELECT DISTINCT saved.player_id, to_char(
                     saved.ranked_day_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
@@ -229,27 +222,24 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> tuple
             ) AS day
             WHERE NOT EXISTS (
                 SELECT 1 FROM python_processing_jobs_worker AS job
-                WHERE job.deduplication_key = concat_ws(
-                    ':', 'reconcile:recheck', %(slot)s::text, day.player_id, day.day_text))
-              AND NOT EXISTS (
-                SELECT 1 FROM python_processing_jobs_worker AS job
                 WHERE job.work_type = 'reconcile_ranked_day'
                   AND job.state IN ('pending', 'waiting_retry')
                   AND job.input_json ->> 'player_id' = day.player_id::text
                   AND job.input_json ->> 'ranked_day_start' = day.day_text)
-            LIMIT %(room)s
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
-            {**_VERSIONS, "priority": DAY_RECHECK_PRIORITY, "slot": slot, "room": room,
-             "last": boundary - timedelta(days=1),
+            {**_VERSIONS, "priority": DAY_RECHECK_PRIORITY, "slot": slot,
+             "spread": RECHECK_SPREAD, "last": boundary - timedelta(days=1),
              "before": boundary - timedelta(days=2)},
-        ).rowcount, room
+        ).rowcount
 
 
 def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | None:
     """The recheck due at ``now`` and its Reset: the morning one once no
-    day-end recheck waits, the night one from 23:00."""
+    day-end recheck waits, the night one from 23:00; none from 04:00 to 07:00."""
     boundary = domain.ranked_day_for(now).start
+    if 4 <= now.astimezone(UTC).hour < 7:
+        return None
     if now >= boundary.replace(hour=23):
         return f"{boundary:%Y-%m-%d}:night", boundary
     waiting = connection.execute(
@@ -263,54 +253,23 @@ def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | N
     return None if waiting else (f"{boundary:%Y-%m-%d}:morning", boundary)
 
 
-def previous_recheck_slot(now: datetime) -> tuple[str, datetime]:
-    """The recheck before the one due at ``now``: the Reset's morning one
-    from 23:00, until then the night one of the Reset before."""
-    boundary = domain.ranked_day_for(now).start
-    if now >= boundary.replace(hour=23):
-        return f"{boundary:%Y-%m-%d}:morning", boundary
-    before = boundary - timedelta(days=1)
-    return f"{before:%Y-%m-%d}:night", before
-
-
 class DailyRecheck:
-    """Run the twice-daily recheck from the worker loop, a batch each
-    ``BATCH_INTERVAL_SECONDS`` until a slot is queued, the oldest unfinished
-    slot first, none from 04:00 to 07:00, logging its counts. The first
-    check after the worker starts also finishes the slot before the due
-    one, which a restart may have left unfinished."""
+    """Run the twice-daily recheck from the worker loop, logging its count."""
 
     def __init__(self, database: db.Database) -> None:
         self.database, self.next_check_at, self.done = database, float("-inf"), set()
-        self.unfinished: list[tuple[str, datetime]] | None = None
 
     def run_when_due(self, now: datetime | None = None) -> None:
         if not isinstance(self.database, db.Database) or monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
-        now = now or datetime.now(UTC)
-        if 4 <= now.astimezone(UTC).hour < 7:
-            return
-        if self.unfinished is None:
-            self.unfinished = [previous_recheck_slot(now)]
         with self.database.pool.connection() as connection:
-            due = due_recheck_slot(connection, now)
-        if due is not None and due[0] not in self.done and due not in self.unfinished:
-            self.unfinished.append(due)
-        if not self.unfinished:
+            due = due_recheck_slot(connection, now or datetime.now(UTC))
+        if due is None or due[0] in self.done:
             return
-        slot = self.unfinished[0]
         try:
-            queued, room = queue_recheck(self.database, *slot)
+            result = {"status": "queued", "days": queue_recheck(self.database, *due)}
+            self.done.add(due[0])
         except Exception as error:  # noqa: BLE001 - retry at the next check
             result = {"status": "failed", "error": repr(error)[:300]}
-        else:
-            if queued < room:
-                self.done.add(slot[0])
-                self.unfinished.remove(slot)
-            if self.unfinished:
-                self.next_check_at = monotonic() + BATCH_INTERVAL_SECONDS
-            if not room:  # the lane is full
-                return
-            result = {"status": "queued" if queued < room else "queuing", "days": queued}
-        print(json.dumps({"event": "daily_recheck", "slot": slot[0], **result}), flush=True)
+        print(json.dumps({"event": "daily_recheck", "slot": due[0], **result}), flush=True)

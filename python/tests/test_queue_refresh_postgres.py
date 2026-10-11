@@ -526,79 +526,61 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
     database_url: str, archive_server
 ) -> None:
     # In the day recheck lane, not backfill's, where about 25,000 at once
-    # held Season repair and day-end recalculations back for hours, so new
-    # evidence for such a day merges into its waiting recheck.
+    # held Season repair and day-end recalculations back for hours, and due
+    # over the next hours, so a recheck for new evidence waits behind only
+    # the ones already due.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
-            count, _ = queue_refresh.queue_recheck(database, "night", DAY_D)
+            count = queue_refresh.queue_recheck(database, "night", DAY_D)
         finally:
             database.close()
-        queued = _queued(connection_info, "reconcile:recheck:night:")
         with psycopg.connect(connection_info) as connection:
-            queue_refresh.queue_for_reading(
-                connection, player_id, "log:1", DAY_D + timedelta(hours=1))
-            waiting = connection.execute(
-                "SELECT deduplication_key, priority FROM python_processing_jobs"
-                " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+            queued = connection.execute(
+                "SELECT input_json ->> 'player_id', input_json ->> 'ranked_day_start',"
+                " priority, extract(epoch FROM due_at - created_at)"
+                " FROM python_processing_jobs WHERE deduplication_key LIKE"
+                " 'reconcile:recheck:night:%' ORDER BY due_at"
             ).fetchall()
 
     assert count == 2
-    assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
-    assert sorted(waiting) == [
-        (f"reconcile:recheck:night:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}", DAY_RECHECK_PRIORITY)
+    assert [(row[0], row[1], row[2]) for row in queued] == [
+        (str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}", DAY_RECHECK_PRIORITY)
         for day in (DAY_B, DAY_C)
     ]
+    (first, rest) = (float(row[3]) for row in queued)
+    assert first < 1
+    assert 1 < rest <= queue_refresh.RECHECK_SPREAD.total_seconds()
 
 
-def test_the_daily_recheck_fills_its_lane_a_batch_at_a_time_and_finishes_each_pass(
-    database_url: str, archive_server, monkeypatch, capsys
+def test_evidence_merges_only_into_a_daily_recheck_already_due(
+    database_url: str, archive_server
 ) -> None:
-    # The lane takes the oldest first, so a whole pass queued at once would
-    # keep a recheck for any other day's evidence waiting behind it for hours.
-    # A worker started at 23:00 first finishes the morning pass a restart may
-    # have cut short, then the night pass, across the 04:00 to 07:00 pause.
-    monkeypatch.setattr(queue_refresh, "RECHECK_BATCH", 1)
-    monkeypatch.setattr(queue_refresh, "BATCH_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(queue_refresh, "CHECK_INTERVAL_SECONDS", 0)
-    night, paused, after = (DAY_D + timedelta(hours=hours) for hours in (18, 23.5, 26))
-    days = [f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C)]
+    # The pass's first day is due now and reads the evidence when it runs;
+    # one due hours later would leave that evidence waiting behind it.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
-        capsys.readouterr()
-
-        def drain() -> None:
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    "UPDATE python_processing_jobs SET status = 'complete',"
-                    " completed_at = clock_timestamp()"
-                    " WHERE priority = %s AND status = 'pending'",
-                    (DAY_RECHECK_PRIORITY,),
-                )
-
         database = Database(connection_info)
-        recheck = queue_refresh.DailyRecheck(database)
         try:
-            for now in (night, night, None, night, None, night, night, None,
-                        paused, None, after, None, after):
-                if now is None:
-                    drain()
-                else:
-                    recheck.run_when_due(now)
+            queue_refresh.queue_recheck(database, "night", DAY_D)
         finally:
             database.close()
-        morning = _queued(connection_info, f"reconcile:recheck:{DAY_D:%Y-%m-%d}:morning:")
-        tonight = _queued(connection_info, f"reconcile:recheck:{DAY_D:%Y-%m-%d}:night:")
+        with psycopg.connect(connection_info) as connection:
+            queue_refresh.queue_for_reading(
+                connection, player_id, "log:1", DAY_C + timedelta(hours=1))
+            waiting = connection.execute(
+                "SELECT deduplication_key, priority, due_at <= clock_timestamp()"
+                " FROM python_processing_jobs"
+                " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+            ).fetchall()
 
-    logged = [(line["slot"].split(":")[1], line["status"], line["days"])
-              for line in map(json.loads, [
-                  line for line in capsys.readouterr().out.splitlines()
-                  if '"daily_recheck"' in line])]
-    assert logged == [
-        ("morning", "queuing", 1), ("morning", "queuing", 1), ("morning", "queued", 0),
-        ("night", "queuing", 1), ("night", "queuing", 1), ("night", "queued", 0)]
-    assert morning == tonight == [(str(player_id), day) for day in days]
+    day_b, day_c = (f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C))
+    assert sorted(waiting) == [
+        (f"reconcile:log:1:{player_id}:{day_c}", DAY_RECHECK_PRIORITY, True),
+        (f"reconcile:recheck:night:{player_id}:{day_b}", DAY_RECHECK_PRIORITY, True),
+        (f"reconcile:recheck:night:{player_id}:{day_c}", DAY_RECHECK_PRIORITY, False),
+    ]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:
