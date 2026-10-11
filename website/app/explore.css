@@ -537,6 +537,11 @@
   font-size: 0.8rem;
 }
 
+/* Long clan names wrap like player names, leaving room for the Tie slot. */
+.leaderboard-table td:nth-child(3) {
+  overflow-wrap: anywhere;
+}
+
 .local-time {
   cursor: help;
 }
@@ -1269,6 +1274,14 @@
   .leaderboard-table td:nth-child(4) {
     width: 1%;
     padding-right: 0.75rem;
+  }
+
+  /* No room beside the trophies on phones, so the Tie pill sits under them. */
+  .tie-slot {
+    display: block;
+    width: auto;
+    margin: 0.15rem 0 0;
+    text-align: right;
   }
 
   .leaderboard-table th,
