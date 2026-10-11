@@ -146,6 +146,85 @@ collection, weekly checks, processing, storage and cost before deciding whether
 additional keys or wiring changes are necessary. Weekly scheduling and reuse of
 finished checks have not been verified by the manual-import test.
 
+## The game's ranking lists, once a day
+
+With `CLASHLENS_GAME_RANKINGS_ENABLED=true` in `app.env` (default `false`),
+the collector pulls the game's own ranking lists around each Reset, on the
+regular keys, one request at a time and at most two a second
+(`game_rankings.py`, migration 0099):
+
+- the global top 200 at 05:00:30, tried again a minute apart until 05:05, for
+  trophies close to the Reset;
+- the global top 200 every 3 minutes from 05:03 until its `previousRank`
+  field holds this Reset's ranks. It counts as switched when at least a
+  quarter of the players with a known `previousRank` in both it and that
+  morning's 05:00:30 pull show a different one; a rank turning unknown is
+  not a switch. With no 05:00:30 pull there is no poll. Polling
+  stops at 06:00; a day never seen to switch pulls no country lists and
+  scores `unknown`;
+- once switched, every country's top 200, with the location list first when
+  the saved one is over 7 days old. A failed pull is tried again 2 minutes
+  later, until 07:00. A location list already over 7 days old at the Reset
+  is never used: while it can't be refreshed no country list is pulled, and
+  the day scores `unknown`.
+
+That is about 258 requests a day plus up to 19 polls. Each pull keeps its raw
+bytes gzip-compressed, its request time and location in `game_ranking_pulls`,
+deleted 28 days after its Reset: about 4 MB a day compressed (43 MB raw), so
+about 115 MB at most. Every Legend I player in a country list who is not
+tracked is saved as due a discovery check, the same path as a Monday
+promotion, so each is asked again once a day. A country pull with a player
+another job holds at that moment is saved as failed and tried again 2 minutes
+later. On 11 October 2026, 570 Legend I players in the lists were missing from
+the board; tracked ones are skipped.
+
+From 07:00, each newly published frozen Daily board for a Reset up to 28 days
+old, while its pulls are kept, is scored against those pulls: the
+board the website shows, including one a later correction or Season repair
+republished, and one with no entries. Scoring a board republished later is
+best effort: the location list a Reset used can be up to 7 days older than
+its Reset and is deleted 28 days after its own, so once it is gone that
+board's country part is `unknown`, never scored. A board for a Reset older
+than the oldest pull still kept is not scored at all. The score is kept forever in
+`game_ranking_scores` (about 2 KB a day per board version). A score is `unknown`, never a pass, when any pull
+above failed or is missing, including a day with no pulls since collection
+began; its numbers then cover only what arrived. The game's own faults are
+left out of every number, S6 included, but listed: stuck 5,000 rows, which
+are Legend I rows at exactly 5,000 trophies with 0 attack wins for players
+with a stored Legend battle, attack or defense, on an earlier Legend day this
+Season; and tags the game lists in two countries. Saved profiles don't keep
+their attack and defense counts, so the stored battles are the evidence.
+Order comparisons still use every published board position. A
+`previousRank` of 0 or less counts as unknown. Each score also saves the
+board's own measured coverage, the share of our eligible players it holds,
+as `board_measured_coverage`, separate from S5's coverage of the game's lists.
+
+| score | meaning | 11 Oct 2026 board |
+|---|---|---:|
+| S1 | same-country order breaks per 100,000 pairs of Legend I players on the board | 116.8 |
+| S2 | global top 200 whose Reset rank falls inside the board positions of their trophy count | 164 |
+| S3 | confirmed board entries in at least one same-country pair the game orders the other way, each counted once | not measured |
+| S4 | Legend I players in country lists not on the board, not at 5,000 with 0 attack wins | 9 at the 14:07 pull |
+| S5 | percent of Legend I players in country lists who are on the board | 91.46 |
+| S6 | percent of board entries, faults left out, marked uncertain | not measured |
+
+The score also counts exact global ranks, tied pairs and how often the
+board's order inside a tie matches the game's, and how many 05:00:30 global
+trophies equal the board value. The 11 October column is this code's score of
+that day's board against the lists pulled at 13:56-14:07 UTC: 342,472 pairs,
+400 breaks, 27 exact global ranks, 1,155 tied pairs, 45 stuck 5,000 rows and
+3 tags in two countries, matching the 11 October blind review. S3 and S6 need
+the board's confidence labels, which that export did not have; S4 counts 8
+players who signed up after that Reset, which a pull at about 05:20 mostly
+avoids. S4 and S5 there are from before S4 stopped requiring a known Reset
+rank and before the stuck rows left S5; they have not been re-run, nor has
+the stuck-row count under the stored-battle rule.
+
+`podman exec clashlens-collector python -m clashlens.cli game-ranking-score
+--database-url-file /run/secrets/database-url [--days 14]` prints one JSON
+line per recent Reset: its latest board version's score. Each tick's pulls,
+scores and prunes also print a `game_rankings` line in the collector log.
+
 ## Weekly eligibility switch
 
 `ops` passes `CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=true` to the collector, for
