@@ -56,7 +56,7 @@ const board: TrackedLeaderboard = {
     freshness: "stale",
     confidence: "partial",
     coverage: "partial",
-    version: "tracked-trophies-md5-v1",
+    version: "tracked-trophies-attack-destruction-v2",
   },
   sourceObservations: {
     newestObservedAt: "2026-10-02T11:59:00Z",
@@ -334,6 +334,7 @@ it("heads a Daily board with its Reset time in UTC and no explanation", async ()
     nextSnapshot: null,
   };
   fixture.provenance.observedAt = "2026-10-05T04:59:00Z";
+  fixture.provenance.version = "tracked-player-order-v3";
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
   expect(html).toContain('<p class="rankings-kicker">Day 28</p>');
@@ -350,6 +351,40 @@ it("heads a Daily board with its Reset time in UTC and no explanation", async ()
   // The Live board's Season-reset rule never applies to a frozen day.
   expect(html).not.toContain("waiting for their Season reset");
 });
+
+it.each([
+  [
+    "tracked-player-order-v3",
+    "go to the player whose trophies changed most recently that Legend day, then",
+  ],
+  [
+    "tracked-player-order-v2",
+    "go to the higher average attack destruction this Season, then more attacks, then",
+  ],
+  ["tracked-player-order-v1", "follow a fixed order based on player tags."],
+])(
+  "explains ties on a Daily board saved with %s by the order it kept",
+  async (version, order) => {
+    const fixture = structuredClone(board);
+    fixture.view = "daily";
+    fixture.daily = {
+      officialSeasonId: "1788757200",
+      dayNumber: 2,
+      resetAt: "2026-09-09T05:00:00Z",
+      seasonStartAt: "2026-09-07T05:00:00Z",
+      seasonEndAt: "2026-10-05T05:00:00Z",
+      previousSnapshot: null,
+      nextSnapshot: null,
+    };
+    fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
+    fixture.provenance.version = version;
+    mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+    const { html } = await render("view=daily&season=1788757200&day=2&page=1");
+    const explanation = `Equal trophies are marked Tie and ${order}`;
+    expect(html).toContain(`<p class="sr-only" id="rank-explanation">Rank among players`);
+    expect(html.match(new RegExp(explanation, "g"))).toHaveLength(2);
+  },
+);
 
 it.each([
   ["q=%232pp", "#2PP isn&#x27;t on this board.", '<a href="/players/%232PP">Open their'],

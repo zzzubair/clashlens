@@ -36,14 +36,19 @@ function formatReset(value: string) {
   const time = date.toISOString().slice(11, 16);
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}, ${time} UTC`;
 }
-// The Live board still orders ties by attack destruction; Daily boards by the
-// latest trophy change, which matched the game's Reset order more often.
-function rankExplanation(view: "live" | "daily") {
-  return `Rank among players tracked by Clash Lens, not the official global rank. Equal trophies are marked Tie and go to ${
-    view === "daily"
-      ? "the player whose trophies changed most recently that Legend day"
-      : "the higher average attack destruction this Season, then more attacks"
-  }, then a fixed order based on player tags.`;
+// Each board explains the tie order it was saved with: Daily boards since v3
+// by the latest trophy change, which matched the game's Reset order more
+// often; the Live board and older v2 Daily boards by attack destruction; older
+// boards by player tags alone.
+function rankExplanation(orderVersion: string | undefined) {
+  const tieOrder =
+    orderVersion === "tracked-player-order-v3"
+      ? "go to the player whose trophies changed most recently that Legend day, then a fixed order based on player tags"
+      : orderVersion === "tracked-player-order-v2" ||
+          orderVersion === "tracked-trophies-attack-destruction-v2"
+        ? "go to the higher average attack destruction this Season, then more attacks, then a fixed order based on player tags"
+        : "follow a fixed order based on player tags";
+  return `Rank among players tracked by Clash Lens, not the official global rank. Equal trophies are marked Tie and ${tieOrder}.`;
 }
 
 function leaderboardUrl(
@@ -400,7 +405,7 @@ export default function TrackedLeaderboardRoute() {
           ) : (
             <>
               <p className="sr-only" id="rank-explanation">
-                {rankExplanation(view)}
+                {rankExplanation(leaderboard?.provenance.version)}
               </p>
               <div
                 aria-label={`${view === "daily" ? "Daily" : "Live"} leaderboard table`}
@@ -422,7 +427,7 @@ export default function TrackedLeaderboardRoute() {
                       <th
                         scope="col"
                         aria-describedby="rank-explanation"
-                        title={rankExplanation(view)}
+                        title={rankExplanation(leaderboard?.provenance.version)}
                       >
                         Rank
                       </th>
