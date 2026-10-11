@@ -309,6 +309,9 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert "python_processing_jobs_pending_claim_v2" in plan_text, (
                 f"claim plan does not use the indexed pending probe:\n{plan_text}"
             )
+            assert "python_processing_jobs_waiting_retry_claim" in plan_text, (
+                f"claim plan reads pending jobs to find retries:\n{plan_text}"
+            )
             assert "Bitmap Heap Scan on python_processing_jobs" not in plan_text, (
                 f"claim plan reads an unbounded candidate set:\n{plan_text}"
             )
@@ -923,3 +926,40 @@ def test_claims_at_a_reset_backlog_skip_reset_work_they_cannot_take(
                 assert max(map(int, removed), default=0) < 1000, (
                     f"claim {options} read Reset work it cannot take:\n{plan_text}"
                 )
+
+
+@pytest.mark.parametrize(
+    ("reset_first", "retried_first"), [(None, True), (False, True), (True, False)]
+)
+def test_a_retried_live_job_is_not_hidden_behind_newer_live_work(
+    database_url: str, reset_first: bool | None, retried_first: bool
+) -> None:
+    # A live job that failed is due again from its retry time, so 40 live jobs
+    # that arrived a minute ago, each waiting behind the Reset backlog, used to
+    # fill the 32 live jobs a claim looks at and hide it until they were done.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            for index in range(40):
+                _response_job(connection, f"newer-live:{index}")
+                _response_job(connection, f"reset:{index}", priority=PYTHON_RESET_PRIORITY)
+            retried = _response_job(connection, "retried-live")
+            connection.execute(
+                """
+                UPDATE python_processing_jobs SET
+                    created_at = clock_timestamp() - CASE WHEN id = %(retried)s
+                        THEN interval '30 minutes' ELSE interval '1 minute' END,
+                    due_at = clock_timestamp() - CASE WHEN id = %(retried)s
+                        THEN interval '10 seconds' ELSE interval '1 minute' END,
+                    status = CASE WHEN id = %(retried)s THEN 'waiting_retry' ELSE status END,
+                    attempt_count = CASE WHEN id = %(retried)s THEN 1 ELSE 0 END
+                """,
+                {"retried": retried},
+            )
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="retry-starvation", reset_first=reset_first)
+        finally:
+            database.close()
+        assert claim is not None
+        assert (claim.job_id == retried) is retried_first
