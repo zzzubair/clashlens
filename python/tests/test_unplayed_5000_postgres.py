@@ -387,11 +387,12 @@ def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
 ) -> None:
     # First seen at the Day 8 Reset at 5,000 with no battle: one already
     # naming the Season, one not signed up who signs up by the Day 10 Reset,
-    # and one never signed up.
+    # and one never signed up. The Day 9 Reset reading ends Day 8.
     signed, joins, never = "#2PP", "#8QQ", "#9YY"
-    day_8, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 9))
+    day_8, day_9, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 8, 9))
     with domain_database(database_url, include_coordinator=True) as connection_info:
         for boundary, joined in ((day_8, _season_zero(joins)),
+                                 (day_9, _season_zero(joins)),
                                  (day_10, _new_season_profile(5000, joins))):
             _run(connection_info, archive_server, _sweep(
                 connection_info, archive_server, boundary, {
@@ -477,7 +478,8 @@ def test_a_malformed_season_at_5000_stays_rejected(
         with psycopg.connect(connection_info) as connection:
             rejected = connection.execute(
                 """
-                SELECT count(*) FROM reset_baseline_evidence AS evidence
+                SELECT count(DISTINCT evidence.boundary_at)
+                FROM reset_baseline_evidence AS evidence
                 JOIN players AS player ON player.id = evidence.player_id
                 WHERE player.normalized_tag = %s
                   AND evidence.failure_reasons ? 'profile_invalid'

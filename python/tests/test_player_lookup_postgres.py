@@ -534,7 +534,8 @@ def _process_profile(info, archive_server, processor, key, **changes) -> None:
         (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
     )
     body.update(changes)
-    store_observation(
+    # A profile at 5,000 queues earlier days, so process this profile's own job.
+    _, job = store_observation(
         info,
         archive_server,
         occurrence_key=key,
@@ -544,7 +545,7 @@ def _process_profile(info, archive_server, processor, key, **changes) -> None:
         normalized_tag="#2PP",
         parser_version=PROFILE_PARSER_VERSION,
     )
-    result = processor.process_once(owner="lookup-test")
+    result = processor.process_job(job, owner="lookup-test")
     assert result is not None and result.outcome == "processed"
 
 
