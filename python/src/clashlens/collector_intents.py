@@ -58,7 +58,7 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
         )
         # A settlement check takes the Reset path: a fresh profile, saved,
         # then the battle log, never a reused profile or a skipped log. It
-        # still waits behind Reset work in the ordinary intent slots.
+        # uses the Reset slots behind any unfinished Reset pair.
         lane = (
             "reset"
             if intent.kind in {"reset_baseline", "reset_settlement"}
