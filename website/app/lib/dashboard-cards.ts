@@ -436,6 +436,8 @@ export interface LegendDayData {
   /** Null when the player page could not be read. */
   day: PlayerDay | null;
   range: RankRange | null;
+  /** The likely part of `range`; null until it can be worked out. */
+  likely: RankRange | null;
 }
 
 export interface BasesData {

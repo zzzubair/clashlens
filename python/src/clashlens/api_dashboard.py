@@ -11,6 +11,10 @@ has not caught up with is never counted without its trophies. A player
 without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
+The likely range inside it (likely_range.py) is recomputed with each board
+read from the same trophies and open slots, each player's attacks on the
+three Legend days before today, and the saved examples of the last 7 days.
+
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
 
@@ -38,7 +42,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
-from . import army_types
+from . import army_types, likely_range
 from .api_db import ApiDatabase, _screen_events, _text
 from .api_leaderboard import _LIVE_PLAYERS_SQL, _season_params
 from .domain import (
@@ -70,10 +74,11 @@ SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
        day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
        day.defense_three_star_count,
        COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0),
-       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
+       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0),
+       recent.yesterday, recent.before
 FROM live
 JOIN players AS player ON player.normalized_tag = live.normalized_tag
-LEFT JOIN LATERAL (
+{likely_range.RECENT_ATTACKS_SQL}LEFT JOIN LATERAL (
     SELECT attack_count, attack_gain, defense_count, defense_loss,
            defense_three_star_count, ranked_day_version_id
     FROM api_player_daily_logs AS daily
@@ -121,6 +126,9 @@ class _Board:
     starts: list[int]
     defenses_below: list[int]
     held_below: list[int]
+    # tag -> its index in ``likely``, which is None until examples are saved.
+    players: dict[str, int]
+    likely: likely_range.LikelyPlaces | None
 
 
 def _open(used: Any, allowed: int) -> int:
@@ -136,9 +144,11 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     held = defenses = 0
     # Day start trophies -> [defenses, held defenses].
     by_start: dict[int, list[int]] = {}
+    # tag -> (trophies now, open attacks, open defenses, activity)
+    inputs: dict[str, tuple[int, int, int, int]] = {}
     for (
         tag, trophies, start, attacks, gained, defended, lost, tripled,
-        zero_attacks, zero_defenses,
+        zero_attacks, zero_defenses, yesterday, before,
     ) in rows:
         if None in (start, attacks, gained, defended, lost):
             basis, open_attacks, open_defenses = (
@@ -154,6 +164,10 @@ def _read_board(connection: Any, now: datetime) -> _Board:
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
+        inputs[_text(tag)] = (
+            basis, open_attacks, open_defenses,
+            likely_range.activity(int(yesterday), int(before)),
+        )
         if defended:
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
@@ -166,6 +180,7 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     for value in starts:
         defenses_below.append(defenses_below[-1] + by_start[value][0])
         held_below.append(held_below[-1] + by_start[value][1])
+    examples = likely_range.read_examples(connection, now) if inputs else None
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -177,6 +192,13 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         starts=starts,
         defenses_below=defenses_below,
         held_below=held_below,
+        players={tag: index for index, tag in enumerate(inputs)},
+        likely=None if examples is None else likely_range.LikelyPlaces(
+            *(list(column) for column in zip(*inputs.values(), strict=True)),
+            examples,
+            # Dashboards read in the same minute imagine the same days.
+            seed=int(now.timestamp()) // 60,
+        ),
     )
 
 
@@ -253,6 +275,15 @@ def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
         if defenses >= SIMILAR_FEWEST_DEFENSES
         else None
     )
+
+
+def likely_rank_range(board: _Board, tag: str) -> dict[str, int] | None:
+    """The places ``tag`` likely finishes in today, inside its rank range;
+    None off the board or before any day's examples are saved."""
+    outer = rank_range(board, tag)
+    if outer is None or board.likely is None:
+        return None
+    return board.likely.range(board.players[tag], outer["best"], outer["worst"])
 
 
 def _battles_known(day: tuple[Any, ...]) -> bool:
@@ -394,6 +425,7 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": _iso(board.computed_at),
         "rank_range": rank_range(board, tag),
+        "likely_rank_range": likely_rank_range(board, tag),
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}

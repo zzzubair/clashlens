@@ -56,6 +56,8 @@ import {
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
   rankRange: RankRange | null;
+  /** Where the player likely finishes, 9 times in 10; null before it can be worked out. */
+  likelyRange: RankRange | null;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
@@ -79,6 +81,14 @@ function time(value: unknown): number {
   const parsed = isString(value) ? Date.parse(value) : Number.NaN;
   if (!Number.isFinite(parsed)) malformed();
   return parsed;
+}
+
+function rankRange(value: unknown): RankRange {
+  if (!isRecord(value)) malformed();
+  const best = count(value.best);
+  const worst = count(value.worst);
+  if (best < 1 || worst < best) malformed();
+  return { best, worst };
 }
 
 function opponent(value: unknown): OpponentRow {
@@ -136,15 +146,10 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
     undefined,
   );
   if (!isRecord(payload) || payload.tag !== tag) malformed();
-  const range = payload.rank_range;
   return {
-    rankRange: nullable(range, (item) => {
-      if (!isRecord(item)) malformed();
-      const best = count(item.best);
-      const worst = count(item.worst);
-      if (best < 1 || worst < best) malformed();
-      return { best, worst };
-    }),
+    rankRange: nullable(payload.rank_range, rankRange),
+    // A data service older than the likely range leaves it out.
+    likelyRange: nullable(payload.likely_rank_range ?? null, rankRange),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
     opponents: nullable(payload.opponents, (items) => {
@@ -763,6 +768,7 @@ export async function loadCardData(
         player: ctx.selected,
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
+        likely: read?.likelyRange ?? null,
       };
     },
     bases: async () => {
