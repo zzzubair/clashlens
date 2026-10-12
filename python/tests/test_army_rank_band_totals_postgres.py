@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from datetime import timedelta
 
+import pytest
 from domain_test_support import as_api_role, domain_database, store_observation, text
 from test_army_analytics_publication_postgres import (
     DAY_START,
@@ -20,9 +21,13 @@ from test_army_analytics_publication_postgres import (
     _selection,
 )
 
-from clashlens import api_analytics, army_rank_bands
+from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase
-from clashlens.army_analytics import CATEGORIES, TOP_PRESETS
+from clashlens.army_analytics import (
+    CATEGORIES,
+    TOP_PRESETS,
+    ArmyAnalyticsUnavailable,
+)
 
 POPULATIONS = (
     "top-5",
@@ -45,11 +50,16 @@ OFFERED = (
     "band-2001-5000",
     "band-5001-10000",
 )
-HOLDING_RANKS_101_300 = {
-    *(f"top-{count}" for count in TOP_PRESETS if count > 100),
-    "band-101-200",
-    "band-201-300",
-}
+# What a view shows, without the evidence fields that name its source.
+SHOWN = (
+    "rows",
+    "total_attacks",
+    "usable_army_sample",
+    "army_states",
+    "unknown_affected_attacks",
+    "unknown_component_occurrences",
+    "perspective_disagreement_count",
+)
 
 
 def _republish(database, boundary, positions: dict[int, int]) -> int:
@@ -97,12 +107,6 @@ def _republish(database, boundary, positions: dict[int, int]) -> int:
         return int(new)
 
 
-def _results_from_facts(api: ApiDatabase, monkeypatch, days) -> dict:
-    with monkeypatch.context() as patch:
-        patch.setattr(api_analytics, "read_rank_band_totals", lambda *a, **k: None)
-        return _results(api, days)
-
-
 def _results(
     api: ApiDatabase, days: tuple[tuple[int, int], ...] = ((23, 24), (24, 24))
 ) -> dict[tuple[str, str, str, int, int], dict]:
@@ -127,7 +131,11 @@ def _results(
     return results
 
 
-def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
+def _shown(result: dict) -> dict:
+    return {field: result[field] for field in SHOWN}
+
+
+def test_each_day_counts_once_by_its_own_board(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     with domain_database(database_url) as ci:
@@ -151,7 +159,6 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
         ]
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
-        cached_api = ApiDatabase(as_api_role(ci))
         fact_queries: list[str] = []
         original_connection = api.pool.connection
 
@@ -169,6 +176,24 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
 
                 yield TracedConnection()
 
+        def view(population: str, start_day: int = 23, **changes) -> dict:
+            result = api_analytics.get_army_analytics(
+                api,
+                _selection(
+                    population=population, start_day=start_day, end_day=24, **changes
+                ),
+            )
+            assert result is not None
+            return result
+
+        counted: list[tuple[int, int]] = []
+        count = army_rank_bands._count
+
+        def counting(connection, snapshot_id, season_id, day, *rest):
+            counted.append((snapshot_id, day))
+            count(connection, snapshot_id, season_id, day, *rest)
+
+        monkeypatch.setattr(army_rank_bands, "_count", counting)
         api.pool.connection = traced_connection
         try:
             for index, job in enumerate(jobs):
@@ -210,202 +235,124 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                 day_start=day2_start, day_number=24,
             )
             assert processor.process_job(_army_job(database), owner="army-2").outcome == "processed"
-            # Each player sits in a different rank band of day 24's leaderboard.
-            _seed_frozen_snapshot_at(
+            # #2PP leads day 23's board and drops to rank 7 on day 24's.
+            board_23, board_24 = day2_start, day2_start + timedelta(days=1)
+            day_23 = _seed_frozen_snapshot_at(
                 database,
-                DAY_START + timedelta(days=2),
+                board_23,
                 [
                     (ids["#2PP"], 1, "fresh", "confirmed"),
+                    (ids["#8PP"], 1500, "fresh", "confirmed"),
+                    (ids["#9PP"], 150, "stale", "uncertain"),
+                ],
+            )
+            day_24 = _seed_frozen_snapshot_at(
+                database,
+                board_24,
+                [
+                    (ids["#2PP"], 7, "fresh", "confirmed"),
                     (ids["#8PP"], 1500, "fresh", "confirmed"),
                     (ids["#9PP"], 150, "fresh", "confirmed"),
                 ],
             )
 
-            from_facts = _results(api)
-            assert from_facts[("offense", "troops", "top-5", 23, 24)]["total_attacks"] == 3
-            assert from_facts[("defense", "troops", "band-1001-2000", 23, 24)][
-                "total_attacks"
-            ] == 1
-            assert from_facts[("defense", "troops", "top-10000", 23, 24)][
-                "total_attacks"
-            ] == 1
-            assert from_facts[("defense", "troops", "top-200", 23, 24)][
-                "total_attacks"
-            ] == 0
+            # A day the worker has not counted is unavailable, never slow.
+            with pytest.raises(ArmyAnalyticsUnavailable) as uncounted:
+                view("top-5000")
+            assert uncounted.value.affected_days == [23, 24]
 
-            # A trophy range may start below 5,000 and may hold no attacks.
-            wide, empty = (
-                api_analytics.get_army_analytics(
-                    api, _selection(population=population, start_day=23, end_day=24)
-                )
-                for population in ("trophies-3000-6100", "trophies-100-200")
-            )
-            assert wide is not None and wide["total_attacks"] == 3
-            assert empty is not None
-            assert (empty["total_attacks"], empty["rows"]) == (0, [])
+            # One day a run, newest first, then nothing more to count.
+            for _run in range(3):
+                army_rank_bands.refresh_rank_band_totals(database)
+            assert counted == [(day_24, 24), (day_23, 23)]
 
             fact_queries.clear()
-            army_rank_bands.refresh_rank_band_totals(database)
-            from_totals = _results(api)
+            saved = _results(api)
             assert fact_queries == []
-            assert from_totals == from_facts
+            # Each day counts by its own board: Top 5 holds #2PP's two day 23
+            # attacks but not its day 24 one.
+            top5 = saved[("offense", "troops", "top-5", 23, 24)]
+            assert top5["total_attacks"] == 2
+            assert top5["reproducibility"]["snapshot_versions"] == [1, 1]
+            assert saved[("offense", "troops", "top-10", 23, 24)]["total_attacks"] == 3
+            assert saved[("offense", "troops", "top-5", 24, 24)]["total_attacks"] == 0
+            assert saved[("defense", "troops", "band-1001-2000", 23, 24)][
+                "total_attacks"
+            ] == 1
+            # The players in ranks 101-200 on either day, one of them with an
+            # old trophy count at a Reset.
+            assert saved[("offense", "troops", "band-101-200", 23, 24)][
+                "cohort_evidence"
+            ]["cohort_players"] == 1
+            assert saved[("offense", "troops", "band-101-200", 23, 24)][
+                "cohort_evidence"
+            ]["stale_or_uncertain_cohort_members"] == 1
+            # The top 10,000 holds every player each day, so it shows what
+            # counting every attack shows.
+            for lens in ("offense", "defense"):
+                for category in sorted(CATEGORIES):
+                    every_attack = view(
+                        "trophies-0-99999", lens=lens, category=category
+                    )
+                    assert every_attack["missing_trophy_membership_evidence"] == 0
+                    assert _shown(
+                        saved[(lens, category, "top-10000", 23, 24)]
+                    ) == _shown(every_attack)
+            # Every Top N and rank range the page offers loads.
+            for population in OFFERED:
+                fact_queries.clear()
+                view(population)
+                assert fact_queries == []
+            # Army types count the same players.
+            army_types.refresh_army_types(database, now=DAY_START.replace(hour=12))
+            assert view("top-5", category="army-types")["total_attacks"] == 2
+            assert view("top-10", category="army-types")["total_attacks"] == 3
 
-            # Totals saved before ranks 1,001-10,000 had bands lack those rows:
-            # the next check counts them instead of keeping the old ones.
-            with database.pool.connection() as connection:
-                connection.execute(
-                    "DELETE FROM army_analytics_rank_band_totals"
-                    " WHERE first_position > 1000"
-                )
+            # A correction moves #2PP back into day 24's top 5. The counted
+            # day keeps its board, and nothing is counted again.
+            republished = _republish(database, board_24, {ids["#2PP"]: 1})
             army_rank_bands.refresh_rank_band_totals(database)
-            assert _results(api) == from_facts
-            assert fact_queries == []
+            assert len(counted) == 2
+            assert view("top-5") == top5
+            assert view("top-5", category="army-types")["total_attacks"] == 2
 
-            # Totals saved before unnamed ids counted carry the old unknown
-            # tallies and leave those ids' rows out: the page reads facts
-            # until the next check counts them again.
+            # Day 23 rebuilt without its partial attack: the page keeps
+            # serving the saved totals until the worker counts day 23 again.
+            _publish_day_correction(database, "#2PP", day_one[:1])
+            assert processor.process_job(_army_job(database), owner="army-3").outcome == "processed"
+            fact_queries.clear()
+            assert _shown(view("top-5")) == _shown(top5)
+            assert fact_queries == []
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert counted[2:] == [(day_23, 23)]
+            assert view("top-5")["total_attacks"] == 1
+
+            # Totals saved before unnamed ids counted, or counted from another
+            # Reset's board before each day used its own, are counted again.
             with database.pool.connection() as connection:
                 connection.execute(
                     """
                     UPDATE army_analytics_rank_band_totals
                     SET totals = totals || '{"cc_unknown": 0, "hero_unknown": {},
                         "unknown": {}, "unknown_present": {}, "rows": {}}'::jsonb
+                    WHERE season_day_number = 24
                     """
                 )
-            assert _results(api) == from_facts
-            assert fact_queries
-            fact_queries.clear()
-            army_rank_bands.refresh_rank_band_totals(database)
-            assert _results(api) == from_facts
-            assert fact_queries == []
-
-            # Rebuilding day 23 without its partial attack: until the totals are
-            # counted again the page reads facts, then the totals take over.
-            _publish_day_correction(database, "#2PP", day_one[:1])
-            assert processor.process_job(_army_job(database), owner="army-3").outcome == "processed"
-            corrected_from_facts = _results(api)
-            assert fact_queries
-            assert corrected_from_facts[("offense", "troops", "top-5", 23, 24)][
-                "total_attacks"
-            ] == 2
-            fact_queries.clear()
-            army_rank_bands.refresh_rank_band_totals(database)
-            corrected_from_totals = _results(api)
-            assert fact_queries == []
-            assert corrected_from_totals == corrected_from_facts
-            # A Top N view's evidence hash changes with its own facts.
-            key = ("offense", "troops", "top-5", 23, 24)
-            assert (
-                corrected_from_totals[key]["publication_identity"]
-                != from_totals[key]["publication_identity"]
-            )
-
-            # Moving a battle to another Legend day also changes the marker of
-            # the day it left, so neither cached results nor saved totals for
-            # that day are reused. A day 23 leaderboard lets the page show day
-            # 23 alone; the second reader keeps the page's result cache.
-            _seed_frozen_snapshot_at(
-                database,
-                day2_start,
-                [
-                    (ids["#2PP"], 1, "fresh", "confirmed"),
-                    (ids["#8PP"], 1500, "fresh", "confirmed"),
-                    (ids["#9PP"], 150, "fresh", "confirmed"),
-                ],
-            )
-            single_days = ((23, 23), (24, 24))
-            _results(cached_api, single_days)
-
-            # A day 23 correction moves day 24's attack to day 23.
-            _publish_day_correction(
-                database,
-                "#2PP",
-                [day_one[0], _event(third, "offense", ts3, 2, 60, 20)],
-                version=3,
-            )
-            assert processor.process_job(_army_job(database), owner="army-4").outcome == "processed"
-            moved_back = _results(api, single_days)
-            assert moved_back[("offense", "troops", "top-5", 24, 24)][
-                "total_attacks"
-            ] == 0
-            assert moved_back[("offense", "troops", "top-5", 23, 23)][
-                "total_attacks"
-            ] == 2
-            assert _results(cached_api, single_days) == moved_back
-
-            # A day 24 build moves day 23's defense to day 24.
-            _publish_day(
-                database, "#8PP", [_event(first, "defense", ts1, 3, 100, -35)],
-                day_start=day2_start, day_number=24,
-            )
-            assert processor.process_job(_army_job(database), owner="army-5").outcome == "processed"
-            moved_forward = _results(api, single_days)
-            assert moved_forward[("defense", "troops", "band-1001-2000", 23, 23)][
-                "total_attacks"
-            ] == 0
-            assert moved_forward[("defense", "troops", "band-1001-2000", 24, 24)][
-                "total_attacks"
-            ] == 1
-            assert _results(cached_api, single_days) == moved_forward
-
-            fact_queries.clear()
-            army_rank_bands.refresh_rank_band_totals(database)
-            assert _results(api, ((24, 24),)) == {
-                key: value for key, value in moved_forward.items() if key[3] == 24
-            }
-            assert fact_queries == []
-
-            # A Reset's board is republished every few minutes. With the same
-            # players in every band (#9PP moves within ranks 101-200), the
-            # page and the worker keep the saved totals.
-            counted: list[tuple[int, list[int]]] = []
-            count = army_rank_bands._count
-
-            def counting(connection, snapshot_id, season_id, days, players, *rest):
-                counted.append((snapshot_id, sorted(players)))
-                count(connection, snapshot_id, season_id, days, players, *rest)
-
-            monkeypatch.setattr(army_rank_bands, "_count", counting)
-            board = DAY_START + timedelta(days=2)
-            _republish(database, board, {ids["#9PP"]: 160})
-            same_from_facts = _results_from_facts(api, monkeypatch, ((24, 24),))
-            army_rank_bands.refresh_rank_band_totals(database)
-            assert counted == []
-            fact_queries.clear()
-            assert _results(api, ((24, 24),)) == same_from_facts
-            assert fact_queries == []
-
-            # #9PP moves to ranks 201-300: views holding either band read
-            # facts until the worker counts those two bands, which hold only
-            # #9PP; the other bands keep their totals. Every Top N and rank
-            # range the page offers loads either way.
-            moved = _republish(database, board, {ids["#9PP"]: 250})
-            selections = {
-                population: _selection(population=population, start_day=24, end_day=24)
-                for population in OFFERED
-            }
-            with monkeypatch.context() as patch:
-                patch.setattr(
-                    api_analytics, "read_rank_band_totals", lambda *a, **k: None
+                connection.execute(
+                    """
+                    UPDATE army_analytics_rank_band_totals SET snapshot_id = %s
+                    WHERE season_day_number = 23
+                    """,
+                    (day_24,),
                 )
-                moved_from_facts = {
-                    population: api_analytics.get_army_analytics(api, selection)
-                    for population, selection in selections.items()
-                }
-            assert moved_from_facts["top-10000"]["total_attacks"] == 1
-            for refreshed in (False, True):
-                for population, selection in selections.items():
-                    fact_queries.clear()
-                    assert (
-                        api_analytics.get_army_analytics(api, selection)
-                        == moved_from_facts[population]
-                    )
-                    assert bool(fact_queries) == (
-                        not refreshed and population in HOLDING_RANKS_101_300
-                    )
-                army_rank_bands.refresh_rank_band_totals(database)
-                assert counted == [(moved, [ids["#9PP"]])]
+            with pytest.raises(ArmyAnalyticsUnavailable):
+                view("top-5")
+            army_rank_bands.refresh_rank_band_totals(database)
+            army_rank_bands.refresh_rank_band_totals(database)
+            # A count uses the board version published when it runs, which
+            # now has #2PP in day 24's top 5.
+            assert counted[3:] == [(republished, 24), (day_23, 23)]
+            assert view("top-5")["total_attacks"] == 2
         finally:
             api.close()
-            cached_api.close()
             database.close()

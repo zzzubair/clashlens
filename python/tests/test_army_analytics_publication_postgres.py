@@ -20,7 +20,7 @@ from domain_test_support import (
 )
 from psycopg_pool import PoolTimeout
 
-from clashlens import api_analytics, boundary_publication
+from clashlens import api_analytics, army_rank_bands, boundary_publication
 from clashlens.api_db import (
     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
@@ -688,6 +688,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 snapshot_id = _seed_frozen_snapshot(
                     database, [(defender_id,), (attacker_id,)]
                 )
+                army_rank_bands.refresh_rank_band_totals(database)
                 top5 = api_analytics.get_army_analytics(api, _selection(lens="defense", population="top-5"))
                 assert top5 is not None
                 assert top5["total_attacks"] == 1
@@ -701,16 +702,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert top5_offense is not None
                 assert top5_offense["total_attacks"] == 0
                 assert top5_offense["rows"] == []
-                aggregate_queries = [
-                    query
-                    for query in fact_queries
-                    if "jsonb_array_elements" in query
-                ]
-                assert len(aggregate_queries) == 1
-                assert "population_player_id = ANY(%s::bigint[])" in aggregate_queries[0]
-                assert "battle_time_trophies BETWEEN" not in aggregate_queries[0]
-                assert "home_troops AS component_payload" not in aggregate_queries[0]
-                assert "heroes" not in aggregate_queries[0]
+                assert fact_queries == []
                 # Top 5 is one rank band (from rank 1) with no facts that day.
                 band_digest = json.dumps([[DAY_NUMBER, 1, None]], separators=(",", ":"))
                 expected_top_source_hash = hashlib.sha256(
@@ -819,6 +811,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
                 database, [(player_ids["#2PP"],), (player_ids["#9PP"],)]
             )
             selection = _selection(population="top-5")
+            army_rank_bands.refresh_rank_band_totals(database)
             before = api_analytics.get_army_analytics(api, selection)
             assert before is not None and before["total_attacks"] == 1
             with database.pool.connection() as connection:
@@ -840,6 +833,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
                 _army_job(database), owner="unselected-correction"
             )
             assert correction is not None and correction.outcome == "processed"
+            army_rank_bands.refresh_rank_band_totals(database)
             after = api_analytics.get_army_analytics(api, selection)
             assert after is not None
             assert after["rows"] == before["rows"]
@@ -1120,21 +1114,13 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
 
             # Frozen cohort filters still include the attacks.
             _seed_frozen_snapshot(database, [(attacker_id,), (defender_id,)])
+            army_rank_bands.refresh_rank_band_totals(database)
             top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert top5 is not None
             assert top5["total_attacks"] == 2
             assert top5["missing_trophy_membership_evidence"] == 0
             cached_top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert cached_top5 == top5
-            _seed_frozen_snapshot(
-                database,
-                [(defender_id,), (attacker_id,)],
-                version=2,
-            )
-            changed_top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
-            assert changed_top5 is not None
-            assert changed_top5["total_attacks"] == 0
-            assert changed_top5["publication_identity"] != top5["publication_identity"]
         finally:
             api.close()
             database.close()
@@ -1166,6 +1152,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
             _seed_frozen_snapshot(
                 database, [(attacker_id,), (defender_id,)], stale_first=True
             )
+            army_rank_bands.refresh_rank_band_totals(database)
             top2 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert top2 is not None
             # Position membership still includes the stale entry; the weakness
@@ -1816,6 +1803,8 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             assert changed_streak is not None
             assert changed_streak["publication_identity"] != streak["publication_identity"]
 
+            for _day in (23, 24):
+                army_rank_bands.refresh_rank_band_totals(database)
             non_streak = api_analytics.get_army_analytics(api,
                 _selection(population="top-5", start_day=23, end_day=24)
             )

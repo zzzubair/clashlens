@@ -1,22 +1,22 @@
-"""Saved army totals per rank band for the newest frozen leaderboard.
+"""Saved army totals per rank band, one completed Legend day at a time.
 
-The Armies page's Top N and rank-band views count every attack, on every
-selected Legend day, by the players in that part of the newest selected day's
-frozen leaderboard. Reading those facts grows with each stored day, so the
-worker saves each Legend day's totals for the 17 rank bands covering ranks
-1-10,000 of the newest leaderboard, and the page adds up at most 28 x 17 rows.
+The Armies page's Top N and rank-band views count each selected Legend day's
+attacks by the players in that part of the day's own frozen leaderboard, the
+one saved just before the Reset that ends the day. Reading those facts grows
+with each stored day, so the worker saves each completed day's totals for the
+17 rank bands covering ranks 1-10,000, and the page adds up at most 28 x 17
+rows. Army types read the same leaderboards, so both views count the same
+players.
 
-Each Season keeps only its newest leaderboard's totals: about 10,500 rows and
-16 MB at day 28, replaced at each Reset and deleted with their Legend day when
-season retirement deletes its completed-day marker. A row holds the day's marker
-hash it was counted from; once a day is rebuilt the row no longer matches,
-the page reads facts instead, and the next check here counts again.
+A Reset's leaderboard keeps being corrected for a day or more, a handful of
+players at a time. Each day is counted once, from the version published when
+it is counted, and corrections never count it again. Only a change to the
+day's own facts does: a row holds the day's marker hash it was counted from,
+and a rebuilt day no longer matches. Until that recount the page serves the
+saved totals.
 
-A Reset's leaderboard is republished every 10-15 minutes, mostly with the same
-players in every band, and counting takes minutes. A band's totals depend only
-on its players and their facts, so totals counted for one version serve every
-version whose bands hold the same players, and a recount counts only the bands
-whose players changed.
+Each Season keeps about 10,500 rows and 16 MB at day 28, deleted with their
+Legend day when season retirement deletes its completed-day marker.
 """
 
 from __future__ import annotations
@@ -41,13 +41,12 @@ from .army_analytics import (
 
 BANDS = tuple(sorted(RANK_BANDS))
 _LAST_POSITION = BANDS[-1][1]
-# A count reads the top 10,000's facts for the Season so far, a few minutes
-# late in a Season, so a failed one waits before trying again.
+# A counted day has one row per lens, category and band.
+DAY_ROWS = len(LENSES) * len(CATEGORIES) * len(BANDS)
+# A count reads one day's facts for the top 10,000, about a minute, so a
+# failed one waits before trying again.
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
-# The saved board and the newest board last found to hold the same players
-# in every band; published boards never change, so they need no second look.
-_same_players: tuple[int, int] | None = None
 # Totals saved before unnamed ids counted like any other unit carry these
 # tallies and leave those ids out; they are counted again, never served.
 _CURRENT_FORMAT = (
@@ -60,10 +59,11 @@ def _text(value: Any) -> str:
 
 
 def refresh_rank_band_totals(database: Any) -> None:
-    """Count the newest leaderboard's totals when they are missing or stale.
+    """Count the newest Season's newest day whose totals are missing or stale.
 
-    Runs on the worker's maintenance timer. A failure is reported and tried
-    again after RETRY_SECONDS; the page reads facts meanwhile.
+    Runs on the worker's maintenance timer and counts at most one day, so
+    other upkeep waits a minute at most. A failure is reported and tried
+    again after RETRY_SECONDS.
     """
     global _retry_at
     started = monotonic()
@@ -90,7 +90,7 @@ def refresh_rank_band_totals(database: Any) -> None:
                 {
                     "event": "army_rank_band_totals",
                     "status": "complete",
-                    "snapshot_id": counted,
+                    **counted,
                     "seconds": round(monotonic() - started, 1),
                 }
             ),
@@ -98,171 +98,112 @@ def refresh_rank_band_totals(database: Any) -> None:
         )
 
 
-def _refresh(database: Any) -> int | None:
-    global _same_players
+def _refresh(database: Any) -> dict[str, Any] | None:
     with database.pool.connection() as connection, connection.transaction():
-        # One snapshot for the day markers and the facts they describe.
+        # One snapshot for the day marker and the facts it describes.
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         if not connection.execute(
             "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
             ("army-rank-band-totals",),
         ).fetchone()[0]:
             return None
-        newest = connection.execute(
-            """
-            SELECT snapshot.id, day.official_season_id, day.season_day_number
-            FROM leaderboard_snapshots AS snapshot
-            JOIN army_analytics_completed_days AS day
-              ON day.ranked_day_start = snapshot.boundary_at - interval '1 day'
-            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-            ORDER BY snapshot.boundary_at DESC, snapshot.version DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        if newest is None:
-            return None
-        snapshot_id, season_id, last_day = int(newest[0]), _text(newest[1]), int(newest[2])
-        days = {
-            int(row[0]): (row[1], _text(row[2]))
-            for row in connection.execute(
-                """
-                SELECT season_day_number, ranked_day_start, fact_input_hash
-                FROM army_analytics_completed_days
-                WHERE official_season_id = %s AND season_day_number <= %s
-                """,
-                (season_id, last_day),
-            ).fetchall()
-        }
-        # Totals saved before a rank band was added lack its rows.
-        saved_rows = connection.execute(
+        # The newest Season's days, as for army types. Rows counted from
+        # another Reset's board, before each day used its own, are counted
+        # again.
+        due = connection.execute(
             f"""
-            SELECT DISTINCT snapshot_id, season_day_number, fact_input_hash,
-                   first_position
-            FROM army_analytics_rank_band_totals
-            WHERE official_season_id = %s AND {_CURRENT_FORMAT}
+            SELECT day.ranked_day_start, day.official_season_id,
+                   day.season_day_number, day.fact_input_hash, board.id
+            FROM army_analytics_completed_days AS day
+            CROSS JOIN LATERAL (
+                SELECT id FROM leaderboard_snapshots
+                WHERE snapshot_kind = 'frozen' AND state = 'published'
+                  AND boundary_at = day.ranked_day_start + interval '1 day'
+                ORDER BY version DESC LIMIT 1
+            ) AS board
+            WHERE day.official_season_id = (
+                SELECT official_season_id FROM army_analytics_completed_days
+                ORDER BY ranked_day_start DESC LIMIT 1
+            ) AND (
+                SELECT count(*)
+                FROM army_analytics_rank_band_totals AS total
+                JOIN leaderboard_snapshots AS saved ON saved.id = total.snapshot_id
+                WHERE total.ranked_day_start = day.ranked_day_start
+                  AND total.fact_input_hash = day.fact_input_hash
+                  AND saved.boundary_at = day.ranked_day_start + interval '1 day'
+                  AND {_CURRENT_FORMAT}
+            ) <> %s
+            ORDER BY day.ranked_day_start DESC
+            LIMIT 1
             """,
-            (season_id,),
-        ).fetchall()
-        saved_snapshots = {int(row[0]) for row in saved_rows}
-        if {
-            (int(row[1]), _text(row[2]), int(row[3])) for row in saved_rows
-        } == {
-            (day, marker, first)
-            for day, (_start, marker) in days.items()
-            for first, _last in BANDS
-        } and len(saved_snapshots) == 1:
-            saved_snapshot = saved_snapshots.pop()
-            if saved_snapshot == snapshot_id or _same_players == (
-                saved_snapshot,
-                snapshot_id,
-            ):
-                return None
-            saved_players = band_players(connection, saved_snapshot, 1, _LAST_POSITION)
-            band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
-            if saved_players == band_by_player:
-                _same_players = (saved_snapshot, snapshot_id)
-                return None
-            # Bands holding the same players keep their totals.
-            kept_from, kept = saved_snapshot, {
-                first
-                for first, _last in BANDS
-                if {p for p, b in saved_players.items() if b == first}
-                == {p for p, b in band_by_player.items() if b == first}
-            }
-        else:
-            kept_from, kept = None, set()
-            band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
-        _count(
-            connection,
-            snapshot_id,
-            season_id,
-            days,
-            {p: b for p, b in band_by_player.items() if b not in kept},
-            kept_from,
-            sorted(kept),
+            (DAY_ROWS,),
+        ).fetchone()
+        if due is None:
+            return None
+        start, season_id, day, marker, snapshot_id = due
+        connection.execute(
+            "DELETE FROM army_analytics_rank_band_totals WHERE ranked_day_start = %s",
+            (start,),
         )
-        return snapshot_id
+        _count(
+            connection, int(snapshot_id), _text(season_id), int(day), start, _text(marker)
+        )
+        return {
+            "official_season_id": _text(season_id),
+            "season_day_number": int(day),
+            "snapshot_id": int(snapshot_id),
+        }
 
 
 def _count(
     connection: Any,
     snapshot_id: int,
     season_id: str,
-    days: dict[int, tuple[Any, str]],
-    band_by_player: dict[int, int],
-    kept_from: int | None,
-    kept: list[int],
+    day: int,
+    ranked_day_start: Any,
+    marker: str,
 ) -> None:
-    """Count the bands of ``band_by_player``; copy ``kept`` from ``kept_from``."""
-    players = sorted(band_by_player)
-    fact_filter = """
-        fact.is_current AND fact.official_season_id = %s
-          AND fact.season_day_number = ANY(%s::integer[])
-          AND fact.population_player_id = ANY(%s::bigint[])
-    """
-    fact_params = (season_id, sorted(days), players)
-    digests = _fact_digests(connection, season_id, days, band_by_player, LENSES)
+    """Save one day's totals for every band of ``snapshot_id``."""
+    band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
+    digests = _fact_digests(connection, season_id, day, band_by_player)
     totals = {
-        (day, lens, first, category): new_army_totals()
-        for day in days
+        (lens, first, category): new_army_totals()
         for lens in LENSES
         for first, _last in BANDS
-        if first not in kept
         for category in CATEGORIES
     }
     with connection.cursor(name="army_rank_band_facts") as cursor:
         cursor.itersize = 2000
         cursor.execute(
-            f"""
-            SELECT fact.season_day_number, fact.lens, fact.population_player_id,
+            """
+            SELECT fact.lens, fact.population_player_id,
                    fact.stars, fact.destruction_percentage, fact.army_state,
                    fact.home_troops, fact.spells, fact.siege, fact.cc_troops,
                    fact.heroes, fact.unresolved_components,
                    fact.perspective_disagreement
             FROM army_analytics_battle_facts_with_armies AS fact
-            WHERE {fact_filter}
+            WHERE fact.is_current AND fact.official_season_id = %s
+              AND fact.season_day_number = %s
+              AND fact.population_player_id = ANY(%s::bigint[])
             """,
-            fact_params,
+            (season_id, day, sorted(band_by_player)),
         )
         for row in cursor:
             fact = {
-                "stars": row[3],
-                "destruction_percentage": row[4],
-                "army_state": _text(row[5]),
-                "home_troops": row[6],
-                "spells": row[7],
-                "siege": row[8],
-                "cc_troops": row[9],
-                "heroes": row[10],
-                "unresolved_components": row[11],
-                "perspective_disagreement": row[12],
+                "stars": row[2],
+                "destruction_percentage": row[3],
+                "army_state": _text(row[4]),
+                "home_troops": row[5],
+                "spells": row[6],
+                "siege": row[7],
+                "cc_troops": row[8],
+                "heroes": row[9],
+                "unresolved_components": row[10],
+                "perspective_disagreement": row[11],
             }
-            key = (int(row[0]), _text(row[1]), band_by_player[int(row[2])])
+            key = (_text(row[0]), band_by_player[int(row[1])])
             for category in CATEGORIES:
                 add_army_fact(totals[(*key, category)], fact, category)
-    connection.execute(
-        """
-        INSERT INTO army_analytics_rank_band_totals (
-            snapshot_id, lens, category, season_day_number, first_position,
-            official_season_id, ranked_day_start, fact_input_hash,
-            source_digest, totals
-        )
-        SELECT %s, lens, category, season_day_number, first_position,
-               official_season_id, ranked_day_start, fact_input_hash,
-               source_digest, totals
-        FROM army_analytics_rank_band_totals
-        WHERE snapshot_id = %s AND first_position = ANY(%s::integer[])
-        """,
-        (snapshot_id, kept_from, kept),
-    )
-    connection.execute(
-        """
-        DELETE FROM army_analytics_rank_band_totals
-        WHERE official_season_id = %s
-          AND (snapshot_id <> %s OR first_position <> ALL(%s::integer[]))
-        """,
-        (season_id, snapshot_id, kept),
-    )
     with connection.cursor() as cursor:
         cursor.executemany(
             """
@@ -280,85 +221,74 @@ def _count(
                     day,
                     first,
                     season_id,
-                    days[day][0],
-                    days[day][1],
-                    digests.get((day, lens, first)),
+                    ranked_day_start,
+                    marker,
+                    digests.get((lens, first)),
                     Jsonb(day_totals),
                 )
-                for (day, lens, first, category), day_totals in totals.items()
+                for (lens, first, category), day_totals in totals.items()
             ],
         )
 
 
+def counted_boards(connection: Any, season_id: str) -> dict[int, tuple[int, int]]:
+    """Each counted day of a Season: the board its totals used, and its version."""
+    return {
+        int(day): (int(snapshot_id), int(version))
+        for day, snapshot_id, version in connection.execute(
+            """
+            SELECT DISTINCT total.season_day_number, total.snapshot_id,
+                   snapshot.version
+            FROM army_analytics_rank_band_totals AS total
+            JOIN leaderboard_snapshots AS snapshot
+              ON snapshot.id = total.snapshot_id
+             AND snapshot.boundary_at = total.ranked_day_start + interval '1 day'
+            WHERE total.official_season_id = %s
+            """,
+            (season_id,),
+        ).fetchall()
+    }
+
+
 def read_rank_band_totals(
     connection: Any,
-    snapshot_id: int,
+    boards: dict[int, int],
     *,
-    season_id: str,
-    band_by_player: dict[int, int],
     lens: str,
     category: str,
     population: str,
-    day_markers: dict[int, str],
 ) -> tuple[dict[str, Any], str] | None:
-    """Add up saved totals for a Top N or rank-band view, if all are current.
+    """Add up saved totals for a Top N or rank-band view.
 
-    ``band_by_player`` is the view's players on ``snapshot_id`` and their
-    bands. Totals counted for another version of the board serve when the
-    view's bands hold the same players there.
-
-    Returns the totals and their ``rank_band_digest``, or None when any
-    selected day's totals are missing, were counted from an older build of
-    that day or were saved in the format before unnamed ids counted.
+    ``boards`` maps each selected day to the board ``counted_boards`` gives
+    it. Returns the totals and their ``rank_band_digest``, or None when any
+    selected day's totals were saved in the format before unnamed ids
+    counted.
     """
     bands = _bands(population)
     if bands is None:
         return None
-    saved = [
-        int(row[0])
-        for row in connection.execute(
-            """
-            SELECT DISTINCT snapshot_id FROM army_analytics_rank_band_totals
-            WHERE official_season_id = %s
-            """,
-            (season_id,),
-        ).fetchall()
-    ]
-    if snapshot_id not in saved:
-        last = next(last for first, last in BANDS if first == bands[-1])
-        snapshot_id = next(
-            (
-                candidate
-                for candidate in saved
-                if band_players(connection, candidate, bands[0], last)
-                == band_by_player
-            ),
-            None,
-        )
-        if snapshot_id is None:
-            return None
     rows = connection.execute(
         f"""
-        SELECT season_day_number, first_position, fact_input_hash,
-               source_digest, totals
-        FROM army_analytics_rank_band_totals
-        WHERE snapshot_id = %s AND lens = %s AND category = %s
+        SELECT total.season_day_number, total.first_position,
+               total.source_digest, total.totals
+        FROM army_analytics_rank_band_totals AS total
+        JOIN unnest(%s::integer[], %s::bigint[]) AS board(day, snapshot_id)
+          ON board.day = total.season_day_number
+         AND board.snapshot_id = total.snapshot_id
+        WHERE total.lens = %s AND total.category = %s
+          AND total.first_position = ANY(%s::integer[])
           AND {_CURRENT_FORMAT}
-          AND season_day_number = ANY(%s::integer[])
-          AND first_position = ANY(%s::integer[])
-        ORDER BY season_day_number, first_position
         """,
-        (snapshot_id, lens, category, sorted(day_markers), bands),
+        (list(boards), list(boards.values()), lens, category, bands),
     ).fetchall()
-    if len(rows) != len(day_markers) * len(bands) or any(
-        _text(row[2]) != day_markers[int(row[0])] for row in rows
-    ):
+    if len(rows) != len(boards) * len(bands):
         return None
     totals = new_army_totals()
     for row in rows:
-        merge_army_totals(totals, row[4])
-    digests = {(int(row[0]), int(row[1])): row[3] for row in rows}
-    return totals, rank_band_digest(population, day_markers, digests)
+        merge_army_totals(totals, row[3])
+    digests = {(int(row[0]), int(row[1])): row[2] for row in rows}
+    return totals, rank_band_digest(population, boards, digests)
 
 
 def band_players(
@@ -399,8 +329,8 @@ def rank_band_digest(
     """Digest of a Top N or rank-band view's fact lists, one per day and band.
 
     ``digests`` holds the SHA-256 of each (day, band first position)'s
-    ``id:input_hash`` facts in battle order, joined by commas. Saved totals
-    and fact reads build the same digest for the same facts.
+    ``id:input_hash`` facts in battle order, joined by commas, as saved with
+    the totals.
     """
     bands = _bands(population)
     assert bands is not None
@@ -416,39 +346,17 @@ def rank_band_digest(
     ).hexdigest()
 
 
-def fact_rank_band_digest(
-    connection: Any,
-    *,
-    season_id: str,
-    lens: str,
-    population: str,
-    days: Iterable[int],
-    band_by_player: dict[int, int],
-) -> str:
-    """``rank_band_digest`` counted from the current facts."""
-    digests = _fact_digests(connection, season_id, days, band_by_player, (lens,))
-    return rank_band_digest(
-        population,
-        days,
-        {(day, first): digest for (day, _lens, first), digest in digests.items()},
-    )
-
-
 def _fact_digests(
-    connection: Any,
-    season_id: str,
-    days: Iterable[int],
-    band_by_player: dict[int, int],
-    lenses: Iterable[str],
-) -> dict[tuple[int, str, int], str]:
-    # The ordered fact list of each day, lens and band: it changes only when
-    # that band's own facts change.
+    connection: Any, season_id: str, day: int, band_by_player: dict[int, int]
+) -> dict[tuple[str, int], str]:
+    # The ordered fact list of each lens and band: it changes only when that
+    # band's own facts change.
     players = sorted(band_by_player)
     return {
-        (int(row[0]), _text(row[1]), int(row[2])): _text(row[3])
+        (_text(row[0]), int(row[1])): _text(row[2])
         for row in connection.execute(
             """
-            SELECT fact.season_day_number, fact.lens, band.first_position,
+            SELECT fact.lens, band.first_position,
                    encode(sha256(convert_to(string_agg(
                        fact.id::text || ':' || fact.input_hash,
                        ',' ORDER BY fact.battle_id
@@ -458,17 +366,15 @@ def _fact_digests(
                 AS band(player_id, first_position)
               ON band.player_id = fact.population_player_id
             WHERE fact.is_current AND fact.official_season_id = %s
-              AND fact.season_day_number = ANY(%s::integer[])
-              AND fact.lens = ANY(%s::text[])
+              AND fact.season_day_number = %s
               AND fact.population_player_id = ANY(%s::bigint[])
-            GROUP BY 1, 2, 3
+            GROUP BY 1, 2
             """,
             (
                 players,
                 [band_by_player[player] for player in players],
                 season_id,
-                sorted(days),
-                list(lenses),
+                day,
                 players,
             ),
         ).fetchall()

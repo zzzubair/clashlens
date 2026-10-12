@@ -22,6 +22,7 @@ from clashlens.army_analytics import (
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
     build_army_result,
+    new_army_totals,
 )
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -65,6 +66,12 @@ def _army_range_database(
                 for day in days
                 if missing_kind != "snapshot" or day != missing_day
             ],
+            # The worker counts days with army data and a board.
+            [
+                (day, day, 1)
+                for day in days
+                if missing_kind not in ("army", "snapshot") or day != missing_day
+            ],
         ]
     )
     cursor.fetchall.side_effect = lambda: next(rows, [])
@@ -75,6 +82,10 @@ def _army_range_database(
             build_army_result([], kwargs["selection"]),
             "b" * 64,
         ),
+    )
+    monkeypatch.setattr(
+        api_analytics, "read_rank_band_totals",
+        lambda *_args, **_kwargs: (new_army_totals(), "c" * 64),
     )
     return database
 

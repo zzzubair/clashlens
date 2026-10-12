@@ -484,14 +484,15 @@ these steps, all run by the worker:
    `army_analytics_battle_facts_with_armies`.
 4. Within 10 seconds of a day's facts and frozen leaderboard both being saved,
    the worker's maintenance timer counts `army_analytics_rank_band_totals`:
-   each Legend day's totals for the 17 rank bands covering ranks 1-10,000 of
-   that Season's newest leaderboard. Top N and rank-band views add these up.
-   A republished leaderboard reuses the saved totals of bands holding the
-   same players, and the worker recounts only the bands whose players changed.
-   Streak views, trophy ranges, ranges ending before the newest day, any day
-   rebuilt since its totals were counted, and, until that recount finishes,
-   views with a changed band read facts instead. The worker log shows each
-   count as an `army_rank_band_totals` event.
+   that day's totals for the 17 rank bands covering ranks 1-10,000 of the
+   day's own leaderboard, as published then. Top N and rank-band views add
+   these up and never read facts; army types use the same leaderboards. Each
+   run counts one day of the newest Season, newest first, in about a minute.
+   A corrected leaderboard is never counted again; a day whose facts are
+   rebuilt is, and the page serves its older totals until then. Until a day
+   is counted, `season=current` views stop at the day before and other views
+   of it are unavailable. The worker log shows each count as an
+   `army_rank_band_totals` event naming the day and leaderboard.
 5. The same timer gives each saved distinct army its
    [army type](domain.md#army-types), 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in

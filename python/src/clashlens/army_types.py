@@ -330,6 +330,7 @@ def read_type_rows(
     days: dict[int, Any],
     member_ids: list[int] | None,
     trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None = None,
 ) -> list[tuple[int, ...]]:
     """Attack totals per type for the selected players and Legend days.
 
@@ -337,8 +338,10 @@ def read_type_rows(
     are added up from their saved counts; days not counted yet, and trophy
     ranges, which saved counts cannot split, are added up from the day's
     attacks. An older partly read army is typed from its saved home troops.
-    Rows are (type id, attacks, one-star, two-star, three-star, destruction),
-    by type id.
+    ``boards`` (each day's board by ``ranked_day_start``, lowest and highest
+    rank) selects each day's players from that day's board instead of
+    ``member_ids``. Rows are (type id, attacks, one-star, two-star,
+    three-star, destruction), by type id.
     """
     counted = {
         row[0]
@@ -356,21 +359,32 @@ def read_type_rows(
     } if trophy_range is None else set()
     saved_days = [start for start in days.values() if start in counted]
     fact_days = [number for number, start in days.items() if start not in counted]
+    if boards is None:
+        members, member_params = "{0}population_player_id = ANY(%s::bigint[])", [member_ids]
+    else:
+        members = """({0}ranked_day_start, {0}population_player_id) IN (
+            SELECT board.ranked_day_start, entry.player_id
+            FROM unnest(%s::timestamptz[], %s::bigint[])
+                AS board (ranked_day_start, snapshot_id)
+            JOIN leaderboard_snapshot_entries AS entry
+              ON entry.snapshot_id = board.snapshot_id
+            WHERE entry.position BETWEEN %s AND %s)"""
+        member_params = [list(boards[0]), list(boards[0].values()), boards[1], boards[2]]
     parts, params = [], []
     if saved_days:
         parts.append(
-            """
+            f"""
             SELECT population_player_id, exact_army_id, attacks, one_star,
                    two_star, three_star, destruction
             FROM army_package_day_counts
             WHERE ranked_day_start = ANY(%s::timestamptz[])
-              AND population_player_id = ANY(%s::bigint[])
+              AND {members.format("")}
             """
         )
-        params += [saved_days, member_ids]
+        params += [saved_days, *member_params]
     if fact_days:
         if trophy_range is None:
-            fact_filter, filters = "fact.population_player_id = ANY(%s::bigint[])", [member_ids]
+            fact_filter, filters = members.format("fact."), member_params
         else:
             fact_filter, filters = "fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range]
         parts.append(
@@ -417,16 +431,17 @@ def type_result(
     day_markers: dict[int, str],
     member_ids: list[int] | None,
     trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """The Armies page result for army types, and its evidence hash, which
-    covers the selected days' completed-day markers.
+    covers the selected days' completed-day markers and boards.
 
     Every attack counts once, under exactly one type, Other and Unreadable
     included, so the shares add up to 100%.
     """
     rows = read_type_rows(
         connection, season_id=selection.season, days=days,
-        member_ids=member_ids, trophy_range=trophy_range,
+        member_ids=member_ids, trophy_range=trophy_range, boards=boards,
     )
     total = sum(row[1] for row in rows)
     unreadable = sum(row[1] for row in rows if row[0] == UNREADABLE)
@@ -455,7 +470,8 @@ def type_result(
     source_hash = hashlib.sha256(json.dumps(
         {"rules": RULES_VERSION, "rows": rows, "days": sorted(day_markers.items()),
          "selection": selection.as_dict(),
-         "players": member_ids, "trophies": trophy_range},
+         "players": member_ids, "trophies": trophy_range,
+         "boards": None if boards is None else sorted(boards[0].values())},
         separators=(",", ":"),
     ).encode()).hexdigest()
     return result, source_hash

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
@@ -37,12 +36,7 @@ from .army_analytics import (
 )
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
-from .army_rank_bands import (
-    band_players,
-    fact_rank_band_digest,
-    rank_band_digest,
-    read_rank_band_totals,
-)
+from .army_rank_bands import counted_boards, read_rank_band_totals
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION
 from .domain import (
@@ -183,7 +177,8 @@ def get_army_season_summary(
 
 @contextmanager
 def _army_troop_admission(database: ApiDatabase, selection: ArmyAnalyticsSelection, deadline: float):
-    if selection.category != "troops":
+    # Top N and rank ranges read saved totals, never the paired connection.
+    if selection.category != "troops" or selection.population.startswith(("top-", "band-")):
         yield
         return
     if not database._army_troop_slots.acquire(
@@ -344,6 +339,8 @@ def get_army_analytics(
             completed_days = {int(row[0]) for row in completed_day_rows}
             population = resolved.population
             streak = population.startswith("streak-top-")
+            # Top N and rank ranges count each day by its own saved board.
+            banded = population.startswith(("top-", "band-"))
             requested_days = list(range(resolved.start_day, resolved.end_day + 1))
             covered_days = [
                 day
@@ -360,7 +357,6 @@ def get_army_analytics(
             snapshot_ids: list[int] = []
             missing_trophies = 0
             member_ids: list[int] | None = None
-            band_by_player: dict[int, int] | None = None
             streak_version_digest: str | None = None
             cohort_evidence: dict[str, int] | None = None
             minimum: int | None = None
@@ -387,19 +383,10 @@ def get_army_analytics(
                 for day in requested_days
                 if day not in covered_days or boundary_by_day[day] not in by_boundary
             ]
-            if (
-                selection.season == "current"
-                and not streak
-                and not population.startswith("trophies-")
-            ):
-                ranked_days = [
-                    day for day in covered_days if day not in streak_gap_days
-                ]
-                covered_days = [
-                    day
-                    for day in covered_days
-                    if ranked_days and day <= ranked_days[-1]
-                ]
+            boards = counted_boards(connection, resolved.season) if banded else {}
+            if selection.season == "current" and banded:
+                # Days the worker has not counted yet are left out and named.
+                covered_days = [day for day in covered_days if day in boards]
             if not covered_days:
                 raise ArmyAnalyticsUnavailable(requested_days)
             if selection.season == "current" and not streak:
@@ -419,39 +406,28 @@ def get_army_analytics(
             if population.startswith("trophies-"):
                 minimum, maximum = map(int, population.split("-")[1:])
             else:
-                needed_days = requested_days if streak else covered_days[-1:]
+                board_by_day = (
+                    {
+                        day: by_boundary.get(boundary_by_day[day])
+                        for day in requested_days
+                    }
+                    if streak
+                    else {day: boards.get(day) for day in covered_days}
+                )
                 unavailable_days = [
-                    day
-                    for day in needed_days
-                    if boundary_by_day[day] not in by_boundary
+                    day for day, board in board_by_day.items() if board is None
                 ]
                 if unavailable_days:
                     raise ArmyAnalyticsUnavailable(unavailable_days)
-                snapshot_ids = [
-                    by_boundary[boundary_by_day[day]][0] for day in needed_days
-                ]
-                snapshot_versions = [
-                    by_boundary[boundary_by_day[day]][1] for day in needed_days
-                ]
+                snapshot_ids = [board[0] for board in board_by_day.values()]
+                snapshot_versions = [board[1] for board in board_by_day.values()]
+                excluded_players = 0
+                shielded_player_days = 0
                 if streak:
                     limit = int(population.removeprefix("streak-top-"))
                     member_ids = consistent_top_members(
                         connection, snapshot_ids, limit
                     )
-                else:
-                    if population.startswith("top-"):
-                        low, high = 1, int(population.removeprefix("top-"))
-                    else:
-                        low, high = map(
-                            int, population.removeprefix("band-").split("-")
-                        )
-                    band_by_player = band_players(
-                        connection, snapshot_ids[0], low, high
-                    )
-                    member_ids = sorted(band_by_player)
-                excluded_players = 0
-                shielded_player_days = 0
-                if population.startswith("streak-top-"):
                     # Excluded streak players appear in the selected Top-N
                     # on at least one saved board but miss it on another.
                     any_snapshot_ids = {
@@ -543,20 +519,23 @@ def get_army_analytics(
                         if population.startswith("top-")
                         else map(int, population.removeprefix("band-").split("-"))
                     )
-                    stale_or_uncertain_members = int(
-                        connection.execute(
-                            """
-                            SELECT count(*) FROM leaderboard_snapshot_entries
-                            WHERE snapshot_id = %s
-                              AND position BETWEEN %s AND %s
-                              AND NOT (freshness = 'fresh'
-                                       AND confidence = 'confirmed')
-                            """,
-                            (snapshot_ids[0], low, high),
-                        ).fetchone()[0]
-                    )
+                    # Players in the range on any selected day's board.
+                    cohort_players, stale_or_uncertain_members = connection.execute(
+                        """
+                        SELECT count(DISTINCT player_id),
+                               count(DISTINCT player_id) FILTER (
+                                   WHERE NOT (freshness = 'fresh'
+                                              AND confidence = 'confirmed'))
+                        FROM leaderboard_snapshot_entries
+                        WHERE snapshot_id = ANY(%s::bigint[])
+                          AND position BETWEEN %s AND %s
+                        """,
+                        (snapshot_ids, low, high),
+                    ).fetchone()
                 cohort_evidence = {
-                    "cohort_players": len(member_ids),
+                    "cohort_players": (
+                        len(member_ids) if member_ids is not None else cohort_players
+                    ),
                     "stale_or_uncertain_cohort_members": stale_or_uncertain_members,
                     "streak_excluded_players": excluded_players,
                     "shielded_player_days": shielded_player_days,
@@ -603,30 +582,27 @@ def get_army_analytics(
                 "is_current",
             ]
             fact_params: list[Any] = [resolved.season, covered_days, resolved.lens]
-            if member_ids is None:
-                assert minimum is not None and maximum is not None
-                fact_filters.append("battle_time_trophies BETWEEN %s AND %s")
-                fact_params.extend((minimum, maximum))
-            else:
+            if member_ids is not None:
                 fact_filters.append("population_player_id = ANY(%s::bigint[])")
                 fact_params.append(member_ids)
-            banded = None
-            band_digest: str | None = None
-            if band_by_player is not None and resolved.category != army_types.CATEGORY:
-                banded = read_rank_band_totals(
+            elif minimum is not None:
+                fact_filters.append("battle_time_trophies BETWEEN %s AND %s")
+                fact_params.extend((minimum, maximum))
+            if banded and resolved.category != army_types.CATEGORY:
+                # At most 28 x 17 saved rows, never the facts.
+                saved = read_rank_band_totals(
                     connection,
-                    snapshot_ids[0],
-                    season_id=resolved.season,
-                    band_by_player=band_by_player,
+                    dict(zip(covered_days, snapshot_ids)),
                     lens=resolved.lens,
                     category=resolved.category,
                     population=population,
-                    day_markers=dict(completed_day_signature),
                 )
-            if banded is not None:
-                # Same numbers as counting the facts, from at most 28 x 17
-                # saved rows.
-                result, band_digest = finish_army_result(banded[0], resolved), banded[1]
+                if saved is None:
+                    # Saved before unnamed ids counted; the worker counts
+                    # those days again.
+                    raise ArmyAnalyticsUnavailable(covered_days)
+                result = finish_army_result(saved[0], resolved)
+                source_hash = _rank_band_source_hash(saved[1], requested, snapshot_ids)
             elif resolved.category == army_types.CATEGORY:
                 if not army_types.rules_ready(connection):
                     raise ArmyAnalyticsUnavailable(covered_days)
@@ -636,7 +612,17 @@ def get_army_analytics(
                     days={day: day_starts[day] for day in covered_days},
                     day_markers=dict(completed_day_signature),
                     member_ids=member_ids,
-                    trophy_range=None if member_ids is not None else (minimum, maximum),
+                    trophy_range=None if minimum is None else (minimum, maximum),
+                    boards=(
+                        {
+                            day_starts[day]: snapshot_id
+                            for day, snapshot_id in zip(covered_days, snapshot_ids)
+                        },
+                        low,
+                        high,
+                    )
+                    if banded
+                    else None,
                 )
             elif resolved.category == "troops":
                 result, source_hash = _query_troops_aggregates(
@@ -648,20 +634,6 @@ def get_army_analytics(
                     selection=resolved,
                     pool=database.pool,
                     deadline=deadline,
-                    source_hash=None
-                    if band_by_player is None
-                    else lambda source_connection: _rank_band_source_hash(
-                        fact_rank_band_digest(
-                            source_connection,
-                            season_id=resolved.season,
-                            lens=resolved.lens,
-                            population=population,
-                            days=covered_days,
-                            band_by_player=band_by_player,
-                        ),
-                        requested,
-                        snapshot_ids,
-                    ),
                 )
             else:
                 facts_rows = connection.execute(
@@ -671,8 +643,7 @@ def get_army_analytics(
                            army_state, failure_reason,
                            {component_column} AS component_payload,
                            unresolved_components, perspective_disagreement,
-                           input_hash, source_ranked_day_version_id,
-                           season_day_number
+                           input_hash, source_ranked_day_version_id
                     FROM army_analytics_battle_facts_with_armies
                     WHERE {" AND ".join(fact_filters)}
                     ORDER BY battle_id
@@ -681,7 +652,6 @@ def get_army_analytics(
                 ).fetchall()
                 source_digest = hashlib.sha256()
                 source_digest.update(b'{"facts":[')
-                band_facts: dict[tuple[int, int], list[str]] = {}
 
                 def selected_facts():
                     separator = b""
@@ -691,10 +661,6 @@ def get_army_analytics(
                         source_digest.update(separator)
                         source_digest.update(f'[{fact_id},"{input_hash}"]'.encode())
                         separator = b","
-                        if band_by_player is not None:
-                            band_facts.setdefault(
-                                (int(row[13]), band_by_player[int(row[2])]), []
-                            ).append(f"{fact_id}:{input_hash}")
                         components = {
                             "home_troops": [],
                             "spells": [],
@@ -737,21 +703,6 @@ def get_army_analytics(
                 source_digest.update(b"}")
                 source_hash = source_digest.hexdigest()
                 del facts_rows
-                if band_by_player is not None:
-                    band_digest = rank_band_digest(
-                        population,
-                        covered_days,
-                        {
-                            key: hashlib.sha256(",".join(facts).encode()).hexdigest()
-                            for key, facts in band_facts.items()
-                        },
-                    )
-            if band_digest is not None:
-                # Saved totals and fact reads give a Top N or rank-band view
-                # the same evidence hash for the same facts.
-                source_hash = _rank_band_source_hash(
-                    band_digest, requested, snapshot_ids
-                )
             result["missing_trophy_membership_evidence"] = missing_trophies
             result["collection_coverage"] = {
                 **result["collection_coverage"],
@@ -1034,21 +985,15 @@ def _query_troops_aggregates(
     selection: ArmyAnalyticsSelection,
     pool: ConnectionPool | None = None,
     deadline: float | None = None,
-    source_hash: Callable[[Any], str] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Aggregate the troops projection and source identity inside PostgreSQL.
-
-    ``source_hash`` computes the source identity on a given connection; it
-    defaults to ``_selected_source_hash`` over the selected facts.
-    """
-    if source_hash is None:
-        source_hash = partial(
-            _selected_source_hash,
-            fact_filters=fact_filters,
-            fact_params=fact_params,
-            requested=requested,
-            snapshot_ids=snapshot_ids,
-        )
+    """Aggregate the troops projection and source identity inside PostgreSQL."""
+    source_hash = partial(
+        _selected_source_hash,
+        fact_filters=fact_filters,
+        fact_params=fact_params,
+        requested=requested,
+        snapshot_ids=snapshot_ids,
+    )
     fact_where = " AND ".join(fact_filters)
     state_rows = connection.execute(
         f"""
