@@ -174,7 +174,8 @@ def test_equal_trophies_keep_the_daily_boards_order_by_when_battles_ended(
     says it ended at 12:59:30. The Daily board puts the latest end first, so
     the projected places are DEFENDED, ATTACKED, HIT: not the order of the
     players' own report times, nor of every defense ending 155 seconds after
-    its report."""
+    its report. They stay so once RAIDER leaves the live board, as RAIDER's
+    published report still says when the battle with HIT ended."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch)
         early = TODAY - timedelta(minutes=45)
@@ -205,6 +206,11 @@ def test_equal_trophies_keep_the_daily_boards_order_by_when_battles_ended(
         _save_examples(connection_info, archive_server, monkeypatch)
         unfinished = story.unfinished_jobs()
         cards = _cards(connection_info, *tags)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET active = false WHERE normalized_tag = %s", (RAIDER,)
+            )
+        without_raider = _cards(connection_info, DEFENDED, ATTACKED, HIT)
 
     assert unfinished == []
     assert {tag: card["rank_range"] for tag, card in cards.items()} == {
@@ -213,4 +219,7 @@ def test_equal_trophies_keep_the_daily_boards_order_by_when_battles_ended(
     }
     assert {tag: card["projected_rank"] for tag, card in cards.items()} == {
         DEFENDED: 1, ATTACKED: 2, HIT: 3, RAIDER: 4,
+    }
+    assert {tag: card["projected_rank"] for tag, card in without_raider.items()} == {
+        DEFENDED: 1, ATTACKED: 2, HIT: 3,
     }

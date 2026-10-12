@@ -71,6 +71,11 @@ OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
+# A battle a published log keeps, as ``event``, with a report time to read.
+_KEPT_EVENT_SQL = """event ->> 'battle_timestamp' ~ '^[0-9]{4}-[0-9][0-9]-[0-9][0-9]T'
+      AND event ->> 'included' IS DISTINCT FROM 'false'
+      AND event ->> 'valid' IS DISTINCT FROM 'false'"""
+
 _BOARD_SQL = f"""
 WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL}),
 board AS MATERIALIZED (
@@ -90,19 +95,48 @@ board AS MATERIALIZED (
         LIMIT 1
     ) AS day ON true
 ),
--- Each battle those logs keep: the player's side and their report's time.
+-- Each battle those logs keep: the player's side, their report's time and
+-- the opponent.
 report AS MATERIALIZED (
     SELECT board.player_id, event ->> 'lens' AS lens,
            event ->> 'battle_identity' AS battle,
+           event -> 'opponent' ->> 'tag' AS opponent,
            (event ->> 'battle_timestamp')::timestamptz AS reported_at,
            event ->> 'trophy_change' <> '0' AS moved
     FROM board
     CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(board.battles)
                                             WHEN 'array' THEN board.battles
                                             ELSE '[]' END) AS event
-    WHERE event ->> 'battle_timestamp' ~ '^[0-9]{{4}}-[0-9][0-9]-[0-9][0-9]T'
-      AND event ->> 'included' IS DISTINCT FROM 'false'
-      AND event ->> 'valid' IS DISTINCT FROM 'false'
+    WHERE {_KEPT_EVENT_SQL}
+),
+-- Attackers' own reports of those battles: in the board's logs, and for a
+-- defense none of those has, in its attacker's newest log of the day,
+-- whether or not the attacker is on the board.
+attack AS MATERIALIZED (
+    SELECT battle, reported_at FROM report WHERE lens = 'offense'
+    UNION ALL
+    SELECT event ->> 'battle_identity', (event ->> 'battle_timestamp')::timestamptz
+    FROM (
+        SELECT DISTINCT player.id
+        FROM report AS own
+        JOIN players AS player ON player.normalized_tag = own.opponent
+        WHERE own.lens = 'defense' AND own.moved
+          AND NOT EXISTS (
+              SELECT 1 FROM report AS known
+              WHERE known.lens = 'offense' AND known.battle = own.battle)
+    ) AS attacker
+    CROSS JOIN LATERAL (
+        SELECT daily.battles
+        FROM api_player_daily_logs AS daily
+        WHERE daily.player_id = attacker.id
+          AND daily.ranked_day_start = %(day_start)s
+        ORDER BY daily.version DESC
+        LIMIT 1
+    ) AS day
+    CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(day.battles)
+                                            WHEN 'array' THEN day.battles
+                                            ELSE '[]' END) AS event
+    WHERE event ->> 'lens' = 'offense' AND {_KEPT_EVENT_SQL}
 ),
 -- When each player's newest battle that moved their trophies ended, by the
 -- Daily board's rule (analytics.latest_trophy_changes): at the attacker's
@@ -116,9 +150,7 @@ latest_change AS (
                    ELSE own.reported_at
                END) AS at
     FROM report AS own
-    LEFT JOIN report AS attack
-      ON own.lens = 'defense' AND attack.lens = 'offense'
-     AND attack.battle = own.battle
+    LEFT JOIN attack ON own.lens = 'defense' AND attack.battle = own.battle
     WHERE own.moved
     GROUP BY own.player_id
 )
