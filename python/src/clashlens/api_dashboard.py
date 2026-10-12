@@ -362,10 +362,13 @@ def get_player_armies(
     """One player's attacks or defenses per army type over the last ``days``
     finished Legend days; None for an unknown tag.
 
-    Only days whose army records are complete and include this player's
-    complete saved day count, and only once every saved army has its type
-    under the current rules: ``covered_days`` names them. A finished Season's
-    records go 7 days after it ends.
+    Only days whose army records are complete and whose newest saved daily
+    log for this player is Complete with complete coverage count, and only
+    once every saved army has its type under the current rules:
+    ``covered_days`` names them. A finished Season's records go 7 days after
+    it ends. Known limit: a corrected day counts as soon as its newest log is
+    published, so until that day's army records are rebuilt it shows the
+    earlier build's battles.
     """
     today = ranked_day_for(now).start
     window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
@@ -384,12 +387,14 @@ def get_player_armies(
                        day.season_day_number
                 FROM army_analytics_completed_days AS day
                 WHERE day.ranked_day_start = ANY(%s::timestamptz[])
-                  AND EXISTS (
-                      SELECT 1 FROM api_player_daily_logs AS daily
+                  AND (
+                      SELECT daily.state = 'Complete'
+                             AND daily.coverage = 'complete'
+                      FROM api_player_daily_logs AS daily
                       WHERE daily.player_id = %s
                         AND daily.ranked_day_start = day.ranked_day_start
-                        AND daily.state = 'Complete'
-                        AND daily.coverage = 'complete'
+                      ORDER BY daily.version DESC
+                      LIMIT 1
                   )
                 ORDER BY day.ranked_day_start
                 """,

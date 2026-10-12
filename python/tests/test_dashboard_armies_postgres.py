@@ -150,6 +150,23 @@ def test_army_cards_from_saved_battles_to_the_api(
                 assert _rows(offense) == [("Thrower", 1, 1, 40)]
                 assert offense["total"] == {"battles": 1, "three_stars": 1, "trophies": 40}
 
+                # A newer Partial version of #2PP's Day 24 log takes that day
+                # out, though the older version is Complete.
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, version, state, coverage
+                        )
+                        SELECT id, %s, 2, 'Partial', 'partial'
+                        FROM players WHERE normalized_tag = '#2PP'
+                        """,
+                        (NEXT_DAY,),
+                    )
+                assert _read(client, "#2PP", "defense", 3)["covered_days"] == [
+                    DAY_START.isoformat()
+                ]
+
                 target = "/v1/players/%23QQQ/armies?lens=defense&days=3"
                 assert client.get(target, headers=_signed_headers(target)).status_code == 404
                 for query in ("lens=army&days=3", "lens=defense&days=29", "lens=offense"):
