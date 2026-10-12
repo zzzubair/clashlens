@@ -26,6 +26,14 @@ export default function Privacy() {
         </p>
       </section>
 
+      <section aria-labelledby="privacy-who">
+        <h2 id="privacy-who">Who runs Clash Lens</h2>
+        <p>
+          Clash Lens, run by Zubair Shaik. Contact:{" "}
+          <a href="mailto:privacy@clashlens.net">privacy@clashlens.net</a>
+        </p>
+      </section>
+
       <section aria-labelledby="privacy-counts">
         <h2 id="privacy-counts">Visitor counts</h2>
         {counting ? null : (
@@ -95,7 +103,8 @@ export default function Privacy() {
         <p>
           We count visits because we have a legitimate interest in improving Clash Lens.
           Our PostHog plan keeps events for one year. Under UK data protection law you can
-          ask to see or delete data about you, or object to its use: ask us on{" "}
+          ask to see or delete data about you, or object to its use: email{" "}
+          <a href="mailto:privacy@clashlens.net">privacy@clashlens.net</a>, or ask us on{" "}
           <a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
             our Discord server
           </a>
