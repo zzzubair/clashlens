@@ -410,18 +410,22 @@ def test_first_time_discovery_is_immediate_and_concurrent_repeats_share_work(dat
 
 
 def test_promotion_reuses_identity_and_starts_regular_battle_collection(database_url, archive_server):
+    # Promotion makes the player due at the database's real time, so use the
+    # first Monday Reset at least an hour after it, not the fixed MONDAY.
+    weeks_passed = (datetime.now(UTC) + timedelta(hours=1) - MONDAY) // timedelta(weeks=1)
+    monday = MONDAY + timedelta(weeks=max(0, weeks_passed + 1))
     with domain_database(database_url) as info:
-        _profile(info, archive_server, at=MONDAY - timedelta(days=1))
+        _profile(info, archive_server, at=monday - timedelta(days=1))
         database = _collector(info)
         try:
-            database.begin_reset(MONDAY, local_regular_inflight=0)
-            check = next_check(database, MONDAY, schedule=True)
+            database.begin_reset(monday, local_regular_inflight=0)
+            check = next_check(database, monday, schedule=True)
             assert check is not None
-            _profile(info, archive_server, at=MONDAY + timedelta(seconds=5), eligible=True)
-            due = database.claim_due_players(limit=10, now=MONDAY + timedelta(seconds=6))
+            _profile(info, archive_server, at=monday + timedelta(seconds=5), eligible=True)
+            due = database.claim_due_players(limit=10, now=monday + timedelta(seconds=6))
             assert len(due) == 1 and due[0].player_id == check.player_id
             assert due[0].first_battle_pending
-            remaining = next_check(database, MONDAY + timedelta(minutes=1), schedule=True)
+            remaining = next_check(database, monday + timedelta(minutes=1), schedule=True)
             assert remaining is not None and remaining.work_id == check.work_id
             assert not remaining.profile_required and remaining.league_history_required
             spool = _Spool()
@@ -430,7 +434,7 @@ def test_promotion_reuses_identity_and_starts_regular_battle_collection(database
             assert asyncio.run(collector.collect_intent(remaining)) == "complete"
             assert client.fetch_count == 1
             assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
-            assert next_check(database, MONDAY + timedelta(minutes=1), schedule=True) is None
+            assert next_check(database, monday + timedelta(minutes=1), schedule=True) is None
             with psycopg.connect(info) as connection:
                 row = connection.execute("SELECT active, eligibility_state FROM players WHERE id = %s", (check.player_id,)).fetchone()
                 assert (row[0], text(row[1])) == (True, "eligible")
