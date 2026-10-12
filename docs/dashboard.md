@@ -10,7 +10,7 @@ The dashboard can be built behind the off switch, but nothing goes live until tr
 - **Account not in Legend I:** selecting it replaces the cards with a large message, "Unfortunately, the dashboard is Legend I only. Support for lower leagues is coming in the future!", and hides Customise.
 - **Grid:** 3 columns. Small = 1 column, Medium = 2, Large = a full row. Small and Medium cards are a fixed 360 px tall on desktop and iPad, so every Small or Medium design must fit; Large cards grow. On phones every card is full width, one under another, and height follows content. If card sizes don't fill a row, the space stays empty.
 - **Live or not:** live cards say "updated N min ago" in the top-right corner. A card without it shows finished Legend days and says "Last 7 days" / "Last 3 days", never "finished days". Estimates are labelled "estimate". Ranks are just "Rank".
-- **Controls:** a choice you flip while looking is a switch on the card (3 days / 7 days, Trophies / Rank, Live / Season, Net / Offense / Defense). A set-once choice is a card setting in Customise.
+- **Controls:** a choice you flip while looking is a switch on the card (3 days / 7 days, Trophies / Rank, Live / Season, Net / Offense / Defense) or, for Group watch, a group picker on the card. A set-once choice is a card setting in Customise.
 - **Customise:** move cards (drag, or ↑ ↓), remove (✕), add from "+ Add a card" (each card listed with its size and one-line description), Reset to default, Done. Cards with settings show an outlined "⚙ Settings" button inside the card's top-right corner while customising.
 - **Default layout:** each user is either on the default layout or on their own. Users on the default automatically get every later change to it, including new cards. Any move, remove or add switches them to their own layout, which we never change for them; "Reset to default" puts them back.
 - **First visit:** a pop-up offers "Use our layout" (recommended) or "Build my own" (starts empty with the card list open), with "Change it any time with ⚙ Customise dashboard".
@@ -43,10 +43,10 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Season graph | Medium | | Your trophies or rank (switch) at every Reset this Season, a missing day shown dotted; best rank this Season and last Season's finish. |
 | Recent form | Small | | Your average day over the last 3 or 7 days (trophies a day, offense per attack and tripled %, defense per defense and held %), and better or worse than the days before when there are enough. |
 | Offense consistency | Small | | Hit rate over the last 3 or 7 days (assuming 8 attacks a day), the 3★/2★/1★/0★ split, average per attack, average when not tripled, trophies missed against tripling everything, and triples each day out of 8. |
-| Group watch | Medium | | One of your groups over the last 7 days or the whole Season: trophies, average gain, hit rate, average offense and defense; 7 rows around you; link to the full comparison. |
+| Group watch | Medium | | One of your groups, picked from a drop-down on the card, over the last 7 days or the whole Season: trophies, average gain, hit rate, average offense and defense; 7 rows around you; link to the full comparison. Shows your only group, or the first one you made; with no groups, the card asks you to make one first. |
 | Armies on offense | Small | | The army types you attacked with over the last 3 or 7 days (up to 3 plus "Other armies"): your hit rate next to everyone's hit rate with that army. A one-army player sees big You vs Legends numbers. |
 
-**Goal shield row:** shield days count as 0 for you while the goal line keeps moving, so trophies a day needed = (gap + line speed × days left) ÷ (days left − shield days). The row then says "still on pace" or "behind by N" against your pace. It is hidden on Day 1 and for lengths that cover every remaining day. Three days is a one-day and a two-day shield stacked.
+**Goal shield row:** shield days count as 0 for you while the goal line keeps moving, so trophies a day needed = (gap + line speed × days left) ÷ (days left − shield days). The row then says "still on pace" or "behind by N" against your pace. It is hidden on Day 1 and for lengths that cover every remaining day. Legend I has only one-day and two-day shields; they can be stacked, and their waits before rebuying mean three days in a row is the longest possible.
 
 ## Card settings (set in Customise)
 
@@ -55,7 +55,9 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Bases you attacked | Held % or Trophies | Held % |
 | Goal | Finish rank, 1–10,000 | Top 200 |
 | Cutoffs | 7 of the 12 Top lines | Top 10, 50, 100, 200, 500, 1,000, 5,000 |
-| Group watch | Which group; Last 7 days or Whole Season | Last 7 days |
+| Group watch | Last 7 days or Whole Season | Last 7 days |
+
+**Switches on the card start at:** 7 days (Recent form, Offense consistency, Armies on defense, Armies on offense), Trophies (Season graph), Net (Season heat map), Live (Cutoffs, Rivals watch).
 
 ## Add-a-card descriptions
 
@@ -89,10 +91,9 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 
 1. **Next Reset rank:** only the outer range is shown. A better single-number estimate is still research.
 2. **Trophies-mode bands:** a held defense still costs about 25 trophies, so a base that holds 10 points more often saves only about 1.5 trophies a defense. Set Hard / Average / Easy for Trophies mode from measured spread, not a guess.
-3. **Shield lengths:** the Goal row offers 1, 2 and 3 days. [ranked-leagues.md](ranked-leagues.md#durations-gem-prices-and-purchase-waits) also lists a 7-day Legend Shield whose current Legend I eligibility is unconfirmed.
-4. **Heat map colours compare you with yourself:** a good day can show red if it is your worst, and with only 2–3 days the colours swing between extremes.
-5. **Fixed Legends averages:** 52% held and −32 a defense were steady over 13 days (29 Sep–11 Oct). Recheck after a big game update.
-6. **Not tested:** dragging cards with a real finger on phone or iPad (the ↑ ↓ arrows always work).
-7. **Build checks:** Goal's dashed goal line must stay visible in dark mode; Goal's "Behind pace by N a day" label must fit for far goals (Top 1–50 from rank 318 overflowed in the design draft); real defenses cost about 32 trophies each (a full 8-defense day about −260), more than some draft numbers.
-8. **Share a card as an image or link:** a later idea, to reuse the Discord bot's card image maker.
-9. **Ideas not built:** Field meta movers, Peer comparison, My accounts, Shield tomorrow?, Crew cup, Participation calendar, Results needing caution. Needing equipment-level army types or new collection: Balance-aware comparison, Training review queue, Equipment-pair watch, castle-and-siege toolbox, garrison diary. Base notebook on hold.
+3. **Heat map colours compare you with yourself:** a good day can show red if it is your worst, and with only 2–3 days the colours swing between extremes.
+4. **Fixed Legends averages:** 52% held and −32 a defense were steady over 13 days (29 Sep–11 Oct). Recheck after a big game update.
+5. **Not tested:** dragging cards with a real finger on phone or iPad (the ↑ ↓ arrows always work).
+6. **Build checks:** Goal's dashed goal line must stay visible in dark mode; Goal's "Behind pace by N a day" label must fit for far goals (Top 1–50 from rank 318 overflowed in the design draft); real defenses cost about 32 trophies each (a full 8-defense day about −260), more than some draft numbers.
+7. **Share a card as an image or link:** a later idea, to reuse the Discord bot's card image maker.
+8. **Ideas not built:** Field meta movers, Peer comparison, My accounts, Shield tomorrow?, Crew cup, Participation calendar, Results needing caution. Needing equipment-level army types or new collection: Balance-aware comparison, Training review queue, Equipment-pair watch, castle-and-siege toolbox, garrison diary. Base notebook on hold.

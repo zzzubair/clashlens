@@ -27,7 +27,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Season graph | Trophies and rank at each Reset this Season; best rank; last Season's official finish | Exists | Use the official finish, never a tracked-only rank. |
 | Recent form | Each finished day's net, offense and defense, triples and held defenses | Exists | |
 | Offense consistency | Your attacks (stars, trophies) over the last 3 or 7 days | Exists | |
-| Group watch | Group comparison over 7 days; each member's Season summary | Exists | `/v1/account/groups/{id}/comparison?days=7`; Whole Season reuses `/v1/players/{tag}/seasons`. |
+| Group watch | Your groups in the order you made them; group comparison over 7 days; each member's Season summary | Exists | Groups keep when they were made. `/v1/account/groups/{id}/comparison?days=7`; Whole Season reuses `/v1/players/{tag}/seasons`. |
 | Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Mostly exists | Counts saved since #458; the Legends hit rate is what the Armies page already adds up. Average gain per attack needs a read of your battles. |
 
 ## Shared
