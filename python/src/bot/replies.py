@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -18,16 +18,15 @@ from discord.utils import escape_markdown, escape_mentions
 from clashlens.domain import ranked_day_for
 
 # Discord shows at most 25 dropdown entries, 100 characters per entry label
-# and 80 per button label, and refuses an embed description over 4,096.
+# and 80 per button label.
 MAX_CHOICES = 25
 _MAX_CHOICE_LABEL = 100
-_MAX_DESCRIPTION = 4000
 WAITING_FOR_RESET = "Waiting for Season reset"
 
 # One line per command for /help, also used as each command's description.
 COMMANDS = (
     ("help", "What the bot does, its commands and your connection"),
-    ("link", "Connect Discord on the Clash Lens website, or see what is connected"),
+    ("link", "Connect Discord and choose your default player on the Clash Lens website"),
     ("stats", "This Season so far for any tracked player, or your default player"),
 )
 
@@ -72,8 +71,6 @@ class Reply:
     # When the oldest data shown was read, or "pending" or "Unavailable"; the
     # bot works out "Updated N min ago" from it as each message goes out.
     updated: datetime | str = "Unavailable"
-    # The tags of the players the reply lists.
-    shown: tuple[str, ...] = ()
     # Only the person who ran the command sees it: the not-connected pointer
     # and plain errors meant for them. Every other reply is a normal message
     # anyone in the conversation can see and forward.
@@ -210,29 +207,13 @@ def help_reply(site: Site, username: str | None, player_count: int, now: datetim
     )
 
 
-def link_reply(
-    site: Site,
-    username: str,
-    cards: Sequence[Mapping[str, Any]],
-    default_tag: str | None,
-    now: datetime,
-) -> Reply:
-    if not cards:
-        return no_players(site, username, now)
-    chosen = next((card for card in cards if card["tag"] == default_tag), None)
-    lines = [
-        f"Connected as @{safe(username)}.",
-        "Players:",
-        *(f"• {safe(card['name'])} {card['tag']}" for card in cards),
-    ]
-    if chosen is not None:
-        lines.append(f"Default player: {safe(chosen['name'])}.")
-    elif len(cards) > 1:
-        lines.append("No default player chosen yet: pick one on Clash Lens.")
+def link_reply(site: Site, username: str, now: datetime) -> Reply:
+    """A connected account's pointer: players and the default player are
+    managed on the website, never in the bot."""
     return Reply(
-        "\n".join(lines),
-        updated=oldest([card["observed_at"] for card in cards]),
-        shown=tuple(card["tag"] for card in cards),
+        f"Connected as @{safe(username)}. Manage the connection and choose your "
+        "default player on Clash Lens.",
+        updated=now,
         links=(Link("Manage on Clash Lens", site.url(DISCORD_SETTINGS)),),
     )
 
@@ -296,22 +277,6 @@ def player_status(
     )
 
 
-def pages(text: str) -> list[str]:
-    """Text split at line ends into pieces Discord accepts whole, so a long
-    list goes out as several messages instead of being cut short."""
-    pieces: list[str] = []
-    lines: list[str] = []
-    size = 0
-    for line in text.split("\n"):
-        if lines and size + len(line) > _MAX_DESCRIPTION:
-            pieces.append("\n".join(lines))
-            lines, size = [], 0
-        lines.append(line)
-        size += len(line) + 1
-    pieces.append("\n".join(lines))
-    return pieces
-
-
 def bad_tag() -> Reply:
     return Reply("That doesn't look like a player tag.", private=True)
 
@@ -356,10 +321,11 @@ def _per(total: int | None, count: int | None) -> str:
     return "Unavailable" if total is None or not count else signed(round(total / count))
 
 
-def _total(days: Sequence[Mapping[str, Any]], key: str) -> int | None:
-    """A Season total, unknown when no day or any day lacks the number."""
-    values = [day[key] for day in days]
-    return None if not values or None in values else sum(values)
+def _total(days: Sequence[Mapping[str, Any] | None], key: str) -> int | None:
+    """A Season total, unknown when a day so far is not published or lacks
+    the number."""
+    values = [None if day is None else day[key] for day in days]
+    return None if None in values else sum(values)
 
 
 def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
@@ -375,10 +341,19 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
             updated=page["observed_at"],
             links=(Link("Open on Clash Lens", site.player(page["tag"])),),
         )
-    by_start = {day["ranked_day_start"]: day for day in ready["days"]}
-    days = [by_start[start] for start in ready["season_day_starts"] if start in by_start]
-    first = next((day for day in days if day.get("season_day_number") == 1), None)
-    start = None if first is None else first.get("start_trophies")
+    published = {datetime.fromisoformat(start) for start in ready["season_day_starts"]}
+    by_start = {
+        moment: day
+        for day in ready["days"]
+        if (moment := datetime.fromisoformat(day["ranked_day_start"])) in published
+    }
+    season_start = datetime.fromisoformat(season["start"])
+    # Every Legend day of the Season so far, None where none is published.
+    days = [
+        by_start.get(season_start + timedelta(days=offset))
+        for offset in range(season["current_day_number"])
+    ]
+    start = None if days[0] is None else days[0].get("start_trophies")
     now_trophies = None if page["season_reset_pending"] else page["trophies"]
     change = _known(start, number) + " → " + _known(now_trophies, number)
     if start is not None and now_trophies is not None:
@@ -392,7 +367,7 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
     held = None if defense_count is None or tripled is None else defense_count - tripled
     lines = [
         (
-            f"Season from {discord_time(datetime.fromisoformat(season['start']), 'D')} · "
+            f"Season from {discord_time(season_start, 'D')} · "
             f"Legend day {season['current_day_number']} of 28"
         ),
         change,

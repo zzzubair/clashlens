@@ -360,11 +360,13 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
             assert [choice.label for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "Drifter #8QQ · 5,000"
             ]
-            # /link dates the player by the newer profile, read now, not the older one.
+            # The player menu dates the player by the newer profile, read now,
+            # not the older one.
             seed_profile(owner, "#2PP", 5100)
             _verify(owner, account_id, "#8QQ")
             _verify(owner, account_id, "#2PP")
-            assert commands.link(DISCORD_ID, "drift").updated == NOW
+            menu = commands.stats(account)
+            assert menu.choices and menu.updated == NOW
         finally:
             bot.close()
             owner.close()
@@ -377,28 +379,10 @@ def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
         try:
             for tag, trophies in (("#2PP", 5100), ("#8QQ", 5300), ("#9RR", 5200)):
                 seed_profile(owner, tag, trophies)
-            account_id = _account(owner, "discord", DISCORD_ID, "drift")
-            group_id = uuid4()
-            with owner.pool.connection() as connection:
-                internal_group = connection.execute(
-                    "INSERT INTO account_groups (public_id, account_id, name, normalized_name)"
-                    " VALUES (%s, %s, 'Night Crew', 'night crew') RETURNING id",
-                    (group_id, account_id),
-                ).fetchone()[0]
-                connection.execute(
-                    "INSERT INTO account_group_players (group_id, player_id)"
-                    " SELECT %s, id FROM players WHERE normalized_tag IN ('#2PP', '#8QQ')",
-                    (internal_group,),
-                )
+            _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
-            account = store.account(DISCORD_ID)
-            assert account is not None
-
+            assert store.account(DISCORD_ID) is not None
             assert [item["tag"] for item in store.search("Player #8", NOW)] == ["#8QQ"]
-            # Group members feed the /stats name suggestions.
-            (group,) = store.groups(account, NOW)
-            assert group["name"] == "Night Crew" and group["group_id"] == str(group_id)
-            assert sorted(player["tag"] for player in group["players"]) == ["#2PP", "#8QQ"]
         finally:
             bot.close()
             owner.close()

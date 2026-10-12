@@ -167,31 +167,22 @@ class FakeResponse:
         self.interaction.record(message)
 
 
-class FakeSent:
-    def __init__(self) -> None:
-        self.edits: list[dict[str, Any]] = []
-
-    async def edit(self, **changes: Any) -> None:
-        self.edits.append(changes)
-
-
 class FakeFollowup:
     def __init__(self, interaction: FakeInteraction) -> None:
         self.interaction = interaction
-        self.sent: list[FakeSent] = []
+        self.sent = 0
 
-    async def send(self, *, wait: bool = False, **message: Any) -> FakeSent:
+    async def send(self, **message: Any) -> None:
         interaction = self.interaction
         # An app installed only to the person gets 5 follow-ups per interaction.
-        assert len(self.sent) < 5, "Discord refuses a sixth follow-up message"
-        self.sent.append(FakeSent())
+        assert self.sent < 5, "Discord refuses a sixth follow-up message"
+        self.sent += 1
         if interaction.thinking is not None:
             # As Discord does: the first message after "thinking" replaces it
             # and keeps its visibility, whatever this message asks for.
             message = {**message, "ephemeral": interaction.thinking}
             interaction.thinking = None
         interaction.record(message)
-        return self.sent[-1]
 
 
 class FakeInteraction:
@@ -254,22 +245,6 @@ def run_command(
     return interaction.last if interaction.messages else None
 
 
-def texts(*interactions: FakeInteraction) -> str:
-    return "\n".join(
-        message["text"] or ""
-        for interaction in interactions
-        for message in interaction.messages
-    )
-
-
-def button(message: dict[str, Any], label: str) -> discord.ui.Button:
-    (found,) = [
-        item for item in message["view"].children
-        if isinstance(item, discord.ui.Button) and item.label.startswith(label)
-    ]
-    return found
-
-
 def links(message: dict[str, Any]) -> dict[str, str]:
     return {item.label: item.url for item in message["view"].children if getattr(item, "url", None)}
 
@@ -329,9 +304,12 @@ def test_help_and_link_work_without_a_connection(store) -> None:
     assert "connected as @drift, 2 verified players" in run_command(
         store, "help", FakeInteraction()
     )["text"]
-    linked = run_command(store, "link", FakeInteraction())["text"]
-    assert "• Drift #2PP\n• Lens #8QQ" in linked
-    assert "Default player: Lens." in linked
+    # Connected: still only a pointer to the website, not the players.
+    linked = run_command(store, "link", FakeInteraction())
+    assert linked["text"].startswith("Connected as @drift.")
+    assert "#2PP" not in linked["text"] and "#8QQ" not in linked["text"]
+    assert linked["private"] is False
+    assert links(linked) == {"Manage on Clash Lens": "https://clashlens.test/account/providers"}
 
 
 def test_connected_account_without_players_is_pointed_to_the_website(store) -> None:
@@ -370,7 +348,7 @@ def test_every_reply_ends_with_how_old_its_data_is(store) -> None:
             card("#8QQ", "Lens", 5100, observed_at=None),
         ],
     )
-    footer = run_command(store, "link", FakeInteraction())["footer"]
+    footer = run_command(store, "stats", FakeInteraction(), player=None)["footer"]
     assert footer.endswith("Updated 180 min ago")
     store.pages["#8QQ"] = page("#8QQ", "Lens", [])
     footer = run_command(store, "stats", FakeInteraction(), player="#8QQ")["footer"]
@@ -379,17 +357,6 @@ def test_every_reply_ends_with_how_old_its_data_is(store) -> None:
     store.fail = psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
     footer = run_command(store, "stats", FakeInteraction(), player=None)["footer"]
     assert footer == "Updated: Unavailable"
-
-
-def test_link_lists_every_player_across_messages(store) -> None:
-    tags = [f"#{index:04d}" for index in range(500)]
-    store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
-    interaction = FakeInteraction()
-    run_command(store, "link", interaction)
-    assert len(interaction.messages) > 1
-    assert not any(item["private"] for item in interaction.messages)
-    assert all(len(item["text"]) <= 4096 for item in interaction.messages)
-    assert all(f"Wanderer {tag}\n" in texts(interaction) + "\n" for tag in tags)
 
 
 @pytest.mark.parametrize(

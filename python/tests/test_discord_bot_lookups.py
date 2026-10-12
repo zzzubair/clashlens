@@ -27,22 +27,15 @@ from bot.commands import Commands
 from bot.discord_app import DiscordApp
 from clashlens.api_db import _screen_daily_log_with_events
 
-GROUP_ID = "6f1c2c1e-6c8a-4c7e-9a2e-1d0f5a1b2c3d"
-
 
 class LookupStore(FakeStore):
     def __init__(self) -> None:
         super().__init__()
         self.known: list[dict[str, Any]] = []
-        self.group_lists: dict[int, list[dict[str, Any]]] = {}
 
     def search(self, query, now):
         self._read("search")
         return [item for item in self.known if query.casefold() in item["name"].casefold()]
-
-    def groups(self, account, now):
-        self._read("groups")
-        return self.group_lists.get(account.internal_id, [])
 
 
 @pytest.fixture
@@ -115,17 +108,10 @@ def test_player_needs_a_connected_account(store) -> None:
     assert "player_page" not in store.reads
 
 
-def test_player_autocomplete_offers_own_and_group_players_then_name_matches(store) -> None:
+def test_player_autocomplete_offers_own_players_then_name_matches(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
-    store.group_lists[1] = [
-        {"group_id": GROUP_ID, "name": "Crew", "tags": ["#8QQ"],
-         "players": [{"tag": "#8QQ", "name": "Group One", "trophies": None}]}
-    ]
     store.known = [{"tag": "#9RR", "name": "Drifter", "trophies": 6000}]
-    assert autocomplete(store, "any_player_choices", "") == [
-        ("Drift #2PP · 5,842", "#2PP"),
-        ("Group One #8QQ", "#8QQ"),
-    ]
+    assert autocomplete(store, "any_player_choices", "") == [("Drift #2PP · 5,842", "#2PP")]
     assert autocomplete(store, "any_player_choices", "dri") == [
         ("Drift #2PP · 5,842", "#2PP"),
         ("Drifter #9RR · 6,000", "#9RR"),
@@ -142,8 +128,9 @@ def test_player_autocomplete_offers_own_and_group_players_then_name_matches(stor
     assert autocomplete(store, "any_player_choices", "lucy") == [("Lucy #0UU · 5,500", "#0UU")]
     assert autocomplete(store, "any_player_choices", "l") == [("Lucy #0UU · 5,500", "#0UU")]
     store.cards[1].append(card("#0LL", "Chasing 8QQ", 5000))
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
     assert autocomplete(store, "any_player_choices", "8qq") == [
-        ("Group One #8QQ", "#8QQ"),
+        ("Lens #8QQ · 5,842", "#8QQ"),
         ("Chasing 8QQ #0LL · 5,000", "#0LL"),
     ]
 
@@ -236,6 +223,10 @@ def test_season_keeps_missing_days_and_numbers_visible(store) -> None:
     store.pages["#2PP"] = season
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
     assert text.splitlines()[1] == "Unavailable → 5,040"
+    assert (
+        "**Attacks** Unavailable · hit rate Unavailable (Unavailable three-stars) · "
+        "Unavailable per attack"
+    ) in text
     assert "**Defenses** Unavailable · held Unavailable (Unavailable not tripled)" in text
 
 

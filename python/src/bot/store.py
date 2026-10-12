@@ -247,6 +247,3 @@ class Store:
                     )
         found.sort(key=lambda item: (item["name"] or "").casefold() != exact)
         return found
-
-    def groups(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
-        return api_accounts.list_groups(self.database, account.internal_id, now=now)

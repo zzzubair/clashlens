@@ -26,7 +26,6 @@ class StoreReads(Protocol):
     def default_tag(self, account: AccountContext) -> str | None: ...
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]: ...
-    def groups(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]: ...
 
 
 T = TypeVar("T")
@@ -80,10 +79,7 @@ class Commands:
         account = self.store.account(discord_id)
         if account is None:
             return replies.not_linked(self.site, discord_name, now)
-        cards = self.store.players(account, now)
-        return replies.link_reply(
-            self.site, account.username, cards, self._default(account, cards), now
-        )
+        return replies.link_reply(self.site, account.username, now)
 
     def _one_moment(self, work: Callable[[datetime], T]) -> T:
         """One moment for every read and the reply. Data saved after a Reset
@@ -149,30 +145,16 @@ class Commands:
             return replies.not_own()
         return self.stats(account, tag)
 
-    def keep(self, discord_id: str, reply: Reply) -> Reply | None:
-        """`reply` again while this Discord user's account still has every
-        player it lists; None when this Discord user is no longer connected."""
-        account = self.store.account(discord_id)
-        if account is None:
-            return None
-        own = {card["tag"] for card in self.store.players(account, self.now())}
-        return reply if set(reply.shown) <= own else replies.not_own()
-
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
-        """Autocomplete for /stats: the person's own players and the players
-        in their groups first, then known players whose name matches what is typed;
-        a known player whose tag is exactly what is typed comes first."""
+        """Autocomplete for /stats: the person's own players first, then known
+        players whose name matches what is typed; a known player whose tag is
+        exactly what is typed comes first."""
         account = self.store.account(discord_id)
         if account is None:
             return []
         now = self.now()
         text = current.strip()
         choices = [replies.choice_for(card) for card in self.store.players(account, now)]
-        choices += [
-            replies.choice_for(player)
-            for group in self.store.groups(account, now)
-            for player in group["players"]
-        ]
         if text:
             choices += [replies.choice_for(item) for item in self.store.search(text, now)]
         tag = tag_text(text)
