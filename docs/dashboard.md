@@ -35,7 +35,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Legend day | Medium | ✓ | Live trophies and net today; rank at Last Reset → Now → a Next Reset range ("estimate · narrows as the day goes on"); attacks and defenses as star boxes with trophies; "N defenses remain · auto defense −X each". |
 | Legend clock | Small | ✓ | 24-hour dial in the user's time zone, Reset on top, countdown to Reset; attacks as swords, defenses as shields; battles within 20 minutes grouped with a count; tap one for name, stars and trophies. |
 | Bases you attacked | Large | ✓ | One row per attack today: the player and their trophies at Reset, your hit, their defenses today as coloured blocks, and Hard / Average / Easy. Held % mode (default): the base's held rate today against the Legends held rate, worked out live from today's defenses (about 52% on a typical day), Average within ±10 points. Trophies mode: average trophies the base gave up per defense today against the fixed Legends −32. Needs 3+ defenses, else "Too early". Row opens the player's page; "Add to group" button. |
-| Goal | Small | ✓ | Any rank for the end of the Season: trophies a day needed from the last Reset, On pace / Behind pace / Already ahead, gap, days left, how fast that rank's line is moving, your pace, a "Shield days 1 / 2 / 3" row, and a small chart of you vs the line. |
+| Goal | Small | ✓ | Any rank from 1 to 10,000 (the owner's chosen range) for the end of the Season: trophies a day needed from the last Reset, On pace / Behind pace / Already ahead, gap, days left, how fast that rank's line is moving, your pace, a "Shield days 1 / 2 / 3" row, and a small chart of you vs the line. |
 | Armies on defense | Medium | ✓ | Top 5 army types that attacked you over the last 3 days, 7 days or a Custom 1–28 days, sorted by most trophies lost: share of your defenses, your held % and your average trophies lost, each followed by the Legends average for that army in grey ("29% / 50%", "−37 / −33") under grey header text saying "/ Legends avg"; an All defenses row with the overall Legends average. |
 | Rivals watch | Medium | ✓ | The live leaderboard around you: 3 above, you, 3 below (edges handled). Live: rank with ▲▼ since Reset, trophies, today's hit rate, offense, defense. Season: the board at the last Reset with Season averages. |
 | Season heat map | Small | ✓ | 28 squares, one per Season day, with a Net / Offense / Defense switch. Each day is coloured by rank within your own Season: your best day green, your worst red, orange and yellow between; shield days grey and left out. Summary follows the switch. Click a day to swap the summary for that day's offense, attacks, defense, defenses, net and trophies at the end. |
@@ -53,7 +53,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Card | Setting | Default |
 |---|---|---|
 | Bases you attacked | Held % or Trophies | Held % |
-| Goal | Finish rank, any rank from 1 | Top 200 |
+| Goal | Finish rank, 1–10,000 (the owner's choice) | Top 200 |
 | Cutoffs | 7 of the 12 Top lines | Top 10, 50, 100, 200, 500, 1,000, 5,000 |
 | Group watch | Last 7 days or Whole Season | Last 7 days |
 

@@ -159,6 +159,13 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await page.getByRole("button", { name: "Goal settings" }).click();
   const settings = page.getByRole("dialog", { name: "Goal settings" });
+  // The Goal takes a rank from 1 to 10,000.
+  await settings.getByRole("spinbutton").fill("10001");
+  await expect(settings).toContainText("Enter a whole number from 1 to 10,000");
+  await expect(settings.getByRole("button", { name: "Save" })).toBeDisabled();
+  await settings.getByRole("spinbutton").fill("10000");
+  await expect(settings).toContainText("Any rank from 1 to 10,000");
+  await expect(settings.getByRole("button", { name: "Save" })).toBeEnabled();
   await settings.getByRole("spinbutton").fill("50");
   await settings.getByRole("button", { name: "Save" }).click();
   await expect(settings).toBeHidden();

@@ -8,6 +8,7 @@ import {
   CUTOFF_LINES,
   CUTOFF_PICKS,
   DEFAULT_CUTOFFS,
+  MAX_GOAL,
   addableCards,
   serializeSettings,
   shownCards,
@@ -183,8 +184,7 @@ function SettingsDialog({
     dialog.current?.showModal();
   }, []);
   const goalNumber = Number(goal);
-  const goalValid =
-    /^\d+$/.test(goal) && goalNumber >= 1 && Number.isSafeInteger(goalNumber);
+  const goalValid = /^\d+$/.test(goal) && goalNumber >= 1 && goalNumber <= MAX_GOAL;
   const valid =
     card === "goal"
       ? goalValid
@@ -236,6 +236,7 @@ function SettingsDialog({
               type="number"
               inputMode="numeric"
               min={1}
+              max={MAX_GOAL}
               step={1}
               value={goal}
               autoFocus
@@ -243,7 +244,9 @@ function SettingsDialog({
               onChange={(event) => setGoal(event.currentTarget.value)}
             />
             <span id="dash-goal-help" className={goalValid ? "dash-muted" : "negative"}>
-              {goalValid ? "Any rank from 1" : "Enter a whole number from 1"}
+              {goalValid
+                ? `Any rank from 1 to ${MAX_GOAL.toLocaleString("en-US")}`
+                : `Enter a whole number from 1 to ${MAX_GOAL.toLocaleString("en-US")}`}
             </span>
           </label>
         ) : card === "cutoffs" ? (
