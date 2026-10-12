@@ -451,13 +451,13 @@ describe("army analytics route historical reads", () => {
     const render = async (population: string) =>
       renderedText(await renderArmyRoute(`season=current&population=${population}`));
     expect(await render("top-100")).toContain(
-      "Each day’s ranks come from the leaderboard saved just before the Reset (05:00 UTC) that ended it. 100 of these 100 players had a trophy count over 10 minutes old at one of those Resets, so their rank may be out of date.",
+      "These numbers cover players in the top 100 on the day of the attack, by the leaderboard saved just before the Reset (05:00 UTC) that ended that day. 100 of these 100 players had a trophy count over 10 minutes old at one of those Resets, so their rank may be out of date.",
     );
     expect(await render("band-101-200")).toContain(
-      "7 of these 100 players had a trophy count over 10 minutes old at one of those Resets",
+      "These numbers cover players ranked 101 to 200 on the day of the attack, by the leaderboard saved just before the Reset (05:00 UTC) that ended that day. 7 of these 100 players had a trophy count over 10 minutes old at one of those Resets",
     );
-    expect(await render("top-100")).not.toContain("ranks come from");
-    expect(await render("all")).not.toContain("ranks come from");
+    expect(await render("top-100")).not.toContain("on the day of the attack");
+    expect(await render("all")).not.toContain("on the day of the attack");
   });
 
   it("keeps a Consistent top choice when its days are unavailable", async () => {

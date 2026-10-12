@@ -396,14 +396,15 @@ in its controls so later days can appear as they become ready, and names gaps
 between the requested start and the last covered day. If no days can be used,
 the view is unavailable.
 
-Frozen Top-N cohorts and rank bands count each covered Legend day's attacks by
-the players in that range of the day's own frozen leaderboard, the one saved
-just before the Reset that ends it. A day is counted once, from the version of
-that leaderboard published when it is counted; later corrections of that
-leaderboard never change it, and only a rebuild of the day's own facts counts
-it again. Each army result names the version used for each day. Every day
-needs its count; for `season=current`, stop at the latest counted day in the
-requested range. Trophy-range filters need no leaderboard.
+Frozen Top-N cohorts and rank bands count an attack only if the player was in
+that Top N or rank range on the day of the attack, by that day's own frozen
+leaderboard, the one saved just before the Reset that ends it. Once a finished
+day is counted, later corrections to that day's leaderboard do not change which
+players count; only a rebuild of that day's battle data or an explicit repair
+counts it again. Each army result names the leaderboard version used for each
+day. Every day needs its count; for `season=current`, days not counted yet are
+left out and named, and other views with such a day are unavailable.
+Trophy-range filters need no leaderboard.
 
 - For a trophy-range filter, the **defense lens** groups attacks by the defender's trophies at battle time.
 - For a trophy-range filter, the **offense lens** groups attacks by the attacker's trophies at battle time.

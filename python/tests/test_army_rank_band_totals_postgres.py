@@ -159,6 +159,7 @@ def test_each_day_counts_once_by_its_own_board(
         ]
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        cached_api = ApiDatabase(as_api_role(ci))
         fact_queries: list[str] = []
         original_connection = api.pool.connection
 
@@ -323,9 +324,15 @@ def test_each_day_counts_once_by_its_own_board(
             fact_queries.clear()
             assert _shown(view("top-5")) == _shown(top5)
             assert fact_queries == []
+            top5_days = _selection(population="top-5", start_day=23, end_day=24)
+            cached = api_analytics.get_army_analytics(cached_api, top5_days)
+            assert cached is not None and cached["total_attacks"] == 2
             army_rank_bands.refresh_rank_band_totals(database)
             assert counted[2:] == [(day_23, 23)]
             assert view("top-5")["total_attacks"] == 1
+            # The recount is never answered from what was cached before it.
+            recounted = api_analytics.get_army_analytics(cached_api, top5_days)
+            assert recounted is not None and recounted["total_attacks"] == 1
 
             # Totals saved before unnamed ids counted, or counted from another
             # Reset's board before each day used its own, are counted again.
@@ -353,6 +360,23 @@ def test_each_day_counts_once_by_its_own_board(
             # now has #2PP in day 24's top 5.
             assert counted[3:] == [(republished, 24), (day_23, 23)]
             assert view("top-5")["total_attacks"] == 2
+
+            # A day 24 build moves day 23's defense to day 24. Day 23 is
+            # unavailable until counted again, so the battle never counts on
+            # both days.
+            _publish_day(
+                database, "#8PP", [_event(first, "defense", ts1, 3, 100, -35)],
+                day_start=day2_start, day_number=24,
+            )
+            assert processor.process_job(_army_job(database), owner="army-4").outcome == "processed"
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert counted[5:] == [(republished, 24)]
+            with pytest.raises(ArmyAnalyticsUnavailable) as departed:
+                view("band-1001-2000", lens="defense")
+            assert departed.value.affected_days == [23]
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert view("band-1001-2000", lens="defense")["total_attacks"] == 1
         finally:
             api.close()
+            cached_api.close()
             database.close()

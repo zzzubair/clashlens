@@ -489,10 +489,11 @@ these steps, all run by the worker:
    these up and never read facts; army types use the same leaderboards. Each
    run counts one day of the newest Season, newest first, in about a minute.
    A corrected leaderboard is never counted again; a day whose facts are
-   rebuilt is, and the page serves its older totals until then. Until a day
-   is counted, `season=current` views stop at the day before and other views
-   of it are unavailable. The worker log shows each count as an
-   `army_rank_band_totals` event naming the day and leaderboard.
+   rebuilt is, and the page serves its older totals until then, except that a
+   day a battle moves out of loses its totals at once. Until a day is counted,
+   `season=current` views leave it out and other views of it are unavailable.
+   The worker log shows each count as an `army_rank_band_totals` event naming
+   the day and leaderboard.
 5. The same timer gives each saved distinct army its
    [army type](domain.md#army-types), 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in

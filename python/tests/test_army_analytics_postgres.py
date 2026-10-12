@@ -68,7 +68,7 @@ def _army_range_database(
             ],
             # The worker counts days with army data and a board.
             [
-                (day, day, 1)
+                (day, day, 1, str(day))
                 for day in days
                 if missing_kind not in ("army", "snapshot") or day != missing_day
             ],

@@ -1075,8 +1075,12 @@ export default function ArmyAnalyticsRoute() {
           ) : null}
           {/^(top|band)-/.test(population) && oldTrophyPlayers > 0 ? (
             <p className="section-note analytics-coverage-note">
-              Each day’s ranks come from the leaderboard saved just before the Reset
-              (05:00 UTC) that ended it.{" "}
+              These numbers cover{" "}
+              {population.startsWith("top-")
+                ? `players in the top ${Number(population.slice(4)).toLocaleString()}`
+                : populationDescription(population)}{" "}
+              on the day of the attack, by the leaderboard saved just before the Reset
+              (05:00 UTC) that ended that day.{" "}
               {cohortPlayers === 1
                 ? "This player"
                 : `${oldTrophyPlayers.toLocaleString()} of these ${cohortPlayers.toLocaleString()} players`}{" "}

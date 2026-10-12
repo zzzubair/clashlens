@@ -550,6 +550,7 @@ def get_army_analytics(
                 completed_day_signature,
                 tuple(member_ids) if member_ids is not None else None,
                 tuple(zip(snapshot_ids, snapshot_versions)),
+                tuple(boards.get(day) for day in covered_days),
                 streak_version_digest,
                 tuple(streak_gap_days),
             )

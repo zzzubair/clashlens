@@ -13,7 +13,8 @@ players at a time. Each day is counted once, from the version published when
 it is counted, and corrections never count it again. Only a change to the
 day's own facts does: a row holds the day's marker hash it was counted from,
 and a rebuilt day no longer matches. Until that recount the page serves the
-saved totals.
+saved totals, except for a day a battle moved out of, whose totals are
+deleted so the battle is never counted on two days.
 
 Each Season keeps about 10,500 rows and 16 MB at day 28, deleted with their
 Legend day when season retirement deletes its completed-day marker.
@@ -231,14 +232,18 @@ def _count(
         )
 
 
-def counted_boards(connection: Any, season_id: str) -> dict[int, tuple[int, int]]:
-    """Each counted day of a Season: the board its totals used, and its version."""
+def counted_boards(
+    connection: Any, season_id: str
+) -> dict[int, tuple[int, int, str]]:
+    """Each counted day of a Season: the board its totals used, its version,
+    and the day marker hash they were counted from.
+    """
     return {
-        int(day): (int(snapshot_id), int(version))
-        for day, snapshot_id, version in connection.execute(
+        int(day): (int(snapshot_id), int(version), _text(marker))
+        for day, snapshot_id, version, marker in connection.execute(
             """
             SELECT DISTINCT total.season_day_number, total.snapshot_id,
-                   snapshot.version
+                   snapshot.version, total.fact_input_hash
             FROM army_analytics_rank_band_totals AS total
             JOIN leaderboard_snapshots AS snapshot
               ON snapshot.id = total.snapshot_id

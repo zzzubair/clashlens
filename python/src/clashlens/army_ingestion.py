@@ -1213,6 +1213,9 @@ def _build_army_fact_batch(
             ), day_totals AS (
                 DELETE FROM army_analytics_day_totals
                 WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
+            ), rank_band_totals AS (
+                DELETE FROM army_analytics_rank_band_totals
+                WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
             )
             SELECT ranked_day_start FROM other_days
             """,
