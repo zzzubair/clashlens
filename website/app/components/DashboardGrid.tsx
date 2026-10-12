@@ -54,7 +54,6 @@ const CARD_VIEWS: {
   bases: (data, context) => (
     <OpponentsCard
       rows={data.rows}
-      legends={data.legends}
       mode={data.mode}
       timeZone={context.timeZone}
       nowMs={context.nowMs}

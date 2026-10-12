@@ -221,7 +221,10 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             assert api_dashboard.get_player_today(database, board, "#8PY", now=NOW)[
                 "rank_range"
             ] == {"best": 1, "worst": 3}
+            # Every player's 4 of 5 held is kept for the older website, but
+            # under 50 defenses near a base gives that base no comparison.
             assert today["legends_held"] == {"held": 4, "defenses": 5}
+            assert [row["legends_held"] for row in today["opponents"]] == [None] * 2
             assert today["open_defenses"] == 6
             assert today["automatic_defense_each"] == 23
             assert [
@@ -381,3 +384,39 @@ def test_dashboard_today_skips_a_yesterday_the_worker_rejects(
             assert today["automatic_defense_each"] is None
         finally:
             database.close()
+
+
+def test_bases_compare_only_with_players_at_similar_trophies() -> None:
+    class Rows:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.rows = rows
+
+        def execute(self, _sql: str, _params: Any) -> Rows:
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self.rows
+
+    def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
+        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0)
+
+    # 24 defenses at 5,400 (6 held) and 196 at 5,000 (168 held), 400 away.
+    rows = (
+        [player(f"#A{n}", 5400, 8, 6) for n in range(3)]
+        + [player(f"#B{n}", 5000, 4, 1) for n in range(28)]
+        + [player(f"#C{n}", 5000, 4, 0) for n in range(21)]
+    )
+    board = api_dashboard._read_board(Rows(rows), NOW)
+
+    # 5,400: 24 within 300, under 50, so no comparison rather than the 174
+    # of 220 (79%) that widening to the 5,000 players would give.
+    assert api_dashboard.similar_held(board, 5400) is None
+    # 5,000: 196 within 300, short of 200 but at least 50, so those.
+    assert api_dashboard.similar_held(board, 5000) == {"held": 168, "defenses": 196}
+    # Unknown Reset trophies: no comparison.
+    assert api_dashboard.similar_held(board, None) is None
+
+    # With 8 more defenses at 5,520, 5,250 has none within 100 and 24 within
+    # 150, then 220 within 250, so it stops short of 5,520 at 270.
+    wider = api_dashboard._read_board(Rows(rows + [player("#D", 5520, 8, 8)]), NOW)
+    assert api_dashboard.similar_held(wider, 5250) == {"held": 174, "defenses": 220}

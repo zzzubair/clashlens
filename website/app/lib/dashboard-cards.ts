@@ -8,7 +8,6 @@ import type { LinkedPlayerCard } from "./account-contracts";
 import type {
   BasesMode,
   ClockBattle,
-  LegendsHeld,
   OpponentRow,
   PlayerDay,
   RankRange,
@@ -442,7 +441,6 @@ export interface LegendDayData {
 export interface BasesData {
   /** Null until the player's battles for today are saved. */
   rows: OpponentRow[] | null;
-  legends: LegendsHeld | null;
   mode: BasesMode;
 }
 

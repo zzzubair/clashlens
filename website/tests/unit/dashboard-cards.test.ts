@@ -537,8 +537,6 @@ const hit = (stars: number, destruction: number, trophies: number, minutes: numb
 const TODAY = {
   tag: MAIN,
   rank_range: { best: 95, worst: 760 },
-  // Legends today: 52% held.
-  legends_held: { held: 52, defenses: 100 },
   open_defenses: 7,
   automatic_defense_each: 21,
   opponents: [
@@ -547,7 +545,8 @@ const TODAY = {
       name: "Bo",
       reset_trophies: 5688,
       hit: hit(2, 88, 31, 25),
-      // Held 1 of 4, 151 trophies given up.
+      // Held 1 of 4, 151 trophies given up; 41% at similar trophies.
+      legends_held: { held: 41, defenses: 100 },
       defenses: [
         defense(3, -40),
         defense(2, -31, true),
@@ -561,7 +560,8 @@ const TODAY = {
       name: "Ava",
       reset_trophies: 5712,
       hit: hit(3, 100, 40, 10),
-      // Held 5 of 6, 90 trophies given up.
+      // Held 5 of 6, 90 trophies given up; 41% at similar trophies.
+      legends_held: { held: 41, defenses: 100 },
       defenses: [
         defense(1, -10),
         defense(1, -10),
@@ -1148,14 +1148,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(day).toContain("1 defense");
     expect(day).toContain("7 defenses remain · auto defense −21 each");
 
-    // Bases you attacked: hardest first against today's Legends 52% held.
+    // Bases you attacked: hardest first against 41% held at similar trophies.
     const bases = text(cards.bases!);
     expect(bases).toContain("Bases you attacked · today · 2 of 8");
-    expect(bases).toContain("Base strength · Legends 52% held");
+    expect(bases).toContain("Base strength · vs Legends at similar trophies today");
     expect(bases).toContain("Ava 5,712 ★★★ 100% +40 · 07:10");
-    expect(bases).toContain("Hard held 5 of 6 · 83%");
+    expect(bases).toContain("Hard held 5 of 6 · 83% vs 41%");
     expect(bases).toContain("Bo 5,688 ★★☆ 88% +31 · 07:25");
-    expect(bases).toContain("Easy held 1 of 4 · 25%");
+    expect(bases).toContain("Easy held 1 of 4 · 25% vs 41%");
     expect(bases.indexOf("Ava")).toBeLessThan(bases.indexOf("Bo"));
 
     // Armies on defense: the costliest armies first, each beside the Legends average.
@@ -1196,7 +1196,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
-    expect(bases).toContain("Base strength · Legends −32 a defense");
+    expect(bases).toContain("Base strength · vs all Legends −32 a defense");
     expect(bases).toContain("Hard gave up −15 a defense");
     expect(bases).toContain("Easy gave up −38 a defense");
   });

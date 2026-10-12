@@ -196,10 +196,14 @@ Reset hides the day's numbers behind a new-day notice until it reloads.
 
 Bases you attacked rates each base Hard / Average / Easy in the mode its
 settings choose. Held % compares the base's held share today with today's held
-share across tracked Legend players (Average is within 10 points); Trophies
-compares the trophies it gave up a defense today with the fixed Legends −32 a
-defense (`LEGENDS_DEFENSE_LOSS`; Average is within `BASE_TROPHY_BAND`
-trophies). Under 3 defenses is too early.
+share among tracked Legend players at similar trophies, whose day started
+within 100 trophies of the base's Reset trophies, widened until that holds 200
+defenses but never past 300 either side, and at least 50 defenses (Average is
+within 15 points). Without that comparison a base with 3+ defenses shows "–"
+and "no comparison yet". The similar-trophies comparison is Held % only:
+Trophies compares the trophies it gave up a defense today with the fixed
+Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average is within
+`BASE_TROPHY_BAND` trophies). Under 3 defenses is too early.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;

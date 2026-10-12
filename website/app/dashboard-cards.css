@@ -388,6 +388,7 @@
   background: #2fb344;
 }
 
+.dash-strength-unavailable,
 .dash-strength-early {
   color: var(--cl-muted);
   background: var(--cl-panel);

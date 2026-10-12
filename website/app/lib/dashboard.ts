@@ -337,20 +337,29 @@ export interface OpponentRow {
   defenses: { stars: number; trophyChange: number; yours: boolean }[];
   /** When the opponent's newest battle log was read, Unix milliseconds. */
   observedAtMs: number | null;
+  /** Today's held share among Legend players at similar trophies; null without enough of them. */
+  legends: LegendsHeld | null;
 }
 
-/** Today's held share across all tracked Legend players. */
+/**
+ * Today's held share among tracked Legend players whose day started near the
+ * base's Reset trophies: within 100, widened until 200 defenses but never past
+ * 300, and at least 50 defenses.
+ */
 export interface LegendsHeld {
   held: number;
   defenses: number;
 }
 
-export type BaseStrength = "hard" | "average" | "easy" | "early";
+export type BaseStrength = "hard" | "average" | "easy" | "unavailable" | "early";
 /** Bases you attacked: the base's held share, or trophies it gave up a defense. */
 export type BasesMode = "held" | "trophies";
 
-/** Held % mode: Average is within 10 points of today's Legends held share. */
-export const BASE_STRENGTH_BAND = 10;
+/**
+ * Held % mode: Average is within 15 points of today's held share among
+ * Legends at similar trophies.
+ */
+export const BASE_STRENGTH_BAND = 15;
 /**
  * Trophies mode: tracked Legend players lose this many trophies a defense,
  * fixed because it held between 31.94 and 32.31 a day over 29 Sep–11 Oct 2026.
@@ -359,7 +368,7 @@ export const LEGENDS_DEFENSE_LOSS = 32;
 /**
  * Trophies mode: Average is within this many trophies a defense of
  * `LEGENDS_DEFENSE_LOSS`. Over 74,239 bases on 5–11 Oct 2026 it rated 27.3%
- * Average, as the held 10-point band rated 27.2%.
+ * Average, as the held band then (10 points against all Legends) rated 27.2%.
  */
 export const BASE_TROPHY_BAND = 1.25;
 /** Under 3 defenses is too early. */
@@ -385,7 +394,7 @@ export function baseStrength(
     if (fewer < -band) return "easy";
     return "average";
   }
-  if (!legends || legends.defenses === 0) return "early";
+  if (!legends || legends.defenses === 0) return "unavailable";
   // Compared without rounding: the base's share against the Legends', both
   // scaled by both defense counts.
   const held = defenses.filter((defense) => defense.stars < 3).length;
