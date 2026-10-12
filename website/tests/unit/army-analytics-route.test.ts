@@ -3,15 +3,41 @@ import type { AddressInfo } from "node:net";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
+  RouterProvider,
   StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  openPage: null as { states: unknown[]; next: number } | null,
 }));
+
+// A page left open keeps its state from one in-page visit to the next, as
+// React does in the browser; server renders otherwise start fresh.
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (initialState: unknown) => {
+      const [value, setValue] = actual.useState(initialState);
+      const page = mocks.openPage;
+      if (!page) return [value, setValue];
+      const index = page.next++;
+      if (index === page.states.length) page.states.push(value);
+      return [
+        page.states[index],
+        (next: unknown) => {
+          page.states[index] = next;
+          setValue(next);
+        },
+      ];
+    },
+  };
+});
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
@@ -817,6 +843,81 @@ describe("army analytics attacks and season picker", () => {
     const failed = await renderArmyRoute("season=current");
     expect(failed).toContain('aria-label="Army statistics"');
     expect(picker(failed).match(/<option/g)).toHaveLength(1);
+  });
+});
+
+describe("army analytics top-bar link", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("drops a chosen sort and lists Usage highest first again", async () => {
+    const rows = (
+      [
+        ["Archer", 1],
+        ["Wizard", 3],
+      ] as const
+    ).map(([label, count]) => ({
+      key: `troop:${label}`,
+      label,
+      usageCount: count,
+      usageDenominator: 4,
+      usageRate: count / 4,
+      starCounts: [0, 0, 0, count],
+      starRates: [0, 0, 0, 1],
+      threeStarRate: 1,
+      averageStars: 3,
+      averageDestruction: 100,
+      unknownExcludedAttacks: 0,
+    }));
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi
+        .fn()
+        .mockResolvedValue({ ...currentAnalytics("top-100", [1], 1), rows }),
+    });
+    const page = { states: [] as unknown[], next: 0 };
+    function OpenPage() {
+      page.next = 0;
+      mocks.openPage = page;
+      try {
+        return ArmyRoute();
+      } finally {
+        mocks.openPage = null;
+      }
+    }
+    const router = createMemoryRouter(
+      [{ path: "/analytics/armies", Component: OpenPage, loader: armyLoader }],
+      {
+        initialEntries: [
+          "/analytics/armies?season=current&category=troops&population=top-100",
+        ],
+      },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const shown = () => {
+      const html = renderToString(createElement(RouterProvider, { router }));
+      return {
+        rows: [...html.matchAll(/role="rowheader">(.*?)<\/th>/g)].map(([, name]) => name),
+        sorted: html.match(/data-column="([^"]+)" aria-sort="([^"]+)"/)?.slice(1),
+      };
+    };
+    expect(shown()).toEqual({
+      rows: ["Wizard", "Archer"],
+      sorted: ["usage-rate", "descending"],
+    });
+
+    // Sort by Name, A to Z: the table's chosen sort is the state that starts empty.
+    page.states[page.states.indexOf(null)] = { column: "name", direction: "ascending" };
+    expect(shown()).toEqual({
+      rows: ["Archer", "Wizard"],
+      sorted: ["name", "ascending"],
+    });
+
+    await router.navigate("/analytics/armies");
+    expect(shown()).toEqual({
+      rows: ["Wizard", "Archer"],
+      sorted: ["usage-rate", "descending"],
+    });
   });
 });
 
