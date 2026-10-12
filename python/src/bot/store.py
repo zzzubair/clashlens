@@ -262,10 +262,47 @@ class Store:
         }
 
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]:
-        """Known players whose name matches, exact name first, as the website's search."""
-        return api_players.search_known_players(
+        """Known players whose name matches, exact name first, as the website's
+        search, with the players who have not played yet this Season whose
+        5,000 profile matches, as players() shows them. Those come from the
+        worker's saved list of them: finding them all live took 17 s on
+        11 October 2026."""
+        found = api_players.search_known_players(
             self.database, query, now=now, freshness_seconds=FRESHNESS_SECONDS, limit=25
         )
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params = api_leaderboard._season_params(now)
+        with self.database.pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT player.normalized_tag, saved.name, saved.clan,
+                       saved.profile_version_id
+                FROM live_unplayed_profiles AS saved
+                JOIN players AS player ON player.id = saved.player_id
+                WHERE saved.official_season_id = %(season_id)s
+                  AND saved.name ILIKE %(pattern)s ESCAPE '\\'
+                  AND NOT player.normalized_tag = ANY(%(found)s::text[])
+                ORDER BY lower(saved.name) = lower(%(query)s) DESC,
+                         lower(saved.name), player.normalized_tag
+                LIMIT 25
+                """,
+                {
+                    **params,
+                    "pattern": f"%{escaped}%",
+                    "query": query,
+                    "found": [item["tag"] for item in found],
+                },
+            ).fetchall()
+            for tag, name, clan, version_id in rows:
+                unplayed = connection.execute(
+                    api_leaderboard.UNPLAYED_PROFILE_SQL, {**params, "tag": tag}
+                ).fetchone()
+                if unplayed is not None and unplayed[0] == version_id:
+                    found.append(
+                        {"tag": tag, "name": name, "clan": clan, "trophies": SEASON_START_TROPHIES}
+                    )
+        found.sort(key=lambda item: (item["name"] or "").casefold() != query.casefold())
+        return found[:25]
 
     def board(self, now: datetime, focus_tag: str | None = None) -> dict[str, Any] | None:
         """The Live Leaderboard's top 10, or with `focus_tag` that player and

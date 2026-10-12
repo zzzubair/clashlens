@@ -10,7 +10,7 @@ from test_api_db_public_ops import NOW, seed_profile
 from bot.commands import Commands
 from bot.replies import Site
 from bot.store import Store
-from clashlens import api_accounts
+from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 DISCORD_ID = "100000000000000001"
@@ -211,6 +211,46 @@ def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) ->
             )
             assert "5,000 🏆" in line
             assert line.endswith("⚔ 0/8 · 🛡 0/8 · net +0 so far")
+        finally:
+            bot.close()
+            owner.close()
+
+
+def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            # Drifter is Legend I at 5,000 with no Legend battle, known only
+            # from the rejected Season 0 profile the game sends before sign-up.
+            seed_profile(owner, "#8QQ", 5000)
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET name = 'Drifter', source_contract_state = 'conflict',
+                        current_league_season_id = '0',
+                        eligibility_reason = 'confirmed_legend_i'
+                    WHERE normalized_tag = '#8QQ'
+                    """
+                )
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = NULL"
+                    " WHERE normalized_tag = '#8QQ'"
+                )
+                api_leaderboard.save_live_unplayed(connection, NOW)
+            _account(owner, "discord", DISCORD_ID, "drift")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+            commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
+
+            found = commands.player(account, "Drifter")
+            assert found.title is not None and found.title.startswith("Drifter #8QQ")
+            assert found.body.startswith("5,000 🏆")
+            assert [choice.value for choice in commands.player_choices(DISCORD_ID, "drift")] == [
+                "#8QQ"
+            ]
         finally:
             bot.close()
             owner.close()
