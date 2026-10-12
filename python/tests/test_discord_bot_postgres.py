@@ -257,7 +257,9 @@ def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) ->
             owner.close()
 
 
-def test_bot_names_a_player_by_the_profile_their_page_shows(database_url: str) -> None:
+def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
+    database_url: str,
+) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         bot = ApiDatabase(as_api_role(connection_info))
@@ -289,7 +291,7 @@ def test_bot_names_a_player_by_the_profile_their_page_shows(database_url: str) -
                     (NOW,),
                 )
                 api_leaderboard.save_live_unplayed(connection, NOW)
-            _account(owner, "discord", DISCORD_ID, "drift")
+            account_id = _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
             account = store.account(DISCORD_ID)
             assert account is not None
@@ -300,6 +302,11 @@ def test_bot_names_a_player_by_the_profile_their_page_shows(database_url: str) -
             assert [choice.label for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "Drifter #8QQ · 5,000"
             ]
+            # /me dates the player by the newer profile, read now, not the older one.
+            seed_profile(owner, "#2PP", 5100)
+            _verify(owner, account_id, "#8QQ")
+            _verify(owner, account_id, "#2PP")
+            assert commands.me(account).updated == NOW
         finally:
             bot.close()
             owner.close()

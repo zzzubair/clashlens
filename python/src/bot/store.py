@@ -157,21 +157,23 @@ class Store:
                 if (
                     card["state"] != "tracking"
                     or card["reason"] not in (None, "pending")
-                    or card["trophies"] is not None
+                    or card["trophies"] not in (None, SEASON_START_TROPHIES)
                 ):
                     continue
                 unplayed = connection.execute(
                     api_leaderboard.UNPLAYED_PROFILE_SQL,
                     {**api_leaderboard._season_params(now), "tag": card["tag"]},
                 ).fetchone()
-                if unplayed is not None:
+                if unplayed is None:
+                    continue
+                seen[card["tag"]] = unplayed[1]
+                if card["trophies"] is None:
                     card.update(
                         reason=None,
                         trophies=SEASON_START_TROPHIES,
                         season_reset_pending=False,
                         today=_today(connection, card["tag"], now),
                     )
-                    seen[card["tag"]] = unplayed[1]
         for card in cards:
             card["observed_at"] = seen.get(card["tag"])
         return cards
