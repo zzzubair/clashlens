@@ -15,9 +15,16 @@ const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",
   average: "Average",
   easy: "Easy",
+  unavailable: "–",
   early: "Too early",
 };
-const STRENGTH_ORDER: BaseStrength[] = ["hard", "average", "easy", "early"];
+const STRENGTH_ORDER: BaseStrength[] = [
+  "hard",
+  "average",
+  "easy",
+  "unavailable",
+  "early",
+];
 /** A Legend day has 8 attacks. */
 const ATTACKS = 8;
 
@@ -32,10 +39,11 @@ function lostEach(trophies: number, defenses: number): string {
 }
 
 /**
- * Card 3: one row per attack today, hardest bases first. Strength compares
+ * Card 3: one row per attack today, hardest bases first. Held % mode compares
  * the base's held share today with today's among tracked Legend players at
- * similar trophies (Held % mode), or the trophies it gave up a defense with
- * the fixed Legends 32 (Trophies mode). Colours follow the attacker: green
+ * similar trophies, and shows "–" when there are too few of them. Trophies
+ * mode compares the trophies it gave up a defense with the fixed Legends 32
+ * for every base, whatever its trophies. Colours follow the attacker: green
  * is good for you, red is bad.
  */
 export function OpponentsCard({
@@ -98,7 +106,7 @@ export function OpponentsCard({
           <span>
             Base strength
             {mode === "trophies"
-              ? ` · Legends ${signed(-LEGENDS_DEFENSE_LOSS)} a defense`
+              ? ` · vs all Legends ${signed(-LEGENDS_DEFENSE_LOSS)} a defense`
               : " · vs Legends at similar trophies today"}
           </span>
           <span />
@@ -156,10 +164,10 @@ export function OpponentsCard({
                   {row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
                     ? `held ${held} of ${row.defenses.length} · needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
                     : mode === "held"
-                      ? `held ${held} of ${row.defenses.length} · ${Math.round(heldShare(row.defenses) * 100)}%${
-                          row.legends
-                            ? ` vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
-                            : ""
+                      ? `held ${held} of ${row.defenses.length} · ${
+                          row.legends?.defenses
+                            ? `${Math.round(heldShare(row.defenses) * 100)}% vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
+                            : "no comparison yet"
                         }`
                       : `gave up ${lostEach(trophiesGivenUp(row.defenses), row.defenses.length)} a defense`}
                 </span>

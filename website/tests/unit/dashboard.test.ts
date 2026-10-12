@@ -322,7 +322,8 @@ describe("dashboard settings", () => {
     expect(baseStrength(defenses(6, 20), { held: 52, defenses: 100 })).toBe("easy");
     expect(baseStrength(defenses(6, 20), { held: 30, defenses: 100 })).toBe("average");
     expect(baseStrength(defenses(2, 2), legends)).toBe("early");
-    expect(baseStrength(defenses(3, 3), null)).toBe("early");
+    // 3+ defenses without enough Legends at similar trophies: no comparison.
+    expect(baseStrength(defenses(3, 3), null)).toBe("unavailable");
   });
 
   it("rates a base by trophies given up a defense against the fixed Legends 32", () => {
@@ -485,6 +486,26 @@ describe("Bases you attacked", () => {
     expect(html.match(/is-yours/g)).toHaveLength(3);
   });
 
+  it("shows a base with 3+ defenses but no comparison as unavailable, not too early", async () => {
+    const plain = text(
+      await renderInRouter(
+        createElement(OpponentsCard, {
+          rows: [
+            { ...row("Early", held(0, 2)), legends: null },
+            { ...row("No comparison", held(3, 4)), legends: null },
+            row("Easy one", held(1, 4)),
+          ],
+          timeZone: "UTC",
+        }),
+      ),
+    );
+    expect(plain).toContain("– held 3 of 4 · no comparison yet");
+    expect(plain).not.toContain("Too early held 3 of 4");
+    expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
+    expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("No comparison"));
+    expect(plain.indexOf("No comparison")).toBeLessThan(plain.indexOf("Early"));
+  });
+
   it("says today's battles aren't saved yet rather than no attacks", async () => {
     const render = async (rows: OpponentRow[] | null) =>
       text(
@@ -509,7 +530,7 @@ describe("Bases you attacked", () => {
         }),
       ),
     );
-    expect(plain).toContain("Base strength · Legends −32 a defense");
+    expect(plain).toContain("Base strength · vs all Legends −32 a defense");
     // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense.
     expect(plain).toContain("Hard gave up −28 a defense");
     // One held and three tripled: 145 over 4 is −36 a defense.

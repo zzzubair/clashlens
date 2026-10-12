@@ -16,9 +16,11 @@ one query and kept for a minute, so dashboards share one read per minute.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
-base's, widened evenly until it holds 200 defenses, because held share falls
-as trophies rise (last Season: about 65% under 4,900, 30% at 5,400 and up).
-A base whose Reset trophies are unknown is compared with every player.
+base's, widened evenly until it holds 200 defenses but never past 300 either
+side, because held share falls as trophies rise (last Season: about 65% under
+4,900, 30% at 5,400 and up). Under 200 defenses within 300, it uses those if
+there are at least 50. A base with fewer, or whose Reset trophies are
+unknown, gets no comparison: it is never compared with every player.
 
 The two army cards read finished Legend days whose army records are complete:
 a player's attacks or defenses per army type. A defense's type is the
@@ -48,9 +50,12 @@ from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
 # Bases you attacked: compare with players whose day started this near the
-# base's Reset trophies, widened until the comparison holds enough defenses.
+# base's Reset trophies, widened until the comparison holds enough defenses
+# but never past the most; with fewer than the fewest there, no comparison.
 SIMILAR_TROPHIES = 100
-SIMILAR_MIN_DEFENSES = 200
+SIMILAR_MOST_TROPHIES = 300
+SIMILAR_DEFENSES = 200
+SIMILAR_FEWEST_DEFENSES = 50
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
 MAX_ARMY_DAYS = 28
@@ -217,33 +222,36 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
 def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
     """Today's held and all defenses of players whose day started within
     100 trophies of ``trophies``, widened evenly until there are 200 defenses
-    or no more players; every player's when ``trophies`` is unknown. None
-    without defenses."""
+    but never past 300. None under 50 defenses there, or when ``trophies`` is
+    unknown."""
     if trophies is None:
-        held, defenses = board.held, board.defenses
-    else:
-        def within(reach: int) -> tuple[int, int]:
-            low = bisect_left(board.starts, trophies - reach)
-            high = bisect_right(board.starts, trophies + reach)
-            return (
-                board.held_below[high] - board.held_below[low],
-                board.defenses_below[high] - board.defenses_below[low],
-            )
+        return None
 
-        reach = SIMILAR_TROPHIES
-        if board.starts and within(reach)[1] < SIMILAR_MIN_DEFENSES:
-            # The narrowest wider reach with enough defenses, by halving
-            # between one too narrow and one that takes every player.
-            narrow = reach
-            reach = max(reach, trophies - board.starts[0], board.starts[-1] - trophies)
-            while reach - narrow > 1:
-                middle = (narrow + reach) // 2
-                if within(middle)[1] < SIMILAR_MIN_DEFENSES:
-                    narrow = middle
-                else:
-                    reach = middle
-        held, defenses = within(reach)
-    return {"held": held, "defenses": defenses} if defenses else None
+    def within(reach: int) -> tuple[int, int]:
+        low = bisect_left(board.starts, trophies - reach)
+        high = bisect_right(board.starts, trophies + reach)
+        return (
+            board.held_below[high] - board.held_below[low],
+            board.defenses_below[high] - board.defenses_below[low],
+        )
+
+    reach = SIMILAR_TROPHIES
+    if within(reach)[1] < SIMILAR_DEFENSES:
+        # The narrowest wider reach with enough defenses, by halving between
+        # one too narrow and the most, which is kept if none has enough.
+        narrow, reach = reach, SIMILAR_MOST_TROPHIES
+        while reach - narrow > 1:
+            middle = (narrow + reach) // 2
+            if within(middle)[1] < SIMILAR_DEFENSES:
+                narrow = middle
+            else:
+                reach = middle
+    held, defenses = within(reach)
+    return (
+        {"held": held, "defenses": defenses}
+        if defenses >= SIMILAR_FEWEST_DEFENSES
+        else None
+    )
 
 
 def _battles_known(day: tuple[Any, ...]) -> bool:
@@ -385,8 +393,11 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": _iso(board.computed_at),
         "rank_range": rank_range(board, tag),
-        # Every player's; the website before each base had its own read this.
-        "legends_held": similar_held(board, None),
+        # Every player's, only for the website released before each base had
+        # its own; never a base's comparison.
+        "legends_held": {"held": board.held, "defenses": board.defenses}
+        if board.defenses
+        else None,
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
         "opponents": None if today is None else opponents,

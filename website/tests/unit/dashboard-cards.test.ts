@@ -1183,7 +1183,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
-    expect(bases).toContain("Base strength · Legends −32 a defense");
+    expect(bases).toContain("Base strength · vs all Legends −32 a defense");
     expect(bases).toContain("Hard gave up −15 a defense");
     expect(bases).toContain("Easy gave up −38 a defense");
   });

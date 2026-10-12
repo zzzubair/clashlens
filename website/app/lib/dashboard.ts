@@ -337,20 +337,21 @@ export interface OpponentRow {
   defenses: { stars: number; trophyChange: number; yours: boolean }[];
   /** When the opponent's newest battle log was read, Unix milliseconds. */
   observedAtMs: number | null;
-  /** Today's held share among Legend players at similar trophies. */
+  /** Today's held share among Legend players at similar trophies; null without enough of them. */
   legends: LegendsHeld | null;
 }
 
 /**
  * Today's held share among tracked Legend players whose day started near the
- * base's Reset trophies (within 100, widened until 200 defenses).
+ * base's Reset trophies: within 100, widened until 200 defenses but never past
+ * 300, and at least 50 defenses.
  */
 export interface LegendsHeld {
   held: number;
   defenses: number;
 }
 
-export type BaseStrength = "hard" | "average" | "easy" | "early";
+export type BaseStrength = "hard" | "average" | "easy" | "unavailable" | "early";
 /** Bases you attacked: the base's held share, or trophies it gave up a defense. */
 export type BasesMode = "held" | "trophies";
 
@@ -393,7 +394,7 @@ export function baseStrength(
     if (fewer < -band) return "easy";
     return "average";
   }
-  if (!legends || legends.defenses === 0) return "early";
+  if (!legends || legends.defenses === 0) return "unavailable";
   // Compared without rounding: the base's share against the Legends', both
   // scaled by both defense counts.
   const held = defenses.filter((defense) => defense.stars < 3).length;
