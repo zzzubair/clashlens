@@ -500,7 +500,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await page.getByRole("button", { name: "Search players" }).click();
   await page.getByRole("searchbox").fill("#2PP");
   await page.getByRole("searchbox").press("Enter");
-  const seasonMenu = page.getByLabel("Season", { exact: true });
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
   await seasonMenu.selectOption({ index: 1 });
   const finish = page.locator(".season-summary");
   await expect(finish.getByText("6,498", { exact: true })).toBeVisible();
@@ -543,7 +543,7 @@ test("season navigation clears refresh state for the same player", async ({ page
   const refresh = page.getByRole("region", { name: "Player refresh" });
   await expect(refresh).toBeVisible();
 
-  await page.getByLabel("Season", { exact: true }).selectOption("");
+  await page.getByRole("combobox", { name: "Season", exact: true }).selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   await expect(refresh).toHaveCount(0);
 });
@@ -598,7 +598,7 @@ test("Back after switching Seasons returns to Your groups in one step", async ({
 
   await groupPlayer.getByRole("link").first().click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
-  const seasonMenu = page.getByLabel("Season", { exact: true });
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
   await seasonMenu.selectOption({ index: 1 });
   await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
   await seasonMenu.selectOption("");
