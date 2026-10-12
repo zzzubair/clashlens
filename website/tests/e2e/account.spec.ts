@@ -139,7 +139,7 @@ test("the account name opens Account and Log out beside Join Discord", async ({
 }) => {
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
-  await page.goto("/about");
+  await page.goto("/blog");
   const header = page.getByRole("navigation", { name: "Account and appearance" });
   const discord = header.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
@@ -163,7 +163,7 @@ test("the account name opens Account and Log out beside Join Discord", async ({
 
   await toggle.click();
   await expect(logOut).toBeVisible();
-  await page.getByRole("heading", { name: "About Clash Lens" }).click();
+  await page.getByRole("heading", { name: "Blog", exact: true }).click();
   await expect(logOut).toBeHidden();
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -185,7 +185,7 @@ test("the account name opens Account and Log out beside Join Discord", async ({
   });
   try {
     const noScriptPage = await noScript.newPage();
-    await noScriptPage.goto("/about");
+    await noScriptPage.goto("/blog");
     const noScriptHeader = noScriptPage.getByRole("navigation", {
       name: "Account and appearance",
     });

@@ -107,7 +107,7 @@ for (const viewport of [
   }) => {
     await serveWorstCaseSearch(page);
     await page.setViewportSize(viewport);
-    await page.goto("/about");
+    await page.goto("/blog");
     const input = page.getByRole("searchbox", {
       name: "Search players and Clash Lens profiles",
     });

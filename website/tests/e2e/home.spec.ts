@@ -48,29 +48,17 @@ test("fan content notice is exact, linked and readable on phones in both themes"
   }
 });
 
-test("header and footer About links open the About page", async ({ page }) => {
-  await page.goto("/");
-  await page
-    .getByRole("navigation", { name: "Main navigation" })
-    .getByRole("link", { name: "About" })
-    .click();
-  await expect(page).toHaveURL(/\/about$/);
-  await expect(page.getByRole("heading", { name: "About Clash Lens" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Join the Discord", exact: true }),
-  ).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
-  await expect(page.getByRole("contentinfo").locator("p")).toHaveText(
-    "This material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy.",
-  );
+test("old About links open home, and no page links to About", async ({ page }) => {
+  const response = await page.request.get("/about", { maxRedirects: 0 });
+  expect(response.status()).toBe(301);
+  expect(response.headers()["location"]).toBe("/");
 
-  await page.goto("/leaderboards/tracked");
-  await page
-    .getByRole("contentinfo")
-    .getByRole("navigation", { name: "Site information" })
-    .getByRole("link", { name: "About" })
-    .click();
-  await expect(page).toHaveURL(/\/about$/);
-  await expect(page.getByRole("heading", { name: "About Clash Lens" })).toBeVisible();
+  await page.goto("/about");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("heading", { name: "Legend League" }).first(),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "About", exact: true })).toHaveCount(0);
 });
 
 test("home and the full leaderboard show collected synthetic players", async ({
@@ -339,7 +327,7 @@ test("header search opens from its icon away from home, suggests players and clo
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Search players" })).toHaveCount(0);
 
-  await page.goto("/about");
+  await page.goto("/blog");
   const toggle = page.getByRole("button", { name: "Search players" });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   const input = await openHeaderSearch(page, () => toggle.click());
@@ -379,7 +367,7 @@ test("header search is a full-width sheet on phones and jumps to an exact tag", 
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
 
-  await page.goto("/about");
+  await page.goto("/blog");
   const input = await openHeaderSearch(page, () =>
     page.getByRole("button", { name: "Search players" }).click(),
   );
@@ -392,7 +380,7 @@ test("header search is a full-width sheet on phones and jumps to an exact tag", 
 test("pressing Enter on a name in the header search shows suggestions without leaving the page", async ({
   page,
 }) => {
-  await page.goto("/about");
+  await page.goto("/blog");
   const input = await openHeaderSearch(page, () =>
     page.getByRole("button", { name: "Search players" }).click(),
   );
@@ -401,7 +389,7 @@ test("pressing Enter on a name in the header search shows suggestions without le
   await expect(
     page.getByRole("region", { name: "Player and profile search suggestions" }),
   ).toContainText("Synthetic Clasher 001");
-  await expect(page).toHaveURL(/\/about$/);
+  await expect(page).toHaveURL(/\/blog$/);
   await expect(input).toHaveValue("Synthetic Clasher 001");
 });
 

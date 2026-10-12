@@ -490,7 +490,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   // Day 6 of a Season, so every worst-case day belongs to the current Season.
   const now = Date.parse("2026-10-10T12:00:00Z");
   await page.clock.install({ time: now });
-  await page.goto("/about");
+  await page.goto("/blog");
   const saved = await page.request.get("/players/%232PP.data");
   const dataType = saved.headers()["content-type"];
   const decoded = decodePageData(await saved.text());
