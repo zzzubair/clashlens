@@ -309,6 +309,8 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("DELETE", f"{group_path}/players/{quote(other['tag'])}", None),
             ("GET", f"{group_path}/comparison", None),
             ("POST", "/v1/account/default-player", {"tag": other["tag"]}),
+            ("GET", "/v1/account/discord-alerts", None),
+            ("POST", "/v1/account/discord-alerts", {"tag": other["tag"], "on": True}),
             ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
             ("GET", f"/v1/account/exports/{uuid4()}", None),
         ]
@@ -364,3 +366,17 @@ def test_default_player_is_only_ever_the_accounts_own_verified_player(accounts):
     for account in owners:
         summary = call(client, account, "GET", "/v1/account/summary").json()
         assert summary["default_player"] is None
+
+
+def test_attack_alerts_are_only_ever_for_the_accounts_own_verified_players(accounts):
+    client, owners = accounts
+    owner, other = owners
+    for tag in (owner["tag"], other["tag"]):
+        refused = call(
+            client, owner, "POST", "/v1/account/discord-alerts", {"tag": tag, "on": True}
+        )
+        assert refused.status_code == 404
+        assert refused.json() == {"error": "player_not_verified"}
+    for account in owners:
+        alerts = call(client, account, "GET", "/v1/account/discord-alerts").json()
+        assert alerts["players"] == [] and alerts["undelivered"] is None

@@ -22,6 +22,7 @@ import psycopg
 from discord import app_commands
 
 from . import replies
+from .alerts import Refused, Unreachable
 from .commands import Commands
 from .replies import Reply
 
@@ -36,6 +37,18 @@ READ_SLOTS = 4
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
+# An attack alert DM that Discord has not taken by then counts as failed.
+DM_SECONDS = 30
+# Discord's JSON error codes for a DM it will not deliver
+# (https://docs.discord.com/developers/topics/opcodes-and-status-codes):
+# 50278 "no mutual guilds", 50007 "Cannot send messages to this user",
+# 10013 "Unknown user", 50033 "Invalid Recipient(s)".
+_REFUSALS = {
+    50278: "no_shared_server",
+    50007: "dms_closed",
+    10013: "unknown_user",
+    50033: "unknown_user",
+}
 _COLOUR = discord.Colour(0xF2B33D)
 
 
@@ -384,6 +397,33 @@ class ReplyView(_OwnedView):
             await self.origin.edit_original_response(view=self)
         except discord.HTTPException:
             pass
+
+
+class DiscordMessenger:
+    """Sends attack alerts as normal DMs from the bot. discord.py waits out
+    Discord's rate limits before each request."""
+
+    def __init__(self, client: discord.Client) -> None:
+        self.client = client
+
+    async def send_dm(self, discord_user_id: str, reply: Reply) -> None:
+        embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
+        view = discord.ui.View(timeout=None)
+        for link in reply.links:
+            view.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
+        try:
+            async with asyncio.timeout(DM_SECONDS):
+                channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
+                await channel.send(embed=embed, view=view)
+        except discord.DiscordServerError as error:
+            raise Unreachable from error
+        except discord.HTTPException as error:
+            reason = "unknown_user" if isinstance(error, discord.NotFound) else "other"
+            raise Refused(_REFUSALS.get(error.code, reason)) from error
+        except Exception as error:
+            # A timeout or a dropped connection: the DM may or may not have gone.
+            log.warning("an attack alert could not reach Discord", exc_info=True)
+            raise Unreachable from error
 
 
 def build_client(commands: Commands) -> tuple[discord.Client, app_commands.CommandTree]:

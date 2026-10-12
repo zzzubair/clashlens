@@ -20,6 +20,7 @@ from . import (
     api_accounts,
     api_analytics,
     api_dashboard,
+    api_discord_alerts,
     api_groups,
     api_leaderboard,
     api_player_lookup,
@@ -147,6 +148,10 @@ class ProviderUnlinkBody(ProviderLinkBody):
 
 class DefaultPlayerBody(StrictBody):
     tag: str = Field(min_length=1, max_length=16)
+
+
+class AttackAlertBody(DefaultPlayerBody):
+    on: bool
 
 
 class ExportBody(StrictBody):
@@ -985,6 +990,30 @@ def create_app(
         result = api_accounts.submit_export(production_database,
             _binding(request, context, "exports.submit", {"format": body.format}),
             export_format=body.format,
+        )
+        return _operation_response(result)
+
+    @app.get("/v1/account/discord-alerts")
+    def attack_alerts(request: Request) -> JSONResponse:
+        context = _authorize(request, "account.read", production_database)
+        assert production_database is not None and context.account is not None
+        return JSONResponse(
+            status_code=200,
+            content=api_discord_alerts.get_attack_alerts(
+                production_database, context.account.internal_id
+            ),
+        )
+
+    @app.post("/v1/account/discord-alerts")
+    def set_attack_alert(body: AttackAlertBody, request: Request) -> JSONResponse:
+        context = _authorize(request, "account.update", production_database)
+        assert production_database is not None and context.account is not None
+        normalized_tag = _safe_tag(body.tag)
+        result = api_discord_alerts.set_attack_alert(production_database,
+            _binding(request, context, "account.update",
+                     {"attack_alert": normalized_tag, "on": body.on}),
+            normalized_tag=normalized_tag,
+            on=body.on,
         )
         return _operation_response(result)
 

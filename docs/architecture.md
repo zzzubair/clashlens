@@ -69,8 +69,13 @@ Integrations needing Clash Lens data use the private API rather than reading
 the database or archive. The one exception is the Clash Lens Discord bot
 ([`python/src/bot`](../python/src/bot)): it reads the database directly,
 read-only, by running the private API's own read code with the API's database
-login, so its numbers match the website. It writes nothing; settings such as
-the default player are saved through the website. The agreed Discord setup
+login, so its numbers match the website. Settings such as the default player
+and attack alerts are saved through the website. The bot's one write is its
+attack alert delivery log (`discord_attack_alert_deliveries`, migration 0108),
+which records each alert DM before it is sent so none is sent twice; it reads
+new defenses only through that migration's `clashlens_discord_attack_alerts_due`
+function, never the battle tables. Attack alerts run only with
+`CLASHLENS_DISCORD_ALERTS=on`. The agreed Discord setup
 also uses a private incoming webhook for operator alerts and an existing ticket
 bot for support; neither needs the product database or archive. Isolate future
 integrations only where availability or measured resource use requires it.

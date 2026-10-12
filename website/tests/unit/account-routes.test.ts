@@ -31,6 +31,10 @@ vi.mock("../../app/server/provider-start.server", () => ({
   startProviderAuthorization: mocks.startProviderAuthorization,
 }));
 
+vi.mock("../../app/services/discord-alerts.server", () => ({
+  getAttackAlerts: async () => ({ players: [], undelivered: null }),
+}));
+
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/python.server")>();

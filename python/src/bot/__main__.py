@@ -9,6 +9,9 @@ Settings come from the environment:
     CLASHLENS_DISCORD_BOT_TOKEN_FILE  file holding the bot token
     CLASHLENS_DATABASE_URL_FILE       file holding the database address
     CLASHLENS_PUBLIC_ORIGIN           the website, for links in replies
+    CLASHLENS_DISCORD_ALERTS          "on" to send attack alert DMs; off when
+                                      unset, so alerts can stop without
+                                      stopping the bot
 """
 
 from __future__ import annotations
@@ -25,8 +28,9 @@ from urllib.parse import urlsplit
 from clashlens.api_db import ApiDatabase
 from clashlens.bootstrap import BootstrapError, read_secret_file
 
+from .alerts import AlertLoop, AlertStore
 from .commands import Commands
-from .discord_app import READ_SLOTS, build_client
+from .discord_app import READ_SLOTS, DiscordMessenger, build_client
 from .replies import Site
 from .store import Store
 
@@ -42,6 +46,7 @@ class Config:
     token_file: str
     database_url_file: str
     origin: str
+    alerts: bool = False
 
 
 def load_config(environ: Mapping[str, str]) -> Config:
@@ -56,6 +61,9 @@ def load_config(environ: Mapping[str, str]) -> Config:
     missing = [name for name, value in values.items() if not value]
     if missing:
         raise ConfigError(f"missing settings: {', '.join(missing)}")
+    alerts = environ.get("CLASHLENS_DISCORD_ALERTS", "").strip()
+    if alerts not in {"", "on", "off"}:
+        raise ConfigError("CLASHLENS_DISCORD_ALERTS must be on or off")
     origin = values["CLASHLENS_PUBLIC_ORIGIN"]
     parts = urlsplit(origin)
     if parts.scheme not in {"https", "http"} or not parts.netloc or parts.path not in {"", "/"}:
@@ -64,6 +72,7 @@ def load_config(environ: Mapping[str, str]) -> Config:
         values["CLASHLENS_DISCORD_BOT_TOKEN_FILE"],
         values["CLASHLENS_DATABASE_URL_FILE"],
         origin.rstrip("/"),
+        alerts == "on",
     )
 
 
@@ -85,7 +94,8 @@ def _commands(config: Config) -> Commands:
         database_url = read_secret_file(config.database_url_file)
     except BootstrapError as error:
         raise ConfigError("the database address file cannot be read") from error
-    database = ApiDatabase(database_url, min_size=1, max_size=READ_SLOTS)
+    # One more connection than command reads, for the attack alert loop.
+    database = ApiDatabase(database_url, min_size=1, max_size=READ_SLOTS + 1)
     return Commands(Store(database), Site(config.origin))
 
 
@@ -96,11 +106,28 @@ def _offline_commands() -> Commands:
 
 def run(config: Config) -> None:
     token = read_token(config.token_file)
-    client, _tree = build_client(_commands(config))
+    commands = _commands(config)
+    client, _tree = build_client(commands)
 
     @client.event
     async def on_ready() -> None:
         log.info("connected to Discord as application %s", client.application_id)
+
+    if config.alerts:
+        store = commands.store
+        assert isinstance(store, Store)
+        loop = AlertLoop(
+            AlertStore(store.database, store), DiscordMessenger(client), commands.site
+        )
+
+        running: list[asyncio.Task[None]] = []
+
+        async def start_alerts() -> None:
+            # Runs once after login, so a reconnect never starts a second loop.
+            running.append(asyncio.create_task(loop.run()))
+            log.info("attack alerts on")
+
+        client.setup_hook = start_alerts  # type: ignore[method-assign]
 
     # discord.py reconnects on its own after network drops.
     client.run(token, log_handler=None)

@@ -328,19 +328,13 @@ def _total(days: Sequence[Mapping[str, Any] | None], key: str) -> int | None:
     return None if None in values else sum(values)
 
 
-def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
-    """This Season so far for one player, from the player page read: one
-    compact message anyone in the conversation can forward."""
+def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | None:
+    """Every Legend day of the Season so far from the player page read, None
+    where none is published; None when the Season's days are not available."""
     ready = page["screen_ready"]
     season = ready.get("season")
-    title = _player_title(page)
     if season is None:
-        return Reply(
-            f"This Season's days are not available yet.\n\n{reset_time(now)}",
-            title=title,
-            updated=page["observed_at"],
-            links=(Link("Open on Clash Lens", site.player(page["tag"])),),
-        )
+        return None
     published = {datetime.fromisoformat(start) for start in ready["season_day_starts"]}
     by_start = {
         moment: day
@@ -348,11 +342,32 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         if (moment := datetime.fromisoformat(day["ranked_day_start"])) in published
     }
     season_start = datetime.fromisoformat(season["start"])
-    # Every Legend day of the Season so far, None where none is published.
-    days = [
+    return [
         by_start.get(season_start + timedelta(days=offset))
         for offset in range(season["current_day_number"])
     ]
+
+
+def hit_rate(days: Sequence[Mapping[str, Any] | None]) -> str:
+    """This Season's three-star share of attacks, as /stats and attack alerts
+    show it."""
+    return _rate(_total(days, "attack_three_star_count"), _total(days, "attack_count"))
+
+
+def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
+    """This Season so far for one player, from the player page read: one
+    compact message anyone in the conversation can forward."""
+    season = page["screen_ready"].get("season")
+    title = _player_title(page)
+    days = season_days(page)
+    if season is None or days is None:
+        return Reply(
+            f"This Season's days are not available yet.\n\n{reset_time(now)}",
+            title=title,
+            updated=page["observed_at"],
+            links=(Link("Open on Clash Lens", site.player(page["tag"])),),
+        )
+    season_start = datetime.fromisoformat(season["start"])
     start = None if days[0] is None else days[0].get("start_trophies")
     now_trophies = None if page["season_reset_pending"] else page["trophies"]
     change = _known(start, number) + " → " + _known(now_trophies, number)
@@ -374,7 +389,7 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         "",
         (
             f"**Attacks** {_known(attack_count, number)} · hit rate "
-            f"{_rate(three_stars, attack_count)} ({_known(three_stars, number)} three-stars) · "
+            f"{hit_rate(days)} ({_known(three_stars, number)} three-stars) · "
             f"{_per(gain, attack_count)} per attack"
         ),
         (
@@ -391,4 +406,25 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         footer="Totals count the battles Clash Lens recorded this Season.",
         updated=page["observed_at"],
         links=(Link("Season on Clash Lens", site.player(page["tag"])),),
+    )
+
+
+def attack_alert(site: Site, alert: Mapping[str, Any], attacker_hit_rate: str) -> Reply:
+    """The DM sent when one of the person's players is attacked, named by the
+    defending player since an account can have several."""
+    attacker = safe(alert["attacker_name"])
+    lost = alert["trophies_lost"]
+    return Reply(
+        (
+            f"{attacker} {alert['attacker_tag']}: {alert['stars']}★ · "
+            f"{alert['destruction_percentage']}% · "
+            f"{f'−{number(lost)}' if lost else '0'} trophies\n"
+            f"{attacker}'s hit rate this Season: {attacker_hit_rate}"
+        ),
+        title=f"{safe(alert['defender_name'])} {alert['defender_tag']} was attacked",
+        updated=alert["saved_at"],
+        links=(
+            Link("Open on Clash Lens", site.player(alert["defender_tag"])),
+            Link("Alert settings", site.url(DISCORD_SETTINGS)),
+        ),
     )

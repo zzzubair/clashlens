@@ -3,6 +3,11 @@ import { redirect, useLoaderData } from "react-router";
 import type { BackHandle } from "../components/BackLink";
 import type { VerifiedPlayer } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
+import {
+  DISCORD_INVITE_URL,
+  type AttackAlerts,
+  type UndeliveredReason,
+} from "../lib/discord";
 import type { Route } from "./+types/account.providers";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -21,6 +26,10 @@ export interface ProvidersLoaderData {
   defaultPlayer: string | null;
   /** The outcome of the last default-player save, shown once. */
   saved: "saved" | "failed" | null;
+  /** Each verified player's Discord attack alert switch; null when unreadable. */
+  alerts: AttackAlerts | null;
+  /** The outcome of the last attack alert switch, shown once. */
+  alertSaved: "saved" | "failed" | null;
   idempotencyKey: string;
   error: WebsiteErrorResponse | null;
 }
@@ -36,20 +45,29 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  const outcome = new URL(request.url).searchParams.get("default");
+  const search = new URL(request.url).searchParams;
+  const outcome = search.get("default");
   const saved = outcome === "saved" || outcome === "failed" ? outcome : null;
+  const alertOutcome = search.get("alerts");
+  const alertSaved =
+    alertOutcome === "saved" || alertOutcome === "failed" ? alertOutcome : null;
   try {
     const { createPythonClient } = await import("../services/python.server");
+    const { getAttackAlerts } = await import("../services/discord-alerts.server");
     const client = createPythonClient(identity);
-    const [account, summary] = await Promise.all([
+    const [account, summary, alerts] = await Promise.all([
       client.getAccount(),
       client.getAccountSummary(),
+      // The rest of the page still works when the alert settings can't be read.
+      getAttackAlerts(identity).catch(() => null),
     ]);
     return {
       providers: account.providers,
       players: summary.verifiedPlayers,
       defaultPlayer: summary.defaultPlayer,
       saved,
+      alerts,
+      alertSaved,
       idempotencyKey: freshIdempotencyKey(),
       error: null,
     };
@@ -63,6 +81,8 @@ export async function loader({
       players: [],
       defaultPlayer: null,
       saved: null,
+      alerts: null,
+      alertSaved: null,
       idempotencyKey: freshIdempotencyKey(),
       error: safeWebsiteError(error),
     };
@@ -70,7 +90,8 @@ export async function loader({
 }
 
 /**
- * POST /account/providers — choose the Discord bot's default player, or start
+ * POST /account/providers — choose the Discord bot's default player, turn one
+ * player's Discord attack alerts on or off, or start
  * a fresh OAuth authorization for linking or unlinking one provider. Linking
  * completes only at the provider callback after real provider authentication.
  */
@@ -109,6 +130,24 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       return redirect("/account/providers?default=failed", { headers: NO_STORE });
     }
     return redirect("/account/providers?default=saved", { headers: NO_STORE });
+  }
+  if (intent === "attack-alert") {
+    const on = form["on"];
+    if (on !== "on" && on !== "off") {
+      return new Response(null, { status: 400, headers: NO_STORE });
+    }
+    try {
+      const { setAttackAlert } = await import("../services/discord-alerts.server");
+      await setAttackAlert(
+        identity,
+        form["tag"] ?? "",
+        on === "on",
+        form["idempotencyKey"] ?? "",
+      );
+    } catch {
+      return redirect("/account/providers?alerts=failed", { headers: NO_STORE });
+    }
+    return redirect("/account/providers?alerts=saved", { headers: NO_STORE });
   }
   if (intent !== "link" && intent !== "unlink") {
     return new Response(null, { status: 400, headers: NO_STORE });
@@ -224,6 +263,13 @@ export default function AccountProvidersRoute() {
         saved={data.saved}
         idempotencyKey={data.idempotencyKey}
       />
+
+      <AttackAlertsSection
+        connected={data.providers.includes("discord")}
+        alerts={data.alerts}
+        saved={data.alertSaved}
+        idempotencyKey={data.idempotencyKey}
+      />
     </main>
   );
 }
@@ -290,6 +336,122 @@ function DiscordBotDefault({
             Save
           </button>
         </form>
+      )}
+    </section>
+  );
+}
+
+/** What a Clasher can do about the newest alert Discord did not deliver. */
+const UNDELIVERED_HELP: Record<UndeliveredReason, string> = {
+  no_shared_server:
+    "Discord only lets the bot message you while you share a server with it. Join the Clash Lens Discord server, then alerts start with the next attack.",
+  dms_closed:
+    "Your Discord privacy settings block messages from the bot. In the server you share with it, allow direct messages from server members, and check you haven't blocked the bot.",
+  unknown_user:
+    "Discord couldn't find the connected Discord account. Unlink Discord above and link it again.",
+  other: "Discord refused the message. Alerts try again with the next attack.",
+  unreachable:
+    "Clash Lens couldn't reach Discord in time. Alerts try again with the next attack.",
+};
+
+/** Per-player switches for a Discord DM each time the player is attacked. */
+function AttackAlertsSection({
+  connected,
+  alerts,
+  saved,
+  idempotencyKey,
+}: {
+  connected: boolean;
+  alerts: AttackAlerts | null;
+  saved: "saved" | "failed" | null;
+  idempotencyKey: string;
+}) {
+  const label = (player: { tag: string; name: string | null }) =>
+    `${player.name ?? "Unnamed"} ${player.tag}`;
+  const missed = alerts?.undelivered;
+  const missedPlayer = alerts?.players.find((player) => player.tag === missed?.tag);
+  const example = alerts?.players[0];
+  return (
+    <section className="form-panel stack-form" aria-labelledby="alerts-title">
+      <h2 id="alerts-title">Alerts</h2>
+      {saved === "saved" ? (
+        <p className="notice" role="status">
+          Attack alerts saved.
+        </p>
+      ) : saved === "failed" ? (
+        <p className="notice notice-unavailable" role="alert">
+          Attack alerts could not be saved. Try again.
+        </p>
+      ) : null}
+      {!connected ? (
+        <p className="form-help">
+          Link Discord above to get a Discord message each time one of your players is
+          attacked.
+        </p>
+      ) : alerts === null ? (
+        <p className="notice notice-unavailable" role="alert">
+          Attack alerts could not be loaded. <a href="/account/providers">Try again</a>
+        </p>
+      ) : alerts.players.length === 0 ? (
+        <p className="form-help">
+          <a href="/account/verify-player">Link a player</a> to get attack alerts in
+          Discord.
+        </p>
+      ) : (
+        <>
+          <p id="attack-alerts-help" className="form-help">
+            Attack alerts: the Clash Lens bot sends you a Discord message as soon as Clash
+            Lens saves an attack on that player. The bot can only message you while you
+            share a Discord server with it, such as the{" "}
+            <a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
+              Clash Lens Discord server
+            </a>
+            .
+          </p>
+          {missed ? (
+            <div className="notice notice-unavailable" role="alert">
+              <p>
+                <strong>
+                  An attack alert for {missedPlayer ? label(missedPlayer) : missed.tag}{" "}
+                  wasn&apos;t delivered.
+                </strong>
+              </p>
+              <p>{UNDELIVERED_HELP[missed.reason]}</p>
+            </div>
+          ) : null}
+          <ul className="player-link-list" aria-describedby="attack-alerts-help">
+            {alerts.players.map((player) => (
+              <li key={player.tag}>
+                <span>{label(player)}</span>
+                <form method="post" className="inline-form">
+                  <input type="hidden" name="intent" value="attack-alert" />
+                  <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+                  <input type="hidden" name="tag" value={player.tag} />
+                  <input type="hidden" name="on" value={player.on ? "off" : "on"} />
+                  <button
+                    type="submit"
+                    role="switch"
+                    aria-checked={player.on}
+                    aria-label={`Attack alerts for ${label(player)}`}
+                    className={`button ${player.on ? "button-primary" : "button-secondary"}`}
+                  >
+                    {player.on ? "Alerts on" : "Alerts off"}
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+          <figure className="attack-alert-example">
+            <figcaption className="form-help">
+              An attack alert looks like this:
+            </figcaption>
+            <div className="attack-alert-message">
+              <strong>{example ? label(example) : "Wanderer #2PP"} was attacked</strong>
+              <span>Drift #9RR: 2★ · 87% · −24 trophies</span>
+              <span>Drift&apos;s hit rate this Season: 62%</span>
+            </div>
+          </figure>
+        </>
       )}
     </section>
   );
