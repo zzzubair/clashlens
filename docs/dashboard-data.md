@@ -12,31 +12,37 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Card | Needs | Status | Notes |
 |---|---|---|---|
 | Legend day | Live trophies and rank, net today, rank at the last Reset, today's attacks and defenses (stars, trophies) | Exists | |
-| | Next Reset rank range | New read | A new calculation. Range only: a lab test was right 99.99% of the time and took about 0.1 s for 13,300 players. Trophies move ±40 per unused attack or defense. A narrow single-number estimate was right at most 51% of the time, so it is not shown. |
-| | Automatic defense loss preview | New read | The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
+| | Next Reset rank range | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. Range only: a lab test was right 99.99% of the time and took about 0.1 s for 13,300 players. Trophies move ±40 per unused attack or defense. A narrow single-number estimate was right at most 51% of the time, so it is not shown. |
+| | Automatic defense loss preview | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
 | Legend clock | Today's battles with times | Exists | |
 | Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | New read | Combines up to 8 opponents' daily logs. |
 | | Legends average | None | Fixed at 52% held and −32 a defense (see below). |
 | | Add to group | Exists | Groups hold up to 20 players. |
 | Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The shield row needs nothing new. |
-| Armies on defense | Your defenses grouped by the attacker's army type over the last 1–28 days | New read | Army types exist since #458. |
+| Armies on defense | Your defenses grouped by the attacker's army type over the last 1–28 days | New read | Army types exist since #458. Both rows can only use days still kept: a finished Season's daily logs and army battle records are deleted 7 days after it ends, so early in a new Season a long Custom window covers fewer days. |
 | | Legends held % and trophies lost per army type | New read | Daily totals per army type across Legends (defenses, held, trophies lost): about 40 types, so a few rows a day. |
-| Rivals watch | Live board around you; each shown player's today and Season summary | Exists | `/v1/leaderboards/live?focus_tag=`, then `/v1/players/{tag}/today` and `/seasons` for 7 players: 7 reads per refresh. Bundle them later only if it proves slow. |
+| Rivals watch | Live board around you; each shown player's today and Season summary | Exists | `/v1/leaderboards/live?focus_tag=`, then `/v1/players/{tag}` for the 7 players: today's battles (hit rate, offense, defense), their rank at the last Reset (for ▲▼) and this Season's finished days (for Season averages). 8 reads per refresh. Bundle them later only if it proves slow. |
+| | Season: the board around you at the last Reset | Exists | `/v1/leaderboards/frozen` for that day has no focus option, so read the 1–2 pages around your rank at the last Reset, plus the same 7 player reads. |
 | Season heat map | Each finished day's net, offense and defense totals, attack and defense counts, trophies at the end | Exists | Same daily results as Season graph. |
 | Cutoffs | Trophies at each Top line, live and on the last Reset board | Exists | |
 | Season graph | Trophies and rank at each Reset this Season; best rank; last Season's official finish | Exists | Use the official finish, never a tracked-only rank. |
 | Recent form | Each finished day's net, offense and defense, triples and held defenses | Exists | |
 | Offense consistency | Your attacks (stars, trophies) over the last 3 or 7 days | Exists | |
-| Group watch | Your groups in the order you made them; group comparison over 7 days; each member's Season summary | Exists | Groups keep when they were made. `/v1/account/groups/{id}/comparison?days=7`; Whole Season reuses `/v1/players/{tag}/seasons`. |
+| Group watch | Your groups in the order you made them | New read | Groups save when they were made, but `/v1/account/groups` sorts by name and doesn't return that time. |
+| | Group comparison over the last 7 days | Exists | `/v1/account/groups/{id}/comparison?days=7`. |
+| | Each member's whole-Season numbers | Exists | The comparison only offers 3, 7 or 14 days, so Whole Season reads `/v1/players/{tag}` (this Season's finished days) for each member and you: up to 21 reads. |
 | Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Mostly exists | Counts saved since #458; the Legends hit rate is what the Armies page already adds up. Average gain per attack needs a read of your battles. |
 
 ## Shared
 
 | Need | Status | Notes |
 |---|---|---|
-| Per-user settings: default or own layout and card order, first-visit choice, Goal rank, Cutoffs lines, Group watch group and window, Bases mode | New data | Fits the account preferences box (capped at 4,096 bytes); under 1 KB per account. |
-| The shared default layout list | New data | One list for everyone; users on the default follow it. |
+| Per-user settings: default or own layout and card order, first-visit choice, Goal rank, Cutoffs lines, Group watch group and window, Bases mode | New data | Fits the account preferences box (capped at 4,096 bytes); under 1 KB per account. The default layout itself is a list in the website code; users on the default follow it at each release. |
 | "updated N min ago" on live cards | New read | Mostly display. |
+
+## Open owner decision
+
+- **Custom defense window across Seasons:** a full 28-day window early in a new Season would need saved per-player defense totals or longer retention of daily logs and army battle records. Until then it covers only the days still kept.
 
 ## Real numbers behind the design
 
