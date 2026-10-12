@@ -139,7 +139,7 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
       if (!isRecord(item)) malformed();
       const defenses = count(item.defenses);
       const heldCount = count(item.held, defenses);
-      return { held: heldCount, defenses, trophies: count(item.trophies) };
+      return { held: heldCount, defenses };
     }),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),

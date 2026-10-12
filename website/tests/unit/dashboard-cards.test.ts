@@ -537,8 +537,8 @@ const hit = (stars: number, destruction: number, trophies: number, minutes: numb
 const TODAY = {
   tag: MAIN,
   rank_range: { best: 95, worst: 760 },
-  // Legends today: 52% held, 32 trophies lost a defense.
-  legends_held: { held: 52, defenses: 100, trophies: 3200 },
+  // Legends today: 52% held.
+  legends_held: { held: 52, defenses: 100 },
   open_defenses: 7,
   automatic_defense_each: 21,
   opponents: [
@@ -1152,8 +1152,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const armiesOffense = text(cards["armies-offense"]!);
     expect(armiesOffense).toContain("Armies on offense 3 days 7 days");
     expect(armiesOffense).not.toContain("Custom");
-    expect(armiesOffense).toContain("Thrower every attack Hit rate 75%");
-    expect(armiesOffense).toContain("Tripled 12 of 16");
+    expect(armiesOffense).toContain("Thrower Hit rate 75%");
+    expect(armiesOffense).not.toContain("Tripled");
 
     // One read of today serves both cards; each army card starts at 7 days.
     const reads = python.requests.filter(({ path }) =>

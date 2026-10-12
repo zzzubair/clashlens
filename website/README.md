@@ -197,9 +197,9 @@ Reset hides the day's numbers behind a new-day notice until it reloads.
 Bases you attacked rates each base Hard / Average / Easy in the mode its
 settings choose. Held % compares the base's held share today with today's held
 share across tracked Legend players (Average is within 10 points); Trophies
-compares the trophies it gave up a defense today with the same players'
-average (Average is within `BASE_TROPHY_BAND` trophies). Under 3 defenses is
-too early.
+compares the trophies it gave up a defense today with the fixed Legends −32 a
+defense (`LEGENDS_DEFENSE_LOSS`; Average is within `BASE_TROPHY_BAND`
+trophies). Under 3 defenses is too early.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
@@ -220,10 +220,14 @@ opponent shows only your hit.
 The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
 on the private API, through `/resources/players/{tag}/armies`, which their day
 switches call (signed-in users only, behind the same switch). Only finished
-days whose army records are complete count, and a finished Season's records
-are deleted 7 days after it ends, so early in a Season a long window covers
-fewer days and the card says how many have army data. A defense's army type is
-the attacker's army. Neither card compares with every tracked player yet:
+days whose army records are complete and include the player's own complete
+saved day count, and a finished Season's records are deleted 7 days after it
+ends, so early in a Season, or for a player tracked only lately, a long window
+covers fewer days and the card says how many have army data. A defense's army
+type is the attacker's army. Armies on offense shows only your hit rate with
+each army type, up to 3 and then Other armies, for 3 or 7 days; Armies on
+defense also takes a Custom 1–28 days. Neither card compares with every
+tracked player yet:
 working that out from each battle's saved army took about 95 seconds a day
 on production in October 2026.
 

@@ -134,6 +134,34 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
         )
 
 
+def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
+    )
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=True,
+    )
+    with TestClient(app) as client:
+        for query, status in (
+            ("lens=offense&days=3", 200),
+            ("lens=offense&days=7", 200),
+            ("lens=offense&days=5", 422),
+            ("lens=offense&days=28", 422),
+            ("lens=defense&days=5", 200),
+            ("lens=defense&days=28", 200),
+        ):
+            target = f"/v1/players/%232PP/armies?{query}"
+            response = client.get(target, headers=_signed_headers(target))
+            assert response.status_code == status, query
+            if status == 422:
+                assert response.json() == {"error": "invalid_request"}
+
+
 def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) -> None:
     with migrated_production_database(
         database_url, include_compact_collector=True
@@ -193,8 +221,7 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             assert api_dashboard.get_player_today(database, board, "#8PY", now=NOW)[
                 "rank_range"
             ] == {"best": 1, "worst": 3}
-            # Today's defenses on the board: 4 of 5 held, losing 30 + 53.
-            assert today["legends_held"] == {"held": 4, "defenses": 5, "trophies": 83}
+            assert today["legends_held"] == {"held": 4, "defenses": 5}
             assert today["open_defenses"] == 6
             assert today["automatic_defense_each"] == 23
             assert [

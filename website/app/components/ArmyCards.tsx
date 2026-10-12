@@ -239,30 +239,16 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
               </div>
               {shown.map((army) => (
                 <div className="army-offense-row" key={army.typeId}>
-                  <span className="army-name">
-                    <Name>{army.name}</Name>
-                    <small className="dash-muted">
-                      {`${Math.round((100 * army.battles) / total.battles)}% of attacks`}
-                    </small>
-                  </span>
+                  <Name>{army.name}</Name>
                   <b>{percent(hitPercent(army))}</b>
                 </div>
               ))}
               {rest && rest.battles > 0 ? (
                 <div className="army-offense-row">
-                  <span className="army-name">
-                    <span>Other armies</span>
-                    <small className="dash-muted">
-                      {`${Math.round((100 * rest.battles) / total.battles)}% of attacks`}
-                    </small>
-                  </span>
+                  <span>Other armies</span>
                   <b>{percent(hitPercent(rest))}</b>
                 </div>
               ) : null}
-              <div className="army-offense-row is-all">
-                <span>All attacks</span>
-                <span>{percent(hitPercent(total))}</span>
-              </div>
             </>
           )}
         </>
@@ -276,15 +262,10 @@ function OneArmy({ army }: { army: ArmyRow }) {
     <div className="army-one">
       <div className="army-one-name">
         <Name>{army.name}</Name>
-        <small className="dash-muted">every attack</small>
       </div>
       <div>
         <span className="dash-label">Hit rate</span>
         <b className="army-one-big">{percent(hitPercent(army))}</b>
-      </div>
-      <div className="army-one-line">
-        <span>Tripled</span>
-        <b>{`${army.threeStars} of ${army.battles}`}</b>
       </div>
     </div>
   );

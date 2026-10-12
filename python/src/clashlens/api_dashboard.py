@@ -11,9 +11,8 @@ has not caught up with is never counted without its trophies. A player
 without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
-The board for that comparison, and today's held share and trophies lost per
-defense across it, are read in one query and kept for a minute, so dashboards
-share one read per minute.
+The board for that comparison, and today's held share across it, are read in
+one query and kept for a minute, so dashboards share one read per minute.
 
 The two army cards read finished Legend days whose army records are complete:
 a player's attacks or defenses per army type, beside every tracked Legend
@@ -44,8 +43,10 @@ from .domain import (
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
-# The army cards look back at most this many finished Legend days.
+# The army cards look back at most this many finished Legend days; Armies
+# on offense offers only these.
 MAX_ARMY_DAYS = 28
+OFFENSE_ARMY_DAYS = (3, 7)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
@@ -101,7 +102,6 @@ class _Board:
     worst_ends: list[int]
     held: int
     defenses: int
-    defense_loss: int
 
 
 def _open(used: Any, allowed: int) -> int:
@@ -114,7 +114,7 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         _BOARD_SQL, {**_season_params(now), "day_start": day_start}
     ).fetchall()
     ends: dict[str, tuple[int, int]] = {}
-    held = defenses = defense_loss = 0
+    held = defenses = 0
     for (
         tag, trophies, start, attacks, gained, defended, lost, tripled,
         zero_attacks, zero_defenses,
@@ -136,7 +136,6 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         if defended:
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
-            defense_loss += int(lost or 0)
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -145,7 +144,6 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         worst_ends=sorted(worst for _, worst in ends.values()),
         held=held,
         defenses=defenses,
-        defense_loss=defense_loss,
     )
 
 
@@ -325,11 +323,7 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": _iso(board.computed_at),
         "rank_range": rank_range(board, tag),
-        "legends_held": {
-            "held": board.held,
-            "defenses": board.defenses,
-            "trophies": board.defense_loss,
-        }
+        "legends_held": {"held": board.held, "defenses": board.defenses}
         if board.defenses
         else None,
         "open_defenses": open_defenses,
@@ -368,9 +362,10 @@ def get_player_armies(
     """One player's attacks or defenses per army type over the last ``days``
     finished Legend days; None for an unknown tag.
 
-    Only days whose army records are complete count, and only once every
-    saved army has its type under the current rules: ``covered_days`` names
-    them. A finished Season's records go 7 days after it ends.
+    Only days whose army records are complete and include this player's
+    complete saved day count, and only once every saved army has its type
+    under the current rules: ``covered_days`` names them. A finished Season's
+    records go 7 days after it ends.
     """
     today = ranked_day_for(now).start
     window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
@@ -385,12 +380,20 @@ def get_player_armies(
             (start, _text(season_id), int(day_number))
             for start, season_id, day_number in connection.execute(
                 """
-                SELECT ranked_day_start, official_season_id, season_day_number
-                FROM army_analytics_completed_days
-                WHERE ranked_day_start = ANY(%s::timestamptz[])
-                ORDER BY ranked_day_start
+                SELECT day.ranked_day_start, day.official_season_id,
+                       day.season_day_number
+                FROM army_analytics_completed_days AS day
+                WHERE day.ranked_day_start = ANY(%s::timestamptz[])
+                  AND EXISTS (
+                      SELECT 1 FROM api_player_daily_logs AS daily
+                      WHERE daily.player_id = %s
+                        AND daily.ranked_day_start = day.ranked_day_start
+                        AND daily.state = 'Complete'
+                        AND daily.coverage = 'complete'
+                  )
+                ORDER BY day.ranked_day_start
                 """,
-                (window,),
+                (window, int(player[0])),
             ).fetchall()
         ] if army_types.rules_ready(connection) else []
         seasons: dict[str, list[int]] = {}

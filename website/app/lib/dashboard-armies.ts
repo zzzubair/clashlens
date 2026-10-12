@@ -25,7 +25,7 @@ export interface ArmyRow extends ArmyOutcome {
 export interface PlayerArmies {
   lens: ArmyLens;
   days: number;
-  /** Finished Legend days in the window whose army records are kept, Unix milliseconds. */
+  /** Finished Legend days in the window with this player's army records, Unix milliseconds. */
   coveredDays: number[];
   /** Named army types only, costliest first on defense, most used first on attack. */
   rows: ArmyRow[];

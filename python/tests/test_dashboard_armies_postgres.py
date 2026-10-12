@@ -104,7 +104,9 @@ def test_army_cards_from_saved_battles_to_the_api(
                     (defender, _event(battle_id, "defense", at, stars, destruction, 0)),
                 ])
             for day, (number, events) in days.items():
-                for tag in ("#2PP", "#8PP", "#9PP"):
+                # #9PP has no saved day for Day 24.
+                tags = ("#2PP", "#8PP", "#9PP") if day == DAY_START else ("#2PP", "#8PP")
+                for tag in tags:
                     _publish_day(
                         database, tag, [event for owner, event in events if owner == tag],
                         day_start=day, day_number=number,
@@ -135,6 +137,13 @@ def test_army_cards_from_saved_battles_to_the_api(
 
                 # Last day only.
                 assert _rows(_read(client, "#2PP", "defense", 1)) == [("Thrower", 1, 0, 29)]
+
+                # Without its own saved day, Day 24 has no army data for #9PP
+                # rather than no battles.
+                assert _read(client, "#9PP", "defense", 1)["covered_days"] == []
+                assert _read(client, "#9PP", "offense", 3)["covered_days"] == [
+                    DAY_START.isoformat()
+                ]
 
                 # Attacks: your one Thrower triple.
                 offense = _read(client, "#2PP", "offense", 3)

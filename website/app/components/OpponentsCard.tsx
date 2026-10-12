@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 import type { BaseStrength, BasesMode, LegendsHeld, OpponentRow } from "../lib/dashboard";
 import {
   BASE_STRENGTH_MIN_DEFENSES,
+  LEGENDS_DEFENSE_LOSS,
   baseStrength,
   trophiesGivenUp,
 } from "../lib/dashboard";
@@ -32,9 +33,10 @@ function lostEach(trophies: number, defenses: number): string {
 
 /**
  * Card 3: one row per attack today, hardest bases first. Strength compares
- * the base's held share today (Held % mode), or the trophies it gave up a
- * defense (Trophies mode), with the same across tracked Legend players
- * today. Colours follow the attacker: green is good for you, red is bad.
+ * the base's held share today with today's across tracked Legend players
+ * (Held % mode), or the trophies it gave up a defense with the fixed Legends
+ * 32 (Trophies mode). Colours follow the attacker: green is good for you,
+ * red is bad.
  */
 export function OpponentsCard({
   rows,
@@ -93,13 +95,11 @@ export function OpponentsCard({
           <span>Their defenses today</span>
           <span>
             Base strength
-            {legends?.defenses
-              ? ` · Legends ${
-                  mode === "held"
-                    ? `${Math.round((100 * legends.held) / legends.defenses)}% held`
-                    : `${lostEach(legends.trophies, legends.defenses)} a defense`
-                }`
-              : ""}
+            {mode === "trophies"
+              ? ` · Legends ${signed(-LEGENDS_DEFENSE_LOSS)} a defense`
+              : legends?.defenses
+                ? ` · Legends ${Math.round((100 * legends.held) / legends.defenses)}% held`
+                : ""}
           </span>
           <span />
         </div>

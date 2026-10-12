@@ -53,6 +53,7 @@ import type {
 import {
   BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
+  LEGENDS_DEFENSE_LOSS,
   addableCards,
   baseStrength,
   defaultSettings,
@@ -301,7 +302,7 @@ describe("dashboard settings", () => {
   });
 
   it("rates a base within 10 points of today's Legends held share as Average", () => {
-    const legends = { held: 50, defenses: 100, trophies: 3200 };
+    const legends = { held: 50, defenses: 100 };
     const defenses = (held: number, total: number) =>
       Array.from({ length: total }, (_, index) => ({
         stars: index < held ? 1 : 3,
@@ -317,17 +318,19 @@ describe("dashboard settings", () => {
     expect(baseStrength(defenses(3, 3), null)).toBe("early");
   });
 
-  it("rates a base by trophies given up a defense against today's Legends average", () => {
-    // Legends lose 32 a defense today.
-    const legends = { held: 50, defenses: 100, trophies: 3200 };
+  it("rates a base by trophies given up a defense against the fixed Legends 32", () => {
     const gaveUp = (each: number) =>
       [0, 1, 2].map(() => ({ stars: 2, trophyChange: -each, yours: false }));
     const band = BASE_TROPHY_BAND;
-    expect(baseStrength(gaveUp(32 - band), legends, "trophies")).toBe("average");
-    expect(baseStrength(gaveUp(32 - band - 1), legends, "trophies")).toBe("hard");
-    expect(baseStrength(gaveUp(32 + band), legends, "trophies")).toBe("average");
-    expect(baseStrength(gaveUp(32 + band + 1), legends, "trophies")).toBe("easy");
-    expect(baseStrength(gaveUp(40).slice(0, 2), legends, "trophies")).toBe("early");
+    expect(LEGENDS_DEFENSE_LOSS).toBe(32);
+    // Today's Legends held share plays no part, read or not.
+    for (const legends of [{ held: 50, defenses: 100 }, null]) {
+      expect(baseStrength(gaveUp(32 - band), legends, "trophies")).toBe("average");
+      expect(baseStrength(gaveUp(32 - band - 1), legends, "trophies")).toBe("hard");
+      expect(baseStrength(gaveUp(32 + band), legends, "trophies")).toBe("average");
+      expect(baseStrength(gaveUp(32 + band + 1), legends, "trophies")).toBe("easy");
+      expect(baseStrength(gaveUp(40).slice(0, 2), legends, "trophies")).toBe("early");
+    }
   });
 });
 
@@ -444,7 +447,7 @@ describe("Bases you attacked", () => {
           row("Early", held(0, 2)),
           row("Hard one", held(5, 6)),
         ],
-        legends: { held: 52, defenses: 100, trophies: 3200 },
+        legends: { held: 52, defenses: 100 },
         timeZone: "UTC",
       }),
     );
@@ -466,7 +469,7 @@ describe("Bases you attacked", () => {
       await renderInRouter(
         createElement(OpponentsCard, {
           rows: [row("Easy one", held(1, 4)), row("Hard one", held(5, 6))],
-          legends: { held: 52, defenses: 100, trophies: 3200 },
+          legends: { held: 52, defenses: 100 },
           timeZone: "UTC",
           mode: "trophies",
         }),
@@ -490,7 +493,7 @@ describe("today read for the Legend day and Bases cards", () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
-      legends_held: { held: 52, defenses: 100, trophies: 3200 },
+      legends_held: { held: 52, defenses: 100 },
       open_defenses: 7,
       automatic_defense_each: 21,
       opponents: [
@@ -511,7 +514,7 @@ describe("today read for the Legend day and Bases cards", () => {
     });
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
-      legendsHeld: { held: 52, defenses: 100, trophies: 3200 },
+      legendsHeld: { held: 52, defenses: 100 },
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [

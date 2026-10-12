@@ -85,21 +85,12 @@
   text-align: right;
 }
 
-:is(.army-defense-row, .army-offense-row).is-all {
+.army-defense-row.is-all {
   border-top: 2px solid var(--cl-card-line);
   font-weight: 900;
 }
 
-.army-defense-row .dash-name {
-  font-weight: 800;
-}
-
-.army-name {
-  display: grid;
-  min-width: 0;
-}
-
-.army-name .dash-name {
+:is(.army-defense-row, .army-offense-row) .dash-name {
   font-weight: 800;
 }
 
@@ -117,10 +108,6 @@
 }
 
 .army-one-name {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.5rem;
   min-width: 0;
 }
 
@@ -135,14 +122,6 @@
   font-size: 2.6rem;
   font-weight: 400;
   line-height: 1.05;
-}
-
-.army-one-line {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.5rem;
-  padding: 0.25rem 0;
-  border-top: 1px solid var(--cl-border);
 }
 
 @media (max-width: 640px) {

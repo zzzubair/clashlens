@@ -181,8 +181,8 @@ describe("Armies on offense", () => {
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 2 with army data · 1 attack");
-    expect(plain).toContain("Thrower every attack Hit rate 100%");
-    expect(plain).toContain("Tripled 1 of 1");
+    expect(plain).toContain("1 attack Thrower Hit rate 100%");
+    expect(plain).not.toContain("Tripled");
     expect(plain).not.toContain("Legends");
   });
 
@@ -209,12 +209,14 @@ describe("Armies on offense", () => {
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 58 attacks");
-    expect(plain).toContain("Army type Hit rate Thrower 52% of attacks 77%");
-    expect(plain).toContain("Hydra 14% of attacks 63%");
-    // Dragon Rider and the 2 unreadable attacks: 3 of 6 tripled.
-    expect(plain).toContain("Other armies 10% of attacks 50%");
-    expect(plain).toContain("All attacks 71%");
+    // Each army's hit rate only. Dragon Rider and the 2 unreadable attacks:
+    // 3 of 6 tripled.
+    expect(plain).toContain(
+      "Army type Hit rate Thrower 77% Super Bowler 71% Hydra 63% Other armies 50%",
+    );
     expect(plain).not.toContain("Dragon Rider");
+    expect(plain).not.toContain("of attacks");
+    expect(plain).not.toContain("All attacks");
   });
 });
 
