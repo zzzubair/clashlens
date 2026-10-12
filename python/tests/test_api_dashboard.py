@@ -242,7 +242,17 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                 ("#9Q2", 2, [{"stars": 2, "trophy_change": -30, "yours": True}]),
             ]
             assert today["opponents"][0]["observed_at"] == "2026-08-06T11:30:00+00:00"
-            # #9Q2 has no published log for today: its attacks are unknown, not none.
+            # #9Q2's published log for today has no attacks: none, not unknown.
+            assert api_dashboard.get_player_today(database, board, "#9Q2", now=NOW)[
+                "opponents"
+            ] == []
+            # Without a published log for today its attacks are unknown, not none.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE player_id = "
+                    "(SELECT id FROM players WHERE normalized_tag = '#9Q2')"
+                )
+                connection.commit()
             assert api_dashboard.get_player_today(database, board, "#9Q2", now=NOW)[
                 "opponents"
             ] is None
