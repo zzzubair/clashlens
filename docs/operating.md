@@ -499,7 +499,12 @@ these steps, all run by the worker:
 5. The same timer gives each saved distinct army its
    [army type](domain.md#army-types), 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in
-   `army_package_day_counts`, outside 04:30-07:00 UTC. The
+   `army_package_day_counts`, outside 04:30-07:00 UTC. Once no attack count
+   is due, it saves one completed day's defense counts per defender and
+   distinct army in `army_package_defense_day_counts` (about 88,000 rows,
+   10.6 MB, a day), for the current Season and the last 28 days, at most one
+   day a minute, for the dashboard's Armies on defense card. After a deploy
+   the current Season fills in at most about 30 minutes. The
    Armies view stays unavailable until that labelling finishes. The worker
    log shows each run as an `army_types` event; a `failed` run is retried
    after 10 minutes.

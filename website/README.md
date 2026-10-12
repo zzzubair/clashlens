@@ -232,9 +232,13 @@ Other armies, for 3 or 7 days, beside every tracked Legend player's hit rate
 with that army in grey, from the worker's saved attack counts for each day
 (about 35,000 rows a day), kept in the API's memory until the day is counted
 again, so only a day not yet seen is read. Armies on defense also takes a
-Custom 1–28 days and shows your own numbers only: a Legends average against
-each army needs saved defense counts from defenders' own reports, which
-Clash Lens does not keep (see [dashboard.md](../docs/dashboard.md)).
+Custom 1–28 days and shows your held % and average trophies lost against
+each army, each followed in grey by every tracked Legend player's against
+that army over the same days, from the worker's saved defense counts for
+each day (defenders' own reports, about 88,000 rows a day), kept in the
+API's memory the same way. A defense whose attacking army could not be read
+counts only in All defenses. Until the worker has counted every one of the
+days the grey numbers show –.
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a

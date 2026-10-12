@@ -5,7 +5,10 @@ heroes with their pets and equipment share one row however many attacks used
 it. Each gets one type in ``army_package_types``; the worker saves each
 completed Legend day's counts per player and distinct army in
 ``army_package_day_counts``; the Armies page and the dashboard's Armies on
-offense card add those counts up by type.
+offense card add those counts up by type. Defenses are counted the same way,
+per defender and distinct army, in ``army_package_defense_day_counts``: a
+defense's army is the attacker's, read from the defender's own battle report,
+and the dashboard's Armies on defense card adds those up by type.
 
 So a rule change relabels the distinct armies only (``RULES_VERSION``), and
 a rename changes ``TYPE_NAMES`` only: the type ids saved with each army never
@@ -30,6 +33,7 @@ from typing import Any
 from . import army_analytics
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
+from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
 # Bump on any change to the rules or camp spaces below, never for a rename.
@@ -193,8 +197,14 @@ LABEL_BATCH = 50_000
 # Legend days with these counts, so those days are counted whatever their
 # Season.
 OFFENSE_CARD_DAYS = 7
+# The Armies on defense card looks back up to 28 finished Legend days. Each
+# day's defenses are about 88,000 rows, so a day is counted at most once a
+# minute: after a deploy the current Season fills in under half an hour.
+DEFENSE_CARD_DAYS = 28
+DEFENSE_PACE_SECONDS = 60
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
+_defense_at = float("-inf")
 
 
 def refresh_army_types(database: Any, now: datetime | None = None) -> None:
@@ -204,10 +214,12 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
     ``RULES_VERSION`` labels every saved distinct army, ``LABEL_BATCH`` per
     run; then each run counts one completed day of the current Season, or of
     the last ``OFFENSE_CARD_DAYS``, whose counts are missing or older than the
-    day, newest first. A failure is reported and tried again after
-    ``RETRY_SECONDS``.
+    day, newest first. Once no attack count is due, it counts one day's
+    defenses the same way, for the current Season or the last
+    ``DEFENSE_CARD_DAYS``, at most once every ``DEFENSE_PACE_SECONDS``. A
+    failure is reported and tried again after ``RETRY_SECONDS``.
     """
-    global _retry_at
+    global _retry_at, _defense_at
     current = (now or datetime.now(UTC)).astimezone(UTC).time()
     started = monotonic()
     if started < _retry_at or QUIET_START <= current < QUIET_END:
@@ -219,7 +231,11 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
                 ("army-type-counts",),
             ).fetchone()[0]:
                 return
-            event = _label(connection) or _count_day(connection)
+            event = _label(connection) or _count_day(connection, "offense")
+            if event is None and started >= _defense_at:
+                event = _count_day(connection, "defense")
+                if event is not None:
+                    _defense_at = monotonic() + DEFENSE_PACE_SECONDS
     except Exception as error:  # noqa: BLE001 - retried after RETRY_SECONDS
         _retry_at = monotonic() + RETRY_SECONDS
         print(json.dumps({"event": "army_types", "status": "failed",
@@ -267,10 +283,12 @@ def _label(connection: Any) -> dict[str, Any] | None:
     return {"status": "labelled", "armies": len(armies), "rules_version": RULES_VERSION}
 
 
-# One row per attack of a completed Legend day: the attacker, the distinct
-# army (0 when unreadable; minus its decode id when an older partly read army
-# has none), stars and destruction. Army types count attacks only.
-_FACTS = """
+def _facts(lens: str) -> str:
+    """One row per attack or defense of a completed Legend day: the tracked
+    attacker or defender, the distinct army (0 when unreadable; minus its
+    decode id when an older partly read army has none), stars and
+    destruction."""
+    return f"""
     SELECT fact.ranked_day_start, fact.population_player_id,
            COALESCE(CASE WHEN fact.army_state IN ('decoded', 'partial')
                          THEN COALESCE(decode.exact_army_id, -decode.id) END,
@@ -278,19 +296,46 @@ _FACTS = """
            fact.stars, fact.destruction_percentage
     FROM army_analytics_battle_facts AS fact
     LEFT JOIN battle_army_decodes AS decode ON decode.id = fact.decode_id
-    WHERE fact.is_current AND fact.lens = 'offense'
+    WHERE fact.is_current AND fact.lens = '{lens}'
       AND fact.official_season_id = %s
       AND fact.season_day_number = ANY(%s::integer[])
 """
 
 
-def _count_day(connection: Any) -> dict[str, Any] | None:
+# The Armies page counts attacks only.
+_FACTS = _facts("offense")
+# Per lens: the counts table, its battle column, its counted-days table, and
+# how many recent days are counted whatever their Season.
+_COUNTS = {
+    "offense": ("army_package_day_counts", "attacks", "army_type_counted_days",
+                OFFENSE_CARD_DAYS),
+    "defense": ("army_package_defense_day_counts", "defenses",
+                "army_type_defense_counted_days", DEFENSE_CARD_DAYS),
+}
+
+
+def _defender_losses() -> tuple[list[int], list[int], list[int]]:
+    """Trophies a defender loses for each possible stars and destruction."""
+    rows = []
+    for stars in range(4):
+        for destruction in range(101):
+            try:
+                loss = allocate_trophies(stars, destruction).defender_loss
+            except DomainRuleError:
+                continue
+            rows.append((stars, destruction, loss))
+    return ([row[0] for row in rows], [row[1] for row in rows],
+            [row[2] for row in rows])
+
+
+def _count_day(connection: Any, lens: str) -> dict[str, Any] | None:
+    counts_table, battles, counted_table, recent_days = _COUNTS[lens]
     day = connection.execute(
-        """
+        f"""
         SELECT day.ranked_day_start, day.official_season_id,
                day.season_day_number, day.fact_input_hash
         FROM army_analytics_completed_days AS day
-        LEFT JOIN army_type_counted_days AS counted
+        LEFT JOIN {counted_table} AS counted
           ON counted.ranked_day_start = day.ranked_day_start
         CROSS JOIN (
             SELECT official_season_id, ranked_day_start
@@ -302,35 +347,47 @@ def _count_day(connection: Any) -> dict[str, Any] | None:
           AND counted.fact_input_hash IS DISTINCT FROM day.fact_input_hash
         ORDER BY day.ranked_day_start DESC LIMIT 1
         """,
-        (OFFENSE_CARD_DAYS,),
+        (recent_days,),
     ).fetchone()
     if day is None:
         return None
     ranked_day_start, season_id, day_number, marker = day
     # This day's older count goes; earlier Seasons' counts stay.
-    for table in ("army_package_day_counts", "army_type_counted_days"):
+    for table in (counts_table, counted_table):
         connection.execute(
             f"DELETE FROM {table} WHERE ranked_day_start = %s", (ranked_day_start,)
         )
+    # Defenses also save the trophies they lost.
+    lost, loss_sum, loss_join, loss_params = "", "", "", []
+    if lens == "defense":
+        lost, loss_sum = ", trophies_lost", ", COALESCE(sum(loss.trophies), 0)"
+        loss_join = """
+        LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
+            AS loss (stars, destruction, trophies)
+          ON loss.stars = fact.stars
+         AND loss.destruction = fact.destruction_percentage"""
+        loss_params = list(_defender_losses())
     inserted = connection.execute(
         f"""
-        INSERT INTO army_package_day_counts (
+        INSERT INTO {counts_table} (
             ranked_day_start, population_player_id, exact_army_id,
-            attacks, one_star, two_star, three_star, destruction
+            {battles}, one_star, two_star, three_star, destruction{lost}
         )
         SELECT ranked_day_start, population_player_id, exact_army_id, count(*),
-               count(*) FILTER (WHERE stars = 1), count(*) FILTER (WHERE stars = 2),
-               count(*) FILTER (WHERE stars = 3), sum(destruction_percentage)
-        FROM ({_FACTS}) AS fact
+               count(*) FILTER (WHERE fact.stars = 1),
+               count(*) FILTER (WHERE fact.stars = 2),
+               count(*) FILTER (WHERE fact.stars = 3),
+               sum(destruction_percentage){loss_sum}
+        FROM ({_facts(lens)}) AS fact{loss_join}
         GROUP BY 1, 2, 3
         """,
-        (season_id, [int(day_number)]),
+        (season_id, [int(day_number)], *loss_params),
     ).rowcount
     connection.execute(
-        "INSERT INTO army_type_counted_days (ranked_day_start, fact_input_hash) VALUES (%s, %s)",
+        f"INSERT INTO {counted_table} (ranked_day_start, fact_input_hash) VALUES (%s, %s)",
         (ranked_day_start, marker),
     )
-    return {"status": "counted", "official_season_id": str(season_id),
+    return {"status": "counted", "lens": lens, "official_season_id": str(season_id),
             "season_day_number": int(day_number), "rows": inserted}
 
 
@@ -479,11 +536,14 @@ def read_type_outcomes(
 
 
 def read_day_totals(
-    connection: Any, days: list[datetime]
+    connection: Any, days: list[datetime], lens: str = "offense"
 ) -> dict[datetime, dict[int, list[int]]]:
-    """Every tracked player's attacks per type on counted Legend days, from
-    the saved counts: [attacks, three-star attacks] by day and type id.
+    """Every tracked player's attacks or defenses per type on counted Legend
+    days, from the saved counts: [attacks, three-star attacks], or
+    [defenses, three-star defenses, trophies lost], by day and type id.
     """
+    counts_table, battles, _counted, _recent = _COUNTS[lens]
+    lost = ", sum(saved.trophies_lost)" if lens == "defense" else ""
     totals: dict[datetime, dict[int, list[int]]] = {day: {} for day in days}
     for day, type_id, troops, unnamed, *counts in connection.execute(
         f"""
@@ -491,8 +551,8 @@ def read_day_totals(
                CASE WHEN saved.exact_army_id = 0 THEN {UNREADABLE}
                     ELSE label.type_id END,
                decode.home_troops, decode.unresolved_components,
-               sum(saved.attacks), sum(saved.three_star)
-        FROM army_package_day_counts AS saved
+               sum(saved.{battles}), sum(saved.three_star){lost}
+        FROM {counts_table} AS saved
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = saved.exact_army_id
         LEFT JOIN battle_army_decodes AS decode ON decode.id = -saved.exact_army_id
@@ -506,7 +566,7 @@ def read_day_totals(
             type_id = classify(army_analytics.with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
-        total = totals[day].setdefault(type_id or OTHER, [0, 0])
+        total = totals[day].setdefault(type_id or OTHER, [0] * len(counts))
         for index, value in enumerate(counts):
             total[index] += int(value)
     return totals
@@ -564,6 +624,24 @@ def type_result(
         separators=(",", ":"),
     ).encode()).hexdigest()
     return result, source_hash
+
+
+def all_counted(
+    connection: Any, days: list[tuple[datetime, str]], lens: str
+) -> bool:
+    """Whether every given (day start, completed-day marker) day has saved
+    counts for ``lens`` made from that marker."""
+    _table, _battles, counted_table, _recent = _COUNTS[lens]
+    counted = connection.execute(
+        f"""
+        SELECT count(*) FROM {counted_table} AS counted
+        JOIN unnest(%s::timestamptz[], %s::text[]) AS day (start, marker)
+          ON counted.ranked_day_start = day.start
+         AND counted.fact_input_hash = day.marker
+        """,
+        ([start for start, _ in days], [marker for _, marker in days]),
+    ).fetchone()[0]
+    return counted == len(days)
 
 
 def rules_ready(connection: Any) -> bool:

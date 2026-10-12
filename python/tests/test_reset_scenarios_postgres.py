@@ -23,12 +23,15 @@ from domain_test_support import as_api_role, domain_database, store_observation,
 from test_reconciliation_postgres import BATTLE_FIXTURE, PROFILE_FIXTURE, _processor
 
 from clashlens import (
+    api_dashboard,
     api_leaderboard,
+    army_types,
     board_deadline,
     boundary_publication,
     past_reset_pacing,
 )
 from clashlens.api_db import ApiDatabase
+from clashlens.db import Database
 from clashlens.domain import _ALLOCATION_THRESHOLDS
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.reading_rule import MAX_AMBIGUOUS_BATTLES
@@ -55,6 +58,9 @@ RESULTS[0] = (0, 0)
 # Reset sweeps read profiles from about 05:03:40.
 READ_AFTER = timedelta(minutes=4)
 
+# A Thrower army's share code; other battles carry the fixture's Other army.
+THROWER = "u9x132-4x7"
+
 
 @dataclass(frozen=True)
 class Battle:
@@ -62,13 +68,15 @@ class Battle:
     moved, positive for an attack's gain, negative for a defense's loss, and
     whether it was an attack. A multiplayer battle is no Legend battle, but
     it takes a row of the log's 50. A Legend row with no opponent is the
-    game's "no opponent, no battle" row: a used slot that is no battle."""
+    game's "no opponent, no battle" row: a used slot that is no battle.
+    ``army`` is the attacker's army share code, None for the fixture's."""
 
     at: datetime
     trophies: int
     attack: bool
     legend: bool = True
     opponent: bool = True
+    army: str | None = None
 
 
 def attacks(start: datetime, *amounts: int) -> list[Battle]:
@@ -77,9 +85,9 @@ def attacks(start: datetime, *amounts: int) -> list[Battle]:
             for n, amount in enumerate(amounts)]
 
 
-def defenses(start: datetime, *amounts: int) -> list[Battle]:
-    """Defenses an hour apart from 30 minutes after ``start``."""
-    return [Battle(start + timedelta(hours=n, minutes=30), -amount, False)
+def defenses(start: datetime, *amounts: int, army: str | None = None) -> list[Battle]:
+    """Defenses an hour apart from 30 minutes after ``start``, by ``army``."""
+    return [Battle(start + timedelta(hours=n, minutes=30), -amount, False, army=army)
             for n, amount in enumerate(amounts)]
 
 
@@ -131,6 +139,8 @@ class Player:
             })
             if not battle.opponent:
                 items[-1].update(opponentPlayerTag=None, battleTime=0)
+            if battle.army:
+                items[-1]["armyShareCode"] = battle.army
         return json.dumps({"items": items[::-1]}).encode()
 
 
@@ -370,6 +380,30 @@ class Story:
         finally:
             api.close()
 
+    def count_armies(self, at: datetime) -> None:
+        """The worker's army counts at ``at``, as its maintenance timer runs
+        them: each run labels the saved armies or counts one finished day's
+        attacks or defenses, so 10 runs count every day of a story. The worker
+        counts at most one day's defenses a minute; a story does not wait."""
+        self.monkeypatch.setattr(army_types, "DEFENSE_PACE_SECONDS", 0)
+        self.monkeypatch.setattr(army_types, "_defense_at", float("-inf"))
+        database = Database(self.connection_info)
+        try:
+            for _ in range(10):
+                army_types.refresh_army_types(database, now=at)
+        finally:
+            database.close()
+
+    def served_armies(self, tag: str, at: datetime) -> dict[str, object] | None:
+        """The player's Armies on defense card the API serves at ``at``, for
+        the Legend day before, read as the data service."""
+        api = ApiDatabase(as_api_role(self.connection_info))
+        try:
+            return api_dashboard.get_player_armies(
+                api, api_dashboard.ArmyDays(), tag, lens="defense", days=1, now=at)
+        finally:
+            api.close()
+
 
 def _ranked(board: dict[str, object] | None) -> dict[str, int]:
     """The served board's players and trophies, checked to be in order."""
@@ -399,7 +433,9 @@ def test_monday_reset_of_12_october_2026(
     back to 5,000. The Reset reading, taken before the loss, fitted; a 05:15
     reading showed one missing defense's share taken and fitted nothing, so
     the day is Inconsistent. It must still save, and the Monday board must
-    publish with both of them on it. A steady player shares the board."""
+    publish with both of them on it. A steady player shares the board, and
+    their Armies on defense card compares their Sunday with every tracked
+    player's."""
     sunday, monday = day(7), day(8)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
@@ -408,7 +444,7 @@ def test_monday_reset_of_12_october_2026(
         # 5,001 before the loss and 4,941 after it.
         story.players[P41426].battles = (
             attacks(sunday, 31, 40, 2, 31, 40, 40)
-            + defenses(sunday, 40, 40, 40, 40, 0, 23)
+            + defenses(sunday, 40, 40, 40, 40, 0, 23, army=THROWER)
         )
         # 3 defenses lose 61, so 5 missing cost 20 each: 5,074 then 4,974.
         story.players[P39803153].battles = (
@@ -417,7 +453,7 @@ def test_monday_reset_of_12_october_2026(
         # 8 attacks of 40 and 8 defenses of 30: no automatic loss.
         story.players[STEADY].battles = (
             attacks(sunday + timedelta(hours=8), *[40] * 8)
-            + defenses(sunday, *[30] * 8)
+            + defenses(sunday, *[30] * 8, army=THROWER)
         )
         before = {P41426: (5000, None), P39803153: (5000, None),
                   STEADY: (5300, SEASON)}
@@ -444,6 +480,9 @@ def test_monday_reset_of_12_october_2026(
         unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
+        noon = monday + timedelta(hours=7)
+        story.count_armies(noon)
+        armies = story.served_armies(STEADY, noon)
 
     assert unfinished == []
     assert days[P41426] == {
@@ -467,6 +506,16 @@ def test_monday_reset_of_12_october_2026(
     assert [(entry["tag"], entry["trophies"]) for entry in board["entries"]] == [
         (STEADY, 5380), (P39803153, 5074), (P41426, 5001),
     ]
+    # Thrower attacked STEADY 8 times for 30 each and P41426 6 times, 4 of
+    # them triples, for 183. P39803153's 3 defenses, for 61, were by Other
+    # armies, which count only in All defenses.
+    assert armies is not None and armies["covered_days"] == [sunday.isoformat()]
+    assert [
+        (row["name"], row["battles"], row["three_stars"], row["trophies"], row["legends"])
+        for row in armies["rows"]
+    ] == [("Thrower", 8, 0, 240, {"battles": 14, "three_stars": 4, "trophies": 423})]
+    assert armies["total"] == {"battles": 8, "three_stars": 0, "trophies": 240}
+    assert armies["legends_total"] == {"battles": 17, "three_stars": 4, "trophies": 484}
 
 
 def _saturday(start: datetime) -> list[Battle]:

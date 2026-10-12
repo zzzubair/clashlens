@@ -907,7 +907,7 @@ def _finish_army_fact_day(
         # Totals from an earlier build of this day no longer describe it.
         for table in (
             "army_analytics_day_totals", "army_analytics_rank_band_totals",
-            "army_type_counted_days",
+            "army_type_counted_days", "army_type_defense_counted_days",
         ):
             connection.execute(
                 f"DELETE FROM {table} WHERE ranked_day_start = %s", (ranked_day_start,)

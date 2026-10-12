@@ -849,9 +849,18 @@ export async function getPlayerArmies(
         typeId: row.type_id,
         name: row.name,
         ...outcome(row),
-        legends: lens === "offense" ? hits(row.legends) : null,
+        legends:
+          lens === "offense"
+            ? hits(row.legends)
+            : row.legends === null
+              ? null
+              : outcome(row.legends),
       };
     }),
     total: outcome(payload.total),
+    legendsTotal:
+      lens === "defense" && payload.legends_total !== null
+        ? outcome(payload.legends_total)
+        : null,
   };
 }
