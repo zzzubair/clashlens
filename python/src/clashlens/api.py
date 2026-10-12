@@ -208,6 +208,7 @@ def create_app(
     clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
     dashboard_board = api_dashboard.DashboardBoard()
+    dashboard_army_days = api_dashboard.ArmyDays()
     live_board = api_leaderboard.LiveBoardCache()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
@@ -436,7 +437,7 @@ def create_app(
         if lens == "offense" and days not in api_dashboard.OFFENSE_ARMY_DAYS:
             raise ApiError(422, "invalid_request")
         result = api_dashboard.get_player_armies(
-            production_database, _safe_tag(tag),
+            production_database, dashboard_army_days, _safe_tag(tag),
             lens=lens, days=days, now=current_time(),
         )
         if result is None:

@@ -114,7 +114,7 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
         api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
     )
     monkeypatch.setattr(
-        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
+        api_dashboard, "get_player_armies", lambda _db, _days, tag, **_: {"tag": tag}
     )
     app = create_app(
         FakeDatabase(),
@@ -138,7 +138,7 @@ def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
+        api_dashboard, "get_player_armies", lambda _db, _days, tag, **_: {"tag": tag}
     )
     app = create_app(
         FakeDatabase(),

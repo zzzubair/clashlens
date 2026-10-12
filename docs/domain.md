@@ -367,7 +367,7 @@ A domain change is complete only when every affected source observation, derived
 
 ### Army types
 
-The Analytics page opens on **Armies**: each attack's army type, beside **Unit usage**, which shows single units and pairs. Army types count attacks only, so the Armies view offers no Attacks/Defenses choice. Army types cover the current Season only, so on a past Season the Armies view says it is not available. The worker counts the current Season's days and keeps earlier Seasons' counts (about 110 MB a Season) for a later past-Season Armies view; the counts are not tied to the completed-day markers, so season retirement keeps them.
+The Analytics page opens on **Armies**: each attack's army type, beside **Unit usage**, which shows single units and pairs. Army types count attacks only, so the Armies view offers no Attacks/Defenses choice. Army types cover the current Season only, so on a past Season the Armies view says it is not available. The worker counts the current Season's days and any of the last 7 completed days from the Season before, which the dashboard's Armies on offense card still compares, and keeps earlier Seasons' counts (about 110 MB a Season) for a later past-Season Armies view; the counts are not tied to the completed-day markers, so season retirement keeps them.
 
 - A **distinct army** is one `exact_armies` row: the same home troops, spells, and heroes with pets and equipment. Each gets one level-1 **army type**, saved once, with a permanent numeric ID; the name is separate and can change without touching anything saved.
 - The type comes from home troops weighted by camp space (count × housing space). Heroes, pets, equipment, spells, siege machines and Clan Castle troops never decide it.

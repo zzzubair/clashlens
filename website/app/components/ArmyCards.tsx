@@ -82,6 +82,11 @@ function percent(value: number | null): string {
   return value === null ? "–" : `${value}%`;
 }
 
+/** Every tracked player's hit rate with this army type, on Armies on offense. */
+function legendsHit(army: ArmyRow): number | null {
+  return army.legends ? hitPercent(army.legends) : null;
+}
+
 function lost(outcome: ArmyOutcome): string {
   const average = averageTrophies(outcome);
   return average === null ? "–" : signed(-average);
@@ -208,8 +213,8 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
 
 /**
  * Armies on offense: the user's hit rate (share of attacks tripled) with
- * each army type over the last 3 or 7 finished days. A one-army player sees
- * the number big.
+ * each army type over the last 3 or 7 finished days, beside everyone's with
+ * that army. A one-army player sees the two numbers big.
  */
 export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("offense", data);
@@ -252,18 +257,21 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
             <>
               <div className="army-offense-row army-head" aria-hidden="true">
                 <span>Army type</span>
-                <span>Hit rate</span>
+                <span>You</span>
+                <span>Legends</span>
               </div>
               {shown.map((army) => (
                 <div className="army-offense-row" key={army.typeId}>
                   <Name>{army.name}</Name>
                   <b>{percent(hitPercent(army))}</b>
+                  <span className="dash-muted">{percent(legendsHit(army))}</span>
                 </div>
               ))}
               {rest && rest.battles > 0 ? (
                 <div className="army-offense-row">
                   <span>Other armies</span>
                   <b>{percent(hitPercent(rest))}</b>
+                  <span className="dash-muted">–</span>
                 </div>
               ) : null}
             </>
@@ -280,9 +288,15 @@ function OneArmy({ army }: { army: ArmyRow }) {
       <div className="army-one-name">
         <Name>{army.name}</Name>
       </div>
-      <div>
-        <span className="dash-label">Hit rate</span>
-        <b className="army-one-big">{percent(hitPercent(army))}</b>
+      <div className="army-one-big">
+        <div>
+          <span className="dash-label">You</span>
+          <b>{percent(hitPercent(army))}</b>
+        </div>
+        <div>
+          <span className="dash-label">Legends</span>
+          <b className="dash-muted">{percent(legendsHit(army))}</b>
+        </div>
       </div>
     </div>
   );

@@ -39,7 +39,8 @@ def _read(client: TestClient, tag: str, lens: str, days: int) -> dict:
 
 def _rows(result: dict) -> list[tuple]:
     return [
-        (row["name"], row["battles"], row["three_stars"], row["trophies"])
+        (row["name"], row["battles"], row["three_stars"], row["trophies"],
+         row.get("legends"))
         for row in result["rows"]
     ]
 
@@ -120,23 +121,32 @@ def test_army_cards_from_saved_battles_to_the_api(
                 clock=lambda: SIGNED_AT, now=lambda: NOW, dashboard_enabled=True,
             )
             with TestClient(app) as client:
-                # Nothing counts until every saved army has its type.
-                waiting = _read(client, "#2PP", "defense", 3)
-                assert (waiting["covered_days"], waiting["rows"]) == ([], [])
-
-                army_types.refresh_army_types(database, now=NOW)
+                # Nothing counts until every saved army has its type; attacks
+                # also wait for the worker to count the day, one a run, newest
+                # day first.
+                both = [DAY_START.isoformat(), NEXT_DAY.isoformat()]
+                for defended, attacked in (
+                    ([], []), (both, []), (both, [NEXT_DAY.isoformat()]),
+                ):
+                    assert _read(client, "#2PP", "defense", 3)["covered_days"] == defended
+                    assert _read(client, "#2PP", "offense", 3)["covered_days"] == attacked
+                    army_types.refresh_army_types(database, now=NOW)
                 # Last 3 days: the day before them has no army records, so 2
-                # count. The armies that cost you the most come first:
-                # Thrower cost you 40 + 29.
+                # count. The armies that cost you the most come first, with no
+                # Legends numbers: Thrower cost you 40 + 29.
                 defense = _read(client, "#2PP", "defense", 3)
                 assert defense["covered_days"] == [
                     DAY_START.isoformat(), NEXT_DAY.isoformat()
                 ]
-                assert _rows(defense) == [("Thrower", 2, 1, 69), ("Hydra", 1, 0, 26)]
+                assert _rows(defense) == [
+                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 0, 26, None),
+                ]
                 assert defense["total"] == {"battles": 3, "three_stars": 1, "trophies": 95}
 
                 # Last day only.
-                assert _rows(_read(client, "#2PP", "defense", 1)) == [("Thrower", 1, 0, 29)]
+                assert _rows(_read(client, "#2PP", "defense", 1)) == [
+                    ("Thrower", 1, 0, 29, None),
+                ]
 
                 # Without its own saved day, Day 24 has no army data for #9PP
                 # rather than no battles.
@@ -145,10 +155,68 @@ def test_army_cards_from_saved_battles_to_the_api(
                     DAY_START.isoformat()
                 ]
 
-                # Attacks: your one Thrower triple.
+                # Attacks: your one Thrower triple, beside every tracked
+                # player's 4 Thrower attacks, 2 of them triples.
                 offense = _read(client, "#2PP", "offense", 3)
-                assert _rows(offense) == [("Thrower", 1, 1, 40)]
+                assert _rows(offense) == [
+                    ("Thrower", 1, 1, 40, {"battles": 4, "three_stars": 2}),
+                ]
                 assert offense["total"] == {"battles": 1, "three_stars": 1, "trophies": 40}
+                # #9PP's Day 23 only: every tracked player's 3 Thrower attacks
+                # that day, 2 of them triples.
+                assert _rows(_read(client, "#9PP", "offense", 3)) == [
+                    ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
+                    ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
+                ]
+
+                # A day rebuilt after a new Season has begun: #9PP's Hydra
+                # two-star becomes a triple. A read under way when it lands
+                # shows the earlier build throughout; then defenses show it at
+                # once, attacks once the worker has counted the new Season's
+                # day and then it.
+                read_outcomes = army_types.read_type_outcomes
+
+                def rebuilt_meanwhile(connection, **query):
+                    monkeypatch.setattr(army_types, "read_type_outcomes", read_outcomes)
+                    with database.pool.connection() as rebuild:
+                        rebuild.execute(
+                            """
+                            INSERT INTO army_analytics_completed_days (
+                                ranked_day_start, official_season_id,
+                                season_day_number, fact_input_hash
+                            ) VALUES (%s, 'next-season', 1, %s)
+                            """,
+                            (NEXT_DAY + timedelta(days=1), "d" * 64),
+                        )
+                        rebuild.execute(
+                            """
+                            UPDATE army_analytics_battle_facts SET stars = 3,
+                                   destruction_percentage = 100
+                            WHERE is_current AND battle_id = %s
+                            """,
+                            (ids[("#9PP", "#2PP", DAY_START)],),
+                        )
+                        rebuild.execute(
+                            "UPDATE army_analytics_completed_days SET fact_input_hash = %s"
+                            " WHERE ranked_day_start = %s",
+                            ("c" * 64, DAY_START),
+                        )
+                    return read_outcomes(connection, **query)
+
+                monkeypatch.setattr(army_types, "read_type_outcomes", rebuilt_meanwhile)
+                assert _rows(_read(client, "#9PP", "offense", 3)) == [
+                    ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
+                    ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
+                ]
+                assert _rows(_read(client, "#2PP", "defense", 3)) == [
+                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 1, 40, None),
+                ]
+                for _run in range(2):
+                    assert _read(client, "#9PP", "offense", 3)["covered_days"] == []
+                    army_types.refresh_army_types(database, now=NOW)
+                assert _rows(_read(client, "#9PP", "offense", 3))[1] == (
+                    "Hydra", 1, 1, 40, {"battles": 1, "three_stars": 1},
+                )
 
                 # A newer Partial version of #2PP's Day 24 log takes that day
                 # out, though the older version is Complete.

@@ -45,6 +45,7 @@ const outcome = (battles: number, three_stars: number, trophies: number) => ({
   three_stars,
   trophies,
 });
+const hits = (battles: number, three_stars: number) => ({ battles, three_stars });
 
 /** What GET /v1/players/{tag}/armies returned for the saved battles in
  * python/tests/test_dashboard_armies_postgres.py. */
@@ -64,7 +65,7 @@ const OFFENSE = {
   lens: "offense",
   days: 7,
   covered_days: [DAY, NEXT_DAY],
-  rows: [{ type_id: 3, name: "Thrower", ...outcome(1, 1, 40) }],
+  rows: [{ type_id: 3, name: "Thrower", ...outcome(1, 1, 40), legends: hits(4, 2) }],
   total: outcome(1, 1, 40),
 };
 
@@ -95,7 +96,7 @@ beforeEach(() => {
 });
 
 describe("Armies on defense", () => {
-  it("shows each army's share, held and loss", async () => {
+  it("shows each army's share, held and loss, with no Legends numbers", async () => {
     const armies = await read(DEFENSE, "defense", 3);
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(TAG)}/armies?lens=defense&days=3`,
@@ -124,12 +125,7 @@ describe("Armies on defense", () => {
       ...outcome(1, 0, 30 - index),
     }));
     const many = await read(
-      {
-        ...DEFENSE,
-        days: 7,
-        rows,
-        total: outcome(7, 0, 189),
-      },
+      { ...DEFENSE, days: 7, rows, total: outcome(7, 0, 189) },
       "defense",
       7,
     );
@@ -161,11 +157,13 @@ describe("Armies on defense", () => {
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
       status: 502,
     });
-    mocks.requestJson.mockResolvedValueOnce({
-      ...DEFENSE,
-      total: outcome(1, 2, 0),
-    });
+    mocks.requestJson.mockResolvedValueOnce({ ...DEFENSE, total: outcome(1, 2, 0) });
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
+      status: 502,
+    });
+    // An attack row without every tracked player's attacks with that army.
+    mocks.requestJson.mockResolvedValueOnce({ ...OFFENSE, rows: DEFENSE.rows });
+    await expect(getPlayerArmies(TAG, "offense", 7)).rejects.toMatchObject({
       status: 502,
     });
     await expect(getPlayerArmies(TAG, "offense", 5)).rejects.toMatchObject({
@@ -175,15 +173,14 @@ describe("Armies on defense", () => {
 });
 
 describe("Armies on offense", () => {
-  it("shows a one-army player's hit rate big", async () => {
+  it("shows a one-army player's hit rate big beside everyone's", async () => {
     const armies = await read(OFFENSE, "offense", 7);
     const plain = await render(
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 2 with army data · 1 attack");
-    expect(plain).toContain("1 attack Thrower Hit rate 100%");
+    expect(plain).toContain("1 attack Thrower You 100% Legends 50%");
     expect(plain).not.toContain("Tripled");
-    expect(plain).not.toContain("Legends");
   });
 
   it("lists 3 armies and puts the rest under Other armies", async () => {
@@ -198,6 +195,7 @@ describe("Armies on offense", () => {
           type_id: index + 3,
           name,
           ...outcome([30, 14, 8, 4][index], [23, 10, 5, 3][index], 0),
+          legends: hits(1000, [503, 467, 475, 544][index]),
         })),
         // 2 unreadable attacks, never tripled.
         total: outcome(58, 41, 0),
@@ -209,10 +207,10 @@ describe("Armies on offense", () => {
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 58 attacks");
-    // Each army's hit rate only. Dragon Rider and the 2 unreadable attacks:
-    // 3 of 6 tripled.
+    // Each army's hit rate beside everyone's with it. Dragon Rider and the 2
+    // unreadable attacks: 3 of 6 tripled, a mix with no Legends rate.
     expect(plain).toContain(
-      "Army type Hit rate Thrower 77% Super Bowler 71% Hydra 63% Other armies 50%",
+      "Army type You Legends Thrower 77% 50% Super Bowler 71% 47% Hydra 63% 48% Other armies 50% –",
     );
     expect(plain).not.toContain("Dragon Rider");
     expect(plain).not.toContain("of attacks");

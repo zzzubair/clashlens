@@ -4,7 +4,8 @@ A distinct army is an ``exact_armies`` row: the same home troops, spells and
 heroes with their pets and equipment share one row however many attacks used
 it. Each gets one type in ``army_package_types``; the worker saves each
 completed Legend day's counts per player and distinct army in
-``army_package_day_counts``; the Armies page adds those counts up by type.
+``army_package_day_counts``; the Armies page and the dashboard's Armies on
+offense card add those counts up by type.
 
 So a rule change relabels the distinct armies only (``RULES_VERSION``), and
 a rename changes ``TYPE_NAMES`` only: the type ids saved with each army never
@@ -188,6 +189,10 @@ def label_new_army(connection: Any, exact_army_id: int, home_troops: Iterable[An
 # Reset, the same window past Resets wait out.
 QUIET_START, QUIET_END = time(4, 30), time(7, 0)
 LABEL_BATCH = 50_000
+# The dashboard's Armies on offense card compares up to the last 7 finished
+# Legend days with these counts, so those days are counted whatever their
+# Season.
+OFFENSE_CARD_DAYS = 7
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
 
@@ -197,9 +202,10 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
 
     Runs on the worker's maintenance timer. The first run under a new
     ``RULES_VERSION`` labels every saved distinct army, ``LABEL_BATCH`` per
-    run; then each run counts one completed day of the current Season whose
-    counts are missing or older than the day, newest first. A failure is
-    reported and tried again after ``RETRY_SECONDS``.
+    run; then each run counts one completed day of the current Season, or of
+    the last ``OFFENSE_CARD_DAYS``, whose counts are missing or older than the
+    day, newest first. A failure is reported and tried again after
+    ``RETRY_SECONDS``.
     """
     global _retry_at
     current = (now or datetime.now(UTC)).astimezone(UTC).time()
@@ -286,12 +292,17 @@ def _count_day(connection: Any) -> dict[str, Any] | None:
         FROM army_analytics_completed_days AS day
         LEFT JOIN army_type_counted_days AS counted
           ON counted.ranked_day_start = day.ranked_day_start
-        WHERE day.official_season_id = (
-                SELECT official_season_id FROM army_analytics_completed_days
-                ORDER BY ranked_day_start DESC LIMIT 1)
+        CROSS JOIN (
+            SELECT official_season_id, ranked_day_start
+            FROM army_analytics_completed_days
+            ORDER BY ranked_day_start DESC LIMIT 1) AS newest
+        WHERE (day.official_season_id = newest.official_season_id
+               OR day.ranked_day_start
+                  > newest.ranked_day_start - %s * interval '1 day')
           AND counted.fact_input_hash IS DISTINCT FROM day.fact_input_hash
         ORDER BY day.ranked_day_start DESC LIMIT 1
-        """
+        """,
+        (OFFENSE_CARD_DAYS,),
     ).fetchone()
     if day is None:
         return None
@@ -465,6 +476,40 @@ def read_type_outcomes(
         key = (str(fact_lens), int(type_id or OTHER), int(stars), int(destruction))
         totals[key] += int(battles)
     return [(*key, battles) for key, battles in sorted(totals.items())]
+
+
+def read_day_totals(
+    connection: Any, days: list[datetime]
+) -> dict[datetime, dict[int, list[int]]]:
+    """Every tracked player's attacks per type on counted Legend days, from
+    the saved counts: [attacks, three-star attacks] by day and type id.
+    """
+    totals: dict[datetime, dict[int, list[int]]] = {day: {} for day in days}
+    for day, type_id, troops, unnamed, *counts in connection.execute(
+        f"""
+        SELECT saved.ranked_day_start,
+               CASE WHEN saved.exact_army_id = 0 THEN {UNREADABLE}
+                    ELSE label.type_id END,
+               decode.home_troops, decode.unresolved_components,
+               sum(saved.attacks), sum(saved.three_star)
+        FROM army_package_day_counts AS saved
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = saved.exact_army_id
+        LEFT JOIN battle_army_decodes AS decode ON decode.id = -saved.exact_army_id
+        WHERE saved.ranked_day_start = ANY(%s::timestamptz[])
+        GROUP BY 1, 2, 3, 4
+        """,
+        (days,),
+    ).fetchall():
+        if troops is not None:
+            # An older partly read army, typed from its saved home troops.
+            type_id = classify(army_analytics.with_unnamed_ids(
+                {"home_troops": troops, "unresolved_components": unnamed}
+            )["home_troops"])
+        total = totals[day].setdefault(type_id or OTHER, [0, 0])
+        for index, value in enumerate(counts):
+            total[index] += int(value)
+    return totals
 
 
 def type_result(
