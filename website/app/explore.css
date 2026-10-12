@@ -48,48 +48,49 @@
 }
 
 /* Home overview */
-.home-badge {
-  display: block;
-  width: 4.5rem;
-  height: 4.5rem;
-}
-
+/* The logo on the left; the line about Clash Lens and the search beside it. */
 .home-overview {
   display: grid;
-  grid-template-columns: minmax(16rem, 0.8fr) minmax(24rem, 1.2fr);
-  gap: clamp(2rem, 6vw, 5rem);
-  align-items: end;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem clamp(2rem, 5vw, 4rem);
   padding: 1rem 0 clamp(2rem, 5vw, 3rem);
   border-bottom: 1px solid var(--cl-border);
 }
 
-.home-overview:has(.search-results) {
-  align-items: start;
-}
-
 .home-intro {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 1rem;
-  align-items: center;
-  min-width: 0;
+  display: contents;
 }
 
+/* Clash Lens is the page's heading: the logo, big. */
 .home-intro h1 {
-  max-width: 13ch;
+  grid-row: 1 / span 2;
+  align-self: center;
   margin: 0;
-  font-size: clamp(2.2rem, 4.5vw, 3.4rem);
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.03em;
+  line-height: 0;
+}
+
+.home-overview:has(.search-results) h1 {
+  align-self: start;
+}
+
+/* The home page shows the big logo, so the top bar's small one steps aside
+   but keeps its space, leaving the menu where it is on every page. */
+body:has(.home-page) .site-brand {
+  visibility: hidden;
+}
+
+.home-logo {
+  display: block;
+  width: clamp(12rem, 24vw, 16.5rem);
+  height: auto;
+  filter: drop-shadow(0 4px 0 rgb(0 0 0 / 0.25));
 }
 
 .home-intro > p {
-  grid-column: 1 / -1;
-  max-width: 38ch;
-  margin: 1rem 0 0;
+  align-self: end;
+  margin: 0;
   color: var(--cl-muted);
-  font-size: 1rem;
+  font-size: 1.1rem;
   line-height: 1.55;
 }
 
@@ -867,8 +868,7 @@
     border-color: var(--cl-action-border);
     background: var(--cl-action-soft);
   }
-  .battle-army:hover,
-  .season-list a:hover {
+  .battle-army:hover {
     border-color: var(--cl-action-border);
     background: var(--cl-action-soft);
   }
@@ -877,13 +877,6 @@
 .battle-disagreement {
   grid-column: 1 / -1;
   color: var(--cl-muted);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .season-list [aria-current="page"]:hover {
-    color: var(--cl-action-text);
-    background: var(--cl-action-soft);
-  }
 }
 
 /* Army filters use bold controls around a plain results table. */
@@ -1007,15 +1000,6 @@
   margin-top: 1.5rem;
 }
 
-.analytics-breakdown summary {
-  width: fit-content;
-  min-height: 2.75rem;
-  padding: 0.75rem 0;
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
 .filter-footer .button {
   flex-shrink: 0;
 }
@@ -1086,10 +1070,6 @@
   font-size: 2rem;
 }
 
-.analytics-breakdown {
-  margin-top: 1rem;
-}
-
 @media (hover: hover) and (pointer: fine) {
   .home-page .analytics-link:hover {
     color: var(--cl-action-text);
@@ -1108,12 +1088,10 @@
 @media (max-width: 52rem) {
   .home-overview {
     grid-template-columns: 1fr;
-    gap: 2rem;
-    align-items: start;
   }
 
   .home-intro h1 {
-    max-width: none;
+    grid-row: auto;
   }
 
   .leading-players {
@@ -1171,7 +1149,6 @@
     padding-top: 1.4rem;
   }
 
-  .home-intro h1,
   .rankings-header h1 {
     font-size: 2rem;
   }
@@ -1319,16 +1296,6 @@
   .player-refresh-form button {
     padding: 0.6rem 0.85rem;
     font-size: 0.8rem;
-  }
-
-  .season-list {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 0.4rem;
-  }
-
-  .season-list li {
-    flex-shrink: 0;
   }
 
   .legend-day > summary {

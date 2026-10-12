@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Form, useFetcher, useSearchParams } from "react-router";
 
-import { formatInviteExpiry, type InviteLink } from "../lib/crew-contracts";
+import type { InviteLink } from "../lib/crew-contracts";
+import { LocalTimestamp } from "./Provenance";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { ErrorNotice } from "./ErrorNotice";
 
@@ -96,7 +97,7 @@ function InviteBody({ invite }: { invite: InviteLink }) {
         </button>
       </div>
       <p className="crew-sheet-note">
-        Works until {formatInviteExpiry(invite.expiresAt)} · {invite.openPlaces}{" "}
+        Works until <LocalTimestamp value={invite.expiresAt} /> · {invite.openPlaces}{" "}
         {invite.openPlaces === 1 ? "place" : "places"} open
       </p>
       {canShare ? (

@@ -7,7 +7,7 @@ import {
 } from "./helpers/account";
 
 for (const [name, path, heading] of [
-  ["home", "/", "Legend League"],
+  ["home", "/", "Clash Lens"],
   ["player", "/players/%232PP", "Synthetic Clasher 001"],
   ["leaderboard", "/leaderboards/tracked", "Live Leaderboard"],
   ["login", "/login", "Sign in"],

@@ -430,27 +430,14 @@ test("player page stays within a narrow viewport", async ({ page }) => {
   ).toBe(0);
 });
 
-test("battle stats switch periods without requests at iPhone width", async ({ page }) => {
+test("battle stats fit at iPhone width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await refuseRefreshes(page);
   await page.goto("/players/%232PP");
   const stats = page.getByRole("region", { name: "Season summary" });
   await expect(stats.getByText("Hit rate", { exact: true })).toBeVisible();
   await expect(stats.getByRole("rowheader", { name: "Defenses" })).toBeVisible();
-  await page.waitForLoadState("networkidle");
-  const requests: string[] = [];
-  page.on("request", (request) => requests.push(request.url()));
-  for (const period of ["7", "14"]) {
-    await stats.getByLabel("Showing").selectOption(period);
-    // Early in a Season the window holds only the finished days so far.
-    await expect(stats).toContainText(
-      /of \d+ finished days saved|No finished Legend days yet/,
-    );
-    await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
-  }
-  await stats.getByLabel("Showing").selectOption("season");
-  await expect(stats.getByLabel("Showing")).toHaveValue("season");
-  expect(requests).toEqual([]);
+  await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -513,14 +500,14 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await page.getByRole("button", { name: "Search players" }).click();
   await page.getByRole("searchbox").fill("#2PP");
   await page.getByRole("searchbox").press("Enter");
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link").first().click();
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
+  await seasonMenu.selectOption({ index: 1 });
   const finish = page.locator(".season-summary");
   await expect(finish.getByText("6,498", { exact: true })).toBeVisible();
   await expect(page.getByText("Stars unknown for 1 attack.")).toBeVisible();
   await expectUsableLayout(page);
 
-  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await seasonMenu.selectOption("");
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
   await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
   await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
@@ -548,7 +535,7 @@ test("season navigation clears refresh state for the same player", async ({ page
     return allowed;
   });
   // Fake players have no ended Season with Clash Lens days to list, so the
-  // past Season is opened by its link and left through Current Season.
+  // past Season is opened by its address and left through the Season menu.
   await page.goto("/players/%232PP?season=1788757200");
   await page.waitForLoadState("networkidle");
   manual = true;
@@ -556,8 +543,7 @@ test("season navigation clears refresh state for the same player", async ({ page
   const refresh = page.getByRole("region", { name: "Player refresh" });
   await expect(refresh).toBeVisible();
 
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await page.getByRole("combobox", { name: "Season", exact: true }).selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   await expect(refresh).toHaveCount(0);
 });
@@ -612,10 +598,10 @@ test("Back after switching Seasons returns to Your groups in one step", async ({
 
   await groupPlayer.getByRole("link").first().click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link").first().click();
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
+  await seasonMenu.selectOption({ index: 1 });
   await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
-  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await seasonMenu.selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
 
   await page.getByRole("link", { name: "Back to Your groups" }).click();

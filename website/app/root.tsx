@@ -4,6 +4,7 @@ import {
   NavLink,
   isRouteErrorResponse,
   useLoaderData,
+  useRouteLoaderData,
   useLocation,
   type LoaderFunctionArgs,
   Links,
@@ -140,59 +141,7 @@ export default function App() {
   }, [location.pathname, location.hash]);
   return (
     <>
-      <header className="site-header">
-        <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <img
-            className="site-brand-logo"
-            src="/images/clashlens-wordmark.svg"
-            alt=""
-            width="78"
-            height="48"
-          />
-        </Link>
-        <nav className="primary-nav" aria-label="Main navigation">
-          <NavLink to="/" end>
-            Home
-          </NavLink>
-          {data.dashboardEnabled && <NavLink to="/dashboard">Dashboard</NavLink>}
-          <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
-          <NavLink to="/analytics/armies">Armies</NavLink>
-          <NavLink to="/blog">Blog</NavLink>
-          <NavLink to="/account/groups">Groups</NavLink>
-          {data.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
-        </nav>
-        <nav className="site-nav" aria-label="Account and appearance">
-          {/* Home keeps its own large search. */}
-          {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
-          <ThemeToggle />
-          {data.loggedIn ? (
-            <AccountMenu
-              label={data.accountLabel ?? "Account"}
-              accountPath={
-                data.accountUsername
-                  ? `/users/${encodeURIComponent(data.accountUsername)}`
-                  : "/account"
-              }
-              logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
-            />
-          ) : (
-            <Link className="nav-link nav-link-primary" to="/login">
-              Account
-            </Link>
-          )}
-          <a
-            className="nav-link nav-discord"
-            href={DISCORD_INVITE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span>
-              <span className="nav-discord-join">Join </span>Discord
-            </span>
-            <span className="sr-only">, opens in a new tab</span>
-          </a>
-        </nav>
-      </header>
+      <SiteHeader data={data} />
       {data.updateStatus ? <UpdatesNotice status={data.updateStatus} /> : null}
       <BackLink />
       <Outlet />
@@ -200,26 +149,74 @@ export default function App() {
   );
 }
 
+// The same top bar on every page, error pages included. Without the root
+// data (the server failed before it), it shows the signed-out menu.
+function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
+  const location = useLocation();
+  return (
+    <header className="site-header">
+      <Link className="site-brand" to="/" aria-label="Clash Lens home">
+        <img
+          className="site-brand-logo"
+          src="/images/clashlens-wordmark.svg"
+          alt=""
+          width="78"
+          height="48"
+        />
+      </Link>
+      <nav className="primary-nav" aria-label="Main navigation">
+        <NavLink to="/" end>
+          Home
+        </NavLink>
+        {data?.dashboardEnabled && <NavLink to="/dashboard">Dashboard</NavLink>}
+        <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
+        <NavLink to="/analytics/armies">Analytics</NavLink>
+        <NavLink to="/blog">Blog</NavLink>
+        <NavLink to="/account/groups">Groups</NavLink>
+        {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
+      </nav>
+      <nav className="site-nav" aria-label="Account and appearance">
+        {/* Home keeps its own large search. */}
+        {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
+        <ThemeToggle />
+        {data?.loggedIn ? (
+          <AccountMenu
+            label={data.accountLabel ?? "Account"}
+            accountPath={
+              data.accountUsername
+                ? `/users/${encodeURIComponent(data.accountUsername)}`
+                : "/account"
+            }
+            logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
+          />
+        ) : (
+          <Link className="nav-link nav-link-primary" to="/login">
+            Account
+          </Link>
+        )}
+        <a
+          className="nav-link nav-discord"
+          href={DISCORD_INVITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>
+            <span className="nav-discord-join">Join </span>Discord
+          </span>
+          <span className="sr-only">, opens in a new tab</span>
+        </a>
+      </nav>
+    </header>
+  );
+}
+
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
   const location = useLocation();
+  const data = useRouteLoaderData<typeof loader>("root");
   return (
     <>
-      <header className="site-header">
-        <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <img
-            className="site-brand-logo"
-            src="/images/clashlens-wordmark.svg"
-            alt=""
-            width="78"
-            height="48"
-          />
-        </Link>
-        <div className="site-nav">
-          <HeaderSearch key={location.pathname} />
-          <ThemeToggle />
-        </div>
-      </header>
+      <SiteHeader data={data} />
       <main
         id="main-content"
         tabIndex={-1}

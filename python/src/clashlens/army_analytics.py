@@ -35,9 +35,9 @@ SORTS = frozenset(
         "average-destruction",
     }
 )
-TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000})
+TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000})
 # Consistent top reads every member's facts, so it stays within the top 1,000.
-STREAK_PRESETS = frozenset(count for count in TOP_PRESETS if count <= 1000)
+STREAK_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000})
 RANK_BANDS = frozenset(
     {
         (1, 5),
@@ -77,6 +77,11 @@ class ArmyAnalyticsUnavailable(Exception):
     def __init__(self, affected_days: list[int]) -> None:
         super().__init__(f"unavailable legend days: {affected_days}")
         self.affected_days = affected_days
+
+
+class ArmyTypesPreparing(ArmyAnalyticsUnavailable):
+    """Army types are still being given to the saved armies under the
+    current rules, so the Armies view waits until that finishes."""
 
 
 class CurrentSeasonEmpty(Exception):

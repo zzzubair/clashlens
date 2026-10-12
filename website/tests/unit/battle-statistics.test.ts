@@ -283,11 +283,8 @@ describe("recorded battle period statistics", () => {
     expect(html).toContain("<dt>Per defense</dt><dd>-40.0</dd>");
   });
 
-  it("labels recent windows that the Season hasn't filled yet", () => {
-    const early = render(player(), Date.parse("2026-10-06T12:00:00Z"));
-    expect(early).toContain("Last 7 days (1 so far)");
-    expect(early).toContain("Last 14 days (1 so far)");
-    expect(render(player())).toContain(">Last 7 days</option>");
+  it("offers no recent-days choice and says when no day has finished", () => {
+    expect(render(player())).not.toContain("Last 7 days");
     const first = render(player(), Date.parse("2026-10-05T12:00:00Z"));
     expect(first).toContain("No finished Legend days yet this Season");
     expect(first).toContain("No finished day yet");

@@ -114,7 +114,13 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
-const CURRENT_LINK = '<a href="/players/%232PP" data-discover="true">Current Season</a>';
+const CURRENT_LINK = '<option value="">Current Season</option>';
+
+// The names in the Season menu, or none when there is no menu.
+function seasonOptions(html: string) {
+  const menu = html.match(/<select name="season"[^>]*>(.*?)<\/select>/)?.[1] ?? "";
+  return [...menu.matchAll(/<option[^>]*>(.*?)<\/option>/g)].map(([, name]) => name);
+}
 
 async function loadAndRender(
   client: Record<string, unknown>,
@@ -460,11 +466,11 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(recoveredHtml).not.toContain('aria-label="Seasons"');
+      expect(seasonOptions(recoveredHtml)).toEqual(player ? ["Current Season"] : []);
     },
   );
 
-  it("shows no Season navigation on the current page when the list is empty", async () => {
+  it("offers only Current Season on the current page when the list is empty", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -473,8 +479,7 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(html).not.toContain('aria-label="Seasons"');
-    expect(html).not.toContain("Current Season");
+    expect(seasonOptions(html)).toEqual(["Current Season"]);
   });
 
   // Day 1 of the Season starting 5 Oct, after the September Season ended.
@@ -526,13 +531,13 @@ describe("past-Season view", () => {
     expect(current).toContain("Day 1");
     for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
       expect(current).not.toContain(hidden);
-    expect(current).toMatch(/Seasons\s+Current Season\s+5 Oct 2026/);
+    expect(current).toMatch(/Season\s+Current Season\s+5 Oct 2026/);
     expect(current).not.toContain("7 Sep 2026");
 
     const past = await loadAndRender(client, SEASON);
     for (const number of [24, 25, 26, 27, 28])
       expect(past).toContain(`<summary>${number}<span class="day-mark`);
-    expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+    expect(past).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
   it("sends an ended Season's day link to that Season with the day marked", async () => {
@@ -554,7 +559,7 @@ describe("past-Season view", () => {
     expect(html).toContain(
       '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
     );
-    expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+    expect(html).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
   it("says when an ended Season has no saved log for the linked day", async () => {

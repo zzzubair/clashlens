@@ -38,6 +38,7 @@ from .api_db import (
 from .army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    ArmyTypesPreparing,
     CurrentSeasonEmpty,
 )
 from .clashking import ClashKingClient, get_past_seasons
@@ -597,6 +598,8 @@ def create_app(
             if empty.previous_season_id:
                 content["previous_season_id"] = empty.previous_season_id
             return JSONResponse(status_code=404, content=content)
+        except ArmyTypesPreparing as preparing:
+            raise ApiError(404, "army_types_preparing") from preparing
         except ArmyAnalyticsUnavailable as unavailable:
             raise ApiError(
                 404,

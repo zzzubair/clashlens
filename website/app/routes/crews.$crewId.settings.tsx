@@ -5,12 +5,8 @@ import { type BackHandle } from "../components/BackLink";
 import { FormResult } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
-import {
-  formatInviteExpiry,
-  MAX_CREW_SIZE,
-  MIN_CREW_SIZE,
-  type Crew,
-} from "../lib/crew-contracts";
+import { MAX_CREW_SIZE, MIN_CREW_SIZE, type Crew } from "../lib/crew-contracts";
+import { LocalTimestamp } from "../components/Provenance";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/crews.$crewId.settings";
 import "../crews.css";
@@ -228,7 +224,9 @@ export default function CrewSettingsRoute() {
               <li key={invite.inviteId}>
                 <span className="crew-who">
                   <b>{invite.mine ? "Your link" : `Made by ${invite.madeBy}`}</b>
-                  <span>Until {formatInviteExpiry(invite.expiresAt)}</span>
+                  <span>
+                    Until <LocalTimestamp value={invite.expiresAt} />
+                  </span>
                 </span>
                 <Form method="post">
                   {hidden("revoke")}

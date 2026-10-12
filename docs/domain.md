@@ -367,7 +367,7 @@ A domain change is complete only when every affected source observation, derived
 
 ### Army types
 
-The Armies page opens on **Armies**: each attack's army type, beside **Unit usage**, which shows single units and pairs. Army types count attacks only, so the Armies view offers no Attacks/Defenses choice. Army types cover the current Season only, so choosing a past Season opens its Unit usage. The worker counts the current Season's days and keeps earlier Seasons' counts (about 110 MB a Season) for a later Season picker; the counts are not tied to the completed-day markers, so season retirement keeps them.
+The Analytics page opens on **Armies**: each attack's army type, beside **Unit usage**, which shows single units and pairs. Army types count attacks only, so the Armies view offers no Attacks/Defenses choice. Army types cover the current Season only, so on a past Season the Armies view says it is not available. The worker counts the current Season's days and keeps earlier Seasons' counts (about 110 MB a Season) for a later past-Season Armies view; the counts are not tied to the completed-day markers, so season retirement keeps them.
 
 - A **distinct army** is one `exact_armies` row: the same home troops, spells, and heroes with pets and equipment. Each gets one level-1 **army type**, saved once, with a permanent numeric ID; the name is separate and can change without touching anything saved.
 - The type comes from home troops weighted by camp space (count × housing space). Heroes, pets, equipment, spells, siege machines and Clan Castle troops never decide it.
@@ -391,10 +391,9 @@ For `season=current`, the requested range ends no later than the latest Legend
 day that has ended at Reset. Except for Consistent top, use the available
 completed army days within that range. The returned selection starts and ends
 at the first and last covered days; `collection_coverage.covered_days` lists
-the exact days used, including gaps. The Armies page keeps the requested range
-in its controls so later days can appear as they become ready, and names gaps
-between the requested start and the last covered day. If no days can be used,
-the view is unavailable.
+the exact days used, including gaps. The Analytics page always requests the
+whole Season and names days not tracked between Day 1 and the last covered
+day. If no days can be used, the view is unavailable.
 
 Frozen Top-N cohorts and rank bands count an attack only if the player was in
 that Top N or rank range on the day of the attack, by that day's own frozen
@@ -414,9 +413,9 @@ Trophy-range filters need no leaderboard.
 - For a rank-streak filter, the offense lens includes attacks made by players in the resulting streak set during the selected consecutive period.
 - Do not substitute current, snapshot, or season-end trophies for battle-time trophies without labeling the value as an estimate.
 - Do not count the same battle twice when it appears in both the attacker's and defender's battle logs.
-- Frozen Top-N cohorts are cumulative and use Top 5, 10, 20, 50, 100, 200, 500, 1,000, 2,000, 5,000, and 10,000; Top 100 is the default.
+- Frozen Top-N cohorts are cumulative and use Top 5, 10, 20, 50, 100, 200, 300, 500, 1,000, 2,000, 5,000, and 10,000; Top 100 is the API default. The Analytics page offers only these cohorts and opens on Top 1,000; rank bands, rank streaks and trophy ranges are API selections only.
 - Frozen rank bands are ranks 1–5, 6–10, 11–20, 21–50, 51–100, 101–200, each 100-rank band from 201–300 through 901–1,000, then 1,001–2,000, 2,001–5,000, and 5,001–10,000. A rank range is one band or several consecutive bands, such as 1–100.
-- A **rank streak**, shown as Consistent top, is available only for a Top-N preset up to Top 1,000 and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. Completed army data and a published frozen leaderboard are required on every day in that range; a missing day makes the view unavailable. Membership follows each day's saved pre-Reset leaderboard as published: a player at position N or better on every selected day qualifies even when an entry is stale or uncertain, and nobody below the cutoff moves up to fill a gap. This ranks each day's trophies at its Reset before the automatic defense loss, or the last reading before it on a board published before battles after readings were added and not rebuilt since, not settled EOD ranks; until settled EOD evidence exists, the page says the comparison with settled ranks is unavailable. Report the qualifying player count, players absent from the Top N on at least one day, qualifying players with stale or uncertain entries on at least one day, and shielded-day evidence. Each army result names the ended days in the requested range that lack completed army data or a published frozen leaderboard. The Armies page offers Consistent top only when that list is empty, explains how Top N is decided, and otherwise links to the latest run of consecutive days that have both.
+- A **rank streak**, called Consistent top, is available only for Top 5, 10, 20, 50, 100, 200, 500 and 1,000 and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. Completed army data and a published frozen leaderboard are required on every day in that range; a missing day makes the view unavailable. Membership follows each day's saved pre-Reset leaderboard as published: a player at position N or better on every selected day qualifies even when an entry is stale or uncertain, and nobody below the cutoff moves up to fill a gap. This ranks each day's trophies at its Reset before the automatic defense loss, or the last reading before it on a board published before battles after readings were added and not rebuilt since, not settled EOD ranks. Report the qualifying player count, players absent from the Top N on at least one day, qualifying players with stale or uncertain entries on at least one day, and shielded-day evidence. Each army result names the ended days in the requested range that lack completed army data or a published frozen leaderboard.
 - A trophy range is an arbitrary inclusive minimum and maximum, both whole numbers from 0 to 99,999, with maximum not lower than minimum. Legend I players can sit below 5,000 between weekly raises, so the range may start below it. Use the lens-specific battle-time trophy value; missing battle-time evidence is an exclusion, never a substituted observation.
 - Exactly one trophy range, frozen Top-N cohort, frozen rank band, or Top-N rank streak applies at a time.
 
@@ -425,9 +424,9 @@ Trophy-range filters need no leaderboard.
 - Keep all-tracked and final-season Top 100 views across the whole season.
   Top 100 uses the final Clash Lens ranking and those players' recorded battles
   from the entire season; it is not official rank or changing daily membership.
-- Attacks are BY the selected players; defenses are AGAINST them. The Clan
-  Castle toggle switches regular troop usage to individual Clan Castle troop
-  usage. Combinations do not replace individual usage.
+- Attacks are BY the selected players; defenses are AGAINST them. Clan
+  Castle Troops, a Unit usage choice, shows individual Clan Castle troop usage
+  in place of regular troop usage. Combinations do not replace individual usage.
 - Preserve unit IDs, quantities, using-battle counts, outcomes, denominators
   and unknown-unit evidence for both views. Measure their storage cost and
   bring an unaffordable result back before dropping an agreed view.

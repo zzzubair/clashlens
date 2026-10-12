@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { battleStatistics, type BattlePeriod } from "../lib/battle-statistics";
+import { battleStatistics } from "../lib/battle-statistics";
 import type { PlayerPage } from "../lib/contracts";
 import { dayEnd } from "../lib/player-lookup-text";
 import { DayMark } from "./DayStatus";
@@ -15,10 +14,16 @@ const date = (time: number) => dateFormatter.format(time).replace("Sept", "Sep")
 // The current Season's summary, from finished Legend days only. Rank is Clash
 // Lens's board at the latest Reset this Season and trophies are that day's
 // end, both from the day that Reset ended; nothing here is live.
-export function BattleStatistics({ player, now }: { player: PlayerPage; now: number }) {
-  const [period, setPeriod] = useState<BattlePeriod>("season");
-  const stats = battleStatistics(player, period, now);
-  const finished = Math.round((stats.today - stats.seasonStart) / 86_400_000);
+export function BattleStatistics({
+  player,
+  now,
+  menu,
+}: {
+  player: PlayerPage;
+  now: number;
+  menu?: React.ReactNode;
+}) {
+  const stats = battleStatistics(player, "season", now);
   const lastDay = stats.today - 86_400_000;
   const last =
     lastDay >= stats.seasonStart
@@ -55,22 +60,7 @@ export function BattleStatistics({ player, now }: { player: PlayerPage; now: num
               ...flags,
             ].join(" · ")
       }
-      controls={
-        <label>
-          Showing{" "}
-          <select
-            value={period}
-            onChange={(event) => setPeriod(event.target.value as BattlePeriod)}
-          >
-            <option value="season">This Season</option>
-            {[7, 14].map((days) => (
-              <option key={days} value={days}>
-                {`Last ${days} days${finished < days ? ` (${finished} so far)` : ""}`}
-              </option>
-            ))}
-          </select>
-        </label>
-      }
+      controls={menu}
       rank={[
         "Rank at last Reset",
         last?.resetRank == null

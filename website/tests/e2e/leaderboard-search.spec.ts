@@ -147,7 +147,7 @@ test.describe("on a touch phone with worst-case players", () => {
       await expect(page).toHaveURL(/[?&]q=Synthetic/);
 
       await openBoard(page, "live");
-      await tapMiddle(page, page.getByRole("link", { name: "Daily", exact: true }));
+      await tapMiddle(page, page.getByRole("link", { name: "Reset", exact: true }));
       await expect(page).toHaveURL(/view=daily/);
     });
   }

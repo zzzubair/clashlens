@@ -119,18 +119,19 @@ export default function Home() {
       ) : null}
       <section className="home-overview" aria-labelledby="search-title">
         <div className="home-intro">
-          <img
-            className="home-badge"
-            src="/images/legend-league.webp"
-            alt=""
-            width="72"
-            height="72"
-          />
-          <h1 id="search-title">Legend League</h1>
+          <h1 id="search-title">
+            <img
+              className="home-logo"
+              src="/images/clashlens-wordmark.svg"
+              alt="Clash Lens"
+              width="264"
+              height="162"
+            />
+          </h1>
           <p>
             {leaderboard
-              ? `Daily results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
-              : "Daily results, rankings and armies for tracked players."}
+              ? `Legend League results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
+              : "Legend League results, rankings and armies for tracked players."}
           </p>
         </div>
         <div className="player-search-panel">

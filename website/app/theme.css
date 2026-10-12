@@ -648,32 +648,6 @@ h3 {
   gap: 0.9rem;
 }
 
-.season-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.season-list a,
-.season-list strong {
-  display: block;
-  padding: 0.65rem 0.9rem;
-  border: 1px solid var(--cl-border);
-  font-size: 0.9rem;
-  text-decoration: none;
-  border-radius: var(--cl-radius);
-  min-height: 2.75rem;
-}
-
-.season-list [aria-current="page"] {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-}
-
 .legend-day {
   min-width: 0;
   border: 1px solid var(--cl-border);

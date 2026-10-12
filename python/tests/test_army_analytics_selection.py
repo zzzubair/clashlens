@@ -16,6 +16,7 @@ from clashlens.army_decoder import decode_army_share_code
 def test_public_army_selection_accepts_settled_filters() -> None:
     for population in (
         "top-5",
+        "top-300",
         "top-1000",
         "top-2000",
         "top-5000",
@@ -55,6 +56,7 @@ def test_public_army_selection_accepts_settled_filters() -> None:
         {"population": "band-1001-1500"},
         {"population": "band-5001-20000"},
         {"population": "streak-band-1-5"},
+        {"population": "streak-top-300"},
         {"population": "streak-top-2000"},
         {"population": "trophies-6000-5000"},
         {"population": "trophies-5000-100000"},

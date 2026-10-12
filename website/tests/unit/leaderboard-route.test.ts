@@ -322,7 +322,7 @@ it.each([
   },
 );
 
-it("heads a Daily board with its Reset time in UTC and no explanation", async () => {
+it("heads a Daily board with its Reset time and no explanation", async () => {
   const fixture = structuredClone(board);
   fixture.view = "daily";
   fixture.seasonResetPending = 40;
@@ -340,8 +340,9 @@ it("heads a Daily board with its Reset time in UTC and no explanation", async ()
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
   expect(html).toContain('<p class="rankings-kicker">Day 28</p>');
-  expect(html).toContain(
-    'id="leaderboard-title">Leaderboard at 5 Oct 2026, 05:00 UTC</h1>',
+  // The server writes UTC; the browser then switches it to the viewer's time.
+  expect(html).toMatch(
+    /id="leaderboard-title">Leaderboard at(<!-- -->)? <time class="local-time" datetime="2026-10-05T05:00:00Z"[^>]*>5 Oct 2026, 05:00 UTC<\/time><\/h1>/i,
   );
   expect(html).not.toContain("not rebuilt since");
   expect(html).not.toContain("Legend season");

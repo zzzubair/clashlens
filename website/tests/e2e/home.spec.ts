@@ -56,7 +56,7 @@ test("old About links open home, and no page links to About", async ({ page }) =
   await page.goto("/about");
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole("heading", { name: "Legend League" }).first(),
+    page.getByRole("heading", { name: "Clash Lens", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "About", exact: true })).toHaveCount(0);
 });
@@ -67,7 +67,7 @@ test("home and the full leaderboard show collected synthetic players", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Legend League", exact: true }),
+    page.getByRole("heading", { name: "Clash Lens", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),

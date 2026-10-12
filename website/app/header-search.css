@@ -69,13 +69,14 @@
   }
 }
 
-/* Make room for the search icon so the header never gains a row. */
+/* Make room for the search icon so the header never gains a row. Home has no
+   icon but keeps the same spacing, so the menu sits still between pages. */
 @media (min-width: 64.0625rem) {
-  .site-header:has(.header-search) {
+  .site-header {
     column-gap: 2rem;
   }
 
-  .site-header:has(.header-search) .primary-nav a {
+  .site-header .primary-nav a {
     padding-inline: 0.7rem;
   }
 }

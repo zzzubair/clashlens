@@ -201,27 +201,13 @@
 :root
   :is(
     .leaderboard-view-switch .button[aria-current="page"],
-    .segmented-control input:checked + span,
-    .season-list [aria-current="page"]
+    .segmented-control input:checked + span
   ) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill);
   border-color: var(--cl-brand-night);
   box-shadow: 0 2px 0 var(--cl-brand-night);
   font-weight: 900;
-}
-:root .season-list :is(a, strong) {
-  border: 2px solid var(--cl-card-line);
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-raise);
-  font-weight: 800;
-}
-:root .season-list a:not([aria-current="page"]) {
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-}
-:root .season-list a:not([aria-current="page"]):hover {
-  background: var(--cl-action-soft);
 }
 
 /* ---------- Cards: one outline, one hard drop, one corner size ---------- */
