@@ -298,7 +298,7 @@ const RESET_LINES: Record<number, Record<number, number>> = {
 /** The selected account was #318 on the Day 8 Reset board. */
 function boardEntry(rank: number, day: number | null) {
   const tag =
-    (day === null ? python.liveTops[0]?.[rank - 1] : undefined) ??
+    (day === null ? python.liveMoves[0]?.[rank] : undefined) ??
     ((day === null && rank === python.liveRank) || (day === 8 && rank === 318)
       ? MAIN
       : rank === 315
@@ -323,8 +323,8 @@ function boardEntry(rank: number, day: number | null) {
 
 /** Where `tag` stands on the live board. */
 function livePlace(tag: string) {
-  const top = python.liveTops[0]?.indexOf(tag) ?? -1;
-  if (top >= 0) return top + 1;
+  const moved = Object.entries(python.liveMoves[0] ?? {}).find(([, at]) => at === tag);
+  if (moved) return Number(moved[0]);
   if (tag === MAIN) return python.liveRank;
   return Number([...tag.slice(3)].map((letter) => "0289PYLQGR".indexOf(letter)).join(""));
 }
@@ -512,8 +512,8 @@ const python = {
   pages: {} as Record<string, unknown>,
   groups: GROUPS as unknown[],
   liveRank: 316,
-  /** The live board's first places by tag; each read focused on you moves on to the next list. */
-  liveTops: [] as string[][],
+  /** Live places held by someone other than usual; each read focused on you moves on to the next. */
+  liveMoves: [] as Record<number, string>[],
   /** Paths ending in one of these answer 503. */
   down: [] as string[],
   requests: [] as { path: string; query: Record<string, string> }[],
@@ -575,8 +575,8 @@ function answer(url: URL): [status: number, body: unknown] {
   if (path.startsWith("/v1/players/") && page) return [200, page];
   if (path === "/v1/leaderboards/live" || path === "/v1/leaderboards/frozen") {
     const board = leaderboard(url.searchParams);
-    if (url.searchParams.get("focus_tag") === MAIN && python.liveTops.length > 1)
-      python.liveTops.shift();
+    if (url.searchParams.get("focus_tag") === MAIN && python.liveMoves.length > 1)
+      python.liveMoves.shift();
     return [200, board];
   }
   return [404, { error: "not_found" }];
@@ -666,7 +666,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       pages: { [MAIN]: mainPage(), [TUNDRA]: tundraPage() },
       groups: GROUPS,
       liveRank: 316,
-      liveTops: [],
+      liveMoves: [],
       down: [],
       requests: [],
     });
@@ -829,7 +829,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     ).toHaveLength(1);
     expect(python.requests).toContainEqual({
       path: "/v1/leaderboards/live",
-      query: { limit: "1", offset: "0", focus_tag: MAIN },
+      query: { limit: "7", offset: "0", focus_tag: MAIN },
     });
     expect(python.requests).toContainEqual(frozen(199, 8));
     expect(python.requests).toContainEqual(frozen(199, 1));
@@ -883,22 +883,37 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(bottom.cards["rivals-watch"]?.live?.rows[6]?.you).toBe(true);
   });
 
-  it("takes every live rival from one read when the board moves between reads", async () => {
-    const top = [MAIN, ...[2, 3, 4, 5, 6, 7].map(rankTag)];
+  it("takes all 7 live rivals at the top from your own read", async () => {
     python.liveRank = 1;
-    // Player 2 drops to 7th after your own read.
-    python.liveTops = [top, [MAIN, ...top.slice(2), top[1]!]];
+    // After your read you drop to 6th and the 4th player goes top.
+    python.liveMoves = [{}, { 1: rankTag(4), 4: rankTag(5), 5: rankTag(6), 6: MAIN }];
     const data = await load();
     expect(
       data.cards["rivals-watch"]?.live?.rows.map((row) => [row.rank, row.tag]),
-    ).toEqual([
-      [1, MAIN],
-      [2, rankTag(3)],
-      [3, rankTag(4)],
-      [4, rankTag(5)],
-      [5, rankTag(6)],
-      [6, rankTag(7)],
-      [7, rankTag(2)],
+    ).toEqual([[1, MAIN], ...[2, 3, 4, 5, 6, 7].map((rank) => [rank, rankTag(rank)])]);
+  });
+
+  it("uses a second live read at the bottom only when it alone holds all 7", async () => {
+    python.liveRank = BOARD_SIZE;
+    const rows = async () =>
+      (await load()).cards["rivals-watch"]?.live?.rows.map((row) => [row.rank, row.tag]);
+    // Two players swap after your read; the second read still holds all 7.
+    python.liveMoves = [{}, { 8996: rankTag(8997), 8997: rankTag(8996) }];
+    expect(await rows()).toEqual([
+      [8994, rankTag(8994)],
+      [8995, rankTag(8995)],
+      [8996, rankTag(8997)],
+      [8997, rankTag(8996)],
+      [8998, rankTag(8998)],
+      [8999, rankTag(8999)],
+      [9000, MAIN],
+    ]);
+    // You swap with the player it centres on; it holds 6 of your rows, so
+    // your own read's 6 stay.
+    python.liveMoves = [{}, { 8998: MAIN, 9000: rankTag(8998) }];
+    expect(await rows()).toEqual([
+      ...[8995, 8996, 8997, 8998, 8999].map((rank) => [rank, rankTag(rank)]),
+      [9000, MAIN],
     ]);
   });
 
@@ -954,7 +969,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
         groupWindow: "season",
       }),
     };
-    python.down = [`/v1/players/${MAIN}`];
+    python.pages = { [TUNDRA]: tundraPage() };
     const group = text(cardsIn(await render(await load()))["group-watch"]!);
     expect(group).toContain("Your numbers could not be loaded.");
     expect(group).not.toContain("Tundra");
@@ -1035,6 +1050,22 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // A missing last-Season finish leaves the graph standing.
     expect(text(cards["season-graph"]!)).toContain("Last Season finish –");
     expect(text(cards.goal!)).toContain("+44 a day needed");
+  });
+
+  it("shows a failed read as unavailable, not as nothing saved", async () => {
+    const unavailable =
+      "This card could not be loaded right now. Reload the page to try again.";
+    python.down = ["/v1/leaderboards/frozen"];
+    const data = await load();
+    expect(data.cards.goal).toBeNull();
+    expect(data.cards["rivals-watch"]).toBeNull();
+    const cards = cardsIn(await render(data));
+    expect(text(cards.goal!)).toContain(unavailable);
+    expect(text(cards.goal!)).not.toContain("not on a saved Reset board");
+    expect(text(cards["heat-map"]!)).not.toContain("could not be loaded");
+    python.down = [`/v1/players/${MAIN}`];
+    const cutoffs = text(cardsIn(await render(await load())).cutoffs!);
+    expect(cutoffs).toContain(unavailable);
   });
 
   it("asks to make a group when there is none", async () => {

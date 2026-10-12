@@ -605,7 +605,7 @@ describe("dashboard route", () => {
     expect(data.cards).toEqual({
       "legend-clock": null,
       goal: null,
-      "rivals-watch": { live: null, season: null },
+      "rivals-watch": null,
       "heat-map": null,
     });
     expect(client.getPlayer).toHaveBeenCalledWith(MAIN);

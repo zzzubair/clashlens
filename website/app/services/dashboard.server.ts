@@ -145,6 +145,7 @@ const DAY_MS = 86_400_000;
 const SEASON_SECONDS = 28 * 86_400;
 const RIVALS_ABOVE = 3;
 const RIVALS_BELOW = 3;
+const RIVAL_ROWS = RIVALS_ABOVE + RIVALS_BELOW + 1;
 const BOARD_PAGE = 10;
 
 /** Player pages read once per load, however many cards use them. */
@@ -256,15 +257,23 @@ async function lastReset(ctx: CardContext, pages: PageReader) {
   };
 }
 
+/** What `read` returns, or null when Python says it is not there. */
+function unlessMissing<T>(read: Promise<T>): Promise<T | null> {
+  return read.catch((cause: unknown) => {
+    if (cause instanceof PythonApiError && cause.status === 404) return null;
+    throw cause;
+  });
+}
+
 /** The trophies at one rank of a board; null when the board or the rank is missing. */
 async function trophiesAt(
   ctx: CardContext,
   rank: number,
   selector?: { officialSeasonId: string; dayNumber: number },
 ) {
-  const board = await ctx.client
-    .getTrackedLeaderboard(1, selector ? "daily" : "live", rank - 1, selector)
-    .catch(() => null);
+  const board = await unlessMissing(
+    ctx.client.getTrackedLeaderboard(1, selector ? "daily" : "live", rank - 1, selector),
+  );
   const entry = board?.entries[0];
   return entry && entry.rank === rank ? entry : null;
 }
@@ -446,20 +455,23 @@ async function rivalsData(
       : (season.days.find((day) => day.day === season.today! - 1)?.rank ?? null);
   };
   const liveRows = async () => {
-    // A read focused on one player holds 5 places either side of them. At the
-    // board's first and last places, a read focused on the fourth row it
-    // holds has all 7.
+    // A read focused on one player holds their page of 7 and 5 places either
+    // side, so all 7 rows everywhere but the board's last place. There, a read
+    // focused on the fourth row it holds is used only if it alone holds all 7.
     const focused = (on: string) =>
-      ctx.client.getTrackedLeaderboard(1, "live", 0, undefined, on);
+      unlessMissing(
+        ctx.client.getTrackedLeaderboard(RIVAL_ROWS, "live", 0, undefined, on),
+      );
+    const whole = (board: TrackedLeaderboard | null) => {
+      if (board === null) return null;
+      const rows = rivalsIn(board, tag);
+      return rows?.length === Math.min(board.totalEntries, RIVAL_ROWS) ? rows : null;
+    };
     const first = await focused(tag);
-    const near = rivalsIn(first, tag);
-    if (near === null) return null;
+    const near = first && rivalsIn(first, tag);
+    if (!near) return null;
     const middle = near[RIVALS_ABOVE];
-    const full = Math.min(first.totalEntries, RIVALS_ABOVE + RIVALS_BELOW + 1);
-    const shown =
-      near.length < full && middle !== undefined
-        ? (rivalsIn(await focused(middle.tag), tag) ?? near)
-        : near;
+    const shown = whole(first) ?? (middle && whole(await focused(middle.tag))) ?? near;
     const read = await Promise.all(
       shown.map(async (entry) => [entry, await pages(entry.tag)] as const),
     );
@@ -490,7 +502,10 @@ async function rivalsData(
     const selector = { officialSeasonId: reset.seasonId, dayNumber: reset.finished };
     const read = (offset: number) =>
       ctx.client.getTrackedLeaderboard(BOARD_PAGE, "daily", offset, selector);
-    const first = await read(Math.floor((rank - 1) / BOARD_PAGE) * BOARD_PAGE);
+    const first = await unlessMissing(
+      read(Math.floor((rank - 1) / BOARD_PAGE) * BOARD_PAGE),
+    );
+    if (first === null) return null;
     const entries = await rivalEntries(first, rank, read);
     const rows = await Promise.all(
       entries.map(async (entry): Promise<RivalRow> => ({
@@ -505,10 +520,7 @@ async function rivalsData(
     );
     return { rows, days: reset.finished };
   };
-  const [live, season] = await Promise.all([
-    liveRows().catch(() => null),
-    seasonRows().catch(() => null),
-  ]);
+  const [live, season] = await Promise.all([liveRows(), seasonRows()]);
   return { live, season };
 }
 
@@ -629,11 +641,7 @@ export async function loadCardData(
 ): Promise<CardDataSet> {
   const read = new Map<string, Promise<PlayerPage | null>>();
   const pages: PageReader = (tag) => {
-    if (!read.has(tag))
-      read.set(
-        tag,
-        ctx.client.getPlayer(tag).catch(() => null),
-      );
+    if (!read.has(tag)) read.set(tag, unlessMissing(ctx.client.getPlayer(tag)));
     return read.get(tag)!;
   };
   const season = async () => {
