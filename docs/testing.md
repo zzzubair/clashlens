@@ -73,10 +73,11 @@ one Reset told the way production lives it:
    player's newest saved day (state, start, end, next start, automatic loss,
    Monday raise, attack and defense counts, unexplained difference).
    `story.board_members(boundary)` is each member's status on the Reset's
-   newest board. `story.served_board(boundary)` is what the API serves for
-   that Daily board, and `_ranked(board)` checks its order and returns each
-   player's total. `story.unfinished_jobs()` lists jobs that failed for good
-   or still wait; a finished story has none.
+   newest board. `story.served_board(boundary, offset)` is the page of 100
+   the API serves for that Daily board from `offset`, and `_ranked(board)`
+   checks a page's order and returns each player's total.
+   `story.unfinished_jobs()` lists jobs that failed for good or still wait; a
+   finished story has none.
 
 Underneath, the stories use the shared test fixtures every PostgreSQL test
 uses: `database_url` and `archive_server` (`tests/conftest.py`, a test
@@ -124,7 +125,8 @@ battle on each call, 500 ms a call, and day results fell 88,000 jobs behind.
   fewer than 20 times in all, where one read a player would make 200 (a
   board build reads it once or twice); the worker takes under 1 second a
   player (about 0.25 seconds on the owner's server); every player is on the
-  board.
+  board, the 100 never-played ones on its second page at 5,000, after every
+  played one.
 - **Why not 13,391 players:** the worker takes about 0.2 seconds a player a
   Reset when it runs one job at a time, so a full Reset would take about 45
   minutes. The other players are saved directly instead.
