@@ -1,0 +1,289 @@
+import { useRef, useState } from "react";
+
+import type { ArmiesData } from "../lib/dashboard-cards";
+import type {
+  ArmyLens,
+  ArmyOutcome,
+  ArmyRow,
+  PlayerArmies,
+} from "../lib/dashboard-armies";
+import {
+  ARMY_MAX_DAYS,
+  armyWindowLabel,
+  averageTrophies,
+  heldPercent,
+  hitPercent,
+} from "../lib/dashboard-armies";
+import { CardHead, CardNote, Name, Switch } from "./DashboardParts";
+import { signed } from "./LegendClock";
+
+/** Armies on defense lists this many army types. */
+const DEFENSE_ROWS = 5;
+/** Armies on offense lists this many before "Other armies". */
+const OFFENSE_ROWS = 3;
+const DAY_OPTIONS = [
+  ["3", "3 days"],
+  ["7", "7 days"],
+] as const;
+const DEFENSE_DAY_OPTIONS = [...DAY_OPTIONS, ["custom", "Custom"]] as const;
+
+export interface ArmiesResponse {
+  armies: PlayerArmies | null;
+}
+
+export function armiesPath(tag: string, lens: ArmyLens, days: number): string {
+  return `/resources/players/${encodeURIComponent(tag)}/armies?lens=${lens}&days=${days}`;
+}
+
+/** The numbers for the chosen days: the page's first read, then the card's own. */
+function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
+  // The chosen days and their numbers: null when they could not be read,
+  // undefined while they load.
+  const [chosen, setChosen] = useState<{ days: number; armies?: PlayerArmies | null }>({
+    days: initial.days,
+    armies: initial,
+  });
+  // What was on screen when the chosen days were asked for.
+  const [shown, setShown] = useState<PlayerArmies | null>(initial);
+  const asked = useRef(0);
+  const loading = chosen.armies === undefined;
+  return {
+    days: chosen.days,
+    // While the chosen days load, the numbers already shown stay, faded.
+    armies: loading ? shown : (chosen.armies ?? null),
+    loading,
+    choose(days: number) {
+      const ask = ++asked.current;
+      if (!loading) setShown(chosen.armies ?? null);
+      if (days === initial.days) {
+        setChosen({ days, armies: initial });
+        return;
+      }
+      setChosen({ days });
+      // Not a router fetcher: its failed read, a dropped connection or a 502
+      // from the server in front, would replace the whole page with an error.
+      void fetch(armiesPath(tag, lens, days), { headers: { Accept: "application/json" } })
+        .then((response) => response.json() as Promise<ArmiesResponse>)
+        .then(({ armies }) => armies ?? null)
+        .catch(() => null)
+        .then((armies) => {
+          if (ask === asked.current) setChosen({ days, armies });
+        });
+    },
+  };
+}
+
+/** "3 defenses", "1 attack". */
+function count(value: number, noun: string): string {
+  return `${value.toLocaleString("en-US")} ${noun}${value === 1 ? "" : "s"}`;
+}
+
+function percent(value: number | null): string {
+  return value === null ? "–" : `${value}%`;
+}
+
+function lost(outcome: ArmyOutcome): string {
+  const average = averageTrophies(outcome);
+  return average === null ? "–" : signed(-average);
+}
+
+/** What the card says instead of numbers, or null when it has numbers to show. */
+function emptyText(armies: PlayerArmies | null, noun: string): string | null {
+  if (!armies) return "Army numbers aren't available right now.";
+  if (armies.coveredDays.length === 0)
+    return "No finished Legend days with army data yet.";
+  if (armies.total.battles === 0) return `No ${noun}s on these days.`;
+  return null;
+}
+
+/** 3 days / 7 days, and on Armies on defense a Custom 1–28 days. */
+function DaySwitch({
+  days,
+  choose,
+  custom,
+}: {
+  days: number;
+  choose: (days: number) => void;
+  custom: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(days);
+  const value = days === 3 || days === 7 ? String(days) : "custom";
+  return (
+    <span className="army-switch">
+      <Switch
+        label="Days"
+        options={custom ? DEFENSE_DAY_OPTIONS : DAY_OPTIONS}
+        value={value}
+        onChange={(option) => {
+          if (option === "custom") {
+            setDraft(days);
+            setOpen(!open);
+          } else {
+            setOpen(false);
+            choose(Number(option));
+          }
+        }}
+      />
+      {open ? (
+        <span className="army-custom">
+          <label>
+            <b>{`Last ${draft} day${draft === 1 ? "" : "s"}`}</b>
+            <input
+              type="range"
+              min={1}
+              max={ARMY_MAX_DAYS}
+              value={draft}
+              aria-label="Number of days"
+              onChange={(event) => setDraft(Number(event.currentTarget.value))}
+            />
+          </label>
+          <span className="dash-muted army-custom-ends">
+            <span>1 day</span>
+            <span>{ARMY_MAX_DAYS} days</span>
+          </span>
+          <button
+            type="button"
+            className="button button-primary dash-small-button"
+            onClick={() => {
+              setOpen(false);
+              choose(draft);
+            }}
+          >
+            Show
+          </button>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Armies on defense: the army types that cost the user the most trophies
+ * over the chosen finished days, and every defense together.
+ */
+export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
+  const { days, armies, loading, choose } = useArmies("defense", data);
+  const empty = emptyText(armies, "defense");
+  const row = (name: string, outcome: ArmyOutcome, all = false) => (
+    <div className={`army-defense-row${all ? " is-all" : ""}`} key={name}>
+      {all ? <span>{name}</span> : <Name>{name}</Name>}
+      <span>
+        {percent(
+          armies?.total.battles
+            ? Math.round((100 * outcome.battles) / armies.total.battles)
+            : null,
+        )}
+      </span>
+      <span>{percent(heldPercent(outcome))}</span>
+      <span className="negative">{lost(outcome)}</span>
+    </div>
+  );
+  return (
+    <div className={`army-card${loading ? " is-loading" : ""}`} aria-busy={loading}>
+      <CardHead
+        title="Armies on defense"
+        meta={<DaySwitch days={days} choose={choose} custom />}
+      />
+      {empty || !armies ? (
+        <CardNote>{empty}</CardNote>
+      ) : (
+        <>
+          <p className="dash-muted dash-card-sub">
+            {`${armyWindowLabel(armies)} · ${count(armies.total.battles, "defense")}`}
+          </p>
+          <div className="army-defense-row army-head" aria-hidden="true">
+            <span>Army type</span>
+            <span>Share</span>
+            <span>Held</span>
+            <span>Avg lost</span>
+          </div>
+          {armies.rows.slice(0, DEFENSE_ROWS).map((army) => row(army.name, army))}
+          {row("All defenses", armies.total, true)}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Armies on offense: the user's hit rate (share of attacks tripled) with
+ * each army type over the last 3 or 7 finished days. A one-army player sees
+ * the number big.
+ */
+export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
+  const { days, armies, loading, choose } = useArmies("offense", data);
+  const empty = emptyText(armies, "attack");
+  const total = armies?.total;
+  const only =
+    armies &&
+    total &&
+    armies.rows.length === 1 &&
+    armies.rows[0].battles === total.battles
+      ? armies.rows[0]
+      : null;
+  const shown = armies?.rows.slice(0, OFFENSE_ROWS) ?? [];
+  const rest = total
+    ? shown.reduce(
+        (left, army) => ({
+          battles: left.battles - army.battles,
+          threeStars: left.threeStars - army.threeStars,
+          trophies: 0,
+        }),
+        { battles: total.battles, threeStars: total.threeStars, trophies: 0 },
+      )
+    : null;
+  return (
+    <div className={`army-card${loading ? " is-loading" : ""}`} aria-busy={loading}>
+      <CardHead
+        title="Armies on offense"
+        meta={<DaySwitch days={days} choose={choose} custom={false} />}
+      />
+      {empty || !armies || !total ? (
+        <CardNote>{empty}</CardNote>
+      ) : (
+        <>
+          <p className="dash-muted dash-card-sub">
+            {`${armyWindowLabel(armies)} · ${count(total.battles, "attack")}`}
+          </p>
+          {only ? (
+            <OneArmy army={only} />
+          ) : (
+            <>
+              <div className="army-offense-row army-head" aria-hidden="true">
+                <span>Army type</span>
+                <span>Hit rate</span>
+              </div>
+              {shown.map((army) => (
+                <div className="army-offense-row" key={army.typeId}>
+                  <Name>{army.name}</Name>
+                  <b>{percent(hitPercent(army))}</b>
+                </div>
+              ))}
+              {rest && rest.battles > 0 ? (
+                <div className="army-offense-row">
+                  <span>Other armies</span>
+                  <b>{percent(hitPercent(rest))}</b>
+                </div>
+              ) : null}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function OneArmy({ army }: { army: ArmyRow }) {
+  return (
+    <div className="army-one">
+      <div className="army-one-name">
+        <Name>{army.name}</Name>
+      </div>
+      <div>
+        <span className="dash-label">Hit rate</span>
+        <b className="army-one-big">{percent(hitPercent(army))}</b>
+      </div>
+    </div>
+  );
+}

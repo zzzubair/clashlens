@@ -106,11 +106,15 @@ def publish_yesterday(
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
-    monkeypatch, enabled: bool
+@pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7"])
+def test_dashboard_reads_refuse_while_the_dashboard_is_off(
+    monkeypatch, enabled: bool, read: str
 ) -> None:
     monkeypatch.setattr(
         api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
+    )
+    monkeypatch.setattr(
+        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
     )
     app = create_app(
         FakeDatabase(),
@@ -118,7 +122,7 @@ def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
         clock=lambda: SIGNED_AT,
         dashboard_enabled=enabled,
     )
-    target = "/v1/players/%232PP/today"
+    target = f"/v1/players/%232PP/{read}"
     with TestClient(app) as client:
         response = client.get(target, headers=_signed_headers(target))
     if enabled:
@@ -128,6 +132,34 @@ def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
             404,
             "dashboard_disabled",
         )
+
+
+def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
+    )
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=True,
+    )
+    with TestClient(app) as client:
+        for query, status in (
+            ("lens=offense&days=3", 200),
+            ("lens=offense&days=7", 200),
+            ("lens=offense&days=5", 422),
+            ("lens=offense&days=28", 422),
+            ("lens=defense&days=5", 200),
+            ("lens=defense&days=28", 200),
+        ):
+            target = f"/v1/players/%232PP/armies?{query}"
+            response = client.get(target, headers=_signed_headers(target))
+            assert response.status_code == status, query
+            if status == 422:
+                assert response.json() == {"error": "invalid_request"}
 
 
 def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) -> None:
@@ -200,15 +232,30 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                     "#8PY",
                     3,
                     [
-                        {"stars": 1, "yours": False},
-                        {"stars": 3, "yours": True},
-                        {"stars": 2, "yours": False},
+                        {"stars": 1, "trophy_change": -5, "yours": False},
+                        {"stars": 3, "trophy_change": -40, "yours": True},
+                        {"stars": 2, "trophy_change": -8, "yours": False},
                     ],
                 ),
-                # #9Q2's log has no battles yet; your attack is still shown.
-                ("#9Q2", 2, [{"stars": 2, "yours": True}]),
+                # #9Q2's log has no battles yet; your attack is still shown,
+                # costing it what you won.
+                ("#9Q2", 2, [{"stars": 2, "trophy_change": -30, "yours": True}]),
             ]
             assert today["opponents"][0]["observed_at"] == "2026-08-06T11:30:00+00:00"
+            # #9Q2's published log for today has no attacks: none, not unknown.
+            assert api_dashboard.get_player_today(database, board, "#9Q2", now=NOW)[
+                "opponents"
+            ] == []
+            # Without a published log for today its attacks are unknown, not none.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE player_id = "
+                    "(SELECT id FROM players WHERE normalized_tag = '#9Q2')"
+                )
+                connection.commit()
+            assert api_dashboard.get_player_today(database, board, "#9Q2", now=NOW)[
+                "opponents"
+            ] is None
 
             assert api_dashboard.get_player_today(database, board, "#QQQ", now=NOW) is None
         finally:

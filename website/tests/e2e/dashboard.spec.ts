@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
   ensureAccount,
@@ -12,8 +12,11 @@ import {
 const TAG = "#Q00VJ";
 
 const ALL_CARDS = [
+  "Legend day",
   "Legend clock",
+  "Bases you attacked",
   "Goal",
+  "Armies on defense",
   "Rivals watch",
   "Season heat map",
   "Cutoffs",
@@ -21,7 +24,9 @@ const ALL_CARDS = [
   "Recent form",
   "Offense consistency",
   "Group watch",
+  "Armies on offense",
 ];
+const DEFAULT_CARDS = ALL_CARDS.slice(0, 7);
 
 /** The card titles on the page, in order. */
 const cardOrder = (page: Page) =>
@@ -59,7 +64,7 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   }).toPass({ intervals: [2_000], timeout: 60_000 });
   await welcome.getByRole("button", { name: /Use our layout/ }).click();
   await expect(welcome).toBeHidden();
-  await expect.poll(() => cardOrder(page)).toEqual(ALL_CARDS.slice(0, 4));
+  await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
 
   // Customise: move, remove and add; Done saves it as the user's own layout.
   // Customise opens once the first pick has saved.
@@ -73,17 +78,20 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect(bar.getByText("Your own layout")).toBeVisible();
   await bar.getByRole("button", { name: "Add a card" }).click();
   const sheet = page.getByRole("dialog", { name: "Add a card" });
-  for (const card of [...ALL_CARDS.slice(4), "Season heat map"])
+  for (const card of [...ALL_CARDS.slice(7), "Season heat map"])
     await sheet.getByRole("button", { name: `Add ${card}`, exact: true }).click();
   await expect(sheet.getByText("Every card is already on your dashboard.")).toBeVisible();
   await sheet.getByRole("button", { name: "Done" }).click();
   await bar.getByRole("button", { name: "Done" }).click();
   await expect(bar).toBeHidden();
   const own = [
-    "Goal",
+    "Legend day",
     "Legend clock",
+    "Goal",
+    "Bases you attacked",
+    "Armies on defense",
     "Rivals watch",
-    ...ALL_CARDS.slice(4),
+    ...ALL_CARDS.slice(7),
     "Season heat map",
   ];
   await expect.poll(() => cardOrder(page)).toEqual(own);
@@ -95,6 +103,57 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     await expect(region).toBeVisible();
     await expect(region).not.toContainText("could not be loaded");
   }
+
+  // An army card's day switch reads the chosen days without leaving the page,
+  // keeping the numbers already shown until they arrive.
+  const armies = page.getByRole("region", { name: "Armies on defense", exact: true });
+  const shown = await armies.evaluateHandle((card) => {
+    const texts: string[] = [];
+    new MutationObserver(() => texts.push(card.textContent ?? "")).observe(card, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    return texts;
+  });
+  await armies.getByRole("button", { name: "3 days" }).click();
+  await expect(armies.getByRole("button", { name: "3 days" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(armies.locator("[aria-busy]")).toHaveAttribute("aria-busy", "false");
+  await expect(armies).not.toContainText("aren't available");
+  expect(
+    (await shown.jsonValue()).filter((text) => text.includes("aren't available")),
+  ).toEqual([]);
+
+  // A day switch whose read fails on the way, a dropped connection or a 502
+  // from the server in front of the website, says so in that card alone.
+  const armiesRead = /\/resources\/players\/[^/]+\/armies\?/;
+  const logged = errors.length;
+  for (const fail of [
+    (route: Route) => route.abort(),
+    (route: Route) => route.fulfill({ status: 502, body: "Bad Gateway" }),
+  ]) {
+    await page.route(armiesRead, fail);
+    await armies.getByRole("button", { name: "Custom" }).click();
+    await armies.getByLabel("Number of days").fill("5");
+    await armies.getByRole("button", { name: "Show" }).click();
+    await expect(armies).toContainText("Army numbers aren't available right now.");
+    await expect.poll(() => cardOrder(page)).toEqual(own);
+    await page.unroute(armiesRead);
+    await armies.getByRole("button", { name: "3 days" }).click();
+    await expect(armies.locator("[aria-busy]")).toHaveAttribute("aria-busy", "false");
+    await expect(armies).not.toContainText("aren't available");
+  }
+  // The browser logs the two failed reads; nothing else went wrong.
+  await expect
+    .poll(() => errors.slice(logged))
+    .toEqual([
+      expect.stringContaining("net::ERR_FAILED"),
+      expect.stringContaining("502"),
+    ]);
+  errors.splice(logged);
 
   // A card setting saves at once: the Goal becomes Top 50.
   await page.getByRole("button", { name: "Customise dashboard" }).click();
@@ -111,14 +170,14 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await bar.getByRole("button", { name: "Done" }).click();
   await expect(bar).toBeHidden();
   await page.reload();
-  await expect.poll(() => cardOrder(page)).toEqual(ALL_CARDS.slice(0, 4));
+  await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
   await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
   await expectNoSeriousAccessibilityViolations(page);
 
   // On a phone the cards stack full width, with nothing wider than the screen.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
-  await expect.poll(() => cardOrder(page)).toEqual(ALL_CARDS.slice(0, 4));
+  await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   const boxes = await page
     .locator(".dash-grid > [data-card]")

@@ -70,7 +70,7 @@ On a tracked player's current page only two things are live: the current
 trophies next to the name and the Daily Legend log. Everything else uses
 finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
 no Trophy trend section; for the unused
-[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 8 in the
+[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 6 in the
 [dashboard design](../docs/dashboard.md). The player page explains
 itself with titles, labels and short counts rather than help paragraphs.
 
@@ -188,15 +188,18 @@ status message; with no linked player the page shows how to link one. On a
 phone every card is full width, the Customise bar stays at the bottom and
 dialogs open as bottom sheets.
 
-Nine cards are built: Legend clock, Goal, Rivals watch, Season heat map,
-Cutoffs, Season graph, Recent form, Offense consistency and Group watch. Legend
-day, Bases you attacked, Armies on defense and Armies on offense are not built
-yet, so they stay off the page and out of "+ Add a card", even where the
-default layout names them. Each card reads saved player pages, tracked
+All 13 cards are built. Each card reads saved player pages, tracked
 leaderboards and groups through the private API; a player page is read once
 per load however many cards use it, and a card whose reads fail says it could
 not be loaded without taking the other cards down. A page left open past the
 Reset hides the day's numbers behind a new-day notice until it reloads.
+
+Bases you attacked rates each base Hard / Average / Easy in the mode its
+settings choose. Held % compares the base's held share today with today's held
+share across tracked Legend players (Average is within 10 points); Trophies
+compares the trophies it gave up a defense today with the fixed Legends −32 a
+defense (`LEGENDS_DEFENSE_LOSS`; Average is within `BASE_TROPHY_BAND`
+trophies). Under 3 defenses is too early.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
@@ -206,6 +209,32 @@ the default layout (`DEFAULT_LAYOUT` in
 their own. Settings are saved in the account's existing 4,096-byte preferences
 box, so there is no database change. The Legend clock uses the device's time
 zone.
+
+Legend day and Bases you attacked share one read of `GET /v1/players/{tag}/today`
+on the private API, for the selected account only. Its board of every
+tracked player's trophies and today's attack and defense counts is read in one
+query and kept for a minute, so all dashboards share one read per minute.
+Opponents' defenses come from their own published daily logs, so an untracked
+opponent shows only your hit. Until the account's own log for today is saved,
+Bases you attacked says so and Legend day shows – for its attack and defense
+counts, rather than 0.
+
+The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
+on the private API, through `/resources/players/{tag}/armies`, which their day
+switches call (signed-in users only, behind the same switch). A finished day
+counts only when its army records are complete and the player's newest saved
+daily log for it is complete, and a finished Season's records are deleted 7
+days after it ends, so early in a Season, or for a player tracked only
+lately, a long window covers fewer days and the card says how many have army
+data. A defense's army
+type is the attacker's army. Armies on offense shows only your hit rate with
+each army type, up to 3 and then Other armies, for 3 or 7 days; Armies on
+defense also takes a Custom 1–28 days. Neither card compares with every
+tracked player yet. For Armies on defense that needs trophies lost per army
+type, which the saved daily counts per army don't keep, and working it out
+from each battle's saved army took about 95 seconds a day on production in
+October 2026. Armies on offense's Legends hit rate needs no per-battle read:
+see [dashboard-data.md](../docs/dashboard-data.md).
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a

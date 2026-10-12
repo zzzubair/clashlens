@@ -423,6 +423,26 @@ def create_app(
             raise ApiError(404, "player_not_found")
         return JSONResponse(content=_json_safe(result))
 
+    @app.get("/v1/players/{tag}/armies")
+    def player_armies(
+        tag: str,
+        request: Request,
+        lens: Literal["offense", "defense"] = Query(),
+        days: int = Query(ge=1, le=api_dashboard.MAX_ARMY_DAYS),
+    ) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if not dashboard_enabled:
+            raise ApiError(404, "dashboard_disabled")
+        if lens == "offense" and days not in api_dashboard.OFFENSE_ARMY_DAYS:
+            raise ApiError(422, "invalid_request")
+        result = api_dashboard.get_player_armies(
+            production_database, _safe_tag(tag),
+            lens=lens, days=days, now=current_time(),
+        )
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(content=_json_safe(result))
+
     @app.get("/v1/players/{tag}/lookup")
     def player_lookup(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)

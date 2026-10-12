@@ -37,7 +37,7 @@ const CARD_LIST = {
     size: "m",
     description:
       "Today's trophies, rank and Next Reset range, with your attacks and defenses.",
-    built: false,
+    built: true,
   },
   "legend-clock": {
     title: "Legend clock",
@@ -50,7 +50,8 @@ const CARD_LIST = {
     size: "l",
     description:
       "Each base you hit today, and how often it holds against other attackers.",
-    built: false,
+    built: true,
+    settings: true,
   },
   goal: {
     title: "Goal",
@@ -64,7 +65,7 @@ const CARD_LIST = {
     title: "Armies on defense",
     size: "m",
     description: "Which armies attack you, and how your base holds against each.",
-    built: false,
+    built: true,
   },
   "rivals-watch": {
     title: "Rivals watch",
@@ -115,7 +116,7 @@ const CARD_LIST = {
     title: "Armies on offense",
     size: "s",
     description: "Your hit rate with each army, next to everyone else's.",
-    built: false,
+    built: true,
   },
 } satisfies Record<string, CardDefinition>;
 
@@ -161,6 +162,8 @@ export interface DashboardSettings {
   /** Group watch: the group last picked on the card; null shows the first one made. */
   group: string | null;
   groupWindow: GroupWindow;
+  /** Bases you attacked: rate bases by held share or by trophies given up. */
+  basesMode: BasesMode;
 }
 
 export function defaultSettings(): DashboardSettings {
@@ -170,6 +173,7 @@ export function defaultSettings(): DashboardSettings {
     cutoffs: [...DEFAULT_CUTOFFS],
     group: null,
     groupWindow: "7",
+    basesMode: "held",
   };
 }
 
@@ -215,7 +219,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The stored shape: `{ v: 3, layout: "default" | [card, ...], goal?, cutoffs?,
- * group?, window? }`. Settings left at their default are left out, which keeps
+ * group?, window?, bases? }`. Settings left at their default are left out, which keeps
  * the box far under its 4,096-byte limit.
  */
 export function serializeSettings(settings: DashboardSettings): Record<string, unknown> {
@@ -225,6 +229,7 @@ export function serializeSettings(settings: DashboardSettings): Record<string, u
     stored.cutoffs = settings.cutoffs;
   if (settings.group) stored.group = settings.group;
   if (settings.groupWindow !== "7") stored.window = settings.groupWindow;
+  if (settings.basesMode !== "held") stored.bases = settings.basesMode;
   return stored;
 }
 
@@ -246,13 +251,14 @@ export function readSettings(value: unknown): DashboardSettings {
   if (typeof value.group === "string" && UUID.test(value.group))
     settings.group = value.group;
   if (value.window === "season") settings.groupWindow = "season";
+  if (value.bases === "trophies") settings.basesMode = "trophies";
   return settings;
 }
 
 /** Check posted settings strictly. Returns null for anything the page would not send. */
 export function parsePostedSettings(value: unknown): DashboardSettings | null {
   if (!isRecord(value) || value.v !== 3) return null;
-  const allowed = new Set(["v", "layout", "goal", "cutoffs", "group", "window"]);
+  const allowed = new Set(["v", "layout", "goal", "cutoffs", "group", "window", "bases"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return null;
   const { layout } = value;
   if (
@@ -272,6 +278,7 @@ export function parsePostedSettings(value: unknown): DashboardSettings | null {
   )
     return null;
   if (value.window !== undefined && value.window !== "season") return null;
+  if (value.bases !== undefined && value.bases !== "trophies") return null;
   return readSettings(value);
 }
 
@@ -327,7 +334,7 @@ export interface OpponentRow {
   resetTrophies: number | null;
   hit: { stars: number; destruction: number; trophyChange: number; at: number };
   /** The opponent's defenses today in time order; `yours` marks this attack. */
-  defenses: { stars: number; yours: boolean }[];
+  defenses: { stars: number; trophyChange: number; yours: boolean }[];
   /** When the opponent's newest battle log was read, Unix milliseconds. */
   observedAtMs: number | null;
 }
@@ -339,22 +346,48 @@ export interface LegendsHeld {
 }
 
 export type BaseStrength = "hard" | "average" | "easy" | "early";
+/** Bases you attacked: the base's held share, or trophies it gave up a defense. */
+export type BasesMode = "held" | "trophies";
 
-/** Average is within 15 points of today's Legends held share; under 3 defenses is too early. */
-export const BASE_STRENGTH_BAND = 15;
+/** Held % mode: Average is within 10 points of today's Legends held share. */
+export const BASE_STRENGTH_BAND = 10;
+/**
+ * Trophies mode: tracked Legend players lose this many trophies a defense,
+ * fixed because it held between 31.94 and 32.31 a day over 29 Sep–11 Oct 2026.
+ */
+export const LEGENDS_DEFENSE_LOSS = 32;
+/**
+ * Trophies mode: Average is within this many trophies a defense of
+ * `LEGENDS_DEFENSE_LOSS`. Over 74,239 bases on 5–11 Oct 2026 it rated 27.3%
+ * Average, as the held 10-point band rated 27.2%.
+ */
+export const BASE_TROPHY_BAND = 1.25;
+/** Under 3 defenses is too early. */
 export const BASE_STRENGTH_MIN_DEFENSES = 3;
+
+/** Trophies the base gave up today, a positive number. */
+export function trophiesGivenUp(defenses: OpponentRow["defenses"]): number {
+  return -defenses.reduce((total, defense) => total + defense.trophyChange, 0);
+}
 
 export function baseStrength(
   defenses: OpponentRow["defenses"],
   legends: LegendsHeld | null,
+  mode: BasesMode = "held",
 ): BaseStrength {
-  if (
-    defenses.length < BASE_STRENGTH_MIN_DEFENSES ||
-    !legends ||
-    legends.defenses === 0
-  ) {
-    return "early";
+  if (defenses.length < BASE_STRENGTH_MIN_DEFENSES) return "early";
+  if (mode === "trophies") {
+    // Compared without rounding: trophies fewer than the Legends' over all
+    // the base's defenses.
+    const fewer = LEGENDS_DEFENSE_LOSS * defenses.length - trophiesGivenUp(defenses);
+    const band = BASE_TROPHY_BAND * defenses.length;
+    if (fewer > band) return "hard";
+    if (fewer < -band) return "easy";
+    return "average";
   }
+  if (!legends || legends.defenses === 0) return "early";
+  // Compared without rounding: the base's share against the Legends', both
+  // scaled by both defense counts.
   const held = defenses.filter((defense) => defense.stars < 3).length;
   const points = 100 * (held * legends.defenses - legends.held * defenses.length);
   const band = BASE_STRENGTH_BAND * defenses.length * legends.defenses;

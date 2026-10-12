@@ -13,6 +13,11 @@ range is an estimate: a battle not yet read leaves a slot looking open.
 
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
+
+The two army cards read finished Legend days whose army records are complete:
+a player's attacks or defenses per army type. A defense's type is the
+attacker's army, and a battle's trophies follow from its stars and
+destruction by the game's rule.
 """
 
 from __future__ import annotations
@@ -24,12 +29,22 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
+from . import army_types
 from .api_db import ApiDatabase, _screen_events, _text
 from .api_leaderboard import _LIVE_PLAYERS_SQL, _season_params
-from .domain import CHAIN_BREAK_REASONS, MAX_BATTLE_TROPHIES, ranked_day_for
+from .domain import (
+    CHAIN_BREAK_REASONS,
+    MAX_BATTLE_TROPHIES,
+    allocate_trophies,
+    ranked_day_for,
+)
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
+# The army cards look back at most this many finished Legend days; Armies
+# on offense offers only these.
+MAX_ARMY_DAYS = 28
+OFFENSE_ARMY_DAYS = (3, 7)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
@@ -218,7 +233,8 @@ def _iso(value: datetime | None) -> str | None:
 def get_player_today(
     database: ApiDatabase, board_cache: DashboardBoard, tag: str, *, now: datetime
 ) -> dict[str, Any] | None:
-    """One player's dashboard numbers for today, or None for an unknown tag."""
+    """One player's dashboard numbers for today, or None for an unknown tag.
+    ``opponents`` is None until the player's log for today is published."""
     day = ranked_day_for(now)
     board = board_cache.current(database, now)
     with database.pool.connection() as connection:
@@ -263,16 +279,21 @@ def get_player_today(
         defenses = [
             {
                 "stars": event["stars"],
+                "trophy_change": event["trophy_change"],
                 "yours": event["opponent"]["tag"] == tag,
                 "at": event["battle_timestamp"],
             }
             for event in defended
         ]
         if not any(defense["yours"] for defense in defenses):
-            # This attack is in your log but not yet in theirs.
-            defenses.append(
-                {"stars": attack["stars"], "yours": True, "at": attack["battle_timestamp"]}
-            )
+            # This attack is in your log but not yet in theirs. A defense
+            # loses what the attack won, except a 0-star one, which loses 0.
+            defenses.append({
+                "stars": attack["stars"],
+                "trophy_change": -attack["trophy_change"] if attack["stars"] else 0,
+                "yours": True,
+                "at": attack["battle_timestamp"],
+            })
         defenses.sort(key=lambda defense: defense["at"])
         opponents.append(
             {
@@ -286,7 +307,7 @@ def get_player_today(
                     "battle_timestamp": attack["battle_timestamp"],
                 },
                 "defenses": [
-                    {"stars": defense["stars"], "yours": defense["yours"]}
+                    {key: defense[key] for key in ("stars", "trophy_change", "yours")}
                     for defense in defenses
                 ],
                 "observed_at": None if row is None else _iso(row[6]),
@@ -306,5 +327,112 @@ def get_player_today(
         else None,
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
-        "opponents": opponents,
+        "opponents": None if today is None else opponents,
+    }
+
+
+# Per army type: battles, three-star battles, and trophies won on attack or
+# lost on defense.
+_Totals = dict[int, list[int]]
+# Named types only: Other and Unreadable count in the totals, never as a row.
+_UNNAMED = frozenset({army_types.OTHER, army_types.UNREADABLE})
+
+
+def _add_outcomes(totals: _Totals, rows: list[tuple[str, int, int, int, int]]) -> None:
+    for lens, type_id, stars, destruction, battles in rows:
+        allocation = allocate_trophies(stars, destruction)
+        trophies = (
+            allocation.attacker_gain if lens == "offense" else allocation.defender_loss
+        )
+        total = totals.setdefault(type_id, [0, 0, 0])
+        total[0] += battles
+        total[1] += battles if stars == 3 else 0
+        total[2] += battles * trophies
+
+
+def get_player_armies(
+    database: ApiDatabase,
+    tag: str,
+    *,
+    lens: str,
+    days: int,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """One player's attacks or defenses per army type over the last ``days``
+    finished Legend days; None for an unknown tag.
+
+    Only days whose army records are complete and whose newest saved daily
+    log for this player is Complete with complete coverage count, and only
+    once every saved army has its type under the current rules:
+    ``covered_days`` names them. A finished Season's records go 7 days after
+    it ends. Known limit: a corrected day counts as soon as its newest log is
+    published, so until that day's army records are rebuilt it shows the
+    earlier build's battles.
+    """
+    today = ranked_day_for(now).start
+    window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
+    mine: _Totals = {}
+    with database.pool.connection() as connection:
+        player = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (tag,)
+        ).fetchone()
+        if player is None:
+            return None
+        covered = [
+            (start, _text(season_id), int(day_number))
+            for start, season_id, day_number in connection.execute(
+                """
+                SELECT day.ranked_day_start, day.official_season_id,
+                       day.season_day_number
+                FROM army_analytics_completed_days AS day
+                WHERE day.ranked_day_start = ANY(%s::timestamptz[])
+                  AND (
+                      SELECT daily.state = 'Complete'
+                             AND daily.coverage = 'complete'
+                      FROM api_player_daily_logs AS daily
+                      WHERE daily.player_id = %s
+                        AND daily.ranked_day_start = day.ranked_day_start
+                      ORDER BY daily.version DESC
+                      LIMIT 1
+                  )
+                ORDER BY day.ranked_day_start
+                """,
+                (window, int(player[0])),
+            ).fetchall()
+        ] if army_types.rules_ready(connection) else []
+        seasons: dict[str, list[int]] = {}
+        for _start, season_id, day_number in covered:
+            seasons.setdefault(season_id, []).append(day_number)
+        for season_id, day_numbers in seasons.items():
+            _add_outcomes(mine, army_types.read_type_outcomes(
+                connection, season_id=season_id, day_numbers=day_numbers,
+                lens=lens, player_id=int(player[0]),
+            ))
+
+    def outcome(counts: list[int]) -> dict[str, int]:
+        return dict(zip(("battles", "three_stars", "trophies"), counts, strict=True))
+
+    rows = [
+        {
+            "type_id": type_id,
+            "name": army_types.TYPE_NAMES.get(type_id, f"Type {type_id}"),
+            **outcome(counts),
+        }
+        for type_id, counts in mine.items()
+        if type_id not in _UNNAMED
+    ]
+    # Defenses: the armies that cost the most trophies first; attacks: the
+    # armies used most.
+    rows.sort(key=lambda row: (
+        -row["trophies"] if lens == "defense" else 0, -row["battles"], row["type_id"]
+    ))
+    return {
+        "tag": tag,
+        "lens": lens,
+        "days": days,
+        "covered_days": [_iso(day[0]) for day in covered],
+        "rows": rows,
+        "total": outcome(
+            [sum(counts[index] for counts in mine.values()) for index in range(3)]
+        ),
     }

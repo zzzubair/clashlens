@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useFetcher } from "react-router";
 
-import type { CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
+import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
   CARDS,
   CARD_SIZE_LABELS,
@@ -22,8 +22,11 @@ import {
   GroupWatchCard,
   RivalsCard,
 } from "./BoardCards";
+import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "./ArmyCards";
 import { DashboardIcon } from "./DashboardIcon";
 import { CardHead, CardNote } from "./DashboardParts";
+import { LegendDayCard } from "./LegendDayCard";
+import { OpponentsCard } from "./OpponentsCard";
 import {
   HeatMapCard,
   OffenseConsistencyCard,
@@ -47,6 +50,18 @@ const CARD_VIEWS: {
     context: ViewContext,
   ) => ReactNode;
 } = {
+  "legend-day": (data, context) => <LegendDayCard {...data} nowMs={context.nowMs} />,
+  bases: (data, context) => (
+    <OpponentsCard
+      rows={data.rows}
+      legends={data.legends}
+      mode={data.mode}
+      timeZone={context.timeZone}
+      nowMs={context.nowMs}
+    />
+  ),
+  "armies-defense": (data) => <ArmiesOnDefenseCard data={data} />,
+  "armies-offense": (data) => <ArmiesOnOffenseCard data={data} />,
   "legend-clock": (data, context) => (
     <ClockCard data={data} nowMs={context.nowMs} timeZone={context.timeZone} />
   ),
@@ -109,6 +124,39 @@ function moved(cards: CardId[], index: number, step: -1 | 1): CardId[] {
   return next;
 }
 
+/** One setting with a few choices, such as Last 7 days or Whole Season. */
+function Choice<Value extends string>({
+  legend,
+  options,
+  value,
+  onChange,
+}: {
+  legend: string;
+  options: readonly (readonly [Value, string])[];
+  value: Value;
+  onChange: (value: Value) => void;
+}) {
+  return (
+    <fieldset className="dash-field">
+      <legend>{legend}</legend>
+      <div className="dash-chips">
+        {options.map(([option, label]) => (
+          <button
+            key={option}
+            type="button"
+            className="dash-chip-button"
+            aria-pressed={value === option}
+            onClick={() => onChange(option)}
+          >
+            {value === option ? "✓ " : ""}
+            {label}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 /** Card settings, opened from "⚙ Settings" while customising. */
 function SettingsDialog({
   card,
@@ -131,6 +179,7 @@ function SettingsDialog({
   const [goal, setGoal] = useState(String(settings.goal));
   const [lines, setLines] = useState<number[]>(settings.cutoffs);
   const [groupWindow, setGroupWindow] = useState<GroupWindow>(settings.groupWindow);
+  const [basesMode, setBasesMode] = useState<BasesMode>(settings.basesMode);
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -150,7 +199,9 @@ function SettingsDialog({
         ? { ...settings, goal: goalNumber }
         : card === "cutoffs"
           ? { ...settings, cutoffs: [...lines].sort((a, b) => a - b) }
-          : { ...settings, groupWindow },
+          : card === "bases"
+            ? { ...settings, basesMode }
+            : { ...settings, groupWindow },
     );
   };
   return (
@@ -235,29 +286,26 @@ function SettingsDialog({
               Reset to default
             </button>
           </fieldset>
+        ) : card === "bases" ? (
+          <Choice
+            legend="Rate each base by"
+            options={[
+              ["held", "Held %"],
+              ["trophies", "Trophies"],
+            ]}
+            value={basesMode}
+            onChange={setBasesMode}
+          />
         ) : (
-          <fieldset className="dash-field">
-            <legend>Show</legend>
-            <div className="dash-chips">
-              {(
-                [
-                  ["7", "Last 7 days"],
-                  ["season", "Whole Season"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className="dash-chip-button"
-                  aria-pressed={groupWindow === value}
-                  onClick={() => setGroupWindow(value)}
-                >
-                  {groupWindow === value ? "✓ " : ""}
-                  {label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <Choice
+            legend="Show"
+            options={[
+              ["7", "Last 7 days"],
+              ["season", "Whole Season"],
+            ]}
+            value={groupWindow}
+            onChange={setGroupWindow}
+          />
         )}
         {tried && error ? (
           <p className="negative" role="alert">

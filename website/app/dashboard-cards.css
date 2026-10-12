@@ -6,7 +6,7 @@
 
 .legend-day-card {
   display: grid;
-  gap: 0.8rem;
+  gap: 0.5rem;
 }
 
 .legend-day-numbers {
@@ -41,11 +41,6 @@
   color: var(--cl-action);
   font-size: 1.4rem;
   font-weight: 900;
-}
-
-.legend-day-board {
-  margin: -0.5rem 0 0;
-  font-size: 0.75rem;
 }
 
 .legend-day-battles {

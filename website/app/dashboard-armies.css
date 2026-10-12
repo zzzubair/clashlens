@@ -1,0 +1,138 @@
+/* Armies on defense and Armies on offense (components/ArmyCards.tsx). */
+
+.army-card {
+  display: grid;
+  gap: 0.25rem;
+  transition: opacity 150ms ease;
+}
+
+.army-card.is-loading {
+  opacity: 0.6;
+}
+
+.army-switch {
+  position: relative;
+  display: inline-block;
+}
+
+.army-custom {
+  text-align: left;
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  gap: 0.35rem;
+  width: min(17.5rem, 80vw);
+  padding: 0.75rem;
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  background: var(--cl-surface);
+  box-shadow: var(--cl-card-drop);
+}
+
+.army-custom label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.army-custom input {
+  width: 100%;
+  accent-color: var(--cl-brand-orange);
+}
+
+.army-custom-ends {
+  display: flex;
+  justify-content: space-between;
+}
+
+.army-custom button {
+  justify-self: end;
+}
+
+.army-head {
+  color: var(--cl-muted);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.army-defense-row,
+.army-offense-row {
+  display: grid;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--cl-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.army-defense-row {
+  grid-template-columns: minmax(0, 1fr) 3rem 3rem 4.25rem;
+}
+
+.army-offense-row {
+  grid-template-columns: minmax(0, 1fr) 4.25rem;
+}
+
+.army-head.army-defense-row,
+.army-head.army-offense-row {
+  border-top: 0;
+}
+
+:is(.army-defense-row, .army-offense-row) > :nth-child(n + 2) {
+  text-align: right;
+}
+
+.army-defense-row.is-all {
+  border-top: 2px solid var(--cl-card-line);
+  font-weight: 900;
+}
+
+:is(.army-defense-row, .army-offense-row) .dash-name {
+  font-weight: 800;
+}
+
+.army-offense-row b {
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+  font-weight: 400;
+}
+
+.army-one {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--cl-border);
+}
+
+.army-one-name {
+  min-width: 0;
+}
+
+.army-one-name .dash-name {
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+}
+
+.army-one-big {
+  display: block;
+  font-family: var(--cl-font-heading);
+  font-size: 2.6rem;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+@media (max-width: 640px) {
+  .army-defense-row {
+    gap: 0.35rem;
+    font-size: 0.85rem;
+  }
+
+  .army-head {
+    font-size: 0.68rem;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+}

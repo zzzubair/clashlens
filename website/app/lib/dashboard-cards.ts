@@ -4,7 +4,16 @@
  * the server and the browser give the same answers and tests need no page.
  */
 
-import type { ClockBattle } from "./dashboard";
+import type { LinkedPlayerCard } from "./account-contracts";
+import type {
+  BasesMode,
+  ClockBattle,
+  LegendsHeld,
+  OpponentRow,
+  PlayerDay,
+  RankRange,
+} from "./dashboard";
+import type { PlayerArmies } from "./dashboard-armies";
 
 /** Every Legend I player starts a Season here (domain.py SEASON_START_TROPHIES). */
 export const SEASON_START_TROPHIES = 5000;
@@ -423,7 +432,31 @@ export function around<T>(rows: T[], index: number, before: number, after: numbe
 }
 
 /** The data each built card is drawn from. A card added later adds its entry here. */
+export interface LegendDayData {
+  player: LinkedPlayerCard;
+  /** Null when the player page could not be read. */
+  day: PlayerDay | null;
+  range: RankRange | null;
+}
+
+export interface BasesData {
+  /** Null until the player's battles for today are saved. */
+  rows: OpponentRow[] | null;
+  legends: LegendsHeld | null;
+  mode: BasesMode;
+}
+
+/** The army cards' first read: the last 7 finished days. */
+export interface ArmiesData {
+  tag: string;
+  armies: PlayerArmies;
+}
+
 export interface CardDataMap {
+  "legend-day": LegendDayData;
+  bases: BasesData;
+  "armies-defense": ArmiesData;
+  "armies-offense": ArmiesData;
   "legend-clock": ClockData;
   goal: GoalData;
   "rivals-watch": RivalsData;

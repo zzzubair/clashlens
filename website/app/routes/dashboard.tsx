@@ -24,6 +24,7 @@ import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
 import "../dashboard-cards.css";
+import "../dashboard-armies.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
