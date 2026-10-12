@@ -482,13 +482,19 @@ their own. While it is off, every private API crew route
 page-not-found page, and the navigation bar has no Crews link. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.
 
-Visitor counting (PostHog, EU) stays off, with no script and no requests,
-until both `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_`
-and can only send events) and `CLASHLENS_POSTHOG_HOST`
-(`https://eu.i.posthog.com`) are set in `app.env`. `./ops` passes them to the
-website and the private API in production only, so turning counting on or off
-takes `./ops up`. Never put a personal API key (`phx_`) here. The `/privacy`
-page explains the counting and the return-visits switch in the site footer.
+Visitor counting stays off, with no script and no requests, until
+`CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only
+send events) is set in `app.env`. Counts go only to PostHog's EU cloud,
+`https://eu.i.posthog.com`; the address is fixed in the code. `./ops` passes
+the token to the website and the private API in production only, so turning
+counting on or off takes `./ops up`. Never put a personal API key (`phx_`)
+here. The `/privacy` page explains the counting and the return-visits switch
+in the site footer.
+
+Before setting the token, confirm in the PostHog project's settings that
+discarding client IP data is switched on. Without it PostHog stores each
+visitor's IP address with every count, which the privacy page and the agreed
+plan rule out. Clash Lens cannot check or change that setting itself.
 
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:

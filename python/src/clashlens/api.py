@@ -727,7 +727,7 @@ def create_app(
             display_name=display_name,
         )
         if result.status_code == 201 and not result.replayed:
-            events.capture("account_created", {"provider": binding.provider})
+            events.capture("signup_completed", {"provider": binding.provider})
         return _operation_response(result)
 
     @app.get("/v1/account")
@@ -878,6 +878,8 @@ def create_app(
             normalized_tag=tag,
             now=current_time(),
         )
+        if result.status_code == 200 and not result.replayed:
+            events.capture("group_used", {"action": "add"})
         return _operation_response(result)
 
     @app.delete("/v1/account/groups/{group_id}/players/{tag}")
@@ -896,6 +898,8 @@ def create_app(
             group_id=group_id,
             normalized_tag=normalized_tag,
         )
+        if result.payload.get("removed") and not result.replayed:
+            events.capture("group_used", {"action": "remove"})
         return _operation_response(result)
 
     @app.get("/v1/account/groups/{group_id}/comparison")

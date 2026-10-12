@@ -2,15 +2,19 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useLocation, useMatches, useRouteLoaderData } from "react-router";
 
 import {
+  armySort,
   loadedPageEvents,
   onReturnVisitsChange,
-  pageChangeEvents,
+  pagePerformance,
   returnVisitsOn,
   routeOf,
   searchInput,
+  selectionEvents,
+  selectionOf,
   setReturnVisits,
   startAnalytics,
   track,
+  type Selection,
 } from "../lib/analytics";
 import type { RootLoaderData } from "../root";
 
@@ -19,18 +23,27 @@ function currentRoute(): string {
 }
 
 // Clicks and searches are read from the page as a whole, so the pages
-// themselves carry no tracking code.
-function onClick(event: MouseEvent) {
-  const link = event.target instanceof Element ? event.target.closest("a") : null;
+// themselves carry no tracking code. `shown` is what the page shows now.
+function onClick(event: MouseEvent, shown: Selection | null) {
+  const target = event.target instanceof Element ? event.target : null;
+  const column = target?.closest(".analytics-sort-button")?.closest("th")?.dataset.column;
+  if (column) {
+    track("armies_changed", {
+      ...shown?.labels,
+      changed: "sort",
+      sort: armySort(column),
+    });
+    return;
+  }
+  if (target?.closest(".player-refresh-form button")) {
+    track("player_detail_changed", { action: "refresh", ...shown?.labels });
+    return;
+  }
+  const link = target?.closest("a");
   const href = link?.getAttribute("href");
   if (!link || !href) return;
   if (href.startsWith("https://link.clashofclans.com/")) {
-    track("copy_army_clicked", { source: currentRoute() });
-    return;
-  }
-  const provider = /^\/auth\/(google|discord)(\?|$)/.exec(href)?.[1];
-  if (provider && currentRoute() === "login") {
-    track("sign_in_step", { stage: "started", provider });
+    track("copy_army_clicked");
     return;
   }
   const list = link.closest(".search-dropdown, .search-results, .rank-search-results");
@@ -64,55 +77,74 @@ function onSubmit(event: SubmitEvent) {
 export function Analytics() {
   const root = useRouteLoaderData<RootLoaderData>("root");
   const token = root?.analytics?.token;
-  const host = root?.analytics?.host;
   const location = useLocation();
   const matches = useMatches();
   const page = matches[matches.length - 1];
-  const shown = useRef<{ pathname: string; search: string } | null>(null);
-  const loaded = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (!token || !host) return;
-    startAnalytics({ token, host });
-    document.addEventListener("click", onClick, true);
-    document.addEventListener("submit", onSubmit, true);
-    return () => {
-      document.removeEventListener("click", onClick, true);
-      document.removeEventListener("submit", onSubmit, true);
-    };
-  }, [token, host]);
+  const routeId = page?.id;
+  const data = page?.loaderData;
+  // What the open page shows, and the loaded results already counted on it.
+  const shown = useRef<{ path: string; selection: Selection } | null>(null);
+  const loaded = useRef({ path: "", keys: new Set<string>() });
 
   useEffect(() => {
     if (!token) return;
-    const before = shown.current;
-    shown.current = { pathname: location.pathname, search: location.search };
-    const { route } = routeOf(location.pathname);
-    if (before?.pathname !== location.pathname) {
-      track("$pageview", { route, signed_in: Boolean(root?.loggedIn) });
-      // A completed sign-in redirects away; only a failure shows this page.
-      const provider = /^\/auth\/(google|discord)\//.exec(location.pathname)?.[1];
-      if (provider) track("sign_in_step", { stage: "failed", provider });
-    } else if (before.search !== location.search) {
-      for (const { event, properties } of pageChangeEvents(
-        route,
-        new URLSearchParams(before.search),
-        new URLSearchParams(location.search),
+    startAnalytics({ token });
+    const click = (event: MouseEvent) => onClick(event, shown.current?.selection ?? null);
+    document.addEventListener("click", click, true);
+    document.addEventListener("submit", onSubmit, true);
+    const timing = () => {
+      const result = pagePerformance(
+        performance.getEntriesByType?.("navigation")[0] as
+          PerformanceNavigationTiming | undefined,
+      );
+      if (result) track(result.event, result.properties);
+    };
+    // The load time is final only once the page's load event has finished.
+    const afterLoad = () => setTimeout(timing);
+    if (document.readyState === "complete") timing();
+    else window.addEventListener("load", afterLoad, { once: true });
+    return () => {
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("submit", onSubmit, true);
+      window.removeEventListener("load", afterLoad);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    track("$pageview", { signed_in: Boolean(root?.loggedIn) });
+  }, [token, location.pathname]);
+
+  useEffect(() => {
+    if (!token || !routeId) return;
+    const path = location.pathname;
+    const before = shown.current?.path === path ? shown.current.selection : null;
+    const selection = selectionOf(routeId, data);
+    if (selection) {
+      shown.current = { path, selection };
+      for (const { event, properties } of selectionEvents(
+        routeOf(path).route,
+        before,
+        selection,
       )) {
         track(event, properties);
       }
+    } else if (before === null) {
+      shown.current = null;
     }
-  }, [token, location.pathname, location.search]);
-
-  useEffect(() => {
-    if (!token || !page) return;
-    for (const { event, properties } of loadedPageEvents(page.id, page.loaderData)) {
-      // Once per visit to a page and result, however often its data reloads.
-      const key = `${location.key} ${event} ${JSON.stringify(properties)}`;
-      if (loaded.current.has(key)) continue;
-      loaded.current.add(key);
+    if (loaded.current.path !== path) loaded.current = { path, keys: new Set() };
+    for (const { event, properties } of loadedPageEvents(routeId, data)) {
+      // A search counts once, however often its results reload; a player
+      // lookup once per outcome it shows on this page.
+      const key =
+        event === "search_results_shown"
+          ? `${location.key} ${event}`
+          : `${event} ${JSON.stringify(properties)}`;
+      if (loaded.current.keys.has(key)) continue;
+      loaded.current.keys.add(key);
       track(event, properties);
     }
-  }, [token, page, location.key]);
+  }, [token, routeId, data, location.key, location.pathname]);
 
   return null;
 }
@@ -120,7 +152,7 @@ export function Analytics() {
 /** Counts an error page once it shows. */
 export function useErrorEvent(notFound: boolean) {
   useEffect(() => {
-    track("ui_error", { route: currentRoute(), kind: notFound ? "not_found" : "error" });
+    track("ui_error", { kind: notFound ? "not_found" : "error" });
   }, [notFound]);
 }
 

@@ -3,11 +3,14 @@ import { gunzipSync } from "node:zlib";
 import { expect, test, type Page } from "@playwright/test";
 
 import {
-  analyticsFixtureHost,
   analyticsFixtureOrigin,
   analyticsFixtureToken,
   blogFixtureOrigin,
 } from "../fixtures/test-values";
+
+// The website's fixed PostHog EU host; the tests answer for it in the browser.
+const posthogHost = "https://eu.i.posthog.com";
+const storedId = `ph_${analyticsFixtureToken}_posthog`;
 
 // PostHog drops events from browsers that call themselves headless.
 test.use({
@@ -39,7 +42,7 @@ async function fakePostHog(page: Page) {
     Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false });
     Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => undefined });
   });
-  await page.route(`${analyticsFixtureHost}/**`, async (route) => {
+  await page.route(`${posthogHost}/**`, async (route) => {
     const body = route.request().postDataBuffer();
     if (body) {
       const sent = decode(body);
@@ -81,10 +84,7 @@ test("counts pages without player tags and keeps the browser ID until switched o
   const outside: string[] = [];
   page.on("request", (request) => {
     const url = request.url();
-    if (
-      !url.startsWith(`${analyticsFixtureOrigin}/`) &&
-      !url.startsWith(analyticsFixtureHost)
-    ) {
+    if (!url.startsWith(`${analyticsFixtureOrigin}/`) && !url.startsWith(posthogHost)) {
       outside.push(url);
     }
   });
@@ -101,15 +101,20 @@ test("counts pages without player tags and keeps the browser ID until switched o
     $geoip_disable: true,
   });
   expect(player.properties.$cookieless_mode).toBeUndefined();
+  for (const detail of [
+    "$browser",
+    "$os",
+    "$screen_height",
+    "$timezone",
+    "$raw_user_agent",
+  ]) {
+    expect(player.properties).not.toHaveProperty(detail);
+  }
   const browserId = player.properties.distinct_id;
   expect(browserId).toEqual(expect.any(String));
   expect(browserId).not.toBe("$posthog_cookieless");
   expect(await storedKeys(page)).toEqual(
-    [
-      "clashlens-return-visits",
-      `ph_${analyticsFixtureToken}_posthog`,
-      `__ph_opt_in_out_${analyticsFixtureToken}`,
-    ].sort(),
+    [storedId, `__ph_opt_in_out_${analyticsFixtureToken}`].sort(),
   );
   expect(await context.cookies()).toEqual([]);
 
@@ -132,9 +137,7 @@ test("counts pages without player tags and keeps the browser ID until switched o
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect
-    .poll(() => storedKeys(page))
-    .not.toContain(`ph_${analyticsFixtureToken}_posthog`);
+  await expect.poll(() => storedKeys(page)).not.toContain(storedId);
   expect(await page.evaluate(() => localStorage.getItem("clashlens-return-visits"))).toBe(
     "off",
   );
@@ -145,12 +148,14 @@ test("counts pages without player tags and keeps the browser ID until switched o
     page.getByRole("main").getByRole("switch", { name: "Count return visits" }),
   ).toHaveAttribute("aria-checked", "false");
   await expect.poll(() => sent("$pageview").length).toBe(3);
+  // PostHog makes the day's code from the browser name and version, then deletes them.
   expect(sent("$pageview")[2].properties).toMatchObject({
     route: "privacy",
     distinct_id: "$posthog_cookieless",
     $cookieless_mode: true,
+    $raw_user_agent: expect.stringContaining("Chrome/"),
   });
-  expect(await storedKeys(page)).not.toContain(`ph_${analyticsFixtureToken}_posthog`);
+  expect(await storedKeys(page)).not.toContain(storedId);
   expect(await context.cookies()).toEqual([]);
 
   for (const body of posthog.bodies) {
@@ -158,4 +163,56 @@ test("counts pages without player tags and keeps the browser ID until switched o
   }
   expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
   expect(outside).toEqual([]);
+});
+
+test("switching return visits off in one tab stops the ID in every tab", async ({
+  context,
+}) => {
+  const first = await context.newPage();
+  const second = await context.newPage();
+  const posthog = await fakePostHog(first);
+  const other = await fakePostHog(second);
+  for (const tab of [first, second]) {
+    await tab.goto(`${analyticsFixtureOrigin}/privacy`);
+  }
+  await expect.poll(() => other.events.length).toBeGreaterThan(0);
+  const toggle = (tab: Page) =>
+    tab.getByRole("main").getByRole("switch", { name: "Count return visits" });
+
+  await toggle(first).click();
+  await expect(toggle(second)).toHaveAttribute("aria-checked", "false");
+  // An in-page move, so the second tab still holds the ID it loaded with.
+  await second.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect
+    .poll(() => other.events.filter(({ event }) => event === "$pageview").at(-1))
+    .toMatchObject({ properties: { route: "blog", distinct_id: "$posthog_cookieless" } });
+  expect(await storedKeys(second)).not.toContain(storedId);
+  expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
+});
+
+test("the switch turns off for the page even when the browser cannot save it", async ({
+  page,
+}) => {
+  const posthog = await fakePostHog(page);
+  await page.addInitScript(() => {
+    const save = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key === "clashlens-return-visits")
+        throw new DOMException("full", "QuotaExceededError");
+      return save.call(this, key, value);
+    };
+  });
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect.poll(() => posthog.events.length).toBeGreaterThan(0);
+  const toggle = page
+    .getByRole("main")
+    .getByRole("switch", { name: "Count return visits" });
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect
+    .poll(() => posthog.events.filter(({ event }) => event === "$pageview").at(-1))
+    .toMatchObject({ properties: { route: "blog", distinct_id: "$posthog_cookieless" } });
+  expect(await storedKeys(page)).not.toContain(storedId);
 });

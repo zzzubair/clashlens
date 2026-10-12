@@ -28,12 +28,15 @@ import {
   dayEnd,
   dayEvidence,
   dayReasons,
+  explainsNoResults,
   isLegendDay,
   liveDay,
   legendDayKey,
   liveDayNotice,
   lookupExplanation,
   lookupMessage,
+  newestPlayer,
+  playerLookupView,
   presentDay,
   seasonForDay,
   selectPlayerHistory,
@@ -258,57 +261,6 @@ function readSeasonParam(value: string | null): string | null {
 
 export function headers() {
   return { "Cache-Control": "no-store" };
-}
-
-// The saved player, or a finished refresh's player when that is newer.
-function newestPlayer(
-  status: RefreshStatus | RefreshWork | null,
-  data: PlayerLoaderData,
-): PlayerPage | null {
-  const refreshed =
-    status && "player" in status && status.tag === data.requestedTag
-      ? status.player
-      : null;
-  return refreshed &&
-    (data.player === null ||
-      Date.parse(refreshed.profile.freshness.observedAt) >
-        Date.parse(data.player.profile.freshness.observedAt))
-    ? refreshed
-    : data.player;
-}
-
-// A newest profile we cannot use is explained, even over saved results.
-function explainsNoResults(lookup: PlayerLookup | null): boolean {
-  return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
-}
-
-// What a visit shows and how often it rereads saved data. A successful lookup
-// alone decides the state; saved results show as current only when it says
-// tracking too. Once explained, the visit rereads once a minute, through failed
-// or partial reads, until a successful lookup gives a normal page or a final
-// answer.
-export function playerLookupView(
-  player: PlayerPage | null,
-  fetched: PlayerLookup | null,
-  explainedVisit: boolean,
-) {
-  const current =
-    fetched === null
-      ? !explainedVisit
-      : fetched.state === "tracking" && !explainsNoResults(fetched);
-  const trackedPlayer = current && player?.trackingState === "tracking" ? player : null;
-  const lookup: PlayerLookup | null =
-    fetched ??
-    (player && !explainedVisit ? { tag: player.tag, state: player.trackingState } : null);
-  const minuteChecks =
-    explainedVisit &&
-    trackedPlayer === null &&
-    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
-  const isChecking =
-    !explainedVisit &&
-    (lookup?.state === "checking" ||
-      (lookup?.state === "tracking" && trackedPlayer === null));
-  return { trackedPlayer, lookup, minuteChecks, isChecking };
 }
 
 // Effects never run during SSR. This client-document guard also prevents a

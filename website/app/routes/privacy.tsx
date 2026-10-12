@@ -39,9 +39,9 @@ export default function Privacy() {
         <p>
           Each count says which page you opened, with player tags, usernames and other IDs
           removed from its address; a few actions, such as searching or changing a filter,
-          but never what you typed; whether you are signed in; the website that sent you
-          here, without its full address; and your browser, device type, screen size,
-          language and time zone.
+          but never what you typed; whether you are signed in; for one page load in ten,
+          roughly how long it took; and the website that sent you here, without its full
+          address.
         </p>
         <p>
           Everyone is counted without cookies. PostHog receives your IP address with each
@@ -57,8 +57,7 @@ export default function Privacy() {
         <p>
           To see whether people come back, this browser also keeps a random ID in its
           local storage. It is on unless you turn it off. The ID is not linked to your
-          Clash Lens, Google or Discord account, and it is replaced with a new one after
-          13 months.
+          Clash Lens, Google or Discord account.
         </p>
         <p>
           Turn it off with this switch or the one at the bottom of every page. That
@@ -74,10 +73,11 @@ export default function Privacy() {
       <section aria-labelledby="privacy-server">
         <h2 id="privacy-server">Accounts and groups</h2>
         <p>
-          When someone creates an account or a group, our server sends PostHog a count
-          with no account, name or group details. If you sign in with Google or Discord,
-          we keep that service&apos;s ID for your account, never your email address, so
-          you can sign back in. Visitor counts never use it.
+          When someone signs in, creates an account or a group, or adds or removes a group
+          player, our server sends PostHog a count with no account, name or group details,
+          only whether a sign-in used Google or Discord and how far it got. If you sign in
+          with Google or Discord, we keep that service&apos;s ID for your account, never
+          your email address, so you can sign back in. Visitor counts never use it.
         </p>
       </section>
 

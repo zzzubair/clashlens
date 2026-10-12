@@ -811,7 +811,7 @@ write_environment() {
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
   local hmac_caller hmac_key_id dashboard_enabled
   dashboard_enabled=CLASHLENS_DASHBOARD_ENABLED=$(setting CLASHLENS_DASHBOARD_ENABLED false)
-  local posthog=(); [[ "$MODE" == fixture ]] || for item in CLASHLENS_POSTHOG_TOKEN CLASHLENS_POSTHOG_HOST; do [[ -z "$(setting "$item" '')" ]] || posthog+=("$item=$(setting "$item" '')"); done
+  local posthog=(); [[ "$MODE" == fixture || -z "$(setting CLASHLENS_POSTHOG_TOKEN '')" ]] || posthog=("CLASHLENS_POSTHOG_TOKEN=$(setting CLASHLENS_POSTHOG_TOKEN '')")
   hmac_caller=$(setting CLASHLENS_HMAC_CALLER typescript-website)
   hmac_key_id=$(setting CLASHLENS_HMAC_KEY_ID current)
   local api_environment=(CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url "CLASHLENS_HMAC_CALLER=$hmac_caller" "CLASHLENS_HMAC_KEY_ID=$hmac_key_id"

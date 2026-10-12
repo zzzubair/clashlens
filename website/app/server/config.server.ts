@@ -71,25 +71,15 @@ export function isDashboardEnabled(
 export const isCrewsEnabled = isDashboardEnabled;
 
 /**
- * Visitor counting stays off, with no script and no requests, unless both the
- * PostHog project token and its https ingestion host are set. The token is
- * public by design: it can only send events.
+ * Visitor counting stays off, with no script and no requests, unless the
+ * PostHog project token is set. The token is public by design: it can only
+ * send events.
  */
 export function loadAnalyticsSettings(
   env: Record<string, string | undefined> = process.env,
 ): AnalyticsSettings | null {
   const token = env.CLASHLENS_POSTHOG_TOKEN?.trim() ?? "";
-  if (!/^phc_[A-Za-z0-9]{20,64}$/.test(token)) return null;
-  let host: URL;
-  try {
-    host = new URL(env.CLASHLENS_POSTHOG_HOST?.trim() ?? "");
-  } catch {
-    return null;
-  }
-  if (host.protocol !== "https:" || host.pathname !== "/" || host.search || host.hash) {
-    return null;
-  }
-  return { token, host: host.origin };
+  return /^phc_[A-Za-z0-9]{20,64}$/.test(token) ? { token } : null;
 }
 
 export function loadWebsiteConfig(

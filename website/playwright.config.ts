@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
 import {
-  analyticsFixtureHost,
   analyticsFixtureOrigin,
   analyticsFixtureToken,
   blogFixtureOrigin,
@@ -37,7 +36,6 @@ const analyticsServer = {
     PORT: new URL(analyticsFixtureOrigin).port,
     CLASHLENS_PUBLIC_ORIGIN: analyticsFixtureOrigin,
     CLASHLENS_POSTHOG_TOKEN: analyticsFixtureToken,
-    CLASHLENS_POSTHOG_HOST: analyticsFixtureHost,
   },
 };
 

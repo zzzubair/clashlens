@@ -1,14 +1,15 @@
 /**
- * Visitor counting with PostHog. Nothing loads, and nothing is sent, unless
- * the server hands over a project token and host. Everyone is then counted
- * without anything kept on their device (PostHog's cookieless mode). The
- * return-visits switch, on by default, adds a random ID kept in this browser
- * so a returning browser can be recognised; switching it off deletes that ID,
- * goes back to cookieless counting, and is remembered here.
+ * Visitor counting with PostHog's EU cloud. Nothing loads, and nothing is
+ * sent, unless the server hands over a project token. Everyone is then
+ * counted without anything kept on their device (PostHog's cookieless mode).
+ * The return-visits switch, on by default, adds a random ID kept in this
+ * browser so a returning browser can be recognised; switching it off deletes
+ * that ID, goes back to cookieless counting, and is remembered here.
  *
  * Only the events and labels below ever leave the browser: page addresses
  * lose player tags, usernames, group and crew IDs, query strings and titles,
- * and no IP-based location is looked up.
+ * no browser or device details are kept, and no IP-based location is looked
+ * up.
  */
 import type {
   CaptureResult,
@@ -16,11 +17,21 @@ import type {
   Properties,
 } from "posthog-js/dist/module.slim.no-external";
 
+import type {
+  ArmyAnalytics,
+  PlayerLookup,
+  PlayerPage,
+  RefreshStatus,
+  TrackedLeaderboard,
+} from "./contracts";
+import { explainsNoResults, newestPlayer, playerLookupView } from "./player-lookup-text";
 import { normalizePlayerTag } from "./player-tag";
+
+/** PostHog Cloud EU, in Frankfurt; the only place counts are sent. */
+export const POSTHOG_HOST = "https://eu.i.posthog.com";
 
 export interface AnalyticsSettings {
   token: string;
-  host: string;
 }
 
 export type EventProperties = Record<string, string | boolean>;
@@ -30,28 +41,46 @@ export interface AnalyticsEvent {
   properties: EventProperties;
 }
 
-/**
- * This browser's choice: "off" once a visitor switches return visits off,
- * otherwise when the current browser ID was made, so it can be replaced.
- */
+/** "off" once a visitor switches return visits off in this browser. */
 export const RETURN_VISITS_KEY = "clashlens-return-visits";
-/** About 13 months; the browser ID is then replaced with a new one. */
-export const BROWSER_ID_LIFETIME_MS = 395 * 24 * 60 * 60 * 1000;
 
-const EVENTS = new Set([
-  "$pageview",
-  "search_submitted",
-  "search_results_shown",
-  "search_result_opened",
-  "player_lookup_result",
-  "player_detail_changed",
-  "rankings_changed",
-  "armies_changed",
-  "copy_army_clicked",
-  "group_used",
-  "sign_in_step",
-  "ui_error",
-]);
+// Every event the browser sends, with the labels it may carry. Each event
+// also carries its page's route label.
+const EVENTS: Record<string, readonly string[]> = {
+  $pageview: ["route", "signed_in"],
+  search_submitted: ["route", "source", "input"],
+  search_results_shown: ["route", "source", "results", "kind"],
+  search_result_opened: ["route", "source", "result"],
+  player_lookup_result: ["route", "state"],
+  player_detail_changed: ["route", "action", "season"],
+  rankings_changed: ["route", "changed", "view", "page", "day", "season"],
+  armies_changed: ["route", "changed", "category", "population", "season", "sort"],
+  copy_army_clicked: ["route"],
+  group_used: ["route", "action"],
+  page_performance: ["route", "response", "load"],
+  ui_error: ["route", "kind"],
+};
+
+// What PostHog itself needs to count an event: the project, the browser ID
+// or cookieless marker, the visit, and the page with its IDs replaced.
+const POSTHOG_PROPERTIES = [
+  "token",
+  "distinct_id",
+  "$device_id",
+  "$session_id",
+  "$window_id",
+  "$lib",
+  "$lib_version",
+  "$insert_id",
+  "$time",
+  "$host",
+  "$current_url",
+  "$pathname",
+  "$referrer",
+  "$referring_domain",
+  "$cookieless_mode",
+  "$process_person_profile",
+];
 
 // Every page the site serves, as [label, address with its IDs replaced].
 const ROUTES: ReadonlyArray<readonly [string, string]> = [
@@ -119,35 +148,33 @@ function safeReferrer(value: string, host: unknown): string | undefined {
   }
 }
 
-function safeProperty(key: string, value: unknown, host: unknown): unknown {
-  if (
-    /title|raw_user_agent|^\$initial_|search|query|hash|utm_|clid|click_id/i.test(key)
-  ) {
-    return undefined;
-  }
-  if (/referrer/i.test(key)) {
-    return typeof value === "string" ? safeReferrer(value, host) : undefined;
-  }
-  if (/url|href/i.test(key))
-    return typeof value === "string" ? safeUrl(value) : undefined;
-  if (/pathname/i.test(key)) {
-    return typeof value === "string" ? routeOf(value).path : undefined;
-  }
-  return value;
-}
-
 /**
- * PostHog's last step before sending. Drops any event not on the list and any
- * person properties, and rewrites or removes every property that could carry
- * a page address, search, title or campaign tag.
+ * PostHog's last step before sending. Drops any event not on the list, keeps
+ * only the event's own labels and what PostHog needs to count it, and
+ * rewrites every page address to its route.
  */
 export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null {
-  if (!event || !EVENTS.has(event.event)) return null;
+  const labels = event ? EVENTS[event.event] : undefined;
+  if (!event || !labels) return null;
+  const source = event.properties;
   const properties: Properties = {};
-  for (const [key, value] of Object.entries(event.properties)) {
-    const safe = safeProperty(key, value, event.properties.$host);
-    if (safe !== undefined) properties[key] = safe;
+  for (const key of [...POSTHOG_PROPERTIES, ...labels]) {
+    if (source[key] !== undefined) properties[key] = source[key];
   }
+  // Counting without an ID needs the browser's name and version for the
+  // day's code; PostHog deletes it once the code is made.
+  if (source.$cookieless_mode === true)
+    properties.$raw_user_agent = source.$raw_user_agent;
+  const rewrite = (key: string, clean: (value: string) => string | undefined) => {
+    const value = properties[key];
+    if (value === undefined) return;
+    const safe = typeof value === "string" ? clean(value) : undefined;
+    if (safe === undefined) delete properties[key];
+    else properties[key] = safe;
+  };
+  rewrite("$current_url", safeUrl);
+  rewrite("$pathname", (value) => routeOf(value).path);
+  rewrite("$referrer", (value) => safeReferrer(value, source.$host));
   properties.$geoip_disable = true;
   return {
     uuid: event.uuid,
@@ -159,115 +186,169 @@ export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null
 
 /** What kind of thing was typed into a search box, never what was typed. */
 export function searchInput(value: string): string {
-  if (normalizePlayerTag(value)) return "tag";
-  return value.trim().startsWith("@") ? "username" : "name";
+  return normalizePlayerTag(value) ? "tag" : "name";
 }
 
 export function countBucket(count: number): string {
   return count === 0 ? "zero" : count === 1 ? "one" : "many";
 }
 
-function slug(value: string | null, fallback: string): string {
-  if (value === null) return fallback;
-  return /^[a-z0-9-]{1,32}$/.test(value) ? value : "other";
+// The Armies labels approved for counting; anything else is sent as "other".
+const ARMY_CATEGORIES = new Set([
+  "army-types",
+  "troops",
+  "spells",
+  "siege",
+  "heroes",
+  "pets",
+  "equipment",
+  "equipment-for-hero",
+  "cc-troops",
+  "hero-pet",
+  "hero-equipment",
+  "cc-composition",
+]);
+const ARMY_POPULATIONS = ["all", "top", "streak-top", "band", "trophies"];
+const ARMY_SORTS = new Set([
+  "name",
+  "quantity",
+  "usage-count",
+  "usage-rate",
+  "one-star-rate",
+  "two-star-rate",
+  "three-star-rate",
+  "average-stars",
+  "average-destruction",
+  "zero-star-rate",
+  "exclusions",
+]);
+
+export function armySort(column: string): string {
+  return ARMY_SORTS.has(column) ? column : "other";
 }
 
-const ARMY_CONTROLS: Record<string, string> = {
-  category: "category",
-  cc: "category",
-  population: "population",
-  trophy_min: "trophies",
-  trophy_max: "trophies",
-  season: "season",
-  sort: "sort",
-  offset: "page",
-  saved: "saved",
-  recent: "recent",
-  sample: "sample",
-};
-
-function changedKeys(before: URLSearchParams, after: URLSearchParams): Set<string> {
-  const keys = new Set([...before.keys(), ...after.keys()]);
-  return new Set(
-    [...keys].filter((key) => before.getAll(key).join() !== after.getAll(key).join()),
-  );
+// A player group's kind, never its numbers: top-100 is "top".
+function armyPopulation(population: string): string {
+  const kind = population.replace(/(-\d+)+$/, "");
+  return ARMY_POPULATIONS.includes(kind) ? kind : "other";
 }
 
 /**
- * Events for a change of settings on the same page, read from the address
- * the page moved to, so the pages themselves need no tracking code.
+ * What a page shows, as its loader accepted it: values compared between loads
+ * to find what changed, and the labels sent with the change.
  */
-export function pageChangeEvents(
-  route: string,
-  before: URLSearchParams,
-  after: URLSearchParams,
-): AnalyticsEvent[] {
-  const changed = changedKeys(before, after);
-  if (route === "rankings") {
-    const controls = ["view", "page", "day", "season"].filter((key) => changed.has(key));
-    if (controls.length === 0) return [];
-    return [
-      {
-        event: "rankings_changed",
-        properties: {
-          changed: controls.join("+"),
-          view: after.get("view") === "daily" ? "daily" : "live",
-          page: Number(after.get("page") ?? "1") > 1 ? "later" : "first",
-          season: after.has("season") ? "previous" : "current",
-        },
+export interface Selection {
+  values: Record<string, string>;
+  labels: EventProperties;
+}
+
+export function selectionOf(routeId: string, data: unknown): Selection | null {
+  if (!data || typeof data !== "object") return null;
+  const page = data as Record<string, unknown>;
+  if (routeId === "routes/tracked-leaderboard" && page.leaderboard) {
+    const board = page.leaderboard as TrackedLeaderboard;
+    const daily = board.daily;
+    const labels: EventProperties = {
+      view: daily ? "daily" : "live",
+      page: board.page > 1 ? "later" : "first",
+      season:
+        daily && Date.parse(board.generatedAt) >= Date.parse(daily.seasonEndAt)
+          ? "previous"
+          : "current",
+    };
+    if (daily) labels.day = String(daily.dayNumber);
+    return {
+      values: {
+        view: board.view,
+        page: String(board.page),
+        day: daily ? String(daily.dayNumber) : "",
+        season: daily?.officialSeasonId ?? "",
       },
-    ];
+      labels,
+    };
   }
-  if (route === "armies") {
-    const controls = [
-      ...new Set([...changed].flatMap((key) => ARMY_CONTROLS[key] ?? [])),
-    ].sort();
-    if (controls.length === 0) return [];
-    const population = after.get("population");
+  if (routeId === "routes/army-analytics" && page.analytics) {
+    const { selection } = page.analytics as ArmyAnalytics;
+    const historical = page.historicalSummary === true;
+    const population = historical ? "all" : selection.population;
+    return {
+      values: {
+        category: selection.category,
+        population,
+        season: String(page.requestedSeason),
+        sort: selection.sort,
+      },
+      labels: {
+        category: ARMY_CATEGORIES.has(selection.category) ? selection.category : "other",
+        population: armyPopulation(population),
+        season: historical ? "historical" : "current",
+        sort: armySort(selection.sort),
+      },
+    };
+  }
+  if (routeId === "routes/player" && page.requestedTag) {
+    const season = (page.selectedSeason as string | null) ?? "";
+    return { values: { season }, labels: { season: season ? "historical" : "current" } };
+  }
+  if (routeId === "routes/account.groups.$groupId" && page.comparison) {
+    return { values: { days: String(page.days), sort: String(page.sort) }, labels: {} };
+  }
+  return null;
+}
+
+/**
+ * Events for a change of what a page shows, read from what its loader
+ * accepted, so the pages themselves need no tracking code. `before` is the
+ * page's previous selection, or null when the page has just been opened.
+ */
+export function selectionEvents(
+  route: string,
+  before: Selection | null,
+  after: Selection,
+): AnalyticsEvent[] {
+  if (route === "group_comparison" && before === null) {
+    return [{ event: "group_used", properties: { action: "compare" } }];
+  }
+  if (before === null) return [];
+  const changed = Object.keys(after.values).filter(
+    (key) => before.values[key] !== after.values[key],
+  );
+  if (changed.length === 0) return [];
+  if (route === "rankings" || route === "armies") {
     return [
       {
-        event: "armies_changed",
-        properties: {
-          changed: controls.join("+"),
-          category: slug(after.get("category"), "default"),
-          population: population?.startsWith("trophies")
-            ? "trophies"
-            : slug(population, "default"),
-          season: (after.get("season") ?? "current") === "current" ? "current" : "past",
-          sort: slug(after.get("sort"), "default"),
-        },
+        event: route === "rankings" ? "rankings_changed" : "armies_changed",
+        properties: { ...after.labels, changed: changed.join("+") },
       },
     ];
   }
   if (route === "player") {
-    const events: AnalyticsEvent[] = [];
-    if (changed.has("refresh") && after.has("refresh")) {
-      events.push({ event: "player_detail_changed", properties: { action: "refresh" } });
-    }
-    if (changed.has("season")) {
-      events.push({
+    return [
+      {
         event: "player_detail_changed",
-        properties: {
-          action: "season",
-          season: after.has("season") ? "historical" : "current",
-        },
-      });
-    }
-    if (changed.has("day")) {
-      events.push({ event: "player_detail_changed", properties: { action: "day" } });
-    }
-    return events;
+        properties: { action: "season", ...after.labels },
+      },
+    ];
   }
   if (route === "group_comparison") {
-    return ["days", "sort"]
-      .filter((key) => changed.has(key))
-      .map((key) => ({
-        event: "group_used",
-        properties: { action: key === "days" ? "change-days" : "change-sort" },
-      }));
+    return changed.map((key) => ({
+      event: "group_used",
+      properties: { action: key === "days" ? "change-days" : "change-sort" },
+    }));
   }
   return [];
 }
+
+// The player page's visible outcome for each lookup state without current
+// results: still checking, not found, or failed.
+const LOOKUP_OUTCOMES: Partial<Record<PlayerLookup["state"], string>> = {
+  checking: "checking",
+  tracking: "checking",
+  uncertain: "checking",
+  not_found: "not-found",
+  not_in_legend: "not-found",
+  failed: "failed",
+};
 
 /** Events read from what a page loaded: search results and player lookups. */
 export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent[] {
@@ -290,27 +371,65 @@ export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent
     return [{ event: "search_results_shown", properties }];
   }
   if (routeId === "routes/player") {
-    const lookup = page.lookup as { state: string } | null;
-    const state = page.player
-      ? "available"
-      : lookup
-        ? lookup.state
-        : page.requestedTag === null
-          ? "invalid"
-          : "failed";
+    const state = lookupOutcome(page as unknown as PlayerLoad);
     return [{ event: "player_lookup_result", properties: { state } }];
   }
   return [];
+}
+
+interface PlayerLoad {
+  requestedTag: string | null;
+  player: PlayerPage | null;
+  refreshStatus: RefreshStatus | null;
+  lookup: PlayerLookup | null;
+}
+
+// What the player page shows for this load, as the page itself decides it.
+function lookupOutcome(data: PlayerLoad): string {
+  if (data.requestedTag === null) return "invalid";
+  const player = newestPlayer(data.refreshStatus, data);
+  const { trackedPlayer, lookup } = playerLookupView(
+    player?.tag === data.requestedTag ? player : null,
+    data.lookup,
+    explainsNoResults(data.lookup),
+  );
+  if (trackedPlayer) return "available";
+  return (lookup && LOOKUP_OUTCOMES[lookup.state]) ?? "failed";
+}
+
+function timeBucket(milliseconds: number): string {
+  if (milliseconds < 1000) return "under-1s";
+  if (milliseconds < 3000) return "1-3s";
+  if (milliseconds < 10_000) return "3-10s";
+  return "over-10s";
+}
+
+/** One page load in ten reports, in coarse steps, how long it took. */
+export function pagePerformance(
+  timing: PerformanceNavigationTiming | undefined,
+  sample = Math.random(),
+): AnalyticsEvent | null {
+  if (!timing || timing.loadEventEnd <= 0 || sample >= 0.1) return null;
+  return {
+    event: "page_performance",
+    properties: {
+      response: timeBucket(timing.responseStart),
+      load: timeBucket(timing.loadEventEnd),
+    },
+  };
 }
 
 // Browser state. `queue` holds up to 50 events until PostHog has loaded; it
 // is dropped once PostHog has loaded or failed to.
 let client: PostHog | null = null;
 let loading: Promise<void> | null = null;
-let queue: AnalyticsEvent[] | null = [];
+let queue: Array<{ event: string; properties: Properties }> | null = [];
+// A choice this browser could not save, kept for this page only.
+let unsavedChoice: boolean | null = null;
 const switchListeners = new Set<() => void>();
 
 export function returnVisitsOn(): boolean {
+  if (unsavedChoice !== null) return unsavedChoice;
   try {
     return window.localStorage.getItem(RETURN_VISITS_KEY) !== "off";
   } catch {
@@ -318,22 +437,22 @@ export function returnVisitsOn(): boolean {
   }
 }
 
+// Brings PostHog in line with the latest choice, including one made in
+// another tab, so an ID that was switched off is never sent again.
 function applyReturnVisits(posthog: PostHog): void {
-  const consent = posthog.get_explicit_consent_status();
-  if (!returnVisitsOn()) {
-    // Forgets the stored ID and keeps counting without one.
-    if (consent !== "denied") posthog.opt_out_capturing();
-    return;
+  if (returnVisitsOn()) {
+    if (posthog.get_explicit_consent_status() !== "granted") {
+      posthog.opt_in_capturing({ captureEventName: false });
+    }
+  } else if (posthog.get_distinct_id() !== "$posthog_cookieless") {
+    // Forgets the ID, here and in storage, and keeps counting without one.
+    posthog.opt_out_capturing();
   }
-  if (consent !== "granted") posthog.opt_in_capturing({ captureEventName: false });
-  try {
-    const made = Number(window.localStorage.getItem(RETURN_VISITS_KEY));
-    if (made > 0 && Date.now() - made < BROWSER_ID_LIFETIME_MS) return;
-    if (made > 0) posthog.reset(true);
-    window.localStorage.setItem(RETURN_VISITS_KEY, String(Date.now()));
-  } catch {
-    // Without storage PostHog keeps the ID for this page only.
-  }
+}
+
+function notifySwitch(): void {
+  if (client) applyReturnVisits(client);
+  for (const listener of switchListeners) listener();
 }
 
 /** Saves the visitor's choice in this browser and applies it straight away. */
@@ -341,11 +460,11 @@ export function setReturnVisits(on: boolean): void {
   try {
     if (on) window.localStorage.removeItem(RETURN_VISITS_KEY);
     else window.localStorage.setItem(RETURN_VISITS_KEY, "off");
+    unsavedChoice = null;
   } catch {
-    // Without storage the choice lasts for this page only.
+    unsavedChoice = on;
   }
-  if (client) applyReturnVisits(client);
-  for (const listener of switchListeners) listener();
+  notifySwitch();
 }
 
 export function onReturnVisitsChange(listener: () => void): () => void {
@@ -353,12 +472,21 @@ export function onReturnVisitsChange(listener: () => void): () => void {
   return () => switchListeners.delete(listener);
 }
 
+function send(posthog: PostHog, event: string, properties: Properties): void {
+  applyReturnVisits(posthog);
+  posthog.capture(event, properties);
+}
+
 export function startAnalytics(settings: AnalyticsSettings): void {
   if (loading) return;
+  // Another tab switched return visits on or off.
+  window.addEventListener("storage", (event) => {
+    if (event.key === RETURN_VISITS_KEY || event.key === null) notifySwitch();
+  });
   loading = import("posthog-js/dist/module.slim.no-external")
     .then(({ default: posthog }) => {
       posthog.init(settings.token, {
-        api_host: settings.host,
+        api_host: POSTHOG_HOST,
         // A stored ID only while return visits are on; cookieless otherwise.
         cookieless_mode: "on_reject",
         persistence: "localStorage",
@@ -382,8 +510,8 @@ export function startAnalytics(settings: AnalyticsSettings): void {
         save_campaign_params: false,
         before_send: sanitizeEvent,
       });
-      applyReturnVisits(posthog);
       client = posthog;
+      applyReturnVisits(posthog);
       for (const { event, properties } of queue ?? []) posthog.capture(event, properties);
       queue = null;
     })
@@ -392,14 +520,26 @@ export function startAnalytics(settings: AnalyticsSettings): void {
     });
 }
 
-/** Sends one listed event with label-only properties; a no-op when counting is off. */
-export function track(event: string, properties: EventProperties = {}): void {
-  if (!EVENTS.has(event)) return;
-  const safe: EventProperties = {};
-  for (const [key, value] of Object.entries(properties)) {
-    if (typeof value === "boolean" || /^[a-z0-9_+-]{1,80}$/.test(value))
-      safe[key] = value;
+/**
+ * Sends one listed event with label-only properties and the page it happened
+ * on; a no-op when counting is off.
+ */
+export function track(event: string, labels: EventProperties = {}): void {
+  const allowed = EVENTS[event];
+  if (!allowed) return;
+  const { route, path } = routeOf(window.location.pathname);
+  // Kept with the event, so one sent after PostHog loads still names its page.
+  const properties: Properties = {
+    route,
+    $current_url: `${window.location.origin}${path}`,
+    $pathname: path,
+  };
+  for (const key of allowed) {
+    const value = labels[key];
+    if (typeof value === "boolean" || /^[a-z0-9_+-]{1,80}$/.test(value ?? "")) {
+      properties[key] = value;
+    }
   }
-  if (client) client.capture(event, safe);
-  else if (queue && queue.length < 50) queue.push({ event, properties: safe });
+  if (client) send(client, event, properties);
+  else if (queue && queue.length < 50) queue.push({ event, properties });
 }

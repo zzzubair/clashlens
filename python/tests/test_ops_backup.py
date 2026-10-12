@@ -1126,10 +1126,7 @@ def test_blog_folder_is_mounted_read_only_only_when_configured(
 def test_visitor_counting_settings_reach_website_and_api_only_when_set(
     tmp_path, mode_config, configured
 ):
-    settings = [
-        "CLASHLENS_POSTHOG_TOKEN=phc_projecttokenprojecttoken",
-        "CLASHLENS_POSTHOG_HOST=https://eu.i.posthog.com",
-    ]
+    settings = ["CLASHLENS_POSTHOG_TOKEN=phc_projecttokenprojecttoken"]
     if configured:
         with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
             config.write("\n".join(settings) + "\n")
