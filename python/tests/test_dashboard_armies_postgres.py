@@ -170,31 +170,44 @@ def test_army_cards_from_saved_battles_to_the_api(
                 ]
 
                 # A day rebuilt after a new Season has begun: #9PP's Hydra
-                # two-star becomes a triple. Defenses show it at once; attacks
-                # once the worker has counted the new Season's day and then it.
-                with database.pool.connection() as connection:
-                    connection.execute(
-                        """
-                        INSERT INTO army_analytics_completed_days (
-                            ranked_day_start, official_season_id,
-                            season_day_number, fact_input_hash
-                        ) VALUES (%s, 'next-season', 1, %s)
-                        """,
-                        (NEXT_DAY + timedelta(days=1), "d" * 64),
-                    )
-                    connection.execute(
-                        """
-                        UPDATE army_analytics_battle_facts SET stars = 3,
-                               destruction_percentage = 100
-                        WHERE is_current AND battle_id = %s
-                        """,
-                        (ids[("#9PP", "#2PP", DAY_START)],),
-                    )
-                    connection.execute(
-                        "UPDATE army_analytics_completed_days SET fact_input_hash = %s"
-                        " WHERE ranked_day_start = %s",
-                        ("c" * 64, DAY_START),
-                    )
+                # two-star becomes a triple. A read under way when it lands
+                # shows the earlier build throughout; then defenses show it at
+                # once, attacks once the worker has counted the new Season's
+                # day and then it.
+                read_outcomes = army_types.read_type_outcomes
+
+                def rebuilt_meanwhile(connection, **query):
+                    monkeypatch.setattr(army_types, "read_type_outcomes", read_outcomes)
+                    with database.pool.connection() as rebuild:
+                        rebuild.execute(
+                            """
+                            INSERT INTO army_analytics_completed_days (
+                                ranked_day_start, official_season_id,
+                                season_day_number, fact_input_hash
+                            ) VALUES (%s, 'next-season', 1, %s)
+                            """,
+                            (NEXT_DAY + timedelta(days=1), "d" * 64),
+                        )
+                        rebuild.execute(
+                            """
+                            UPDATE army_analytics_battle_facts SET stars = 3,
+                                   destruction_percentage = 100
+                            WHERE is_current AND battle_id = %s
+                            """,
+                            (ids[("#9PP", "#2PP", DAY_START)],),
+                        )
+                        rebuild.execute(
+                            "UPDATE army_analytics_completed_days SET fact_input_hash = %s"
+                            " WHERE ranked_day_start = %s",
+                            ("c" * 64, DAY_START),
+                        )
+                    return read_outcomes(connection, **query)
+
+                monkeypatch.setattr(army_types, "read_type_outcomes", rebuilt_meanwhile)
+                assert _rows(_read(client, "#9PP", "offense", 3)) == [
+                    ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
+                    ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
+                ]
                 assert _rows(_read(client, "#2PP", "defense", 3)) == [
                     ("Thrower", 2, 1, 69, None), ("Hydra", 1, 1, 40, None),
                 ]

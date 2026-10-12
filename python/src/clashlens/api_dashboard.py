@@ -360,18 +360,17 @@ class ArmyDays:
         self._days: dict[datetime, tuple[tuple[str, str], dict[int, list[int]]]] = {}
 
     def totals(
-        self, database: ApiDatabase, days: list[tuple[datetime, str]]
+        self, connection: Any, days: list[tuple[datetime, str]]
     ) -> list[dict[int, list[int]]]:
         """Totals for each (day start, completed-day marker), reading only the
-        days not kept yet."""
+        days not kept yet, in the snapshot that found those markers."""
         with self._lock:
             missing = [
                 start for start, marker in days
                 if self._days.get(start, (None,))[0] != (marker, army_types.RULES_VERSION)
             ]
             if missing:
-                with database.pool.connection() as connection:
-                    read = army_types.read_day_totals(connection, missing)
+                read = army_types.read_day_totals(connection, missing)
                 for start, marker in days:
                     if start in read:
                         self._days[start] = (
@@ -407,7 +406,8 @@ def get_player_armies(
     today = ranked_day_for(now).start
     window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
     mine: _Totals = {}
-    with database.pool.connection() as connection:
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         player = connection.execute(
             "SELECT id FROM players WHERE normalized_tag = %s", (tag,)
         ).fetchone()
@@ -448,6 +448,9 @@ def get_player_armies(
                 connection, season_id=season_id, day_numbers=day_numbers,
                 lens=lens, player_id=int(player[0]),
             ))
+        legend_days = army_days.totals(
+            connection, [(day[0], day[3]) for day in covered]
+        ) if lens == "offense" else []
 
     def outcome(counts: list[int]) -> dict[str, int]:
         return dict(zip(("battles", "three_stars", "trophies"), counts, strict=True))
@@ -469,7 +472,7 @@ def get_player_armies(
     if lens == "offense":
         # Every tracked player's attacks with each type over the same days.
         legends: dict[int, list[int]] = {}
-        for day in army_days.totals(database, [(day[0], day[3]) for day in covered]):
+        for day in legend_days:
             for type_id, (attacks, three_stars) in day.items():
                 total = legends.setdefault(type_id, [0, 0])
                 total[0] += attacks
