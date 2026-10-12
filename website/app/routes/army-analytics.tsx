@@ -1075,13 +1075,17 @@ export default function ArmyAnalyticsRoute() {
           ) : null}
           {/^(top|band)-/.test(population) && oldTrophyPlayers > 0 ? (
             <p className="section-note analytics-coverage-note">
-              Ranks come from the leaderboard saved just before the latest included day’s
-              Reset (05:00 UTC).{" "}
+              These numbers cover{" "}
+              {population.startsWith("top-")
+                ? `players in the top ${Number(population.slice(4)).toLocaleString()}`
+                : populationDescription(population)}{" "}
+              on the day of the attack, by the leaderboard saved just before the Reset
+              (05:00 UTC) that ended that day.{" "}
               {cohortPlayers === 1
                 ? "This player"
                 : `${oldTrophyPlayers.toLocaleString()} of these ${cohortPlayers.toLocaleString()} players`}{" "}
-              had a trophy count over 10 minutes old at that Reset, so their rank may be
-              out of date.
+              had a trophy count over 10 minutes old at one of those Resets, so their rank
+              may be out of date.
             </p>
           ) : null}
           <div className="analytics-kpis" aria-label="Battle coverage">

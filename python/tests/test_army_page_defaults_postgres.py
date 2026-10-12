@@ -28,6 +28,7 @@ from test_army_analytics_publication_postgres import (
 )
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
+from clashlens import army_rank_bands
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
@@ -86,12 +87,15 @@ def test_page_request_reads_attacks_from_every_finished_day(
             _publish_day(database, "#2PP", [_event(second, "offense", day_two, 1, 50, 12)],
                          day_start=DAY_START + timedelta(days=1), day_number=2)
             assert processor.process_job(_army_job(database), owner="analytics-2").outcome == "processed"
-            _seed_frozen_snapshot_at(
-                database,
-                DAY_START + timedelta(days=2),
-                [(players["#2PP"], 1, "fresh", "confirmed"),
-                 (players["#8PP"], 2, "fresh", "confirmed")],
-            )
+            # Each day's own board, counted by the worker one day a run.
+            for day in (1, 2):
+                _seed_frozen_snapshot_at(
+                    database,
+                    DAY_START + timedelta(days=day),
+                    [(players["#2PP"], 1, "fresh", "confirmed"),
+                     (players["#8PP"], 2, "fresh", "confirmed")],
+                )
+                army_rank_bands.refresh_rank_band_totals(database)
             _insert_confirmed_anchor(database, SEASON_ID, "1781296800")
 
             app = create_app(

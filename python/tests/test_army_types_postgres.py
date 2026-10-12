@@ -17,7 +17,7 @@ from test_army_analytics_publication_postgres import (
     _selection,
 )
 
-from clashlens import api_analytics, army_types
+from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsUnavailable
 
@@ -127,6 +127,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 [(ids[tag], position, "fresh", "confirmed")
                  for position, tag in enumerate(("#2PP", "#8PP", "#9PP"), start=1)],
             )
+            army_rank_bands.refresh_rank_band_totals(database)
             expected = {
                 "Thrower": (2, 3, [0, 0, 1, 1], 90.0),
                 "Hydra": (1, 3, [0, 1, 0, 0], 50.0),
