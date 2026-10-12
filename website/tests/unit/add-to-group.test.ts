@@ -127,9 +127,14 @@ it("asks a Clasher with no groups to name one, then puts the player straight in"
     name: " Friends ",
     createIdempotencyKey: CREATE_KEY,
   });
-  expect(mocks.createGroup).toHaveBeenCalledWith({ name: "Friends" }, CREATE_KEY);
+  // Both changes are counted as made on this page.
+  expect(mocks.createGroup).toHaveBeenCalledWith(
+    { name: "Friends" },
+    CREATE_KEY,
+    "group_add",
+  );
   expect(mocks.requestJson.mock.calls[0]?.slice(0, 2)).toEqual([
-    `/v1/account/groups/${FRIENDS}/players`,
+    `/v1/account/groups/${FRIENDS}/players?page=group_add`,
     "POST",
   ]);
   expect(result.data.notice).toBe("Added Nova (#2PP) to Friends.");

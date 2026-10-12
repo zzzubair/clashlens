@@ -36,6 +36,7 @@ export default [
   route("crews/:crewId/settings", "routes/crews.$crewId.settings.tsx"),
   route("crews/join/:code", "routes/crews.join.$code.tsx"),
   route("users/:username", "routes/users.$username.tsx"),
+  route("privacy", "routes/privacy.tsx"),
   route("about", "routes/about.ts"),
   route("healthz", "routes/healthz.ts"),
 ] satisfies RouteConfig;

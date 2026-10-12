@@ -3,6 +3,8 @@ import type {
   PlayerLookup,
   PlayerPage,
   RankedDaySummary,
+  RefreshStatus,
+  RefreshWork,
   SummarizedSeasonRef,
 } from "./contracts";
 
@@ -26,6 +28,57 @@ export function lookupMessage(lookup: PlayerLookup): string {
   const league = lookup.state === "not_in_legend" ? lookup.profile?.league : undefined;
   const message = LOOKUP_MESSAGES[lookup.state];
   return league ? `${message} Current league: ${league}.` : message;
+}
+
+// The saved player, or a finished refresh's player when that is newer.
+export function newestPlayer(
+  status: RefreshStatus | RefreshWork | null,
+  data: { requestedTag: string | null; player: PlayerPage | null },
+): PlayerPage | null {
+  const refreshed =
+    status && "player" in status && status.tag === data.requestedTag
+      ? status.player
+      : null;
+  return refreshed &&
+    (data.player === null ||
+      Date.parse(refreshed.profile.freshness.observedAt) >
+        Date.parse(data.player.profile.freshness.observedAt))
+    ? refreshed
+    : data.player;
+}
+
+// A newest profile we cannot use is explained, even over saved results.
+export function explainsNoResults(lookup: PlayerLookup | null): boolean {
+  return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
+}
+
+// What a visit shows and how often it rereads saved data. A successful lookup
+// alone decides the state; saved results show as current only when it says
+// tracking too. Once explained, the visit rereads once a minute, through failed
+// or partial reads, until a successful lookup gives a normal page or a final
+// answer.
+export function playerLookupView(
+  player: PlayerPage | null,
+  fetched: PlayerLookup | null,
+  explainedVisit: boolean,
+) {
+  const current =
+    fetched === null
+      ? !explainedVisit
+      : fetched.state === "tracking" && !explainsNoResults(fetched);
+  const trackedPlayer = current && player?.trackingState === "tracking" ? player : null;
+  const lookup: PlayerLookup | null =
+    fetched ??
+    (player && !explainedVisit ? { tag: player.tag, state: player.trackingState } : null);
+  const minuteChecks =
+    explainedVisit &&
+    trackedPlayer === null &&
+    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
+  const isChecking =
+    !explainedVisit &&
+    (lookup?.state === "checking" ||
+      (lookup?.state === "tracking" && trackedPlayer === null));
+  return { trackedPlayer, lookup, minuteChecks, isChecking };
 }
 
 /**

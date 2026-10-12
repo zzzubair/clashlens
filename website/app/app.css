@@ -566,7 +566,18 @@ h3 {
 
 .page-footer nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.8rem;
+}
+
+.return-visits-switch {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .sr-only {

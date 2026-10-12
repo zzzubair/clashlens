@@ -45,10 +45,8 @@ import type {
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
-import PlayerRoute, {
-  loader as playerLoader,
-  playerLookupView,
-} from "../../app/routes/player";
+import { playerLookupView } from "../../app/lib/player-lookup-text";
+import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
 import { createClientAddressContext } from "../../app/server/client-address.server";
 

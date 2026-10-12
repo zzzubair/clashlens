@@ -107,7 +107,11 @@ export interface PythonClient {
     idempotencyKey: string,
   ): Promise<ClashLensAccount>;
   listGroups(): Promise<GroupList>;
-  createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
+  createGroup(
+    input: GroupInput,
+    idempotencyKey: string,
+    page: GroupPage,
+  ): Promise<PrivateGroup>;
   updateGroup(
     groupId: string,
     input: GroupInput,
@@ -154,6 +158,9 @@ export interface AccountNameInput {
   username: string;
   displayName: string;
 }
+
+/** The page a group change is made on, as its analytics label. */
+export type GroupPage = "groups" | "group_add";
 
 /** Players join a group one at a time (services/group-players.server.ts). */
 export interface GroupInput {
@@ -1113,7 +1120,8 @@ function createAccountOperations(
     updateAccount: (input, idempotencyKey) =>
       updateAccount(input, idempotencyKey, identity),
     listGroups: () => listGroups(identity),
-    createGroup: (input, idempotencyKey) => createGroup(input, idempotencyKey, identity),
+    createGroup: (input, idempotencyKey, page) =>
+      createGroup(input, idempotencyKey, page, identity),
     updateGroup: (groupId, input, idempotencyKey) =>
       updateGroup(groupId, input, idempotencyKey, identity),
     deleteGroup: (groupId, idempotencyKey) =>
@@ -1258,6 +1266,7 @@ async function listGroups(
 async function createGroup(
   input: GroupInput,
   idempotencyKey: string,
+  page: GroupPage,
   identity: GoogleAccountIdentity | undefined,
 ): Promise<PrivateGroup> {
   requireIdentity(identity);
@@ -1269,7 +1278,7 @@ async function createGroup(
     throw new PythonApiError(422, { error: "invalid_request" });
   }
   const payload = await requestJson<unknown>(
-    "/v1/account/groups",
+    `/v1/account/groups?page=${page}`,
     "POST",
     jsonBody({ name }),
     undefined,
