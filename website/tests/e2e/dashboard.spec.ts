@@ -104,8 +104,18 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     await expect(region).not.toContainText("could not be loaded");
   }
 
-  // An army card's day switch reads the chosen days without leaving the page.
+  // An army card's day switch reads the chosen days without leaving the page,
+  // keeping the numbers already shown until they arrive.
   const armies = page.getByRole("region", { name: "Armies on defense", exact: true });
+  const shown = await armies.evaluateHandle((card) => {
+    const texts: string[] = [];
+    new MutationObserver(() => texts.push(card.textContent ?? "")).observe(card, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    return texts;
+  });
   await armies.getByRole("button", { name: "3 days" }).click();
   await expect(armies.getByRole("button", { name: "3 days" })).toHaveAttribute(
     "aria-pressed",
@@ -113,6 +123,9 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   );
   await expect(armies.locator("[aria-busy]")).toHaveAttribute("aria-busy", "false");
   await expect(armies).not.toContainText("aren't available");
+  expect((await shown.jsonValue()).filter((text) => text.includes("aren't available"))).toEqual(
+    [],
+  );
 
   // A card setting saves at once: the Goal becomes Top 50.
   await page.getByRole("button", { name: "Customise dashboard" }).click();

@@ -40,7 +40,11 @@ export function armiesPath(tag: string, lens: ArmyLens, days: number): string {
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
   const fetcher = useFetcher<ArmiesResponse>();
   const [days, setDays] = useState(initial.days);
-  const loading = fetcher.state !== "idle";
+  // The answer in hand when the chosen days were asked for: until a newer one
+  // arrives they are loading, even before the fetcher says so.
+  const [asked, setAsked] = useState(fetcher.data);
+  const loading =
+    fetcher.state !== "idle" || (initial.days !== days && fetcher.data === asked);
   const fetched = fetcher.data?.armies;
   const chosen =
     fetched && fetched.days === days ? fetched : initial.days === days ? initial : null;
@@ -51,6 +55,7 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
     loading,
     choose(next: number) {
       setDays(next);
+      setAsked(fetcher.data);
       if (initial.days !== next) void fetcher.load(armiesPath(tag, lens, next));
     },
   };
