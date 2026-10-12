@@ -351,17 +351,17 @@ def _add_outcomes(totals: _Totals, rows: list[tuple[str, int, int, int, int]]) -
 
 
 class ArmyDays:
-    """Each counted Legend day's Legends totals per lens and army type, read
-    from the worker's saved counts and kept until the day is counted again or
-    the type rules change."""
+    """Each counted Legend day's attacks and three-star attacks per army type
+    across every tracked player, read from the worker's saved counts and kept
+    until the day is counted again or the type rules change."""
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._days: dict[datetime, tuple[tuple[str, str], dict[str, _Totals]]] = {}
+        self._days: dict[datetime, tuple[tuple[str, str], dict[int, list[int]]]] = {}
 
     def totals(
         self, database: ApiDatabase, days: list[tuple[datetime, str]]
-    ) -> list[dict[str, _Totals]]:
+    ) -> list[dict[int, list[int]]]:
         """Totals for each (day start, completed-day marker), reading only the
         days not kept yet."""
         with self._lock:
@@ -374,16 +374,9 @@ class ArmyDays:
                     read = army_types.read_day_totals(connection, missing)
                 for start, marker in days:
                     if start in read:
-                        self._days[start] = ((marker, army_types.RULES_VERSION), {
-                            "offense": {
-                                type_id: [attacks, three, won]
-                                for type_id, (attacks, three, won, _lost) in read[start].items()
-                            },
-                            "defense": {
-                                type_id: [attacks, three, lost]
-                                for type_id, (attacks, three, _won, lost) in read[start].items()
-                            },
-                        })
+                        self._days[start] = (
+                            (marker, army_types.RULES_VERSION), read[start]
+                        )
                 # Older days than any card can ask for go.
                 for start in sorted(self._days)[: -2 * MAX_ARMY_DAYS]:
                     del self._days[start]
@@ -400,12 +393,13 @@ def get_player_armies(
     now: datetime,
 ) -> dict[str, Any] | None:
     """One player's attacks or defenses per army type over the last ``days``
-    finished Legend days, beside the Legends average; None for an unknown tag.
+    finished Legend days, attacks beside every tracked player's with each
+    type; None for an unknown tag.
 
-    Only days whose army records are complete and counted with trophies by
-    the worker, and whose newest saved daily log for this player is Complete
-    with complete coverage, count, and only once every saved army has its type
-    under the current rules: ``covered_days`` names them. A finished Season's
+    Only days whose army records are complete and counted by the worker, and
+    whose newest saved daily log for this player is Complete with complete
+    coverage, count, and only once every saved army has its type under the
+    current rules: ``covered_days`` names them. A finished Season's
     records go 7 days after it ends. Known limit: a corrected day counts as
     soon as its newest log is published, so until that day's army records are
     rebuilt it shows the earlier build's battles.
@@ -429,7 +423,6 @@ def get_player_armies(
                 JOIN army_type_counted_days AS counted
                   ON counted.ranked_day_start = day.ranked_day_start
                  AND counted.fact_input_hash = day.fact_input_hash
-                 AND counted.with_trophies
                 WHERE day.ranked_day_start = ANY(%s::timestamptz[])
                   AND (
                       SELECT daily.state = 'Complete'
@@ -453,25 +446,15 @@ def get_player_armies(
                 connection, season_id=season_id, day_numbers=day_numbers,
                 lens=lens, player_id=int(player[0]),
             ))
-    legends: _Totals = {}
-    for day in army_days.totals(database, [(day[0], day[3]) for day in covered]):
-        for type_id, counts in day[lens].items():
-            total = legends.setdefault(type_id, [0, 0, 0])
-            for index, count in enumerate(counts):
-                total[index] += count
 
     def outcome(counts: list[int]) -> dict[str, int]:
         return dict(zip(("battles", "three_stars", "trophies"), counts, strict=True))
-
-    def summed(totals: _Totals) -> list[int]:
-        return [sum(counts[index] for counts in totals.values()) for index in range(3)]
 
     rows = [
         {
             "type_id": type_id,
             "name": army_types.TYPE_NAMES.get(type_id, f"Type {type_id}"),
             **outcome(counts),
-            "legends": outcome(legends.get(type_id, [0, 0, 0])),
         }
         for type_id, counts in mine.items()
         if type_id not in _UNNAMED
@@ -481,11 +464,24 @@ def get_player_armies(
     rows.sort(key=lambda row: (
         -row["trophies"] if lens == "defense" else 0, -row["battles"], row["type_id"]
     ))
+    if lens == "offense":
+        # Every tracked player's attacks with each type over the same days.
+        legends: dict[int, list[int]] = {}
+        for day in army_days.totals(database, [(day[0], day[3]) for day in covered]):
+            for type_id, (attacks, three_stars) in day.items():
+                total = legends.setdefault(type_id, [0, 0])
+                total[0] += attacks
+                total[1] += three_stars
+        for row in rows:
+            attacks, three_stars = legends.get(row["type_id"], [0, 0])
+            row["legends"] = {"battles": attacks, "three_stars": three_stars}
     return {
         "tag": tag,
         "lens": lens,
         "days": days,
         "covered_days": [_iso(day[0]) for day in covered],
         "rows": rows,
-        "total": {**outcome(summed(mine)), "legends": outcome(summed(legends))},
+        "total": outcome(
+            [sum(counts[index] for counts in mine.values()) for index in range(3)]
+        ),
     }

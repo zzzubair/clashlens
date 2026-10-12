@@ -499,10 +499,7 @@ these steps, all run by the worker:
 5. The same timer gives each saved distinct army its
    [army type](domain.md#army-types), 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in
-   `army_package_day_counts`, outside 04:30-07:00 UTC, with the trophies
-   won and lost the dashboard's army cards compare against. After migration
-   0104 it counts the current Season's earlier days again, one a run, and
-   the cards leave a day out until then. The
+   `army_package_day_counts`, outside 04:30-07:00 UTC. The
    Armies view stays unavailable until that labelling finishes. The worker
    log shows each run as an `army_types` event; a `failed` run is retried
    after 10 minutes.

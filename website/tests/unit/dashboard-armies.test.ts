@@ -45,6 +45,7 @@ const outcome = (battles: number, three_stars: number, trophies: number) => ({
   three_stars,
   trophies,
 });
+const hits = (battles: number, three_stars: number) => ({ battles, three_stars });
 
 /** What GET /v1/players/{tag}/armies returned for the saved battles in
  * python/tests/test_dashboard_armies_postgres.py. */
@@ -54,20 +55,18 @@ const DEFENSE = {
   days: 3,
   covered_days: [DAY, NEXT_DAY],
   rows: [
-    { type_id: 3, name: "Thrower", ...outcome(2, 1, 69), legends: outcome(4, 2, 119) },
-    { type_id: 4, name: "Hydra", ...outcome(1, 0, 26), legends: outcome(1, 0, 26) },
+    { type_id: 3, name: "Thrower", ...outcome(2, 1, 69) },
+    { type_id: 4, name: "Hydra", ...outcome(1, 0, 26) },
   ],
-  total: { ...outcome(3, 1, 95), legends: outcome(5, 2, 145) },
+  total: outcome(3, 1, 95),
 };
 const OFFENSE = {
   tag: TAG,
   lens: "offense",
   days: 7,
   covered_days: [DAY, NEXT_DAY],
-  rows: [
-    { type_id: 3, name: "Thrower", ...outcome(1, 1, 40), legends: outcome(4, 2, 119) },
-  ],
-  total: { ...outcome(1, 1, 40), legends: outcome(5, 2, 145) },
+  rows: [{ type_id: 3, name: "Thrower", ...outcome(1, 1, 40), legends: hits(4, 2) }],
+  total: outcome(1, 1, 40),
 };
 
 async function render(element: ReturnType<typeof createElement>) {
@@ -97,7 +96,7 @@ beforeEach(() => {
 });
 
 describe("Armies on defense", () => {
-  it("shows each army's share, held and loss beside the Legends average", async () => {
+  it("shows each army's share, held and loss, with no Legends numbers", async () => {
     const armies = await read(DEFENSE, "defense", 3);
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(TAG)}/armies?lens=defense&days=3`,
@@ -110,11 +109,12 @@ describe("Armies on defense", () => {
     );
     // One of the 3 days has no army records.
     expect(plain).toContain("Last 3 days · 2 with army data · 3 defenses");
-    expect(plain).toContain("You held / Legends avg Avg lost / Legends avg");
-    // Thrower: 1 of 2 held, 69 lost; Legends 2 of 4 held, 119 over 4.
-    expect(plain).toContain("Thrower 67% 50% / 50% −35 / −30");
-    expect(plain).toContain("Hydra 33% 100% / 100% −26 / −26");
-    expect(plain).toContain("All defenses 100% 67% / 60% −32 / −29");
+    expect(plain).toContain("Army type Share Held Avg lost");
+    // Thrower: 2 of 3 defenses, 1 of 2 held, 69 lost.
+    expect(plain).toContain("Thrower 67% 50% −35");
+    expect(plain).toContain("Hydra 33% 100% −26");
+    expect(plain).toContain("All defenses 100% 67% −32");
+    expect(plain).not.toContain("Legends");
     expect(plain.indexOf("Thrower")).toBeLessThan(plain.indexOf("Hydra"));
   });
 
@@ -123,15 +123,9 @@ describe("Armies on defense", () => {
       type_id: index + 3,
       name: `Army ${index + 1}`,
       ...outcome(1, 0, 30 - index),
-      legends: outcome(10, 5, 300),
     }));
     const many = await read(
-      {
-        ...DEFENSE,
-        days: 7,
-        rows,
-        total: { ...outcome(7, 0, 189), legends: outcome(70, 35, 2100) },
-      },
+      { ...DEFENSE, days: 7, rows, total: outcome(7, 0, 189) },
       "defense",
       7,
     );
@@ -146,7 +140,7 @@ describe("Armies on defense", () => {
         ...DEFENSE,
         covered_days: [],
         rows: [],
-        total: { ...outcome(0, 0, 0), legends: outcome(0, 0, 0) },
+        total: outcome(0, 0, 0),
       },
       "defense",
       3,
@@ -163,11 +157,13 @@ describe("Armies on defense", () => {
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
       status: 502,
     });
-    mocks.requestJson.mockResolvedValueOnce({
-      ...DEFENSE,
-      total: { ...outcome(1, 2, 0), legends: outcome(0, 0, 0) },
-    });
+    mocks.requestJson.mockResolvedValueOnce({ ...DEFENSE, total: outcome(1, 2, 0) });
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
+      status: 502,
+    });
+    // An attack row without every tracked player's attacks with that army.
+    mocks.requestJson.mockResolvedValueOnce({ ...OFFENSE, rows: DEFENSE.rows });
+    await expect(getPlayerArmies(TAG, "offense", 7)).rejects.toMatchObject({
       status: 502,
     });
     await expect(getPlayerArmies(TAG, "offense", 5)).rejects.toMatchObject({
@@ -199,10 +195,10 @@ describe("Armies on offense", () => {
           type_id: index + 3,
           name,
           ...outcome([30, 14, 8, 4][index], [23, 10, 5, 3][index], 0),
-          legends: outcome(1000, [503, 467, 475, 544][index], 0),
+          legends: hits(1000, [503, 467, 475, 544][index]),
         })),
         // 2 unreadable attacks, never tripled.
-        total: { ...outcome(58, 41, 0), legends: outcome(5000, 2405, 0) },
+        total: outcome(58, 41, 0),
       },
       "offense",
       7,

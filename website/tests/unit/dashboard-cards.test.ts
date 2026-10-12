@@ -593,20 +593,10 @@ function armies(lens: string, days: number) {
         days,
         covered_days,
         rows: [
-          {
-            type_id: 3,
-            name: "Thrower",
-            ...outcome(5, 2, 170),
-            legends: outcome(1000, 500, 32000),
-          },
-          {
-            type_id: 4,
-            name: "Hydra",
-            ...outcome(3, 3, 120),
-            legends: outcome(500, 300, 17000),
-          },
+          { type_id: 3, name: "Thrower", ...outcome(5, 2, 170) },
+          { type_id: 4, name: "Hydra", ...outcome(3, 3, 120) },
         ],
-        total: { ...outcome(8, 5, 290), legends: outcome(3000, 1500, 96000) },
+        total: outcome(8, 5, 290),
       }
     : {
         tag: MAIN,
@@ -618,10 +608,10 @@ function armies(lens: string, days: number) {
             type_id: 3,
             name: "Thrower",
             ...outcome(16, 12, 600),
-            legends: outcome(1000, 500, 35000),
+            legends: { battles: 1000, three_stars: 500 },
           },
         ],
-        total: { ...outcome(16, 12, 600), legends: outcome(3000, 1450, 100000) },
+        total: outcome(16, 12, 600),
       };
 }
 
@@ -1157,13 +1147,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(bases).toContain("Easy held 1 of 4 · 25%");
     expect(bases.indexOf("Ava")).toBeLessThan(bases.indexOf("Bo"));
 
-    // Armies on defense: the costliest armies first, Legends averages in grey.
+    // Armies on defense: the costliest armies first, your own numbers only.
     const armiesDefense = text(cards["armies-defense"]!);
     expect(armiesDefense).toContain("Armies on defense 3 days 7 days Custom");
     expect(armiesDefense).toContain("Last 7 days · 8 defenses");
-    expect(armiesDefense).toContain("Thrower 63% 60% / 50% −34 / −32");
-    expect(armiesDefense).toContain("Hydra 38% 0% / 40% −40 / −34");
-    expect(armiesDefense).toContain("All defenses 100% 38% / 50% −36 / −32");
+    expect(armiesDefense).toContain("Thrower 63% 60% −34");
+    expect(armiesDefense).toContain("Hydra 38% 0% −40");
+    expect(armiesDefense).toContain("All defenses 100% 38% −36");
+    expect(armiesDefense).not.toContain("Legends");
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);

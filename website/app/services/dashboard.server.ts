@@ -31,7 +31,12 @@ import {
   type SeasonData,
   type SeasonDay,
 } from "../lib/dashboard-cards";
-import type { ArmyLens, ArmyOutcome, PlayerArmies } from "../lib/dashboard-armies";
+import type {
+  ArmyHits,
+  ArmyLens,
+  ArmyOutcome,
+  PlayerArmies,
+} from "../lib/dashboard-armies";
 import { ARMY_DEFAULT_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
 import { getGroupComparison } from "./group-comparison.server";
@@ -799,14 +804,15 @@ export async function loadCardData(
   return Object.fromEntries(loaded) as CardDataSet;
 }
 
-function outcome(value: unknown): ArmyOutcome {
+function hits(value: unknown): ArmyHits {
   if (!isRecord(value)) malformed();
   const battles = count(value.battles);
-  return {
-    battles,
-    threeStars: count(value.three_stars, battles),
-    trophies: count(value.trophies),
-  };
+  return { battles, threeStars: count(value.three_stars, battles) };
+}
+
+function outcome(value: unknown): ArmyOutcome {
+  if (!isRecord(value)) malformed();
+  return { ...hits(value), trophies: count(value.trophies) };
 }
 
 /** One player's attacks or defenses per army type, from GET /v1/players/{tag}/armies. */
@@ -843,9 +849,9 @@ export async function getPlayerArmies(
         typeId: row.type_id,
         name: row.name,
         ...outcome(row),
-        legends: outcome(row.legends),
+        legends: lens === "offense" ? hits(row.legends) : null,
       };
     }),
-    total: { ...outcome(payload.total), legends: outcome(payload.total.legends) },
+    total: outcome(payload.total),
   };
 }

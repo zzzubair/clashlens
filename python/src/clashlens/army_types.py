@@ -4,8 +4,8 @@ A distinct army is an ``exact_armies`` row: the same home troops, spells and
 heroes with their pets and equipment share one row however many attacks used
 it. Each gets one type in ``army_package_types``; the worker saves each
 completed Legend day's counts per player and distinct army in
-``army_package_day_counts``; the Armies page and the dashboard's army cards
-add those counts up by type.
+``army_package_day_counts``; the Armies page and the dashboard's Armies on
+offense card add those counts up by type.
 
 So a rule change relabels the distinct armies only (``RULES_VERSION``), and
 a rename changes ``TYPE_NAMES`` only: the type ids saved with each army never
@@ -30,7 +30,6 @@ from typing import Any
 from . import army_analytics
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
-from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
 # Bump on any change to the rules or camp spaces below, never for a rename.
@@ -200,7 +199,7 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
     Runs on the worker's maintenance timer. The first run under a new
     ``RULES_VERSION`` labels every saved distinct army, ``LABEL_BATCH`` per
     run; then each run counts one completed day of the current Season whose
-    counts are missing, older than the day or without trophies, newest first. A failure is
+    counts are missing or older than the day, newest first. A failure is
     reported and tried again after ``RETRY_SECONDS``.
     """
     global _retry_at
@@ -280,24 +279,6 @@ _FACTS = """
 """
 
 
-def _gains() -> tuple[list[int], list[int], list[int]]:
-    """Every valid Legend I result's trophies won: stars, destruction, trophies."""
-    stars, destruction, trophies = [], [], []
-    for star in range(4):
-        for percent in range(101):
-            try:
-                gain = allocate_trophies(star, percent).attacker_gain
-            except DomainRuleError:
-                continue
-            stars.append(star)
-            destruction.append(percent)
-            trophies.append(gain)
-    return stars, destruction, trophies
-
-
-_GAINS = _gains()
-
-
 def _count_day(connection: Any) -> dict[str, Any] | None:
     day = connection.execute(
         """
@@ -309,8 +290,7 @@ def _count_day(connection: Any) -> dict[str, Any] | None:
         WHERE day.official_season_id = (
                 SELECT official_season_id FROM army_analytics_completed_days
                 ORDER BY ranked_day_start DESC LIMIT 1)
-          AND (counted.fact_input_hash IS DISTINCT FROM day.fact_input_hash
-               OR NOT counted.with_trophies)
+          AND counted.fact_input_hash IS DISTINCT FROM day.fact_input_hash
         ORDER BY day.ranked_day_start DESC LIMIT 1
         """
     ).fetchone()
@@ -326,28 +306,18 @@ def _count_day(connection: Any) -> dict[str, Any] | None:
         f"""
         INSERT INTO army_package_day_counts (
             ranked_day_start, population_player_id, exact_army_id,
-            attacks, one_star, two_star, three_star, destruction,
-            attacker_gain, defender_loss
+            attacks, one_star, two_star, three_star, destruction
         )
-        SELECT fact.ranked_day_start, fact.population_player_id, fact.exact_army_id,
-               count(*), count(*) FILTER (WHERE fact.stars = 1),
-               count(*) FILTER (WHERE fact.stars = 2),
-               count(*) FILTER (WHERE fact.stars = 3),
-               sum(fact.destruction_percentage), COALESCE(sum(gain.trophies), 0),
-               COALESCE(sum(gain.trophies) FILTER (WHERE fact.stars > 0), 0)
+        SELECT ranked_day_start, population_player_id, exact_army_id, count(*),
+               count(*) FILTER (WHERE stars = 1), count(*) FILTER (WHERE stars = 2),
+               count(*) FILTER (WHERE stars = 3), sum(destruction_percentage)
         FROM ({_FACTS}) AS fact
-        LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
-            AS gain (stars, destruction, trophies)
-          ON gain.stars = fact.stars AND gain.destruction = fact.destruction_percentage
         GROUP BY 1, 2, 3
         """,
-        (season_id, [int(day_number)], *_GAINS),
+        (season_id, [int(day_number)]),
     ).rowcount
     connection.execute(
-        """
-        INSERT INTO army_type_counted_days (ranked_day_start, fact_input_hash, with_trophies)
-        VALUES (%s, %s, true)
-        """,
+        "INSERT INTO army_type_counted_days (ranked_day_start, fact_input_hash) VALUES (%s, %s)",
         (ranked_day_start, marker),
     )
     return {"status": "counted", "official_season_id": str(season_id),
@@ -502,9 +472,7 @@ def read_day_totals(
     connection: Any, days: list[datetime]
 ) -> dict[datetime, dict[int, list[int]]]:
     """Every tracked player's attacks per type on counted Legend days, from
-    the saved counts: [attacks, three-star attacks, trophies won, trophies the
-    defenders lost] by day and type id. Each attack is also a tracked
-    player's defense against that army.
+    the saved counts: [attacks, three-star attacks] by day and type id.
     """
     totals: dict[datetime, dict[int, list[int]]] = {day: {} for day in days}
     for day, type_id, troops, unnamed, *counts in connection.execute(
@@ -513,8 +481,7 @@ def read_day_totals(
                CASE WHEN saved.exact_army_id = 0 THEN {UNREADABLE}
                     ELSE label.type_id END,
                decode.home_troops, decode.unresolved_components,
-               sum(saved.attacks), sum(saved.three_star),
-               sum(saved.attacker_gain), sum(saved.defender_loss)
+               sum(saved.attacks), sum(saved.three_star)
         FROM army_package_day_counts AS saved
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = saved.exact_army_id
@@ -529,7 +496,7 @@ def read_day_totals(
             type_id = classify(army_analytics.with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
-        total = totals[day].setdefault(type_id or OTHER, [0] * 4)
+        total = totals[day].setdefault(type_id or OTHER, [0, 0])
         for index, value in enumerate(counts):
             total[index] += int(value)
     return totals

@@ -221,7 +221,7 @@ describe("dashboard settings", () => {
   it("stores only what differs from the defaults and reads it back", () => {
     const settings: DashboardSettings = {
       layout: ["cutoffs", "goal"],
-      goal: 10_000,
+      goal: 12_000,
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       groupWindow: "season",
@@ -231,7 +231,7 @@ describe("dashboard settings", () => {
     expect(stored).toEqual({
       v: 3,
       layout: ["cutoffs", "goal"],
-      goal: 10_000,
+      goal: 12_000,
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       window: "season",
@@ -271,7 +271,8 @@ describe("dashboard settings", () => {
       parsePostedSettings({ v: 3, layout: "default", ...changes });
     expect(posted({})).not.toBeNull();
     expect(posted({ goal: 1 })?.goal).toBe(1);
-    expect(posted({ goal: 10_000 })?.goal).toBe(10_000);
+    // Any rank, with no top limit.
+    expect(posted({ goal: 12_000 })?.goal).toBe(12_000);
     expect(posted({ layout: [] })?.layout).toEqual([]);
     for (const bad of [
       { v: 2 },
@@ -279,7 +280,6 @@ describe("dashboard settings", () => {
       { layout: ["goal", "goal"] },
       { layout: ["nope"] },
       { goal: 0 },
-      { goal: 10_001 },
       { goal: 2.5 },
       { goal: "200" },
       { cutoffs: [10, 50, 100, 200, 500, 1000] },

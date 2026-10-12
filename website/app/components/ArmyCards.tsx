@@ -82,6 +82,11 @@ function percent(value: number | null): string {
   return value === null ? "–" : `${value}%`;
 }
 
+/** Every tracked player's hit rate with this army type, on Armies on offense. */
+function legendsHit(army: ArmyRow): number | null {
+  return army.legends ? hitPercent(army.legends) : null;
+}
+
 function lost(outcome: ArmyOutcome): string {
   const average = averageTrophies(outcome);
   return average === null ? "–" : signed(-average);
@@ -160,13 +165,12 @@ function DaySwitch({
 
 /**
  * Armies on defense: the army types that cost the user the most trophies
- * over the chosen finished days, each beside the Legends average against
- * that army in grey, and every defense together.
+ * over the chosen finished days, and every defense together.
  */
 export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("defense", data);
   const empty = emptyText(armies, "defense");
-  const row = (name: string, outcome: ArmyRow | PlayerArmies["total"], all = false) => (
+  const row = (name: string, outcome: ArmyOutcome, all = false) => (
     <div className={`army-defense-row${all ? " is-all" : ""}`} key={name}>
       {all ? <span>{name}</span> : <Name>{name}</Name>}
       <span>
@@ -176,14 +180,8 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
             : null,
         )}
       </span>
-      <span>
-        {percent(heldPercent(outcome))}
-        <em> / {percent(heldPercent(outcome.legends))}</em>
-      </span>
-      <span>
-        <span className="negative">{lost(outcome)}</span>
-        <em> / {lost(outcome.legends)}</em>
-      </span>
+      <span>{percent(heldPercent(outcome))}</span>
+      <span className="negative">{lost(outcome)}</span>
     </div>
   );
   return (
@@ -202,12 +200,8 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
           <div className="army-defense-row army-head" aria-hidden="true">
             <span>Army type</span>
             <span>Share</span>
-            <span>
-              You held <em>/ Legends avg</em>
-            </span>
-            <span>
-              Avg lost <em>/ Legends avg</em>
-            </span>
+            <span>Held</span>
+            <span>Avg lost</span>
           </div>
           {armies.rows.slice(0, DEFENSE_ROWS).map((army) => row(army.name, army))}
           {row("All defenses", armies.total, true)}
@@ -270,7 +264,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
                 <div className="army-offense-row" key={army.typeId}>
                   <Name>{army.name}</Name>
                   <b>{percent(hitPercent(army))}</b>
-                  <span className="dash-muted">{percent(hitPercent(army.legends))}</span>
+                  <span className="dash-muted">{percent(legendsHit(army))}</span>
                 </div>
               ))}
               {rest && rest.battles > 0 ? (
@@ -301,7 +295,7 @@ function OneArmy({ army }: { army: ArmyRow }) {
         </div>
         <div>
           <span className="dash-label">Legends</span>
-          <b className="dash-muted">{percent(hitPercent(army.legends))}</b>
+          <b className="dash-muted">{percent(legendsHit(army))}</b>
         </div>
       </div>
     </div>

@@ -147,8 +147,6 @@ export const CUTOFF_LINES = [
 export const CUTOFF_PICKS = 7;
 export const DEFAULT_CUTOFFS: readonly number[] = [10, 50, 100, 200, 500, 1000, 5000];
 export const DEFAULT_GOAL = 200;
-/** The Goal can be any rank from 1 to 10,000, the owner's chosen range. */
-export const MAX_GOAL = 10_000;
 
 export type GroupWindow = "7" | "season";
 
@@ -195,10 +193,9 @@ function isCardId(value: unknown): value is CardId {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** The Goal can be any rank: a whole number from 1. */
 function isGoal(value: unknown): value is number {
-  return (
-    Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= MAX_GOAL
-  );
+  return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
 function isCutoffs(value: unknown): value is number[] {

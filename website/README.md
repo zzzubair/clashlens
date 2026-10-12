@@ -228,12 +228,13 @@ Season's records are deleted 7 days after it ends, so early in a Season, or
 for a player tracked only lately, a long window covers fewer days and the card
 says how many have army data. A defense's army type is the attacker's army.
 Armies on offense shows your hit rate with each army type, up to 3 and then
-Other armies, for 3 or 7 days; Armies on defense also takes a Custom 1–28
-days. Both cards put every tracked Legend player's number with that army
-beside yours in grey: every Legends attack is also a Legends defense, so both
-come from the worker's saved counts for each day (about 35,000 rows a day,
-with the trophies won and lost), kept in the API's memory until the day is
-counted again, so only a day not yet seen is read.
+Other armies, for 3 or 7 days, beside every tracked Legend player's hit rate
+with that army in grey, from the worker's saved attack counts for each day
+(about 35,000 rows a day), kept in the API's memory until the day is counted
+again, so only a day not yet seen is read. Armies on defense also takes a
+Custom 1–28 days and shows your own numbers only: a Legends average against
+each army needs saved defense counts from defenders' own reports, which
+Clash Lens does not keep (see [dashboard.md](../docs/dashboard.md)).
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
