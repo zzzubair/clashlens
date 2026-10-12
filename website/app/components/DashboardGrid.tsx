@@ -32,6 +32,8 @@ import {
 } from "./SeasonCards";
 
 interface ViewContext {
+  /** The Legend day the cards were read for has ended. */
+  dayOver: boolean;
   nowMs: number | null;
   timeZone: string;
   saving: boolean;
@@ -66,7 +68,7 @@ function hasView(card: CardId): card is keyof CardDataMap {
 
 function cardBody(card: CardId, data: CardDataSet, context: ViewContext): ReactNode {
   const title = CARDS[card].title;
-  if (!hasView(card)) return <CardHead title={title} />;
+  if (context.dayOver || !hasView(card)) return <CardHead title={title} />;
   const loaded = data[card];
   if (loaded === undefined)
     return (
@@ -405,10 +407,12 @@ function FirstVisit({
 export function Dashboard({
   settings,
   data,
+  dayOver,
   idempotencyKey,
 }: {
   settings: DashboardSettings;
   data: CardDataSet;
+  dayOver: boolean;
   idempotencyKey: string;
 }) {
   const fetcher = useFetcher<DashboardActionData>();
@@ -506,6 +510,7 @@ export function Dashboard({
   }, [dragging]);
 
   const context: ViewContext = {
+    dayOver,
     nowMs,
     timeZone,
     saving,

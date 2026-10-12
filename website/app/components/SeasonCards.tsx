@@ -277,11 +277,7 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
       <div className="graph-foot">
         <div>
           <span className="dash-label">Best rank this Season</span>
-          <b>
-            {best
-              ? `#${count(best.rank)} · ${count(best.endTrophies)} · Day ${best.day}`
-              : "–"}
-          </b>
+          <b>{best ? `#${count(best.rank)} · Day ${best.day}` : "–"}</b>
         </div>
         <div>
           <span className="dash-label">Last Season finish</span>
@@ -400,7 +396,8 @@ function SeasonChart({
             top: `${(y(tipPoint.value) / GRAPH.height) * 100}%`,
           }}
         >
-          Day {tipDay.day} · {count(tipDay.endTrophies)} · #{count(tipDay.rank)}
+          Day {tipDay.day} ·{" "}
+          {mode === "trophies" ? count(tipDay.endTrophies) : `#${count(tipDay.rank)}`}
         </span>
       ) : null}
     </div>

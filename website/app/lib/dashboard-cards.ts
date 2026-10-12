@@ -61,13 +61,16 @@ export interface GoalData {
   finished: number;
   /** Days the pace numbers cover: up to 7. */
   window: number;
-  /** Your trophies at the last Reset, and `window` days earlier. */
+  /** Your trophies after the last Reset, and `window` days earlier: your pace. */
   you: number | null;
   youThen: number | null;
   /** Trophies at the goal rank on the last Reset board, and `window` days earlier. */
   line: number | null;
   lineThen: number | null;
-  /** Your trophies at each Reset of the window, oldest first, for the chart. */
+  /**
+   * Your trophies on each Reset board of the window, oldest first, taken
+   * before the automatic defense loss like the line's: the gap and the chart.
+   */
   history: (number | null)[];
 }
 
@@ -79,7 +82,10 @@ export interface CutoffLine {
 export interface CutoffsData {
   name: string;
   live: { lines: CutoffLine[]; you: number | null; observedAtMs: number | null };
-  /** The board saved at the last Reset; null before the Season's first Reset. */
+  /**
+   * The board saved at the last Reset, with your trophies on it; null before
+   * the Season's first Reset.
+   */
   reset: { lines: CutoffLine[]; you: number | null } | null;
 }
 
@@ -375,19 +381,21 @@ export interface GoalPlan {
  * needed = (gap + line speed × days left) ÷ (days left − shield days).
  */
 export function goalPlan(data: GoalData): GoalPlan | null {
+  const onBoard = data.history.at(-1) ?? null;
   if (
     data.finished < 1 ||
     data.window < 1 ||
     data.you === null ||
     data.youThen === null ||
     data.line === null ||
-    data.lineThen === null
+    data.lineThen === null ||
+    onBoard === null
   )
     return null;
   const daysLeft = SEASON_DAYS - data.finished;
   const pace = (data.you - data.youThen) / data.window;
   const drift = (data.line - data.lineThen) / data.window;
-  const behind = data.line - data.you;
+  const behind = data.line - onBoard;
   const need = behind / daysLeft + drift;
   const shields = [1, 2, 3]
     .filter((days) => days < daysLeft)

@@ -232,9 +232,11 @@ function accountLine(player: LinkedPlayerCard): string {
 function AccountTabs({
   players,
   selectedTag,
+  dayOver,
 }: {
   players: LinkedPlayerCard[];
   selectedTag: string | null;
+  dayOver: boolean;
 }) {
   const [searchParams] = useSearchParams();
   return (
@@ -242,7 +244,8 @@ function AccountTabs({
       {players.map((player) => {
         const next = new URLSearchParams(searchParams);
         next.set("player", player.tag);
-        const net = player.state === "tracking" ? (player.today?.net ?? null) : null;
+        const net =
+          !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
         const name = player.name ?? player.tag;
         return (
           <Link
@@ -359,6 +362,9 @@ function SignedOutPreview({ loginAvailable }: { loginAvailable: boolean }) {
 
 export default function DashboardRoute() {
   const loaderData = useLoaderData<typeof loader>();
+  const dayOver = useDayOver(
+    loaderData.kind === "signed-in" ? loaderData.dayEndsMs : Number.POSITIVE_INFINITY,
+  );
   if (loaderData.kind === "signed-out") {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell dash-page">
@@ -383,7 +389,11 @@ export default function DashboardRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
       {loaderData.players.length > 0 ? (
-        <AccountTabs players={loaderData.players} selectedTag={loaderData.selectedTag} />
+        <AccountTabs
+          players={loaderData.players}
+          selectedTag={loaderData.selectedTag}
+          dayOver={dayOver}
+        />
       ) : null}
       {loaderData.playersUnavailable ? (
         <p className="notice notice-warning" role="status">
@@ -406,11 +416,12 @@ export default function DashboardRoute() {
         </section>
       ) : (
         <>
-          <NewDayNotice dayEndsMs={loaderData.dayEndsMs} />
+          {dayOver ? <NewDayNotice /> : null}
           <Dashboard
             key={selected.tag}
             settings={loaderData.settings}
             data={loaderData.cards}
+            dayOver={dayOver}
             idempotencyKey={loaderData.idempotencyKey}
           />
         </>
@@ -420,10 +431,8 @@ export default function DashboardRoute() {
 }
 
 /** A page left open past the Reset says so instead of showing yesterday as today. */
-function NewDayNotice({ dayEndsMs }: { dayEndsMs: number }) {
+function NewDayNotice() {
   const [searchParams] = useSearchParams();
-  const over = useDayOver(dayEndsMs);
-  if (!over) return null;
   return (
     <p className="notice notice-warning dash-new-day" role="status">
       A new Legend day has started.{" "}
@@ -434,13 +443,14 @@ function NewDayNotice({ dayEndsMs }: { dayEndsMs: number }) {
   );
 }
 
+/** Whether the Legend day the page was read for has ended, checked every 30 seconds. */
 function useDayOver(dayEndsMs: number): boolean {
-  const [over, setOver] = useState(false);
+  const [, setTick] = useState(0);
+  const over = Date.now() >= dayEndsMs;
   useEffect(() => {
-    const check = () => setOver(Date.now() >= dayEndsMs);
-    check();
-    const timer = window.setInterval(check, 30_000);
+    if (over || !Number.isFinite(dayEndsMs)) return;
+    const timer = window.setInterval(() => setTick((tick) => tick + 1), 30_000);
     return () => window.clearInterval(timer);
-  }, [dayEndsMs]);
+  }, [over, dayEndsMs]);
   return over;
 }

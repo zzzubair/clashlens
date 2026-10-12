@@ -278,6 +278,25 @@ async function trophiesAt(
   return entry && entry.rank === rank ? entry : null;
 }
 
+/**
+ * Your trophies on one day's saved Reset board, taken before the automatic
+ * defense loss like every line on it; null when it does not hold you at your
+ * saved rank.
+ */
+async function boardTrophies(
+  ctx: CardContext,
+  seasonId: string | null,
+  day: SeasonDay | null | undefined,
+) {
+  const rank = day?.rank ?? null;
+  if (seasonId === null || !day || rank === null) return null;
+  const entry = await trophiesAt(ctx, rank, {
+    officialSeasonId: seasonId,
+    dayNumber: day.day,
+  });
+  return entry?.tag === ctx.selected.tag ? entry.trophies : null;
+}
+
 /** The oldest of the readings a card shows; null when any of them has no time. */
 function observedMs(times: (string | null | undefined)[]): number | null {
   const parsed = times.map((time) => Date.parse(time ?? ""));
@@ -355,10 +374,24 @@ async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData |
     });
     return entry?.trophies ?? null;
   };
-  const [line, lineThen] =
+  const onBoard = (day: number) =>
+    day === 0
+      ? SEASON_START_TROPHIES
+      : boardTrophies(
+          ctx,
+          seasonId,
+          season.days.find((saved) => saved.day === day),
+        );
+  const [line, lineThen, history] =
     finished === 0
-      ? [null, null]
-      : await Promise.all([lineOn(finished), lineOn(firstDay)]);
+      ? [null, null, []]
+      : await Promise.all([
+          lineOn(finished),
+          lineOn(firstDay),
+          Promise.all(
+            Array.from({ length: window + 1 }, (_, index) => onBoard(firstDay + index)),
+          ),
+        ]);
   return {
     rank: ctx.settings.goal,
     name: ctx.selected.name ?? ctx.selected.tag,
@@ -368,9 +401,7 @@ async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData |
     youThen: finished === 0 ? null : end(firstDay),
     line,
     lineThen,
-    history: Array.from({ length: finished === 0 ? 0 : window + 1 }, (_, index) =>
-      end(firstDay + index),
-    ),
+    history,
   };
 }
 
@@ -385,9 +416,12 @@ async function cutoffsData(
     reset && reset.finished > 0 && reset.seasonId
       ? { officialSeasonId: reset.seasonId, dayNumber: reset.finished }
       : null;
-  const saved = selector
-    ? await Promise.all(lines.map((top) => trophiesAt(ctx, top, selector)))
-    : null;
+  const [saved, youSaved] = selector
+    ? await Promise.all([
+        Promise.all(lines.map((top) => trophiesAt(ctx, top, selector))),
+        boardTrophies(ctx, selector.officialSeasonId, reset?.you),
+      ])
+    : [null, null];
   const profile = reset?.page.profile ?? null;
   const you = profile === null || profile.seasonResetPending ? null : profile.trophies;
   return {
@@ -409,7 +443,7 @@ async function cutoffsData(
             top,
             trophies: saved[index]?.trophies ?? null,
           })),
-          you: reset?.you?.endTrophies ?? null,
+          you: youSaved,
         }
       : null,
   };

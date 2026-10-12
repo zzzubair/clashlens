@@ -295,11 +295,22 @@ const RESET_LINES: Record<number, Record<number, number>> = {
   1: { 200: 5120 },
 };
 
-/** The selected account was #318 on the Day 8 Reset board. */
+/** The selected account's rank and trophies on each saved Reset board, as its days say. */
+const MAIN_BOARD: Record<number, [rank: number, trophies: number]> = {
+  1: [900, 5044],
+  2: [700, 5114],
+  3: [760, 5114],
+  4: [800, 5122],
+  5: [500, 5186],
+  6: [520, 5188],
+  8: [318, 5324],
+};
+
 function boardEntry(rank: number, day: number | null) {
+  const mine = day === null ? undefined : python.mainBoard[day];
   const tag =
     (day === null ? python.liveMoves[0]?.[rank] : undefined) ??
-    ((day === null && rank === python.liveRank) || (day === 8 && rank === 318)
+    ((day === null && rank === python.liveRank) || mine?.[0] === rank
       ? MAIN
       : rank === 315
         ? TUNDRA
@@ -310,7 +321,10 @@ function boardEntry(rank: number, day: number | null) {
     tag,
     name: tag === MAIN ? "Lens Main" : tag === TUNDRA ? "Tundra" : `Player ${rank}`,
     clan: null,
-    trophies: lines[rank] ?? (day === null ? 5450 : 5414) - 5 * (rank - 300),
+    trophies:
+      (mine?.[0] === rank ? mine[1] : undefined) ??
+      lines[rank] ??
+      (day === null ? 5450 : 5414) - 5 * (rank - 300),
     observed_at: iso(NOW - 3 * 60_000),
     age_seconds: 180,
     freshness: "fresh",
@@ -512,6 +526,7 @@ const python = {
   pages: {} as Record<string, unknown>,
   groups: GROUPS as unknown[],
   liveRank: 316,
+  mainBoard: MAIN_BOARD,
   /** Live places held by someone other than usual; each read focused on you moves on to the next. */
   liveMoves: [] as Record<number, string>[],
   /** Paths ending in one of these answer 503. */
@@ -666,6 +681,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       pages: { [MAIN]: mainPage(), [TUNDRA]: tundraPage() },
       groups: GROUPS,
       liveRank: 316,
+      mainBoard: MAIN_BOARD,
       liveMoves: [],
       down: [],
       requests: [],
@@ -732,7 +748,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Season graph: a gap where Day 7 is missing; best rank and last Season's finish.
     const graph = text(cards["season-graph"]!);
-    expect(graph).toContain("Best rank this Season #318 · 5,324 · Day 8");
+    expect(graph).toContain("Best rank this Season #318 · Day 8");
     expect(graph).toContain("Last Season finish #412 · 5,288");
     expect(cards["season-graph"]).toContain('aria-label="Day 6: 5,188"');
     expect(cards["season-graph"]).toContain('aria-label="Day 8: 5,324"');
@@ -993,7 +1009,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(
       data.cards["season-graph"]?.days.find((day) => day.day === 8)?.endTrophies,
     ).toBe(5404);
-    expect(data.cards.cutoffs?.reset?.you).toBe(5404);
+    // Cutoffs' Last Reset keeps your trophies on that day's board.
+    expect(data.cards.cutoffs?.reset?.you).toBe(5324);
   });
 
   it("leaves a day's attacks unknown when more than 8 are recorded", async () => {
@@ -1066,6 +1083,36 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     python.down = [`/v1/players/${MAIN}`];
     const cutoffs = text(cardsIn(await render(await load())).cutoffs!);
     expect(cutoffs).toContain(unavailable);
+  });
+
+  it("places you against saved boards with your trophies on them", async () => {
+    // Day 8's board holds you at 5,444, before the automatic defense loss;
+    // the day ends 120 lower, at 5,324, after it.
+    python.mainBoard = { ...MAIN_BOARD, 8: [318, 5444] };
+    const data = await load();
+    expect(data.cards.cutoffs?.reset?.you).toBe(5444);
+    expect(data.cards.goal).toMatchObject({
+      you: 5324,
+      youThen: 5044,
+      history: [5044, 5114, 5114, 5122, 5186, 5188, null, 5444],
+    });
+    const goal = text(cardsIn(await render(data)).goal!);
+    expect(goal).toContain("Gap at last Reset +44");
+    expect(goal).toContain("Your pace (7 days) +40 a day");
+  });
+
+  it("hides the day's numbers once the Legend day they were read for ends", async () => {
+    const html = await render({ ...(await load()), dayEndsMs: NOW });
+    expect(text(html)).toContain(
+      "A new Legend day has started. Reload for today's numbers",
+    );
+    const tabs = text(html.match(/<nav class="dash-accounts"[\s\S]*?<\/nav>/)![0]);
+    expect(tabs).toContain("Lens Main 5,360 · #316");
+    expect(tabs).not.toContain("+55");
+    const cards = cardsIn(html);
+    expect(Object.keys(cards)).toEqual(ALL_CARDS);
+    for (const card of ALL_CARDS)
+      expect(text(cards[card]!).trim()).toBe(CARDS[card as CardId].title);
   });
 
   it("asks to make a group when there is none", async () => {
@@ -1192,7 +1239,7 @@ describe("dashboard card numbers", () => {
       youThen: 5044,
       line: 5400,
       lineThen: 5120,
-      history: [],
+      history: [5044, changes.you ?? 5324],
       ...changes,
     });
     expect(goalPlan(goal({}))?.status).toBe("behind");
@@ -1206,6 +1253,12 @@ describe("dashboard card numbers", () => {
       1,
     ]);
     expect(goalPlan(goal({ line: null }))).toBeNull();
+    // The gap goes by your trophies on the board; the pace by your day ends.
+    expect(goalPlan(goal({ history: [5044, 5444] }))).toMatchObject({
+      gap: 44,
+      pace: 40,
+    });
+    expect(goalPlan(goal({ history: [5044, null] }))).toBeNull();
   });
 
   it("keeps 3 above and 3 below, filling from the other side at the edges", () => {
