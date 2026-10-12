@@ -127,9 +127,12 @@ export interface GroupWatchData {
   rows: GroupRow[];
 }
 
-/** A finished day with no attacks and no defenses: a shield day, left out of rankings. */
+/**
+ * A finished day with no attacks, no defenses and a trophy change of 0: a
+ * shield day, left out of rankings.
+ */
 export function isShieldDay(day: SeasonDay): boolean {
-  return day.attacks === 0 && day.defenses === 0;
+  return day.attacks === 0 && day.defenses === 0 && day.net === 0;
 }
 
 function ratio(top: number, bottom: number): number | null {

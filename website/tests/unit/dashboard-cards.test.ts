@@ -28,6 +28,7 @@ import {
   around,
   goalPlan,
   heatCells,
+  isShieldDay,
   offenseConsistency,
   recentForm,
   type GoalData,
@@ -1071,6 +1072,20 @@ describe("dashboard card numbers", () => {
     expect(cells.slice(0, 5).map((cell) => [cell.kind, cell.shade])).toEqual([
       ["played", 0.5],
       ["played", 0.5],
+      ["played", 1],
+      ["shield", null],
+      ["played", 0],
+    ]);
+  });
+
+  it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
+    const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
+    const lost = day(3, -304, quiet);
+    expect(isShieldDay(lost)).toBe(false);
+    expect(isShieldDay(day(2, 0, quiet))).toBe(true);
+    expect(isShieldDay({ ...day(4, 0, quiet), net: null })).toBe(false);
+    const cells = heatCells(season([day(1, 40), day(2, 0, quiet), lost]), "net");
+    expect(cells.slice(0, 3).map((cell) => [cell.kind, cell.shade])).toEqual([
       ["played", 1],
       ["shield", null],
       ["played", 0],
