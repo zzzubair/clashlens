@@ -705,8 +705,8 @@ class Database:
         self.player_discovery_enabled = player_discovery_enabled
 
         def configure(connection: Any) -> None:
-            connection.execute(
-                f"SET statement_timeout = '{statement_timeout_seconds}s'"
+            connection.execute(  # JIT: collector_liveness.bound_statements.
+                f"SET statement_timeout = '{statement_timeout_seconds}s'; SET jit = off"
             )
             connection.commit()
 

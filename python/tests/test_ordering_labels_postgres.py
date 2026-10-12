@@ -235,6 +235,9 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                         ranked_day_input_hash="a" * 64,
                     )
                 monkeypatch.undo()
+                # Clocks set before these boards were made; not the hourly wait.
+                monkeypatch.setattr(
+                    past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
                 # Its input list was frozen before latest trophy changes were.
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(

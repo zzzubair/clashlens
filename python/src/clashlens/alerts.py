@@ -189,6 +189,11 @@ WARNING_DATABASE_STARTING = 300
 # Season's opening Reset adds a league history each, at least 3 minutes of
 # six keys. Freezing by 05:25 leaves five minutes to publish by 05:30.
 RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 12, 15, 25, 30
+# Collector numbers sampled longer ago than this are unknown.
+METRICS_MAX_AGE = 300
+# board_deadline.MAX_UNFINISHED: this check runs on the host without the
+# worker's imports.
+BOARD_MAX_UNFINISHED = 50
 
 
 class CheckError(Exception):
@@ -368,7 +373,8 @@ def reset_probe(served: str, read_at: str) -> None:
     """Run inside the worker container; updates the latest Reset's record.
 
     Prints that Reset, its captured members, those whose Reset collection
-    ended, and when its board's inputs froze and it was first readable, or 0.
+    ended, when its board's inputs froze and it was first readable, and its
+    newest board's members waiting for a result and failed for good, or 0.
     ``served`` is the Reset of the board the website's public page showed at
     ``read_at``, both 0 when it showed none or could not be read.
     """
@@ -384,8 +390,28 @@ def reset_probe(served: str, read_at: str) -> None:
             readable_boundary=readable,
             readable_at=datetime.fromtimestamp(int(read_at), UTC) if readable else None,
         )
+        connection.commit()
+        # The newest board's members still without a result, and those whose
+        # day calculation failed for good (board_deadline), so an alert says
+        # what the board waits for; a slow count leaves them unknown, as 0.
+        waiting = (0, 0)
+        try:
+            connection.execute("SET statement_timeout = '5s'")
+            waiting = record and connection.execute(
+                """
+                SELECT count(*) FILTER (WHERE snapshot_status = 'pending'),
+                       count(*) FILTER (WHERE snapshot_status = 'failed')
+                FROM boundary_publication_generation_members
+                WHERE generation_id = (
+                    SELECT id FROM boundary_publication_generations
+                    WHERE boundary_at = %s ORDER BY generation DESC LIMIT 1)
+                """,
+                (record["boundary_at"],),
+            ).fetchone()
+        except psycopg.Error:
+            connection.rollback()
     if record is None:
-        print(0, 0, 0, 0, 0)
+        print(0, 0, 0, 0, 0, 0, 0)
         return
     epoch = lambda value: 0 if value is None else int(value.timestamp())
     print(
@@ -394,6 +420,7 @@ def reset_probe(served: str, read_at: str) -> None:
         record["collected_count"] + record["not_collected_count"],
         epoch(record["inputs_frozen_at"]),
         epoch(record["readable_at"]),
+        *waiting,
     )
 
 
@@ -680,6 +707,12 @@ def observe(
                 if not math.isfinite(value) or value < 0:
                     raise ValueError
                 metrics[parts[0]] = value
+        # The collector answers from its last database sample, which ages
+        # while its refresh cannot finish: an old one is unknown, not healthy.
+        sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
+        if sampled is not None and now - sampled > METRICS_MAX_AGE:
+            metrics.clear()
+            raise ValueError
         age = metrics.get("clashlens_collector_last_success_age_seconds")
         if age is not None:
             state["last_success"] = now - age
@@ -863,7 +896,8 @@ def observe(
             container = f"clashlens-python-{service}"
             result = command([podman, "exec", container, *probe[3:-1], *arguments], 25)
             values = [int(value) for value in result.stdout.split()]
-            if result.returncode or len(values) != count:
+            # A newer probe may print more values than this check reads.
+            if result.returncode or len(values) < count:
                 raise ValueError
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
@@ -1014,10 +1048,20 @@ def reset_stages(
         return False, False
     # A board that could not be read by 05:30 missed it too.
     late = minutes >= RESET_READABLE
+    blocked = []
+    if record is not None and record[0] == boundary:
+        waiting, failed = (list(record[5:7]) + [0, 0])[:2]
+        if waiting:
+            blocked.append(f"the board waits for {waiting:,} players' day results" + (
+                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30"
+                if waiting > BOARD_MAX_UNFINISHED else ""))
+        if failed:
+            blocked.append(f"{failed:,} players' day calculations failed for good")
     if late:
         state.setdefault("details", {})["publication"] = (
             f"Now: the {start:%Y-%m-%d} 05:00 UTC board was not readable at 05:30"
             + ("; the website check could not read it" if served is None else "")
+            + "".join(f"; {reason}" for reason in blocked)
         )
     if minutes < RESET_COLLECTED:
         return False, late
@@ -1033,6 +1077,7 @@ def reset_stages(
         pass  # Inputs frozen; publication is checked at 05:30.
     elif minutes >= RESET_FROZEN:
         reasons.append("the board's inputs were not frozen by 05:25")
+        reasons += blocked
     elif minutes >= RESET_PROJECTED:
         if remaining is None or len(samples) < 2:
             unknown = True

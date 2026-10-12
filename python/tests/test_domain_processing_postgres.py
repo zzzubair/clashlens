@@ -631,7 +631,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
                     ORDER BY id
                     """
                 ).fetchall()
-            assert len(reconciliation_jobs) == 2
+            assert len(reconciliation_jobs) == 1  # The waiting one reads the change.
             assert all(
                 row[1]["trigger"] == "live_battle_projection"
                 for row in reconciliation_jobs

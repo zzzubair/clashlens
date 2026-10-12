@@ -159,7 +159,10 @@ regular keys, one request at a time and at most two a second
   field holds this Reset's ranks. It counts as switched when at least a
   quarter of the players with a known `previousRank` in both it and that
   morning's 05:00:30 pull show a different one; a rank turning unknown is
-  not a switch. With no 05:00:30 pull there is no poll. Polling
+  not a switch. A 05:00:30 pull where fewer than a quarter of the players
+  with a known `previousRank` have moved from it already holds this
+  Reset's ranks, as on 12 Oct 2026: it is the Reset's list and there is no
+  poll. With no 05:00:30 pull there is no poll. Polling
   stops at 06:00; a day never seen to switch pulls no country lists and
   scores `unknown`;
 - once switched, every country's top 200, with the location list first when

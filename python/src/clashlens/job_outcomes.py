@@ -4,10 +4,32 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+import psycopg
+from psycopg.errors import (
+    DeadlockDetected,
+    IdleInTransactionSessionTimeout,
+    LockNotAvailable,
+    QueryCanceled,
+    SerializationFailure,
+    TransactionTimeout,
+)
 from psycopg.types.json import Jsonb
+from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import reset_baselines
-from .db import Claim, Database, LeaseLost, _text_value
+from .db import PYTHON_RESET_PRIORITY, Claim, Database, LeaseLost, _text_value
+
+# A job a busy lock or the statement deadline rolled back waits out of its
+# lease, costing no attempt: 30 s, then 60, 120 and 240, then every 5 minutes,
+# a Reset job at most a minute, each plus up to 9 s by job so a crowd spreads.
+# On 12 Oct 2026 131 Season-rule rebuilds met Reset locks that board builds
+# held for 6 to 16 minutes. Each kept its lease, so it came back at the head
+# of the queue every minute, 57 to 167 times, about one run in three was
+# wasted, and the leases counted as late live work, pausing background work.
+DEFERRED_CONFLICTS = frozenset({"database_lock_busy", "database_timeout"})
+CONFLICT_RETRY_FIRST_SECONDS = 30
+CONFLICT_RETRY_MAX_SECONDS = 300
+RESET_CONFLICT_RETRY_MAX_SECONDS = 60
 
 
 def _observation_source(
@@ -323,6 +345,83 @@ def fail_claim(
                         category=category,
                     )
             return state
+
+
+def release_conflicted(database: Database, claim: Claim, reason: str) -> None:
+    """Hand back a job whose transaction a conflict rolled back unrecorded.
+
+    A busy lock or the statement deadline defers it (``DEFERRED_CONFLICTS``).
+    Otherwise, or when that cannot commit, its retry slot is restored and its
+    lease kept, so queue maintenance recovers it later rather than failing it
+    on its last attempt, even if conflicts outlast the lease. Raises LeaseLost
+    once another worker or maintenance took the job.
+    """
+    if reason in DEFERRED_CONFLICTS:
+        try:
+            if _defer_conflicted(database, claim, reason):
+                return
+        except psycopg.Error:
+            pass  # Restore the retry slot instead.
+    while True:
+        try:
+            database.refund_claim_attempt(claim)
+            return
+        except (DeadlockDetected, SerializationFailure, QueryCanceled):
+            continue
+        except (PoolTimeout, TooManyRequests, LockNotAvailable,
+                IdleInTransactionSessionTimeout, TransactionTimeout):
+            # No connection, or the refund's own short lock wait or session
+            # ran out. Leave the lease to run out so queue maintenance
+            # retries the job or fails its last try.
+            return
+
+
+def _defer_conflicted(database: Database, claim: Claim, reason: str) -> bool:
+    """Release the job to run again after its conflict wait; False where the
+    schema has no dependency deferral."""
+    if not isinstance(database, Database):
+        return False
+    database._ensure_dependency_support_probed()
+    if not database._supports_dependency_deferral:
+        return False
+    with database._timed_connection() as connection, connection.transaction():
+        # Never queue behind a long holder of the job row.
+        connection.execute("SET LOCAL lock_timeout = '1s'")
+        # The owner and token fence it even after the lease expired, as the
+        # refund does: only a job nobody else has taken is deferred.
+        deferred = connection.execute(
+            f"""
+            UPDATE {database._jobs_relation}
+            SET state = 'waiting_dependency',
+                due_at = clock_timestamp() + (LEAST(
+                    CASE WHEN priority = %(reset)s THEN %(reset_max)s ELSE %(max)s END,
+                    %(first)s * 2 ^ LEAST(dependency_deferral_count, 4)) + id %% 10)
+                    * interval '1 second',
+                dependency_deferral_count = dependency_deferral_count + 1,
+                outcome = 'dependency_deferred', failure_category = %(reason)s,
+                failure_detail = %(reason)s,
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                updated_at = clock_timestamp()
+            WHERE id = %(job)s AND state = 'leased'
+              AND lease_owner = %(owner)s AND lease_token = %(token)s
+            """,
+            {"reset": PYTHON_RESET_PRIORITY, "reset_max": RESET_CONFLICT_RETRY_MAX_SECONDS,
+             "max": CONFLICT_RETRY_MAX_SECONDS, "first": CONFLICT_RETRY_FIRST_SECONDS,
+             "reason": reason, "job": claim.job_id, "owner": claim.lease_owner,
+             "token": claim.lease_token},
+        )
+        if deferred.rowcount != 1:
+            raise LeaseLost("job lease was lost while deferring its conflict")
+        connection.execute(
+            """
+            UPDATE python_processing_attempts
+            SET state = 'waiting_dependency', completed_at = clock_timestamp(),
+                outcome = 'dependency_deferred', failure_category = %s
+            WHERE id = %s AND job_id = %s AND lease_token = %s
+            """,
+            (reason, claim.attempt_id, claim.job_id, claim.lease_token),
+        )
+    return True
 
 
 def complete_terminal(database: Database, claim: Claim, *, outcome: str) -> None:
