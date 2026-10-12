@@ -6,8 +6,9 @@ On 9 Oct 2026 six re-decodes each held about 103 battle locks for 5 to 14
 seconds, 568 jobs were leased at once beside Season repair, and live
 responses fell to about 8,000 players over 2 minutes late. So however many
 worker processes run, at most ``BACKGROUND_JOB_LIMIT`` background jobs hold
-a lease at once, and none starts while live data is behind. Background work
-claims come last, so it still runs whenever live work leaves room.
+a lease at once, and none but one daily result of each priority starts
+while live data is behind. Background work claims come last, so it still
+runs whenever live work leaves room.
 
 A day's recheck after new evidence, or in the twice-daily recheck
 (``queue_refresh``), is background work in its own lane, at
@@ -44,12 +45,22 @@ their first try while 9 in 10 waited under 14 seconds, and stopping for any
 one of them stopped background work 32% of the time. Replayed every 5
 seconds, this rule stops it 0.6% of that time and halves it 3.2%, and still
 stops it 39% of 05:00 to 06:20, when up to 21,800 live jobs waited.
+
+Pausing is not stopping, though. A claim that finds live work late still
+takes one daily result of a background priority with none running, ahead
+of its live work (``background_floor``), except on a Reset turn, while a
+live or Reset daily result runs. From
+06:16 on 12 Oct 2026 live daily results waited hours and the pause never lifted: by 09:42
+none of about 50,000 background jobs had run, among them the day-end
+results of the day the Reset ended and the 23:00 recheck pass. Army
+re-decodes stay paused, as their battle locks are what held live work up.
 """
 
 from __future__ import annotations
 
 import os
 import random
+from collections.abc import Callable
 from typing import Any
 
 from psycopg import ClientCursor
@@ -79,14 +90,50 @@ LOCK_STRAIN_SECONDS = 1
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
 
 
+def background_floor(
+    connection: Any, jobs_relation: str, rows: list[Any], limit: int,
+    claim: Callable[..., list[Any]],
+) -> list[Any]:
+    """Up to ``limit`` jobs: one daily result ``claim`` finds of a
+    background priority with no job leased, then ``rows``, the claim's live work.
+
+    For a claim that holds the permit and found live work late, so
+    background work holds at most one lane of each priority. It takes one
+    only while a live or Reset daily result is leased, and a claim of one
+    gives up its live job only while one of that job's priority is:
+    Reset-first turns keep Reset work running, and live work at 100 keeps
+    a lane of its own. The priorities go in random order in proportion to
+    their limits, so one-job claims run both. Holding the permit, it counts
+    every background claim committed before this one.
+    """
+    from .db import PYTHON_BACKFILL_PRIORITY, PYTHON_LIVE_PRIORITY
+
+    priorities = [PYTHON_BACKFILL_PRIORITY, DAY_RECHECK_PRIORITY]
+    if random.random() * (BACKGROUND_JOB_LIMIT + DAY_RECHECK_JOB_LIMIT) >= BACKGROUND_JOB_LIMIT:
+        priorities.reverse()
+    leased = {row[0] for row in connection.execute(
+        f"SELECT DISTINCT priority FROM {jobs_relation} WHERE state = 'leased' AND (priority = ANY(%s)"
+        " OR work_type = 'reconcile_ranked_day' AND priority >= %s)", (priorities, PYTHON_LIVE_PRIORITY))}
+    running = {priority for priority in leased if priority >= PYTHON_LIVE_PRIORITY}
+    if limit == 1 and rows:
+        running &= {connection.execute(
+            f"SELECT priority FROM {jobs_relation} WHERE id = %s", (rows[0][0],)).fetchone()[0]}
+    ahead: list[Any] = []
+    for priority in priorities:
+        ahead += [] if priority in leased else claim(
+            int(bool(running)) - len(ahead), backfill=(priority,), work_types=["reconcile_ranked_day"])
+    return ahead + rows[:limit - len(ahead)]
+
+
 def background_lanes(
     connection: Any, jobs_relation: str, denormalized_contract: bool,
     supports_coordinator: bool, supports_dependency: bool, *, wait: bool = False,
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int]] | None:
     """Each background priority with room, and how many more jobs it may
     lease, the one using less of its limit first, ties at random in proportion
-    to the limits; with any, this claim holds the permit. With ``wait`` it
-    waits up to ``PERMIT_WAIT`` for the permit.
+    to the limits, or None while late live work pauses them; with any, or
+    None, this claim holds the permit. With ``wait`` it waits up to
+    ``PERMIT_WAIT`` for the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
     pauses background work for good. Late live work counts while it waits,
@@ -171,7 +218,7 @@ def background_lanes(
         (PYTHON_BACKFILL_PRIORITY, bulk, BACKGROUND_JOB_LIMIT),
         (DAY_RECHECK_PRIORITY, rechecks, DAY_RECHECK_JOB_LIMIT),
     ) for cap in [(limit + 1) // 2 if strained else limit] if leased < cap)
-    return [] if late >= threshold else [(priority, room) for *_, priority, room in lanes]
+    return None if late >= threshold else [(priority, room) for *_, priority, room in lanes]
 
 
 def _take_permit(connection: Any, wait: bool) -> bool:

@@ -1017,28 +1017,28 @@ class Database:
                 "work_types": work_types,
                 "reset_first": reset_first,
                 "limit": limit,
-                "past_reset_build_hold": (
-                    past_reset_build_hold(connection) if supports_coordinator else None
-                ),
-                "operator_build_hold": (
-                    supports_coordinator and operator_correction_waits(connection)
-                ),
+                "past_reset_build_hold": past_reset_build_hold(connection) if supports_coordinator else None,
+                "operator_build_hold": supports_coordinator and operator_correction_waits(connection),
             }
-            rows = [] if job_ids is None else connection.execute(*_claim_select_statement(
-                self._jobs_relation, job_ids=job_ids, planned=planned, **options
-            )).fetchall()
+
+            def claim(size: int, **kwargs: Any) -> list[Any]:
+                return [] if size < 1 else connection.execute(*_claim_select_statement(
+                    self._jobs_relation, **{**options, "limit": size, **kwargs})).fetchall()
+
+            rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
             if job_ids is None or (not rows and planned):
-                rows = connection.execute(*_claim_select_statement(
-                    self._jobs_relation, planned=planned, backfill=(), **options
-                )).fetchall()
+                rows = claim(limit, planned=planned, backfill=())
+                floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
                 # Backfill fills only what live work leaves; see background_pacing.
-                for priority, room in [] if len(rows) >= limit or planned else background_lanes(
+                lanes = [] if planned or (len(rows) >= limit and not floor) else background_lanes(
                     connection, self._jobs_relation, self._supports_denormalized_contract,
-                    supports_coordinator, self._supports_dependency_deferral, wait=not rows):
-                    rows += connection.execute(*_claim_select_statement(
-                        self._jobs_relation, backfill=(priority,),
-                        **{**options, "limit": min(room, limit - len(rows))},
-                    )).fetchall() if len(rows) < limit else []
+                    supports_coordinator, self._supports_dependency_deferral, wait=not rows)
+                for priority, room in lanes or ():
+                    rows += claim(min(room, limit - len(rows)), backfill=(priority,))
+                # Paused by late live work, but for a daily result of each priority.
+                if lanes is None and floor:
+                    rows = background_pacing.background_floor(
+                        connection, self._jobs_relation, rows, limit, claim)
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(
