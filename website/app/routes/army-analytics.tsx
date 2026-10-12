@@ -5,6 +5,7 @@ import {
   Link,
   redirect,
   useLoaderData,
+  useLocation,
   useSearchParams,
   useNavigation,
   useSubmit,
@@ -518,7 +519,14 @@ export default function ArmyAnalyticsRoute() {
     : 0;
   const excludedBattleRecords = recordedBattleRecords - includedBattleRecords;
   const partialArmies = analytics?.armyStates.partial ?? 0;
+  const location = useLocation();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
+  const [defaultVisit, setDefaultVisit] = useState(location.key);
+  // The top-bar link opens the defaults again, sorted by Usage.
+  if (!location.search && defaultVisit !== location.key) {
+    setDefaultVisit(location.key);
+    setChosenSort(null);
+  }
   const defaultColumn =
     selected?.sort && Object.hasOwn(sortColumns, selected.sort)
       ? (selected.sort as SortColumn)

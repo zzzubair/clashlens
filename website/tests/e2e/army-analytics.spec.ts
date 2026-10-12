@@ -69,6 +69,27 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test("the top-bar Analytics link drops a chosen sort", async ({ page }) => {
+  await page.goto(
+    "/analytics/armies?recent=1&population=top-100&category=troops&sort=usage-rate",
+  );
+  const table = page.getByRole("table", { name: "Army analytics results" });
+  const name = table.getByRole("columnheader", { name: /Name/ });
+  const usage = table.getByRole("columnheader", { name: /Sort by Usage,/ });
+  await table.getByRole("button", { name: "Sort by Name, A to Z" }).click();
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+
+  await page
+    .getByRole("navigation", { name: "Main navigation" })
+    .getByRole("link", { name: "Analytics" })
+    .click();
+  await expect(page).toHaveURL(/\/analytics\/armies$/);
+  // Even back on the earlier page, the table is in its default order again.
+  await page.goBack();
+  await expect(usage).toHaveAttribute("aria-sort", "descending");
+  await expect(name).not.toHaveAttribute("aria-sort");
+});
+
 test("the saved-data page shows attacks over the whole season with no day range", async ({
   page,
 }) => {
@@ -139,14 +160,17 @@ test("large army view keeps every row and shows the browser's local time", async
     expect(value).not.toBeNull();
     const expected = await page.evaluate(
       (date) =>
-        new Intl.DateTimeFormat(undefined, {
+        new Intl.DateTimeFormat("en-GB", {
           day: "numeric",
           month: "short",
           year: "numeric",
           hour: "2-digit",
           minute: "2-digit",
           timeZoneName: "short",
-        }).format(new Date(date!)),
+          timeZone: "Asia/Kolkata",
+        })
+          .format(new Date(date!))
+          .replace("Sept", "Sep"),
       value,
     );
     await expect(timestamp).toHaveText(expected);

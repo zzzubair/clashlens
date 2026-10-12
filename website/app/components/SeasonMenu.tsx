@@ -27,7 +27,7 @@ export function SeasonMenu({
   // A selected past Season always keeps its way back, even if the list failed.
   if (selectedSeason !== null && !past.includes(selectedSeason))
     past.push(selectedSeason);
-  if (past.length === 0) return null;
+  if (past.length === 0 && !currentAvailable) return null;
   return (
     <Form method="get" action={path} className="season-menu">
       <label className="filter-field">

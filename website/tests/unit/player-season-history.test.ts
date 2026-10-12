@@ -116,6 +116,12 @@ const PLAYER = {
 
 const CURRENT_LINK = '<option value="">Current Season</option>';
 
+// The names in the Season menu, or none when there is no menu.
+function seasonOptions(html: string) {
+  const menu = html.match(/<select name="season"[^>]*>(.*?)<\/select>/)?.[1] ?? "";
+  return [...menu.matchAll(/<option[^>]*>(.*?)<\/option>/g)].map(([, name]) => name);
+}
+
 async function loadAndRender(
   client: Record<string, unknown>,
   season: string | null,
@@ -460,11 +466,11 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(recoveredHtml).not.toContain('<select name="season"');
+      expect(seasonOptions(recoveredHtml)).toEqual(player ? ["Current Season"] : []);
     },
   );
 
-  it("shows no Season navigation on the current page when the list is empty", async () => {
+  it("offers only Current Season on the current page when the list is empty", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -473,8 +479,7 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(html).not.toContain('<select name="season"');
-    expect(html).not.toContain("Current Season");
+    expect(seasonOptions(html)).toEqual(["Current Season"]);
   });
 
   // Day 1 of the Season starting 5 Oct, after the September Season ended.

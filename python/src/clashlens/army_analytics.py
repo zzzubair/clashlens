@@ -37,7 +37,7 @@ SORTS = frozenset(
 )
 TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000})
 # Consistent top reads every member's facts, so it stays within the top 1,000.
-STREAK_PRESETS = frozenset(count for count in TOP_PRESETS if count <= 1000)
+STREAK_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000})
 RANK_BANDS = frozenset(
     {
         (1, 5),
