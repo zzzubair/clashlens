@@ -1,8 +1,8 @@
 """Everything the bot says, as plain data.
 
 Nothing here talks to Discord or the database, so every reply can be checked
-from fixture data alone. Game and group names are escaped so their markup or
-an @mention in a name cannot ping anyone or break the layout.
+from fixture data alone. Player, clan and account names are escaped so their
+markup or an @mention in a name cannot ping anyone or break the layout.
 """
 
 from __future__ import annotations
