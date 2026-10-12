@@ -107,7 +107,7 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
 
   // Reset to default puts the default layout back, and it stays after a reload.
   await bar.getByRole("button", { name: "Reset to default" }).click();
-  await expect(bar.getByText("Default layout")).toBeVisible();
+  await expect(bar.getByText("Default layout", { exact: true })).toBeVisible();
   await bar.getByRole("button", { name: "Done" }).click();
   await expect(bar).toBeHidden();
   await page.reload();
