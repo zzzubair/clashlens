@@ -1137,7 +1137,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(day).toContain("1 defense");
     expect(day).toContain("7 defenses remain · auto defense −21 each");
 
-    // Bases you attacked: hardest first against today's Legends 52% held.
+    // Bases you attacked: hardest first against 41% held at similar trophies.
     const bases = text(cards.bases!);
     expect(bases).toContain("Bases you attacked · today · 2 of 8");
     expect(bases).toContain("Base strength · vs Legends at similar trophies today");

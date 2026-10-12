@@ -368,7 +368,7 @@ export const LEGENDS_DEFENSE_LOSS = 32;
 /**
  * Trophies mode: Average is within this many trophies a defense of
  * `LEGENDS_DEFENSE_LOSS`. Over 74,239 bases on 5–11 Oct 2026 it rated 27.3%
- * Average, as the held 10-point band rated 27.2%.
+ * Average, as the held band then (10 points against all Legends) rated 27.2%.
  */
 export const BASE_TROPHY_BAND = 1.25;
 /** Under 3 defenses is too early. */
