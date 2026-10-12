@@ -456,6 +456,54 @@ def test_a_few_straggling_live_jobs_never_stop_background_work(database_url: str
     assert [claim.work_type for claim in resumed] == ["redecode_army"]
 
 
+def test_daily_results_keep_one_lane_each_while_live_work_stays_late(database_url: str) -> None:
+    # From 06:16 on 12 Oct 2026 live daily results waited hours, the pause
+    # never lifted, and by 09:42 none of about 50,000 background jobs had
+    # run: day-end results, the 23:00 recheck pass and weekly drops among them.
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        day_ends = {_queue_result(connection_info, f"day-end:{index}", priority=25,
+                                  due_at=now - timedelta(hours=2)) for index in range(3)}
+        rechecks = {_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(3)}
+        redecodes = set(_queue_redecodes(connection_info, [[1]]))
+        database = Database(connection_info)
+
+        def claim(turn: int) -> tuple[int, int, int]:
+            """Live jobs, day-end results and rechecks one lane's claim of 4
+            takes, with more live work arriving late than lanes finish."""
+            _queue_live(connection_info, f"live:{turn}", now - timedelta(minutes=3), count=8)
+            claimed = {job.job_id for job in database.claim_jobs(
+                owner="lane", limit=4, reset_first=turn % 2 == 0)}
+            assert not claimed & redecodes
+            return (len(claimed - day_ends - rechecks), len(claimed & day_ends),
+                    len(claimed & rechecks))
+
+        try:
+            # A Reset turn takes no background work.
+            assert claim(0) == (4, 0, 0)
+            # The other turns take one of each priority with none running,
+            # ahead of live work, and no more while those run.
+            assert claim(1) == (2, 1, 1)
+            assert claim(2) == (4, 0, 0)
+            assert claim(3) == (4, 0, 0)
+            # Lanes finish every job before the next claim.
+            taken = []
+            for turn in range(4, 12):
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+                        " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
+                    )
+                taken.append(claim(turn))
+        finally:
+            database.close()
+
+    # The other background jobs ran too, and live work kept at least half of each claim.
+    assert [sum(kind) for kind in zip(*taken, strict=True)][1:] == [2, 2]
+    assert [live for live, *_ in taken] == [4, 2, 4, 2, 4, 4, 4, 4]
+
+
 def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:

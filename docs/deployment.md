@@ -1204,7 +1204,8 @@ reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
 (`republish-current-season --first-logs` and `--repair`)
 are queued at backfill priority, 25, which a worker thread only runs when no
-higher-priority work that thread can claim is due; a thread that does not process saved
+higher-priority work that thread can claim is due, or one at a time while live
+work is 2 minutes behind; a thread that does not process saved
 responses can run one while responses still wait. All worker processes together
 run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
 2), and beside them at most `CLASHLENS_DAY_RECHECK_JOB_LIMIT` day rechecks after
@@ -1225,8 +1226,11 @@ leased, including one that keeps its lease after a lock conflict. Each limit
 halves, rounded up, while live work is 30 seconds behind (9 in 10 live
 responses waited under 14 seconds on 2026-10-09) or a statement of the
 worker's own has been blocked on a lock for a second or more (sessions of
-other database roles do not show what they wait on), and none starts while
-it is 2 minutes behind. A few stragglers are not enough: between 16:00 and 18:00 UTC on
+other database roles do not show what they wait on), and while it is 2
+minutes behind none starts but one day result of each priority, which a claim
+that does not take Reset work first takes ahead of its live work: from 06:16
+on 2026-10-12 live day results waited hours, and by 09:42 none of about
+50,000 background jobs had run. Army re-decodes stay paused. A few stragglers are not enough: between 16:00 and 18:00 UTC on
 2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first
 try, and stopping for any one of them stopped background work 32% of the
 time; replayed every 5 seconds, this rule stops it 0.6% of that time and

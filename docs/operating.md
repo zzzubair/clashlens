@@ -582,7 +582,8 @@ after its Reset, also queues one recalculation of that day,
 `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its Reset at
 the lowest priority, so every tracked player's ended day is calculated once
 more with the readings and battles saved since: about 13,000 jobs a Reset,
-run only when no other work waits. New evidence also queues each ended day
+run when no other work waits, or one at a time while live work is 2 minutes
+behind. New evidence also queues each ended day
 it can change (`queue_refresh.py`), at priority 26 in its own lane: each saved
 profile or battle-log response the player's newest ended day
 (`reconcile:reading:` and `reconcile:log:`), each successful unchanged
@@ -690,7 +691,8 @@ each player whose first saved battle log was saved on Day 1, from Day 1, and
 each player first tracked later whose battles reach an earlier day, from
 that day. `--first-logs queue --season <Season ID>` queues up to `--max-jobs`
 of them (default 100), at backfill priority: a worker thread runs them only
-when no higher-priority work that thread can claim is due; run it again until
+when no higher-priority work that thread can claim is due, or one at a time
+while live work is 2 minutes behind; run it again until
 `left_to_queue` is 0. Each player
 is queued once for their earliest saved battle log. A Day 1 waits for the
 player's accepted Legend I profile naming the Season, which its Season-rule
