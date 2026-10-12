@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { IconName } from "../lib/dashboard";
-
-type ToolIcon = "plus" | "x" | "up" | "down" | "check" | "globe" | "info";
-
-const PATHS: Record<IconName | ToolIcon, ReactNode> = {
+const PATHS = {
   clock: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -96,10 +92,18 @@ const PATHS: Record<IconName | ToolIcon, ReactNode> = {
       <path d="M12 11v6M12 7.5v.01" />
     </>
   ),
-};
+  gear: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" />
+    </>
+  ),
+} satisfies Record<string, ReactNode>;
+
+export type IconName = keyof typeof PATHS;
 
 /** A 24-pixel line icon that takes the text colour. */
-export function DashboardIcon({ name }: { name: IconName | ToolIcon }) {
+export function DashboardIcon({ name }: { name: IconName }) {
   return (
     <svg
       className="dash-icon"

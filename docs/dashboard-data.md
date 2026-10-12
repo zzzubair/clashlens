@@ -12,11 +12,11 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Card | Needs | Status | Notes |
 |---|---|---|---|
 | Legend day | Live trophies and rank, net today, rank at the last Reset, today's attacks and defenses (stars, trophies) | Exists | |
-| | Next Reset rank range | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. Range only: a lab test was right 99.99% of the time and took about 0.1 s for 13,300 players. Trophies move ±40 per unused attack or defense. A narrow single-number estimate was right at most 51% of the time, so it is not shown. |
-| | Automatic defense loss preview | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
+| | Next Reset rank range | Exists | `/v1/players/{tag}/today` returns it. Range only: a lab test was right 99.99% of the time and took about 0.1 s for 13,300 players. Trophies move ±40 per unused attack or defense. A narrow single-number estimate was right at most 51% of the time, so it is not shown. |
+| | Automatic defense loss preview | Exists | `/v1/players/{tag}/today` returns it. The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
 | Legend clock | Today's battles with times | Exists | |
-| Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | Mostly exists | `/v1/players/{tag}/today` already returns up to 8 opponents with their trophies at Reset and each defense today (stars, and which one was yours), and the current dashboard shows them. Missing: trophies lost on each defense, which Trophies mode needs (a new API field). |
-| | Legends held % | Exists | `/v1/players/{tag}/today` returns it as `legends_held`, worked out live from today's defenses across the live leaderboard (re-read at most once a minute), and the current dashboard shows it. About 52% on a typical day (see below); not fixed. |
+| Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | Mostly exists | `/v1/players/{tag}/today` already returns up to 8 opponents with their trophies at Reset and each defense today (stars, and which one was yours). Missing: trophies lost on each defense, which Trophies mode needs (a new API field). |
+| | Legends held % | Exists | `/v1/players/{tag}/today` returns it as `legends_held`, worked out live from today's defenses across the live leaderboard (re-read at most once a minute). About 52% on a typical day (see below); not fixed. |
 | | Legends trophies lost a defense | None | Fixed at −32 a defense (see below). |
 | | Add to group | Exists | Groups hold up to 20 players. |
 | Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The shield row needs nothing new. |
@@ -29,7 +29,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Season graph | Trophies and rank at each Reset this Season; best rank; last Season's official finish | Exists | Use the official finish, never a tracked-only rank. |
 | Recent form | Each finished day's net, offense and defense, triples and held defenses | Exists | |
 | Offense consistency | Your attacks (stars, trophies) over the last 3 or 7 days | Exists | |
-| Group watch | Your groups in the order you made them | New read | Groups save when they were made, but `/v1/account/groups` sorts by name and doesn't return that time. |
+| Group watch | Your groups in the order you made them | Exists | `/v1/account/groups` returns each group's `created_at`; the card shows the oldest first. |
 | | Group comparison over the last 7 days | Exists | `/v1/account/groups/{id}/comparison?days=7`. |
 | | Each member's whole-Season numbers | Exists | The comparison only offers 3, 7 or 14 days, so Whole Season reads `/v1/players/{tag}` (this Season's finished days) for each member and you: up to 21 reads. |
 | Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Mostly exists | Counts saved since #458; the Legends hit rate is what the Armies page already adds up. Average gain per attack needs a read of your battles. |
@@ -38,8 +38,8 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 
 | Need | Status | Notes |
 |---|---|---|
-| Per-user settings: default or own layout and card order, first-visit choice, Goal rank, Cutoffs lines, Group watch group and window, Bases mode | New data | Fits the account preferences box (capped at 4,096 bytes); under 1 KB per account. The default layout itself is a list in the website code; users on the default follow it at each release. |
-| "updated N min ago" on live cards | New read | Mostly display. |
+| Per-user settings: default or own layout and card order, first-visit choice, Goal rank, Cutoffs lines, Group watch group and window, Bases mode | Exists | Saved under `dashboard` in the account preferences box (capped at 4,096 bytes); under 1 KB per account. Bases mode is saved once the Bases you attacked card is built. The default layout itself is a list in the website code; users on the default follow it at each release. |
+| "updated N min ago" on live cards | Exists | Taken from the saved time of each reading the card shows. |
 
 ## Open owner decision
 

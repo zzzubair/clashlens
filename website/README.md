@@ -69,8 +69,9 @@ tracks the remaining launch work.
 On a tracked player's current page only two things are live: the current
 trophies next to the name and the Daily Legend log. Everything else uses
 finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
-no Trophy trend section; [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx)
-keeps that calculation for a later dashboard card. The player page explains
+no Trophy trend section; for the unused
+[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 8 in the
+[dashboard design](../docs/dashboard.md). The player page explains
 itself with titles, labels and short counts rather than help paragraphs.
 
 The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
@@ -174,53 +175,37 @@ that the page stops checking, says so, and ignores any later answer.
 The Dashboard at `/dashboard` is for signed-in users, and only exists while
 `CLASHLENS_DASHBOARD_ENABLED=true`; otherwise it is a page-not-found page with
 no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
-not signed in see a blurred preview and the sign-in buttons. Signed-in users get an
-account switcher over their linked players, Today / Season / Crew tabs ("Crew"
-is a placeholder word) and a 3-column grid. Each card has one size: Small (1
-column), Medium (2) or Large (the full row); phones stack every card full
-width. One layout serves every account: the switcher changes the data, and any
-card can be pinned to one account. Customise adds cards to their own tab,
-removes, moves and pins them, and Done saves the layout and time zone into the
-account's existing 4,096-byte preferences (a default layout uses about 300
-bytes), so there is no database change. Live cards show "updated N min ago"
-instead of a live tag.
+not signed in see a blurred preview and the sign-in buttons. The card designs
+are in the [dashboard design](../docs/dashboard.md).
 
-Three cards have content; the rest are labelled placeholders.
+Signed-in users get one page: account tabs for their linked players (name,
+trophies, rank, net today), then a divider with "⚙ Customise dashboard" and a
+3-column grid of Small (1 column), Medium (2) and Large (full row) cards; empty
+grid slots stay empty. The cards follow the selected tab, and one layout serves
+every account. An account outside Legend I gets the Legend I only message
+instead of cards and Customise; one not tracked yet gets the player page's
+status message; with no linked player the page shows how to link one. On a
+phone every card is full width, the Customise bar stays at the bottom and
+dialogs open as bottom sheets.
 
-- **Legend day** (Medium): live trophies, net today, the rank at the last
-  Reset, the live rank among tracked players and the range the next Reset can
-  still land in, labelled as an estimate that narrows during the day. Each
-  player's best end adds 40 for every open attack and worst end takes 40 for
-  every open defense, starting from the Reset trophies and battles in that
-  player's own daily log (or from their profile trophies with every slot open
-  when the log lacks them), so a counted battle always brings its trophies;
-  anyone whose worst end beats your best surely finishes
-  above you, anyone whose best end reaches your worst may. Then attack and
-  defense totals with star boxes, and "N defenses remain · auto defense −X each"
-  using the worker's automatic defense loss rule, hidden while unknown.
-- **Legend clock** (Small): a 24-hour dial in your time zone with the Reset on
-  top, the time left as an orange arc and the countdown in the middle. Attacks
-  are swords and defenses shields; battles within 20 minutes share one mark
-  with a count, and tapping it lists them (popover on desktop, bottom sheet on
-  a phone).
-- **Bases you attacked** (Large): one row per attack today, hard bases first,
-  with your hit, the base's defenses today as blocks and Hard / Average / Easy
-  against today's held share across tracked Legend players (Average is within
-  15 points; under 3 defenses is too early). Green is good for the attacker,
-  red bad. A row opens the player's page; its button adds them to saved
-  players.
+Nine cards are built: Legend clock, Goal, Rivals watch, Season heat map,
+Cutoffs, Season graph, Recent form, Offense consistency and Group watch. Legend
+day, Bases you attacked, Armies on defense and Armies on offense are not built
+yet, so they stay off the page and out of "+ Add a card", even where the
+default layout names them. Each card reads saved player pages, tracked
+leaderboards and groups through the private API; a player page is read once
+per load however many cards use it, and a card whose reads fail says it could
+not be loaded without taking the other cards down. A page left open past the
+Reset hides the day's numbers behind a new-day notice until it reloads.
 
-These read `GET /v1/players/{tag}/today` on the private API. Its board of every
-tracked player's trophies and today's attack and defense counts is read in one
-query and kept for a minute, so all dashboards share one read per minute.
-Opponents' defenses come from their own published daily logs, so an untracked
-opponent shows only your hit. The page reads at most 4 players' days per load:
-the switcher's player and players pinned on Today; a fifth pinned player's
-cards show without battle details. With no linked player the page shows how to
-link one; a player outside Legends gets one "not in Legends" line instead of
-empty cards, and any other player not yet tracked (still being checked, or
-the check failed) gets one line with the player page's status message. The
-day's numbers clear at the Reset until the page reloads.
+The first visit offers "Use our layout" or "Build my own". Customise moves
+(drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
+card settings and the group picked on Group watch save at once. A user is on
+the default layout (`DEFAULT_LAYOUT` in
+[`dashboard.ts`](app/lib/dashboard.ts)), which follows each release, or on
+their own. Settings are saved in the account's existing 4,096-byte preferences
+box, so there is no database change. The Legend clock uses the device's time
+zone.
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a

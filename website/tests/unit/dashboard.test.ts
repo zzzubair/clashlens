@@ -44,23 +44,32 @@ import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
 import App, { loader as rootLoader } from "../../app/root";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
-import type { ClockBattle, OpponentRow, PlayerDay } from "../../app/lib/dashboard";
+import type {
+  ClockBattle,
+  DashboardSettings,
+  OpponentRow,
+  PlayerDay,
+} from "../../app/lib/dashboard";
 import {
-  MAX_CARDS_PER_TAB,
+  DEFAULT_LAYOUT,
+  addableCards,
   baseStrength,
-  defaultLayout,
+  defaultSettings,
   nextResetMs,
-  parsePostedLayout,
-  readSavedLayout,
-  serializeLayout,
+  parsePostedSettings,
+  readSettings,
+  serializeSettings,
+  shownCards,
 } from "../../app/lib/dashboard";
 import DashboardRoute, {
   action,
   loader,
+  shouldRevalidate,
   type DashboardActionData,
   type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
+import { getPlayerToday } from "../../app/services/dashboard.server";
 import { PythonApiError } from "../../app/services/python.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -116,7 +125,10 @@ function postRequest(
   } as unknown as Parameters<typeof action>[0];
 }
 
-const saveRequest = (layout: string, origin = ORIGIN) => postRequest({ layout }, origin);
+const saveRequest = (settings: string, origin = ORIGIN) =>
+  postRequest({ settings }, origin);
+const GROUP = "0f6c1d8e-7b2a-4c3d-9e5f-1a2b3c4d5e6f";
+const DEFAULT_SAVE = JSON.stringify({ v: 3, layout: "default" });
 
 function emptyDay(overrides: Partial<PlayerDay> = {}): PlayerDay {
   return {
@@ -170,66 +182,115 @@ async function renderInRouter(element: ReturnType<typeof createElement>) {
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-describe("dashboard layout", () => {
-  it("falls back to the default layout when nothing is saved", () => {
-    expect(readSavedLayout(undefined)).toEqual(defaultLayout());
-    expect(readSavedLayout({ v: 3, today: [] })).toEqual(defaultLayout());
-    expect(defaultLayout().tabs.today.map((card) => card.card)).toEqual([
-      "legendday",
-      "clock",
-      "opponents",
-      "cutoffs",
-      "shield",
-      "around",
-      "ghost",
-    ]);
-  });
-
-  it("round-trips a saved layout with pins and a time zone", () => {
-    const layout = defaultLayout();
-    layout.timeZone = "Asia/Tokyo";
-    layout.tabs.today = [
-      { card: "clock", player: null },
-      { card: "clock", player: MAIN },
-    ];
-    layout.tabs.crew = [];
-    const stored = serializeLayout(layout);
-    expect(stored.today).toEqual([["clock"], ["clock", MAIN]]);
-    expect(readSavedLayout(stored)).toEqual(layout);
-    expect(parsePostedLayout(JSON.parse(JSON.stringify(stored)))).toEqual(layout);
-  });
-
-  it("reads a version 1 layout without its sizes and keeps cards on their own tab", () => {
-    const layout = readSavedLayout({
-      v: 1,
-      tz: "Not/AZone",
-      today: [["retired-card", "l"], ["shield", "xl"], ["clock", "s", MAIN], "junk"],
-      season: [["invite", "s"]],
+describe("dashboard settings", () => {
+  it("starts on the first-visit choice with the owner's defaults", () => {
+    for (const saved of [undefined, null, "x", { v: 2, today: [["shield"]] }, { v: 3 }]) {
+      expect(readSettings(saved)).toEqual(defaultSettings());
+    }
+    expect(defaultSettings()).toEqual({
+      layout: null,
+      goal: 200,
+      cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
+      group: null,
+      groupWindow: "7",
     });
-    expect(layout.timeZone).toBe("auto");
-    expect(layout.tabs.today).toEqual([
-      { card: "shield", player: null },
-      { card: "clock", player: MAIN },
+    // The default list names cards still to come; only built ones show.
+    expect(DEFAULT_LAYOUT).toEqual([
+      "legend-day",
+      "legend-clock",
+      "bases",
+      "goal",
+      "armies-defense",
+      "rivals-watch",
+      "heat-map",
     ]);
-    expect(layout.tabs.season).toEqual([]);
+    expect(shownCards(null)).toEqual([
+      "legend-clock",
+      "goal",
+      "rivals-watch",
+      "heat-map",
+    ]);
+    expect(shownCards("default")).toEqual(shownCards(null));
+    expect(addableCards(shownCards("default"))).toEqual([
+      "cutoffs",
+      "season-graph",
+      "recent-form",
+      "offense-consistency",
+      "group-watch",
+    ]);
   });
 
-  it("rejects a posted layout the page would never send", () => {
-    const valid = serializeLayout(defaultLayout());
-    const posted = (changes: Record<string, unknown>) =>
-      parsePostedLayout({ ...valid, ...changes });
-    expect(posted({})).not.toBeNull();
-    expect(posted({ v: 1 })).toBeNull();
-    expect(posted({ today: [["nope"]] })).toBeNull();
-    expect(posted({ today: [["shield", "s"]] })).toBeNull();
-    expect(posted({ crew: [["invite", MAIN]] })).toBeNull();
-    expect(posted({ season: [["clock"]] })).toBeNull();
-    expect(posted({ today: [["clock", "#lq2v8pj0"]] })).toBeNull();
-    expect(posted({ tz: "Not/AZone" })).toBeNull();
-    expect(posted({ season: undefined })).toBeNull();
+  it("stores only what differs from the defaults and reads it back", () => {
+    const settings: DashboardSettings = {
+      layout: ["cutoffs", "goal"],
+      goal: 10_000,
+      cutoffs: [10, 20, 50, 100, 200, 300, 400],
+      group: GROUP,
+      groupWindow: "season",
+    };
+    const stored = serializeSettings(settings);
+    expect(stored).toEqual({
+      v: 3,
+      layout: ["cutoffs", "goal"],
+      goal: 10_000,
+      cutoffs: [10, 20, 50, 100, 200, 300, 400],
+      group: GROUP,
+      window: "season",
+    });
+    expect(serializeSettings({ ...defaultSettings(), layout: "default" })).toEqual({
+      v: 3,
+      layout: "default",
+    });
+    expect(readSettings(stored)).toEqual(settings);
+    expect(parsePostedSettings(JSON.parse(JSON.stringify(stored)))).toEqual(settings);
+    // Every card and setting together stays far under the 4,096-byte box.
+    const everything = JSON.stringify(
+      serializeSettings({ ...settings, layout: addableCards([]) }),
+    );
+    expect(new TextEncoder().encode(everything).byteLength).toBeLessThan(400);
+  });
+
+  it("drops saved cards that are unknown, repeated or not built yet", () => {
     expect(
-      posted({ today: Array.from({ length: MAX_CARDS_PER_TAB + 1 }, () => ["clock"]) }),
-    ).toBeNull();
+      readSettings({
+        v: 3,
+        layout: ["goal", "retired", "goal", "bases", "cutoffs"],
+        goal: 0,
+        cutoffs: [10],
+        group: "nope",
+        window: "x",
+      }),
+    ).toEqual({ ...defaultSettings(), layout: ["goal", "cutoffs"] });
+    // An empty own layout stays empty; it is not a first visit.
+    expect(readSettings({ v: 3, layout: [] }).layout).toEqual([]);
+  });
+
+  it("refuses posted settings the page would never send", () => {
+    const posted = (changes: Record<string, unknown>) =>
+      parsePostedSettings({ v: 3, layout: "default", ...changes });
+    expect(posted({})).not.toBeNull();
+    expect(posted({ goal: 1 })?.goal).toBe(1);
+    expect(posted({ goal: 10_000 })?.goal).toBe(10_000);
+    expect(posted({ layout: [] })?.layout).toEqual([]);
+    for (const bad of [
+      { v: 2 },
+      { layout: null },
+      { layout: ["goal", "goal"] },
+      { layout: ["bases"] },
+      { layout: ["nope"] },
+      { goal: 0 },
+      { goal: 10_001 },
+      { goal: 2.5 },
+      { goal: "200" },
+      { cutoffs: [10, 50, 100, 200, 500, 1000] },
+      { cutoffs: [50, 10, 100, 200, 500, 1000, 5000] },
+      { cutoffs: [10, 50, 100, 200, 500, 1000, 7000] },
+      { group: "not-a-group" },
+      { window: "7" },
+      { extra: true },
+    ]) {
+      expect(posted(bad)).toBeNull();
+    }
   });
 
   it("finds the next 05:00 UTC Reset", () => {
@@ -390,140 +451,12 @@ describe("Bases you attacked", () => {
   });
 });
 
-describe("dashboard route", () => {
-  let account: {
-    username: string;
-    displayName: string;
-    preferences: Record<string, unknown>;
-  };
-  let client: {
-    getAccount: ReturnType<typeof vi.fn>;
-    updateAccount: ReturnType<typeof vi.fn>;
-    getPublicUser: ReturnType<typeof vi.fn>;
-    getPlayer: ReturnType<typeof vi.fn>;
-  };
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  });
-
+describe("today read for the Legend day and Bases cards", () => {
   beforeEach(() => {
-    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
-    mocks.getWebsiteConfig.mockReturnValue(
-      loadWebsiteConfig({
-        NODE_ENV: "test",
-        CLASHLENS_LOGIN_ENABLED: "true",
-        CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-        CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-        CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-        CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-        CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-        CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      }),
-    );
-    mocks.requireLogin.mockResolvedValue(IDENTITY);
-    mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
     mocks.requestJson.mockReset();
-    mocks.requestJson.mockRejectedValue(
-      new PythonApiError(503, { error: "unavailable" }),
-    );
-    account = { username: "nova88", displayName: "Nova", preferences: { other: 1 } };
-    client = {
-      getAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
-      updateAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
-      getPublicUser: vi.fn(async () => ({
-        username: "nova88",
-        displayName: "Nova",
-        verifiedPlayers: [
-          linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
-          linked(MAIN),
-        ],
-      })),
-      getPlayer: vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      }),
-    };
-    mocks.createPythonClient.mockReturnValue(client);
   });
 
-  const page = (
-    currentDay: Record<string, unknown>,
-    extra: Record<string, unknown> = {},
-  ) => ({
-    season: { currentDayNumber: 3, dayCount: 28 },
-    profile: {
-      trophies: 5702,
-      freshness: { observedAt: "2026-10-07T09:20:00Z" },
-      // A later correction to an earlier day.
-      battleHistoryUpdatedAt: "2026-10-07T09:28:00Z",
-    },
-    currentDayPublishedAt: "2026-10-07T09:25:00Z",
-    recentDays: [],
-    seasonDays: [],
-    currentDay: {
-      period: "2026-10-07T05:00:00+00:00 – 2026-10-08T05:00:00+00:00",
-      battlesComplete: false,
-      trophyChange: null,
-      offense: { attacks: 0 },
-      defense: { defenses: 0 },
-      offenseEvents: [],
-      defenseEvents: [],
-      ...currentDay,
-    },
-    ...extra,
-  });
-
-  it("shows the signed-out preview without a login", async () => {
-    mocks.readLoginIdentity.mockResolvedValue(null);
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    expect(data).toEqual({ kind: "signed-out", loginAvailable: true });
-    expect(client.getAccount).not.toHaveBeenCalled();
-  });
-
-  it("selects the first Legend player and survives missing player reads", async () => {
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.selectedTag).toBe(MAIN);
-    expect(data.layout).toEqual(defaultLayout());
-    expect(data.days).toEqual({});
-    expect(data.ranges).toEqual({});
-    expect(data.opponents).toEqual({});
-    expect(data.legendsHeld).toBeNull();
-    expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
-  });
-
-  it("reads the day, the last Reset rank, the range and the bases attacked", async () => {
-    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 9, 30) });
-    client.getPlayer.mockResolvedValue(
-      page(
-        {
-          offense: { attacks: 2 },
-          defense: { defenses: 1 },
-          offenseEvents: [
-            {
-              battleTimestamp: "2026-10-07T09:00:00Z",
-              stars: 3,
-              destructionPercentage: 100,
-              trophyChange: 40,
-              opponent: { tag: "#8PY", name: "Tundra" },
-            },
-          ],
-        },
-        {
-          recentDays: [
-            {
-              period: "2026-10-06T05:00:00+00:00 – 2026-10-07T05:00:00+00:00",
-              resetRank: 331,
-            },
-          ],
-        },
-      ),
-    );
+  it("reads the Next Reset range, Legends held and the bases attacked", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
@@ -546,84 +479,36 @@ describe("dashboard route", () => {
         },
       ],
     });
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
+    expect(await getPlayerToday(MAIN)).toEqual({
+      rankRange: { best: 95, worst: 760 },
+      legendsHeld: { held: 52, defenses: 100 },
+      openDefenses: 7,
+      automaticDefenseEach: 21,
+      opponents: [
+        {
+          tag: "#8PY",
+          name: "Tundra",
+          resetTrophies: 5688,
+          hit: {
+            stars: 3,
+            destruction: 100,
+            trophyChange: 40,
+            at: Date.UTC(2026, 9, 7, 9),
+          },
+          defenses: [{ stars: 3, yours: true }],
+          observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
+        },
+      ],
+    });
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
       "GET",
       undefined,
       undefined,
     );
-    expect(data.dayEndsMs).toBe(Date.UTC(2026, 9, 8, 5));
-    expect(data.days[MAIN]).toEqual(
-      emptyDay({
-        dayNumber: 3,
-        battles: [
-          {
-            at: Date.UTC(2026, 9, 7, 9),
-            kind: "attack",
-            stars: 3,
-            destruction: 100,
-            trophyChange: 40,
-            opponent: "Tundra",
-          },
-        ],
-        attacks: 2,
-        defenses: 1,
-        lastResetRank: 331,
-        trophies: 5702,
-        observedAtMs: Date.UTC(2026, 9, 7, 9, 20),
-        battlesObservedAtMs: Date.UTC(2026, 9, 7, 9, 25),
-        openDefenses: 7,
-        autoDefenseEach: 21,
-      }),
-    );
-    expect(data.ranges[MAIN]).toEqual({ best: 95, worst: 760 });
-    expect(data.legendsHeld).toEqual({ held: 52, defenses: 100 });
-    expect(data.opponents[MAIN]).toEqual([
-      {
-        tag: "#8PY",
-        name: "Tundra",
-        resetTrophies: 5688,
-        hit: {
-          stars: 3,
-          destruction: 100,
-          trophyChange: 40,
-          at: Date.UTC(2026, 9, 7, 9),
-        },
-        defenses: [{ stars: 3, yours: true }],
-        observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
-      },
-    ]);
   });
 
-  it("keeps the last Reset rank before today's log is published", async () => {
-    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 5, 10) });
-    client.getPlayer.mockResolvedValue(
-      page(
-        {},
-        {
-          currentDay: null,
-          recentDays: [
-            {
-              period: "2026-10-06T05:00:00+00:00 – 2026-10-07T05:00:00+00:00",
-              resetRank: 331,
-            },
-          ],
-        },
-      ),
-    );
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.days[MAIN]).toMatchObject({ lastResetRank: 331, battles: [] });
-  });
-
-  it("drops a today read whose range is impossible", async () => {
-    client.getPlayer.mockResolvedValue(page({}));
+  it("refuses a today read whose range is impossible", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 9, worst: 3 },
@@ -632,45 +517,117 @@ describe("dashboard route", () => {
       automatic_defense_each: null,
       opponents: [],
     });
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.ranges).toEqual({});
-    expect(data.days[MAIN]).toMatchObject({ openDefenses: null, autoDefenseEach: null });
+    await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
+  });
+});
+
+describe("dashboard route", () => {
+  let account: {
+    username: string;
+    displayName: string;
+    preferences: Record<string, unknown>;
+  };
+  let client: Record<
+    | "getAccount"
+    | "updateAccount"
+    | "getPublicUser"
+    | "getPlayer"
+    | "getPlayerSeasons"
+    | "getTrackedLeaderboard"
+    | "listGroups",
+    ReturnType<typeof vi.fn>
+  >;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
-  it("never shows last Season's trophies as live", async () => {
-    const pending = page({});
-    client.getPlayer.mockResolvedValue({
-      ...pending,
-      profile: { ...pending.profile, trophies: 6000, seasonResetPending: true },
-    });
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+  beforeEach(() => {
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+    mocks.getWebsiteConfig.mockReturnValue(
+      loadWebsiteConfig({
+        NODE_ENV: "test",
+        CLASHLENS_LOGIN_ENABLED: "true",
+        CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
+        CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+        CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+        CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+        CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
+        CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      }),
     );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.days[MAIN]).toMatchObject({ trophies: null });
-  });
-
-  it("works out a complete live day's gain from its attacks and defenses", async () => {
-    const day = {
-      battlesComplete: true,
-      offense: { attacks: 2, trophyGain: 80 },
-      defense: { defenses: 1, trophyLoss: 16 },
+    mocks.requireLogin.mockResolvedValue(IDENTITY);
+    mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
+    account = { username: "nova88", displayName: "Nova", preferences: { other: 1 } };
+    const unavailable = async () => {
+      throw new PythonApiError(503, { error: "unavailable" });
     };
-    client.getPlayer.mockResolvedValue(page(day));
-    const complete = unwrap<DashboardLoaderData>(
+    client = {
+      getAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
+      updateAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
+      getPublicUser: vi.fn(async () => ({
+        username: "nova88",
+        displayName: "Nova",
+        verifiedPlayers: [
+          linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
+          linked(MAIN),
+        ],
+      })),
+      getPlayer: vi.fn(unavailable),
+      getPlayerSeasons: vi.fn(unavailable),
+      getTrackedLeaderboard: vi.fn(unavailable),
+      listGroups: vi.fn(unavailable),
+    };
+    mocks.createPythonClient.mockReturnValue(client);
+  });
+
+  const load = async (url = `${ORIGIN}/dashboard`) => {
+    const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(url)));
+    if (data.kind !== "signed-in") throw new Error("expected signed in");
+    return data;
+  };
+
+  it("shows the signed-out preview without a login", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(null);
+    const { data } = unwrap<DashboardLoaderData>(
       await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    ).data;
-    if (complete.kind !== "signed-in") throw new Error("expected signed in");
-    expect(complete.days[MAIN]).toMatchObject({ complete: true, net: 64 });
-    client.getPlayer.mockResolvedValue(page({ ...day, battlesComplete: false }));
-    const partial = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    ).data;
-    if (partial.kind !== "signed-in") throw new Error("expected signed in");
-    expect(partial.days[MAIN]).toMatchObject({ complete: false, net: null });
+    );
+    expect(data).toEqual({ kind: "signed-out", loginAvailable: true });
+    expect(client.getAccount).not.toHaveBeenCalled();
+  });
+
+  it("selects the first Legend player and still answers when every card read fails", async () => {
+    const data = await load();
+    expect(data.selectedTag).toBe(MAIN);
+    expect(data.settings).toEqual(defaultSettings());
+    // A first visit reads the default cards that sit behind the pop-up.
+    expect(data.cards).toEqual({
+      "legend-clock": null,
+      goal: null,
+      "rivals-watch": null,
+      "heat-map": null,
+    });
+    expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
+  });
+
+  it("follows the switcher's player and reads no cards outside Legend I", async () => {
+    account.preferences = { dashboard: { v: 3, layout: ["goal"], goal: 50 } };
+    const data = await load(`${ORIGIN}/dashboard?player=%232pp8qly0`);
+    expect(data.selectedTag).toBe(ALT);
+    expect(data.settings).toMatchObject({ layout: ["goal"], goal: 50 });
+    expect(data.cards).toEqual({});
+    expect(client.getPlayer).not.toHaveBeenCalled();
+    expect(client.getTrackedLeaderboard).not.toHaveBeenCalled();
+  });
+
+  it("reads only the cards on the dashboard", async () => {
+    account.preferences = { dashboard: { v: 3, layout: ["heat-map"] } };
+    const data = await load();
+    expect(Object.keys(data.cards)).toEqual(["heat-map"]);
+    expect(client.getPlayer).toHaveBeenCalledTimes(1);
+    expect(client.getTrackedLeaderboard).not.toHaveBeenCalled();
+    expect(client.listGroups).not.toHaveBeenCalled();
   });
 
   it("ends the day at the Reset after the first read starts, even if it lands after", async () => {
@@ -679,22 +636,7 @@ describe("dashboard route", () => {
       vi.setSystemTime(Date.UTC(2026, 9, 7, 5, 0, 1));
       return { username: "nova88", displayName: "Nova", verifiedPlayers: [linked(MAIN)] };
     });
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
-  });
-
-  it("follows the switcher's player and reads the saved layout", async () => {
-    account.preferences = { dashboard: { v: 2, tz: "auto", today: [["shield"]] } };
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard?player=%232pp8qly0`)),
-    );
-    if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(data.selectedTag).toBe(ALT);
-    expect(data.layout.tabs.today).toEqual([{ card: "shield", player: null }]);
-    expect(client.getPlayer).not.toHaveBeenCalled();
+    expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
   });
 
   it("sends an account without a profile to setup", async () => {
@@ -708,11 +650,10 @@ describe("dashboard route", () => {
     );
   });
 
-  it("saves the layout and keeps every other preference", async () => {
-    const layout = defaultLayout();
-    layout.tabs.today = [{ card: "clock", player: MAIN }];
+  it("saves the settings and keeps every other preference", async () => {
+    const settings = { v: 3, layout: ["goal", "cutoffs"], goal: 75 };
     const { data, status } = unwrap<DashboardActionData>(
-      await action(saveRequest(JSON.stringify(serializeLayout(layout)))),
+      await action(saveRequest(JSON.stringify(settings))),
     );
     expect(status).toBe(200);
     expect(data.saved).toBe(true);
@@ -720,28 +661,48 @@ describe("dashboard route", () => {
       {
         username: "nova88",
         displayName: "Nova",
-        preferences: { other: 1, dashboard: serializeLayout(layout) },
+        preferences: { other: 1, dashboard: settings },
       },
       IDEMPOTENCY_KEY,
     );
   });
 
-  it("refuses a bad layout, another site, or a layout too big to store", async () => {
-    const bad = unwrap<DashboardActionData>(await action(saveRequest('{"v":2}')));
-    expect(bad.status).toBe(400);
+  it("saves the default choice so later default changes reach the user", async () => {
+    account.preferences = { dashboard: { v: 3, layout: ["goal"], goal: 75 } };
+    await action(saveRequest(JSON.stringify({ v: 3, layout: "default", goal: 75 })));
+    expect(client.updateAccount.mock.calls[0]?.[0].preferences.dashboard).toEqual({
+      v: 3,
+      layout: "default",
+      goal: 75,
+    });
+  });
+
+  it("saves a card setting made before any layout was picked with the default layout", async () => {
+    const posted = serializeSettings({ ...defaultSettings(), goal: 50 });
+    const { data, status } = unwrap<DashboardActionData>(
+      await action(saveRequest(JSON.stringify(posted))),
+    );
+    expect(status).toBe(200);
+    expect(data.saved).toBe(true);
+    expect(client.updateAccount.mock.calls[0]?.[0].preferences.dashboard).toEqual({
+      v: 3,
+      layout: "default",
+      goal: 50,
+    });
+  });
+
+  it("refuses bad settings, another site, or settings too big to store", async () => {
+    for (const bad of ['{"v":2}', "not json", '{"v":3,"layout":"default","goal":0}']) {
+      expect(unwrap<DashboardActionData>(await action(saveRequest(bad))).status).toBe(
+        400,
+      );
+    }
     const crossSite = unwrap<DashboardActionData>(
-      await action(
-        saveRequest(
-          JSON.stringify(serializeLayout(defaultLayout())),
-          "https://evil.example",
-        ),
-      ),
+      await action(saveRequest(DEFAULT_SAVE, "https://evil.example")),
     );
     expect(crossSite.status).toBe(403);
-    account.preferences = { notes: "x".repeat(3900) };
-    const tooBig = unwrap<DashboardActionData>(
-      await action(saveRequest(JSON.stringify(serializeLayout(defaultLayout())))),
-    );
+    account.preferences = { notes: "x".repeat(4050) };
+    const tooBig = unwrap<DashboardActionData>(await action(saveRequest(DEFAULT_SAVE)));
     expect(tooBig.status).toBe(413);
     expect(client.updateAccount).not.toHaveBeenCalled();
   });
@@ -751,10 +712,25 @@ describe("dashboard route", () => {
       new PythonApiError(503, { error: "unavailable" }),
     );
     const { data, status } = unwrap<DashboardActionData>(
-      await action(saveRequest(JSON.stringify(serializeLayout(defaultLayout())))),
+      await action(saveRequest(DEFAULT_SAVE)),
     );
     expect(status).toBe(503);
     expect(data).toMatchObject({ saved: false, error: expect.any(String) });
+  });
+
+  it("reloads the cards after a save or for another player, never otherwise", () => {
+    const check = (from: string, to: string, formMethod?: string) =>
+      shouldRevalidate({
+        currentUrl: new URL(`${ORIGIN}${from}`),
+        nextUrl: new URL(`${ORIGIN}${to}`),
+        formMethod,
+        defaultShouldRevalidate: true,
+      } as Parameters<typeof shouldRevalidate>[0]);
+    expect(check("/dashboard", "/dashboard", "POST")).toBe(true);
+    expect(check("/dashboard", "/dashboard?player=%232PP8QLY0")).toBe(true);
+    expect(check("/dashboard?player=%232PP8QLY0", "/dashboard?player=%232PP8QLY0")).toBe(
+      false,
+    );
   });
 });
 
@@ -788,7 +764,7 @@ describe("dashboard switch", () => {
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "");
     for (const run of [
       () => loader(loaderArgs(`${ORIGIN}/dashboard`)),
-      () => action(saveRequest(JSON.stringify(serializeLayout(defaultLayout())))),
+      () => action(saveRequest(DEFAULT_SAVE)),
     ]) {
       const thrown = await run().then(
         () => null,
@@ -808,28 +784,11 @@ describe("dashboard switch", () => {
 describe("dashboard page", () => {
   const CHECKING = "#9YJ2C0QL";
 
-  async function renderDashboard(
-    loaderData: Partial<Extract<DashboardLoaderData, { kind: "signed-in" }>>,
-    search = "",
-  ) {
-    const full: DashboardLoaderData = {
-      kind: "signed-in",
-      players: [],
-      playersUnavailable: false,
-      selectedTag: null,
-      layout: defaultLayout(),
-      days: {},
-      ranges: {},
-      opponents: {},
-      legendsHeld: null,
-      dayEndsMs: Date.UTC(2099, 0, 1, 5),
-      idempotencyKey: IDEMPOTENCY_KEY,
-      ...loaderData,
-    };
+  async function renderPage(loaderData: DashboardLoaderData) {
     const handler = createStaticHandler([
-      { path: "/dashboard", Component: DashboardRoute, loader: () => full },
+      { path: "/dashboard", Component: DashboardRoute, loader: () => loaderData },
     ]);
-    const context = await handler.query(new Request(`${ORIGIN}/dashboard${search}`));
+    const context = await handler.query(new Request(`${ORIGIN}/dashboard`));
     if (context instanceof Response) throw new Error("unexpected response");
     return renderToString(
       createElement(StaticRouterProvider, {
@@ -840,53 +799,125 @@ describe("dashboard page", () => {
     ).replaceAll("<!-- -->", "");
   }
 
-  it("says each player's status once and shows live numbers once", async () => {
-    const layout = defaultLayout();
-    layout.tabs.today = [
-      { card: "legendday", player: null },
-      { card: "shield", player: ALT },
-      { card: "around", player: ALT },
-      { card: "ghost", player: CHECKING },
-    ];
+  const renderDashboard = (
+    loaderData: Partial<Extract<DashboardLoaderData, { kind: "signed-in" }>>,
+  ) =>
+    renderPage({
+      kind: "signed-in",
+      players: [linked(MAIN)],
+      playersUnavailable: false,
+      selectedTag: MAIN,
+      settings: { ...defaultSettings(), layout: "default" },
+      cards: {},
+      dayEndsMs: Date.UTC(2099, 0, 1, 5),
+      idempotencyKey: IDEMPOTENCY_KEY,
+      ...loaderData,
+    });
+
+  const cardOrder = (html: string) =>
+    [...html.matchAll(/class="dash-card dash-card-(\w)"[^>]*data-card="([^"]+)"/g)].map(
+      (match) => `${match[2]}:${match[1]}`,
+    );
+
+  it("shows each linked account as a tab with its trophies, rank and net today", async () => {
+    const html = await renderDashboard({
+      players: [
+        linked(MAIN),
+        linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
+        linked(CHECKING, { name: "Lens New", state: "checking", rank: null }),
+      ],
+    });
+    const plain = text(html);
+    expect(plain).toContain("Lens Main 5,696 · #318 · +46");
+    expect(plain).toContain("Lens Alt Not in Legend I");
+    expect(plain).toContain("Lens New Not tracked yet");
+    expect(html).toContain(
+      `aria-current="page" href="/dashboard?player=${encodeURIComponent(MAIN)}"`,
+    );
+    expect(html).toContain('href="/account/verify-player"');
+    // The player's name shows once, in its tab, cut with "…" and in full on hover.
+    expect(html.match(/title="Lens Main"/g)).toHaveLength(1);
+  });
+
+  it("puts Customise on the divider above the cards, in the saved order and sizes", async () => {
+    const html = await renderDashboard({
+      settings: {
+        ...defaultSettings(),
+        layout: ["heat-map", "rivals-watch", "goal", "group-watch"],
+      },
+      cards: { goal: null },
+    });
+    expect(html.indexOf("Customise dashboard")).toBeLessThan(html.indexOf("dash-grid"));
+    expect(cardOrder(html)).toEqual([
+      "heat-map:s",
+      "rivals-watch:m",
+      "goal:s",
+      "group-watch:m",
+    ]);
+    expect(text(html)).toContain(
+      "Goal This card could not be loaded right now. Reload the page to try again.",
+    );
+    expect(html).not.toContain("Use our layout");
+  });
+
+  it("asks a first-time user to pick a start over the default cards", async () => {
+    const html = await renderDashboard({ settings: defaultSettings() });
+    const plain = text(html);
+    expect(plain).toContain("Your dashboard");
+    expect(plain).toContain("Recommended Use our layout");
+    expect(plain).toContain("Build my own");
+    expect(plain).toContain("Change it any time with");
+    expect(cardOrder(html)).toEqual([
+      "legend-clock:s",
+      "goal:s",
+      "rivals-watch:m",
+      "heat-map:s",
+    ]);
+  });
+
+  it("offers Add a card on an empty dashboard", async () => {
+    const html = await renderDashboard({
+      settings: { ...defaultSettings(), layout: [] },
+    });
+    expect(text(html)).toContain("Your dashboard is empty Add a card");
+    expect(html).not.toContain("data-card=");
+  });
+
+  it("says the dashboard is Legend I only for an account outside it", async () => {
     const html = await renderDashboard({
       players: [
         linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
-        linked(MAIN),
-        linked(CHECKING, { name: "Lens New", state: "checking", rank: null }),
       ],
-      selectedTag: MAIN,
-      layout,
-      days: { [MAIN]: emptyDay() },
+      selectedTag: ALT,
     });
-    expect(html.match(/not in Legends/gi)).toHaveLength(1);
-    expect(html).toContain("Lens Alt is not in Legends");
-    expect(html).toContain("Lens New</b> Checking this tag with Clash of Clans.");
-    expect(html.match(/5,696/g)).toHaveLength(1);
-    expect(html.match(/#318/g)).toHaveLength(1);
-    expect(html).not.toContain('data-card="shield"');
-    expect(html).not.toContain('data-card="ghost"');
-    expect(html).not.toMatch(/follows switcher/i);
-    expect(html).not.toMatch(/\bLIVE\b/);
+    expect(text(html)).toContain(
+      "Unfortunately, the dashboard is Legend I only. Support for lower leagues is coming in the future!",
+    );
+    expect(html).not.toContain("Customise dashboard");
+    expect(html).not.toContain("data-card=");
   });
 
-  it("gives every card its one size on the 3-column grid", async () => {
+  it("explains an account still being checked", async () => {
     const html = await renderDashboard({
-      players: [linked(MAIN)],
-      selectedTag: MAIN,
-      days: { [MAIN]: emptyDay() },
+      players: [linked(CHECKING, { name: "Lens New", state: "checking", rank: null })],
+      selectedTag: CHECKING,
     });
-    expect(html).toMatch(/dash-card dash-card-m" aria-label="Legend day"/);
-    expect(html).toMatch(/dash-card dash-card-s" aria-label="Legend clock"/);
-    expect(html).toMatch(/dash-card dash-card-l" aria-label="Bases you attacked"/);
-    // The Legend day heading and the switcher name the player in full on hover.
-    expect(html.match(/title="Lens Main"/g)).toHaveLength(2);
+    expect(text(html)).toContain("Checking this tag with Clash of Clans.");
+    expect(html).not.toContain("data-card=");
   });
 
-  it("shows only the linking prompt on every tab when no player is linked", async () => {
-    for (const tab of ["today", "season", "crew"]) {
-      const html = await renderDashboard({}, `?tab=${tab}`);
-      expect(html).toContain("Link your Clash player");
-      expect(html).not.toContain("data-card=");
-    }
+  it("shows only the linking prompt when no player is linked", async () => {
+    const html = await renderDashboard({ players: [], selectedTag: null });
+    expect(html).toContain("Link your Clash player");
+    expect(html).not.toContain("Customise dashboard");
+    expect(html).not.toContain("data-card=");
+  });
+
+  it("previews the default cards behind sign-in", async () => {
+    const html = await renderPage({ kind: "signed-out", loginAvailable: true });
+    const plain = text(html);
+    expect(plain).toContain("Your Legend day, on one page");
+    expect(plain).toContain("Continue with Google");
+    expect(plain).toContain("Legend clock Goal Rivals watch Season heat map");
   });
 });

@@ -1,6 +1,6 @@
 # Player dashboard design
 
-Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. The one-page design isn't built yet; Legend day, Legend clock and Bases you attacked already show on the current tabbed dashboard. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
+Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. The one-page dashboard is built with 9 of the 13 cards; Legend day, Bases you attacked, Armies on defense and Armies on offense aren't built yet and stay off the page until they are. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
 
 The dashboard can be built behind the off switch, but nothing goes live until tracking passes the accuracy bar.
 
@@ -95,7 +95,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 4. **Fixed Legends trophies lost:** −32 a defense was steady over 13 days (29 Sep–11 Oct). Recheck after a big game update. The Legends held rate is not fixed: it is worked out live from today's defenses (about 52% over those days).
 5. **Not tested:** dragging cards with a real finger on phone or iPad (the ↑ ↓ arrows always work).
 6. **Build checks:** Goal's dashed goal line must stay visible in dark mode; Goal's "Behind pace by N a day" label must fit for far goals (Top 1–50 from rank 318 overflowed in the design draft); real defenses cost about 32 trophies each (a full 8-defense day about −260), more than some draft numbers.
-7. **Bases you attacked Average band:** the owner set ±10 points on 2026-10-09. The card on the current dashboard still uses 15 points (`BASE_STRENGTH_BAND` in `website/app/lib/dashboard.ts`); change it to 10 when the one-page dashboard is built.
+7. **Bases you attacked Average band:** the owner set ±10 points on 2026-10-09. `BASE_STRENGTH_BAND` in `website/app/lib/dashboard.ts` is still 15; change it to 10 when the Bases you attacked card is built.
 8. **Unused Trophy trend code (owner decision):** `website/app/components/PlayerTrends.tsx` is imported by nothing but its own test and is kept for a Trophy trend card this design dropped. Deleting it waits for the owner's approval.
 9. **Share a card as an image or link:** a later idea, to reuse the Discord bot's card image maker.
 10. **Custom defense window across Seasons (owner decision):** Armies on defense can only use days still kept. A finished Season's daily logs and army battle records are deleted 7 days after it ends, so early in a new Season a long Custom window covers fewer days. Covering the full window would need saved per-player defense totals or longer retention.

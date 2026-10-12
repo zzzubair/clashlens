@@ -1,46 +1,96 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useFetcher } from "react-router";
+import { useFetcher } from "react-router";
 
-import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type {
-  CardData,
-  CardId,
-  DashboardLayout,
-  DashboardTab,
-  LegendsHeld,
-  OpponentRow,
-  PlacedCard,
-  PlayerDay,
-  RankRange,
-} from "../lib/dashboard";
+import type { CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
-  CARD_IDS,
-  CARD_SIZE_LABELS,
   CARDS,
-  DASHBOARD_TABS,
-  serializeLayout,
+  CARD_SIZE_LABELS,
+  CUTOFF_LINES,
+  CUTOFF_PICKS,
+  DEFAULT_CUTOFFS,
+  MAX_GOAL,
+  addableCards,
+  serializeSettings,
+  shownCards,
 } from "../lib/dashboard";
-import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
+import type { CardDataMap, CardDataSet } from "../lib/dashboard-cards";
 import type { DashboardActionData } from "../routes/dashboard";
+import {
+  ClockCard,
+  CutoffsCard,
+  GoalCard,
+  GroupWatchCard,
+  RivalsCard,
+} from "./BoardCards";
 import { DashboardIcon } from "./DashboardIcon";
-import { LegendClock } from "./LegendClock";
-import { LegendDayCard } from "./LegendDayCard";
-import { OpponentsCard } from "./OpponentsCard";
+import { CardHead, CardNote } from "./DashboardParts";
+import {
+  HeatMapCard,
+  OffenseConsistencyCard,
+  RecentFormCard,
+  SeasonGraphCard,
+} from "./SeasonCards";
 
-const DATA_TAGS: Record<CardData, string | null> = {
-  ready: null,
-  "new-read": "new read",
-  estimate: "≈ estimate",
-  "new-data": "needs new data",
-  "not-ready": "not ready",
+interface ViewContext {
+  /** The Legend day the cards were read for has ended. */
+  dayOver: boolean;
+  nowMs: number | null;
+  timeZone: string;
+  saving: boolean;
+  pickGroup: (groupId: string) => void;
+}
+
+/** How each built card draws its data. A card added later adds its view here. */
+const CARD_VIEWS: {
+  [Card in keyof CardDataMap]: (
+    data: CardDataMap[Card],
+    context: ViewContext,
+  ) => ReactNode;
+} = {
+  "legend-clock": (data, context) => (
+    <ClockCard data={data} nowMs={context.nowMs} timeZone={context.timeZone} />
+  ),
+  goal: (data) => <GoalCard data={data} />,
+  "rivals-watch": (data, context) => <RivalsCard data={data} nowMs={context.nowMs} />,
+  "heat-map": (data) => <HeatMapCard data={data} />,
+  cutoffs: (data, context) => <CutoffsCard data={data} nowMs={context.nowMs} />,
+  "season-graph": (data) => <SeasonGraphCard data={data} />,
+  "recent-form": (data) => <RecentFormCard data={data} />,
+  "offense-consistency": (data) => <OffenseConsistencyCard data={data} />,
+  "group-watch": (data, context) => (
+    <GroupWatchCard data={data} onPick={context.pickGroup} saving={context.saving} />
+  ),
 };
 
-const TAB_LABELS = Object.fromEntries(
-  DASHBOARD_TABS.map((item) => [item.id, item.label]),
-) as Record<DashboardTab, string>;
+function hasView(card: CardId): card is keyof CardDataMap {
+  return Object.hasOwn(CARD_VIEWS, card);
+}
 
-function playerName(player: LinkedPlayerCard): string {
-  return player.name ?? player.tag;
+function cardBody(card: CardId, data: CardDataSet, context: ViewContext): ReactNode {
+  const title = CARDS[card].title;
+  if (context.dayOver || !hasView(card)) return <CardHead title={title} />;
+  const loaded = data[card];
+  if (loaded === undefined)
+    return (
+      <>
+        <CardHead title={title} />
+        <CardNote>This card loads when you press Done.</CardNote>
+      </>
+    );
+  if (loaded === null)
+    return (
+      <>
+        <CardHead title={title} />
+        <CardNote>
+          This card could not be loaded right now. Reload the page to try again.
+        </CardNote>
+      </>
+    );
+  const view = CARD_VIEWS[card] as (
+    value: typeof loaded,
+    context: ViewContext,
+  ) => ReactNode;
+  return view(loaded, context);
 }
 
 function deviceTimeZone(): string {
@@ -51,240 +101,192 @@ function deviceTimeZone(): string {
   }
 }
 
-function timeZoneOptions(): string[] {
-  try {
-    return Intl.supportedValuesOf("timeZone");
-  } catch {
-    return ["UTC"];
-  }
+function moved(cards: CardId[], index: number, step: -1 | 1): CardId[] {
+  const next = [...cards];
+  const target = index + step;
+  if (target < 0 || target >= next.length) return cards;
+  [next[index], next[target]] = [next[target] as CardId, next[index] as CardId];
+  return next;
 }
 
-/** "updated 3 min ago", or nothing until the browser knows the time. */
-function updatedAgo(observedAtMs: number | null, nowMs: number | null): string | null {
-  if (observedAtMs === null || nowMs === null) return null;
-  const minutes = Math.max(0, Math.floor((nowMs - observedAtMs) / 60_000));
-  if (minutes < 1) return "updated just now";
-  if (minutes < 120) return `updated ${minutes} min ago`;
-  return `updated ${Math.floor(minutes / 60)} h ago`;
-}
-
-/** A card with no content yet: its title, size and what it will show. */
-export function PlaceholderCard({
-  placed,
-  tools,
-  pinnedTo,
+/** Card settings, opened from "⚙ Settings" while customising. */
+function SettingsDialog({
+  card,
+  settings,
+  saving,
+  error,
+  onSave,
+  onClose,
 }: {
-  placed: PlacedCard;
-  tools?: ReactNode;
-  pinnedTo?: string | null;
+  card: CardId;
+  settings: DashboardSettings;
+  saving: boolean;
+  error: string | null | undefined;
+  onSave: (next: DashboardSettings) => void;
+  onClose: () => void;
 }) {
-  const definition = CARDS[placed.card];
-  return (
-    <CardFrame placed={placed} tools={tools} titleExtra={pinnedTo}>
-      <div className="dash-placeholder">
-        <DashboardIcon name={definition.icon} />
-        <p className="dash-placeholder-label">
-          Placeholder · {CARD_SIZE_LABELS[definition.size]}
-        </p>
-        <p className="dash-placeholder-what">{definition.what}</p>
-        {DATA_TAGS[definition.data] ? (
-          <span className="dash-tag">{DATA_TAGS[definition.data]}</span>
-        ) : null}
-      </div>
-    </CardFrame>
-  );
-}
-
-function CardFrame({
-  placed,
-  tools,
-  titleExtra,
-  meta,
-  footer,
-  children,
-}: {
-  placed: PlacedCard;
-  tools?: ReactNode;
-  /** Shown after the title, such as the player's name; cut short, in full on hover. */
-  titleExtra?: string | null;
-  /** Top-right corner, such as "updated 2 min ago". */
-  meta?: ReactNode;
-  footer?: ReactNode;
-  children: ReactNode;
-}) {
-  const definition = CARDS[placed.card];
-  return (
-    <section
-      className={`dash-card dash-card-${definition.size}${tools ? " dash-card-editing" : ""}`}
-      aria-label={definition.title}
-      data-card={placed.card}
-    >
-      {tools}
-      <header className="dash-card-head">
-        <h2>
-          {definition.title}
-          {titleExtra ? (
-            <span className="dash-card-extra">
-              {" · "}
-              <bdi className="dash-name" title={titleExtra}>
-                {titleExtra}
-              </bdi>
-            </span>
-          ) : null}
-        </h2>
-        {meta ? <span className="dash-card-meta">{meta}</span> : null}
-      </header>
-      {children}
-      {footer ? <p className="dash-card-foot">{footer}</p> : null}
-    </section>
-  );
-}
-
-/** What one placed card shows for one player. */
-interface CardContext {
-  player: LinkedPlayerCard;
-  pinned: boolean;
-  day: PlayerDay | null;
-  range: RankRange | null;
-  opponents: OpponentRow[] | null;
-  legends: LegendsHeld | null;
-  nowMs: number | null;
-  timeZone: string;
-}
-
-interface CardContent {
-  body: ReactNode;
-  titleExtra?: string | null;
-  meta?: ReactNode;
-  footer?: ReactNode;
-}
-
-/**
- * The cards that have content. A card missing here shows its placeholder,
- * so a new card is one entry here plus its component.
- */
-const CARD_CONTENT: Partial<
-  Record<CardId, (context: CardContext) => CardContent | null>
-> = {
-  legendday: (context) => ({
-    titleExtra: playerName(context.player),
-    meta: [
-      context.day?.dayNumber
-        ? `Day ${context.day.dayNumber} of ${context.day.dayCount ?? 28}`
-        : null,
-      updatedAgo(context.day?.observedAtMs ?? null, context.nowMs),
-    ]
-      .filter(Boolean)
-      .join(" · "),
-    body: (
-      <LegendDayCard player={context.player} day={context.day} range={context.range} />
-    ),
-  }),
-  clock: (context) => ({
-    titleExtra: context.pinned ? playerName(context.player) : null,
-    meta: updatedAgo(context.day?.battlesObservedAtMs ?? null, context.nowMs),
-    footer: `Times in your zone: ${context.timeZone}`,
-    body: (
-      <LegendClock
-        battles={context.day?.battles ?? []}
-        nowMs={context.nowMs}
-        timeZone={context.timeZone}
-      />
-    ),
-  }),
-  opponents: (context) => {
-    if (context.opponents === null) return null;
-    const oldest = context.opponents.reduce<number | null>(
-      (min, row) =>
-        row.observedAtMs === null
-          ? min
-          : min === null
-            ? row.observedAtMs
-            : Math.min(min, row.observedAtMs),
-      null,
+  const dialog = useRef<HTMLDialogElement>(null);
+  // Only this dialog's own save failing shows here, not an earlier one.
+  const [tried, setTried] = useState(false);
+  const [goal, setGoal] = useState(String(settings.goal));
+  const [lines, setLines] = useState<number[]>(settings.cutoffs);
+  const [groupWindow, setGroupWindow] = useState<GroupWindow>(settings.groupWindow);
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  const goalNumber = Number(goal);
+  const goalValid = /^\d+$/.test(goal) && goalNumber >= 1 && goalNumber <= MAX_GOAL;
+  const valid =
+    card === "goal"
+      ? goalValid
+      : card === "cutoffs"
+        ? lines.length === CUTOFF_PICKS
+        : true;
+  const save = () => {
+    if (!valid) return;
+    setTried(true);
+    onSave(
+      card === "goal"
+        ? { ...settings, goal: goalNumber }
+        : card === "cutoffs"
+          ? { ...settings, cutoffs: [...lines].sort((a, b) => a - b) }
+          : { ...settings, groupWindow },
     );
-    return {
-      titleExtra: `${context.pinned ? `${playerName(context.player)} · ` : ""}today · ${context.opponents.length} of 8`,
-      meta: updatedAgo(oldest, context.nowMs),
-      body: (
-        <OpponentsCard
-          rows={context.opponents}
-          legends={context.legends}
-          timeZone={context.timeZone}
-        />
-      ),
-    };
-  },
-};
-
-function CardTools({
-  placed,
-  index,
-  count,
-  players,
-  onChange,
-}: {
-  placed: PlacedCard;
-  index: number;
-  count: number;
-  players: LinkedPlayerCard[];
-  onChange: (change: { move?: -1 | 1; player?: string | null; remove?: true }) => void;
-}) {
-  const definition = CARDS[placed.card];
+  };
   return (
-    <div className="dash-card-tools">
-      <button
-        type="button"
-        className="dash-icon-button"
-        aria-label={`Move ${definition.title} up`}
-        disabled={index === 0}
-        onClick={() => onChange({ move: -1 })}
+    <dialog
+      ref={dialog}
+      className="dash-dialog dash-settings"
+      aria-labelledby="dash-settings-title"
+      onClose={onClose}
+    >
+      <form
+        method="dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
       >
-        <DashboardIcon name="up" />
-      </button>
-      <button
-        type="button"
-        className="dash-icon-button"
-        aria-label={`Move ${definition.title} down`}
-        disabled={index === count - 1}
-        onClick={() => onChange({ move: 1 })}
-      >
-        <DashboardIcon name="down" />
-      </button>
-      {definition.perPlayer && players.length > 0 ? (
-        <select
-          aria-label={`Pin ${definition.title} to one account`}
-          value={placed.player ?? ""}
-          onChange={(event) => onChange({ player: event.currentTarget.value || null })}
-        >
-          <option value="">Not pinned</option>
-          {players.map((player) => (
-            <option key={player.tag} value={player.tag}>
-              Pin to {playerName(player)}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      <button
-        type="button"
-        className="dash-icon-button dash-remove"
-        aria-label={`Remove ${definition.title}`}
-        onClick={() => onChange({ remove: true })}
-      >
-        <DashboardIcon name="x" />
-      </button>
-    </div>
+        <header className="dash-dialog-head">
+          <h2 id="dash-settings-title">{CARDS[card].title} settings</h2>
+          <button
+            type="button"
+            className="dash-icon-button"
+            aria-label="Close"
+            onClick={() => dialog.current?.close()}
+          >
+            <DashboardIcon name="x" />
+          </button>
+        </header>
+        {card === "goal" ? (
+          <label className="dash-field">
+            Finish the Season in the top
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={MAX_GOAL}
+              step={1}
+              value={goal}
+              autoFocus
+              aria-describedby="dash-goal-help"
+              onChange={(event) => setGoal(event.currentTarget.value)}
+            />
+            <span id="dash-goal-help" className={goalValid ? "dash-muted" : "negative"}>
+              {goalValid
+                ? `Any rank from 1 to ${MAX_GOAL.toLocaleString("en-US")}`
+                : `Enter a whole number from 1 to ${MAX_GOAL.toLocaleString("en-US")}`}
+            </span>
+          </label>
+        ) : card === "cutoffs" ? (
+          <fieldset className="dash-field">
+            <legend>
+              Pick {CUTOFF_PICKS} lines ·{" "}
+              <b>
+                {lines.length} of {CUTOFF_PICKS}
+              </b>
+            </legend>
+            <div className="dash-chips">
+              {CUTOFF_LINES.map((line) => {
+                const on = lines.includes(line);
+                return (
+                  <button
+                    key={line}
+                    type="button"
+                    className="dash-chip-button"
+                    aria-pressed={on}
+                    disabled={!on && lines.length >= CUTOFF_PICKS}
+                    onClick={() =>
+                      setLines(
+                        on ? lines.filter((item) => item !== line) : [...lines, line],
+                      )
+                    }
+                  >
+                    {on ? "✓ " : ""}Top {line.toLocaleString("en-US")}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              className="button button-secondary dash-small-button"
+              onClick={() => setLines([...DEFAULT_CUTOFFS])}
+            >
+              Reset to default
+            </button>
+          </fieldset>
+        ) : (
+          <fieldset className="dash-field">
+            <legend>Show</legend>
+            <div className="dash-chips">
+              {(
+                [
+                  ["7", "Last 7 days"],
+                  ["season", "Whole Season"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="dash-chip-button"
+                  aria-pressed={groupWindow === value}
+                  onClick={() => setGroupWindow(value)}
+                >
+                  {groupWindow === value ? "✓ " : ""}
+                  {label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+        {tried && error ? (
+          <p className="negative" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="dash-dialog-actions">
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={!valid || saving}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
-function CardPicker({
-  tab,
-  placed,
+/** "+ Add a card": every built card not on the dashboard, with its size and one line. */
+function AddSheet({
+  cards,
+  saving,
   onAdd,
   onClose,
 }: {
-  tab: DashboardTab;
-  placed: PlacedCard[];
+  cards: CardId[];
+  saving: boolean;
   onAdd: (card: CardId) => void;
   onClose: () => void;
 }) {
@@ -292,375 +294,422 @@ function CardPicker({
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
-  const shown = CARD_IDS.filter((id) => CARDS[id].tab === tab);
   return (
     <dialog
       ref={dialog}
-      className="dash-picker"
-      aria-labelledby="dash-picker-title"
+      className="dash-dialog dash-add-sheet"
+      aria-labelledby="dash-add-title"
       onClose={onClose}
     >
-      <header className="dash-picker-head">
-        <h2 id="dash-picker-title">
-          <DashboardIcon name="plus" /> Add a card to {TAB_LABELS[tab]}
-        </h2>
+      <header className="dash-dialog-head">
+        <h2 id="dash-add-title">Add a card</h2>
         <button
           type="button"
-          className="dash-icon-button"
-          aria-label="Close"
+          className="button button-secondary dash-small-button"
           onClick={() => dialog.current?.close()}
         >
-          <DashboardIcon name="x" />
+          Done
         </button>
       </header>
-      <ul className="dash-picker-list">
-        {shown.map((id) => {
-          const definition = CARDS[id];
-          const onTab = placed.some((card) => card.card === id);
-          return (
-            <li key={id} className="dash-picker-card">
-              <div className="dash-picker-preview" aria-hidden="true">
-                <DashboardIcon name={definition.icon} />
-              </div>
-              <h3>
-                <DashboardIcon name={definition.icon} />
-                {definition.title}
-              </h3>
-              <p>{definition.what}</p>
-              <p className="dash-picker-tags">
+      {cards.length ? (
+        <ul className="dash-add-list">
+          {cards.map((card) => (
+            <li key={card}>
+              <div>
+                <b>{CARDS[card].title}</b>{" "}
                 <span className="dash-size-chip">
-                  {CARD_SIZE_LABELS[definition.size]}
+                  {CARD_SIZE_LABELS[CARDS[card].size]}
                 </span>
-                {DATA_TAGS[definition.data] ? (
-                  <span className="dash-tag">{DATA_TAGS[definition.data]}</span>
-                ) : null}
-                {definition.offByDefault ? (
-                  <span className="dash-tag">off by default</span>
-                ) : null}
-              </p>
-              {onTab ? (
-                <p className="dash-picker-on">
-                  <DashboardIcon name="check" /> on this tab
-                </p>
-              ) : null}
+                <p className="dash-muted">{CARDS[card].description}</p>
+              </div>
               <button
                 type="button"
-                className="button button-primary"
-                onClick={() => {
-                  onAdd(id);
-                  dialog.current?.close();
-                }}
+                className="button button-primary dash-small-button"
+                aria-label={`Add ${CARDS[card].title}`}
+                disabled={saving}
+                onClick={() => onAdd(card)}
               >
-                <DashboardIcon name="plus" /> Add to {TAB_LABELS[tab]}
+                Add
               </button>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+      ) : (
+        <p className="dash-muted dash-add-none">
+          Every card is already on your dashboard.
+        </p>
+      )}
     </dialog>
   );
 }
 
-function LinkPlayerPrompt() {
+/** The first-visit pop-up: our layout or an empty one. */
+function FirstVisit({
+  saving,
+  onPick,
+}: {
+  saving: boolean;
+  onPick: (choice: "default" | "own") => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
   return (
-    <section
-      className="dash-card dash-card-xl dash-link"
-      aria-labelledby="dash-link-title"
+    <dialog
+      ref={dialog}
+      className="dash-dialog dash-welcome"
+      aria-labelledby="dash-welcome-title"
     >
-      <header className="dash-card-head">
-        <h2 id="dash-link-title">
-          <DashboardIcon name="link" /> Link your Clash player
-        </h2>
-      </header>
-      <ol className="dash-link-steps">
-        <li>In Clash of Clans, open Settings → More Settings.</li>
-        <li>Copy your player tag and API token.</li>
-        <li>Paste both on the next page.</li>
-      </ol>
-      <Link className="button button-primary" to="/account/verify-player">
-        Link player
-      </Link>
-    </section>
+      <h2 id="dash-welcome-title">Your dashboard</h2>
+      <p className="dash-muted">
+        Pick a start. Change it any time with <DashboardIcon name="gear" /> Customise
+        dashboard.
+      </p>
+      <div className="dash-welcome-options">
+        <button
+          type="button"
+          className="dash-welcome-option"
+          disabled={saving}
+          onClick={() => {
+            onPick("default");
+            dialog.current?.close();
+          }}
+        >
+          <span className="dash-welcome-badge">Recommended</span>
+          <b>Use our layout</b>
+          <span className="dash-muted">Our pick of cards, ready now</span>
+        </button>
+        <button
+          type="button"
+          className="dash-welcome-option"
+          disabled={saving}
+          onClick={() => {
+            onPick("own");
+            dialog.current?.close();
+          }}
+        >
+          <b>
+            <DashboardIcon name="plus" /> Build my own
+          </b>
+          <span className="dash-muted">Start empty and add cards</span>
+        </button>
+      </div>
+    </dialog>
   );
 }
 
-function moveCard(cards: PlacedCard[], index: number, step: -1 | 1): PlacedCard[] {
-  const next = [...cards];
-  const target = index + step;
-  if (target < 0 || target >= next.length) return cards;
-  [next[index], next[target]] = [next[target] as PlacedCard, next[index] as PlacedCard];
-  return next;
-}
-
 /**
- * The tab row, the Customise flow and the card grid for one dashboard tab.
- * Customise edits a draft of every tab; Done saves it to the account.
+ * The divider with "⚙ Customise dashboard", the card grid and Customise.
+ * Customise edits a draft of the card order; Done saves it. Card settings
+ * and the group picked on Group watch save at once.
  */
-export function DashboardGrid({
-  tab,
-  layout,
-  players,
-  selected,
-  days,
-  ranges,
-  opponents,
-  legends,
-  dayEndsMs,
+export function Dashboard({
+  settings,
+  data,
+  dayOver,
   idempotencyKey,
-  renderTabs,
-  noPlayers,
 }: {
-  tab: DashboardTab;
-  layout: DashboardLayout;
-  players: LinkedPlayerCard[];
-  selected: LinkedPlayerCard | null;
-  days: Record<string, PlayerDay>;
-  ranges: Record<string, RankRange>;
-  opponents: Record<string, OpponentRow[]>;
-  legends: LegendsHeld | null;
-  dayEndsMs: number;
+  settings: DashboardSettings;
+  data: CardDataSet;
+  dayOver: boolean;
   idempotencyKey: string;
-  renderTabs: (meta: ReactNode) => ReactNode;
-  noPlayers: boolean;
 }) {
   const fetcher = useFetcher<DashboardActionData>();
-  const [draft, setDraft] = useState<DashboardLayout | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [draft, setDraft] = useState<DashboardSettings["layout"] | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingSettings, setEditingSettings] = useState<CardId | null>(null);
+  // Done waits for its own save's answer, not an earlier one.
+  const [finishing, setFinishing] = useState<{
+    after: DashboardActionData | undefined;
+  } | null>(null);
+  const [status, setStatus] = useState("");
+  const [dragging, setDragging] = useState<CardId | null>(null);
   const [nowMs, setNowMs] = useState<number | null>(null);
-  const [device, setDevice] = useState<string | null>(null);
+  const [timeZone, setTimeZone] = useState("UTC");
 
   useEffect(() => {
-    setDevice(deviceTimeZone());
+    setTimeZone(deviceTimeZone());
     setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
 
+  const saving = fetcher.state !== "idle";
+  const saved = fetcher.state === "idle" && fetcher.data?.saved === true;
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.saved) setDraft(null);
-  }, [fetcher.state, fetcher.data]);
+    if (
+      finishing === null ||
+      fetcher.state !== "idle" ||
+      fetcher.data === finishing.after
+    )
+      return;
+    setFinishing(null);
+    if (fetcher.data?.saved) {
+      setDraft(null);
+      setAdding(false);
+    }
+  }, [finishing, fetcher.state, fetcher.data]);
+  useEffect(() => {
+    if (saved) setEditingSettings(null);
+  }, [saved]);
+
+  const save = (next: DashboardSettings) =>
+    fetcher.submit(
+      {
+        idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
+        settings: JSON.stringify(serializeSettings(next)),
+      },
+      { method: "post" },
+    );
 
   const editing = draft !== null;
-  const shown = draft ?? layout;
-  const cards = shown.tabs[tab];
-  const saving = fetcher.state !== "idle";
-  const timeZone = shown.timeZone === "auto" ? (device ?? "UTC") : shown.timeZone;
-  const dayOver = nowMs !== null && nowMs >= dayEndsMs;
-  const notTracking = [
-    selected,
-    ...cards.map((card) => players.find((player) => player.tag === card.player)),
-  ].filter(
-    (player, index, all): player is LinkedPlayerCard =>
-      !!player &&
-      player.state !== "tracking" &&
-      all.findIndex((other) => other?.tag === player.tag) === index,
-  );
-
-  const editDraft = (change: (current: DashboardLayout) => DashboardLayout) => {
-    if (!saving) setDraft((current) => (current ? change(current) : current));
+  const cards = shownCards(editing ? draft : settings.layout);
+  const change = (next: CardId[], message: string) => {
+    setDraft(next);
+    setStatus(message);
   };
-  const updateTab = (next: PlacedCard[]) =>
-    editDraft((current) => ({ ...current, tabs: { ...current.tabs, [tab]: next } }));
 
-  const meta =
-    !editing && !noPlayers ? (
-      <div className="dash-meta">
-        <button
-          type="button"
-          className="button button-primary dash-customise"
-          onClick={() => setDraft(structuredClone(layout))}
-        >
-          <DashboardIcon name="grid" /> Customise
-        </button>
-      </div>
-    ) : null;
+  // Dragging: the card under the pointer makes room; the page scrolls near its edges.
+  useEffect(() => {
+    if (dragging === null) return;
+    const move = (event: PointerEvent) => {
+      const edge = 80;
+      if (event.clientY < edge) window.scrollBy(0, -12);
+      else if (event.clientY > window.innerHeight - edge) window.scrollBy(0, 12);
+      const target = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>(".dash-grid [data-card]");
+      const over = target?.dataset.card as CardId | undefined;
+      if (!target || !over || over === dragging) return;
+      const box = target.getBoundingClientRect();
+      const stacked =
+        CARDS[over].size === "l" || window.matchMedia("(max-width: 40rem)").matches;
+      const before = stacked
+        ? event.clientY < box.top + box.height / 2
+        : event.clientX < box.left + box.width / 2;
+      setDraft((current) => {
+        const list = shownCards(current ?? null).filter((card) => card !== dragging);
+        list.splice(list.indexOf(over) + (before ? 0 : 1), 0, dragging);
+        const was = shownCards(current ?? null);
+        return list.join() === was.join() ? current : list;
+      });
+    };
+    const stop = () => {
+      setDragging(null);
+      setStatus(`Moved ${CARDS[dragging].title}`);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, [dragging]);
 
-  if (noPlayers) {
-    return (
-      <>
-        {renderTabs(meta)}
-        <div className="dash-grid">
-          <LinkPlayerPrompt />
-        </div>
-      </>
-    );
-  }
+  const context: ViewContext = {
+    dayOver,
+    nowMs,
+    timeZone,
+    saving,
+    pickGroup: (groupId) => save({ ...settings, group: groupId }),
+  };
+  const firstVisit = settings.layout === null && !editing;
+  const error = fetcher.state === "idle" ? fetcher.data?.error : null;
 
   return (
     <>
-      {renderTabs(meta)}
-      {editing ? (
-        <div className="dash-editbar" role="region" aria-label="Customise">
-          <span className="dash-editbar-title">
-            <DashboardIcon name="grid" /> Customising {TAB_LABELS[tab]}
-          </span>
+      <div className="dash-divider">
+        {!editing ? (
           <button
             type="button"
-            className="button button-primary dash-add"
+            className="button button-secondary dash-customise"
             disabled={saving}
-            onClick={() => setPicking(true)}
+            onClick={() => {
+              setDraft(settings.layout ?? "default");
+              setStatus("");
+            }}
           >
-            <DashboardIcon name="plus" /> Add a card
+            <DashboardIcon name="gear" /> Customise dashboard
           </button>
-          <label className="dash-timezone">
-            <DashboardIcon name="globe" />
-            <span className="sr-only">Time zone</span>
-            <select
-              value={shown.timeZone}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                editDraft((current) => ({ ...current, timeZone: value }));
-              }}
-            >
-              <option value="auto">Device time ({device ?? "auto"})</option>
-              {timeZoneOptions().map((zone) => (
-                <option key={zone} value={zone}>
-                  {zone}
-                </option>
-              ))}
-            </select>
-          </label>
+        ) : null}
+      </div>
+      {editing ? (
+        <div className="dash-editbar" role="region" aria-label="Customise dashboard">
+          <b className="dash-editbar-title">Customise dashboard</b>
+          <span className="dash-editbar-state">
+            {draft === "default" ? "Default layout" : "Your own layout"}
+          </span>
+          <span className="sr-only" role="status">
+            {status}
+          </span>
           <button
             type="button"
             className="button button-secondary"
             disabled={saving}
-            onClick={() => setDraft(null)}
+            onClick={() => setAdding(true)}
           >
-            Cancel
+            <DashboardIcon name="plus" /> Add a card
           </button>
           <button
             type="button"
-            className="button button-secondary dash-done"
-            disabled={saving}
-            onClick={() =>
-              fetcher.submit(
-                {
-                  idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
-                  layout: JSON.stringify(serializeLayout(shown)),
-                },
-                { method: "post" },
-              )
-            }
+            className="button button-secondary"
+            disabled={saving || draft === "default"}
+            onClick={() => {
+              setDraft("default");
+              setStatus("Back to the default layout");
+            }}
           >
-            <DashboardIcon name="check" /> {saving ? "Saving…" : "Done"}
+            Reset to default
           </button>
-          {fetcher.state === "idle" && fetcher.data?.error ? (
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={saving}
+            onClick={() => {
+              setFinishing({ after: fetcher.data });
+              save({ ...settings, layout: draft });
+            }}
+          >
+            <DashboardIcon name="check" /> {finishing && saving ? "Saving…" : "Done"}
+          </button>
+          {error ? (
             <p className="dash-editbar-error" role="alert">
-              {fetcher.data.error}
+              {error}
             </p>
           ) : null}
         </div>
-      ) : null}
-      {notTracking.map((player) => (
-        <p key={player.tag} className="dash-banner" role="status">
-          {player.state === "not_in_legend" ? (
-            <>
-              <DashboardIcon name="shieldOff" />
-              <b>{playerName(player)} is not in Legends</b>
-            </>
-          ) : (
-            <>
-              <DashboardIcon name="info" />
-              <b>{playerName(player)}</b> {LOOKUP_MESSAGES[player.state]}
-            </>
-          )}
+      ) : error ? (
+        <p className="notice notice-warning" role="alert">
+          {error}
         </p>
-      ))}
-      <div className="dash-grid">
-        {cards.map((placed, index) => {
-          const definition = CARDS[placed.card];
-          const pinned = placed.player
-            ? (players.find((player) => player.tag === placed.player) ?? null)
-            : null;
-          const player = definition.perPlayer ? (pinned ?? selected) : null;
-          if (!editing && player && player.state !== "tracking") return null;
-          const tools = editing ? (
-            <CardTools
-              placed={placed}
-              index={index}
-              count={cards.length}
-              players={players}
-              onChange={(change) => {
-                if (change.remove)
-                  return updateTab(cards.filter((_, at) => at !== index));
-                if (change.move) return updateTab(moveCard(cards, index, change.move));
-                updateTab(
-                  cards.map((card, at) =>
-                    at === index
-                      ? {
-                          ...card,
-                          ...("player" in change
-                            ? { player: change.player ?? null }
-                            : {}),
-                        }
-                      : card,
-                  ),
-                );
-              }}
-            />
-          ) : undefined;
-          const pinnedTo = pinned ? playerName(pinned) : null;
-          const content =
-            player && !dayOver
-              ? CARD_CONTENT[placed.card]?.({
-                  player,
-                  pinned: pinned !== null,
-                  day: days[player.tag] ?? null,
-                  range: ranges[player.tag] ?? null,
-                  opponents: opponents[player.tag] ?? null,
-                  legends,
-                  nowMs,
-                  timeZone,
-                })
-              : null;
-          if (content) {
-            return (
-              <CardFrame
-                key={index}
-                placed={placed}
-                tools={tools}
-                titleExtra={content.titleExtra}
-                meta={content.meta}
-                footer={content.footer}
+      ) : null}
+      <div className={`dash-grid${editing ? " dash-grid-editing" : ""}`}>
+        {cards.map((card, index) => (
+          <section
+            key={card}
+            className={`dash-card dash-card-${CARDS[card].size}${dragging === card ? " dash-card-dragging" : ""}`}
+            aria-label={CARDS[card].title}
+            data-card={card}
+          >
+            {editing ? (
+              <div className="dash-edit-strip">
+                <button
+                  type="button"
+                  className="dash-grip"
+                  aria-label={`Drag to move ${CARDS[card].title}`}
+                  disabled={saving}
+                  onPointerDown={(event) => {
+                    if (event.button > 0 || saving) return;
+                    event.preventDefault();
+                    setDragging(card);
+                  }}
+                >
+                  ⠿
+                </button>
+                <span className="dash-edit-name">{CARDS[card].title}</span>
+                <span className="dash-size-chip">
+                  {CARD_SIZE_LABELS[CARDS[card].size]}
+                </span>
+                <button
+                  type="button"
+                  className="dash-icon-button"
+                  aria-label={`Move ${CARDS[card].title} earlier`}
+                  disabled={saving || index === 0}
+                  onClick={() =>
+                    change(moved(cards, index, -1), `Moved ${CARDS[card].title} earlier`)
+                  }
+                >
+                  <DashboardIcon name="up" />
+                </button>
+                <button
+                  type="button"
+                  className="dash-icon-button"
+                  aria-label={`Move ${CARDS[card].title} later`}
+                  disabled={saving || index === cards.length - 1}
+                  onClick={() =>
+                    change(moved(cards, index, 1), `Moved ${CARDS[card].title} later`)
+                  }
+                >
+                  <DashboardIcon name="down" />
+                </button>
+                <button
+                  type="button"
+                  className="dash-icon-button"
+                  aria-label={`Remove ${CARDS[card].title}`}
+                  disabled={saving}
+                  onClick={() =>
+                    change(
+                      cards.filter((item) => item !== card),
+                      `Removed ${CARDS[card].title}. Add it back from Add a card.`,
+                    )
+                  }
+                >
+                  <DashboardIcon name="x" />
+                </button>
+              </div>
+            ) : null}
+            {editing && CARDS[card].settings ? (
+              <button
+                type="button"
+                className="dash-card-settings"
+                aria-label={`${CARDS[card].title} settings`}
+                disabled={saving}
+                onClick={() => setEditingSettings(card)}
               >
-                {content.body}
-              </CardFrame>
-            );
-          }
-          return (
-            <PlaceholderCard
-              key={index}
-              placed={placed}
-              tools={tools}
-              pinnedTo={pinnedTo}
-            />
-          );
-        })}
+                <DashboardIcon name="gear" /> Settings
+              </button>
+            ) : null}
+            {cardBody(card, data, context)}
+          </section>
+        ))}
       </div>
       {cards.length === 0 ? (
-        <div className="dash-empty dash-empty-tab">
-          <DashboardIcon name="grid" />
-          <b>No cards on this tab</b>
-          {!editing ? (
-            <button
-              type="button"
-              className="button button-primary"
-              onClick={() => {
-                setDraft(structuredClone(layout));
-                setPicking(true);
-              }}
-            >
-              <DashboardIcon name="plus" /> Add a card
-            </button>
-          ) : null}
+        <div className="dash-empty">
+          <b>Your dashboard is empty</b>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => {
+              if (!editing) setDraft([]);
+              setAdding(true);
+            }}
+          >
+            <DashboardIcon name="plus" /> Add a card
+          </button>
         </div>
       ) : null}
-      {picking && draft ? (
-        <CardPicker
-          tab={tab}
-          placed={cards}
-          onClose={() => setPicking(false)}
-          onAdd={(card) => updateTab([...cards, { card, player: null }])}
+      {adding && editing ? (
+        <AddSheet
+          cards={addableCards(cards)}
+          saving={saving}
+          onClose={() => setAdding(false)}
+          onAdd={(card) =>
+            change([...cards, card], `Added ${CARDS[card].title} at the end`)
+          }
+        />
+      ) : null}
+      {editingSettings ? (
+        <SettingsDialog
+          card={editingSettings}
+          settings={settings}
+          saving={saving}
+          error={error}
+          onSave={save}
+          onClose={() => setEditingSettings(null)}
+        />
+      ) : null}
+      {firstVisit ? (
+        <FirstVisit
+          saving={saving}
+          onPick={(choice) => {
+            if (choice === "default") return save({ ...settings, layout: "default" });
+            save({ ...settings, layout: [] });
+            setDraft([]);
+            setAdding(true);
+          }}
         />
       ) : null}
     </>

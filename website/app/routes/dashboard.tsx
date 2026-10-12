@@ -1,44 +1,31 @@
+import { useEffect, useState } from "react";
 import { Link, data, redirect, useLoaderData, useSearchParams } from "react-router";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
-import type { ReactNode } from "react";
 
-import { DashboardGrid, PlaceholderCard } from "../components/DashboardGrid";
+import { Dashboard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type {
-  PlayerPage,
-  RankedDaySummary,
-  WebsiteErrorResponse,
-} from "../lib/contracts";
-import type {
-  DashboardLayout,
-  DashboardTab,
-  LegendsHeld,
-  OpponentRow,
-  PlayerDay,
-  RankRange,
-} from "../lib/dashboard";
+import type { WebsiteErrorResponse } from "../lib/contracts";
+import type { DashboardSettings } from "../lib/dashboard";
 import {
-  DASHBOARD_TABS,
-  defaultTab,
-  isDashboardTab,
+  CARDS,
+  DEFAULT_LAYOUT,
   nextResetMs,
-  parsePostedLayout,
-  readSavedLayout,
-  serializeLayout,
+  parsePostedSettings,
+  readSettings,
+  serializeSettings,
+  shownCards,
 } from "../lib/dashboard";
+import type { CardDataSet } from "../lib/dashboard-cards";
+import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
+import "../dashboard-cards.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
-const DAY_MS = 86_400_000;
-/** Players read per load: the switcher's player plus players pinned on Today. */
-const MAX_PLAYER_DAYS = 4;
-/** Today's cards that read the player page and today's numbers. */
-const DAY_CARDS = new Set(["legendday", "clock", "opponents"]);
 
 export type DashboardLoaderData =
   | { kind: "signed-out"; loginAvailable: boolean }
@@ -48,12 +35,9 @@ export type DashboardLoaderData =
       players: LinkedPlayerCard[];
       playersUnavailable: boolean;
       selectedTag: string | null;
-      layout: DashboardLayout;
-      days: Record<string, PlayerDay>;
-      ranges: Record<string, RankRange>;
-      opponents: Record<string, OpponentRow[]>;
-      legendsHeld: LegendsHeld | null;
-      /** The Reset that ends the Legend day the players' numbers were read for. */
+      settings: DashboardSettings;
+      cards: CardDataSet;
+      /** The Reset that ends the Legend day the cards were read for. */
       dayEndsMs: number;
       idempotencyKey: string;
     };
@@ -99,9 +83,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const { createPythonClient } = await import("../services/python.server");
+  const client = createPythonClient(identity);
   let account;
   try {
-    account = await createPythonClient(identity).getAccount();
+    account = await client.getAccount();
   } catch (cause) {
     if (isAccountNotFoundError(cause))
       throw redirect("/account/setup?returnPath=/dashboard");
@@ -113,16 +98,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const dayEndsMs = nextResetMs(Date.now());
-  const publicClient = createPythonClient();
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
   try {
-    players = (await publicClient.getPublicUser(account.username)).verifiedPlayers;
+    players = (await client.getPublicUser(account.username)).verifiedPlayers;
   } catch {
     playersUnavailable = true;
   }
 
-  const layout = readSavedLayout(account.preferences.dashboard);
+  const settings = readSettings(account.preferences.dashboard);
   const requested = normalizePlayerTag(
     new URL(request.url).searchParams.get("player") ?? "",
   );
@@ -132,30 +116,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     players[0] ??
     null;
 
-  const dayTags = new Set<string>();
-  if (selected?.state === "tracking") dayTags.add(selected.tag);
-  for (const card of layout.tabs.today) {
-    const pinned = players.find((player) => player.tag === card.player);
-    if (DAY_CARDS.has(card.card) && pinned?.state === "tracking") dayTags.add(pinned.tag);
+  let cards: CardDataSet = {};
+  if (selected?.state === "tracking") {
+    const { loadCardData } = await import("../services/dashboard.server");
+    cards = await loadCardData(
+      shownCards(settings.layout),
+      { client, selected, settings },
+      identity,
+    );
   }
-  const { getPlayerToday } = await import("../services/dashboard.server");
-  const days: Record<string, PlayerDay> = {};
-  const ranges: Record<string, RankRange> = {};
-  const opponents: Record<string, OpponentRow[]> = {};
-  let legendsHeld: LegendsHeld | null = null;
-  await Promise.all(
-    [...dayTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
-      const [page, today] = await Promise.all([
-        publicClient.getPlayer(tag).catch(() => null),
-        getPlayerToday(tag).catch(() => null),
-      ]);
-      // Each card still shows what it can without the other read.
-      if (page) days[tag] = playerDay(page, today, dayEndsMs - DAY_MS);
-      if (today?.rankRange) ranges[tag] = today.rankRange;
-      if (today) opponents[tag] = today.opponents;
-      legendsHeld ??= today?.legendsHeld ?? null;
-    }),
-  );
 
   return data<DashboardLoaderData>(
     {
@@ -163,11 +132,8 @@ export async function loader({ request }: Route.LoaderArgs) {
       players,
       playersUnavailable,
       selectedTag: selected?.tag ?? null,
-      layout,
-      days,
-      ranges,
-      opponents,
-      legendsHeld,
+      settings,
+      cards,
       dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
     },
@@ -175,67 +141,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   );
 }
 
-function dayBounds(day: RankedDaySummary): [number, number] {
-  const [start, end] = day.period.split(" – ").map(Date.parse);
-  return [start ?? Number.NaN, end ?? Number.NaN];
-}
-
-function playerDay(
-  page: PlayerPage,
-  today: { openDefenses: number | null; automaticDefenseEach: number | null } | null,
-  dayStartMs: number,
-): PlayerDay {
-  const day = page.currentDay;
-  const battles = day
-    ? [
-        ...day.offenseEvents.map((event) => ({ event, kind: "attack" as const })),
-        ...day.defenseEvents.map((event) => ({ event, kind: "defense" as const })),
-      ]
-        .map(({ event, kind }) => ({
-          at: Date.parse(event.battleTimestamp),
-          kind,
-          stars: event.stars,
-          destruction: event.destructionPercentage,
-          trophyChange: event.trophyChange,
-          opponent: event.opponent.name,
-        }))
-        .filter((battle) => Number.isFinite(battle.at))
-    : [];
-  const complete = day?.battlesComplete === true;
-  const gain = day?.offense.trophyGain ?? null;
-  const loss = day?.defense.trophyLoss ?? null;
-  // The finished day that ended at the Reset that started today.
-  const previous = [...page.recentDays, ...page.seasonDays].find(
-    (finished) => dayBounds(finished)[1] === dayStartMs,
-  );
-  const [profileAt, battlesAt] = [
-    page.profile.freshness.observedAt,
-    page.currentDayPublishedAt,
-  ].map((value) => (value ? Date.parse(value) : Number.NaN));
-  const observed = [profileAt, battlesAt].filter(Number.isFinite);
-  return {
-    dayNumber: page.season?.currentDayNumber ?? null,
-    dayCount: page.season?.dayCount ?? null,
-    battles,
-    complete,
-    net:
-      day?.trophyChange ??
-      (complete && gain !== null && loss !== null ? gain - loss : null),
-    attacks: day?.offense.attacks ?? null,
-    defenses: day?.defense.defenses ?? null,
-    lastResetRank: previous?.resetRank ?? null,
-    trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-    // The older of the trophy and battle reads, so the card never looks newer than it is.
-    observedAtMs: observed.length ? Math.min(...observed) : null,
-    battlesObservedAtMs: Number.isFinite(battlesAt) ? (battlesAt as number) : null,
-    openDefenses: today?.openDefenses ?? null,
-    autoDefenseEach: today?.automaticDefenseEach ?? null,
-  };
-}
-
 /**
- * POST /dashboard — save the layout into the account's preferences box,
- * keeping every other preference as it was.
+ * POST /dashboard — save the dashboard settings into the account's
+ * preferences box, keeping every other preference as it was.
  */
 export async function action({ request }: Route.ActionArgs) {
   const { isDashboardEnabled } = await import("../server/config.server");
@@ -256,24 +164,27 @@ export async function action({ request }: Route.ActionArgs) {
   const form = await actions.parseBoundedFormData(request);
   const idempotencyKey = form?.["idempotencyKey"] ?? "";
   if (form === null || !actions.isIdempotencyKey(idempotencyKey)) {
-    return fail(400, "That layout could not be read.");
+    return fail(400, "Your dashboard could not be read.");
   }
   let posted: unknown;
   try {
-    posted = JSON.parse(form["layout"] ?? "");
+    posted = JSON.parse(form["settings"] ?? "");
   } catch {
-    return fail(400, "That layout could not be read.");
+    return fail(400, "Your dashboard could not be read.");
   }
-  const layout = parsePostedLayout(posted);
-  if (layout === null) return fail(400, "That layout could not be read.");
+  const settings = parsePostedSettings(posted);
+  if (settings === null) return fail(400, "Your dashboard could not be read.");
 
   try {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const account = await client.getAccount();
-    const preferences = { ...account.preferences, dashboard: serializeLayout(layout) };
+    const preferences = {
+      ...account.preferences,
+      dashboard: serializeSettings(settings),
+    };
     if (new TextEncoder().encode(JSON.stringify(preferences)).byteLength > 4096) {
-      return fail(413, "Too many cards to save. Remove a few and try again.");
+      return fail(413, "Your settings are too large to save.");
     }
     await client.updateAccount(
       { username: account.username, displayName: account.displayName, preferences },
@@ -281,7 +192,7 @@ export async function action({ request }: Route.ActionArgs) {
     );
   } catch (cause) {
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
-    return fail(503, "Your layout could not be saved. Try again.");
+    return fail(503, "Your dashboard could not be saved. Try again.");
   }
   return data<DashboardActionData>(
     { saved: true, error: null, idempotencyKey: actions.freshIdempotencyKey() },
@@ -293,7 +204,7 @@ export function headers() {
   return NO_STORE;
 }
 
-/** Switching tabs only changes what is shown, so it skips the server. */
+/** Reload the cards for another account or after a save, never for anything else. */
 export function shouldRevalidate({
   currentUrl,
   nextUrl,
@@ -306,73 +217,62 @@ export function shouldRevalidate({
   return currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player");
 }
 
-function useTab(): DashboardTab {
-  const [searchParams] = useSearchParams();
-  const tab = searchParams.get("tab");
-  return isDashboardTab(tab) ? tab : "today";
+function accountLine(player: LinkedPlayerCard): string {
+  if (player.state === "not_in_legend") return "Not in Legend I";
+  if (player.state !== "tracking") return "Not tracked yet";
+  const parts = [
+    player.trophies === null || player.seasonResetPending
+      ? "–"
+      : player.trophies.toLocaleString("en-US"),
+    player.rank === null ? null : `#${player.rank.toLocaleString("en-US")}`,
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
-function tabLink(searchParams: URLSearchParams, changes: Record<string, string>): string {
-  const next = new URLSearchParams(searchParams);
-  for (const [key, value] of Object.entries(changes)) next.set(key, value);
-  return `?${next.toString()}`;
-}
-
-function DashboardTabs({ tab, meta }: { tab: DashboardTab; meta?: ReactNode }) {
-  const [searchParams] = useSearchParams();
-  return (
-    <div className="dash-tabs">
-      <nav className="dash-tab-list" aria-label="Dashboard views">
-        {DASHBOARD_TABS.map((item) => (
-          <Link
-            key={item.id}
-            className="dash-tab"
-            to={tabLink(searchParams, { tab: item.id })}
-            aria-current={item.id === tab ? "page" : undefined}
-            preventScrollReset
-            replace
-          >
-            <DashboardIcon
-              name={
-                item.id === "today" ? "clock" : item.id === "season" ? "cal" : "users"
-              }
-            />
-            {item.label}
-            {item.id === "crew" ? (
-              <span className="dash-tag" title="Placeholder word, still being decided">
-                word TBD
-              </span>
-            ) : null}
-          </Link>
-        ))}
-      </nav>
-      {meta}
-    </div>
-  );
-}
-
-function AccountSwitcher({
+function AccountTabs({
   players,
   selectedTag,
+  dayOver,
 }: {
   players: LinkedPlayerCard[];
   selectedTag: string | null;
+  dayOver: boolean;
 }) {
   const [searchParams] = useSearchParams();
   return (
     <nav className="dash-accounts" aria-label="Your Clash players">
-      {players.map((player) => (
-        <Link
-          key={player.tag}
-          className="dash-account"
-          to={tabLink(searchParams, { player: player.tag })}
-          aria-current={player.tag === selectedTag ? "true" : undefined}
-          preventScrollReset
-          replace
-        >
-          <b title={player.name ?? player.tag}>{player.name ?? player.tag}</b>
-        </Link>
-      ))}
+      {players.map((player) => {
+        const next = new URLSearchParams(searchParams);
+        next.set("player", player.tag);
+        const net =
+          !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
+        const name = player.name ?? player.tag;
+        return (
+          <Link
+            key={player.tag}
+            className="dash-account"
+            to={`?${next.toString()}`}
+            aria-current={player.tag === selectedTag ? "page" : undefined}
+            preventScrollReset
+            replace
+          >
+            <bdi className="dash-name" title={name}>
+              {name}
+            </bdi>
+            <span className="dash-account-line">
+              {accountLine(player)}
+              {net !== null ? (
+                <>
+                  {" · "}
+                  <b className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}>
+                    {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
+                  </b>
+                </>
+              ) : null}
+            </span>
+          </Link>
+        );
+      })}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
         <DashboardIcon name="plus" /> Link player
       </Link>
@@ -380,13 +280,31 @@ function AccountSwitcher({
   );
 }
 
+function LinkPlayerPrompt() {
+  return (
+    <section className="dash-message" aria-labelledby="dash-link-title">
+      <h2 id="dash-link-title">
+        <DashboardIcon name="link" /> Link your Clash player
+      </h2>
+      <ol className="dash-link-steps">
+        <li>In Clash of Clans, open Settings → More Settings.</li>
+        <li>Copy your player tag and API token.</li>
+        <li>Paste both on the next page.</li>
+      </ol>
+      <Link className="button button-primary" to="/account/verify-player">
+        Link player
+      </Link>
+    </section>
+  );
+}
+
 const TEASER_TILES = [
   { icon: "clock", label: "Legend clock in your time" },
-  { icon: "chart", label: "Live rank + rank at Reset" },
-  { icon: "target", label: "How the bases you hit hold" },
-  { icon: "shield", label: "Shield or not, in one look" },
   { icon: "flag", label: "Your goal, on pace or not" },
-  { icon: "users", label: "Race your crew" },
+  { icon: "list", label: "Rivals just above and below you" },
+  { icon: "grid", label: "Every Season day at a glance" },
+  { icon: "bars", label: "Top lines and your gap" },
+  { icon: "users", label: "How you compare with your groups" },
 ] as const;
 
 function SignedOutPreview({ loginAvailable }: { loginAvailable: boolean }) {
@@ -394,10 +312,11 @@ function SignedOutPreview({ loginAvailable }: { loginAvailable: boolean }) {
   return (
     <div className="dash-teaser">
       <div className="dash-teaser-behind" aria-hidden="true" inert>
-        <DashboardTabs tab="today" />
         <div className="dash-grid">
-          {defaultTab("today").map((card, index) => (
-            <PlaceholderCard key={index} placed={card} />
+          {DEFAULT_LAYOUT.filter((card) => CARDS[card].built).map((card) => (
+            <section key={card} className={`dash-card dash-card-${CARDS[card].size}`}>
+              <h2>{CARDS[card].title}</h2>
+            </section>
           ))}
         </div>
       </div>
@@ -443,7 +362,9 @@ function SignedOutPreview({ loginAvailable }: { loginAvailable: boolean }) {
 
 export default function DashboardRoute() {
   const loaderData = useLoaderData<typeof loader>();
-  const tab = useTab();
+  const dayOver = useDayOver(
+    loaderData.kind === "signed-in" ? loaderData.dayEndsMs : Number.POSITIVE_INFINITY,
+  );
   if (loaderData.kind === "signed-out") {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell dash-page">
@@ -468,9 +389,10 @@ export default function DashboardRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
       {loaderData.players.length > 0 ? (
-        <AccountSwitcher
+        <AccountTabs
           players={loaderData.players}
           selectedTag={loaderData.selectedTag}
+          dayOver={dayOver}
         />
       ) : null}
       {loaderData.playersUnavailable ? (
@@ -478,20 +400,57 @@ export default function DashboardRoute() {
           Your linked players could not be loaded. Cards show again on the next load.
         </p>
       ) : null}
-      <DashboardGrid
-        tab={tab}
-        layout={loaderData.layout}
-        players={loaderData.players}
-        selected={selected}
-        days={loaderData.days}
-        ranges={loaderData.ranges}
-        opponents={loaderData.opponents}
-        legends={loaderData.legendsHeld}
-        dayEndsMs={loaderData.dayEndsMs}
-        idempotencyKey={loaderData.idempotencyKey}
-        renderTabs={(meta) => <DashboardTabs tab={tab} meta={meta} />}
-        noPlayers={!loaderData.playersUnavailable && loaderData.players.length === 0}
-      />
+      {selected === null ? (
+        loaderData.playersUnavailable ? null : (
+          <LinkPlayerPrompt />
+        )
+      ) : selected.state === "not_in_legend" ? (
+        <section className="dash-message" aria-live="polite">
+          <h2>Unfortunately, the dashboard is Legend I only.</h2>
+          <p>Support for lower leagues is coming in the future!</p>
+        </section>
+      ) : selected.state !== "tracking" ? (
+        <section className="dash-message" aria-live="polite">
+          <h2>{selected.name ?? selected.tag}</h2>
+          <p>{LOOKUP_MESSAGES[selected.state]}</p>
+        </section>
+      ) : (
+        <>
+          {dayOver ? <NewDayNotice /> : null}
+          <Dashboard
+            key={selected.tag}
+            settings={loaderData.settings}
+            data={loaderData.cards}
+            dayOver={dayOver}
+            idempotencyKey={loaderData.idempotencyKey}
+          />
+        </>
+      )}
     </main>
   );
+}
+
+/** A page left open past the Reset says so instead of showing yesterday as today. */
+function NewDayNotice() {
+  const [searchParams] = useSearchParams();
+  return (
+    <p className="notice notice-warning dash-new-day" role="status">
+      A new Legend day has started.{" "}
+      <Link to={`?${searchParams.toString()}`} reloadDocument>
+        Reload for today's numbers
+      </Link>
+    </p>
+  );
+}
+
+/** Whether the Legend day the page was read for has ended, checked every 30 seconds. */
+function useDayOver(dayEndsMs: number): boolean {
+  const [, setTick] = useState(0);
+  const over = Date.now() >= dayEndsMs;
+  useEffect(() => {
+    if (over || !Number.isFinite(dayEndsMs)) return;
+    const timer = window.setInterval(() => setTick((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, [over, dayEndsMs]);
+  return over;
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import UTC, timedelta
 from itertools import islice, product
 from pathlib import Path
 from uuid import uuid4
@@ -92,10 +92,16 @@ def test_groups_public_user_and_multi_account_stay_separate(
             assert group.status_code == 201
             group_id = group.payload["group_id"]
             assert isinstance(group_id, str)
+            with database.pool.connection() as connection:
+                created_at = connection.execute(
+                    "SELECT created_at FROM account_groups WHERE public_id = %s",
+                    (group_id,),
+                ).fetchone()[0]
             assert api_accounts.list_groups(database, account_id, now=NOW) == [
                 {
                     "group_id": group_id,
                     "name": "My Accounts",
+                    "created_at": created_at.astimezone(UTC).isoformat(),
                     "tags": ["#2PP", "#8PY"],
                     "players": [
                         {"tag": "#2PP", "name": None, "trophies": None, "state": "checking", "season_reset_pending": False},

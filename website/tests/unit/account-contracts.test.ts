@@ -194,7 +194,10 @@ describe("Python account response mappers", () => {
       { tag: "#2PL", name: null, trophies: null, state: "not_in_legend" },
     ];
     const season = "1791176400";
-    expect(mapGroups({ season, groups: [{ ...group, players }] })).toEqual({
+    const createdAt = "2026-10-01T10:00:00+00:00";
+    expect(
+      mapGroups({ season, groups: [{ ...group, players, created_at: createdAt }] }),
+    ).toEqual({
       season,
       groups: [
         {
@@ -202,9 +205,19 @@ describe("Python account response mappers", () => {
           name: "Push team",
           tags: ["#2PP", "#2PL"],
           players: players.map((player) => ({ ...player, seasonResetPending: false })),
+          createdAt,
         },
       ],
     });
+    // A Python from before groups said when they were made still lists them.
+    expect(
+      mapGroups({ season, groups: [{ ...group, players }] })?.groups[0],
+    ).toMatchObject({
+      createdAt: null,
+    });
+    expect(
+      mapGroups({ season, groups: [{ ...group, players, created_at: "soon" }] }),
+    ).toBeNull();
     // Without the Season, an open page could not tell when its trophies expire.
     expect(mapGroups({ groups: [{ ...group, players }] })).toBeNull();
     expect(mapGroups({ season, groups: [group] })).toBeNull();
