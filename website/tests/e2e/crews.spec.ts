@@ -98,14 +98,20 @@ test("an invite is accepted with 2 of 3 accounts, one is kicked, and places stay
     await expect(mate.page).toHaveURL(crewPath);
     await expect(mate.page.getByText("4 of 10 places")).toBeVisible();
 
-    // The captain kicks one of the mate's accounts.
+    // The captain kicks one of the mate's accounts from its row, on a phone.
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${crewPath}/members`);
     const mateCard = page.locator(".crew-member").filter({ hasText: "@crewmate" });
     await expect(mateCard.getByText(MATE_TAGS[2]!)).toHaveCount(0);
-    await mateCard.getByText("Edit", { exact: true }).click();
-    const kick = mateCard.locator(".crew-confirm").filter({ hasText: MATE_TAGS[0]! });
-    await kick.locator("summary").click();
-    await kick.getByRole("button", { name: "Kick", exact: true }).click();
+    const row = mateCard
+      .locator(".crew-accounts > li")
+      .filter({ hasText: MATE_TAGS[0]! });
+    const x = row.getByLabel(/^Kick /);
+    const box = (await x.boundingBox())!;
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    await x.click();
+    await row.getByRole("button", { name: "Kick", exact: true }).click();
     await expect(page.getByText(`Kicked ${MATE_TAGS[0]}.`)).toBeVisible();
     await expect(page.getByText("2 clashers · 3 of 10 places")).toBeVisible();
 

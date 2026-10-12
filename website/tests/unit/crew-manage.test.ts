@@ -46,7 +46,10 @@ import {
   mapInvitePreview,
 } from "../../app/lib/crew-contracts";
 import { action as crewAction } from "../../app/routes/crews.$crewId";
-import { action as membersAction } from "../../app/routes/crews.$crewId.members";
+import CrewMembersRoute, {
+  action as membersAction,
+  loader as membersLoader,
+} from "../../app/routes/crews.$crewId.members";
 import CrewSettingsRoute, {
   action as settingsAction,
   loader as settingsLoader,
@@ -450,6 +453,44 @@ describe("members", () => {
     );
     expect(status).toBe(503);
     expect(data.idempotencyKey).toBe(KEY);
+  });
+
+  it("puts each account's remove or kick button on its own row, by role", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getAccountSummary: async () => ({ username: "zara" }),
+      getPublicUser: async () => ({ verifiedPlayers: [] }),
+    });
+    const rows = async (role: string) => {
+      mocks.requestJson.mockResolvedValue(crewPayload(role));
+      const html = await render(`/crews/${CREW_ID}/members`, {
+        path: "/crews/:crewId/members",
+        Component: CrewMembersRoute,
+        loader: membersLoader as never,
+      });
+      // Each account row, up to the end of its list item.
+      return html
+        .split("<li")
+        .filter((row) => row.includes('href="/players/'))
+        .map((row) => row.slice(0, row.indexOf("</li>")));
+    };
+    const label = (row: string) => /aria-label="([^"]+)"/.exec(row)?.[1] ?? null;
+
+    // The owner kicks every account of a member, but can't remove their own last one.
+    const owner = await rows("owner");
+    expect(owner.map(label)).toEqual([null, "Kick Kenji", "Kick #2RR", "Kick Alt"]);
+    expect(owner[1]).toContain(">Kick</button>");
+    // An admin kicks members too, and can remove their own last account.
+    expect((await rows("admin")).map(label)).toEqual([
+      "Remove Zara",
+      "Kick Kenji",
+      "Kick #2RR",
+      "Kick Alt",
+    ]);
+    // A member removes only their own account, which takes them out too.
+    const member = await rows("member");
+    expect(member.map(label)).toEqual(["Remove Zara", null, null, null]);
+    expect(member[0]).toContain(">Remove and leave</button>");
+    expect(member[0]).toContain('name="own" value="1"');
   });
 
   it("refuses a form from another site or with an unknown intent", async () => {

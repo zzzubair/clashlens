@@ -199,16 +199,19 @@ export function FormResult({
 /**
  * A button that asks before it acts: it opens a short question with the
  * real button under it. A disclosure, so it works without JavaScript.
+ * With `icon`, the button shows only the icon and `label` is its name.
  */
 export function ConfirmForm({
   label,
+  icon,
   question,
   confirm,
   intent,
   idempotencyKey,
   fields = {},
 }: {
-  label: React.ReactNode;
+  label: string;
+  icon?: React.ReactNode;
   question: React.ReactNode;
   confirm: string;
   intent: string;
@@ -216,8 +219,14 @@ export function ConfirmForm({
   fields?: Record<string, string>;
 }) {
   return (
-    <details className="crew-confirm">
-      <summary className="button secondary">{label}</summary>
+    <details className={icon ? "crew-confirm crew-row-confirm" : "crew-confirm"}>
+      {icon ? (
+        <summary className="crew-row-x" aria-label={label} title={label}>
+          {icon}
+        </summary>
+      ) : (
+        <summary className="button secondary">{label}</summary>
+      )}
       <Form method="post" className="crew-confirm-body">
         <p>{question}</p>
         <input type="hidden" name="intent" value={intent} />
