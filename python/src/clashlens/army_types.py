@@ -423,6 +423,50 @@ def read_type_rows(
     return [(type_id, *total) for type_id, total in sorted(totals.items())]
 
 
+def read_type_outcomes(
+    connection: Any,
+    *,
+    season_id: str,
+    day_numbers: list[int],
+    lens: str,
+    player_id: int,
+) -> list[tuple[str, int, int, int, int]]:
+    """One tracked player's attacks or defenses per type, stars and
+    destruction on completed Legend days; a defense's type is the attacker's
+    army. Rows are (lens, type id, stars, destruction, battles).
+    """
+    totals: Counter[tuple[str, int, int, int]] = Counter()
+    for fact_lens, type_id, troops, unnamed, stars, destruction, battles in connection.execute(
+        f"""
+        SELECT fact.lens,
+               CASE WHEN decode.id IS NULL
+                      OR fact.army_state NOT IN ('decoded', 'partial')
+                    THEN {UNREADABLE} ELSE label.type_id END,
+               CASE WHEN decode.exact_army_id IS NULL THEN decode.home_troops END,
+               CASE WHEN decode.exact_army_id IS NULL
+                    THEN decode.unresolved_components END,
+               fact.stars, fact.destruction_percentage, count(*)
+        FROM army_analytics_battle_facts AS fact
+        LEFT JOIN battle_army_decodes AS decode ON decode.id = fact.decode_id
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = decode.exact_army_id
+        WHERE fact.is_current AND fact.official_season_id = %s
+          AND fact.season_day_number = ANY(%s::integer[])
+          AND fact.lens = %s AND fact.population_player_id = %s
+        GROUP BY 1, 2, 3, 4, 5, 6
+        """,
+        (season_id, day_numbers, lens, player_id),
+    ).fetchall():
+        if type_id != UNREADABLE and troops is not None:
+            # An older partly read army, typed from its saved home troops.
+            type_id = classify(army_analytics.with_unnamed_ids(
+                {"home_troops": troops, "unresolved_components": unnamed}
+            )["home_troops"])
+        key = (str(fact_lens), int(type_id or OTHER), int(stars), int(destruction))
+        totals[key] += int(battles)
+    return [(*key, battles) for key, battles in sorted(totals.items())]
+
+
 def type_result(
     connection: Any,
     selection: Any,

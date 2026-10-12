@@ -51,6 +51,7 @@ import type {
   PlayerDay,
 } from "../../app/lib/dashboard";
 import {
+  BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
   addableCards,
   baseStrength,
@@ -193,8 +194,8 @@ describe("dashboard settings", () => {
       cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
       group: null,
       groupWindow: "7",
+      basesMode: "held",
     });
-    // The default list names cards still to come; only built ones show.
     expect(DEFAULT_LAYOUT).toEqual([
       "legend-day",
       "legend-clock",
@@ -204,19 +205,15 @@ describe("dashboard settings", () => {
       "rivals-watch",
       "heat-map",
     ]);
-    expect(shownCards(null)).toEqual([
-      "legend-clock",
-      "goal",
-      "rivals-watch",
-      "heat-map",
-    ]);
-    expect(shownCards("default")).toEqual(shownCards(null));
+    expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
+    expect(shownCards("default")).toEqual(DEFAULT_LAYOUT);
     expect(addableCards(shownCards("default"))).toEqual([
       "cutoffs",
       "season-graph",
       "recent-form",
       "offense-consistency",
       "group-watch",
+      "armies-offense",
     ]);
   });
 
@@ -227,6 +224,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       groupWindow: "season",
+      basesMode: "trophies",
     };
     const stored = serializeSettings(settings);
     expect(stored).toEqual({
@@ -236,6 +234,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       window: "season",
+      bases: "trophies",
     });
     expect(serializeSettings({ ...defaultSettings(), layout: "default" })).toEqual({
       v: 3,
@@ -250,7 +249,7 @@ describe("dashboard settings", () => {
     expect(new TextEncoder().encode(everything).byteLength).toBeLessThan(400);
   });
 
-  it("drops saved cards that are unknown, repeated or not built yet", () => {
+  it("drops saved cards that are unknown or repeated", () => {
     expect(
       readSettings({
         v: 3,
@@ -259,8 +258,9 @@ describe("dashboard settings", () => {
         cutoffs: [10],
         group: "nope",
         window: "x",
+        bases: "x",
       }),
-    ).toEqual({ ...defaultSettings(), layout: ["goal", "cutoffs"] });
+    ).toEqual({ ...defaultSettings(), layout: ["goal", "bases", "cutoffs"] });
     // An empty own layout stays empty; it is not a first visit.
     expect(readSettings({ v: 3, layout: [] }).layout).toEqual([]);
   });
@@ -276,7 +276,6 @@ describe("dashboard settings", () => {
       { v: 2 },
       { layout: null },
       { layout: ["goal", "goal"] },
-      { layout: ["bases"] },
       { layout: ["nope"] },
       { goal: 0 },
       { goal: 10_001 },
@@ -287,6 +286,8 @@ describe("dashboard settings", () => {
       { cutoffs: [10, 50, 100, 200, 500, 1000, 7000] },
       { group: "not-a-group" },
       { window: "7" },
+      { bases: "held" },
+      { bases: "rank" },
       { extra: true },
     ]) {
       expect(posted(bad)).toBeNull();
@@ -299,23 +300,34 @@ describe("dashboard settings", () => {
     expect(nextResetMs(Date.UTC(2026, 9, 7, 23, 59))).toBe(Date.UTC(2026, 9, 8, 5));
   });
 
-  it("rates a base within 15 points of today's Legends held share as Average", () => {
-    const legends = { held: 50, defenses: 100 };
+  it("rates a base within 10 points of today's Legends held share as Average", () => {
+    const legends = { held: 50, defenses: 100, trophies: 3200 };
     const defenses = (held: number, total: number) =>
       Array.from({ length: total }, (_, index) => ({
         stars: index < held ? 1 : 3,
+        trophyChange: -30,
         yours: false,
       }));
-    // 50% Legends average: 13 of 20 held is +15, 14 of 20 is +20.
-    expect(baseStrength(defenses(13, 20), legends)).toBe("average");
-    expect(baseStrength(defenses(14, 20), legends)).toBe("hard");
-    expect(baseStrength(defenses(7, 20), legends)).toBe("average");
-    expect(baseStrength(defenses(6, 20), legends)).toBe("easy");
-    // Exactly 15 points either side of 49 of 60 held.
-    expect(baseStrength(defenses(2, 3), { held: 49, defenses: 60 })).toBe("average");
-    expect(baseStrength(defenses(29, 30), { held: 49, defenses: 60 })).toBe("average");
+    // 50% Legends average: 12 of 20 held is +10, 13 of 20 is +15.
+    expect(baseStrength(defenses(12, 20), legends)).toBe("average");
+    expect(baseStrength(defenses(13, 20), legends)).toBe("hard");
+    expect(baseStrength(defenses(8, 20), legends)).toBe("average");
+    expect(baseStrength(defenses(7, 20), legends)).toBe("easy");
     expect(baseStrength(defenses(2, 2), legends)).toBe("early");
     expect(baseStrength(defenses(3, 3), null)).toBe("early");
+  });
+
+  it("rates a base by trophies given up a defense against today's Legends average", () => {
+    // Legends lose 32 a defense today.
+    const legends = { held: 50, defenses: 100, trophies: 3200 };
+    const gaveUp = (each: number) =>
+      [0, 1, 2].map(() => ({ stars: 2, trophyChange: -each, yours: false }));
+    const band = BASE_TROPHY_BAND;
+    expect(baseStrength(gaveUp(32 - band), legends, "trophies")).toBe("average");
+    expect(baseStrength(gaveUp(32 - band - 1), legends, "trophies")).toBe("hard");
+    expect(baseStrength(gaveUp(32 + band), legends, "trophies")).toBe("average");
+    expect(baseStrength(gaveUp(32 + band + 1), legends, "trophies")).toBe("easy");
+    expect(baseStrength(gaveUp(40).slice(0, 2), legends, "trophies")).toBe("early");
   });
 });
 
@@ -404,10 +416,7 @@ describe("Legend day card", () => {
 });
 
 describe("Bases you attacked", () => {
-  const row = (
-    name: string,
-    defenses: { stars: number; yours: boolean }[],
-  ): OpponentRow => ({
+  const row = (name: string, defenses: OpponentRow["defenses"]): OpponentRow => ({
     tag: `#${name.length}PP`,
     name,
     resetTrophies: 5712,
@@ -423,6 +432,7 @@ describe("Bases you attacked", () => {
   const held = (count: number, total: number) =>
     Array.from({ length: total }, (_, index) => ({
       stars: index < count ? 2 : 3,
+      trophyChange: index < count ? -25 : -40,
       yours: index === total - 1,
     }));
 
@@ -434,11 +444,12 @@ describe("Bases you attacked", () => {
           row("Early", held(0, 2)),
           row("Hard one", held(5, 6)),
         ],
-        legends: { held: 52, defenses: 100 },
+        legends: { held: 52, defenses: 100, trophies: 3200 },
         timeZone: "UTC",
       }),
     );
     const plain = text(html);
+    expect(plain).toContain("Base strength · Legends 52% held");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
     expect(plain).toContain("Hard held 5 of 6 · 83%");
@@ -448,6 +459,25 @@ describe("Bases you attacked", () => {
     // Each opponent can be saved into one of the account's groups.
     expect(html).toContain('href="/account/groups/add/8PP"');
     expect(html.match(/is-yours/g)).toHaveLength(3);
+  });
+
+  it("rates bases by trophies given up a defense in Trophies mode", async () => {
+    const plain = text(
+      await renderInRouter(
+        createElement(OpponentsCard, {
+          rows: [row("Easy one", held(1, 4)), row("Hard one", held(5, 6))],
+          legends: { held: 52, defenses: 100, trophies: 3200 },
+          timeZone: "UTC",
+          mode: "trophies",
+        }),
+      ),
+    );
+    expect(plain).toContain("Base strength · Legends −32 a defense");
+    // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense.
+    expect(plain).toContain("Hard gave up −28 a defense");
+    // One held and three tripled: 145 over 4 is −36 a defense.
+    expect(plain).toContain("Easy gave up −36 a defense");
+    expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });
 });
 
@@ -460,7 +490,7 @@ describe("today read for the Legend day and Bases cards", () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
-      legends_held: { held: 52, defenses: 100 },
+      legends_held: { held: 52, defenses: 100, trophies: 3200 },
       open_defenses: 7,
       automatic_defense_each: 21,
       opponents: [
@@ -474,14 +504,14 @@ describe("today read for the Legend day and Bases cards", () => {
             trophy_change: 40,
             battle_timestamp: "2026-10-07T09:00:00Z",
           },
-          defenses: [{ stars: 3, yours: true }],
+          defenses: [{ stars: 3, trophy_change: -40, yours: true }],
           observed_at: "2026-10-07T09:10:00+00:00",
         },
       ],
     });
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
-      legendsHeld: { held: 52, defenses: 100 },
+      legendsHeld: { held: 52, defenses: 100, trophies: 3200 },
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [
@@ -495,7 +525,7 @@ describe("today read for the Legend day and Bases cards", () => {
             trophyChange: 40,
             at: Date.UTC(2026, 9, 7, 9),
           },
-          defenses: [{ stars: 3, yours: true }],
+          defenses: [{ stars: 3, trophyChange: -40, yours: true }],
           observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
         },
       ],
@@ -563,6 +593,8 @@ describe("dashboard route", () => {
     const unavailable = async () => {
       throw new PythonApiError(503, { error: "unavailable" });
     };
+    mocks.requestJson.mockReset();
+    mocks.requestJson.mockImplementation(unavailable);
     client = {
       getAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
       updateAccount: vi.fn(async () => ({ ...account, providers: ["google"] })),
@@ -602,9 +634,13 @@ describe("dashboard route", () => {
     expect(data.selectedTag).toBe(MAIN);
     expect(data.settings).toEqual(defaultSettings());
     // A first visit reads the default cards that sit behind the pop-up.
+    // Legend day still has the account's live trophies and rank.
     expect(data.cards).toEqual({
+      "legend-day": { player: linked(MAIN), day: null, range: null },
       "legend-clock": null,
+      bases: null,
       goal: null,
+      "armies-defense": null,
       "rivals-watch": null,
       "heat-map": null,
     });
@@ -868,8 +904,11 @@ describe("dashboard page", () => {
     expect(plain).toContain("Build my own");
     expect(plain).toContain("Change it any time with");
     expect(cardOrder(html)).toEqual([
+      "legend-day:m",
       "legend-clock:s",
+      "bases:l",
       "goal:s",
+      "armies-defense:m",
       "rivals-watch:m",
       "heat-map:s",
     ]);
@@ -918,6 +957,8 @@ describe("dashboard page", () => {
     const plain = text(html);
     expect(plain).toContain("Your Legend day, on one page");
     expect(plain).toContain("Continue with Google");
-    expect(plain).toContain("Legend clock Goal Rivals watch Season heat map");
+    expect(plain).toContain(
+      "Legend day Legend clock Bases you attacked Goal Armies on defense Rivals watch Season heat map",
+    );
   });
 });

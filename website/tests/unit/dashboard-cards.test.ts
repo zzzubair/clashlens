@@ -520,6 +520,94 @@ const GROUPS = [
   },
 ];
 
+const defense = (stars: number, trophyChange: number, yours = false) => ({
+  stars,
+  trophy_change: trophyChange,
+  yours,
+});
+
+const hit = (stars: number, destruction: number, trophies: number, minutes: number) => ({
+  stars,
+  destruction_percentage: destruction,
+  trophy_change: trophies,
+  battle_timestamp: iso(dayStart(9) + 2 * HOUR + minutes * 60_000),
+});
+
+/** What GET /v1/players/{tag}/today returns on Day 9 for today's two attacks. */
+const TODAY = {
+  tag: MAIN,
+  rank_range: { best: 95, worst: 760 },
+  // Legends today: 52% held, 32 trophies lost a defense.
+  legends_held: { held: 52, defenses: 100, trophies: 3200 },
+  open_defenses: 7,
+  automatic_defense_each: 21,
+  opponents: [
+    {
+      tag: BO,
+      name: "Bo",
+      reset_trophies: 5688,
+      hit: hit(2, 88, 31, 25),
+      // Held 1 of 4, 151 trophies given up.
+      defenses: [
+        defense(3, -40),
+        defense(2, -31, true),
+        defense(3, -40),
+        defense(3, -40),
+      ],
+      observed_at: iso(NOW - 12 * 60_000),
+    },
+    {
+      tag: AVA,
+      name: "Ava",
+      reset_trophies: 5712,
+      hit: hit(3, 100, 40, 10),
+      // Held 5 of 6, 90 trophies given up.
+      defenses: [
+        defense(1, -10),
+        defense(1, -10),
+        defense(3, -40, true),
+        defense(1, -10),
+        defense(2, -20),
+        defense(0, 0),
+      ],
+      observed_at: iso(NOW - 4 * 60_000),
+    },
+  ],
+};
+
+const outcome = (battles: number, three_stars: number, trophies: number) => ({
+  battles,
+  three_stars,
+  trophies,
+});
+
+/** What GET /v1/players/{tag}/armies returns for Days 2–8. */
+function armies(lens: string, days: number) {
+  const covered_days = Array.from({ length: days }, (_, index) =>
+    iso(dayStart(9 - days + index)),
+  );
+  return lens === "defense"
+    ? {
+        tag: MAIN,
+        lens,
+        days,
+        covered_days,
+        rows: [
+          { type_id: 3, name: "Thrower", ...outcome(5, 2, 170) },
+          { type_id: 4, name: "Hydra", ...outcome(3, 3, 120) },
+        ],
+        total: outcome(8, 5, 290),
+      }
+    : {
+        tag: MAIN,
+        lens,
+        days,
+        covered_days,
+        rows: [{ type_id: 3, name: "Thrower", ...outcome(16, 12, 600) }],
+        total: outcome(16, 12, 600),
+      };
+}
+
 /** The fake Python service: what it holds, and every request it was sent. */
 const python = {
   preferences: {} as Record<string, unknown>,
@@ -585,6 +673,12 @@ function answer(url: URL): [status: number, body: unknown] {
           },
         ],
       },
+    ];
+  if (path === `/v1/players/${MAIN}/today`) return [200, TODAY];
+  if (path === `/v1/players/${MAIN}/armies`)
+    return [
+      200,
+      armies(url.searchParams.get("lens")!, Number(url.searchParams.get("days"))),
     ];
   const page = python.pages[path.replace("/v1/players/", "")];
   if (path.startsWith("/v1/players/") && page) return [200, page];
@@ -654,6 +748,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
       group: null,
       groupWindow: "7" as const,
+      basesMode: "held" as const,
     };
   }
 
@@ -704,12 +799,12 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     vi.unstubAllGlobals();
   });
 
-  it("draws all 9 cards with the numbers worked out from the saved days", async () => {
+  it("draws all 13 cards with the numbers worked out from the saved days", async () => {
     const data = await load();
     const html = await render(data);
     const cards = cardsIn(html);
     expect(Object.keys(cards)).toEqual(ALL_CARDS);
-    expect(ALL_CARDS).toHaveLength(9);
+    expect(ALL_CARDS).toHaveLength(13);
     for (const card of ALL_CARDS)
       expect(cards[card]).not.toContain("could not be loaded");
 
@@ -1023,6 +1118,79 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(offense).toMatch(/7 D2 0 D3 4 D4 8 D5 – D6 7 D8/);
   });
 
+  it("shows today's read on Legend day and Bases you attacked, and the army reads", async () => {
+    const cards = cardsIn(await render(await load()));
+
+    // Legend day: the page's trophies and battles, the read's range and open defenses.
+    const day = text(cards["legend-day"]!);
+    expect(day).toContain("Legend day · Lens Main Day 9 of 28");
+    expect(day).toContain("Trophies 5,370 Net today –");
+    expect(day).toContain("Last Reset #318 → Now #316 → Next Reset #95 – #760");
+    expect(day).toContain("2 attacks");
+    expect(day).toContain("1 defense");
+    expect(day).toContain("7 defenses remain · auto defense −21 each");
+
+    // Bases you attacked: hardest first against today's Legends 52% held.
+    const bases = text(cards.bases!);
+    expect(bases).toContain("Bases you attacked · today · 2 of 8");
+    expect(bases).toContain("Base strength · Legends 52% held");
+    expect(bases).toContain("Ava 5,712 ★★★ 100% +40 · 07:10");
+    expect(bases).toContain("Hard held 5 of 6 · 83%");
+    expect(bases).toContain("Bo 5,688 ★★☆ 88% +31 · 07:25");
+    expect(bases).toContain("Easy held 1 of 4 · 25%");
+    expect(bases.indexOf("Ava")).toBeLessThan(bases.indexOf("Bo"));
+
+    // Armies on defense: the costliest armies first.
+    const armiesDefense = text(cards["armies-defense"]!);
+    expect(armiesDefense).toContain("Armies on defense 3 days 7 days Custom");
+    expect(armiesDefense).toContain("Last 7 days · 8 defenses");
+    expect(armiesDefense).toContain("Thrower 63% 60% −34");
+    expect(armiesDefense).toContain("Hydra 38% 0% −40");
+    expect(armiesDefense).toContain("All defenses 100% 38% −36");
+
+    // Armies on offense: one army, so its hit rate big.
+    const armiesOffense = text(cards["armies-offense"]!);
+    expect(armiesOffense).toContain("Armies on offense 3 days 7 days");
+    expect(armiesOffense).not.toContain("Custom");
+    expect(armiesOffense).toContain("Thrower every attack Hit rate 75%");
+    expect(armiesOffense).toContain("Tripled 12 of 16");
+
+    // One read of today serves both cards; each army card starts at 7 days.
+    const reads = python.requests.filter(({ path }) =>
+      path.startsWith(`/v1/players/${MAIN}/`),
+    );
+    expect(reads.filter(({ path }) => path.endsWith("/today"))).toHaveLength(1);
+    expect(
+      reads.filter(({ path }) => path.endsWith("/armies")).map(({ query }) => query),
+    ).toEqual(
+      expect.arrayContaining([
+        { lens: "defense", days: "7" },
+        { lens: "offense", days: "7" },
+      ]),
+    );
+  });
+
+  it("rates the bases by trophies given up when that is the saved setting", async () => {
+    python.preferences = {
+      dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
+    };
+    const bases = text(cardsIn(await render(await load())).bases!);
+    expect(bases).toContain("Base strength · Legends −32 a defense");
+    expect(bases).toContain("Hard gave up −15 a defense");
+    expect(bases).toContain("Easy gave up −38 a defense");
+  });
+
+  it("keeps Legend day from the player page when today's read fails", async () => {
+    python.down = ["/today", "/armies"];
+    const cards = cardsIn(await render(await load()));
+    const day = text(cards["legend-day"]!);
+    expect(day).toContain("Trophies 5,370");
+    expect(day).toContain("Next Reset –");
+    expect(day).not.toContain("defenses remain");
+    for (const card of ["bases", "armies-defense", "armies-offense"])
+      expect(text(cards[card]!)).toContain("This card could not be loaded right now.");
+  });
+
   it("follows the saved Goal, Cutoffs lines and group for the whole Season", async () => {
     python.preferences = {
       dashboard: serializeSettings({
@@ -1031,6 +1199,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
         cutoffs: [10, 20, 50, 100, 200, 300, 400],
         group: ALPHA,
         groupWindow: "season",
+        basesMode: "held",
       }),
     };
     const data = await load();

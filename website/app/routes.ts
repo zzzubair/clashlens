@@ -7,6 +7,7 @@ export default [
   route("players/:tag", "routes/player.tsx"),
   route("resources/players/search", "routes/player-search.ts"),
   route("resources/players/:tag/refresh", "routes/refresh.ts"),
+  route("resources/players/:tag/armies", "routes/player-armies.ts"),
   route("leaderboards/tracked", "routes/tracked-leaderboard.tsx"),
   route("analytics/armies", "routes/army-analytics.tsx"),
   route("blog", "routes/blog.tsx"),

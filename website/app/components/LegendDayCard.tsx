@@ -1,5 +1,6 @@
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { ClockBattle, PlayerDay, RankRange } from "../lib/dashboard";
+import { CardHead, Name, updatedAgo } from "./DashboardParts";
 import { signed, starText } from "./LegendClock";
 
 const SLOTS = 8;
@@ -60,16 +61,18 @@ function BattleRow({
 
 /**
  * Card 1: live trophies, net today, the rank at the last Reset, the live rank
- * among tracked players and the range the next Reset can still land in.
+ * and the range the next Reset can still land in.
  */
 export function LegendDayCard({
   player,
   day,
   range,
+  nowMs = null,
 }: {
   player: LinkedPlayerCard;
   day: PlayerDay | null;
   range: RankRange | null;
+  nowMs?: number | null;
 }) {
   const battles = [...(day?.battles ?? [])].sort((a, b) => a.at - b.at);
   const attacks = battles.filter((battle) => battle.kind === "attack");
@@ -82,8 +85,21 @@ export function LegendDayCard({
   const net = day?.net ?? null;
   const trophies = day ? day.trophies : player.trophies;
   const openDefenses = day?.openDefenses ?? null;
+  const meta = [
+    day?.dayNumber && day.dayCount ? `Day ${day.dayNumber} of ${day.dayCount}` : null,
+    updatedAgo(day?.observedAtMs ?? null, nowMs),
+  ].filter(Boolean);
   return (
     <div className="legend-day-card">
+      <CardHead
+        title={
+          <>
+            {"Legend day · "}
+            <Name>{player.name ?? player.tag}</Name>
+          </>
+        }
+        meta={meta.length ? meta.join(" · ") : null}
+      />
       <div className="legend-day-numbers">
         <div>
           <span className="dash-label">Trophies</span>
@@ -121,7 +137,6 @@ export function LegendDayCard({
           <span className="dash-estimate">estimate · narrows as the day goes on</span>
         </div>
       </div>
-      <p className="dash-muted legend-day-board">among tracked players</p>
       <BattleRow
         battles={attacks}
         count={attackCount}

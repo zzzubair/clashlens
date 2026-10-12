@@ -106,11 +106,15 @@ def publish_yesterday(
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
-    monkeypatch, enabled: bool
+@pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7"])
+def test_dashboard_reads_refuse_while_the_dashboard_is_off(
+    monkeypatch, enabled: bool, read: str
 ) -> None:
     monkeypatch.setattr(
         api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
+    )
+    monkeypatch.setattr(
+        api_dashboard, "get_player_armies", lambda _db, tag, **_: {"tag": tag}
     )
     app = create_app(
         FakeDatabase(),
@@ -118,7 +122,7 @@ def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
         clock=lambda: SIGNED_AT,
         dashboard_enabled=enabled,
     )
-    target = "/v1/players/%232PP/today"
+    target = f"/v1/players/%232PP/{read}"
     with TestClient(app) as client:
         response = client.get(target, headers=_signed_headers(target))
     if enabled:
@@ -189,7 +193,8 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             assert api_dashboard.get_player_today(database, board, "#8PY", now=NOW)[
                 "rank_range"
             ] == {"best": 1, "worst": 3}
-            assert today["legends_held"] == {"held": 4, "defenses": 5}
+            # Today's defenses on the board: 4 of 5 held, losing 30 + 53.
+            assert today["legends_held"] == {"held": 4, "defenses": 5, "trophies": 83}
             assert today["open_defenses"] == 6
             assert today["automatic_defense_each"] == 23
             assert [
@@ -200,13 +205,14 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                     "#8PY",
                     3,
                     [
-                        {"stars": 1, "yours": False},
-                        {"stars": 3, "yours": True},
-                        {"stars": 2, "yours": False},
+                        {"stars": 1, "trophy_change": -5, "yours": False},
+                        {"stars": 3, "trophy_change": -40, "yours": True},
+                        {"stars": 2, "trophy_change": -8, "yours": False},
                     ],
                 ),
-                # #9Q2's log has no battles yet; your attack is still shown.
-                ("#9Q2", 2, [{"stars": 2, "yours": True}]),
+                # #9Q2's log has no battles yet; your attack is still shown,
+                # costing it what you won.
+                ("#9Q2", 2, [{"stars": 2, "trophy_change": -30, "yours": True}]),
             ]
             assert today["opponents"][0]["observed_at"] == "2026-08-06T11:30:00+00:00"
 

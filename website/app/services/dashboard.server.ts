@@ -10,8 +10,10 @@ import type {
   DashboardSettings,
   LegendsHeld,
   OpponentRow,
+  PlayerDay,
   RankRange,
 } from "../lib/dashboard";
+import { nextResetMs } from "../lib/dashboard";
 import {
   DAILY_BATTLES,
   GOAL_PACE_DAYS,
@@ -29,6 +31,8 @@ import {
   type SeasonData,
   type SeasonDay,
 } from "../lib/dashboard-cards";
+import type { ArmyLens, ArmyOutcome, PlayerArmies } from "../lib/dashboard-armies";
+import { ARMY_DEFAULT_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
 import { getGroupComparison } from "./group-comparison.server";
 import {
@@ -94,8 +98,18 @@ function opponent(value: unknown): OpponentRow {
       at: time(hit.battle_timestamp),
     },
     defenses: value.defenses.map((defense) => {
-      if (!isRecord(defense) || typeof defense.yours !== "boolean") malformed();
-      return { stars: count(defense.stars, 3), yours: defense.yours };
+      if (
+        !isRecord(defense) ||
+        typeof defense.yours !== "boolean" ||
+        !isInteger(defense.trophy_change) ||
+        defense.trophy_change > 0
+      )
+        malformed();
+      return {
+        stars: count(defense.stars, 3),
+        trophyChange: defense.trophy_change,
+        yours: defense.yours,
+      };
     }),
     observedAtMs: nullable(value.observed_at, time),
   };
@@ -125,7 +139,7 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
       if (!isRecord(item)) malformed();
       const defenses = count(item.defenses);
       const heldCount = count(item.held, defenses);
-      return { held: heldCount, defenses };
+      return { held: heldCount, defenses, trophies: count(item.trophies) };
     }),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
@@ -217,6 +231,46 @@ export function seasonData(page: PlayerPage): SeasonData {
     });
   }
   return { today: season.currentDayNumber, days };
+}
+
+/**
+ * The selected account's Legend day for the Legend day card: the player
+ * page's battles and totals, and the automatic defense loss from today's
+ * read.
+ */
+function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
+  const day = page.currentDay;
+  const complete = day?.battlesComplete === true;
+  const gain = day?.offense.trophyGain ?? null;
+  const loss = day?.defense.trophyLoss ?? null;
+  // The finished day that ended at the Reset that started today.
+  const dayStartMs = nextResetMs(Date.now()) - DAY_MS;
+  const previous = [...page.recentDays, ...page.seasonDays].find(
+    (finished) => Date.parse(finished.period.split(" – ")[1] ?? "") === dayStartMs,
+  );
+  const [profileAt, battlesAt] = [
+    page.profile.freshness.observedAt,
+    page.currentDayPublishedAt,
+  ].map((value) => (value ? Date.parse(value) : Number.NaN));
+  const observed = [profileAt, battlesAt].filter(Number.isFinite);
+  return {
+    dayNumber: page.season?.currentDayNumber ?? null,
+    dayCount: page.season?.dayCount ?? null,
+    battles: clockData(page).battles,
+    complete,
+    net:
+      day?.trophyChange ??
+      (complete && gain !== null && loss !== null ? gain - loss : null),
+    attacks: day?.offense.attacks ?? null,
+    defenses: day?.defense.defenses ?? null,
+    lastResetRank: previous?.resetRank ?? null,
+    trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
+    // The older of the trophy and battle reads, so the card never looks newer than it is.
+    observedAtMs: observed.length ? Math.min(...observed) : null,
+    battlesObservedAtMs: Number.isFinite(battlesAt) ? battlesAt : null,
+    openDefenses: today?.openDefenses ?? null,
+    autoDefenseEach: today?.automaticDefenseEach ?? null,
+  };
 }
 
 function clockData(page: PlayerPage): ClockData {
@@ -682,9 +736,40 @@ export async function loadCardData(
     const page = await pages(ctx.selected.tag);
     return page === null ? null : seasonData(page);
   };
+  // Legend day and Bases you attacked share one read of today's numbers.
+  let todayRead: Promise<PlayerToday | null> | undefined;
+  const today = () => (todayRead ??= getPlayerToday(ctx.selected.tag).catch(() => null));
+  const armies = async (lens: ArmyLens) => ({
+    tag: ctx.selected.tag,
+    armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
+  });
   const readers: {
     [Card in keyof CardDataMap]: () => Promise<CardDataMap[Card] | null>;
   } = {
+    "legend-day": async () => {
+      // Without the page the card still shows the account's live trophies and rank.
+      const [page, read] = await Promise.all([
+        pages(ctx.selected.tag).catch(() => null),
+        today(),
+      ]);
+      return {
+        player: ctx.selected,
+        day: page === null ? null : legendDay(page, read),
+        range: read?.rankRange ?? null,
+      };
+    },
+    bases: async () => {
+      const read = await today();
+      return read === null
+        ? null
+        : {
+            rows: read.opponents,
+            legends: read.legendsHeld,
+            mode: ctx.settings.basesMode,
+          };
+    },
+    "armies-defense": () => armies("defense"),
+    "armies-offense": () => armies("offense"),
     "legend-clock": async () => {
       const page = await pages(ctx.selected.tag);
       return page === null ? null : clockData(page);
@@ -709,4 +794,50 @@ export async function loadCardData(
       .map(async (card) => [card, await readers[card]().catch(() => null)] as const),
   );
   return Object.fromEntries(loaded) as CardDataSet;
+}
+
+function outcome(value: unknown): ArmyOutcome {
+  if (!isRecord(value)) malformed();
+  const battles = count(value.battles);
+  return {
+    battles,
+    threeStars: count(value.three_stars, battles),
+    trophies: count(value.trophies),
+  };
+}
+
+/** One player's attacks or defenses per army type, from GET /v1/players/{tag}/armies. */
+export async function getPlayerArmies(
+  tag: string,
+  lens: ArmyLens,
+  days: number,
+): Promise<PlayerArmies> {
+  if (!isCanonicalPlayerTag(tag) || !isArmyDays(days, lens))
+    throw new PythonApiError(422, { error: "invalid_request" });
+  const payload = await requestJson<unknown>(
+    `/v1/players/${encodeURIComponent(tag)}/armies?lens=${lens}&days=${days}`,
+    "GET",
+    undefined,
+    undefined,
+  );
+  if (
+    !isRecord(payload) ||
+    payload.tag !== tag ||
+    payload.lens !== lens ||
+    payload.days !== days ||
+    !Array.isArray(payload.covered_days) ||
+    !Array.isArray(payload.rows) ||
+    !isRecord(payload.total)
+  )
+    malformed();
+  return {
+    lens,
+    days,
+    coveredDays: payload.covered_days.slice(0, days).map(time),
+    rows: payload.rows.slice(0, 64).map((row) => {
+      if (!isRecord(row) || !isInteger(row.type_id) || !isString(row.name)) malformed();
+      return { typeId: row.type_id, name: row.name, ...outcome(row) };
+    }),
+    total: outcome(payload.total),
+  };
 }
