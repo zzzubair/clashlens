@@ -677,6 +677,20 @@ describe("dashboard route", () => {
     });
   });
 
+  it("saves a card setting made before any layout was picked with the default layout", async () => {
+    const posted = serializeSettings({ ...defaultSettings(), goal: 50 });
+    const { data, status } = unwrap<DashboardActionData>(
+      await action(saveRequest(JSON.stringify(posted))),
+    );
+    expect(status).toBe(200);
+    expect(data.saved).toBe(true);
+    expect(client.updateAccount.mock.calls[0]?.[0].preferences.dashboard).toEqual({
+      v: 3,
+      layout: "default",
+      goal: 50,
+    });
+  });
+
   it("refuses bad settings, another site, or settings too big to store", async () => {
     for (const bad of ['{"v":2}', "not json", '{"v":3,"layout":"default","goal":0}']) {
       expect(unwrap<DashboardActionData>(await action(saveRequest(bad))).status).toBe(

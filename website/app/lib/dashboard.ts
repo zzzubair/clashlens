@@ -219,7 +219,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * the box far under its 4,096-byte limit.
  */
 export function serializeSettings(settings: DashboardSettings): Record<string, unknown> {
-  const stored: Record<string, unknown> = { v: 3, layout: settings.layout };
+  const stored: Record<string, unknown> = { v: 3, layout: settings.layout ?? "default" };
   if (settings.goal !== DEFAULT_GOAL) stored.goal = settings.goal;
   if (settings.cutoffs.join() !== DEFAULT_CUTOFFS.join())
     stored.cutoffs = settings.cutoffs;
