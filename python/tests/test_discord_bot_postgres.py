@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 from domain_test_support import as_api_role, domain_database
@@ -250,6 +251,54 @@ def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) ->
             assert found.body.startswith("5,000 🏆")
             assert [choice.value for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "#8QQ"
+            ]
+        finally:
+            bot.close()
+            owner.close()
+
+
+def test_bot_names_a_player_by_the_profile_their_page_shows(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            # An accepted 5,000 profile named Drifter II, then a newer Season 0
+            # one at 5,000 named Drifter, which the player's page shows.
+            seed_profile(owner, "#8QQ", 5000, observed_at=NOW - timedelta(hours=1))
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET name = 'Drifter II'"
+                    " WHERE normalized_tag = '#8QQ'"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag, endpoint_version,
+                        schema_version, parser_version, observed_at, source_http_status,
+                        name, trophies, league_tier_id, league_tier_name,
+                        eligibility_state, current_league_season_id, profile_json,
+                        source_contract_state, eligibility_reason
+                    )
+                    SELECT player_id, observation_id, normalized_tag, endpoint_version,
+                           schema_version, 'profile-parser-v2', %s, source_http_status,
+                           'Drifter', trophies, league_tier_id, league_tier_name,
+                           eligibility_state, '0', profile_json,
+                           'conflict', 'confirmed_legend_i'
+                    FROM player_profile_versions WHERE normalized_tag = '#8QQ'
+                    """,
+                    (NOW,),
+                )
+                api_leaderboard.save_live_unplayed(connection, NOW)
+            _account(owner, "discord", DISCORD_ID, "drift")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+            commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
+
+            found = commands.player(account, "Drifter")
+            assert found.title is not None and found.title.startswith("Drifter #8QQ")
+            assert [choice.label for choice in commands.player_choices(DISCORD_ID, "drift")] == [
+                "Drifter #8QQ · 5,000"
             ]
         finally:
             bot.close()

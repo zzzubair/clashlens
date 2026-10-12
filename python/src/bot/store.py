@@ -263,46 +263,61 @@ class Store:
 
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]:
         """Known players whose name matches, exact name first, as the website's
-        search, with the players who have not played yet this Season whose
-        5,000 profile matches, as players() shows them. Those come from the
-        worker's saved list of them: finding them all live took 17 s on
-        11 October 2026."""
-        found = api_players.search_known_players(
-            self.database, query, now=now, freshness_seconds=FRESHNESS_SECONDS, limit=25
-        )
+        search, each named by the profile their page shows: for a player who
+        has not played yet this Season, the profile that ranks them at 5,000.
+        Those players are found from the worker's saved list of them, as
+        finding them all live took 17 s on 11 October 2026."""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        params = api_leaderboard._season_params(now)
+        params = {**api_leaderboard._season_params(now), "pattern": f"%{escaped}%"}
+        exact = query.casefold()
+        website = {
+            item["tag"]: item
+            for item in api_players.search_known_players(
+                self.database, query, now=now, freshness_seconds=FRESHNESS_SECONDS, limit=25
+            )
+        }
+        found: list[dict[str, Any]] = []
         with self.database.pool.connection() as connection:
-            rows = connection.execute(
+            saved = connection.execute(
                 """
-                SELECT player.normalized_tag, saved.name, saved.clan,
-                       saved.profile_version_id
+                SELECT player.normalized_tag, saved.name
                 FROM live_unplayed_profiles AS saved
                 JOIN players AS player ON player.id = saved.player_id
                 WHERE saved.official_season_id = %(season_id)s
                   AND saved.name ILIKE %(pattern)s ESCAPE '\\'
-                  AND NOT player.normalized_tag = ANY(%(found)s::text[])
-                ORDER BY lower(saved.name) = lower(%(query)s) DESC,
-                         lower(saved.name), player.normalized_tag
-                LIMIT 25
+                ORDER BY lower(saved.name), player.normalized_tag
                 """,
-                {
-                    **params,
-                    "pattern": f"%{escaped}%",
-                    "query": query,
-                    "found": [item["tag"] for item in found],
-                },
+                params,
             ).fetchall()
-            for tag, name, clan, version_id in rows:
+            candidates = sorted(
+                [(item["tag"], item["name"]) for item in website.values()] + saved,
+                key=lambda candidate: (candidate[1] or "").casefold() != exact,
+            )
+            for tag in dict.fromkeys(tag for tag, _name in candidates):
+                if len(found) == 25:
+                    break
                 unplayed = connection.execute(
                     api_leaderboard.UNPLAYED_PROFILE_SQL, {**params, "tag": tag}
                 ).fetchone()
-                if unplayed is not None and unplayed[0] == version_id:
+                if unplayed is None:
+                    if tag in website:
+                        found.append(website[tag])
+                    continue
+                name, clan, matches = connection.execute(
+                    """
+                    SELECT name, profile_json -> 'clan' ->> 'name',
+                           name ILIKE %(pattern)s ESCAPE '\\'
+                    FROM player_profile_versions
+                    WHERE id = %(id)s
+                    """,
+                    {**params, "id": unplayed[0]},
+                ).fetchone()
+                if matches:
                     found.append(
                         {"tag": tag, "name": name, "clan": clan, "trophies": SEASON_START_TROPHIES}
                     )
-        found.sort(key=lambda item: (item["name"] or "").casefold() != query.casefold())
-        return found[:25]
+        found.sort(key=lambda item: (item["name"] or "").casefold() != exact)
+        return found
 
     def board(self, now: datetime, focus_tag: str | None = None) -> dict[str, Any] | None:
         """The Live Leaderboard's top 10, or with `focus_tag` that player and
