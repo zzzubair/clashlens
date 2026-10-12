@@ -7,6 +7,7 @@ import {
   useRevalidator,
   useSearchParams,
   type LoaderFunctionArgs,
+  type ShouldRevalidateFunctionArgs,
 } from "react-router";
 
 import { usePlayerLookupEvent } from "../components/Analytics";
@@ -262,6 +263,15 @@ function readSeasonParam(value: string | null): string | null {
 
 export function headers() {
   return { "Cache-Control": "no-store" };
+}
+
+/** A refused Refresh can land during a Season switch; the switch still reads its Season. */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  return currentUrl.search !== nextUrl.search || defaultShouldRevalidate;
 }
 
 // Effects never run during SSR. This client-document guard also prevents a
