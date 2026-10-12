@@ -16,7 +16,7 @@ The thick dark outline lets it sit on light or dark backgrounds without a box be
 
 For the browser tab icon, the phone home-screen icon and the Discord or social avatar.
 
-- **Chosen:** [`assets/mark-cl-block.svg`](../assets/mark-cl-block.svg), "CL" in the wordmark's own letters and colours. [`assets/mark-cl-block-app.svg`](../assets/mark-cl-block-app.svg) is the same on a dark rounded tile, for the app icon and avatars.
+- **Chosen:** [`assets/mark-cl-block.svg`](../assets/mark-cl-block.svg), "CL" in the wordmark's own letters and colours. [`assets/mark-cl-block-app.svg`](../assets/mark-cl-block-app.svg) is the same on a dark rounded tile. The app icons and the Discord server icon use the sky blue square below instead.
 - **Kept as a backup:** [`assets/mark-lens-arrow.svg`](../assets/mark-lens-arrow.svg) and [`assets/mark-lens-arrow-app.svg`](../assets/mark-lens-arrow-app.svg), the gold lens with an arrow behind it.
 
 At 16 pixels the CL mark reads as two orange blocks rather than letters.
