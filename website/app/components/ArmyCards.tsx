@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { useFetcher } from "react-router";
+import { useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
 import type {
@@ -38,25 +37,38 @@ export function armiesPath(tag: string, lens: ArmyLens, days: number): string {
 
 /** The numbers for the chosen days: the page's first read, then the card's own. */
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
-  const fetcher = useFetcher<ArmiesResponse>();
-  const [days, setDays] = useState(initial.days);
-  // The answer in hand when the chosen days were asked for: until a newer one
-  // arrives they are loading, even before the fetcher says so.
-  const [asked, setAsked] = useState(fetcher.data);
-  const loading =
-    fetcher.state !== "idle" || (initial.days !== days && fetcher.data === asked);
-  const fetched = fetcher.data?.armies;
-  const chosen =
-    fetched && fetched.days === days ? fetched : initial.days === days ? initial : null;
+  // The chosen days and their numbers: null when they could not be read,
+  // undefined while they load.
+  const [chosen, setChosen] = useState<{ days: number; armies?: PlayerArmies | null }>({
+    days: initial.days,
+    armies: initial,
+  });
+  // What was on screen when the chosen days were asked for.
+  const [shown, setShown] = useState<PlayerArmies | null>(initial);
+  const asked = useRef(0);
+  const loading = chosen.armies === undefined;
   return {
-    days,
+    days: chosen.days,
     // While the chosen days load, the numbers already shown stay, faded.
-    armies: chosen ?? (loading ? (fetched ?? initial) : null),
+    armies: loading ? shown : (chosen.armies ?? null),
     loading,
-    choose(next: number) {
-      setDays(next);
-      setAsked(fetcher.data);
-      if (initial.days !== next) void fetcher.load(armiesPath(tag, lens, next));
+    choose(days: number) {
+      const ask = ++asked.current;
+      if (!loading) setShown(chosen.armies ?? null);
+      if (days === initial.days) {
+        setChosen({ days, armies: initial });
+        return;
+      }
+      setChosen({ days });
+      // Not a router fetcher: its failed read, a dropped connection or a 502
+      // from the server in front, would replace the whole page with an error.
+      void fetch(armiesPath(tag, lens, days), { headers: { Accept: "application/json" } })
+        .then((response) => response.json() as Promise<ArmiesResponse>)
+        .then(({ armies }) => armies ?? null)
+        .catch(() => null)
+        .then((armies) => {
+          if (ask === asked.current) setChosen({ days, armies });
+        });
     },
   };
 }

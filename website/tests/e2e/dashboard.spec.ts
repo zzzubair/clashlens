@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
   ensureAccount,
@@ -126,6 +126,32 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   expect((await shown.jsonValue()).filter((text) => text.includes("aren't available"))).toEqual(
     [],
   );
+
+  // A day switch whose read fails on the way, a dropped connection or a 502
+  // from the server in front of the website, says so in that card alone.
+  const armiesRead = /\/resources\/players\/[^/]+\/armies\?/;
+  const logged = errors.length;
+  for (const fail of [
+    (route: Route) => route.abort(),
+    (route: Route) => route.fulfill({ status: 502, body: "Bad Gateway" }),
+  ]) {
+    await page.route(armiesRead, fail);
+    await armies.getByRole("button", { name: "Custom" }).click();
+    await armies.getByLabel("Number of days").fill("5");
+    await armies.getByRole("button", { name: "Show" }).click();
+    await expect(armies).toContainText("Army numbers aren't available right now.");
+    await expect.poll(() => cardOrder(page)).toEqual(own);
+    await page.unroute(armiesRead);
+    await armies.getByRole("button", { name: "3 days" }).click();
+    await expect(armies.locator("[aria-busy]")).toHaveAttribute("aria-busy", "false");
+    await expect(armies).not.toContainText("aren't available");
+  }
+  // The browser logs the two failed reads; nothing else went wrong.
+  await expect.poll(() => errors.slice(logged)).toEqual([
+    expect.stringContaining("net::ERR_FAILED"),
+    expect.stringContaining("502"),
+  ]);
+  errors.splice(logged);
 
   // A card setting saves at once: the Goal becomes Top 50.
   await page.getByRole("button", { name: "Customise dashboard" }).click();
