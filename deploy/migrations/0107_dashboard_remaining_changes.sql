@@ -5,11 +5,14 @@
 -- For each of the last 7 finished Legend days and each 15-minute step from
 -- its Reset, one row holds every Daily board player's situation at that
 -- moment (attacks and defenses still open, attacks on the 3 days before, and
--- rank band or trophy level) and the trophies they won or lost from then to
--- the end of the day. The worker writes a day once its Daily board publishes
--- and deletes days older than 7. At about 13,300 players that is 96 rows a
--- day of two 13,300-number arrays: 7 days of made-up data that size took
--- 15.7 MB on disk. Days are replaced one by one, so it does not grow.
+-- rank band or trophy level), the trophies they won or lost from then to
+-- the end of the day, and whether a battle that moved their trophies was
+-- still to come, which a day's battles can leave at 0 overall. The worker
+-- writes a day once its Daily board publishes and deletes days older than 7.
+-- At about 13,300 players that is 96 rows a day of two 13,300-number arrays
+-- and one 13,300-flag array: 7 days of made-up data that size took 15.7 MB on
+-- disk before the flags, which add at most 13.3 KB a row, 9 MB for 7 days.
+-- Days are replaced one by one, so it does not grow.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS dashboard_remaining_changes (
@@ -21,6 +24,8 @@ CREATE TABLE IF NOT EXISTS dashboard_remaining_changes (
     situations smallint[] NOT NULL,
     changes smallint[] NOT NULL
         CHECK (cardinality(changes) = cardinality(situations)),
+    moved boolean[] NOT NULL
+        CHECK (cardinality(moved) = cardinality(situations)),
     built_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (ranked_day_start, slot)
 );

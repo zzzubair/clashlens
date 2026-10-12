@@ -12,9 +12,11 @@ without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
 The projected place inside it (projected_place.py) is recomputed with each
-board read from the same trophies and open slots, each player's newest
-battle that moved their trophies in that log, their attacks on the three
-Legend days before today, and the saved examples of the last 7 days.
+board read from the same trophies and open slots, when each player's newest
+battle that moved their trophies in that log ended by the Daily board's
+rule (the attacker's report time, from the attacker's own log, else 155
+seconds after the defender's), their attacks on the three Legend days
+before today, and the saved examples of the last 7 days.
 
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
@@ -70,34 +72,66 @@ OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
 _BOARD_SQL = f"""
-WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL})
-SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
-       day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
-       day.defense_three_star_count,
+WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL}),
+board AS MATERIALIZED (
+    SELECT live.normalized_tag, live.trophies, player.id AS player_id,
+           recent.yesterday, recent.before, day.attack_count, day.attack_gain,
+           day.defense_count, day.defense_loss, day.defense_three_star_count,
+           day.ranked_day_version_id, day.battles
+    FROM live
+    JOIN players AS player ON player.normalized_tag = live.normalized_tag
+    {projected_place.RECENT_ATTACKS_SQL}LEFT JOIN LATERAL (
+        SELECT attack_count, attack_gain, defense_count, defense_loss,
+               defense_three_star_count, ranked_day_version_id, battles
+        FROM api_player_daily_logs AS daily
+        WHERE daily.player_id = player.id
+          AND daily.ranked_day_start = %(day_start)s
+        ORDER BY daily.version DESC
+        LIMIT 1
+    ) AS day ON true
+),
+-- Each battle those logs keep: the player's side and their report's time.
+report AS MATERIALIZED (
+    SELECT board.player_id, event ->> 'lens' AS lens,
+           event ->> 'battle_identity' AS battle,
+           (event ->> 'battle_timestamp')::timestamptz AS reported_at,
+           event ->> 'trophy_change' <> '0' AS moved
+    FROM board
+    CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(board.battles)
+                                            WHEN 'array' THEN board.battles
+                                            ELSE '[]' END) AS event
+    WHERE event ->> 'battle_timestamp' ~ '^[0-9]{{4}}-[0-9][0-9]-[0-9][0-9]T'
+      AND event ->> 'included' IS DISTINCT FROM 'false'
+      AND event ->> 'valid' IS DISTINCT FROM 'false'
+),
+-- When each player's newest battle that moved their trophies ended, by the
+-- Daily board's rule (analytics.latest_trophy_changes): at the attacker's
+-- report, from the attacker's own log, else 155 seconds after the
+-- defender's.
+latest_change AS (
+    SELECT own.player_id,
+           max(CASE own.lens
+                   WHEN 'defense' THEN COALESCE(
+                       attack.reported_at, own.reported_at + interval '155 seconds')
+                   ELSE own.reported_at
+               END) AS at
+    FROM report AS own
+    LEFT JOIN report AS attack
+      ON own.lens = 'defense' AND attack.lens = 'offense'
+     AND attack.battle = own.battle
+    WHERE own.moved
+    GROUP BY own.player_id
+)
+SELECT board.normalized_tag, board.trophies, ranked_day.start_trophies,
+       board.attack_count, board.attack_gain, board.defense_count,
+       board.defense_loss, board.defense_three_star_count,
        COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0),
        COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0),
-       recent.yesterday, recent.before, day.latest_change_at
-FROM live
-JOIN players AS player ON player.normalized_tag = live.normalized_tag
-{projected_place.RECENT_ATTACKS_SQL}LEFT JOIN LATERAL (
-    SELECT attack_count, attack_gain, defense_count, defense_loss,
-           defense_three_star_count, ranked_day_version_id,
-           (SELECT max((event ->> 'battle_timestamp')::timestamptz)
-            FROM jsonb_array_elements(CASE jsonb_typeof(daily.battles)
-                                      WHEN 'array' THEN daily.battles
-                                      ELSE '[]' END) AS event
-            WHERE event ->> 'trophy_change' <> '0'
-              AND event ->> 'battle_timestamp' ~ '^[0-9]{{4}}-[0-9][0-9]-[0-9][0-9]T'
-              AND event ->> 'included' IS DISTINCT FROM 'false'
-              AND event ->> 'valid' IS DISTINCT FROM 'false') AS latest_change_at
-    FROM api_player_daily_logs AS daily
-    WHERE daily.player_id = player.id
-      AND daily.ranked_day_start = %(day_start)s
-    ORDER BY daily.version DESC
-    LIMIT 1
-) AS day ON true
+       board.yesterday, board.before, latest_change.at
+FROM board
+LEFT JOIN latest_change ON latest_change.player_id = board.player_id
 LEFT JOIN ranked_day_versions AS ranked_day
-    ON ranked_day.id = day.ranked_day_version_id
+    ON ranked_day.id = board.ranked_day_version_id
 """
 
 # Each player's latest log for one Legend day, with the day's start trophies

@@ -37,10 +37,15 @@ def test_level_is_rank_band_then_trophy_bracket() -> None:
     assert key // LEVELS % ACTIVITIES == 3
 
 
-def _day(trophies, open_attacks, open_defenses, changes):
+def _day(trophies, open_attacks, open_defenses, changes, moved=None):
     keys = situations(trophies, open_attacks, open_defenses, [3] * len(trophies))
-    pairs = sorted(zip(keys, changes, strict=True))
-    return [key for key, _ in pairs], [change for _, change in pairs]
+    moved = moved or [change != 0 for change in changes]
+    triples = sorted(zip(keys, changes, moved, strict=True))
+    return (
+        [key for key, _, _ in triples],
+        [change for _, change, _ in triples],
+        [flag for _, _, flag in triples],
+    )
 
 
 def _places(trophies, open_attacks, open_defenses, days, latest=None, seed=1):
@@ -65,7 +70,7 @@ def test_a_finished_player_is_passed_by_a_rival_who_usually_climbs() -> None:
 
 
 def test_unseen_situations_stay_where_they_are() -> None:
-    places = _places([5100, 5000], [8, 8], [8, 8], [([], [])])
+    places = _places([5100, 5000], [8, 8], [8, 8], [([], [], [])])
     assert places.projected(0, 1, 2) == 1
     assert places.projected(1, 1, 2) == 2
 
@@ -80,6 +85,30 @@ def test_equal_trophies_follow_the_daily_boards_order() -> None:
         latest=[MORNING, None, NOON, MORNING],
     )
     assert [places.projected(player, 1, 4) for player in range(4)] == [3, 4, 2, 1]
+
+
+def test_a_balanced_finish_still_changes_trophies_last() -> None:
+    # Yesterday at this time 50 players with an attack and a defense left won
+    # 40 and lost 40, and 50 who had finished stayed put. Today a finished
+    # player whose trophies last changed at noon and one with both battles
+    # left, last changed in the morning, are both on 5,000. The second ends
+    # on 5,000 too, but changes trophies after the first, so places first.
+    day = _day([5000] * 100, [1] * 50 + [0] * 50, [1] * 50 + [0] * 50, [0] * 100,
+               moved=[True] * 50 + [False] * 50)
+    places = _places([5000, 5000], [0, 1], [0, 1], [day], latest=[NOON, MORNING])
+    assert places.projected(0, 1, 2) == 2
+    assert places.projected(1, 1, 2) == 1
+
+
+def test_every_imagined_day_gives_each_player_their_own_place() -> None:
+    # 100 players on 4,960 each have an attack left that always wins 40, so
+    # all end on 5,000 in a random order: never two on the same place.
+    day = _day([5000] * 100, [1] * 100, [0] * 100, [40] * 100)
+    places = _places([4960] * 100, [1] * 100, [0] * 100, [day])
+    for keys, ordered in zip(places.keys, places.sorted, strict=True):
+        assert sorted(
+            1 + places.size - bisect_right(ordered, key) for key in keys
+        ) == list(range(1, 101))
 
 
 def test_a_situation_without_examples_copies_the_nearest_within_its_own_slots() -> None:
