@@ -2,7 +2,7 @@
 
 The bot connects as the API's database role and calls the same reads the
 website's pages use, so a number in Discord matches the number on the site.
-Its only writes are each account's main player. Every read takes the moment
+It writes nothing: the default player is chosen on the website. Every read takes the moment
 of the command, so one reply never mixes two Legend days.
 """
 
@@ -13,8 +13,16 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from clashlens import api_accounts, api_leaderboard, api_player_lookup, api_players
-from clashlens.api_db import AccountContext, ApiDatabase
+from clashlens import (
+    api_accounts,
+    api_leaderboard,
+    api_player_lookup,
+    api_players,
+)
+from clashlens.api_db import (
+    AccountContext,
+    ApiDatabase,
+)
 from clashlens.domain import SEASON_START_TROPHIES
 
 # The website's own freshness limit for a saved player profile.
@@ -63,6 +71,7 @@ def _linked_players(
         )
         for row in rows
     ]
+
 
 
 class _OneConnection:
@@ -118,74 +127,36 @@ class Store:
                 if (
                     card["state"] != "tracking"
                     or card["reason"] not in (None, "pending")
-                    or card["trophies"] is not None
+                    or card["trophies"] not in (None, SEASON_START_TROPHIES)
                 ):
                     continue
                 unplayed = connection.execute(
                     api_leaderboard.UNPLAYED_PROFILE_SQL,
                     {**api_leaderboard._season_params(now), "tag": card["tag"]},
                 ).fetchone()
-                if unplayed is not None:
+                if unplayed is None:
+                    continue
+                seen[card["tag"]] = unplayed[1]
+                if card["trophies"] is None:
                     card.update(
                         reason=None,
                         trophies=SEASON_START_TROPHIES,
                         season_reset_pending=False,
                     )
-                    seen[card["tag"]] = unplayed[1]
         for card in cards:
             card["observed_at"] = seen.get(card["tag"])
         return cards
 
-    def main_tag(self, account: AccountContext) -> str | None:
-        """The saved main; one no longer verified to this account is forgotten."""
+    def default_tag(self, account: AccountContext) -> str | None:
+        """The default player chosen on the website, while still verified."""
         with self.database.pool.connection() as connection:
-            with connection.transaction():
-                connection.execute(
-                    """
-                    DELETE FROM discord_bot_main_players AS main
-                    WHERE main.account_id = %s
-                      AND NOT EXISTS (
-                          SELECT 1 FROM verified_player_links AS link
-                          WHERE link.player_id = main.player_id
-                            AND link.account_id = main.account_id
-                      )
-                    """,
-                    (account.internal_id,),
-                )
-                row = connection.execute(
-                    """
-                    SELECT player.normalized_tag
-                    FROM discord_bot_main_players AS main
-                    JOIN players AS player ON player.id = main.player_id
-                    WHERE main.account_id = %s
-                    """,
-                    (account.internal_id,),
-                ).fetchone()
-        return None if row is None else str(row[0])
-
-    def set_main(self, account: AccountContext, tag: str) -> bool:
-        """Save `tag` as the main; False when it is not this account's player."""
-        with self.database.pool.connection() as connection:
-            with connection.transaction():
-                row = connection.execute(
-                    """
-                    INSERT INTO discord_bot_main_players (account_id, player_id)
-                    SELECT link.account_id, link.player_id
-                    FROM verified_player_links AS link
-                    JOIN players AS player ON player.id = link.player_id
-                    WHERE link.account_id = %s AND player.normalized_tag = %s
-                    ON CONFLICT (account_id) DO UPDATE
-                        SET player_id = EXCLUDED.player_id,
-                            updated_at = clock_timestamp()
-                    RETURNING account_id
-                    """,
-                    (account.internal_id, tag),
-                ).fetchone()
-        return row is not None
+            return api_accounts.default_player_tag(connection, account.internal_id)
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
         """The website's player page with the player's lookup state, reason
-        and live board position, all from one read-only database snapshot."""
+        and live board position, all from one read-only database snapshot.
+        A known player with no page gets only their lookup state; None when
+        Clash Lens has never heard of the tag."""
         with self.database.pool.connection() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             page = api_players.get_player_page(
@@ -194,9 +165,22 @@ class Store:
                 now=now,
                 freshness_seconds=FRESHNESS_SECONDS,
             )
-            if page is None:
-                return None
             lookup = api_player_lookup._lookup(connection, tag)
+            if page is None:
+                if lookup["state"] == "unknown":
+                    return None
+                profile = lookup.get("profile") or {}
+                return {
+                    "tag": tag,
+                    "name": profile.get("name"),
+                    "clan": profile.get("clan"),
+                    "trophies": None,
+                    "season_reset_pending": False,
+                    "observed_at": None,
+                    "state": lookup["state"],
+                    "reason": lookup.get("reason"),
+                    "rank": None,
+                }
             rank = api_leaderboard.live_positions(connection, [tag], now=now).get(tag)
         return {
             **page,
@@ -205,3 +189,64 @@ class Store:
             "reason": lookup.get("reason"),
             "rank": rank,
         }
+
+    def search(self, query: str, now: datetime) -> list[dict[str, Any]]:
+        """Known players whose name matches, exact name first, as the website's
+        search, each named by the profile their page shows: for a player who
+        has not played yet this Season, the profile that ranks them at 5,000.
+        Those players are found from the worker's saved list of them, as
+        finding them all live took 17 s on 11 October 2026."""
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params = {**api_leaderboard._season_params(now), "pattern": f"%{escaped}%"}
+        exact = query.casefold()
+        website = {
+            item["tag"]: item
+            for item in api_players.search_known_players(
+                self.database, query, now=now, freshness_seconds=FRESHNESS_SECONDS, limit=25
+            )
+        }
+        found: list[dict[str, Any]] = []
+        with self.database.pool.connection() as connection:
+            saved = connection.execute(
+                """
+                SELECT player.normalized_tag, saved.name
+                FROM live_unplayed_profiles AS saved
+                JOIN players AS player ON player.id = saved.player_id
+                WHERE saved.official_season_id = %(season_id)s
+                  AND saved.name ILIKE %(pattern)s ESCAPE '\\'
+                ORDER BY lower(saved.name), player.normalized_tag
+                """,
+                params,
+            ).fetchall()
+            candidates = sorted(
+                [(item["tag"], item["name"]) for item in website.values()] + saved,
+                key=lambda candidate: (candidate[1] or "").casefold() != exact,
+            )
+            for tag in dict.fromkeys(tag for tag, _name in candidates):
+                if len(found) == 25:
+                    break
+                unplayed = connection.execute(
+                    api_leaderboard.UNPLAYED_PROFILE_SQL, {**params, "tag": tag}
+                ).fetchone()
+                if unplayed is None:
+                    if tag in website:
+                        found.append(website[tag])
+                    continue
+                name, clan, matches = connection.execute(
+                    """
+                    SELECT name, profile_json -> 'clan' ->> 'name',
+                           name ILIKE %(pattern)s ESCAPE '\\'
+                    FROM player_profile_versions
+                    WHERE id = %(id)s
+                    """,
+                    {**params, "id": unplayed[0]},
+                ).fetchone()
+                if matches:
+                    found.append(
+                        {"tag": tag, "name": name, "clan": clan, "trophies": SEASON_START_TROPHIES}
+                    )
+        found.sort(key=lambda item: (item["name"] or "").casefold() != exact)
+        return found
+
+    def groups(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
+        return api_accounts.list_groups(self.database, account.internal_id, now=now)

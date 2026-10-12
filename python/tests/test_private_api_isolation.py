@@ -130,6 +130,7 @@ def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(account
             "username": owner["username"],
             "display_name": owner["username"],
             "verified_players": [],
+            "default_player": None,
         }
         # Searching a public username must not disclose private counts or labels.
         search = call(client, owner, "GET", f"/v1/players/search?q={other['username']}")
@@ -307,6 +308,7 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("POST", f"{group_path}/players", {"tag": other["tag"]}),
             ("DELETE", f"{group_path}/players/{quote(other['tag'])}", None),
             ("GET", f"{group_path}/comparison", None),
+            ("POST", "/v1/account/default-player", {"tag": other["tag"]}),
             ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
             ("GET", f"/v1/account/exports/{uuid4()}", None),
         ]
@@ -347,3 +349,18 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
                 assert denied.status_code == 403
                 assert denied.json() == {"error": "caller_operation_not_authorized"}
         assert_private_state(client, other)
+
+
+def test_default_player_is_only_ever_the_accounts_own_verified_player(accounts):
+    client, owners = accounts
+    owner, other = owners
+    # Neither account has verified a player, so no tag can become the default.
+    for tag in (owner["tag"], other["tag"]):
+        refused = call(client, owner, "POST", "/v1/account/default-player", {"tag": tag})
+        assert refused.status_code == 404
+        assert refused.json() == {"error": "player_not_verified"}
+    malformed = call(client, owner, "POST", "/v1/account/default-player", {"tag": "#AB!"})
+    assert malformed.status_code == 422
+    for account in owners:
+        summary = call(client, account, "GET", "/v1/account/summary").json()
+        assert summary["default_player"] is None

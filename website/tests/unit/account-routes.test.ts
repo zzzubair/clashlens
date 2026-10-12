@@ -79,7 +79,12 @@ const ACCOUNT = {
   preferences: {},
   providers: ["google"],
 };
-const SUMMARY = { username: "nova88", displayName: "Nova", verifiedPlayers: [] };
+const SUMMARY = {
+  username: "nova88",
+  displayName: "Nova",
+  verifiedPlayers: [],
+  defaultPlayer: null,
+};
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface DataWithResponseInit<T> {
@@ -145,6 +150,7 @@ function fakeClient(overrides: Partial<PythonClient> = {}): PythonClient {
     })),
     deleteGroup: vi.fn(async () => ({ groupId: GROUP_ID, deleted: true })),
     getAccountSummary: vi.fn(async () => ({ ...SUMMARY })),
+    setDefaultPlayer: vi.fn(async () => undefined),
     getPublicUser: vi.fn(),
     verifyPlayerToken: vi.fn(async () => ({ status: "linked", tag: TAG })),
     ...overrides,
@@ -350,6 +356,49 @@ describe("account routes", () => {
       expect(result.providers).toEqual(["google"]);
       expect(result.error).toBeNull();
     });
+
+    it("offers the Discord bot's default player from the verified players", async () => {
+      const players = [
+        { tag: TAG, name: "Alpha" },
+        { tag: "#8QQ", name: "Beta" },
+      ];
+      client.getAccountSummary = vi.fn(async () => ({
+        ...SUMMARY,
+        verifiedPlayers: players,
+        defaultPlayer: "#8QQ",
+      }));
+      const result = await providersLoader({
+        request: new Request(`${ORIGIN}/account/providers?default=saved`),
+      } as never);
+      expect(result.players).toEqual(players);
+      expect(result.defaultPlayer).toBe("#8QQ");
+      expect(result.saved).toBe("saved");
+    });
+
+    it.each([
+      { failure: false, outcome: "saved" },
+      { failure: true, outcome: "failed" },
+    ])(
+      "saves the default player and says it was $outcome",
+      async ({ failure, outcome }) => {
+        client.setDefaultPlayer = vi.fn(async () => {
+          if (failure) throw new PythonApiError(404, { error: "player_not_verified" });
+        });
+        const response = await providersAction({
+          request: formRequest("/account/providers", {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            intent: "default-player",
+            tag: "#8QQ",
+          }),
+        } as never);
+        expect(client.setDefaultPlayer).toHaveBeenCalledWith("#8QQ", IDEMPOTENCY_KEY);
+        expect(response.status).toBe(302);
+        expect(response.headers.get("Location")).toBe(
+          `/account/providers?default=${outcome}`,
+        );
+        expect(mocks.startProviderAuthorization).not.toHaveBeenCalled();
+      },
+    );
 
     it.each([
       { status: 503, code: "unavailable" },

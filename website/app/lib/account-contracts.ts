@@ -25,6 +25,8 @@ export interface AccountSummary {
   username: string;
   displayName: string;
   verifiedPlayers: VerifiedPlayer[];
+  /** The verified player the Discord bot uses when none is named, if chosen. */
+  defaultPlayer: string | null;
 }
 
 export interface PrivateGroup {
@@ -229,11 +231,15 @@ function asNamePayload(value: unknown): NamePayload | null {
 
 export function mapSummary(value: unknown): AccountSummary | null {
   const payload = asNamePayload(value);
-  if (payload === null) return null;
+  if (payload === null || !isRecord(value)) return null;
+  const chosen = value.default_player;
+  if (chosen !== null && chosen !== undefined && !isString(chosen)) return null;
+  const tags = payload.verified_players.map((player) => player.tag);
   return {
     username: payload.username,
     displayName: payload.display_name,
     verifiedPlayers: payload.verified_players,
+    defaultPlayer: isString(chosen) && tags.includes(chosen) ? chosen : null,
   };
 }
 

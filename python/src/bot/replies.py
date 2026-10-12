@@ -17,25 +17,18 @@ from discord.utils import escape_markdown, escape_mentions
 
 from clashlens.domain import ranked_day_for
 
-# The product word for an account's private player lists is still open
-# (groups, saved players, crews); renaming it here renames it everywhere.
-GROUP_WORD = "group"
 # Discord shows at most 25 dropdown entries, 100 characters per entry label
 # and 80 per button label, and refuses an embed description over 4,096.
 MAX_CHOICES = 25
 _MAX_CHOICE_LABEL = 100
 _MAX_DESCRIPTION = 4000
-# /me lists this many players before a "Show all" button.
-COMPACT_LIMIT = 4
-_DAILY_BATTLES = 8
 WAITING_FOR_RESET = "Waiting for Season reset"
 
 # One line per command for /help, also used as each command's description.
 COMMANDS = (
     ("help", "What the bot does, its commands and your connection"),
-    ("link", "Connect Discord to Clash Lens, or see what is connected"),
-    ("me", "Your Legend day: one line per player, or the full day for one"),
-    ("main", "Choose the player commands use when you don't pick one"),
+    ("link", "Connect Discord on the Clash Lens website, or see what is connected"),
+    ("stats", "This Season so far for any tracked player, or your default player"),
 )
 
 _STATE_WORDS = {
@@ -53,16 +46,6 @@ _REASON_WORDS = {
     "unknown_tier": "League not recognised",
     "profile_rejected": "Profile could not be read",
 }
-# The player page's data notes in the bot's words.
-_NOTE_WORDS = {
-    "Stale saved profile": "Profile not refreshed recently",
-    "Missing current ranked-day data": "Nothing recorded for this Legend day yet",
-    "Incomplete ranked-day data": "Some of this Legend day's battles may be missing",
-    "Waiting for this player's Season reset": "Waiting for this player's Season reset",
-    "Season boundary conflict": "Season days are held back while Clash Lens checks the Season start",
-}
-
-
 @dataclass(frozen=True, slots=True)
 class Link:
     label: str
@@ -82,17 +65,19 @@ class Reply:
     footer: str | None = None
     links: tuple[Link, ...] = ()
     # A dropdown of the person's own players; picking one runs `pick`
-    # ("day" or "main") for that player.
+    # ("stats") for that player.
     choices: tuple[Choice, ...] = ()
     pick: str | None = None
     placeholder: str | None = None
-    # How many players a "Show all" button lists, when /me cut its lines.
-    show_all: int | None = None
     # When the oldest data shown was read, or "pending" or "Unavailable"; the
     # bot works out "Updated N min ago" from it as each message goes out.
     updated: datetime | str = "Unavailable"
     # The tags of the players the reply lists.
     shown: tuple[str, ...] = ()
+    # Only the person who ran the command sees it: the not-connected pointer
+    # and plain errors meant for them. Every other reply is a normal message
+    # anyone in the conversation can see and forward.
+    private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,45 +126,47 @@ def discord_time(moment: datetime, style: str) -> str:
     return f"<t:{int(moment.timestamp())}:{style}>"
 
 
-def reset_line(now: datetime) -> str:
-    day = ranked_day_for(now)
-    return (
-        f"Legend day {day.day_number} of 28 · Reset {discord_time(day.end, 't')}"
-        f" ({discord_time(day.end, 'R')})"
-    )
+def reset_time(now: datetime) -> str:
+    end = ranked_day_for(now).end
+    return f"Reset {discord_time(end, 't')} ({discord_time(end, 'R')})"
+
 
 
 def unavailable() -> Reply:
-    return Reply("Clash Lens is unavailable right now, try again in a minute.")
+    return Reply("Clash Lens is unavailable right now, try again in a minute.", private=True)
 
 
 def slow() -> Reply:
-    return Reply("Clash Lens is taking longer than usual. Try again.")
+    return Reply("Clash Lens is taking longer than usual. Try again.", private=True)
 
 
 def failed() -> Reply:
-    return Reply("Something went wrong on Clash Lens's side. Try again in a minute.")
+    return Reply("Something went wrong on Clash Lens's side. Try again in a minute.", private=True)
 
 
 def not_own() -> Reply:
-    return Reply("That player isn't linked to your Clash Lens account.")
+    return Reply("That player isn't linked to your Clash Lens account.", private=True)
 
 
 def not_your_menu() -> Reply:
-    return Reply("Only the person who ran this command can use these buttons.")
+    return Reply("Only the person who ran this command can use these buttons.", private=True)
+
+
+# Where a Clasher connects Discord and chooses the bot's default player.
+DISCORD_SETTINGS = "/account/providers"
 
 
 def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
+    """The one reply for anyone whose Discord account is not connected yet:
+    connecting happens on the website, never in the bot."""
     return Reply(
-        f"Clash Lens doesn't know this Discord account (@{safe(discord_name)}) yet.\n\n"
-        "**Have a Clash Lens account?** Sign in on the site, open sign-in "
-        "connections and connect Discord. This works for Google sign-ins too.\n"
-        "**New here?** Create an account with Discord.\n\n"
-        "Connect the same Discord account you are chatting from, then run /link again.",
+        f"Connect this Discord account (@{safe(discord_name)}) to your Clash Lens "
+        "account on the website to use the bot.",
         title="Connect Discord to Clash Lens",
         updated=now,
+        private=True,
         links=(
-            Link("I have an account: connect Discord", site.url("/account/providers")),
+            Link("Connect Discord on Clash Lens", site.url(DISCORD_SETTINGS)),
             Link(
                 "New here: create an account with Discord",
                 site.url("/auth/discord?returnPath=%2Faccount"),
@@ -190,12 +177,10 @@ def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
 
 def no_players(site: Site, username: str, now: datetime) -> Reply:
     return Reply(
-        f"Connected as @{safe(username)}. No player linked yet.\n\n"
-        "Link your Clash of Clans player on the site with:\n"
-        "1. Your player tag, from your in-game profile.\n"
-        "2. Your API token, from the game: Settings → More Settings → API Token.",
+        f"Connected as @{safe(username)}. Link a Clash of Clans player on Clash "
+        "Lens to see your Legend days here.",
         updated=now,
-        links=(Link("Link a player", site.url("/account/verify-player")),),
+        links=(Link("Link a player on Clash Lens", site.url("/account/verify-player")),),
     )
 
 
@@ -207,7 +192,8 @@ def help_reply(site: Site, username: str | None, player_count: int, now: datetim
         "",
         (
             "Every command except /help and /link needs this Discord account "
-            "connected to Clash Lens. In servers, replies are private to you."
+            "connected to Clash Lens. With several players, choose the bot's "
+            "default player on Clash Lens."
         ),
         "",
     ]
@@ -228,26 +214,26 @@ def link_reply(
     site: Site,
     username: str,
     cards: Sequence[Mapping[str, Any]],
-    main_tag: str | None,
+    default_tag: str | None,
     now: datetime,
 ) -> Reply:
     if not cards:
         return no_players(site, username, now)
-    main = next((card for card in cards if card["tag"] == main_tag), None)
+    chosen = next((card for card in cards if card["tag"] == default_tag), None)
     lines = [
         f"Connected as @{safe(username)}.",
         "Players:",
         *(f"• {safe(card['name'])} {card['tag']}" for card in cards),
     ]
-    if main is not None:
-        lines.append(f"Main: {safe(main['name'])}.")
+    if chosen is not None:
+        lines.append(f"Default player: {safe(chosen['name'])}.")
     elif len(cards) > 1:
-        lines.append("No main chosen yet: use /main to pick one.")
+        lines.append("No default player chosen yet: pick one on Clash Lens.")
     return Reply(
         "\n".join(lines),
         updated=oldest([card["observed_at"] for card in cards]),
         shown=tuple(card["tag"] for card in cards),
-        links=(Link("Manage on Clash Lens", site.url("/account")),),
+        links=(Link("Manage on Clash Lens", site.url(DISCORD_SETTINGS)),),
     )
 
 
@@ -268,74 +254,24 @@ def _known(value: int | None, show: Callable[[int], str]) -> str:
     return "Unavailable" if value is None else show(value)
 
 
-def _of_eight(count: int) -> str:
-    return f"{count}/8"
-
-
-def card_line(card: Mapping[str, Any], *, main: bool = False) -> str:
-    """One player's day so far on one line."""
-    head = f"**{safe(card['name'])}** {card['tag']}" + (" (main)" if main else "")
-    status = card_status(card)
-    if status is not None:
-        return f"{head} · {status}"
-    parts = [head, f"{number(card['trophies'])} 🏆"]
-    parts.append("Unranked" if card["rank"] is None else f"#{number(card['rank'])}")
-    today = card["today"]
-    if today is None:
-        parts += ["no battles recorded today", "net pending"]
-    else:
-        parts.append(f"⚔ {_known(today['attacks'], _of_eight)}")
-        parts.append(f"🛡 {_known(today['defenses'], _of_eight)}")
-        net = today["net"]
-        parts.append("net pending" if net is None else f"net {signed(net)} so far")
-    return " · ".join(parts)
-
-
 def choice_for(card: Mapping[str, Any]) -> Choice:
     """A dropdown or autocomplete entry: "Name #TAG · 5,842"."""
-    label = f"{' '.join((card['name'] or 'Unnamed').split())} {card['tag']}"
+    label = f"{card['name'] or 'Unnamed'} {card['tag']}"
     if card.get("trophies") is not None:
         label += f" · {number(card['trophies'])}"
     return Choice(label[:_MAX_CHOICE_LABEL], card["tag"])
 
 
-def ordered(cards: Sequence[Mapping[str, Any]], main_tag: str | None) -> list[Mapping[str, Any]]:
+def ordered(cards: Sequence[Mapping[str, Any]], first_tag: str | None) -> list[Mapping[str, Any]]:
     """Main first, then the most trophies, then by tag."""
     return sorted(
         cards,
         key=lambda card: (
-            card["tag"] != main_tag,
+            card["tag"] != first_tag,
             card["trophies"] is None,
             -(card["trophies"] or 0),
             card["tag"],
         ),
-    )
-
-
-def me_overview(
-    site: Site,
-    cards: Sequence[Mapping[str, Any]],
-    main_tag: str | None,
-    now: datetime,
-    *,
-    show_all: bool = False,
-) -> Reply:
-    players = ordered(cards, main_tag)
-    cut = not show_all and len(players) > COMPACT_LIMIT
-    shown = players[:COMPACT_LIMIT] if cut else players
-    lines = [reset_line(now), ""]
-    lines += [card_line(card, main=card["tag"] == main_tag) for card in shown]
-    return Reply(
-        "\n".join(lines),
-        title="Your Legend day",
-        footer="Ranks are among the players Clash Lens tracks, not official world ranks.",
-        updated=oldest([card["observed_at"] for card in shown]),
-        shown=tuple(card["tag"] for card in shown),
-        links=(Link("Open Clash Lens", site.url("/account")),),
-        choices=tuple(choice_for(card) for card in players[:MAX_CHOICES]),
-        pick="day",
-        placeholder="Full day for…",
-        show_all=len(players) if cut else None,
     )
 
 
@@ -345,141 +281,18 @@ def _player_title(item: Mapping[str, Any]) -> str:
 
 
 def player_status(
-    site: Site, card: Mapping[str, Any], status: str, choices: tuple[Choice, ...] = ()
+    site: Site,
+    card: Mapping[str, Any],
+    status: str,
+    now: datetime,
 ) -> Reply:
     """A player whose numbers do not apply right now: the status word instead,
-    from a card or a player page read."""
+    from a player page read."""
     return Reply(
-        status,
+        f"{status}\n\n{reset_time(now)}",
         title=_player_title(card),
         updated=oldest([card["observed_at"]]),
         links=(Link("Open on Clash Lens", site.player(card["tag"])),),
-        choices=choices,
-        pick="day" if choices else None,
-        placeholder="Full day for…" if choices else None,
-    )
-
-
-def _stars(stars: int) -> str:
-    return "⭐" * stars if stars else "0⭐"
-
-
-def _opponent(event: Mapping[str, Any]) -> str:
-    opponent = event["opponent"]
-    return safe(opponent.get("name")) if opponent.get("name") else opponent["tag"]
-
-
-def _battle_lines(events: Sequence[Mapping[str, Any]], word: str) -> list[str]:
-    # The page lists the newest battle first; the bot reads in time order.
-    return [
-        f"{_stars(event['stars'])} {event['destruction_percentage']}% · "
-        f"{signed(event['trophy_change'])} · {word} {_opponent(event)}"
-        for event in reversed(events)
-    ]
-
-
-def full_day(
-    site: Site,
-    page: Mapping[str, Any],
-    now: datetime,
-    *,
-    choices: tuple[Choice, ...] = (),
-) -> Reply:
-    """One player's whole Legend day so far, from the player page read."""
-    ready = page["screen_ready"]
-    today = next(
-        (day for day in ready["days"] if day["ranked_day_start"] == ready["current_day_start"]),
-        None,
-    )
-    if page["season_reset_pending"]:
-        summary = [WAITING_FOR_RESET]
-    else:
-        summary = [f"{number(page['trophies'])} 🏆"]
-    rank = page["rank"]
-    summary.append("Unranked" if rank is None else f"#{number(rank)} among tracked")
-    day = today or {}
-    day_number = day.get("season_day_number") or (ready.get("season") or {}).get(
-        "current_day_number"
-    )
-    summary.append(f"Legend day {day_number} of 28" if day_number else "Legend day Unavailable")
-    start = day.get("start_trophies")
-    summary.append(
-        "start trophies Unavailable" if start is None else f"started today at {number(start)}"
-    )
-    lines = [" · ".join(summary), ""]
-    if today is None:
-        lines.append("No battles recorded for this Legend day yet.")
-    else:
-        loss = today["defense_loss"]
-        lines.append(
-            f"**Attacks** {_known(today['attack_count'], _of_eight)} · "
-            f"{_known(today['attack_gain'], signed)} · "
-            f"{_known(today['attack_three_star_count'], str)} three-stars"
-        )
-        lines += _battle_lines(today["offense_events"], "vs")
-        lines.append(
-            f"**Defenses** {_known(today['defense_count'], _of_eight)} · "
-            f"{_known(None if loss is None else -loss, signed)} · "
-            f"{_known(today['defense_three_star_count'], str)} three-stars given up"
-        )
-        lines += _battle_lines(today["defense_events"], "by")
-    lines.append("")
-    if today is not None and today["battles_complete"]:
-        lines.append(f"Net so far: {signed(today['attack_gain'] - today['defense_loss'])}")
-    else:
-        lines.append("Net pending: Clash Lens has not recorded every battle yet.")
-    defenses = day.get("defense_count")
-    if defenses is not None and defenses < _DAILY_BATTLES:
-        lines.append(
-            "Fewer than 8 defenses so far: the game applies an automatic "
-            "defense loss at Reset; the amount shows after Reset."
-        )
-    notes = [_NOTE_WORDS.get(note["label"], note["label"]) for note in ready["data_quality"]]
-    if notes:
-        lines += ["", *(f"⚠ {note}" for note in dict.fromkeys(notes))]
-    end = ranked_day_for(now).end
-    lines += ["", f"Reset {discord_time(end, 't')} ({discord_time(end, 'R')})"]
-    return Reply(
-        "\n".join(lines),
-        title=_player_title(page),
-        updated=page["observed_at"],
-        links=(Link("Open on Clash Lens", site.player(page["tag"])),),
-        choices=choices,
-        pick="day" if choices else None,
-        placeholder="Full day for…" if choices else None,
-    )
-
-
-def main_reply(
-    cards: Sequence[Mapping[str, Any]], main_tag: str | None, *, changed: bool = False
-) -> Reply:
-    main = next((card for card in cards if card["tag"] == main_tag), None)
-    seen = oldest([card["observed_at"] for card in cards])
-    if len(cards) == 1:
-        only = cards[0]
-        return Reply(
-            f"Main is {safe(only['name'])} {only['tag']}: your only player, "
-            "so every command uses it.",
-            updated=seen,
-        )
-    if main is None:
-        return Reply(
-            "No main chosen yet. Pick the player commands should use when you "
-            "don't choose one.",
-            choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
-            updated=seen,
-            pick="main",
-            placeholder="Make this my main…",
-        )
-    if changed:
-        return Reply(
-            f"Main is now {safe(main['name'])} {main['tag']}. Commands that need "
-            "one player use it unless you choose another, and /me lists it first.",
-            updated=seen,
-        )
-    return Reply(
-        f"Main is {safe(main['name'])} {main['tag']}. Use /main account: to change it.",
-        updated=seen,
     )
 
 
@@ -497,3 +310,110 @@ def pages(text: str) -> list[str]:
         size += len(line) + 1
     pieces.append("\n".join(lines))
     return pieces
+
+
+def bad_tag() -> Reply:
+    return Reply("That doesn't look like a player tag.", private=True)
+
+
+def no_such_player(name: str) -> Reply:
+    return Reply(
+        f"Clash Lens doesn't know a player called {safe(name)}. "
+        "Pick one from the list or use their tag.",
+        private=True,
+    )
+
+
+def not_tracked(site: Site, tag: str, now: datetime) -> Reply:
+    return Reply(
+        f"Clash Lens hasn't tracked {tag} yet. Open their page to start "
+        "tracking and check back in a few minutes.",
+        updated=now,
+        links=(Link("Open on Clash Lens", site.player(tag)),),
+    )
+
+
+def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
+    """No player named and no default chosen: ask with a dropdown of the
+    person's own players."""
+    return Reply(
+        "Which player? Pick one below, or choose a default player on Clash Lens.",
+        links=(Link("Choose a default player", site.url(DISCORD_SETTINGS)),),
+        choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
+        updated=oldest([card["observed_at"] for card in cards]),
+        pick=action,
+        placeholder="Which player?",
+    )
+
+
+
+
+def _rate(part: int | None, whole: int | None) -> str:
+    return "Unavailable" if part is None or not whole else f"{round(100 * part / whole)}%"
+
+
+def _per(total: int | None, count: int | None) -> str:
+    return "Unavailable" if total is None or not count else signed(round(total / count))
+
+
+def _total(days: Sequence[Mapping[str, Any]], key: str) -> int | None:
+    """A Season total, unknown when no day or any day lacks the number."""
+    values = [day[key] for day in days]
+    return None if not values or None in values else sum(values)
+
+
+def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
+    """This Season so far for one player, from the player page read: one
+    compact message anyone in the conversation can forward."""
+    ready = page["screen_ready"]
+    season = ready.get("season")
+    title = _player_title(page)
+    if season is None:
+        return Reply(
+            f"This Season's days are not available yet.\n\n{reset_time(now)}",
+            title=title,
+            updated=page["observed_at"],
+            links=(Link("Open on Clash Lens", site.player(page["tag"])),),
+        )
+    by_start = {day["ranked_day_start"]: day for day in ready["days"]}
+    days = [by_start[start] for start in ready["season_day_starts"] if start in by_start]
+    first = next((day for day in days if day.get("season_day_number") == 1), None)
+    start = None if first is None else first.get("start_trophies")
+    now_trophies = None if page["season_reset_pending"] else page["trophies"]
+    change = _known(start, number) + " → " + _known(now_trophies, number)
+    if start is not None and now_trophies is not None:
+        change += f" ({signed(now_trophies - start)})"
+    attack_count = _total(days, "attack_count")
+    three_stars = _total(days, "attack_three_star_count")
+    gain = _total(days, "attack_gain")
+    defense_count = _total(days, "defense_count")
+    tripled = _total(days, "defense_three_star_count")
+    loss = _total(days, "defense_loss")
+    held = None if defense_count is None or tripled is None else defense_count - tripled
+    lines = [
+        (
+            f"Season from {discord_time(datetime.fromisoformat(season['start']), 'D')} · "
+            f"Legend day {season['current_day_number']} of 28"
+        ),
+        change,
+        "",
+        (
+            f"**Attacks** {_known(attack_count, number)} · hit rate "
+            f"{_rate(three_stars, attack_count)} ({_known(three_stars, number)} three-stars) · "
+            f"{_per(gain, attack_count)} per attack"
+        ),
+        (
+            f"**Defenses** {_known(defense_count, number)} · held {_rate(held, defense_count)} "
+            f"({_known(held, number)} not tripled) · "
+            f"{_per(None if loss is None else -loss, defense_count)} per defense"
+        ),
+        "",
+        reset_time(now),
+    ]
+    return Reply(
+        "\n".join(lines),
+        title=title,
+        footer="Totals count the battles Clash Lens recorded this Season.",
+        updated=page["observed_at"],
+        links=(Link("Season on Clash Lens", site.player(page["tag"])),),
+    )

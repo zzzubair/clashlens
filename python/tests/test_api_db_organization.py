@@ -118,6 +118,7 @@ def test_groups_public_user_and_multi_account_stay_separate(
                 "username": "groupowner",
                 "display_name": "Group Owner",
                 "verified_players": [],
+                "default_player": None,
             }
 
             request_id = str(uuid4())

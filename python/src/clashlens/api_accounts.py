@@ -1116,7 +1116,63 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
             "username": _text(account[0]),
             "display_name": _text(account[1]),
             "verified_players": _verified_players(connection, account_id),
+            "default_player": default_player_tag(connection, account_id),
         }
+
+
+def default_player_tag(connection: Any, account_id: int) -> str | None:
+    """The account's chosen default player while it is still verified to it."""
+    row = connection.execute(
+        """
+        SELECT player.normalized_tag
+        FROM account_default_players AS chosen
+        JOIN verified_player_links AS link
+            ON link.player_id = chosen.player_id AND link.account_id = chosen.account_id
+        JOIN players AS player ON player.id = chosen.player_id
+        WHERE chosen.account_id = %s
+        """,
+        (account_id,),
+    ).fetchone()
+    return None if row is None else _text(row[0])
+
+
+def set_default_player(
+    database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str
+) -> OperationResult:
+    """Choose the verified player the Discord bot uses when none is named."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            # Locking the ownership row holds off a transfer until this commits,
+            # so the migration 0105 trigger then forgets the choice.
+            link = connection.execute(
+                """
+                SELECT link.player_id, link.account_id
+                FROM verified_player_links AS link
+                JOIN players AS player ON player.id = link.player_id
+                WHERE player.normalized_tag = %s
+                FOR SHARE OF link
+                """,
+                (normalized_tag,),
+            ).fetchone()
+            if link is None or int(link[1]) != binding.account_id:
+                result = OperationResult(404, {"error": "player_not_verified"})
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO account_default_players (account_id, player_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (account_id) DO UPDATE
+                        SET player_id = EXCLUDED.player_id,
+                            updated_at = clock_timestamp()
+                    """,
+                    (binding.account_id, link[0]),
+                )
+                result = OperationResult(200, {"default_player": normalized_tag})
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
 
 
 def _replace_group_players(

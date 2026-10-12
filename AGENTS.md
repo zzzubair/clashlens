@@ -37,7 +37,7 @@ Use these exactly.
 - **Season**: exactly 28 Legend days.
 - **Tournament**: a ranked competition period. Weekly in other Ranked Leagues, 28 Legend days in Legend I.
 - **Crew**: an invite-only group of up to 100 Legend League accounts, owned by Clash Lens accounts, with shared boards. Separate from Groups.
-- **Main**: the one verified player per Clash Lens account that the bot's single-player commands use when none is chosen.
+- **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 
 ## Technical words
 
@@ -64,7 +64,6 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Unsettled loss**: the previous day's automatic defense loss that a Reset reading was taken before the game applied, so the next day starts from the reading less it.
 - **Season repair**: the one operator command that recalculates a Season's saved days, Daily boards and Season summaries under the current rules, with a before-and-after receipt.
 - **Board deadline**: 05:30 UTC, when a Reset's Daily board publishes without at most 50 players whose day result is still unfinished, shown as unavailable until their day saves and the board is rebuilt with them.
-- **Ephemeral reply**: a Discord reply only the person who typed the command can see.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 
@@ -76,6 +75,9 @@ If you introduce a new term, add it here in the same PR. One plain sentence.
 - A file over 1,500 lines, tests included, is something you report, not somewhere you add more.
 - Check line counts before editing source or test files. If a target is over 1,500 lines, report its path and count and propose a way to make the change without growing it.
 - Use `gh` for issues, PRs and checks.
+
+## Testing
+- Any change to calculations, jobs, boards or the Reset ships with an end-to-end test: the real worker against a real PostgreSQL, from saved game data to a published board. It must fail on the old code; unit tests alone are not enough. See docs/testing.md.
 
 ## Reporting
 

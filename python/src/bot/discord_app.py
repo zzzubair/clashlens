@@ -4,9 +4,9 @@ It registers the slash commands, decides who sees a reply, runs the database
 reads off the event loop, and turns a `Reply` into Discord messages with
 buttons.
 
-Who sees a reply: in the bot's own DM every reply is a normal message. In a
-server or group DM it is private to the person who typed the command, unless
-the command takes `share` and they set it; refusals and failures stay private.
+Who sees a reply: every reply is a normal message anyone in the conversation
+can see and forward. Only the not-connected pointer and plain errors meant for
+the person who typed the command (`Reply.private`) are shown to them alone.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ class DiscordApp:
             }
             for index, text in enumerate(replies.pages(reply.body))
         ]
-        if reply.links or reply.choices or reply.show_all:
+        if reply.links or reply.choices:
             messages[0]["view"] = ReplyView(self, reply, owner, origin, private)
         return messages
 
@@ -101,18 +101,17 @@ class DiscordApp:
         work: Callable[..., Reply],
         *args: Any,
         needs_link: bool = True,
-        share: bool = False,
     ) -> None:
         """Answer one slash command; `work` gets the linked account first when
         the command needs one."""
         started = time.perf_counter()
         outcome = "ok"
-        shared = share and not in_bot_dm(interaction)
+        # Outside the bot's own DM a private reply must first remove the public
+        # "thinking"; in the DM every reply is the person's own anyway.
+        shared = not in_bot_dm(interaction)
         try:
             # Acknowledge before any database work: Discord waits 3 seconds.
-            await interaction.response.defer(
-                ephemeral=not shared and not in_bot_dm(interaction), thinking=True
-            )
+            await interaction.response.defer(thinking=True)
             if needs_link:
                 account = await self.read(self.commands.account, str(interaction.user.id))
                 if account is None:
@@ -124,7 +123,10 @@ class DiscordApp:
                     return
                 args = (account, *args)
             reply = await self.read(work, *args)
-            await self._send(interaction, reply, private=not shared)
+            if reply.private:
+                await self._private(interaction, reply, shared)
+            else:
+                await self._send(interaction, reply, private=False)
         except Slow:
             outcome = "slow"
             await self._private(interaction, replies.slow(), shared)
@@ -237,6 +239,11 @@ class DiscordApp:
                     )
                     await self._send(interaction, reply, private=True)
                     return
+                if reply.private:
+                    # A refusal for the clicker never replaces the message.
+                    outcome = "refused"
+                    await self._send(interaction, reply, private=True)
+                    return
                 if isinstance(view, MoreView):
                     if reply is not view.reply:
                         outcome = "not_own"
@@ -275,30 +282,40 @@ class DiscordApp:
                 "component outcome=%s ms=%d", outcome, (time.perf_counter() - started) * 1000
             )
 
-    async def own_player_choices(
-        self, interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        """Autocomplete for options that name one of the person's own players."""
+    async def _choices(
+        self, work: Callable[..., list[replies.Choice]], *args: Any
+    ) -> list[replies.Choice]:
+        """One autocomplete read, or no entries when it cannot answer in time."""
         deadline = asyncio.get_running_loop().time() + AUTOCOMPLETE_SECONDS
-        task = asyncio.ensure_future(
-            self.read(self.commands.own_choices, str(interaction.user.id), deadline=deadline)
-        )
+        task = asyncio.ensure_future(self.read(work, *args, deadline=deadline))
         # A read already running when the answer is due keeps its slot until
         # it ends; one still waiting for a slot then never runs.
         task.add_done_callback(lambda done: done.cancelled() or done.exception())
         try:
             async with asyncio.timeout(AUTOCOMPLETE_SECONDS):
-                choices = await asyncio.shield(task)
+                return await asyncio.shield(task)
         except Exception:
             # An empty list is the only safe autocomplete answer.
             log.warning("autocomplete read failed", exc_info=True)
             return []
+
+    @staticmethod
+    def _offer(choices: list[replies.Choice], current: str) -> list[app_commands.Choice[str]]:
         wanted = current.casefold().strip()
         return [
             app_commands.Choice(name=choice.label, value=choice.value)
             for choice in choices
             if wanted in choice.label.casefold()
         ][: replies.MAX_CHOICES]
+
+    async def any_player_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for /stats: own players and group members, then name matches."""
+        choices = await self._choices(
+            self.commands.player_choices, str(interaction.user.id), current
+        )
+        return self._offer(choices, "")
 
     def register(self, tree: app_commands.CommandTree) -> None:
         app = self
@@ -325,22 +342,13 @@ class DiscordApp:
                 needs_link=False,
             )
 
-        @tree.command(name="me", description=words["me"])
+        @tree.command(name="stats", description=words["stats"])
         @app_commands.describe(
-            account="One of your players; leave empty for all of them",
-            share="Post the reply for everyone in this channel",
+            player="A player tag, with or without #, or a name; empty for your default player"
         )
-        @app_commands.autocomplete(account=app.own_player_choices)
-        async def me_command(
-            interaction: discord.Interaction, account: str | None = None, share: bool = False
-        ) -> None:
-            await app.respond(interaction, "me", app.commands.me, account, share=share)
-
-        @tree.command(name="main", description=words["main"])
-        @app_commands.describe(account="The player to make your main")
-        @app_commands.autocomplete(account=app.own_player_choices)
-        async def main_command(interaction: discord.Interaction, account: str | None = None) -> None:
-            await app.respond(interaction, "main", app.commands.main, account)
+        @app_commands.autocomplete(player=app.any_player_choices)
+        async def stats_command(interaction: discord.Interaction, player: str | None = None) -> None:
+            await app.respond(interaction, "stats", app.commands.stats, player)
 
 
 class _OwnedView(discord.ui.View):
@@ -415,7 +423,7 @@ class ReplyView(_OwnedView):
         private: bool,
     ) -> None:
         # Link buttons never expire, so a view with only links needs no timer.
-        interactive = bool(reply.choices or reply.show_all)
+        interactive = bool(reply.choices)
         super().__init__(timeout=VIEW_SECONDS if interactive else None)
         self.app = app
         self.owner = owner
@@ -431,7 +439,7 @@ class ReplyView(_OwnedView):
                     for choice in reply.choices
                 ],
             )
-            action = reply.pick or "day"
+            action = reply.pick or "stats"
 
             async def picked(interaction: discord.Interaction) -> None:
                 tag = select.values[0]
@@ -443,20 +451,6 @@ class ReplyView(_OwnedView):
 
             select.callback = picked  # type: ignore[method-assign]
             self.add_item(select)
-        if reply.show_all:
-            button: discord.ui.Button[ReplyView] = discord.ui.Button(
-                label=f"Show all ({reply.show_all})"
-            )
-
-            async def show_all(interaction: discord.Interaction) -> None:
-                await app.on_component(
-                    interaction, self, lambda: app.commands.pick(
-                        str(interaction.user.id), "all", ""
-                    )
-                )
-
-            button.callback = show_all  # type: ignore[method-assign]
-            self.add_item(button)
 
     async def on_timeout(self) -> None:
         # Keep the link buttons; the rest would only answer "interaction failed".
