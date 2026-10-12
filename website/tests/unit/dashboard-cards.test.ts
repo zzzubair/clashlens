@@ -298,11 +298,12 @@ const RESET_LINES: Record<number, Record<number, number>> = {
 /** The selected account was #318 on the Day 8 Reset board. */
 function boardEntry(rank: number, day: number | null) {
   const tag =
-    (day === null && rank === python.liveRank) || (day === 8 && rank === 318)
+    (day === null ? python.liveTops[0]?.[rank - 1] : undefined) ??
+    ((day === null && rank === python.liveRank) || (day === 8 && rank === 318)
       ? MAIN
       : rank === 315
         ? TUNDRA
-        : rankTag(rank);
+        : rankTag(rank));
   const lines = day === null ? LIVE_LINES : (RESET_LINES[day] ?? {});
   return {
     position: rank,
@@ -320,13 +321,22 @@ function boardEntry(rank: number, day: number | null) {
   };
 }
 
+/** Where `tag` stands on the live board. */
+function livePlace(tag: string) {
+  const top = python.liveTops[0]?.indexOf(tag) ?? -1;
+  if (top >= 0) return top + 1;
+  if (tag === MAIN) return python.liveRank;
+  return Number([...tag.slice(3)].map((letter) => "0289PYLQGR".indexOf(letter)).join(""));
+}
+
 /** GET /v1/leaderboards/{live,frozen}, as Python pages it. */
 function leaderboard(query: URLSearchParams) {
   const limit = Number(query.get("limit"));
   const dayNumber = query.get("season_day_number");
   const day = dayNumber === null ? null : Number(dayNumber);
   // A focused read is the page holding the player, with 5 places either side.
-  const focus = query.has("focus_tag") ? python.liveRank : null;
+  const focusTag = query.get("focus_tag");
+  const focus = focusTag === null ? null : livePlace(focusTag);
   const offset =
     focus === null
       ? Number(query.get("offset"))
@@ -502,6 +512,8 @@ const python = {
   pages: {} as Record<string, unknown>,
   groups: GROUPS as unknown[],
   liveRank: 316,
+  /** The live board's first places by tag; each read focused on you moves on to the next list. */
+  liveTops: [] as string[][],
   /** Paths ending in one of these answer 503. */
   down: [] as string[],
   requests: [] as { path: string; query: Record<string, string> }[],
@@ -561,8 +573,12 @@ function answer(url: URL): [status: number, body: unknown] {
     ];
   const page = python.pages[path.replace("/v1/players/", "")];
   if (path.startsWith("/v1/players/") && page) return [200, page];
-  if (path === "/v1/leaderboards/live" || path === "/v1/leaderboards/frozen")
-    return [200, leaderboard(url.searchParams)];
+  if (path === "/v1/leaderboards/live" || path === "/v1/leaderboards/frozen") {
+    const board = leaderboard(url.searchParams);
+    if (url.searchParams.get("focus_tag") === MAIN && python.liveTops.length > 1)
+      python.liveTops.shift();
+    return [200, board];
+  }
   return [404, { error: "not_found" }];
 }
 
@@ -650,6 +666,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       pages: { [MAIN]: mainPage(), [TUNDRA]: tundraPage() },
       groups: GROUPS,
       liveRank: 316,
+      liveTops: [],
       down: [],
       requests: [],
     });
@@ -864,6 +881,25 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       8994, 8995, 8996, 8997, 8998, 8999, 9000,
     ]);
     expect(bottom.cards["rivals-watch"]?.live?.rows[6]?.you).toBe(true);
+  });
+
+  it("takes every live rival from one read when the board moves between reads", async () => {
+    const top = [MAIN, ...[2, 3, 4, 5, 6, 7].map(rankTag)];
+    python.liveRank = 1;
+    // Player 2 drops to 7th after your own read.
+    python.liveTops = [top, [MAIN, ...top.slice(2), top[1]!]];
+    const data = await load();
+    expect(
+      data.cards["rivals-watch"]?.live?.rows.map((row) => [row.rank, row.tag]),
+    ).toEqual([
+      [1, MAIN],
+      [2, rankTag(3)],
+      [3, rankTag(4)],
+      [4, rankTag(5)],
+      [5, rankTag(6)],
+      [6, rankTag(7)],
+      [7, rankTag(2)],
+    ]);
   });
 
   it("leaves a day not available when Python leaves its result unknown", async () => {

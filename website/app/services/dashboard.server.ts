@@ -276,22 +276,36 @@ function observedMs(times: (string | null | undefined)[]): number | null {
 }
 
 /**
- * The board rows from 3 above to 3 below `rank`, filled from the other side
- * at either end of the board: the rows `first` holds, plus any page of 10
- * holding the rest.
+ * The places from 3 above to 3 below `rank`, filled from the other side at
+ * either end of a board of `total`.
  */
-async function rivalEntries(
-  first: TrackedLeaderboard,
-  rank: number,
-  read: (offset: number) => Promise<TrackedLeaderboard>,
-): Promise<TrackedPlayerEntry[]> {
-  const total = first.totalEntries;
+function rivalPlaces(rank: number, total: number): number[] {
   const start = Math.max(
     1,
     Math.min(rank - RIVALS_ABOVE, total - RIVALS_ABOVE - RIVALS_BELOW),
   );
   const stop = Math.min(total, start + RIVALS_ABOVE + RIVALS_BELOW);
-  const places = Array.from({ length: stop - start + 1 }, (_, index) => start + index);
+  return Array.from({ length: stop - start + 1 }, (_, index) => start + index);
+}
+
+/** The rows at `places` in `entries`, each player once. */
+function rowsAt(entries: TrackedPlayerEntry[], places: number[]): TrackedPlayerEntry[] {
+  const tags = new Set<string>();
+  return places.flatMap((place) => {
+    const entry = entries.find((row) => row.rank === place);
+    if (entry === undefined || tags.has(entry.tag)) return [];
+    tags.add(entry.tag);
+    return [entry];
+  });
+}
+
+/** The rows `first` holds around `rank`, plus any page of 10 holding the rest. */
+async function rivalEntries(
+  first: TrackedLeaderboard,
+  rank: number,
+  read: (offset: number) => Promise<TrackedLeaderboard>,
+): Promise<TrackedPlayerEntry[]> {
+  const places = rivalPlaces(rank, first.totalEntries);
   const held = new Set(first.entries.map((entry) => entry.rank));
   const offsets = new Set(
     places
@@ -299,10 +313,18 @@ async function rivalEntries(
       .map((place) => Math.floor((place - 1) / BOARD_PAGE) * BOARD_PAGE),
   );
   const others = await Promise.all([...offsets].map(read));
-  const byRank = new Map<number, TrackedPlayerEntry>();
-  for (const entry of [first, ...others].flatMap((board) => board.entries))
-    if (!byRank.has(entry.rank)) byRank.set(entry.rank, entry);
-  return places.flatMap((place) => byRank.get(place) ?? []);
+  return rowsAt(
+    [first, ...others].flatMap((board) => board.entries),
+    places,
+  );
+}
+
+/** The rows around `tag` that one `board` reply holds, or null when `tag` is off it. */
+function rivalsIn(board: TrackedLeaderboard, tag: string): TrackedPlayerEntry[] | null {
+  const rank = board.entries.find((entry) => entry.tag === tag)?.rank;
+  return rank === undefined
+    ? null
+    : rowsAt(board.entries, rivalPlaces(rank, board.totalEntries));
 }
 
 async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData | null> {
@@ -424,14 +446,20 @@ async function rivalsData(
       : (season.days.find((day) => day.day === season.today! - 1)?.rank ?? null);
   };
   const liveRows = async () => {
-    // The focused read holds 5 places either side of you; the board's first
-    // and last places need a page more for 7 rows.
-    const first = await ctx.client.getTrackedLeaderboard(1, "live", 0, undefined, tag);
-    const rank = first.entries.find((entry) => entry.tag === tag)?.rank;
-    if (rank === undefined) return null;
-    const shown = await rivalEntries(first, rank, (offset) =>
-      ctx.client.getTrackedLeaderboard(BOARD_PAGE, "live", offset),
-    );
+    // A read focused on one player holds 5 places either side of them. At the
+    // board's first and last places, a read focused on the fourth row it
+    // holds has all 7.
+    const focused = (on: string) =>
+      ctx.client.getTrackedLeaderboard(1, "live", 0, undefined, on);
+    const first = await focused(tag);
+    const near = rivalsIn(first, tag);
+    if (near === null) return null;
+    const middle = near[RIVALS_ABOVE];
+    const full = Math.min(first.totalEntries, RIVALS_ABOVE + RIVALS_BELOW + 1);
+    const shown =
+      near.length < full && middle !== undefined
+        ? (rivalsIn(await focused(middle.tag), tag) ?? near)
+        : near;
     const read = await Promise.all(
       shown.map(async (entry) => [entry, await pages(entry.tag)] as const),
     );
