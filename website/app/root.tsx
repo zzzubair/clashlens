@@ -117,7 +117,6 @@ export function Layout({ children }: { children: ReactNode }) {
           </p>
           <nav aria-label="Site information">
             <a href="/blog">Blog</a>
-            <a href="/about">About</a>
           </nav>
         </footer>
         <ScrollRestoration />
@@ -161,7 +160,6 @@ export default function App() {
           <NavLink to="/blog">Blog</NavLink>
           <NavLink to="/account/groups">Groups</NavLink>
           {data.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
-          <NavLink to="/about">About</NavLink>
         </nav>
         <nav className="site-nav" aria-label="Account and appearance">
           {/* Home keeps its own large search. */}
