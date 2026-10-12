@@ -37,6 +37,7 @@ Use these exactly.
 - **Season**: exactly 28 Legend days.
 - **Tournament**: a ranked competition period. Weekly in other Ranked Leagues, 28 Legend days in Legend I.
 - **Crew**: an invite-only group of up to 100 Legend League accounts, owned by Clash Lens accounts, with shared boards. Separate from Groups.
+- **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 
 ## Technical words
 

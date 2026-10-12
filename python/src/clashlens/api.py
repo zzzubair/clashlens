@@ -143,6 +143,10 @@ class ProviderUnlinkBody(ProviderLinkBody):
     session: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
+class DefaultPlayerBody(StrictBody):
+    tag: str = Field(min_length=1, max_length=16)
+
+
 class ExportBody(StrictBody):
     format: Literal["google_sheets_scaffold", "csv_scaffold"]
 
@@ -962,6 +966,17 @@ def create_app(
         if result is None:
             raise ApiError(404, "account_not_found")
         return JSONResponse(status_code=200, content=result)
+
+    @app.post("/v1/account/default-player")
+    def set_default_player(body: DefaultPlayerBody, request: Request) -> JSONResponse:
+        context = _authorize(request, "account.update", production_database)
+        assert production_database is not None and context.account is not None
+        normalized_tag = _safe_tag(body.tag)
+        result = api_accounts.set_default_player(production_database,
+            _binding(request, context, "account.update", {"default_player": normalized_tag}),
+            normalized_tag=normalized_tag,
+        )
+        return _operation_response(result)
 
     @app.post("/v1/account/exports")
     def submit_export(body: ExportBody, request: Request) -> JSONResponse:

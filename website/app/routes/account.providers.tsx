@@ -1,6 +1,7 @@
 import { redirect, useLoaderData } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
+import type { VerifiedPlayer } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.providers";
 
@@ -15,6 +16,11 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export interface ProvidersLoaderData {
   providers: string[];
+  /** The account's verified players, for the Discord bot's default player. */
+  players: VerifiedPlayer[];
+  defaultPlayer: string | null;
+  /** The outcome of the last default-player save, shown once. */
+  saved: "saved" | "failed" | null;
   idempotencyKey: string;
   error: WebsiteErrorResponse | null;
 }
@@ -30,11 +36,20 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
+  const outcome = new URL(request.url).searchParams.get("default");
+  const saved = outcome === "saved" || outcome === "failed" ? outcome : null;
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const account = await createPythonClient(identity).getAccount();
+    const client = createPythonClient(identity);
+    const [account, summary] = await Promise.all([
+      client.getAccount(),
+      client.getAccountSummary(),
+    ]);
     return {
       providers: account.providers,
+      players: summary.verifiedPlayers,
+      defaultPlayer: summary.defaultPlayer,
+      saved,
       idempotencyKey: freshIdempotencyKey(),
       error: null,
     };
@@ -45,6 +60,9 @@ export async function loader({
     const { safeWebsiteError } = await import("../server/errors.server");
     return {
       providers: [],
+      players: [],
+      defaultPlayer: null,
+      saved: null,
       idempotencyKey: freshIdempotencyKey(),
       error: safeWebsiteError(error),
     };
@@ -52,16 +70,16 @@ export async function loader({
 }
 
 /**
- * POST /account/providers — start a fresh OAuth authorization for linking or
- * unlinking one provider. The completion happens only at the provider
- * callback after real provider authentication.
+ * POST /account/providers — choose the Discord bot's default player, or start
+ * a fresh OAuth authorization for linking or unlinking one provider. Linking
+ * completes only at the provider callback after real provider authentication.
  */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") {
     return new Response(null, { status: 405, headers: NO_STORE });
   }
   const { requireLogin } = await import("../server/auth-guard.server");
-  await requireLogin(request);
+  const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
 
@@ -79,6 +97,19 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
   const intent = form["intent"];
+  if (intent === "default-player") {
+    const tag = form["tag"] ?? "";
+    try {
+      const { createPythonClient } = await import("../services/python.server");
+      await createPythonClient(identity).setDefaultPlayer(
+        tag,
+        form["idempotencyKey"] ?? "",
+      );
+    } catch {
+      return redirect("/account/providers?default=failed", { headers: NO_STORE });
+    }
+    return redirect("/account/providers?default=saved", { headers: NO_STORE });
+  }
   if (intent !== "link" && intent !== "unlink") {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
@@ -186,6 +217,80 @@ export default function AccountProvidersRoute() {
           })}
         </ul>
       </section>
+
+      <DiscordBotDefault
+        players={data.players}
+        defaultPlayer={data.defaultPlayer}
+        saved={data.saved}
+        idempotencyKey={data.idempotencyKey}
+      />
     </main>
+  );
+}
+
+/** The player the Clash Lens Discord bot uses when a command doesn't name one. */
+function DiscordBotDefault({
+  players,
+  defaultPlayer,
+  saved,
+  idempotencyKey,
+}: {
+  players: VerifiedPlayer[];
+  defaultPlayer: string | null;
+  saved: "saved" | "failed" | null;
+  idempotencyKey: string;
+}) {
+  const label = (player: VerifiedPlayer) => `${player.name ?? "Unnamed"} ${player.tag}`;
+  return (
+    <section className="form-panel stack-form" aria-labelledby="bot-default-title">
+      <h2 id="bot-default-title">Discord bot</h2>
+      {saved === "saved" ? (
+        <p className="notice" role="status">
+          Default player saved.
+        </p>
+      ) : saved === "failed" ? (
+        <p className="notice notice-unavailable" role="alert">
+          The default player could not be saved. Try again.
+        </p>
+      ) : null}
+      {players.length === 0 ? (
+        <p className="form-help">
+          <a href="/account/verify-player">Link a player</a> to see your Legend days in
+          the Clash Lens Discord bot.
+        </p>
+      ) : players.length === 1 ? (
+        <p className="form-help">
+          The bot uses {label(players[0])}, your only linked player.
+        </p>
+      ) : (
+        <form method="post" className="stack-form">
+          <input type="hidden" name="intent" value="default-player" />
+          <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+          <label htmlFor="bot-default-player">Default player</label>
+          <p id="bot-default-help" className="form-help">
+            The bot uses this player when a command doesn't name one.
+          </p>
+          <select
+            id="bot-default-player"
+            name="tag"
+            defaultValue={defaultPlayer ?? ""}
+            aria-describedby="bot-default-help"
+            required
+          >
+            <option value="" disabled>
+              Choose a player
+            </option>
+            {players.map((player) => (
+              <option key={player.tag} value={player.tag}>
+                {label(player)}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="button button-primary">
+            Save
+          </button>
+        </form>
+      )}
+    </section>
   );
 }

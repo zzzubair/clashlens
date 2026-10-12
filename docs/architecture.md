@@ -59,11 +59,14 @@ the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.
 
 Integrations needing Clash Lens data use the private API rather than reading
-the database or archive. The agreed Discord setup uses a private incoming
-webhook for operator alerts and an existing ticket bot for support. Neither
-needs access to the product database or archive. No custom product bot is part
-of the current stack. Isolate future integrations only where availability or
-measured resource use requires it.
+the database or archive. The one exception is the Clash Lens Discord bot
+([`python/src/bot`](../python/src/bot)): it reads the database directly,
+read-only, by running the private API's own read code with the API's database
+login, so its numbers match the website. It writes nothing; settings such as
+the default player are saved through the website. The agreed Discord setup
+also uses a private incoming webhook for operator alerts and an existing ticket
+bot for support; neither needs the product database or archive. Isolate future
+integrations only where availability or measured resource use requires it.
 
 ## Durable seams
 
@@ -101,8 +104,9 @@ arguments, logs, metrics, traces, or durable request data. Player verification
 tokens are request-only secrets: use them in memory, never persist or archive
 them, and return only a sanitized result.
 
-The browser receives public or screen-ready data only. The TypeScript backend,
-Discord bot, and other integrations use the private API; they do not receive
+The browser receives public or screen-ready data only. The TypeScript backend
+and other integrations use the private API, and the Discord bot reads as
+described above; they do not receive
 the official collection key or archive credentials. The collector and Python
 worker are the only archive readers, with access limited to their collection
 and processing paths.

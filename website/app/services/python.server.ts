@@ -119,6 +119,7 @@ export interface PythonClient {
   ): Promise<PrivateGroup>;
   deleteGroup(groupId: string, idempotencyKey: string): Promise<GroupDeleteResult>;
   getAccountSummary(): Promise<AccountSummary>;
+  setDefaultPlayer(tag: string, idempotencyKey: string): Promise<void>;
   linkProvider(
     provider: "google" | "discord",
     providerSubject: string,
@@ -1095,6 +1096,7 @@ type AccountOperations = Pick<
   | "updateGroup"
   | "deleteGroup"
   | "getAccountSummary"
+  | "setDefaultPlayer"
   | "linkProvider"
   | "unlinkProvider"
   | "getPublicUser"
@@ -1127,6 +1129,8 @@ function createAccountOperations(
     deleteGroup: (groupId, idempotencyKey) =>
       deleteGroup(groupId, idempotencyKey, identity),
     getAccountSummary: () => getAccountSummary(identity),
+    setDefaultPlayer: (tag, idempotencyKey) =>
+      setDefaultPlayer(tag, idempotencyKey, identity),
     linkProvider: (provider, providerSubject, idempotencyKey) =>
       changeProviderIdentity("link", provider, providerSubject, idempotencyKey, identity),
     unlinkProvider: (provider, providerSubject, idempotencyKey, endedLogin) =>
@@ -1346,6 +1350,26 @@ async function getAccountSummary(
     identity,
   );
   return mappedOrMalformed(mapSummary(payload));
+}
+
+/** Choose the verified player the Discord bot uses when none is named. */
+async function setDefaultPlayer(
+  tag: string,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<void> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  await requestJson<unknown>(
+    "/v1/account/default-player",
+    "POST",
+    jsonBody({ tag }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
 }
 
 const ALLOWED_PROVIDERS: readonly ("google" | "discord")[] = ["google", "discord"];
