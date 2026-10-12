@@ -1,4 +1,4 @@
-"""End to end: the dashboard's likely place at the next Reset, from saved
+"""End to end: the dashboard's projected place at the next Reset, from saved
 game data through the real worker to the Legend day card's API response.
 
 A finished Legend day's Daily board publishes, the worker's maintenance saves
@@ -15,7 +15,7 @@ from domain_test_support import as_api_role, domain_database
 from test_reconciliation_postgres import _processor
 from test_reset_scenarios_postgres import SEASON, Battle, _story, attacks, day, defenses
 
-from clashlens import api_dashboard, likely_range, worker
+from clashlens import api_dashboard, projected_place, worker
 from clashlens.api_db import ApiDatabase
 
 DONE, CHASER = "#2PP", "#8PP"
@@ -37,13 +37,13 @@ def _days_battles(start, *, late: bool) -> dict[str, list[Battle]]:
     }
 
 
-def test_card_shows_a_likely_range_learned_from_the_day_before(
+def test_card_shows_a_projected_place_learned_from_the_day_before(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """At 20:00 DONE has finished on 5,460 and CHASER, 50 behind on 5,410,
     still has 2 attacks. The outer range lets either finish first. The day
     before, CHASER was in the same spot at 20:00 and won 80 more, so the
-    likely range puts CHASER first and DONE second."""
+    projected place puts CHASER first and DONE second."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, DONE, CHASER)
         # Today's card is read at 20:00. The worker publishes a day's battles
@@ -81,8 +81,8 @@ def test_card_shows_a_likely_range_learned_from_the_day_before(
                 "SELECT count(*) FROM dashboard_remaining_changes"
             ).fetchone()[0]
         # The real worker's maintenance, on a timer, saves the day.
-        monkeypatch.setattr(likely_range, "_now", lambda: NOW)
-        monkeypatch.setattr(likely_range, "_next_refresh_at", float("-inf"))
+        monkeypatch.setattr(projected_place, "_now", lambda: NOW)
+        monkeypatch.setattr(projected_place, "_next_refresh_at", float("-inf"))
         database, _ = _processor(connection_info, archive_server)
         maintenance = worker.TimedMaintenance(database, worker.StageMetrics())
         try:
@@ -119,6 +119,6 @@ def test_card_shows_a_likely_range_learned_from_the_day_before(
     assert {tag: card["rank_range"] for tag, card in cards.items()} == {
         DONE: {"best": 1, "worst": 2}, CHASER: {"best": 1, "worst": 2},
     }
-    assert {tag: card["likely_rank_range"] for tag, card in cards.items()} == {
-        DONE: {"best": 2, "worst": 2}, CHASER: {"best": 1, "worst": 1},
+    assert {tag: card["projected_rank"] for tag, card in cards.items()} == {
+        DONE: 2, CHASER: 1,
     }

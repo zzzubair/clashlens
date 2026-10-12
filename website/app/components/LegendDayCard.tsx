@@ -59,19 +59,19 @@ function BattleRow({
 
 /**
  * Card 1: live trophies, net today, the rank at the last Reset, the live rank,
- * the range the next Reset can still land in and the likely part of it.
+ * the range the next Reset can still land in and the projected place in it.
  */
 export function LegendDayCard({
   player,
   day,
   range,
-  likely = null,
+  projected = null,
   nowMs = null,
 }: {
   player: LinkedPlayerCard;
   day: PlayerDay | null;
   range: RankRange | null;
-  likely?: RankRange | null;
+  projected?: number | null;
   nowMs?: number | null;
 }) {
   const battles = [...(day?.battles ?? [])].sort((a, b) => a.at - b.at);
@@ -136,15 +136,14 @@ export function LegendDayCard({
           <b>{range ? `${rankText(range.best)} – ${rankText(range.worst)}` : "–"}</b>
           <span className="dash-estimate">estimate · narrows as the day goes on</span>
         </div>
-        {likely ? (
-          <div className="legend-day-likely">
-            <span className="dash-label">Likely finish</span>
-            <strong>
-              {rankText(likely.best)} – {rankText(likely.worst)}
-            </strong>
+        {projected ? (
+          <div className="legend-day-projected">
+            <span className="dash-label">Projected</span>
+            <strong>{rankText(projected)} at Reset</strong>
             <span className="dash-muted">
-              Where you will most likely be at the Reset, right 9 times in 10. Wide early
-              in the day, it narrows as attacks and defenses are used up.
+              An estimate from how players in your spot finished on recent days. It can be
+              hundreds of places out while battles are left, and gets closer through the
+              day.
             </span>
           </div>
         ) : null}

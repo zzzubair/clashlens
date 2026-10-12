@@ -1,5 +1,5 @@
-"""The likely place at the next Reset: the places a player finishes in about
-9 times in 10, always inside the outer range (api_dashboard.rank_range).
+"""The projected place at the next Reset: one estimated place for every
+player, always inside the outer range (api_dashboard.rank_range).
 
 The dashboard imagines the rest of the Legend day 200 times. In each, every
 player's trophy change from now to the Reset is copied from a player who, at
@@ -8,19 +8,30 @@ same situation: the same attacks and defenses still open, the same activity
 (all 8 attacks the day before, 1-7, none but some in the two days before, or
 none in three days) and the same level (Top 200, 201-1,000, or below that
 the same trophy bracket). A situation with fewer than 40 examples drops the
-level, then the activity. Each imagined day copies one whole earlier day, so
-a busy or quiet night moves everyone together. Everyone is ranked in each,
-a tied player anywhere in their tied group, and the likely range runs from a
-player's 10th-best to 190th-best place of the 200.
+level, then the activity; one with no examples at all copies the nearest
+open attacks and defenses, kept to what the player's own open slots allow.
+Each imagined day copies one whole earlier day, so a busy or quiet night
+moves everyone together.
 
-Tested on this Season's Days 5-7 (12 October 2026): 89-91% of players on the
-held-back Sunday finished inside from 06:00 to 20:00 UTC, 83-87% from 02:00
-to 04:00 on a quiet night, misses mostly under 25 places.
+Everyone is ranked in each imagined day by the Daily board's order for equal
+trophies (analytics.latest_change_order_key): the latest trophy change
+first, then no change that day, then the tag hash. A player whose imagined
+day moves their trophies changed after everyone's known battles, in a random
+order among those who also moved. The projected place is the middle of a
+player's 200 imagined places.
+
+Tested on this Season's Days 1-7 (12 October 2026), the held-back Sunday's
+typical miss was about 570 places at 06:00 UTC, 290 at 17:00, 100 at 23:00
+and 50 at 01:00. Players who had finished their battles were typically
+25-35 places off; one with a battle left at 23:00, about 250-300.
 
 The worker saves each finished day's examples (``refresh_remaining_changes``)
 from its Daily board and battles: a battle counts from a minute after it was
-first saved, and a player's trophies at each step are their Daily board total
-less the battles not counted yet.
+first saved, as the tests measured, and a player's trophies at each step are
+their Daily board total less the battles not counted yet. The live
+dashboard instead counts a battle once the player's published log has it,
+usually a few minutes later, so its examples are a little ahead of what the
+card knows.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ from operator import itemgetter
 from time import monotonic
 from typing import Any
 
+from .analytics import latest_change_order_key
 from .domain import MAX_BATTLE_TROPHIES, ranked_day_for
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
@@ -42,9 +54,6 @@ SLOT = timedelta(minutes=15)
 SLOTS = 96
 DAYS = 7
 DRAWS = 200
-# The 10th-best and 190th-best of 200 imagined places.
-BEST_DRAW = 9
-WORST_DRAW = 189
 MIN_POOL = 40
 MIN_DAY_POOL = 20
 # A battle counts from this long after it was first saved.
@@ -81,6 +90,23 @@ LEFT JOIN LATERAL (
         ORDER BY recent.ranked_day_start, recent.version DESC
     ) AS latest
 ) AS recent ON true
+"""
+
+# The game's "no opponent, no battle" attack and defense slots of the
+# player's newest published log for the Legend day %(day_start)s, which the
+# game counts as used.
+ZERO_SLOTS_SQL = """
+LEFT JOIN LATERAL (
+    SELECT COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0)
+               AS attacks,
+           COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
+               AS defenses
+    FROM api_player_daily_logs AS daily
+    JOIN ranked_day_versions AS ranked_day ON ranked_day.id = daily.ranked_day_version_id
+    WHERE daily.player_id = player.id AND daily.ranked_day_start = %(day_start)s
+    ORDER BY daily.version DESC
+    LIMIT 1
+) AS zero ON true
 """
 
 
@@ -124,10 +150,14 @@ def situations(
     return out
 
 
+def _open_slots(situation: int) -> tuple[int, int]:
+    """Open attacks and open defenses of ``situation``."""
+    return divmod(situation // (LEVELS * ACTIVITIES), MAX_DAILY_DEFENSES + 1)
+
+
 def _open_bounds(situation: int) -> tuple[int, int]:
     """The most a player in ``situation`` can lose and win before the Reset."""
-    slots = situation // (LEVELS * ACTIVITIES)
-    attacks, defenses = divmod(slots, MAX_DAILY_DEFENSES + 1)
+    attacks, defenses = _open_slots(situation)
     return -MAX_BATTLE_TROPHIES * defenses, MAX_BATTLE_TROPHIES * attacks
 
 
@@ -246,13 +276,15 @@ def build_day(
     connection: Any, day_start: datetime, snapshot_id: int
 ) -> list[tuple[list[int], list[int]]]:
     """For each 15-minute step of the day, every board player's situation and
-    trophy change to the end of the day, ordered by situation then change."""
+    trophy change to the end of the day, ordered by situation then change.
+    A player's "no opponent, no battle" slots count as used all day."""
     players = connection.execute(
         f"""
-        SELECT entry.player_id, entry.trophies, recent.yesterday, recent.before
+        SELECT entry.player_id, entry.trophies, recent.yesterday, recent.before,
+               COALESCE(zero.attacks, 0), COALESCE(zero.defenses, 0)
         FROM leaderboard_snapshot_entries AS entry
         JOIN players AS player ON player.id = entry.player_id
-        {RECENT_ATTACKS_SQL}
+        {RECENT_ATTACKS_SQL}{ZERO_SLOTS_SQL}
         WHERE entry.snapshot_id = %(snapshot_id)s
         ORDER BY entry.position
         """,
@@ -263,6 +295,9 @@ def build_day(
     activities = [activity(int(row[2]), int(row[3])) for row in players]
     # (known at, player, is attack, trophy change)
     events: list[tuple[datetime, int, bool, int]] = []
+    # The Daily board's total is taken at exactly the Reset, so a battle
+    # whose attacker's report is stamped at or after it is not in it
+    # (boundary_manifest.reset_trophies).
     for attacker, defender, saved_at, gain, loss in connection.execute(
         """
         SELECT battle.attacker_player_id, battle.defender_player_id,
@@ -276,9 +311,11 @@ def build_day(
         LEFT JOIN battle_perspectives AS defender_side
           ON defender_side.battle_id = battle.id AND defender_side.perspective = 'defender'
         LEFT JOIN battle_evidence AS defender ON defender.id = defender_side.evidence_id
-        WHERE battle.ranked_day_start = %s
+        WHERE battle.ranked_day_start = %(day_start)s
+          AND (attacker.battle_timestamp IS NULL
+               OR attacker.battle_timestamp < %(day_end)s)
         """,
-        (day_start,),
+        {"day_start": day_start, "day_end": day_start + timedelta(days=1)},
     ):
         known = saved_at + GUARD
         if (player := index.get(int(attacker))) is not None:
@@ -290,8 +327,8 @@ def build_day(
     remaining = [0] * len(players)
     for _known, player, _attack, change in events:
         remaining[player] += change
-    attacks = [0] * len(players)
-    defenses = [0] * len(players)
+    attacks = [int(row[4]) for row in players]
+    defenses = [int(row[5]) for row in players]
     rows = []
     counted = 0
     for slot in range(SLOTS):
@@ -320,7 +357,7 @@ def build_day(
 
 
 # ---------------------------------------------------------------------------
-# Dashboard: the likely range, recomputed with each board read.
+# Dashboard: the projected place, recomputed with each board read.
 
 
 def read_examples(
@@ -341,10 +378,25 @@ def read_examples(
     return [(list(keys), list(changes)) for keys, changes in rows] or None
 
 
-class LikelyPlaces:
-    """Every board player's imagined finishing trophies in 200 imagined
-    days, kept as one array per imagined day with a sorted copy, so one
-    player's range takes 400 binary searches."""
+def _nearest(open_slots: dict[int, list[int]], situation: int) -> int | None:
+    """The open attacks and defenses with examples nearest ``situation``'s,
+    as ``situation // (LEVELS * ACTIVITIES)``, or None without any."""
+    attacks, defenses = _open_slots(situation)
+    return min(
+        open_slots,
+        key=lambda slots: (
+            abs(slots // (MAX_DAILY_DEFENSES + 1) - attacks)
+            + abs(slots % (MAX_DAILY_DEFENSES + 1) - defenses),
+            slots,
+        ),
+        default=None,
+    )
+
+
+class ProjectedPlaces:
+    """Every board player's place in 200 imagined days, kept as each
+    player's ranking key per imagined day with a sorted copy, so one
+    player's projected place takes 200 binary searches."""
 
     def __init__(
         self,
@@ -352,29 +404,46 @@ class LikelyPlaces:
         open_attacks: Sequence[int],
         open_defenses: Sequence[int],
         activities: Sequence[int],
+        latest_changes: Sequence[datetime | None],
+        tags: Sequence[str],
         examples: list[tuple[list[int], list[int]]],
         seed: int,
     ) -> None:
         keys = situations(trophies, open_attacks, open_defenses, activities)
-        by_day: list[dict[int, list[int]]] = []
-        pooled: list[dict[int, list[int]]] = [{}, {}, {}]
+        size = len(keys)
+        # The examples by situation, then without level, then by open slots
+        # only: pooled over the days and for each day.
+        steps = (1, LEVELS, LEVELS * ACTIVITIES)
+        pooled: list[dict[int, list[int]]] = [{} for _ in steps]
+        by_day: list[list[dict[int, list[int]]]] = []
         for day_keys, day_changes in examples:
-            day: dict[int, list[int]] = {}
+            day: list[dict[int, list[int]]] = [{} for _ in steps]
             for key, change in zip(day_keys, day_changes, strict=True):
-                day.setdefault(key, []).append(change)
-                pooled[0].setdefault(key, []).append(change)
-                pooled[1].setdefault(key // LEVELS, []).append(change)
-                pooled[2].setdefault(key // (LEVELS * ACTIVITIES), []).append(change)
+                for step, everyday, today in zip(steps, pooled, day, strict=True):
+                    everyday.setdefault(key // step, []).append(change)
+                    today.setdefault(key // step, []).append(change)
             by_day.append(day)
+        # Among equal trophies, a larger tie number places first: the
+        # board's order for players whose trophies stay put, and above
+        # everyone who stays put for those who move.
+        order = sorted(
+            range(size), key=lambda player: latest_change_order_key(
+                latest_changes[player], tags[player]
+            )
+        )
+        tie = [0] * size
+        for place, player in enumerate(order):
+            tie[player] = size - 1 - place
+        width = 2 * size
         groups: dict[int, list[int]] = {}
         for player, key in enumerate(keys):
             groups.setdefault(key, []).append(player)
         # Players in situation order, so each imagined day is built one
         # situation at a time; ``position`` finds a player in that order.
-        self.position = [0] * len(keys)
-        # For each day, each situation's players' trophies and examples, the
-        # examples None when every one is 0.
-        day_pools: list[list[tuple[list[int], list[int] | None]]] = [
+        self.position = [0] * size
+        # For each day, each situation's players' trophies and ranking keys
+        # if they stay put, and the examples, None when every one is 0.
+        day_pools: list[list[tuple[list[int], list[int], list[int] | None]]] = [
             [] for _ in by_day
         ]
         placed = 0
@@ -383,49 +452,60 @@ class LikelyPlaces:
                 self.position[player] = placed
                 placed += 1
             current = [trophies[player] for player in members]
-            fine = pooled[0].get(key)
-            if fine is not None and len(fine) >= MIN_POOL:
-                choice, own = fine, True
+            still = [trophies[player] * width + tie[player] for player in members]
+            level = next(
+                (
+                    level for level, step in enumerate(steps)
+                    if len(pooled[level].get(key // step, ())) >= MIN_POOL
+                ),
+                None,
+            )
+            lowest = highest = None
+            if level is not None:
+                pool_key = key // steps[level]
+            elif key // steps[-1] in pooled[-1]:
+                level, pool_key = len(steps) - 1, key // steps[-1]
             else:
-                own = False
-                choice = pooled[1].get(key // LEVELS)
-                if choice is None or len(choice) < MIN_POOL:
-                    choice = pooled[2].get(key // (LEVELS * ACTIVITIES), [0])
+                level = len(steps) - 1
+                pool_key = _nearest(pooled[-1], key)
+                lowest, highest = _open_bounds(key)
+            choice = pooled[level].get(pool_key, [0]) if pool_key is not None else [0]
             for day, pools in zip(by_day, day_pools, strict=True):
-                pool = day.get(key) if own else None
+                pool = day[level].get(pool_key)
                 if pool is None or len(pool) < MIN_DAY_POOL:
                     pool = choice
-                pools.append((current, pool if any(pool) else None))
+                if lowest is not None:
+                    pool = [min(highest, max(lowest, change)) for change in pool]
+                pools.append((current, still, pool if any(pool) else None))
         rng = random.Random(seed)
         draw = rng.random
-        self.size = len(keys)
-        self.finals: list[array] = []
+        self.size = size
+        self.keys: list[array] = []
         self.sorted: list[array] = []
         for _ in range(DRAWS):
-            finals: list[int] = []
-            for current, pool in day_pools[rng.randrange(len(day_pools))]:
+            ranked: list[int] = []
+            for current, still, pool in day_pools[rng.randrange(len(day_pools))]:
                 if pool is None:
-                    finals.extend(current)
+                    ranked.extend(still)
                     continue
                 count = len(pool)
-                finals.extend([points + pool[int(draw() * count)] for points in current])
-            self.finals.append(array("i", finals))
-            finals.sort()
-            self.sorted.append(array("i", finals))
+                # What is left of ``pick`` orders those who move at random.
+                ranked.extend([
+                    (points + change) * width + size + int(pick % 1 * size)
+                    if (change := pool[int(pick := draw() * count)]) else stays
+                    for points, stays in zip(current, still, strict=True)
+                ])
+            self.keys.append(array("q", ranked))
+            ranked.sort()
+            self.sorted.append(array("q", ranked))
 
-    def range(self, player: int, best: int, worst: int) -> dict[str, int]:
-        """``player``'s likely best and worst place, inside ``best``-``worst``."""
+    def projected(self, player: int, best: int, worst: int) -> int:
+        """``player``'s projected place, inside ``best``-``worst``."""
         n = self.size
         player = self.position[player]
-        highs = sorted(
-            1 + n - bisect_right(ordered, finals[player])
-            for finals, ordered in zip(self.finals, self.sorted, strict=True)
+        places = sorted(
+            n + 1 - bisect_right(ordered, keys[player])
+            for keys, ordered in zip(self.keys, self.sorted, strict=True)
         )
-        lows = sorted(
-            n - bisect_left(ordered, finals[player])
-            for finals, ordered in zip(self.finals, self.sorted, strict=True)
-        )
-        return {
-            "best": min(worst, max(best, highs[BEST_DRAW])),
-            "worst": min(worst, max(best, lows[WORST_DRAW])),
-        }
+        middle = (places[DRAWS // 2 - 1] + places[DRAWS // 2] + 1) // 2
+        return min(worst, max(best, middle))

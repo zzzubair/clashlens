@@ -1,6 +1,6 @@
 -- Clash Lens deployment migration 0107.
 -- Examples of how players' trophies moved for the rest of a Legend day, for
--- the dashboard's likely place at the next Reset (likely_range.py).
+-- the dashboard's projected place at the next Reset (projected_place.py).
 --
 -- For each of the last 7 finished Legend days and each 15-minute step from
 -- its Reset, one row holds every Daily board player's situation at that

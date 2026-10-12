@@ -37,7 +37,7 @@
   color: var(--cl-accent);
 }
 
-.legend-day-likely {
+.legend-day-projected {
   display: flex;
   flex-basis: 100%;
   flex-wrap: wrap;
@@ -47,7 +47,7 @@
   border-top: 1.5px dashed var(--cl-card-line);
 }
 
-.legend-day-likely strong {
+.legend-day-projected strong {
   color: var(--cl-accent);
   font-family: var(--cl-font-heading);
   font-size: 1.1rem;
@@ -55,7 +55,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.legend-day-likely .dash-muted {
+.legend-day-projected .dash-muted {
   flex-basis: 100%;
   font-size: 0.75rem;
 }
