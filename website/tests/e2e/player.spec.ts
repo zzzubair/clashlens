@@ -471,9 +471,9 @@ async function expectUsableLayout(page: Page) {
   expect(problems).toEqual([]);
 }
 
-test("player page holds worst-case player data on a phone", async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 568 });
-  await refuseRefreshes(page);
+// Opens #2PP from search with worst-case saved data and one past Season.
+// `servesSeason` returning false leaves that read of the past Season unanswered.
+async function openWorstCasePlayer(page: Page, servesSeason = () => true) {
   // Day 6 of a Season, so every worst-case day belongs to the current Season.
   const now = Date.parse("2026-10-10T12:00:00Z");
   await page.clock.install({ time: now });
@@ -489,17 +489,24 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
     historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
   });
   const season = encodePageData(decoded);
-  await page.route("**/players/%232PP.data*", (route) =>
-    route.fulfill({
-      contentType: dataType,
-      body: new URL(route.request().url()).searchParams.has("season") ? season : current,
-    }),
-  );
+  await page.route("**/players/%232PP.data*", (route) => {
+    const past = new URL(route.request().url()).searchParams.has("season");
+    if (past && !servesSeason()) return;
+    return route.fulfill({ contentType: dataType, body: past ? season : current });
+  });
 
   // Client navigation reads the replaced page data.
   await page.getByRole("button", { name: "Search players" }).click();
   await page.getByRole("searchbox").fill("#2PP");
   await page.getByRole("searchbox").press("Enter");
+}
+
+test("player page holds worst-case player data on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await refuseRefreshes(page);
+  const automatic = refreshSubmitted(page);
+  await openWorstCasePlayer(page);
+  await automatic;
   const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
   await seasonMenu.selectOption({ index: 1 });
   const finish = page.locator(".season-summary");
@@ -525,6 +532,45 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
     await expectUsableLayout(page);
   }
 });
+
+for (const status of [400, 429]) {
+  test(`a Season switch shows that Season when the automatic refresh gets ${status}`, async ({
+    page,
+  }) => {
+    let switchStarted!: () => void;
+    const switching = new Promise<void>((resolve) => (switchStarted = resolve));
+    await page.route("**/resources/players/*/refresh*", async (route) => {
+      await switching;
+      if (status === 400) return route.continue({ postData: "idempotencyKey=invalid" });
+      return route.fulfill({
+        status,
+        contentType: "text/x-script",
+        headers: { "X-Remix-Response": "yes" },
+        body: encodePageData({
+          data: { error: { code: "rate_limited", message: "Too many requests." } },
+        }),
+      });
+    });
+    // The refused refresh answers while the switch's first read is still
+    // waiting, and that read is never answered. Only reading the page data
+    // again for the chosen Season can show it.
+    let seasonReads = 0;
+    await openWorstCasePlayer(page, () => {
+      if (seasonReads++ > 0) return true;
+      switchStarted();
+      return false;
+    });
+    const refused = refreshSubmitted(page);
+    await page
+      .getByRole("combobox", { name: "Season", exact: true })
+      .selectOption({ index: 1 });
+    expect((await refused).status()).toBe(status);
+    await expect(page).toHaveURL(/\?season=/);
+    await expect(
+      page.locator(".season-summary").getByText("6,498", { exact: true }),
+    ).toBeVisible();
+  });
+}
 
 test("season navigation clears refresh state for the same player", async ({ page }) => {
   // Only the manual Refresh below may spend the shared allowance.
