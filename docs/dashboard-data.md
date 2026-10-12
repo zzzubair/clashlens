@@ -16,7 +16,8 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | | Automatic defense loss preview | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
 | Legend clock | Today's battles with times | Exists | |
 | Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | Mostly exists | `/v1/players/{tag}/today` already returns up to 8 opponents with their trophies at Reset and each defense today (stars, and which one was yours), and the current dashboard shows them. Missing: trophies lost on each defense, which Trophies mode needs (a new API field). |
-| | Legends average | None | Fixed at 52% held and −32 a defense (see below). |
+| | Legends held % | Exists | `/v1/players/{tag}/today` returns it as `legends_held`, worked out live from today's defenses across the live leaderboard (re-read at most once a minute), and the current dashboard shows it. About 52% on a typical day (see below); not fixed. |
+| | Legends trophies lost a defense | None | Fixed at −32 a defense (see below). |
 | | Add to group | Exists | Groups hold up to 20 players. |
 | Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The shield row needs nothing new. |
 | Armies on defense | Your defenses grouped by the attacker's army type over the last 1–28 days | New read | Army types exist since #458. Both rows can only use days still kept: a finished Season's daily logs and army battle records are deleted 7 days after it ends, so early in a new Season a long Custom window covers fewer days. |
@@ -48,7 +49,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 
 Measured read-only on production on 2026-10-12, Legend I only.
 
-- **Defenses, 29 Sep–11 Oct:** 1,161,037 defenses; 51.92% held (not tripled), 2.383 stars, −32.13 trophies a defense. Daily values ranged 50.95–52.62% held and −31.94 to −32.31 a defense, which is why the dashboard fixes 52% and −32.
+- **Defenses, 29 Sep–11 Oct:** 1,161,037 defenses; 51.92% held (not tripled), 2.383 stars, −32.13 trophies a defense. Daily values ranged 50.95–52.62% held and −31.94 to −32.31 a defense, which is why the dashboard fixes −32 a defense. The held rate is worked out live from today's defenses, so 52% is only a typical value.
 - **Star split, 10 Oct (88,932 defenses):** 3★ 48.2% cost 40; 2★ 43.0% cost 27.6 on average; 1★ 8.5% cost 13.5; 0★ 0.3% cost 0. A full 8-defense day has a median loss of 262.
 - **Army types, 5–10 Oct:** 66% of players used one army type, 22% two, 11% three or more; a player's main type is 92% of their attacks on average. Among named types with 10,000+ attacks, Legends hit rates ran from 45.8% (Super Yeti) to 54.4% (Dragon Rider); Thrower, the most used, was 50.3%.
 - **Repeat attackers, 5–11 Oct:** of 617,255 attacker-defender pairs, 99.7% happened once.
