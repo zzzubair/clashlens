@@ -416,6 +416,19 @@ describe("Legend day card", () => {
     expect(html).not.toContain("auto defense");
     expect(render(null)).toContain("Trophies 5,696 Net today –");
   });
+
+  it("shows – for attack and defense counts it does not know, not 0", () => {
+    // Today's battles not saved yet, or the player page not read at all.
+    for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
+      const html = render(day);
+      expect(html).toContain("– – attacks");
+      expect(html).toContain("– – defenses");
+      expect(html).not.toContain("0 attacks");
+      expect(html).toContain("Trophies 5,696");
+      expect(html).toContain("Now #318");
+      expect(html).toContain("Next Reset #95 – #760");
+    }
+  });
 });
 
 describe("Bases you attacked", () => {
@@ -462,6 +475,22 @@ describe("Bases you attacked", () => {
     // Each opponent can be saved into one of the account's groups.
     expect(html).toContain('href="/account/groups/add/8PP"');
     expect(html.match(/is-yours/g)).toHaveLength(3);
+  });
+
+  it("says today's battles aren't saved yet rather than no attacks", async () => {
+    const render = async (rows: OpponentRow[] | null) =>
+      text(
+        await renderInRouter(
+          createElement(OpponentsCard, { rows, legends: null, timeZone: "UTC" }),
+        ),
+      ).replace(/&#x27;/g, "'");
+    const unsaved = await render(null);
+    expect(unsaved).toContain(
+      "Bases you attacked · today Today's battles aren't saved yet.",
+    );
+    expect(unsaved).not.toContain("of 8");
+    expect(unsaved).not.toContain("No attacks yet today");
+    expect(await render([])).toContain("· today · 0 of 8 No attacks yet today.");
   });
 
   it("rates bases by trophies given up a defense in Trophies mode", async () => {
@@ -539,6 +568,21 @@ describe("today read for the Legend day and Bases cards", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("keeps a today read without saved battles apart from one with no attacks", async () => {
+    mocks.requestJson.mockResolvedValue({
+      tag: MAIN,
+      rank_range: { best: 95, worst: 760 },
+      legends_held: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+    });
+    expect(await getPlayerToday(MAIN)).toMatchObject({
+      rankRange: { best: 95, worst: 760 },
+      opponents: null,
+    });
   });
 
   it("refuses a today read whose range is impossible", async () => {

@@ -54,7 +54,8 @@ export interface PlayerToday {
   legendsHeld: LegendsHeld | null;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
-  opponents: OpponentRow[];
+  /** Null until the player's battles for today are saved. */
+  opponents: OpponentRow[] | null;
 }
 
 function malformed(): never {
@@ -123,8 +124,7 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
     undefined,
     undefined,
   );
-  if (!isRecord(payload) || payload.tag !== tag || !Array.isArray(payload.opponents))
-    malformed();
+  if (!isRecord(payload) || payload.tag !== tag) malformed();
   const range = payload.rank_range;
   const held = payload.legends_held;
   return {
@@ -143,7 +143,10 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
     }),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
-    opponents: payload.opponents.slice(0, 8).map(opponent),
+    opponents: nullable(payload.opponents, (items) => {
+      if (!Array.isArray(items)) malformed();
+      return items.slice(0, 8).map(opponent);
+    }),
   };
 }
 

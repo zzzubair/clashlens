@@ -45,7 +45,7 @@ export function OpponentsCard({
   mode = "held",
   nowMs = null,
 }: {
-  rows: OpponentRow[];
+  rows: OpponentRow[] | null;
   legends: LegendsHeld | null;
   timeZone: string;
   mode?: BasesMode;
@@ -53,6 +53,30 @@ export function OpponentsCard({
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
+  // The oldest opponent read, so the card never looks newer than it is.
+  const observed = (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
+  const head = (
+    <CardHead
+      title={
+        <>
+          {"Bases you attacked "}
+          <small className="dash-muted">
+            {rows ? `· today · ${rows.length} of ${ATTACKS}` : "· today"}
+          </small>
+        </>
+      }
+      meta={observed.length ? updatedAgo(Math.min(...observed), nowMs) : null}
+    />
+  );
+  if (!rows?.length)
+    return (
+      <>
+        {head}
+        <CardNote>
+          {rows ? "No attacks yet today." : "Today's battles aren't saved yet."}
+        </CardNote>
+      </>
+    );
   // Hardest first within each strength: held most, or gave up least a defense.
   const hardness = (defenses: OpponentRow["defenses"]) =>
     mode === "held"
@@ -64,26 +88,6 @@ export function OpponentsCard({
       (a, b) =>
         STRENGTH_ORDER.indexOf(a.strength) - STRENGTH_ORDER.indexOf(b.strength) ||
         hardness(b.row.defenses) - hardness(a.row.defenses),
-    );
-  // The oldest opponent read, so the card never looks newer than it is.
-  const observed = rows.flatMap((row) => row.observedAtMs ?? []);
-  const head = (
-    <CardHead
-      title={
-        <>
-          {"Bases you attacked "}
-          <small className="dash-muted">{`· today · ${rows.length} of ${ATTACKS}`}</small>
-        </>
-      }
-      meta={observed.length ? updatedAgo(Math.min(...observed), nowMs) : null}
-    />
-  );
-  if (rows.length === 0)
-    return (
-      <>
-        {head}
-        <CardNote>No attacks yet today.</CardNote>
-      </>
     );
   return (
     <>

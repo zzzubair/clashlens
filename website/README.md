@@ -215,7 +215,9 @@ on the private API, for the selected account only. Its board of every
 tracked player's trophies and today's attack and defense counts is read in one
 query and kept for a minute, so all dashboards share one read per minute.
 Opponents' defenses come from their own published daily logs, so an untracked
-opponent shows only your hit.
+opponent shows only your hit. Until the account's own log for today is saved,
+Bases you attacked says so and Legend day shows – for its attack and defense
+counts, rather than 0.
 
 The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
 on the private API, through `/resources/players/{tag}/armies`, which their day

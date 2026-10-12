@@ -22,7 +22,8 @@ function BattleRow({
   noun: string;
   kind: "attack" | "defense";
 }) {
-  const shown = count ?? battles.length;
+  const shown =
+    count === null ? `– ${noun}s` : `${count} ${noun}${count === 1 ? "" : "s"}`;
   return (
     <div className="legend-day-battles">
       <div>
@@ -33,12 +34,9 @@ function BattleRow({
         ) : (
           <b>–</b>
         )}
-        <span className="dash-muted">
-          {shown} {noun}
-          {shown === 1 ? "" : "s"}
-        </span>
+        <span className="dash-muted">{shown}</span>
       </div>
-      <ol className="dash-star-boxes" aria-label={`${shown} ${noun}s`}>
+      <ol className="dash-star-boxes" aria-label={shown}>
         {Array.from({ length: SLOTS }, (_, index) => {
           const battle = battles[index];
           if (!battle)

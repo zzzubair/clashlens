@@ -235,7 +235,8 @@ def _iso(value: datetime | None) -> str | None:
 def get_player_today(
     database: ApiDatabase, board_cache: DashboardBoard, tag: str, *, now: datetime
 ) -> dict[str, Any] | None:
-    """One player's dashboard numbers for today, or None for an unknown tag."""
+    """One player's dashboard numbers for today, or None for an unknown tag.
+    ``opponents`` is None until the player's log for today is published."""
     day = ranked_day_for(now)
     board = board_cache.current(database, now)
     with database.pool.connection() as connection:
@@ -328,7 +329,7 @@ def get_player_today(
         else None,
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
-        "opponents": opponents,
+        "opponents": None if today is None else opponents,
     }
 
 

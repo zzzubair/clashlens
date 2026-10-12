@@ -440,7 +440,8 @@ export interface LegendDayData {
 }
 
 export interface BasesData {
-  rows: OpponentRow[];
+  /** Null until the player's battles for today are saved. */
+  rows: OpponentRow[] | null;
   legends: LegendsHeld | null;
   mode: BasesMode;
 }

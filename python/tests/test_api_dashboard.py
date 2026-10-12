@@ -242,6 +242,10 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                 ("#9Q2", 2, [{"stars": 2, "trophy_change": -30, "yours": True}]),
             ]
             assert today["opponents"][0]["observed_at"] == "2026-08-06T11:30:00+00:00"
+            # #9Q2 has no published log for today: its attacks are unknown, not none.
+            assert api_dashboard.get_player_today(database, board, "#9Q2", now=NOW)[
+                "opponents"
+            ] is None
 
             assert api_dashboard.get_player_today(database, board, "#QQQ", now=NOW) is None
         finally:
