@@ -20,6 +20,7 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /** Each account picked to add is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
 const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
+const REMOVE_ICON = <span aria-hidden="true">✕</span>;
 
 /** Back leads to the crew. */
 export const handle: BackHandle = {
@@ -192,6 +193,8 @@ function MemberCard({
   const canKick =
     !member.you && (role === "owner" || (role === "admin" && member.role === "member"));
   const count = member.players.length;
+  // The owner keeps a place until they hand over or delete the crew.
+  const canRemove = member.you && !(member.role === "owner" && count === 1);
   return (
     <li className="crew-panel crew-member">
       <div className="crew-member-top">
@@ -211,7 +214,10 @@ function MemberCard({
       </div>
       <ul className="crew-accounts">
         {member.players.map((player) => (
-          <li key={player.tag}>
+          <li
+            key={player.tag}
+            className={canRemove || canKick ? "crew-removable" : undefined}
+          >
             <span className="crew-who">
               <Link to={canonicalPlayerPath(player.tag)} state={backState}>
                 {player.name ?? player.tag}
@@ -227,29 +233,43 @@ function MemberCard({
                 {player.trophies.toLocaleString("en-US")}
               </span>
             ) : null}
+            {canRemove ? (
+              <ConfirmForm
+                label={`Remove ${player.name ?? player.tag}`}
+                icon={REMOVE_ICON}
+                question={`${player.tag} leaves the crew${
+                  count === 1 ? ". It's your last account here, so you leave too." : "."
+                }`}
+                confirm={count === 1 ? "Remove and leave" : "Remove"}
+                intent="remove"
+                idempotencyKey={idempotencyKey}
+                fields={{ tag: player.tag, own: "1" }}
+              />
+            ) : canKick ? (
+              <ConfirmForm
+                label={`Kick ${player.name ?? player.tag}`}
+                icon={REMOVE_ICON}
+                question={`${player.tag} leaves the crew. ${
+                  count === 1
+                    ? `It's ${member.displayName}'s only account here, so they leave too.`
+                    : `${member.displayName}'s other accounts stay.`
+                }`}
+                confirm="Kick"
+                intent="remove"
+                idempotencyKey={idempotencyKey}
+                fields={{ tag: player.tag }}
+              />
+            ) : null}
           </li>
         ))}
       </ul>
-      {member.you ? (
+      {/* The owner can't leave, so with nothing to add their tray would be empty. */}
+      {member.you &&
+      (member.role !== "owner" ||
+        spareAccounts(crew, member.players, accounts).length > 0) ? (
         <details className="crew-edit">
           <summary className="button secondary">Edit</summary>
           <div className="crew-tray">
-            {/* The owner keeps a place until they hand over or delete the crew. */}
-            {(member.role === "owner" && count === 1 ? [] : member.players).map(
-              (player) => (
-                <ConfirmForm
-                  key={player.tag}
-                  label={`Remove ${player.name ?? player.tag}`}
-                  question={`${player.tag} leaves the crew${
-                    count === 1 ? ". It's your last account here, so you leave too." : "."
-                  }`}
-                  confirm={count === 1 ? "Remove and leave" : "Remove"}
-                  intent="remove"
-                  idempotencyKey={idempotencyKey}
-                  fields={{ tag: player.tag, own: "1" }}
-                />
-              ),
-            )}
             <AddAccounts
               crew={crew}
               mine={member.players}
@@ -267,39 +287,22 @@ function MemberCard({
             )}
           </div>
         </details>
-      ) : canKick ? (
+      ) : canKick && role === "owner" ? (
         <details className="crew-edit">
           <summary className="button secondary">Edit</summary>
           <div className="crew-tray">
-            {role === "owner" ? (
-              <Form method="post">
-                <input
-                  type="hidden"
-                  name="intent"
-                  value={member.role === "admin" ? "demote" : "promote"}
-                />
-                <input type="hidden" name="username" value={member.username} />
-                <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-                <button type="submit" className="button secondary">
-                  {member.role === "admin" ? "Remove admin" : "Make admin"}
-                </button>
-              </Form>
-            ) : null}
-            {member.players.map((player) => (
-              <ConfirmForm
-                key={player.tag}
-                label={`Kick ${player.name ?? player.tag}`}
-                question={`${player.tag} leaves the crew. ${
-                  count === 1
-                    ? `It's ${member.displayName}'s only account here, so they leave too.`
-                    : `${member.displayName}'s other accounts stay.`
-                }`}
-                confirm="Kick"
-                intent="remove"
-                idempotencyKey={idempotencyKey}
-                fields={{ tag: player.tag }}
+            <Form method="post">
+              <input
+                type="hidden"
+                name="intent"
+                value={member.role === "admin" ? "demote" : "promote"}
               />
-            ))}
+              <input type="hidden" name="username" value={member.username} />
+              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+              <button type="submit" className="button secondary">
+                {member.role === "admin" ? "Remove admin" : "Make admin"}
+              </button>
+            </Form>
           </div>
         </details>
       ) : null}
@@ -319,6 +322,14 @@ function PlayerStatus({ player }: { player: CrewPlayer }) {
   );
 }
 
+/** Your linked Legend accounts that can still join, or none when the crew is full. */
+function spareAccounts(crew: Crew, mine: CrewPlayer[], accounts: LinkedAccount[]) {
+  if (crew.used >= crew.size) return [];
+  return accounts.filter(
+    (account) => canJoin(account) && !mine.some((player) => player.tag === account.tag),
+  );
+}
+
 /** Your linked Legend accounts that aren't in the crew yet, to add. */
 function AddAccounts({
   crew,
@@ -331,11 +342,9 @@ function AddAccounts({
   accounts: LinkedAccount[];
   idempotencyKey: string;
 }) {
-  const spare = accounts.filter(
-    (account) => canJoin(account) && !mine.some((player) => player.tag === account.tag),
-  );
+  const spare = spareAccounts(crew, mine, accounts);
   const open = Math.max(0, crew.size - crew.used);
-  if (spare.length === 0 || open === 0) return null;
+  if (spare.length === 0) return null;
   return (
     <details className="crew-confirm">
       <summary className="button secondary">Add my accounts</summary>

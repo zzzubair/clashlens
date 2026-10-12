@@ -681,6 +681,64 @@
   font-weight: 800;
 }
 
+/* A row with its own remove button keeps room for it at the end; the
+   question under it opens on its own line below the row. */
+.crew-accounts li.crew-removable {
+  position: relative;
+  flex-wrap: wrap;
+  padding-right: 3.35rem;
+}
+
+.crew-removable .crew-who {
+  flex: 1 1 0;
+}
+
+/* The button takes room on a phone, so a status chip wraps rather than hides. */
+.crew-removable .crew-who > span {
+  white-space: normal;
+}
+
+.crew-accounts .crew-row-confirm {
+  margin-top: 0;
+}
+
+/* Closed, it holds only the button, so it takes no gap in the row. */
+.crew-row-confirm:not([open]) {
+  margin-left: -0.6rem;
+}
+
+.crew-row-confirm[open] {
+  flex-basis: 100%;
+}
+
+.crew-row-x {
+  position: absolute;
+  top: 0.4rem;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--cl-muted);
+  font-size: 1rem;
+  font-weight: 900;
+  list-style: none;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.crew-row-x::-webkit-details-marker {
+  display: none;
+}
+
+.crew-row-x:hover,
+.crew-row-confirm[open] > .crew-row-x {
+  color: var(--cl-negative);
+  background: var(--cl-surface);
+  border-color: var(--cl-card-line);
+}
+
 .crew-edit,
 .crew-confirm {
   margin-top: 0.7rem;
