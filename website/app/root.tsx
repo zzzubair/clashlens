@@ -83,6 +83,14 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   }
 }
 
+/** Restart a signed-in browser's 30 days on each visit; see login-renewal.server. */
+export const middleware: Route.MiddlewareFunction[] = [
+  async ({ request }, next) => {
+    const { renewLoginCookie } = await import("./server/login-renewal.server");
+    return renewLoginCookie(request, next);
+  },
+];
+
 export const clientMiddleware: Route.ClientMiddlewareFunction[] = [
   keepPageOnLostConnection,
 ];

@@ -843,7 +843,7 @@ describe("auth.google.callback loader", () => {
     expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
   });
 
-  it("clears the transaction, sets a 24-hour login cookie, and redirects to the safe path for an existing account", async () => {
+  it("clears the transaction, sets a 30-day login cookie, and redirects to the safe path for an existing account", async () => {
     let validatedAtMs = 0;
     service.validateCallback.mockImplementationOnce(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));

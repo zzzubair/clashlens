@@ -39,7 +39,8 @@ function oauthTransaction(now = 1_750_000) {
 }
 
 describe("login cookie values", () => {
-  it("signs a canonical provider+subject payload with a fixed 24-hour lifetime", () => {
+  it("signs a canonical provider+subject payload with a 30-day lifetime", () => {
+    expect(LOGIN_COOKIE_LIFETIME_SECONDS).toBe(30 * 86_400);
     const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const [payloadPart, signaturePart] = value.split(".");
     const payload = Buffer.from(payloadPart, "base64url").toString("utf8");
@@ -91,14 +92,71 @@ describe("login cookie values", () => {
     expect(parseLoginCookieValue(value, OTHER_KEY, 1_750_100)).toBeNull();
   });
 
-  it("rejects expired cookies at the exact expiry second", () => {
+  it("rejects expired cookies at the exact expiry second, 30 days after issue", () => {
     const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
-    expect(
-      parseLoginCookieValue(value, KEY, 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS - 1),
-    ).toEqual(SESSION);
-    expect(
-      parseLoginCookieValue(value, KEY, 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS),
-    ).toBeNull();
+    expect(parseLoginCookieValue(value, KEY, 1_750_000 + 30 * 86_400 - 1)).toEqual(
+      SESSION,
+    );
+    expect(parseLoginCookieValue(value, KEY, 1_750_000 + 30 * 86_400)).toBeNull();
+  });
+
+  it("keeps accepting a 24-hour cookie issued before the 30-day lifetime until it expires", () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        p: "google",
+        s: IDENTITY.providerSubject,
+        i: 1_750_000,
+        m: 0,
+        e: 1_750_000 + 86_400,
+        n: "A".repeat(22),
+      }),
+    );
+    const value = `${payload.toString("base64url")}.${createHmac("sha256", KEY)
+      .update(payload)
+      .digest("base64url")}`;
+    expect(parseLoginCookieValue(value, KEY, 1_750_000 + 86_399)).toEqual(SESSION);
+    expect(parseLoginCookieValue(value, KEY, 1_750_000 + 86_400)).toBeNull();
+  });
+
+  it("renews a cookie into a fresh 30-day cookie of the same login", () => {
+    const longest = { provider: "discord", providerSubject: "9".repeat(128) } as const;
+    const first = createLoginCookieValue(longest, KEY, 1_750_000_000);
+    const login = createLoginSessionBinding(first);
+    const renewed = createLoginCookieValue(longest, KEY, 1_760_000_123, login);
+    const again = createLoginCookieValue(
+      longest,
+      KEY,
+      1_770_000_000,
+      createLoginSessionBinding(renewed),
+    );
+    expect(parseLoginCookieValue(renewed, KEY, 1_760_000)).toEqual({
+      ...longest,
+      issuedAtMs: 1_760_000_123,
+    });
+    expect(parseLoginCookieValue(again, KEY, 1_770_000 + 30 * 86_400 - 1)).not.toBeNull();
+    expect(parseLoginCookieValue(again, KEY, 1_770_000 + 30 * 86_400)).toBeNull();
+    // Logout records one fingerprint, which ends every renewal of the login.
+    expect(createLoginSessionBinding(renewed)).toBe(login);
+    expect(createLoginSessionBinding(again)).toBe(login);
+    expect(() => createLoginCookieValue(longest, KEY, 1_760_000_000, "short")).toThrow();
+  });
+
+  it("rejects a validly signed cookie with a malformed login fingerprint", () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        p: "google",
+        s: IDENTITY.providerSubject,
+        i: 1_750_000,
+        e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
+        l: "not a fingerprint",
+      }),
+    );
+    const value = `${payload.toString("base64url")}.${createHmac("sha256", KEY)
+      .update(payload)
+      .digest("base64url")}`;
+    expect(parseLoginCookieValue(value, KEY, 1_750_100)).toBeNull();
   });
 
   it("rejects values with a non-canonical lifetime or future issuance", () => {

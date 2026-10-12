@@ -44,11 +44,15 @@ The TypeScript backend owns browser sessions, provider login, and
 presentation-oriented calls to the private Python API. Logout records a SHA-256
 fingerprint of that login cookie through the private API, and the backend asks
 the API before trusting any login cookie, so a copied cookie stops working once
-its login logs out. The API keeps each fingerprint for 25 hours, one hour past
-the cookie's own lifetime. Removing a sign-in connection records when it was
-removed, also for 25 hours, and the check then refuses every login cookie
-issued through that connection at or before that millisecond, on every
-browser. A login cookie records when it was issued to the millisecond, taken
+its login logs out. A login cookie lasts 30 days, and a signed-in visit at
+least an hour after the cookie was issued replaces it with a fresh 30-day
+cookie for the same login, once the API confirms that login is still valid.
+The fresh cookie carries the fingerprint of the cookie that started the login,
+so logging out ends every copy of that login. The API keeps each fingerprint
+for 31 days, one day past the cookie's own lifetime. Removing a sign-in
+connection records when it was removed, also for 31 days, and the check then
+refuses every login cookie issued through that connection at or before that
+millisecond, on every browser. A login cookie records when it was issued to the millisecond, taken
 after the provider confirms the sign-in, so a fresh login is accepted even in
 the same second as the removal; cookies from before that field count from the
 start of their second. The backend sends the cookie's issue time with each

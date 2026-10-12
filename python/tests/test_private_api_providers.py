@@ -343,15 +343,20 @@ def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: s
                 assert _session_call(client, "revoke", other, provider="").status_code == 403
                 assert _session_call(client, "check", "short").status_code == 422
 
-                # A login cookie lasts 24 hours, so a logout over 25 hours old is
-                # deleted the next time someone logs out.
-                with database.pool.connection() as connection:
-                    connection.execute(
-                        "UPDATE login_session_revocations"
-                        " SET revoked_at = now() - interval '26 hours'"
-                    )
-                assert _session_call(client, "revoke", other).status_code == 200
-                assert _session_call(client, "check", ended).json() == {"revoked": False}
+                # A login cookie lasts 30 days, so a logout keeps ending its
+                # login for 31 days and is deleted the next time someone logs
+                # out after that.
+                for age, revoked in (("30 days", True), ("32 days", False)):
+                    with database.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE login_session_revocations SET revoked_at ="
+                            " now() - %s::interval WHERE session_hash = %s",
+                            (age, ended),
+                        )
+                    assert _session_call(client, "revoke", other).status_code == 200
+                    assert _session_call(client, "check", ended).json() == {
+                        "revoked": revoked
+                    }
                 assert _session_call(client, "check", other).json() == {"revoked": True}
         finally:
             database.close()
@@ -496,7 +501,7 @@ def test_removing_a_connection_ends_its_logins_on_every_browser(
             database.close()
 
 
-def test_removals_over_25_hours_old_are_deleted_and_end_nothing(database_url: str) -> None:
+def test_removals_over_31_days_old_are_deleted_and_end_nothing(database_url: str) -> None:
     with migrated_production_database(database_url) as connection_info:
         migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
@@ -509,21 +514,34 @@ def test_removals_over_25_hours_old_are_deleted_and_end_nothing(database_url: st
                 assert link.status_code == 200
                 unlink = _change_provider(client, "DELETE", "discord", signed_in_with="google")
                 assert unlink.status_code == 200
-                with database.pool.connection() as connection:
-                    connection.execute(
-                        "UPDATE provider_identity_removals"
-                        " SET removed_at = now() - interval '26 hours'"
-                    )
-                old_login = {
-                    "provider": "discord",
-                    "issued_at_ms": int(time.time() * 1000) - 27 * 3_600_000,
-                }
+                now_ms = int(time.time() * 1000)
+
+                def age_discord_removal(days: int) -> dict[str, object]:
+                    with database.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE provider_identity_removals"
+                            " SET removed_at = now() - make_interval(days => %s)"
+                            " WHERE provider = 'discord'",
+                            (days,),
+                        )
+                    return {"provider": "discord", "issued_at_ms": now_ms - (days + 1) * 86_400_000}
+
+                # A login cookie lasts 30 days, so a 30-day-old removal survives
+                # the next removal and still ends logins from before it.
+                old_login = age_discord_removal(30)
+                link = _change_provider(client, "POST", "discord", signed_in_with="google")
+                assert link.status_code == 200
+                unlink = _change_provider(client, "DELETE", "google", signed_in_with="discord")
+                assert unlink.status_code == 200
+                assert _removed_at(database, "discord") is not None
                 assert _session_call(client, "check", "d" * 43, **old_login).json() == {
                     "revoked": True
                 }
 
-                # The next removal deletes the aged row, which then ends nothing.
-                link = _change_provider(client, "POST", "discord", signed_in_with="google")
+                # Once over 31 days old, the next removal deletes it, and it then
+                # ends nothing.
+                old_login = age_discord_removal(32)
+                link = _change_provider(client, "POST", "google", signed_in_with="discord")
                 assert link.status_code == 200
                 unlink = _change_provider(client, "DELETE", "google", signed_in_with="discord")
                 assert unlink.status_code == 200

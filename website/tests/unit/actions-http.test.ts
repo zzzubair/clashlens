@@ -21,6 +21,7 @@ import {
   validateAccountNames,
 } from "../../app/server/actions.server";
 import {
+  LOGIN_COOKIE_LIFETIME_SECONDS,
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
 } from "../../app/server/auth-cookies.server";
@@ -144,7 +145,7 @@ describe("readLoginIdentity", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      (NOW_SECONDS - 86_401) * 1000,
+      (NOW_SECONDS - LOGIN_COOKIE_LIFETIME_SECONDS - 1) * 1000,
     );
     expect(
       await readLoginIdentity(
