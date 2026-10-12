@@ -15,7 +15,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | | Next Reset rank range | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. Range only: a lab test was right 99.99% of the time and took about 0.1 s for 13,300 players. Trophies move ±40 per unused attack or defense. A narrow single-number estimate was right at most 51% of the time, so it is not shown. |
 | | Automatic defense loss preview | Exists | `/v1/players/{tag}/today` returns it and the current dashboard shows it. The same formula the worker uses at Reset ([domain.md](domain.md)). Shows nothing if either day's defenses are unknown. |
 | Legend clock | Today's battles with times | Exists | |
-| Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | New read | Combines up to 8 opponents' daily logs. |
+| Bases you attacked | Each opponent's trophies at Reset and their defenses today (held or tripled, trophies lost, which one was yours) | Mostly exists | `/v1/players/{tag}/today` already returns up to 8 opponents with their trophies at Reset and each defense today (stars, and which one was yours), and the current dashboard shows them. Missing: trophies lost on each defense, which Trophies mode needs (a new API field). |
 | | Legends average | None | Fixed at 52% held and −32 a defense (see below). |
 | | Add to group | Exists | Groups hold up to 20 players. |
 | Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The shield row needs nothing new. |

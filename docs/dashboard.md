@@ -1,6 +1,6 @@
 # Player dashboard design
 
-Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard; none of it is built yet. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
+Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. The one-page design isn't built yet; Legend day, Legend clock and Bases you attacked already show on the current tabbed dashboard. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
 
 The dashboard can be built behind the off switch, but nothing goes live until tracking passes the accuracy bar.
 
