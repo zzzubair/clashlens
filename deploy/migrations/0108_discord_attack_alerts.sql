@@ -1,18 +1,19 @@
 -- Clash Lens deployment migration 0108.
 -- Discord attack alerts: a Clasher turns them on per verified player on the
--- website, and the Discord bot then sends a DM for each defense of that
--- player saved after the switch went on.
+-- website, and the Discord bot then sends a short confirmation DM, and a DM
+-- for each defense of that player saved after the switch went on.
 --
 -- discord_attack_alerts holds one row per player whose alerts are on, so it
 -- is never larger than the verified player list. Turning alerts off deletes
 -- the row. Unverifying the player or moving it to another account deletes it
 -- in the same transaction, so moving it away and back does not restore it.
 --
--- discord_attack_alert_deliveries is the bot's log of every alert it tried,
--- one row per battle and account. The bot writes the row before it sends, so
--- no battle is ever sent twice, even after a crash. It is the only table the
--- bot writes; the bot deletes rows older than 7 days, so at most 7 days of
--- alerts are kept: about 8 rows a day per player with alerts on.
+-- discord_attack_alert_deliveries is the bot's log of every DM it tried: one
+-- row per battle and account, and one per confirmation of a switch going on.
+-- The bot writes the row before it sends, so nothing is ever sent twice, even
+-- after a crash. It is the only table the bot writes; the bot deletes rows
+-- older than 7 days, so at most 7 days of alerts are kept: about 8 rows a day
+-- per player with alerts on.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS discord_attack_alerts (
@@ -23,11 +24,14 @@ CREATE TABLE IF NOT EXISTS discord_attack_alerts (
 );
 
 -- battle_id is a legend_battles row, without a reference so the log never
--- holds up the worker changing or removing battles.
+-- holds up the worker changing or removing battles. A confirmation has no
+-- battle; `confirms` is the enabled_at of the switch it confirms.
 CREATE TABLE IF NOT EXISTS discord_attack_alert_deliveries (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id bigint NOT NULL REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
-    battle_id bigint NOT NULL,
     player_id bigint NOT NULL,
+    battle_id bigint,
+    confirms timestamptz,
     -- sending: claimed, the DM may or may not have gone out; never retried.
     -- refused: Discord would not deliver it, for `reason`; failed: Discord
     -- could not be reached in time.
@@ -35,7 +39,9 @@ CREATE TABLE IF NOT EXISTS discord_attack_alert_deliveries (
     reason text CHECK (reason IN ('no_shared_server', 'dms_closed', 'unknown_user', 'other')),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     finished_at timestamptz,
-    PRIMARY KEY (account_id, battle_id)
+    CHECK ((battle_id IS NULL) <> (confirms IS NULL)),
+    UNIQUE (account_id, battle_id),
+    UNIQUE (account_id, player_id, confirms)
 );
 
 REVOKE ALL PRIVILEGES ON TABLE discord_attack_alerts, discord_attack_alert_deliveries

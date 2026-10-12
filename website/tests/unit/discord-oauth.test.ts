@@ -51,7 +51,7 @@ describe("Discord OAuth service", () => {
     return { code: "one-time-code", state: transaction().state };
   }
 
-  it("builds the exact authorization URL with identify-only scope and PKCE S256", async () => {
+  it("builds the exact authorization URL that also installs the bot, with PKCE S256", async () => {
     const service = await createDiscordOAuthService(config());
     const url = service.authorizationUrl(transaction());
     expect(url.origin).toBe("https://discord.example");
@@ -61,7 +61,8 @@ describe("Discord OAuth service", () => {
       "https://clashlens.example/auth/discord/callback",
     );
     expect(url.searchParams.get("response_type")).toBe("code");
-    expect(url.searchParams.get("scope")).toBe("identify");
+    expect(url.searchParams.get("scope")).toBe("identify applications.commands");
+    expect(url.searchParams.get("integration_type")).toBe("1");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("state")).toBe(transaction().state);
   });

@@ -26,7 +26,7 @@ WAITING_FOR_RESET = "Waiting for Season reset"
 # One line per command for /help, also used as each command's description.
 COMMANDS = (
     ("help", "What the bot does, its commands and your connection"),
-    ("link", "Connect Discord and choose your default player on the Clash Lens website"),
+    ("link", "Connect Discord and turn on attack alerts on the Clash Lens website"),
     ("stats", "This Season so far for any tracked player, or your default player"),
 )
 
@@ -149,8 +149,11 @@ def not_your_menu() -> Reply:
     return Reply("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher connects Discord and chooses the bot's default player.
+# Where a Clasher chooses the bot's default player.
 DISCORD_SETTINGS = "/account/providers"
+# Where a Clasher connects Discord and turns attack alerts on or off; /link
+# opens it, and a signed-out visitor signs in first and lands there.
+DISCORD_ALERTS = "/account/discord-alerts"
 
 
 def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
@@ -163,7 +166,7 @@ def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
         updated=now,
         private=True,
         links=(
-            Link("Connect Discord on Clash Lens", site.url(DISCORD_SETTINGS)),
+            Link("Connect Discord on Clash Lens", site.url(DISCORD_ALERTS)),
             Link(
                 "New here: create an account with Discord",
                 site.url("/auth/discord?returnPath=%2Faccount"),
@@ -208,13 +211,13 @@ def help_reply(site: Site, username: str | None, player_count: int, now: datetim
 
 
 def link_reply(site: Site, username: str, now: datetime) -> Reply:
-    """A connected account's pointer: players and the default player are
-    managed on the website, never in the bot."""
+    """A connected account's pointer: attack alerts are managed on the
+    website, never in the bot."""
     return Reply(
-        f"Connected as @{safe(username)}. Manage the connection and choose your "
-        "default player on Clash Lens.",
+        f"Connected as @{safe(username)}. Turn attack alerts on or off for your "
+        "players on Clash Lens.",
         updated=now,
-        links=(Link("Manage on Clash Lens", site.url(DISCORD_SETTINGS)),),
+        links=(Link("Discord alerts on Clash Lens", site.url(DISCORD_ALERTS)),),
     )
 
 
@@ -425,6 +428,18 @@ def attack_alert(site: Site, alert: Mapping[str, Any], attacker_hit_rate: str) -
         updated=alert["saved_at"],
         links=(
             Link("Open on Clash Lens", site.player(alert["defender_tag"])),
-            Link("Alert settings", site.url(DISCORD_SETTINGS)),
+            Link("Alert settings", site.url(DISCORD_ALERTS)),
         ),
+    )
+
+
+def alerts_on(site: Site, switch: Mapping[str, Any]) -> Reply:
+    """The DM sent once when attack alerts go on for a player, which also
+    proves the bot can reach the person."""
+    player = safe(switch["name"])
+    return Reply(
+        f"You'll get a message here as soon as {player} is attacked.",
+        title=f"Attack alerts are on for {player} {switch['tag']}",
+        updated=switch["enabled_at"],
+        links=(Link("Alert settings", site.url(DISCORD_ALERTS)),),
     )

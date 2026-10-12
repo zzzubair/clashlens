@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
   getAttackAlerts: vi.fn(),
   setAttackAlert: vi.fn(),
   requestJson: vi.fn(),
+  startProviderAuthorization: vi.fn(),
+}));
+
+vi.mock("../../app/server/provider-start.server", () => ({
+  startProviderAuthorization: mocks.startProviderAuthorization,
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -36,11 +41,16 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import { mapAttackAlerts, type AttackAlerts } from "../../app/lib/discord";
+import {
+  LOGIN_COOKIE_NAME,
+  createLoginCookieValue,
+  createLoginSessionBinding,
+} from "../../app/server/auth-cookies.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import ProvidersRoute, {
-  action as providersAction,
-  loader as providersLoader,
-} from "../../app/routes/account.providers";
+import AlertsRoute, {
+  action as alertsAction,
+  loader as alertsLoader,
+} from "../../app/routes/account.discord-alerts";
 import * as alertsService from "../../app/services/discord-alerts.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -59,7 +69,7 @@ const ALERTS: AttackAlerts = {
 };
 
 function post(fields: Record<string, string>): Request {
-  return new Request(`${ORIGIN}/account/providers`, {
+  return new Request(`${ORIGIN}/account/discord-alerts`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", Origin: ORIGIN },
     body: new URLSearchParams({ idempotencyKey: KEY, ...fields }).toString(),
@@ -67,9 +77,9 @@ function post(fields: Record<string, string>): Request {
 }
 
 async function renderPage(): Promise<string> {
-  const path = "/account/providers";
+  const path = "/account/discord-alerts";
   const handler = createStaticHandler([
-    { path, Component: ProvidersRoute, loader: providersLoader as never },
+    { path, Component: AlertsRoute, loader: alertsLoader as never },
   ]);
   const context = await handler.query(new Request(`${ORIGIN}${path}`));
   if (context instanceof Response) throw new Error("unexpected route response");
@@ -130,13 +140,37 @@ describe("Discord attack alerts settings", () => {
     );
     expect(html).toContain("was attacked");
     expect(html).not.toContain("wasn&#x27;t delivered");
+    expect(html).not.toContain("Reconnect Discord");
   });
 
-  it("asks to link Discord first when it isn't linked", async () => {
+  it("asks to connect Discord first when it isn't connected", async () => {
     providers = ["google"];
     const html = await renderPage();
-    expect(html).toContain("Link Discord above to get a Discord message");
+    expect(html).toContain("Connect Discord first");
+    expect(html).toContain('name="intent" value="connect-discord"');
     expect(html).not.toContain('role="switch"');
+  });
+
+  it("connects Discord through the existing flow and comes back here", async () => {
+    const config = mocks.getWebsiteConfig();
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
+    mocks.startProviderAuthorization.mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { Location: "https://discord.example" },
+      }),
+    );
+    const request = post({ intent: "connect-discord" });
+    request.headers.set("cookie", `${LOGIN_COOKIE_NAME}=${login}`);
+    const response = await alertsAction({ request } as never);
+    expect(response.headers.get("Location")).toBe("https://discord.example");
+    expect(mocks.startProviderAuthorization).toHaveBeenCalledWith(
+      config,
+      "discord",
+      "link",
+      "/account/discord-alerts",
+      createLoginSessionBinding(login),
+    );
   });
 
   it("says what to do about an alert Discord didn't deliver", async () => {
@@ -150,23 +184,23 @@ describe("Discord attack alerts settings", () => {
       },
     });
     const html = await renderPage();
-    expect(html).toContain("An attack alert for Wanderer #2PP");
-    expect(html).toContain("Join the Clash Lens Discord server");
+    expect(html).toContain("A Discord message about Wanderer #2PP");
+    expect(html).toContain("Reconnect Discord to add it");
+    expect(html).toContain('name="intent" value="connect-discord"');
   });
 
-  it("keeps the rest of the page when the alert settings can't be read", async () => {
+  it("says so when the alert settings can't be read", async () => {
     mocks.requestJson.mockRejectedValue(new Error("down"));
     const html = await renderPage();
     expect(html).toContain("Attack alerts could not be loaded.");
-    expect(html).toContain("Unlink");
   });
 
   it.each([
-    { failure: false, outcome: "saved" },
+    { failure: false, outcome: "on" },
     { failure: true, outcome: "failed" },
   ])("saves a switch and says it was $outcome", async ({ failure, outcome }) => {
     if (failure) mocks.requestJson.mockRejectedValue(new Error("refused"));
-    const response = await providersAction({
+    const response = await alertsAction({
       request: post({ intent: "attack-alert", tag: "#8QQ", on: "on" }),
     } as never);
     expect(mocks.requestJson).toHaveBeenCalledWith(
@@ -177,11 +211,13 @@ describe("Discord attack alerts settings", () => {
       KEY,
       IDENTITY,
     );
-    expect(response.headers.get("Location")).toBe(`/account/providers?alerts=${outcome}`);
+    expect(response.headers.get("Location")).toBe(
+      `/account/discord-alerts?alerts=${outcome}`,
+    );
   });
 
   it("refuses a switch that is neither on nor off", async () => {
-    const response = await providersAction({
+    const response = await alertsAction({
       request: post({ intent: "attack-alert", tag: "#8QQ", on: "yes" }),
     } as never);
     expect(response.status).toBe(400);

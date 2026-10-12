@@ -275,7 +275,7 @@ def test_unconnected_person_gets_only_a_private_connect_pointer(store) -> None:
     assert message["private"] is True
     assert "(@drifter)" in message["text"]
     assert set(links(message).values()) == {
-        "https://clashlens.test/account/providers",
+        "https://clashlens.test/account/discord-alerts",
         "https://clashlens.test/auth/discord?returnPath=%2Faccount",
     }
     assert store.reads == ["account"]
@@ -296,7 +296,7 @@ def test_help_and_link_work_without_a_connection(store) -> None:
     assert link_message["private"] is True
     # Connecting happens on the website: the bot only points there.
     assert links(link_message)["Connect Discord on Clash Lens"] == (
-        "https://clashlens.test/account/providers"
+        "https://clashlens.test/account/discord-alerts"
     )
 
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
@@ -309,7 +309,9 @@ def test_help_and_link_work_without_a_connection(store) -> None:
     assert linked["text"].startswith("Connected as @drift.")
     assert "#2PP" not in linked["text"] and "#8QQ" not in linked["text"]
     assert linked["private"] is False
-    assert links(linked) == {"Manage on Clash Lens": "https://clashlens.test/account/providers"}
+    assert links(linked) == {
+        "Discord alerts on Clash Lens": "https://clashlens.test/account/discord-alerts"
+    }
 
 
 def test_connected_account_without_players_is_pointed_to_the_website(store) -> None:

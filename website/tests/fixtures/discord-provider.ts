@@ -5,6 +5,7 @@
  * This server is test-only. It serves the OAuth2 Authorization Code + PKCE
  * endpoints and the `identify` user endpoint that the website's Discord
  * service uses: /oauth2/authorize, /api/oauth2/token, and /api/users/@me.
+ * Authorization must ask for the bot's user install along with `identify`.
  * Access tokens are opaque, single-user, in-memory values; the immutable
  * numeric subject is the only identity ever returned. Codes are one-time and
  * expire quickly. No secret or token is ever logged.
@@ -16,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 const BIND_HOST = envOr("CLASHLENS_FIXTURE_BIND_HOST", "127.0.0.1");
 const DEFAULT_PORT = 8012;
+const SCOPE = "identify applications.commands";
 const AUTH_CODE_TTL_SECONDS = 60;
 const MAX_CODE_ENTRIES = 5_000;
 const MAX_QUERY_BYTES = 8_192;
@@ -132,7 +134,7 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
     authorizationRedirect(response, callback, { error: "unsupported_response_type" });
     return;
   }
-  if (parameters.get("scope") !== "identify") {
+  if (parameters.get("scope") !== SCOPE || parameters.get("integration_type") !== "1") {
     authorizationRedirect(response, callback, { error: "invalid_scope" });
     return;
   }
@@ -211,7 +213,7 @@ async function handleToken(
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: 300,
-    scope: "identify",
+    scope: SCOPE,
   });
 }
 

@@ -1094,6 +1094,38 @@ describe("auth.google.callback loader", () => {
     expect(headers["Cache-Control"]).toBe("no-store");
   });
 
+  it("returns a connection started on the Discord alerts page to that page", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getAccount: vi.fn(async () => ({ providers: ["google"] })),
+      linkProvider: vi.fn(async () => undefined),
+    } as never);
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (now() - 10) * 1000,
+    );
+    const transaction = createOAuthTransaction(
+      "/account/discord-alerts",
+      now() - 10,
+      undefined,
+      "link",
+      "google",
+      createLoginSessionBinding(login),
+    );
+    const oauthValue = createOAuthTransactionCookieValue(transaction, config.loginSecret);
+    const linked = await callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+        {
+          headers: {
+            cookie: `${OAUTH_COOKIE_NAME}=${oauthValue}; ${LOGIN_COOKIE_NAME}=${login}`,
+          },
+        },
+      ),
+    } as never);
+    expect((linked as Response).headers.get("Location")).toBe("/account/discord-alerts");
+  });
+
   it("exports a no-store headers policy", async () => {
     const { headers } = await import("../../app/routes/auth.google.callback");
     expect(headers()).toEqual({ "Cache-Control": "no-store" });

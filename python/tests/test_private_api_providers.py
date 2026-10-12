@@ -4,10 +4,9 @@ import json
 import time
 from datetime import UTC, datetime
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from test_api_migration import ROOT, migrated_production_database
+from test_api_migration import migrated_production_database
 from test_private_api import signed_headers
 
 from clashlens.api import create_app
@@ -16,17 +15,6 @@ from clashlens.api_db import ApiDatabase
 TS_CURRENT = bytes.fromhex("21" * 32)
 NOW_SECONDS = 1_807_000_000
 NOW = datetime.fromtimestamp(NOW_SECONDS, tz=UTC)
-
-
-def migrate_login_tables(connection_info: str) -> None:
-    """Add the logout and removed-connection tables that login checks and
-    unlinking need."""
-    with psycopg.connect(connection_info, autocommit=True) as connection:
-        for name in (
-            "0054_login_session_revocations.sql",
-            "0070_provider_identity_removals.sql",
-        ):
-            connection.execute((ROOT / "deploy/migrations" / name).read_text())
 
 
 def _app(database: ApiDatabase) -> TestClient:
@@ -59,7 +47,9 @@ def _create_account(client: TestClient, *, provider: str, subject: str, username
 
 
 def test_discord_identity_creates_and_resolves_an_account(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -85,8 +75,9 @@ def test_discord_identity_creates_and_resolves_an_account(database_url: str) -> 
 
 
 def test_link_then_unlink_through_the_private_api_endpoints(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -138,7 +129,9 @@ def test_reused_request_id_with_another_subject_conflicts(
 ) -> None:
     """The fresh provider subject joins the idempotency binding, so a reused
     request ID carrying another subject conflicts instead of replaying."""
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -186,7 +179,9 @@ def test_reused_request_id_with_another_subject_conflicts(
 def test_collision_final_provider_and_unknown_provider_fail_safely(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -324,8 +319,9 @@ def _removed_at(database: ApiDatabase, provider: str) -> int | None:
 
 
 def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -365,8 +361,9 @@ def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: s
 def test_unlinking_the_login_provider_ends_that_login_in_the_same_transaction(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -432,8 +429,9 @@ def test_removing_a_connection_ends_its_logins_on_every_browser(
 ) -> None:
     other = "discord" if removed == "google" else "google"
     remover = removed if signed_in_with == "removed" else other
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -502,8 +500,9 @@ def test_removing_a_connection_ends_its_logins_on_every_browser(
 
 
 def test_removals_over_31_days_old_are_deleted_and_end_nothing(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -559,8 +558,9 @@ def test_a_login_in_the_same_second_as_a_removal_is_judged_by_millisecond(
     database_url: str, removed: str
 ) -> None:
     other = "discord" if removed == "google" else "google"
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:

@@ -230,7 +230,11 @@ export async function completeProviderCallback(
     }
     return {
       kind: "redirect",
-      location: "/account/providers",
+      // Connecting from the Discord alerts page goes back there.
+      location:
+        transaction.returnPath === "/account/discord-alerts"
+          ? transaction.returnPath
+          : "/account/providers",
       setCookies: [clearTransactionCookie],
     };
   }

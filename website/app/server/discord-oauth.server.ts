@@ -1,7 +1,9 @@
 /**
  * Server-only Discord OAuth2 service (Authorization Code + PKCE S256).
  *
- * Discord login uses the `identify` scope only. The access token is used once
+ * Discord login asks for `identify` plus `applications.commands` as a user
+ * install, so the same consent adds the Clash Lens bot to the user's own
+ * Discord, which lets its alert DMs through. The access token is used once
  * in memory to read `/users/@me` and is then dropped: it is never persisted,
  * logged, or placed in a cookie. Only the immutable numeric Discord user ID
  * survives validation. Errors are safe, typed OAuthCallbackError values that
@@ -91,7 +93,8 @@ export async function createDiscordOAuthService(
       url.searchParams.set("client_id", clientId);
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("response_type", "code");
-      url.searchParams.set("scope", "identify");
+      url.searchParams.set("scope", "identify applications.commands");
+      url.searchParams.set("integration_type", "1");
       url.searchParams.set("state", transaction.state);
       url.searchParams.set("code_challenge", transaction.codeChallenge);
       url.searchParams.set("code_challenge_method", "S256");

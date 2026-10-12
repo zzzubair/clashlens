@@ -27,7 +27,7 @@ from bot.alerts import AlertLoop, AlertStore, Refused
 from bot.commands import Commands
 from bot.replies import Reply, Site
 from bot.store import Store
-from clashlens import api_discord_alerts
+from clashlens import api_accounts, api_discord_alerts
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 SITE = Site("https://clashlens.test")
@@ -72,8 +72,9 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """DEFENDER's alerts go on after Clash Lens saved their Day 1 defense, so
-    only the Day 3 defense saved later sends a DM, once however often the loop
-    looks. The attacker's hit rate is the one /stats shows for them."""
+    the bot confirms that, then only the Day 3 defense saved later sends a DM,
+    once however often the loop looks. The attacker's hit rate is the one
+    /stats shows for them."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
     # The fixture names each log row's opponent by its place in the log, so
     # DEFENDER's second defense is by the player tagged _tag(2).
@@ -133,10 +134,11 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             api.close()
             owner.close()
 
-    assert (before, sent) == (0, [1, 0, 0])
+    assert (before, sent) == (1, [1, 0, 0])
     stars, destruction = RESULTS[30]
-    assert len(discord.sent) == 1
-    user, reply = discord.sent[0]
+    assert len(discord.sent) == 2
+    assert discord.sent[0][1].title == f"Attack alerts are on for {NAME} {DEFENDER}"
+    user, reply = discord.sent[1]
     assert user == DISCORD_ID
     assert reply.title == f"{NAME} {DEFENDER} was attacked"
     assert reply.body.splitlines() == [
@@ -221,6 +223,60 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_record_refusals(
         ("#2PP", True), ("#8QQ", False)]
     assert cleared["undelivered"] is None
     assert discord.sent[0][1].body.splitlines()[0].endswith(": 1★ · 33% · −16 trophies")
+
+
+def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
+    database_url: str,
+) -> None:
+    """Turning alerts on sends one confirmation. Discord refusing it shows on
+    the website, and it is not retried; reconnecting Discord, which adds the
+    bot, clears that and confirms again."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true)")
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            _verify(owner, mine, "#2PP")
+            discord = FakeDiscord()
+            discord.refusing[DISCORD_ID] = "no_shared_server"
+            loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE)
+            assert _switch(api, mine, "#2PP", True) == 200
+            refused = [asyncio.run(loop.tick()) for _ in range(2)]
+            shown = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
+
+            del discord.refusing[DISCORD_ID]
+            assert _switch(api, mine, "#2PP", True) == 200
+            still_on = asyncio.run(loop.tick())
+            reconnected = api_accounts.link_provider(
+                api,
+                RequestBinding(
+                    request_id=str(uuid4()),
+                    caller="typescript-website",
+                    provider="discord",
+                    provider_subject=DISCORD_ID,
+                    account_id=mine,
+                    operation="account.update",
+                    method="POST",
+                    request_target="/v1/account/providers/discord/link",
+                    identity={"provider": "discord"},
+                ),
+                account_id=mine,
+                provider="discord",
+                provider_subject=DISCORD_ID,
+            ).status_code
+            cleared = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
+            confirmed = [asyncio.run(loop.tick()) for _ in range(2)]
+        finally:
+            api.close()
+            owner.close()
+
+    assert (refused, still_on, reconnected, confirmed) == ([0, 0], 0, 200, [1, 0])
+    assert shown is not None and (shown["tag"], shown["reason"]) == ("#2PP", "no_shared_server")
+    assert cleared is None
+    assert [reply.title for _, reply in discord.sent] == ["Attack alerts are on for Unnamed #2PP"]
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:

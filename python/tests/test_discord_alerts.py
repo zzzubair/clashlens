@@ -104,5 +104,5 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
     ]
     assert [item.url for item in client.sent[0]["view"].children] == [
         "https://clashlens.test/players/%232PP",
-        "https://clashlens.test/account/providers",
+        "https://clashlens.test/account/discord-alerts",
     ]

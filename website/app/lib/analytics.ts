@@ -97,6 +97,7 @@ const ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["account_setup", "/account/setup"],
   ["account_profile", "/account/profile"],
   ["account_providers", "/account/providers"],
+  ["account_discord_alerts", "/account/discord-alerts"],
   ["verify_player", "/account/verify-player"],
   ["groups", "/account/groups"],
   ["group_add", "/account/groups/add/:tag"],

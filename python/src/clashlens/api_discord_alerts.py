@@ -1,8 +1,8 @@
-"""Discord attack alert switches, saved from the website's Discord settings.
+"""Discord attack alert switches, saved from the website's Discord alerts page.
 
-One switch per verified player, off until turned on. The Discord bot sends the
-alerts and logs each one; the website reads that log only to show an alert
-Discord would not deliver.
+One switch per verified player, off until turned on. The Discord bot sends a
+confirmation and then the alerts, and logs each one; the website reads that
+log only to show a DM Discord would not deliver.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 
 
 def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
-    """Each verified player with its switch, and the newest alert that could
-    not be delivered when nothing has been delivered since."""
+    """Each verified player with its switch, and the newest DM that could not
+    be delivered when nothing has been delivered since and no switch has gone
+    on since, which sends a fresh confirmation."""
     with database.pool.connection() as connection:
         players = _verified_players(connection, account_id)
         on = {
@@ -40,10 +41,13 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
             FROM discord_attack_alert_deliveries AS delivery
             JOIN players AS player ON player.id = delivery.player_id
             WHERE delivery.account_id = %s AND delivery.state <> 'sending'
-            ORDER BY delivery.finished_at DESC, delivery.battle_id DESC
+              AND delivery.created_at >= (
+                  SELECT max(enabled_at) FROM discord_attack_alerts WHERE account_id = %s
+              )
+            ORDER BY delivery.finished_at DESC, delivery.id DESC
             LIMIT 1
             """,
-            (account_id,),
+            (account_id, account_id),
         ).fetchone()
     undelivered = None
     if newest is not None and newest[0] in ("refused", "failed"):
