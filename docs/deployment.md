@@ -482,6 +482,14 @@ their own. While it is off, every private API crew route
 page-not-found page, and the navigation bar has no Crews link. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.
 
+Visitor counting (PostHog, EU) stays off, with no script and no requests,
+until both `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_`
+and can only send events) and `CLASHLENS_POSTHOG_HOST`
+(`https://eu.i.posthog.com`) are set in `app.env`. `./ops` passes them to the
+website and the private API in production only, so turning counting on or off
+takes `./ops up`. Never put a personal API key (`phx_`) here. The `/privacy`
+page explains the counting and the return-visits switch in the site footer.
+
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
 

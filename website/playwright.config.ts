@@ -1,6 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { blogFixtureOrigin, websiteOrigin } from "./tests/fixtures/test-values";
+import {
+  analyticsFixtureHost,
+  analyticsFixtureOrigin,
+  analyticsFixtureToken,
+  blogFixtureOrigin,
+  websiteOrigin,
+} from "./tests/fixtures/test-values";
 
 const externalStack = process.env.CLASHLENS_E2E_EXTERNAL_STACK === "1";
 
@@ -21,6 +27,20 @@ const blogServer = {
   },
 };
 
+// The built website once more with visitor counting on; the tests answer for
+// PostHog in the browser, so nothing reaches the real service.
+const analyticsServer = {
+  ...blogServer,
+  url: `${analyticsFixtureOrigin}/privacy`,
+  env: {
+    ...blogServer.env,
+    PORT: new URL(analyticsFixtureOrigin).port,
+    CLASHLENS_PUBLIC_ORIGIN: analyticsFixtureOrigin,
+    CLASHLENS_POSTHOG_TOKEN: analyticsFixtureToken,
+    CLASHLENS_POSTHOG_HOST: analyticsFixtureHost,
+  },
+};
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
@@ -36,7 +56,7 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: externalStack
-    ? [blogServer]
+    ? [blogServer, analyticsServer]
     : [
         {
           command: "../dev e2e-server",
@@ -49,5 +69,6 @@ export default defineConfig({
           gracefulShutdown: { signal: "SIGTERM", timeout: 60_000 },
         },
         blogServer,
+        analyticsServer,
       ],
 });

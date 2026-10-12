@@ -1,0 +1,161 @@
+import { gunzipSync } from "node:zlib";
+
+import { expect, test, type Page } from "@playwright/test";
+
+import {
+  analyticsFixtureHost,
+  analyticsFixtureOrigin,
+  analyticsFixtureToken,
+  blogFixtureOrigin,
+} from "../fixtures/test-values";
+
+// PostHog drops events from browsers that call themselves headless.
+test.use({
+  userAgent:
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+});
+
+interface SentEvent {
+  event: string;
+  properties: Record<string, unknown>;
+}
+
+function decode(body: Buffer): SentEvent[] {
+  let text = body.toString("utf8");
+  if (body[0] === 0x1f && body[1] === 0x8b) text = gunzipSync(body).toString("utf8");
+  else if (text.startsWith("data=")) {
+    text = Buffer.from(decodeURIComponent(text.slice(5)), "base64").toString("utf8");
+  }
+  const parsed = JSON.parse(text) as SentEvent | SentEvent[] | { batch: SentEvent[] };
+  return Array.isArray(parsed) ? parsed : "batch" in parsed ? parsed.batch : [parsed];
+}
+
+/** Answers for PostHog in the browser and keeps every raw body it was sent. */
+async function fakePostHog(page: Page) {
+  const bodies: string[] = [];
+  const events: SentEvent[] = [];
+  // PostHog also drops events from browsers driven by test tools.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false });
+    Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => undefined });
+  });
+  await page.route(`${analyticsFixtureHost}/**`, async (route) => {
+    const body = route.request().postDataBuffer();
+    if (body) {
+      const sent = decode(body);
+      events.push(...sent);
+      bodies.push(JSON.stringify(sent));
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  return { bodies, events };
+}
+
+async function storedKeys(page: Page) {
+  return page.evaluate(() => Object.keys(localStorage).sort());
+}
+
+test("with no project token no analytics code loads and nothing is sent", async ({
+  page,
+  context,
+}) => {
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+  await page.goto(`${blogFixtureOrigin}/privacy`);
+  await expect(page.getByText("Visitor counting is not switched on")).toBeVisible();
+  await expect(page.getByRole("switch")).toHaveCount(0);
+  await page.getByRole("contentinfo").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+
+  expect(requests.filter((url) => !url.startsWith(`${blogFixtureOrigin}/`))).toEqual([]);
+  expect(requests.filter((url) => /posthog|module\.slim/i.test(url))).toEqual([]);
+  expect(await storedKeys(page)).toEqual([]);
+  expect(await context.cookies()).toEqual([]);
+});
+
+test("counts pages without player tags and keeps the browser ID until switched off", async ({
+  page,
+  context,
+}) => {
+  const posthog = await fakePostHog(page);
+  const outside: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (
+      !url.startsWith(`${analyticsFixtureOrigin}/`) &&
+      !url.startsWith(analyticsFixtureHost)
+    ) {
+      outside.push(url);
+    }
+  });
+  const sent = (name: string) => posthog.events.filter(({ event }) => event === name);
+
+  await page.goto(`${analyticsFixtureOrigin}/players/%232PP?season=2026-09`);
+  await expect.poll(() => sent("$pageview").length).toBe(1);
+  const [player] = sent("$pageview");
+  expect(player.properties).toMatchObject({
+    route: "player",
+    signed_in: false,
+    $current_url: `${analyticsFixtureOrigin}/players/:tag`,
+    $pathname: "/players/:tag",
+    $geoip_disable: true,
+  });
+  expect(player.properties.$cookieless_mode).toBeUndefined();
+  const browserId = player.properties.distinct_id;
+  expect(browserId).toEqual(expect.any(String));
+  expect(browserId).not.toBe("$posthog_cookieless");
+  expect(await storedKeys(page)).toEqual(
+    [
+      "clashlens-return-visits",
+      `ph_${analyticsFixtureToken}_posthog`,
+      `__ph_opt_in_out_${analyticsFixtureToken}`,
+    ].sort(),
+  );
+  expect(await context.cookies()).toEqual([]);
+
+  await page.goto(`${analyticsFixtureOrigin}/`);
+  const search = page.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
+  });
+  await search.fill("Secret Name");
+  await search.press("Enter");
+  await expect
+    .poll(() => sent("search_submitted").map(({ properties }) => properties))
+    .toEqual([expect.objectContaining({ source: "home", input: "name" })]);
+  await expect.poll(() => sent("$pageview").length).toBe(2);
+  expect(sent("$pageview")[1].properties.distinct_id).toBe(browserId);
+
+  // The footer switch is on every page.
+  const toggle = page.getByRole("contentinfo").getByRole("switch", {
+    name: "Count return visits",
+  });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect
+    .poll(() => storedKeys(page))
+    .not.toContain(`ph_${analyticsFixtureToken}_posthog`);
+  expect(await page.evaluate(() => localStorage.getItem("clashlens-return-visits"))).toBe(
+    "off",
+  );
+
+  // Remembered on the next visit, which is counted without an ID.
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect(
+    page.getByRole("main").getByRole("switch", { name: "Count return visits" }),
+  ).toHaveAttribute("aria-checked", "false");
+  await expect.poll(() => sent("$pageview").length).toBe(3);
+  expect(sent("$pageview")[2].properties).toMatchObject({
+    route: "privacy",
+    distinct_id: "$posthog_cookieless",
+    $cookieless_mode: true,
+  });
+  expect(await storedKeys(page)).not.toContain(`ph_${analyticsFixtureToken}_posthog`);
+  expect(await context.cookies()).toEqual([]);
+
+  for (const body of posthog.bodies) {
+    expect(body).not.toMatch(/2PP|2026-09|Secret Name|season=/i);
+  }
+  expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
+  expect(outside).toEqual([]);
+});

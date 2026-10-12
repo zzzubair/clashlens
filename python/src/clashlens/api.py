@@ -46,6 +46,7 @@ from .domain import ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
 from .profile import normalize_player_tag
+from .usage_events import UsageEvents
 from .verification import (
     OfficialVerificationResponse,
     VerificationOutcome,
@@ -180,6 +181,7 @@ def create_app(
     api_metrics: ApiMetrics | None = None,
     clashking_client: ClashKingClient | None = None,
     dashboard_enabled: bool = False,
+    usage_events: UsageEvents | None = None,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -200,6 +202,7 @@ def create_app(
             raise ValueError("a caller may have only current and previous HMAC keys")
 
     production_database = database
+    events = usage_events or UsageEvents.from_environment()
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
     operating_metrics = api_metrics or ApiMetrics()
     clashking = clashking_client or ClashKingClient()
@@ -213,6 +216,7 @@ def create_app(
     async def lifespan(_app: FastAPI):
         yield
         database.close()
+        events.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -722,6 +726,8 @@ def create_app(
             normalized_username=username,
             display_name=display_name,
         )
+        if result.status_code == 201 and not result.replayed:
+            events.capture("account_created", {"provider": binding.provider})
         return _operation_response(result)
 
     @app.get("/v1/account")
@@ -821,6 +827,8 @@ def create_app(
             normalized_name=normalized_name,
             normalized_tags=tags,
         )
+        if result.status_code == 201 and not result.replayed:
+            events.capture("group_created")
         return _operation_response(result)
 
     @app.patch("/v1/account/groups/{group_id}")

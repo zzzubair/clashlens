@@ -1120,3 +1120,29 @@ def test_blog_folder_is_mounted_read_only_only_when_configured(
         if blog_dir is None
         else ["CLASHLENS_BLOG_DIR=/blog", "CLASHLENS_BLOG_OWNER=google:owner-1"]
     )
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_visitor_counting_settings_reach_website_and_api_only_when_set(
+    tmp_path, mode_config, configured
+):
+    settings = [
+        "CLASHLENS_POSTHOG_TOKEN=phc_projecttokenprojecttoken",
+        "CLASHLENS_POSTHOG_HOST=https://eu.i.posthog.com",
+    ]
+    if configured:
+        with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+            config.write("\n".join(settings) + "\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "write_environment\n", "posthog-env-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    for name in ("website.env", "api.env"):
+        environment = (tmp_path / "state" / "clashlens" / "env" / name).read_text()
+        lines = [line for line in environment.splitlines() if "POSTHOG" in line]
+        assert lines == (settings if configured else [])

@@ -16,10 +16,12 @@ import {
 
 import type { Route } from "./+types/root";
 import { AccountMenu } from "./components/AccountMenu";
+import { Analytics, ReturnVisitsSwitch, useErrorEvent } from "./components/Analytics";
 import { BackLink } from "./components/BackLink";
 import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
+import type { AnalyticsSettings } from "./lib/analytics";
 import type { UpdateStatus } from "./lib/contracts";
 import { DISCORD_INVITE_URL } from "./lib/discord";
 import {
@@ -44,6 +46,7 @@ export interface RootLoaderData {
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
+  analytics?: AnalyticsSettings | null;
 }
 
 /**
@@ -58,11 +61,12 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
   const switches = import("./server/config.server")
-    .then(({ isDashboardEnabled, isCrewsEnabled }) => ({
+    .then(({ isDashboardEnabled, isCrewsEnabled, loadAnalyticsSettings }) => ({
       dashboardEnabled: isDashboardEnabled(),
       crewsEnabled: isCrewsEnabled(),
+      analytics: loadAnalyticsSettings(),
     }))
-    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false }));
+    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return {
@@ -118,8 +122,11 @@ export function Layout({ children }: { children: ReactNode }) {
           </p>
           <nav aria-label="Site information">
             <a href="/blog">Blog</a>
+            <a href="/privacy">Privacy</a>
+            <ReturnVisitsSwitch />
           </nav>
         </footer>
+        <Analytics />
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -214,6 +221,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
   const location = useLocation();
   const data = useRouteLoaderData<typeof loader>("root");
+  useErrorEvent(isNotFound);
   return (
     <>
       <SiteHeader data={data} />

@@ -11,6 +11,7 @@
 
 import { readFileSync } from "node:fs";
 
+import type { AnalyticsSettings } from "../lib/analytics";
 import { decodeSecretValue, loadSecretFile } from "./signer.server";
 
 export const GOOGLE_ISSUER = "https://accounts.google.com";
@@ -68,6 +69,28 @@ export function isDashboardEnabled(
 
 /** Crews ship with the dashboard, so they stay hidden behind the same switch. */
 export const isCrewsEnabled = isDashboardEnabled;
+
+/**
+ * Visitor counting stays off, with no script and no requests, unless both the
+ * PostHog project token and its https ingestion host are set. The token is
+ * public by design: it can only send events.
+ */
+export function loadAnalyticsSettings(
+  env: Record<string, string | undefined> = process.env,
+): AnalyticsSettings | null {
+  const token = env.CLASHLENS_POSTHOG_TOKEN?.trim() ?? "";
+  if (!/^phc_[A-Za-z0-9]{20,64}$/.test(token)) return null;
+  let host: URL;
+  try {
+    host = new URL(env.CLASHLENS_POSTHOG_HOST?.trim() ?? "");
+  } catch {
+    return null;
+  }
+  if (host.protocol !== "https:" || host.pathname !== "/" || host.search || host.hash) {
+    return null;
+  }
+  return { token, host: host.origin };
+}
 
 export function loadWebsiteConfig(
   env: Record<string, string | undefined> = process.env,
