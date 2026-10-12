@@ -118,6 +118,15 @@ test("counts pages without player tags and keeps the browser ID until switched o
   );
   expect(await context.cookies()).toEqual([]);
 
+  // Only the Home and Rankings searches are counted, never the header's.
+  const banner = page.getByRole("banner");
+  await banner.getByRole("button", { name: "Search players" }).click();
+  const headerSearch = banner.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
+  });
+  await headerSearch.fill("Secret Name");
+  await headerSearch.press("Enter");
+
   await page.goto(`${analyticsFixtureOrigin}/`);
   const search = page.getByRole("searchbox", {
     name: "Search players and Clash Lens profiles",
@@ -163,6 +172,59 @@ test("counts pages without player tags and keeps the browser ID until switched o
   }
   expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
   expect(outside).toEqual([]);
+});
+
+test("switching return visits off stops a held or retried event carrying the ID", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await fakePostHog(page);
+  // Marks each send made while the switch is off.
+  await page.addInitScript((host) => {
+    const send = window.fetch.bind(window);
+    window.fetch = (input, init) =>
+      send(
+        String(input).startsWith(host) &&
+          localStorage.getItem("clashlens-return-visits") === "off"
+          ? `${String(input)}&switched_off`
+          : input,
+        init,
+      );
+  }, posthogHost);
+  const sentWhileOff: SentEvent[] = [];
+  let answered = 0;
+  await page.route(`${posthogHost}/**`, async (route) => {
+    const body = route.request().postDataBuffer();
+    if (body && route.request().url().endsWith("&switched_off")) {
+      sentWhileOff.push(...decode(body));
+    }
+    // The first send fails, so PostHog would try it again later.
+    if (answered++ === 0) await route.fulfill({ status: 503 });
+    else await route.fallback();
+  });
+
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect.poll(() => answered).toBeGreaterThan(0);
+  const browserId = await page.evaluate(
+    (key) => JSON.parse(localStorage.getItem(key) ?? "{}").distinct_id,
+    storedId,
+  );
+  expect(browserId).toEqual(expect.any(String));
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await page
+    .getByRole("contentinfo")
+    .getByRole("switch", { name: "Count return visits" })
+    .click();
+  // Long past any wait before sending and any retry of the failed send.
+  await page.clock.runFor(120_000);
+  await page.getByRole("banner").getByRole("link", { name: "Home", exact: true }).click();
+  await expect
+    .poll(() => sentWhileOff.filter(({ event }) => event === "$pageview").at(-1))
+    .toMatchObject({ properties: { route: "home", distinct_id: "$posthog_cookieless" } });
+  expect(sentWhileOff.map(({ properties }) => properties.distinct_id)).not.toContain(
+    browserId,
+  );
 });
 
 test("switching return visits off in one tab stops the ID in every tab", async ({

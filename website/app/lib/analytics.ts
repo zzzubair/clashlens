@@ -21,10 +21,8 @@ import type {
   ArmyAnalytics,
   PlayerLookup,
   PlayerPage,
-  RefreshStatus,
   TrackedLeaderboard,
 } from "./contracts";
-import { explainsNoResults, newestPlayer, playerLookupView } from "./player-lookup-text";
 import { normalizePlayerTag } from "./player-tag";
 
 /** PostHog Cloud EU, in Frankfurt; the only place counts are sent. */
@@ -162,8 +160,8 @@ export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null
     if (source[key] !== undefined) properties[key] = source[key];
   }
   // Counting without an ID needs the browser's name and version for the
-  // day's code; PostHog deletes it once the code is made.
-  if (source.$cookieless_mode === true)
+  // day's code; PostHog deletes it once the code is made. Never sent with an ID.
+  if (source.$cookieless_mode === true && source.distinct_id === "$posthog_cookieless")
     properties.$raw_user_agent = source.$raw_user_agent;
   const rewrite = (key: string, clean: (value: string) => string | undefined) => {
     const value = properties[key];
@@ -252,9 +250,7 @@ export function selectionOf(routeId: string, data: unknown): Selection | null {
       view: daily ? "daily" : "live",
       page: board.page > 1 ? "later" : "first",
       season:
-        daily && Date.parse(board.generatedAt) >= Date.parse(daily.seasonEndAt)
-          ? "previous"
-          : "current",
+        daily && Date.now() >= Date.parse(daily.seasonEndAt) ? "previous" : "current",
     };
     if (daily) labels.day = String(daily.dayNumber);
     return {
@@ -350,7 +346,7 @@ const LOOKUP_OUTCOMES: Partial<Record<PlayerLookup["state"], string>> = {
   failed: "failed",
 };
 
-/** Events read from what a page loaded: search results and player lookups. */
+/** Events read from what a page loaded: search results. */
 export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent[] {
   if (!data || typeof data !== "object") return [];
   const page = data as Record<string, unknown>;
@@ -370,29 +366,16 @@ export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent
     }
     return [{ event: "search_results_shown", properties }];
   }
-  if (routeId === "routes/player") {
-    const state = lookupOutcome(page as unknown as PlayerLoad);
-    return [{ event: "player_lookup_result", properties: { state } }];
-  }
   return [];
 }
 
-interface PlayerLoad {
-  requestedTag: string | null;
-  player: PlayerPage | null;
-  refreshStatus: RefreshStatus | null;
-  lookup: PlayerLookup | null;
-}
-
-// What the player page shows for this load, as the page itself decides it.
-function lookupOutcome(data: PlayerLoad): string {
-  if (data.requestedTag === null) return "invalid";
-  const player = newestPlayer(data.refreshStatus, data);
-  const { trackedPlayer, lookup } = playerLookupView(
-    player?.tag === data.requestedTag ? player : null,
-    data.lookup,
-    explainsNoResults(data.lookup),
-  );
+/** The lookup outcome the player page shows, from what it renders. */
+export function lookupOutcome(
+  requestedTag: string | null,
+  trackedPlayer: PlayerPage | null,
+  lookup: PlayerLookup | null,
+): string {
+  if (requestedTag === null) return "invalid";
   if (trackedPlayer) return "available";
   return (lookup && LOOKUP_OUTCOMES[lookup.state]) ?? "failed";
 }
@@ -472,6 +455,8 @@ export function onReturnVisitsChange(listener: () => void): () => void {
   return () => switchListeners.delete(listener);
 }
 
+// The only way an event leaves: the latest choice is applied, then PostHog
+// sends it at once, never later from a wait or a retry.
 function send(posthog: PostHog, event: string, properties: Properties): void {
   applyReturnVisits(posthog);
   posthog.capture(event, properties);
@@ -509,10 +494,12 @@ export function startAnalytics(settings: AnalyticsSettings): void {
         save_referrer: false,
         save_campaign_params: false,
         before_send: sanitizeEvent,
+        request_batching: false,
       });
+      posthog._retryQueue = undefined;
       client = posthog;
       applyReturnVisits(posthog);
-      for (const { event, properties } of queue ?? []) posthog.capture(event, properties);
+      for (const { event, properties } of queue ?? []) send(posthog, event, properties);
       queue = null;
     })
     .catch(() => {

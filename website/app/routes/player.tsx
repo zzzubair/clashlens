@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { usePlayerLookupEvent } from "../components/Analytics";
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -350,6 +351,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     data.lookup,
     explainedVisit,
   );
+  usePlayerLookupEvent(data.requestedTag, trackedPlayer, lookup);
   const loadedAt = player ? profileLoadedAt(player.profile) : undefined;
   const now = useServerTime(loadedAt);
   const seasonExpired = useSeasonReread(

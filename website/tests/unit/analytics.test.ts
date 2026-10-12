@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   loadedPageEvents,
+  lookupOutcome,
   pagePerformance,
   routeOf,
   sanitizeEvent,
@@ -9,6 +10,8 @@ import {
   selectionEvents,
   selectionOf,
 } from "../../app/lib/analytics";
+import type { PlayerLookup, PlayerPage, RefreshStatus } from "../../app/lib/contracts";
+import { newestPlayer, playerLookupView } from "../../app/lib/player-lookup-text";
 import { loadAnalyticsSettings } from "../../app/server/config.server";
 
 const TOKEN = `phc_${"A1b2C3d4E5".repeat(4)}`;
@@ -106,21 +109,28 @@ describe("what leaves the browser", () => {
     }
   });
 
-  it("passes the browser name and version only to count without an ID", () => {
-    const sent = (cookieless: boolean) =>
+  it("passes the browser name and version only to count without an ID, never to keep", () => {
+    const sent = (properties: Record<string, unknown>) =>
       sanitizeEvent({
         uuid: "u3",
         event: "ui_error",
-        properties: {
-          $raw_user_agent: "Mozilla/5.0",
-          ...(cookieless ? { $cookieless_mode: true } : {}),
-        },
-      })?.properties;
-    expect(sent(true)).toMatchObject({
-      $cookieless_mode: true,
-      $raw_user_agent: "Mozilla/5.0",
+        properties: { $raw_user_agent: "Mozilla/5.0", ...properties },
+        $set: { $raw_user_agent: "Mozilla/5.0" },
+        $set_once: { $initial_raw_user_agent: "Mozilla/5.0" },
+      });
+    const cookieless = { distinct_id: "$posthog_cookieless", $cookieless_mode: true };
+    expect(sent(cookieless)).toEqual({
+      uuid: "u3",
+      event: "ui_error",
+      properties: { ...cookieless, $raw_user_agent: "Mozilla/5.0", $geoip_disable: true },
+      timestamp: undefined,
     });
-    expect(sent(false)).not.toHaveProperty("$raw_user_agent");
+    for (const withId of [
+      { distinct_id: "browser-1" },
+      { distinct_id: "browser-1", $cookieless_mode: true },
+    ]) {
+      expect(sent(withId)?.properties).not.toHaveProperty("$raw_user_agent");
+    }
   });
 
   it("keeps a same-site referrer as a page label, never its IDs", () => {
@@ -143,20 +153,38 @@ describe("what leaves the browser", () => {
 });
 
 describe("events read from what a page shows", () => {
-  const board = (view: "live" | "daily", page: number, day?: number) => ({
-    leaderboard: {
-      view,
-      page,
-      generatedAt: "2026-10-12T06:00:00Z",
-      daily: day
-        ? {
-            officialSeasonId: "1790000000",
-            dayNumber: day,
-            seasonEndAt: "2026-10-20T05:00:00Z",
-          }
-        : null,
-    },
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-12T06:00:00Z") });
   });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A saved Daily board was made at the Reset that ended its day.
+  const seasonStartAt = Date.parse("2026-09-22T05:00:00Z");
+  const board = (view: "live" | "daily", page: number, day?: number) => {
+    const resetAt = day
+      ? new Date(seasonStartAt + day * 86_400_000)
+          .toISOString()
+          .replace(".000Z", "+00:00")
+      : null;
+    return {
+      leaderboard: {
+        view,
+        page,
+        generatedAt: resetAt ?? "2026-10-12T06:00:00+00:00",
+        daily: day
+          ? {
+              officialSeasonId: "1790000000",
+              dayNumber: day,
+              resetAt,
+              seasonStartAt: "2026-09-22T05:00:00+00:00",
+              seasonEndAt: "2026-10-20T05:00:00+00:00",
+            }
+          : null,
+      },
+    };
+  };
   const rankings = (before: object, after: object) =>
     selectionEvents(
       "rankings",
@@ -193,10 +221,12 @@ describe("events read from what a page shows", () => {
     expect(rankings(board("live", 1), board("live", 1))).toEqual([]);
   });
 
-  it("calls a Daily board from an ended Season the previous Season", () => {
-    const ended = board("daily", 1, 28);
-    ended.leaderboard.generatedAt = "2026-10-21T00:00:00Z";
-    expect(selectionOf("routes/tracked-leaderboard", ended)?.labels.season).toBe(
+  it("calls a Daily board the previous Season once its Season has ended", () => {
+    const day = board("daily", 1, 12);
+    expect(day.leaderboard.generatedAt).toBe("2026-10-04T05:00:00+00:00");
+    expect(selectionOf("routes/tracked-leaderboard", day)?.labels.season).toBe("current");
+    vi.setSystemTime(new Date("2026-10-21T00:00:00Z"));
+    expect(selectionOf("routes/tracked-leaderboard", day)?.labels.season).toBe(
       "previous",
     );
   });
@@ -309,34 +339,47 @@ describe("events read from what a page loaded", () => {
     ]);
   });
 
-  it("reports the player lookup outcome the page shows", () => {
-    const saved = { tag: "#2PP", trackingState: "tracking" };
-    const state = (data: object) =>
-      loadedPageEvents("routes/player", {
-        requestedTag: "#2PP",
-        player: null,
-        refreshStatus: null,
-        lookup: null,
-        ...data,
-      })[0].properties.state;
-    const lookup = (value: string, reason?: string) => ({
-      lookup: { tag: "#2PP", state: value, reason },
-    });
-    expect(state({ player: saved })).toBe("available");
-    expect(state({ player: saved, ...lookup("tracking") })).toBe("available");
+  it("reports the player lookup outcome from what the page shows on its visit", () => {
+    const saved = { tag: "#2PP", trackingState: "tracking" } as PlayerPage;
+    // The page's own state: its newest player, latest lookup and whether this
+    // visit has already explained missing results.
+    const state = (
+      player: PlayerPage | null,
+      value: string | null,
+      {
+        reason = undefined as string | undefined,
+        explained = false,
+        tag = "#2PP" as string | null,
+      } = {},
+    ) => {
+      const lookup = value
+        ? ({ tag: "#2PP", state: value, reason } as PlayerLookup)
+        : null;
+      const view = playerLookupView(player, lookup, explained);
+      return lookupOutcome(tag, view.trackedPlayer, view.lookup);
+    };
+    expect(state(saved, null)).toBe("available");
+    expect(state(saved, "tracking")).toBe("available");
     // Saved results are hidden when the latest lookup found no player.
-    expect(state({ player: saved, ...lookup("not_found") })).toBe("not-found");
-    expect(state(lookup("not_in_legend"))).toBe("not-found");
-    expect(state(lookup("checking"))).toBe("checking");
-    expect(state(lookup("tracking"))).toBe("checking");
-    expect(state({ player: saved, ...lookup("tracking", "no_legend_battles") })).toBe(
-      "checking",
-    );
-    expect(state(lookup("uncertain"))).toBe("checking");
-    expect(state(lookup("failed"))).toBe("failed");
-    expect(state(lookup("unknown"))).toBe("failed");
-    expect(state({})).toBe("failed");
-    expect(state({ requestedTag: null })).toBe("invalid");
+    expect(state(saved, "not_found")).toBe("not-found");
+    expect(state(null, "not_in_legend")).toBe("not-found");
+    expect(state(null, "checking")).toBe("checking");
+    expect(state(null, "tracking")).toBe("checking");
+    expect(
+      state(saved, "tracking", { reason: "no_legend_battles", explained: true }),
+    ).toBe("checking");
+    // An explained visit keeps saved results hidden when a later read fails.
+    expect(state(saved, null, { explained: true })).toBe("failed");
+    expect(state(null, "uncertain")).toBe("checking");
+    expect(state(null, "failed")).toBe("failed");
+    expect(state(null, "unknown")).toBe("failed");
+    expect(state(null, null)).toBe("failed");
+    expect(state(null, null, { tag: null })).toBe("invalid");
+    // A refresh the page finished shows its player.
+    const refreshed = { tag: "#2PP", state: "complete", player: saved } as RefreshStatus;
+    expect(
+      state(newestPlayer(refreshed, { requestedTag: "#2PP", player: null }), null),
+    ).toBe("available");
   });
 });
 

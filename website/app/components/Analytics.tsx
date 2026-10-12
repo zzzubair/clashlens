@@ -1,9 +1,11 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useLocation, useMatches, useRouteLoaderData } from "react-router";
 
+import type { PlayerLookup, PlayerPage } from "../lib/contracts";
 import {
   armySort,
   loadedPageEvents,
+  lookupOutcome,
   onReturnVisitsChange,
   pagePerformance,
   returnVisitsOn,
@@ -62,15 +64,21 @@ function onClick(event: MouseEvent, shown: Selection | null) {
   });
 }
 
+// Only the Home and Rankings search forms; the header search is not counted.
 function onSubmit(event: SubmitEvent) {
   const form = event.target instanceof HTMLFormElement ? event.target : null;
-  if (form?.getAttribute("role") !== "search") return;
+  if (form?.getAttribute("role") !== "search" || form.closest(".site-header")) return;
   const value = form.querySelector<HTMLInputElement>('input[type="search"]')?.value ?? "";
   if (value.trim() === "") return;
-  track("search_submitted", {
-    source: form.closest(".site-header") ? "header" : currentRoute(),
-    input: searchInput(value),
-  });
+  track("search_submitted", { source: currentRoute(), input: searchInput(value) });
+}
+
+// The loaded results and lookups already counted on the open page.
+let counted = { path: "", keys: new Set<string>() };
+
+function countedOn(path: string): Set<string> {
+  if (counted.path !== path) counted = { path, keys: new Set() };
+  return counted.keys;
 }
 
 /** Starts visitor counting when the server configured it, and sends page events. */
@@ -82,9 +90,8 @@ export function Analytics() {
   const page = matches[matches.length - 1];
   const routeId = page?.id;
   const data = page?.loaderData;
-  // What the open page shows, and the loaded results already counted on it.
+  // What the open page shows.
   const shown = useRef<{ path: string; selection: Selection } | null>(null);
-  const loaded = useRef({ path: "", keys: new Set<string>() });
 
   useEffect(() => {
     if (!token) return;
@@ -120,6 +127,12 @@ export function Analytics() {
     const path = location.pathname;
     const before = shown.current?.path === path ? shown.current.selection : null;
     const selection = selectionOf(routeId, data);
+    // The Armies table can be re-sorted on the page without a new load.
+    const sorted = document.querySelector<HTMLElement>(
+      ".analytics-results-table th[aria-sort]",
+    );
+    if (selection && sorted?.dataset.column)
+      selection.labels.sort = armySort(sorted.dataset.column);
     if (selection) {
       shown.current = { path, selection };
       for (const { event, properties } of selectionEvents(
@@ -132,21 +145,33 @@ export function Analytics() {
     } else if (before === null) {
       shown.current = null;
     }
-    if (loaded.current.path !== path) loaded.current = { path, keys: new Set() };
+    const keys = countedOn(path);
     for (const { event, properties } of loadedPageEvents(routeId, data)) {
-      // A search counts once, however often its results reload; a player
-      // lookup once per outcome it shows on this page.
-      const key =
-        event === "search_results_shown"
-          ? `${location.key} ${event}`
-          : `${event} ${JSON.stringify(properties)}`;
-      if (loaded.current.keys.has(key)) continue;
-      loaded.current.keys.add(key);
+      // A search counts once, however often its results reload.
+      const key = `${location.key} ${event}`;
+      if (keys.has(key)) continue;
+      keys.add(key);
       track(event, properties);
     }
   }, [token, routeId, data, location.key, location.pathname]);
 
   return null;
+}
+
+/** Counts each lookup outcome the player page shows, once per page. */
+export function usePlayerLookupEvent(
+  requestedTag: string | null,
+  trackedPlayer: PlayerPage | null,
+  lookup: PlayerLookup | null,
+) {
+  const { pathname } = useLocation();
+  const state = lookupOutcome(requestedTag, trackedPlayer, lookup);
+  useEffect(() => {
+    const keys = countedOn(pathname);
+    if (keys.has(`lookup ${state}`)) return;
+    keys.add(`lookup ${state}`);
+    track("player_lookup_result", { state });
+  }, [pathname, state]);
 }
 
 /** Counts an error page once it shows. */
