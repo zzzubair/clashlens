@@ -57,16 +57,15 @@ READ_AFTER = timedelta(minutes=4)
 
 @dataclass(frozen=True)
 class Battle:
-    """One battle on the player's own log: its report time and the trophies
-    it moved, positive for an attack's gain, negative for a defense's loss
-    (``attack`` says which for a zero). A multiplayer battle is no Legend
-    battle, but it takes a row of the log's 50. A Legend row with no
-    opponent is the game's "no opponent, no battle" row: a used slot that is
-    no battle."""
+    """One battle on the player's own log: its report time, the trophies it
+    moved, positive for an attack's gain, negative for a defense's loss, and
+    whether it was an attack. A multiplayer battle is no Legend battle, but
+    it takes a row of the log's 50. A Legend row with no opponent is the
+    game's "no opponent, no battle" row: a used slot that is no battle."""
 
     at: datetime
     trophies: int
-    attack: bool | None = None
+    attack: bool
     legend: bool = True
     opponent: bool = True
 
@@ -121,9 +120,8 @@ class Player:
         items = []
         for index, battle in list(enumerate(shown))[-50:]:
             stars, destruction = RESULTS[abs(battle.trophies)]
-            attack = battle.trophies > 0 if battle.attack is None else battle.attack
             items.append({
-                **template, "attack": attack, "battleTime": 150,
+                **template, "attack": battle.attack, "battleTime": 150,
                 "battleType": "legend" if battle.legend else "homeVillage",
                 "battleTimestamp": battle.at.strftime("%Y%m%dT%H%M%S.000Z"),
                 "stars": stars, "destructionPercentage": destruction,
@@ -271,14 +269,14 @@ class Story:
                 }]}).encode(),
             )
 
-    def run_worker(self, *, rounds: int = 20) -> None:
+    def run_worker(self) -> None:
         """Run the worker as production does: the publication check, then
         every job due in its claim order, until nothing is left to do. A job
         sent to wait (a retry or a dependency) is made due again, as time
-        passing would, for at most ``rounds`` rounds."""
+        passing would, for at most 20 rounds."""
         database, processor = _processor(self.connection_info, self.archive_server)
         try:
-            for _ in range(rounds):
+            for _ in range(20):
                 boundary_publication.reevaluate_boundary_publications(database)
                 processed = processor.process_until_idle(owner="story", max_jobs=10_000)
                 boundary_publication.reevaluate_boundary_publications(database)
@@ -353,9 +351,11 @@ class Story:
                 ).fetchall()
             }
 
-    def served_board(self, boundary: datetime | None = None) -> dict[str, object] | None:
-        """The Daily board the API serves now, the newest or the one for the
-        Legend day ending at ``boundary``, read as the data service."""
+    def served_board(self, boundary: datetime | None = None,
+                     offset: int = 0) -> dict[str, object] | None:
+        """The page of 100 from ``offset`` of the Daily board the API serves
+        now, the newest or the one for the Legend day ending at ``boundary``,
+        read as the data service."""
         selector = {}
         if boundary is not None:
             ended = boundary - timedelta(days=1)
@@ -364,7 +364,8 @@ class Story:
                         "season_day_number": (ended - season).days + 1}
         api = ApiDatabase(as_api_role(self.connection_info))
         try:
-            return api_leaderboard.get_frozen_leaderboard(api, limit=100, **selector)
+            return api_leaderboard.get_frozen_leaderboard(
+                api, limit=100, offset=offset, **selector)
         finally:
             api.close()
 
@@ -981,6 +982,7 @@ def test_reset_at_full_size(database_url: str, archive_server, monkeypatch) -> N
         unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
+        second_page = story.served_board(offset=100)
     assert unfinished == []
     assert battles >= 7 * BATTLES_A_DAY
     # A board build may read the whole table once or twice; the
@@ -992,5 +994,8 @@ def test_reset_at_full_size(database_url: str, archive_server, monkeypatch) -> N
     assert sorted(members) == sorted(tags)
     assert {members[tag] for tag in played} == {"complete"}
     assert board is not None and board["total_entries"] == SWEPT
-    assert {(entry["tag"] in played, entry["trophies"]) for entry in board["entries"]} == {
-        (True, 5380)}
+    assert _ranked(board) == {tag: 5380 for tag in played}
+    # The never-played players rank at 5,000, after every played one.
+    assert second_page is not None
+    assert {entry["tag"]: entry["trophies"] for entry in second_page["entries"]} == {
+        tag: 5000 for tag in unplayed}
