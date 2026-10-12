@@ -58,7 +58,26 @@ async function storedKeys(page: Page) {
   return page.evaluate(() => Object.keys(localStorage).sort());
 }
 
-test("with no project token no analytics code loads and nothing is sent", async ({
+const choiceKey = "clashlens-analytics";
+
+function banner(page: Page) {
+  return page.getByRole("region", { name: /May we use PostHog/ });
+}
+
+/** Opens the question again from the site footer. */
+async function reopenFromFooter(page: Page) {
+  await page
+    .getByRole("contentinfo")
+    .getByRole("button", { name: "Analytics choices" })
+    .click();
+}
+
+/** Every page load starts as a visitor who already accepted. */
+async function acceptedBeforeLoad(page: Page) {
+  await page.addInitScript((key) => localStorage.setItem(key, "accepted"), choiceKey);
+}
+
+test("with no project token no analytics code loads, nothing is sent and nothing is asked", async ({
   page,
   context,
 }) => {
@@ -70,7 +89,8 @@ test("with no project token no analytics code loads and nothing is sent", async 
   await expect(
     page.getByRole("main").getByRole("link", { name: "privacy@clashlens.net" }).first(),
   ).toHaveAttribute("href", "mailto:privacy@clashlens.net");
-  await expect(page.getByRole("switch")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /analytics choice/i })).toHaveCount(0);
+  await expect(banner(page)).toHaveCount(0);
   await page.getByRole("contentinfo").getByRole("link", { name: "Blog" }).click();
   await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
 
@@ -80,21 +100,31 @@ test("with no project token no analytics code loads and nothing is sent", async 
   expect(await context.cookies()).toEqual([]);
 });
 
-test("counts pages without player tags and keeps the browser ID until switched off", async ({
+test("asks first, counts only after Accept without player tags, and remembers the choice", async ({
   page,
   context,
 }) => {
   const posthog = await fakePostHog(page);
-  const outside: string[] = [];
-  page.on("request", (request) => {
-    const url = request.url();
-    if (!url.startsWith(`${analyticsFixtureOrigin}/`) && !url.startsWith(posthogHost)) {
-      outside.push(url);
-    }
-  });
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
   const sent = (name: string) => posthog.events.filter(({ event }) => event === name);
 
+  // Before a choice: no PostHog code, no requests and nothing kept, across pages.
   await page.goto(`${analyticsFixtureOrigin}/players/%232PP?season=2026-09`);
+  await expect(banner(page)).toBeVisible();
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await page.goto(`${analyticsFixtureOrigin}/players/%232PP?season=2026-09`);
+  await expect(banner(page)).toBeVisible();
+  expect(requests.filter((url) => !url.startsWith(`${analyticsFixtureOrigin}/`))).toEqual(
+    [],
+  );
+  expect(requests.filter((url) => /posthog|module\.slim/i.test(url))).toEqual([]);
+  expect(await storedKeys(page)).toEqual([]);
+
+  // Accepting counts the page it was made on, with a browser ID kept here.
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect(banner(page)).toHaveCount(0);
   await expect.poll(() => sent("$pageview").length).toBe(1);
   const [player] = sent("$pageview");
   expect(player.properties).toMatchObject({
@@ -104,13 +134,13 @@ test("counts pages without player tags and keeps the browser ID until switched o
     $pathname: "/players/:tag",
     $geoip_disable: true,
   });
-  expect(player.properties.$cookieless_mode).toBeUndefined();
   for (const detail of [
     "$browser",
     "$os",
     "$screen_height",
     "$timezone",
     "$raw_user_agent",
+    "$cookieless_mode",
   ]) {
     expect(player.properties).not.toHaveProperty(detail);
   }
@@ -118,20 +148,24 @@ test("counts pages without player tags and keeps the browser ID until switched o
   expect(browserId).toEqual(expect.any(String));
   expect(browserId).not.toBe("$posthog_cookieless");
   expect(await storedKeys(page)).toEqual(
-    [storedId, `__ph_opt_in_out_${analyticsFixtureToken}`].sort(),
+    [choiceKey, storedId, `__ph_opt_in_out_${analyticsFixtureToken}`].sort(),
   );
   expect(await context.cookies()).toEqual([]);
 
   // Only the Home and Rankings searches are counted, never the header's.
-  const banner = page.getByRole("banner");
-  await banner.getByRole("button", { name: "Search players" }).click();
-  const headerSearch = banner.getByRole("searchbox", {
+  const header = page.getByRole("banner");
+  await header.getByRole("button", { name: "Search players" }).click();
+  const headerSearch = header.getByRole("searchbox", {
     name: "Search players and Clash Lens profiles",
   });
   await headerSearch.fill("Secret Name");
   await headerSearch.press("Enter");
 
+  // Remembered on the next visit, which is counted with the same ID.
   await page.goto(`${analyticsFixtureOrigin}/`);
+  await expect.poll(() => sent("$pageview").length).toBe(2);
+  expect(sent("$pageview")[1].properties.distinct_id).toBe(browserId);
+  await expect(banner(page)).toHaveCount(0);
   const search = page.getByRole("searchbox", {
     name: "Search players and Clash Lens profiles",
   });
@@ -140,86 +174,105 @@ test("counts pages without player tags and keeps the browser ID until switched o
   await expect
     .poll(() => sent("search_submitted").map(({ properties }) => properties))
     .toEqual([expect.objectContaining({ source: "home", input: "name" })]);
-  await expect.poll(() => sent("$pageview").length).toBe(2);
-  expect(sent("$pageview")[1].properties.distinct_id).toBe(browserId);
-
-  // The footer switch is on every page.
-  const toggle = page.getByRole("contentinfo").getByRole("switch", {
-    name: "Count return visits",
-  });
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect.poll(() => storedKeys(page)).not.toContain(storedId);
-  expect(await page.evaluate(() => localStorage.getItem("clashlens-return-visits"))).toBe(
-    "off",
-  );
-
-  // Remembered on the next visit, which is counted without an ID.
-  await page.goto(`${analyticsFixtureOrigin}/privacy`);
-  await expect(
-    page.getByRole("main").getByRole("switch", { name: "Count return visits" }),
-  ).toHaveAttribute("aria-checked", "false");
-  await expect.poll(() => sent("$pageview").length).toBe(3);
-  // PostHog makes the day's code from the browser name and version, then deletes them.
-  expect(sent("$pageview")[2].properties).toMatchObject({
-    route: "privacy",
-    distinct_id: "$posthog_cookieless",
-    $cookieless_mode: true,
-    $raw_user_agent: expect.stringContaining("Chrome/"),
-  });
-  expect(await storedKeys(page)).not.toContain(storedId);
-  expect(await context.cookies()).toEqual([]);
 
   for (const body of posthog.bodies) {
     expect(body).not.toMatch(/2PP|2026-09|Secret Name|season=/i);
   }
   expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
-  expect(outside).toEqual([]);
+  expect(
+    requests.filter(
+      (url) =>
+        !url.startsWith(`${analyticsFixtureOrigin}/`) && !url.startsWith(posthogHost),
+    ),
+  ).toEqual([]);
 });
 
-test("switching return visits off stops a held, preparing or retried event carrying the ID", async ({
+test("Decline loads nothing, is remembered, and can be changed on the privacy page", async ({
+  page,
+  context,
+}) => {
+  const posthog = await fakePostHog(page);
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect(page.getByText("You have not chosen yet.")).toBeVisible();
+  await banner(page).getByRole("button", { name: "Decline" }).click();
+  await expect(banner(page)).toHaveCount(0);
+  await expect(page.getByText("You declined visitor counting")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("You declined visitor counting")).toBeVisible();
+  await expect(banner(page)).toHaveCount(0);
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  expect(requests.filter((url) => /posthog|module\.slim/i.test(url))).toEqual([]);
+  expect(await storedKeys(page)).toEqual([choiceKey]);
+  expect(await page.evaluate((key) => localStorage.getItem(key), choiceKey)).toBe(
+    "declined",
+  );
+  expect(await context.cookies()).toEqual([]);
+
+  // The privacy page's button reopens the same question.
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Change your analytics choice" })
+    .click();
+  await expect(banner(page)).toBeFocused();
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect(page.getByText("You accepted visitor counting")).toBeVisible();
+  await expect
+    .poll(() => posthog.events.filter(({ event }) => event === "$pageview").length)
+    .toBe(1);
+});
+
+test("changing to Decline deletes the ID and stops a held, preparing or retried event", async ({
   page,
 }) => {
   await page.clock.install();
   await fakePostHog(page);
-  // Marks each send made while the switch is off, and lets any background
-  // preparation of the Blog page view finish only once the switch is off.
-  await page.addInitScript((host) => {
-    const switchedOff = () => localStorage.getItem("clashlens-return-visits") === "off";
-    const send = window.fetch.bind(window);
-    window.fetch = (input, init) =>
-      send(
-        String(input).startsWith(host) && switchedOff()
-          ? `${String(input)}&switched_off`
-          : input,
-        init,
-      );
-    const Compress = window.CompressionStream;
-    window.CompressionStream = class extends Compress {
-      constructor(format: CompressionFormat) {
-        super(format);
-        const writer = super.writable.getWriter();
-        const writable = new WritableStream<BufferSource>({
-          async write(chunk) {
-            if (new TextDecoder().decode(chunk).includes('"route":"blog"')) {
-              while (!switchedOff()) await new Promise((wait) => setTimeout(wait, 20));
-            }
-            await writer.write(chunk);
-          },
-          close: () => writer.close(),
-          abort: (reason) => writer.abort(reason),
-        });
-        Object.defineProperty(this, "writable", { value: writable });
-      }
-    };
-  }, posthogHost);
-  const sentWhileOff: SentEvent[] = [];
+  await acceptedBeforeLoad(page);
+  // Marks each send made after Decline, and lets any background preparation
+  // of the Blog page view finish only once the visitor has declined.
+  await page.addInitScript(
+    ([host, key]) => {
+      const declined = () => localStorage.getItem(key) === "declined";
+      const send = window.fetch.bind(window);
+      window.fetch = (input, init) =>
+        send(
+          String(input).startsWith(host) && declined()
+            ? `${String(input)}&declined`
+            : input,
+          init,
+        );
+      const Compress = window.CompressionStream;
+      window.CompressionStream = class extends Compress {
+        constructor(format: CompressionFormat) {
+          super(format);
+          const writer = super.writable.getWriter();
+          const writable = new WritableStream<BufferSource>({
+            async write(chunk) {
+              if (new TextDecoder().decode(chunk).includes('"route":"blog"')) {
+                while (!declined()) await new Promise((wait) => setTimeout(wait, 20));
+              }
+              await writer.write(chunk);
+            },
+            close: () => writer.close(),
+            abort: (reason) => writer.abort(reason),
+          });
+          Object.defineProperty(this, "writable", { value: writable });
+        }
+      };
+    },
+    [posthogHost, choiceKey],
+  );
+  const sentAfterDecline: SentEvent[] = [];
   let answered = 0;
   await page.route(`${posthogHost}/**`, async (route) => {
     const body = route.request().postDataBuffer();
-    if (body && route.request().url().endsWith("&switched_off")) {
-      sentWhileOff.push(...decode(body));
+    if (body && route.request().url().endsWith("&declined")) {
+      sentAfterDecline.push(...decode(body));
     }
     // The first send fails, so PostHog would try it again later.
     if (answered++ === 0) await route.fulfill({ status: 503 });
@@ -228,30 +281,27 @@ test("switching return visits off stops a held, preparing or retried event carry
 
   await page.goto(`${analyticsFixtureOrigin}/privacy`);
   await expect.poll(() => answered).toBeGreaterThan(0);
-  const browserId = await page.evaluate(
-    (key) => JSON.parse(localStorage.getItem(key) ?? "{}").distinct_id,
-    storedId,
-  );
-  expect(browserId).toEqual(expect.any(String));
+  expect(await storedKeys(page)).toContain(storedId);
   await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
   await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
-  await page
-    .getByRole("contentinfo")
-    .getByRole("switch", { name: "Count return visits" })
-    .click();
+  await reopenFromFooter(page);
+  await banner(page).getByRole("button", { name: "Decline" }).click();
+  // Focus goes back to where the question was opened from.
+  await expect(
+    page.getByRole("contentinfo").getByRole("button", { name: "Analytics choices" }),
+  ).toBeFocused();
   // Long past any wait before sending and any retry of the failed send.
   await page.clock.runFor(120_000);
   await page.getByRole("banner").getByRole("link", { name: "Home", exact: true }).click();
-  await expect
-    .poll(() => sentWhileOff.filter(({ event }) => event === "$pageview").at(-1))
-    .toMatchObject({ properties: { route: "home", distinct_id: "$posthog_cookieless" } });
-  expect(sentWhileOff.map(({ properties }) => properties.distinct_id)).not.toContain(
-    browserId,
-  );
+  await expect(page.getByRole("searchbox").first()).toBeVisible();
+  await page.clock.runFor(120_000);
+  expect(sentAfterDecline).toEqual([]);
+  expect(await storedKeys(page)).toEqual([choiceKey]);
 });
 
 test("a sampled load time names the page that was loading", async ({ page }) => {
   const posthog = await fakePostHog(page);
+  await acceptedBeforeLoad(page);
   // Every load is sampled.
   await page.addInitScript(() => {
     const random = Math.random;
@@ -281,54 +331,53 @@ test("a sampled load time names the page that was loading", async ({ page }) => 
     });
 });
 
-test("switching return visits off in one tab stops the ID in every tab", async ({
+test("declining in one tab stops counting and deletes the ID in every tab", async ({
   context,
 }) => {
   const first = await context.newPage();
   const second = await context.newPage();
-  const posthog = await fakePostHog(first);
+  await fakePostHog(first);
   const other = await fakePostHog(second);
-  for (const tab of [first, second]) {
-    await tab.goto(`${analyticsFixtureOrigin}/privacy`);
-  }
+  await first.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect(banner(second)).toHaveCount(0);
+  await banner(first).getByRole("button", { name: "Accept" }).click();
+  await second.goto(`${analyticsFixtureOrigin}/privacy`);
   await expect.poll(() => other.events.length).toBeGreaterThan(0);
-  const toggle = (tab: Page) =>
-    tab.getByRole("main").getByRole("switch", { name: "Count return visits" });
+  const before = other.events.length;
 
-  await toggle(first).click();
-  await expect(toggle(second)).toHaveAttribute("aria-checked", "false");
-  // An in-page move, so the second tab still holds the ID it loaded with.
+  await reopenFromFooter(first);
+  await banner(first).getByRole("button", { name: "Decline" }).click();
+  await expect(second.getByText("You declined visitor counting")).toBeVisible();
+  // An in-page move, so the second tab still has PostHog loaded.
   await second.getByRole("banner").getByRole("link", { name: "Blog" }).click();
-  await expect
-    .poll(() => other.events.filter(({ event }) => event === "$pageview").at(-1))
-    .toMatchObject({ properties: { route: "blog", distinct_id: "$posthog_cookieless" } });
-  expect(await storedKeys(second)).not.toContain(storedId);
-  expect(posthog.events.map(({ event }) => event)).not.toContain("$opt_in");
+  await expect(second.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await second.waitForTimeout(500);
+  expect(other.events.length).toBe(before);
+  expect(await storedKeys(second)).toEqual([choiceKey]);
 });
 
-test("the switch turns off for the page even when the browser cannot save it", async ({
+test("a choice applies to the page even when the browser cannot save it", async ({
   page,
 }) => {
   const posthog = await fakePostHog(page);
-  await page.addInitScript(() => {
+  await page.addInitScript((key) => {
     const save = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (key: string, value: string) {
-      if (key === "clashlens-return-visits")
-        throw new DOMException("full", "QuotaExceededError");
-      return save.call(this, key, value);
+    Storage.prototype.setItem = function (name: string, value: string) {
+      if (name === key) throw new DOMException("full", "QuotaExceededError");
+      return save.call(this, name, value);
     };
-  });
+  }, choiceKey);
   await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await banner(page).getByRole("button", { name: "Accept" }).click();
   await expect.poll(() => posthog.events.length).toBeGreaterThan(0);
-  const toggle = page
-    .getByRole("main")
-    .getByRole("switch", { name: "Count return visits" });
+  expect(await storedKeys(page)).toContain(storedId);
 
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await reopenFromFooter(page);
+  await banner(page).getByRole("button", { name: "Decline" }).click();
+  const before = posthog.events.length;
   await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
-  await expect
-    .poll(() => posthog.events.filter(({ event }) => event === "$pageview").at(-1))
-    .toMatchObject({ properties: { route: "blog", distinct_id: "$posthog_cookieless" } });
-  expect(await storedKeys(page)).not.toContain(storedId);
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(posthog.events.length).toBe(before);
+  expect(await storedKeys(page)).toEqual([]);
 });

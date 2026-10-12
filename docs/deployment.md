@@ -492,8 +492,10 @@ send events) is set in `app.env`. Counts go only to PostHog's EU cloud,
 `https://eu.i.posthog.com`; the address is fixed in the code. `./ops` passes
 the token to the website and the private API in production only, so turning
 counting on or off takes `./ops up`. Never put a personal API key (`phx_`)
-here. The `/privacy` page explains the counting and the return-visits switch
-in the site footer.
+here. Even then, a visitor's browser loads PostHog only after they accept the
+analytics question shown at the bottom of the page; declining loads nothing.
+The `/privacy` page explains the counting, and both it and the site footer's
+Analytics choices button reopen the question.
 
 Before setting the token, confirm in the PostHog project's settings that
 discarding client IP data is switched on. Without it PostHog stores each

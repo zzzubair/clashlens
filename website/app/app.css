@@ -570,14 +570,58 @@ h3 {
   gap: 0.8rem;
 }
 
-.return-visits-switch {
+.analytics-choices-button {
   padding: 0;
   border: 0;
   background: none;
-  color: inherit;
+  color: var(--cl-ink);
   font: inherit;
+  font-weight: 600;
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* The analytics question: a small dark card in the bottom-left corner. */
+body {
+  padding-bottom: var(--analytics-choice-space, 0);
+}
+
+.analytics-choice {
+  position: fixed;
+  z-index: 50;
+  bottom: 1rem;
+  left: 1rem;
+  width: min(22rem, calc(100% - 2rem));
+  padding: 1rem;
+  color: var(--cl-header-ink);
+  background: var(--cl-header-bg);
+  border: 1px solid var(--cl-outline);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.analytics-choice p {
+  margin: 0 0 0.85rem;
+}
+
+.analytics-choice a {
+  color: var(--cl-brand-yellow);
+  text-decoration: underline;
+}
+
+.analytics-choice-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+/* Phone width: the card spans the screen; the page gets its height as room below. */
+@media (max-width: 34rem) {
+  .analytics-choice {
+    bottom: 0.75rem;
+    left: 0.75rem;
+    width: calc(100% - 1.5rem);
+  }
 }
 
 .sr-only {

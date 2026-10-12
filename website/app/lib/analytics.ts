@@ -1,10 +1,10 @@
 /**
- * Visitor counting with PostHog's EU cloud. Nothing loads, and nothing is
- * sent, unless the server hands over a project token. Everyone is then
- * counted without anything kept on their device (PostHog's cookieless mode).
- * The return-visits switch, on by default, adds a random ID kept in this
- * browser so a returning browser can be recognised; switching it off deletes
- * that ID, goes back to cookieless counting, and is remembered here.
+ * Visitor counting with PostHog's EU cloud, only for visitors who accept.
+ * Nothing loads, and nothing is sent, unless the server hands over a project
+ * token and the visitor has accepted in this browser. Accepting loads PostHog
+ * with a random ID kept in this browser, so a returning browser can be
+ * recognised. Declining, then or later, loads nothing and deletes that ID;
+ * the choice is remembered here.
  *
  * Only the events and labels below ever leave the browser: page addresses
  * lose player tags, usernames, group and crew IDs, query strings and titles,
@@ -39,8 +39,10 @@ export interface AnalyticsEvent {
   properties: EventProperties;
 }
 
-/** "off" once a visitor switches return visits off in this browser. */
-export const RETURN_VISITS_KEY = "clashlens-return-visits";
+/** "accepted" or "declined": the visitor's analytics choice in this browser. */
+export const ANALYTICS_CHOICE_KEY = "clashlens-analytics";
+
+export type AnalyticsChoice = "accepted" | "declined" | null;
 
 // Every event the browser sends, with the labels it may carry. Each event
 // also carries its page's route label.
@@ -59,8 +61,8 @@ const EVENTS: Record<string, readonly string[]> = {
   ui_error: ["route", "kind"],
 };
 
-// What PostHog itself needs to count an event: the project, the browser ID
-// or cookieless marker, the visit, and the page with its IDs replaced.
+// What PostHog itself needs to count an event: the project, the browser ID,
+// the visit, and the page with its IDs replaced.
 const POSTHOG_PROPERTIES = [
   "token",
   "distinct_id",
@@ -76,7 +78,6 @@ const POSTHOG_PROPERTIES = [
   "$pathname",
   "$referrer",
   "$referring_domain",
-  "$cookieless_mode",
   "$process_person_profile",
 ];
 
@@ -159,10 +160,6 @@ export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null
   for (const key of [...POSTHOG_PROPERTIES, ...labels]) {
     if (source[key] !== undefined) properties[key] = source[key];
   }
-  // Counting without an ID needs the browser's name and version for the
-  // day's code; PostHog deletes it once the code is made. Never sent with an ID.
-  if (source.$cookieless_mode === true && source.distinct_id === "$posthog_cookieless")
-    properties.$raw_user_agent = source.$raw_user_agent;
   const rewrite = (key: string, clean: (value: string) => string | undefined) => {
     const value = properties[key];
     if (value === undefined) return;
@@ -400,78 +397,119 @@ export function pagePerformance(
   };
 }
 
-// Browser state. `queue` holds up to 50 events until PostHog has loaded; it
-// is dropped once PostHog has loaded or failed to.
+// Browser state. `queue` holds up to 50 events sent after Accept until PostHog
+// has loaded; it is dropped once PostHog has loaded or failed to.
 let client: PostHog | null = null;
 let loading: Promise<void> | null = null;
 let queue: Array<{ event: string; properties: Properties }> | null = [];
+// Whether `client` was last told to count.
+let clientCounting = false;
 // A choice this browser could not save, kept for this page only.
-let unsavedChoice: boolean | null = null;
-const switchListeners = new Set<() => void>();
+let unsavedChoice: AnalyticsChoice | undefined;
+// Whether the choice was reopened after one was made.
+let reopened = false;
+let watchingTabs = false;
+const choiceListeners = new Set<() => void>();
 
-export function returnVisitsOn(): boolean {
-  if (unsavedChoice !== null) return unsavedChoice;
+/** The visitor's choice in this browser, or null before they make one. */
+export function analyticsChoice(): AnalyticsChoice {
+  if (unsavedChoice !== undefined) return unsavedChoice;
   try {
-    return window.localStorage.getItem(RETURN_VISITS_KEY) !== "off";
+    const saved = window.localStorage.getItem(ANALYTICS_CHOICE_KEY);
+    return saved === "accepted" || saved === "declined" ? saved : null;
   } catch {
-    return true;
+    return null;
+  }
+}
+
+/** Whether to show the Accept or Decline question. */
+export function askingForChoice(): boolean {
+  return reopened || analyticsChoice() === null;
+}
+
+// Deletes everything PostHog keeps in this browser: its ID and its own record
+// of the choice.
+function forgetPostHog(): void {
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      for (const key of Object.keys(storage)) {
+        if (key.startsWith("ph_") || key.startsWith("__ph_")) storage.removeItem(key);
+      }
+    } catch {
+      // Nothing can be kept where nothing can be read.
+    }
   }
 }
 
 // Brings PostHog in line with the latest choice, including one made in
-// another tab, so an ID that was switched off is never sent again.
-function applyReturnVisits(posthog: PostHog): void {
-  if (returnVisitsOn()) {
-    if (posthog.get_explicit_consent_status() !== "granted") {
-      posthog.opt_in_capturing({ captureEventName: false });
-    }
-  } else if (posthog.get_distinct_id() !== "$posthog_cookieless") {
-    // Forgets the ID, here and in storage, and keeps counting without one.
+// another tab, so nothing is sent once a visitor declines. True when it may
+// count.
+function applyChoice(posthog: PostHog): boolean {
+  const accepted = analyticsChoice() === "accepted";
+  if (accepted && !clientCounting) {
+    posthog.opt_in_capturing({ captureEventName: false });
+  } else if (!accepted && clientCounting) {
     posthog.opt_out_capturing();
+    // A new ID in memory, so accepting again never brings the old one back.
+    posthog.reset(true);
   }
+  clientCounting = accepted;
+  if (!accepted) forgetPostHog();
+  return accepted;
 }
 
-function notifySwitch(): void {
-  if (client) applyReturnVisits(client);
-  for (const listener of switchListeners) listener();
+function notifyChoice(): void {
+  if (client) applyChoice(client);
+  else if (analyticsChoice() !== "accepted") forgetPostHog();
+  for (const listener of choiceListeners) listener();
 }
 
 /** Saves the visitor's choice in this browser and applies it straight away. */
-export function setReturnVisits(on: boolean): void {
+export function setAnalyticsChoice(choice: "accepted" | "declined"): void {
   try {
-    if (on) window.localStorage.removeItem(RETURN_VISITS_KEY);
-    else window.localStorage.setItem(RETURN_VISITS_KEY, "off");
-    unsavedChoice = null;
+    window.localStorage.setItem(ANALYTICS_CHOICE_KEY, choice);
+    unsavedChoice = undefined;
   } catch {
-    unsavedChoice = on;
+    unsavedChoice = choice;
   }
-  notifySwitch();
+  reopened = false;
+  notifyChoice();
 }
 
-export function onReturnVisitsChange(listener: () => void): () => void {
-  switchListeners.add(listener);
-  return () => switchListeners.delete(listener);
+/** Shows the Accept or Decline question again. */
+export function reopenAnalyticsChoice(): void {
+  reopened = true;
+  for (const listener of choiceListeners) listener();
+}
+
+export function onAnalyticsChoiceChange(listener: () => void): () => void {
+  if (!watchingTabs) {
+    watchingTabs = true;
+    // Another tab made a choice.
+    window.addEventListener("storage", (event) => {
+      if (event.key === ANALYTICS_CHOICE_KEY || event.key === null) notifyChoice();
+    });
+  }
+  choiceListeners.add(listener);
+  return () => choiceListeners.delete(listener);
 }
 
 // The only way an event leaves: the latest choice is applied, then PostHog
 // sends it at once, never later from a wait or a retry.
 function send(posthog: PostHog, event: string, properties: Properties): void {
-  applyReturnVisits(posthog);
-  posthog.capture(event, properties, { send_instantly: true });
+  if (applyChoice(posthog)) posthog.capture(event, properties, { send_instantly: true });
 }
 
+/** Loads PostHog; called only once the visitor has accepted. */
 export function startAnalytics(settings: AnalyticsSettings): void {
   if (loading) return;
-  // Another tab switched return visits on or off.
-  window.addEventListener("storage", (event) => {
-    if (event.key === RETURN_VISITS_KEY || event.key === null) notifySwitch();
-  });
   loading = import("posthog-js/dist/module.slim.no-external")
     .then(({ default: posthog }) => {
       posthog.init(settings.token, {
         api_host: POSTHOG_HOST,
-        // A stored ID only while return visits are on; cookieless otherwise.
-        cookieless_mode: "on_reject",
+        // Nothing is kept or sent until the choice is applied below.
+        opt_out_capturing_by_default: true,
+        opt_out_persistence_by_default: true,
         persistence: "localStorage",
         person_profiles: "never",
         autocapture: false,
@@ -495,8 +533,8 @@ export function startAnalytics(settings: AnalyticsSettings): void {
       });
       posthog._retryQueue = undefined;
       client = posthog;
-      applyReturnVisits(posthog);
       for (const { event, properties } of queue ?? []) send(posthog, event, properties);
+      applyChoice(posthog);
       queue = null;
     })
     .catch(() => {
@@ -506,7 +544,7 @@ export function startAnalytics(settings: AnalyticsSettings): void {
 
 /**
  * Sends one listed event with label-only properties and the page it happened
- * on; a no-op when counting is off.
+ * on; a no-op unless the visitor accepted.
  */
 export function track(
   event: string,
@@ -514,7 +552,7 @@ export function track(
   pathname = window.location.pathname,
 ): void {
   const allowed = EVENTS[event];
-  if (!allowed) return;
+  if (!allowed || analyticsChoice() !== "accepted") return;
   const { route, path } = routeOf(pathname);
   // Kept with the event, so one sent after PostHog loads still names its page.
   const properties: Properties = {
