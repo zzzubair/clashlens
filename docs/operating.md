@@ -489,9 +489,10 @@ these steps, all run by the worker:
    these up and never read facts; army types use the same leaderboards. Each
    run counts one day of the newest Season, newest first, in about a minute.
    Counts and army day builds never overlap: a run that finds a build going
-   counts nothing, and a build waits for a running count. A corrected leaderboard is never counted again; a day whose facts are
-   rebuilt is, and the page serves its older totals until then, except that a
-   day a battle moves out of loses its totals at once. Until a day is counted,
+   counts nothing, and a build waits for a running count. A corrected
+   leaderboard is never counted again; a day whose facts are rebuilt is, and
+   the page serves its older totals until then, except that a day a battle
+   moves out of loses its totals at once. Until a day is counted,
    `season=current` views leave it out and other views of it are unavailable.
    The worker log shows each count as an `army_rank_band_totals` event naming
    the day and leaderboard.
