@@ -47,7 +47,6 @@ class LookupStore(FakeStore):
     def __init__(self) -> None:
         super().__init__()
         self.known: list[dict[str, Any]] = []
-        self.saved_players: dict[int, list[dict[str, Any]]] = {}
         self.boards: dict[str | None, dict[str, Any]] = {}
         self.group_lists: dict[int, list[dict[str, Any]]] = {}
         self.comparisons: dict[tuple[int, str], dict[str, Any] | Exception] = {}
@@ -55,10 +54,6 @@ class LookupStore(FakeStore):
     def search(self, query, now):
         self._read("search")
         return [item for item in self.known if query.casefold() in item["name"].casefold()]
-
-    def saved(self, account):
-        self._read("saved")
-        return self.saved_players.get(account.internal_id, [])
 
     def board(self, now, focus_tag=None):
         self._read("board")
@@ -146,13 +141,16 @@ def test_player_needs_a_connected_account(store) -> None:
     assert "player_page" not in store.reads
 
 
-def test_player_autocomplete_offers_own_and_saved_players_then_name_matches(store) -> None:
+def test_player_autocomplete_offers_own_and_group_players_then_name_matches(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
-    store.saved_players[1] = [{"tag": "#8QQ", "name": "Saved One"}]
+    store.group_lists[1] = [
+        {"group_id": GROUP_ID, "name": "Crew", "tags": ["#8QQ"],
+         "players": [{"tag": "#8QQ", "name": "Group One", "trophies": None}]}
+    ]
     store.known = [{"tag": "#9RR", "name": "Drifter", "trophies": 6000}]
     assert autocomplete(store, "any_player_choices", "") == [
         ("Drift #2PP · 5,842", "#2PP"),
-        ("Saved One #8QQ", "#8QQ"),
+        ("Group One #8QQ", "#8QQ"),
     ]
     assert autocomplete(store, "any_player_choices", "dri") == [
         ("Drift #2PP · 5,842", "#2PP"),
@@ -171,7 +169,7 @@ def test_player_autocomplete_offers_own_and_saved_players_then_name_matches(stor
     assert autocomplete(store, "any_player_choices", "l") == [("Lucy #0UU · 5,500", "#0UU")]
     store.cards[1].append(card("#0LL", "Chasing 8QQ", 5000))
     assert autocomplete(store, "any_player_choices", "8qq") == [
-        ("Saved One #8QQ", "#8QQ"),
+        ("Group One #8QQ", "#8QQ"),
         ("Chasing 8QQ #0LL · 5,000", "#0LL"),
     ]
 

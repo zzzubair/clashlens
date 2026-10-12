@@ -261,7 +261,12 @@ def test_one_process_at_a_time_runs_publication_maintenance(database_url: str) -
             assert not second.acquire()
             assert first.acquire()  # it keeps the permit while it runs
             first.close()  # a process that stops gives it up
-            assert second.acquire()
+            # The server frees the lock once it ends the closed session, a
+            # moment after the client hangs up.
+            deadline = time.monotonic() + 10
+            while not second.acquire() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert second.held
             assert not first.acquire()
         finally:
             first.close()

@@ -67,7 +67,7 @@ test("only hash tags jump directly; back restores search", async ({ page }) => {
 
 test("empty searches explain that there is no match", async ({ page }) => {
   await page.goto("/leaderboards/tracked?view=live&page=1&q=NoSuchClasherForThisTest");
-  await expect(page.getByText(/No tracked players matching/)).toBeVisible();
+  await expect(page.getByText(/No players on this board match/)).toBeVisible();
   await expect(page.locator(".rank-search-results a")).toHaveCount(0);
   await expect(page.locator(".leaderboard-row").first()).toBeVisible();
 });
@@ -93,6 +93,9 @@ test.describe("on a touch phone with worst-case players", () => {
         row.querySelector('[data-label="Clan"]')!.textContent = player.clan;
         row.querySelector(".trophy-cell strong")!.textContent =
           player.trophies.toLocaleString();
+        // Every other row shows a Tie pill in its slot.
+        row.querySelector(".tie-slot")!.innerHTML =
+          index % 2 ? "" : '<span class="tie-pill">Tie</span>';
       });
     }, worstCasePlayers);
   }
@@ -117,6 +120,11 @@ test.describe("on a touch phone with worst-case players", () => {
       expect(
         await table.evaluate((node) => node.scrollWidth - node.clientWidth),
       ).toBeLessThanOrEqual(1);
+      // Trophies line up whether or not a row has a Tie pill.
+      const trophyEdges = await page
+        .locator(".trophy-cell strong")
+        .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().right));
+      expect(new Set(trophyEdges).size).toBe(1);
       await expect(
         page
           .locator(".rank-mark")
@@ -139,7 +147,7 @@ test.describe("on a touch phone with worst-case players", () => {
       await expect(page).toHaveURL(/[?&]q=Synthetic/);
 
       await openBoard(page, "live");
-      await tapMiddle(page, page.getByRole("link", { name: "Daily", exact: true }));
+      await tapMiddle(page, page.getByRole("link", { name: "Reset", exact: true }));
       await expect(page).toHaveURL(/view=daily/);
     });
   }

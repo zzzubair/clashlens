@@ -46,8 +46,14 @@ _loop: ContextVar[str] = ContextVar("collector_loop", default="start")
 
 
 def bound_statements(connection: Any) -> None:
-    """Configure each new collector connection with the statement limit."""
-    connection.execute(f"SET statement_timeout = '{STATEMENT_TIMEOUT}'")
+    """Configure each new collector connection with the statement limit.
+
+    JIT is off, as for the worker and the API: compiling small queries took
+    547 s of 2,254 s of database time from 12:11:50 to 12:14:27 on 12 Oct
+    2026, under the database's CPU limit; the day calculation's battle-log
+    read ran 313 ms with it and 103 ms without, the metrics count 20% longer.
+    """
+    connection.execute(f"SET statement_timeout = '{STATEMENT_TIMEOUT}'; SET jit = off")
     connection.commit()
 
 

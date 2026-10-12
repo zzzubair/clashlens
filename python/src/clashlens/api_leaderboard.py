@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 
+from .analytics import LIVE_TALLY_SECONDS, tie_order_sql, unplayed_sql
 from .api_db import (
     ApiDatabase,
     _public_confidence,
@@ -10,7 +16,7 @@ from .api_db import (
     _season_reset_waiting_sql,
     _text,
 )
-from .domain import ranked_day_for, season_opening_reset
+from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -26,26 +32,122 @@ _FOCUS_NEIGHBORS = 5
 _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
     "player.id", "profile.trophies", "%(opening_reset)s"
 )
-_LIVE_CANDIDATES_SQL = f"""
-SELECT player.normalized_tag, profile.name, profile.trophies,
-       greatest(
-           player.current_observed_at, player.current_profile_confirmed_at
-       ) AS observed_at,
-       player.eligibility_state,
-       profile.profile_json -> 'clan' ->> 'name' AS clan,
-       COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
-FROM players AS player
-JOIN LATERAL (
-    SELECT name, trophies, profile_json, source_contract_state,
-           current_league_season_id
+# A tracked Legend I player at 5,000 with no Legend battle saved this Season
+# has not played yet, so they rank at 5,000 from their newest profile even
+# when it names no current Season, such as Season ID 0, or was rejected for
+# it. On 11 October 2026, 1,374 tracked players waited off the board so.
+_UNPLAYED_SQL = unplayed_sql(
+    "player.id", "version", "%(season_start)s", "%(season_end)s"
+)
+# The player's current accepted profile, and whether it ranks them this Season.
+_CURRENT_PROFILE_JOINS = f"""
+LEFT JOIN LATERAL (
+    SELECT name, trophies, profile_json, current_league_season_id
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
+      AND source_contract_state = 'accepted'
     -- Keep one indexed current-profile lookup per player as history grows.
     OFFSET 0
 ) AS profile ON true
+CROSS JOIN LATERAL (
+    SELECT COALESCE(profile.current_league_season_id = %(season_id)s, false)
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
+) AS current
+"""
+# Look only for players the current profile leaves off the board or shows
+# at 5,000, which a newer profile may show instead.
+_UNPLAYED_CANDIDATE_SQL = f"""(NOT current.season_current
+               OR profile.trophies = {SEASON_START_TROPHIES})"""
+
+
+def _unplayed_seen_sql(sighted_at: str, version_id: str, observation_ids: str) -> str:
+    """When the 5,000 profile ``version_id`` was last seen: its newest
+    sighting, or a later successful unchanged check of it, which confirms it
+    without another sighting. ``observation_ids`` are observations known to
+    show it."""
+    return f"""greatest({sighted_at}, CASE
+               WHEN {version_id} = player.current_profile_version_id
+               THEN player.current_profile_confirmed_at
+           END, (
+               SELECT checked.last_success_at
+               FROM collector_response_state AS checked
+               WHERE checked.scope = 'player'
+                 AND checked.identity_key = player.normalized_tag
+                 AND checked.endpoint = 'profile'
+                 AND (checked.last_observation_id IN ({observation_ids})
+                      OR EXISTS (
+                          SELECT 1 FROM player_profile_effects AS retained
+                          WHERE retained.observation_id
+                                = checked.last_observation_id
+                            AND retained.profile_version_id = {version_id}))
+           ))"""
+
+
+# Their newest profile, when it ranks them at 5,000 instead.
+_UNPLAYED_PROFILE_SQL = f"""
+    SELECT version.id, version.name, version.trophies, version.profile_json,
+           version.observation_id, newest.observed_at AS sighted_at,
+           newest.effect_id AS sighting_id,
+           {_unplayed_seen_sql(
+               "newest.observed_at", "version.id", "version.observation_id"
+           )} AS observed_at
+    FROM (
+        -- The newest sighting of any of the player's profiles: a repeated
+        -- profile is saved once and sighted again.
+        SELECT version.id,
+               COALESCE(sighting.observed_at, version.observed_at) AS observed_at,
+               sighting.id AS effect_id
+        FROM player_profile_versions AS version
+        LEFT JOIN LATERAL (
+            SELECT effect.observed_at, effect.id
+            FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = version.id
+            ORDER BY effect.observed_at DESC, effect.id DESC
+            LIMIT 1
+        ) AS sighting ON true
+        WHERE {_UNPLAYED_CANDIDATE_SQL}
+          AND version.normalized_tag = player.normalized_tag
+        ORDER BY 2 DESC, version.id DESC
+        LIMIT 1
+    ) AS newest
+    JOIN player_profile_versions AS version ON version.id = newest.id
+    WHERE {_UNPLAYED_SQL}
+"""
+# The same profile as the worker last found it (refresh_live_unplayed), with
+# the parts the board shows: the search above reads about 16 scattered pages
+# per player, 8 s for 1,365 players on 11 October 2026, too slow for every
+# board read. A player whose current profile now ranks them at another total
+# leaves at once; one who starts qualifying, plays or changes profile waits
+# for the next refresh.
+_SAVED_UNPLAYED_PROFILE_SQL = f"""
+    SELECT saved.profile_version_id AS id, saved.name, saved.trophies, saved.clan,
+           {_unplayed_seen_sql(
+               "saved.sighted_at", "saved.profile_version_id",
+               "saved.observation_id, saved.sighting_observation_id",
+           )} AS observed_at
+    FROM live_unplayed_profiles AS saved
+    WHERE saved.player_id = player.id
+      AND saved.official_season_id = %(season_id)s
+      AND {_UNPLAYED_CANDIDATE_SQL}
+"""
+_LIVE_CANDIDATES_SQL = f"""
+SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
+       COALESCE(unplayed.trophies, profile.trophies) AS trophies,
+       COALESCE(unplayed.observed_at, greatest(
+           player.current_observed_at, player.current_profile_confirmed_at
+       )) AS observed_at,
+       player.eligibility_state,
+       CASE WHEN unplayed.id IS NULL
+            THEN profile.profile_json -> 'clan' ->> 'name'
+            ELSE unplayed.clan END AS clan,
+       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
+       tally.attacks, tally.destruction
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}LEFT JOIN LATERAL ({_SAVED_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
+LEFT JOIN live_attack_tallies AS tally
+  ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
-  AND profile.source_contract_state = 'accepted'
+  AND (profile.name IS NOT NULL OR unplayed.name IS NOT NULL)
   AND NOT EXISTS (
       SELECT 1 FROM collector_response_state AS checked
       WHERE checked.scope = 'player'
@@ -59,8 +161,21 @@ WHERE player.active = true
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
+# The profile that ranks one player at 5,000 when their current one does not.
+UNPLAYED_PROFILE_SQL = f"""
+SELECT unplayed.id, unplayed.observed_at
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
+WHERE player.normalized_tag = %(tag)s
+"""
 
-_LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
+# Equal trophies in the Daily board's order (analytics.tie_order_key), from
+# the counts the worker last saved (analytics.refresh_live_attack_tallies).
+# v1 ordered them by MD5 of the tag alone.
+_LIVE_ORDER_VERSION = "tracked-trophies-attack-destruction-v2"
+_LIVE_ORDER_SQL = (
+    f"trophies DESC, {tie_order_sql('attacks', 'destruction', 'normalized_tag')}"
+)
 _LIVE_RANKED_SQL = f"""
 SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
 FROM ({_LIVE_PLAYERS_SQL}) AS live
@@ -68,54 +183,144 @@ FROM ({_LIVE_PLAYERS_SQL}) AS live
 
 
 def _season_params(now: datetime) -> dict[str, Any]:
+    day = ranked_day_for(now)
     return {
-        "season_id": ranked_day_for(now).official_season_id,
+        "season_id": day.official_season_id,
         "opening_reset": season_opening_reset(now),
+        "season_start": day.season_start,
+        "season_end": day.season_end,
     }
 
 
+_REFRESH_UNPLAYED_SQL = f"""
+WITH searched AS MATERIALIZED (
+    -- An outer join, so the battle check waits for the 5,000 profile instead
+    -- of running for every player.
+    SELECT player.id AS player_id, unplayed.id AS profile_version_id,
+           unplayed.observation_id, unplayed.sighted_at, unplayed.sighting_id,
+           unplayed.name, unplayed.trophies,
+           unplayed.profile_json -> 'clan' ->> 'name' AS clan
+    FROM players AS player
+    {_CURRENT_PROFILE_JOINS}LEFT JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
+    WHERE player.active = true
+), found AS (
+    SELECT * FROM searched WHERE profile_version_id IS NOT NULL
+), saved AS (
+    INSERT INTO live_unplayed_profiles AS saved
+        (player_id, official_season_id, profile_version_id, observation_id,
+         sighted_at, sighting_observation_id, name, trophies, clan)
+    SELECT player_id, %(season_id)s, profile_version_id, observation_id, sighted_at,
+           (SELECT sighting.observation_id FROM player_profile_effects AS sighting
+            WHERE sighting.id = found.sighting_id),
+           name, trophies, clan
+    FROM found
+    ON CONFLICT (player_id) DO UPDATE
+    SET official_season_id = excluded.official_season_id,
+        profile_version_id = excluded.profile_version_id,
+        observation_id = excluded.observation_id,
+        sighted_at = excluded.sighted_at,
+        sighting_observation_id = excluded.sighting_observation_id,
+        name = excluded.name,
+        trophies = excluded.trophies,
+        clan = excluded.clan,
+        refreshed_at = clock_timestamp()
+    WHERE (saved.official_season_id, saved.profile_version_id, saved.sighted_at,
+           saved.sighting_observation_id)
+          IS DISTINCT FROM (excluded.official_season_id, excluded.profile_version_id,
+                            excluded.sighted_at, excluded.sighting_observation_id)
+    RETURNING 1
+), removed AS (
+    DELETE FROM live_unplayed_profiles AS saved
+    WHERE NOT EXISTS (SELECT 1 FROM found WHERE found.player_id = saved.player_id)
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM found), (SELECT count(*) FROM saved)
+       + (SELECT count(*) FROM removed)
+"""
+_next_unplayed_refresh_at = float("-inf")
+
+
+def save_live_unplayed(connection: Any, now: datetime) -> tuple[int, int]:
+    """Save who the Live board ranks at 5,000 from a newest profile with no
+    battle this Season: (players found, rows changed)."""
+    found, changed = connection.execute(
+        _REFRESH_UNPLAYED_SQL, _season_params(now)
+    ).fetchone()
+    return int(found), int(changed)
+
+
+def refresh_live_unplayed(database: Any, *, now: datetime | None = None) -> None:
+    """``save_live_unplayed`` every LIVE_TALLY_SECONDS; a failure waits a turn."""
+    global _next_unplayed_refresh_at
+    started = time.monotonic()
+    if started < _next_unplayed_refresh_at:
+        return
+    _next_unplayed_refresh_at = started + LIVE_TALLY_SECONDS
+    try:
+        with database.pool.connection() as connection, connection.transaction():
+            # Compiling the search to machine code took 4 s of its 17 s on
+            # 11 October 2026 production data, more than it saved.
+            connection.execute("SET LOCAL jit = off")
+            found, changed = save_live_unplayed(connection, now or datetime.now(UTC))
+    except Exception as error:  # noqa: BLE001 - tried again at the next turn
+        print(
+            json.dumps(
+                {
+                    "event": "live_unplayed_profiles",
+                    "status": "failed",
+                    "error": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
+        return
+    print(
+        json.dumps(
+            {
+                "event": "live_unplayed_profiles",
+                "status": "complete",
+                "players": found,
+                "changed": changed,
+                "seconds": round(time.monotonic() - started, 1),
+            }
+        ),
+        flush=True,
+    )
+
+
 def search_live_leaderboard(
-    database: ApiDatabase, query: str, *, now: datetime
+    database: ApiDatabase,
+    query: str,
+    *,
+    now: datetime,
+    cache: LiveBoardCache | None = None,
 ) -> dict[str, Any]:
-    """Filter after ranking the board, using only indexed current-profile reads."""
+    """Filter the ranked board the focused Live Leaderboard page reads."""
     query = query.strip()
     if not query or len(query) > 80:
         raise ValueError("invalid leaderboard search")
-    explicit_tag = query.startswith("#")
     tag = "#" + query.removeprefix("#").upper()
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL}), exact AS (
-                SELECT 1 FROM ranked
-                WHERE %(explicit_tag)s AND normalized_tag = %(tag)s
-            )
-            SELECT normalized_tag, name, trophies, position,
-                   EXISTS (SELECT 1 FROM exact) AS exact_match
-            FROM ranked
-            WHERE normalized_tag = %(tag)s
-               OR (NOT EXISTS (SELECT 1 FROM exact)
-                   AND strpos(lower(name), lower(%(query)s)) > 0)
-            ORDER BY position LIMIT 21
-            """,
-            {
-                "tag": tag,
-                "explicit_tag": explicit_tag,
-                "query": query,
-                **_season_params(now),
-            },
-        ).fetchall()
+    ranked = list(enumerate(_live_board(database, now, cache).rows, start=1))
+    exact = [
+        (rank, row) for rank, row in ranked if query.startswith("#") and row[0] == tag
+    ]
+    needle = query.casefold()
+    found = exact or [
+        (rank, row)
+        for rank, row in ranked
+        if row[0] == tag or needle in _text(row[1]).casefold()
+    ]
     return {
-        "exact_tag": tag if rows and rows[0][4] else None,
-        "has_more": len(rows) > 20,
+        "exact_tag": tag if exact else None,
+        "has_more": len(found) > 20,
         "results": [
             {
                 "tag": _text(row[0]),
                 "name": _text(row[1]),
                 "trophies": int(row[2]),
-                "rank": int(row[3]),
+                "rank": rank,
             }
-            for row in rows[:20]
+            for rank, row in found[:20]
         ],
     }
 
@@ -168,6 +373,90 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
     }
 
 
+@dataclass(frozen=True)
+class _LiveBoard:
+    season: tuple[Any, ...]
+    tracked_population: int
+    season_reset_pending: int
+    # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
+    rows: list[tuple[Any, ...]]
+
+    def tied(self, index: int) -> bool:
+        """Whether the row at ``index`` shares its trophies with a neighbor."""
+        trophies = self.rows[index][2]
+        return any(
+            0 <= other < len(self.rows) and self.rows[other][2] == trophies
+            for other in (index - 1, index + 1)
+        )
+
+
+def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
+    season = _season_params(now)
+    rows = connection.execute(
+        f"""
+        WITH candidates AS MATERIALIZED (
+            {_LIVE_CANDIDATES_SQL}
+        ), totals AS (
+            SELECT count(*)::bigint AS tracked_population,
+                   (SELECT count(*) FROM candidates WHERE NOT season_current)
+                       AS season_reset_pending
+            FROM players WHERE active
+        )
+        SELECT totals.tracked_population, totals.season_reset_pending,
+               live.normalized_tag, live.name, live.trophies, live.observed_at,
+               live.eligibility_state, live.clan
+        FROM totals LEFT JOIN (
+            SELECT * FROM candidates WHERE season_current
+        ) AS live ON true
+        ORDER BY {_LIVE_ORDER_SQL}
+        """,
+        season,
+    ).fetchall()
+    return _LiveBoard(
+        season=tuple(season.values()),
+        tracked_population=int(rows[0][0]),
+        season_reset_pending=int(rows[0][1]),
+        rows=[tuple(row[2:]) for row in rows if row[2] is not None],
+    )
+
+
+class LiveBoardCache:
+    """The ranked Live Leaderboard, read at most once per ``seconds`` and
+    shared by every page of it, the home page's top players included."""
+
+    def __init__(
+        self, seconds: float = 30, *, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._seconds = seconds
+        self._clock = clock
+        self._lock = Lock()
+        self._board: _LiveBoard | None = None
+        self._refresh_after = 0.0
+
+    def current(self, database: ApiDatabase, now: datetime) -> _LiveBoard:
+        with self._lock:
+            board = self._board
+            if (
+                board is None
+                or self._clock() >= self._refresh_after
+                or board.season != tuple(_season_params(now).values())
+            ):
+                with database.pool.connection() as connection:
+                    board = _read_live_board(connection, now)
+                self._board = board
+                self._refresh_after = self._clock() + self._seconds
+            return board
+
+
+def _live_board(
+    database: ApiDatabase, now: datetime, cache: LiveBoardCache | None
+) -> _LiveBoard:
+    if cache is not None:
+        return cache.current(database, now)
+    with database.pool.connection() as connection:
+        return _read_live_board(connection, now)
+
+
 def get_live_leaderboard(
     database: ApiDatabase,
     *,
@@ -175,151 +464,107 @@ def get_live_leaderboard(
     offset: int = 0,
     now: datetime,
     focus_tag: str | None = None,
+    cache: LiveBoardCache | None = None,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            WITH candidates AS MATERIALIZED (
-                {_LIVE_CANDIDATES_SQL}
-            ), selected AS MATERIALIZED (
-                SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
-                FROM candidates WHERE season_current
-            ), location AS (
-                SELECT CASE WHEN %(focus_tag)s::text IS NULL THEN %(offset)s::bigint
-                            ELSE ((position - 1) / %(limit)s) * %(limit)s
-                       END AS page_offset,
-                       position AS focus_position
-                FROM (SELECT max(position) AS position FROM selected
-                      WHERE normalized_tag = %(focus_tag)s::text) AS focus
-            ), stats AS (
-                SELECT count(*) AS total_entries,
-                       count(*) FILTER (
-                           WHERE observed_at < %(now)s - make_interval(secs => %(fresh)s)
-                       ) AS stale_count,
-                       min(observed_at) AS oldest_observed_at,
-                       max(observed_at) AS newest_observed_at
-                FROM selected
-            ), page AS MATERIALIZED (
-                SELECT selected.* FROM selected CROSS JOIN location
-                WHERE position BETWEEN
-                    least(page_offset + 1, focus_position - %(neighbors)s)
-                    AND greatest(page_offset + %(limit)s, focus_position + %(neighbors)s)
-            ), totals AS (
-                SELECT count(*)::bigint AS tracked_population,
-                       (SELECT count(*) FROM candidates WHERE NOT season_current)
-                           AS season_reset_pending
-                FROM players WHERE active
-            )
-            SELECT page.normalized_tag, page.name, page.trophies,
-                   page.observed_at, page.eligibility_state, page.clan,
-                   page.position,
-                   stats.total_entries, stats.stale_count,
-                   stats.oldest_observed_at, stats.newest_observed_at,
-                   totals.tracked_population, location.page_offset,
-                   totals.season_reset_pending
-            FROM stats CROSS JOIN totals CROSS JOIN location
-            LEFT JOIN page ON true
-            ORDER BY position NULLS LAST
-            """,
+    board = _live_board(database, now, cache)
+    rows = board.rows
+    total_entries = len(rows)
+    first, last = offset + 1, offset + limit
+    if focus_tag is not None:
+        focus_position = next(
+            (index + 1 for index, row in enumerate(rows) if row[0] == focus_tag),
+            None,
+        )
+        if focus_position is None:
+            return None
+        offset = (focus_position - 1) // limit * limit
+        first = min(offset + 1, focus_position - _FOCUS_NEIGHBORS)
+        last = max(offset + limit, focus_position + _FOCUS_NEIGHBORS)
+    if offset and offset >= total_entries:
+        return None
+    observed = [row[3] for row in rows if row[3] is not None]
+    stale_before = now - timedelta(seconds=_LIVE_FRESHNESS_SECONDS)
+    stale_count = sum(1 for value in observed if value < stale_before)
+    oldest_observed_at = min(observed, default=None)
+    newest_observed_at = max(observed, default=None)
+    entries = []
+    first = max(first, 1)
+    for position, row in enumerate(rows[first - 1 : last], start=first):
+        observed_at = row[3].astimezone(UTC)
+        age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
+        age_seconds = int(age)
+        freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
+        entries.append(
             {
-                "focus_tag": focus_tag,
-                "offset": offset,
-                "limit": limit,
-                "now": now,
-                "fresh": _LIVE_FRESHNESS_SECONDS,
-                "neighbors": _FOCUS_NEIGHBORS,
-                **_season_params(now),
-            },
-        ).fetchall()
-        if rows[0][12] is None:
-            return None
-        offset = int(rows[0][12])
-        total_entries = int(rows[0][7]) if rows else 0
-        if offset and offset >= total_entries:
-            return None
-        tracked_population = int(rows[0][11])
-        season_reset_pending = int(rows[0][13])
-        stale_count = int(rows[0][8])
-        oldest_observed_at = rows[0][9]
-        newest_observed_at = rows[0][10]
-        entries = []
-        for row in rows:
-            if row[0] is None:
-                continue
-            observed_at = row[3].astimezone(UTC)
-            age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
-            age_seconds = int(age)
-            freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
-            entries.append(
-                {
-                    "position": int(row[6]),
-                    "tag": _text(row[0]),
-                    "name": _text(row[1]),
-                    "trophies": int(row[2]),
-                    "observed_at": observed_at.isoformat(),
-                    "age_seconds": age_seconds,
-                    "freshness": freshness,
-                    "confidence": _text(row[4]),
-                    "public_confidence": _public_confidence(True, _text(row[4])),
-                    "clan": None if row[5] is None else _text(row[5]),
-                    "official_rank": None,
-                }
-            )
-        page_count = (total_entries + limit - 1) // limit
-        page = offset // limit + 1
-        return {
-            "kind": "live",
-            "ordering_rule_version": "tracked-trophies-md5-v1",
-            "generated_at": now.astimezone(UTC).isoformat(),
-            "tracked_population": tracked_population,
-            "total_entries": total_entries,
-            # Tracked players left off until a profile names this Season.
-            "season_reset_pending": season_reset_pending,
-            "page": page,
-            "page_size": limit,
-            "page_count": page_count,
-            "has_previous": page > 1,
-            "has_next": page < page_count,
-            "coverage": {
-                "state": "partial",
-                "tracked_players": tracked_population,
-                "measured_percent": (
-                    100.0 * total_entries / tracked_population
-                    if tracked_population
-                    else 0.0
-                ),
-                "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
-            },
-            "provenance": {
-                "source": "current accepted player profiles",
-                "observed_at": (
-                    None
-                    if newest_observed_at is None
-                    else newest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "freshness": "stale" if stale_count else "fresh",
-                "confidence": "partial",
-                "coverage": "partial",
-                "version": "tracked-trophies-md5-v1",
-            },
-            "source_observations": {
-                "oldest_observed_at": (
-                    None
-                    if oldest_observed_at is None
-                    else oldest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "newest_observed_at": (
-                    None
-                    if newest_observed_at is None
-                    else newest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "stale_count": stale_count,
-            },
-            "quality_states": ["partial"] + (["stale"] if stale_count else []),
-            "entries": entries,
-        }
+                "position": position,
+                "tag": _text(row[0]),
+                "name": _text(row[1]),
+                "trophies": int(row[2]),
+                "observed_at": observed_at.isoformat(),
+                "age_seconds": age_seconds,
+                "freshness": freshness,
+                "confidence": _text(row[4]),
+                "public_confidence": _public_confidence(True, _text(row[4])),
+                "clan": None if row[5] is None else _text(row[5]),
+                "official_rank": None,
+                "tied": board.tied(position - 1),
+            }
+        )
+    page_count = (total_entries + limit - 1) // limit
+    page = offset // limit + 1
+    return {
+        "kind": "live",
+        "ordering_rule_version": _LIVE_ORDER_VERSION,
+        "generated_at": now.astimezone(UTC).isoformat(),
+        "tracked_population": board.tracked_population,
+        "total_entries": total_entries,
+        # Tracked players left off until a profile names this Season.
+        "season_reset_pending": board.season_reset_pending,
+        "page": page,
+        "page_size": limit,
+        "page_count": page_count,
+        "has_previous": page > 1,
+        "has_next": page < page_count,
+        "coverage": {
+            "state": "partial",
+            "tracked_players": board.tracked_population,
+            "measured_percent": (
+                100.0 * total_entries / board.tracked_population
+                if board.tracked_population
+                else 0.0
+            ),
+            "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
+        },
+        "provenance": {
+            "source": "current accepted player profiles",
+            "observed_at": (
+                None
+                if newest_observed_at is None
+                else newest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "freshness": "stale" if stale_count else "fresh",
+            "confidence": "partial",
+            "coverage": "partial",
+            "version": _LIVE_ORDER_VERSION,
+        },
+        "source_observations": {
+            "oldest_observed_at": (
+                None
+                if oldest_observed_at is None
+                else oldest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "newest_observed_at": (
+                None
+                if newest_observed_at is None
+                else newest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "stale_count": stale_count,
+        },
+        "quality_states": ["partial"] + (["stale"] if stale_count else []),
+        "entries": entries,
+    }
 
 
 def get_frozen_leaderboard(
@@ -535,7 +780,14 @@ def get_frozen_leaderboard(
                 SELECT entry.position, player.normalized_tag, profile.name,
                        profile.profile_json -> 'clan' ->> 'name',
                        entry.trophies, entry.observed_at, entry.freshness,
-                       entry.confidence, entry.official_rank
+                       entry.confidence, entry.official_rank,
+                       EXISTS (
+                           SELECT FROM api_frozen_leaderboard_entries AS other
+                           WHERE other.leaderboard_id = entry.leaderboard_id
+                             AND other.position IN (entry.position - 1,
+                                                    entry.position + 1)
+                             AND other.trophies = entry.trophies
+                       )
                 FROM api_frozen_leaderboard_entries AS entry
                 JOIN players AS player ON player.id = entry.player_id
                 LEFT JOIN player_profile_versions AS profile
@@ -615,6 +867,7 @@ def get_frozen_leaderboard(
                             _text(row[7])
                         ),
                         "official_rank": None if row[8] is None else int(row[8]),
+                        "tied": bool(row[9]),
                     }
                     for row in rows
                 ],
@@ -636,7 +889,15 @@ def get_frozen_leaderboard(
             SELECT entry.position, player.normalized_tag, profile.name,
                    entry.trophies, entry.profile_observed_at,
                    entry.profile_freshness, entry.profile_confidence,
-                   entry.official_rank, profile.clan
+                   entry.official_rank, profile.clan,
+                   -- Equal trophies sit next to each other on the board.
+                   EXISTS (
+                       SELECT FROM leaderboard_snapshot_entries AS other
+                       WHERE other.snapshot_id = entry.snapshot_id
+                         AND other.position IN (entry.position - 1,
+                                                entry.position + 1)
+                         AND other.trophies = entry.trophies
+                   )
             FROM leaderboard_snapshot_entries AS entry
             JOIN players AS player ON player.id = entry.player_id
             LEFT JOIN LATERAL (
@@ -713,6 +974,7 @@ def get_frozen_leaderboard(
                     "public_confidence": _public_snapshot_confidence(_text(row[6])),
                     "official_rank": None if row[7] is None else int(row[7]),
                     "clan": None if row[8] is None else _text(row[8]),
+                    "tied": bool(row[9]),
                 }
                 for row in rows
             ],

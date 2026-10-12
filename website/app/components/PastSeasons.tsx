@@ -46,47 +46,54 @@ export function PastSeasons({
 export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
   return (
     <section className="data-section past-seasons" aria-labelledby="past-seasons-title">
-      <div className="section-heading">
-        <h2 id="past-seasons-title">Older Seasons</h2>
-      </div>
-      <p className="section-note">
-        Older history from{" "}
-        <a href="https://clashk.ing" rel="noopener">
-          ClashKing
-        </a>
-        .
-      </p>
-      <div
-        className="table-wrap top-space"
-        tabIndex={0}
-        role="region"
-        aria-label="Older Seasons table"
-      >
-        <table className="data-table" aria-label="Older Seasons">
-          <thead>
-            <tr>
-              <th scope="col">Season ended</th>
-              <th scope="col">Global rank</th>
-              <th scope="col">Final trophies</th>
-            </tr>
-          </thead>
-          <tbody>
-            {finishes.map((finish) => (
-              <tr key={finish.seasonId}>
-                <th scope="row">{pastSeasonLabel(finish)}</th>
-                {finish.globalRank === null ? (
-                  <td>Not recorded</td>
-                ) : (
-                  <td className="past-season-rank">
-                    {`#${finish.globalRank.toLocaleString("en-GB")}`}
-                  </td>
-                )}
-                <td>{finish.trophies?.toLocaleString("en-GB") ?? "Not recorded"}</td>
+      {/* Closed by default so a long history doesn't crowd the page. */}
+      <details>
+        <summary>
+          <h2 id="past-seasons-title">Older history</h2>
+          <span>
+            Seasons that ended up to{" "}
+            {endFormatter.format(LAST_OLDER_SEASON_END).replace("Sept", "Sep")}
+          </span>
+        </summary>
+        <p className="section-note">
+          From{" "}
+          <a href="https://clashk.ing" rel="noopener">
+            ClashKing
+          </a>
+          , or the game&apos;s own Season results where it has them.
+        </p>
+        <div
+          className="table-wrap top-space"
+          tabIndex={0}
+          role="region"
+          aria-label="Older history table"
+        >
+          <table className="data-table" aria-label="Older history">
+            <thead>
+              <tr>
+                <th scope="col">Season ended</th>
+                <th scope="col">Global rank</th>
+                <th scope="col">Final trophies</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {finishes.map((finish) => (
+                <tr key={finish.seasonId}>
+                  <th scope="row">{pastSeasonLabel(finish)}</th>
+                  {finish.globalRank === null ? (
+                    <td>Not recorded</td>
+                  ) : (
+                    <td className="past-season-rank">
+                      {`#${finish.globalRank.toLocaleString("en-GB")}`}
+                    </td>
+                  )}
+                  <td>{finish.trophies?.toLocaleString("en-GB") ?? "Not recorded"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </section>
   );
 }

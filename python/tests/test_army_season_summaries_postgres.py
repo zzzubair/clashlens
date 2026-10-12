@@ -214,8 +214,9 @@ def test_complete_season_materializes_whole_season_aggregates(
             assert summary["unknown_affected_attacks"] == 1
             assert summary["unknown_component_occurrences"] == 1
             states = dict(summary["army_states"])
-            assert states["fully_decoded"] == 3
-            assert states["partial"] == 1
+            # An old partial army counts as read: its unnamed ids count too.
+            assert states["fully_decoded"] == 4
+            assert "partial" not in states
             assert states["missing_code"] == 1
             assert summary["result_rows"] == []
             assert summary["unit_usage"] == [
@@ -433,6 +434,15 @@ def test_historical_season_endpoint_serves_summary_without_facts(
                     bad_lens, headers=signed_headers(bad_lens)
                 )
                 assert rejected.status_code == 422
+                # The Season picker lists finished seasons with army data.
+                listing = "/v1/analytics/armies/seasons"
+                assert client.get(listing).status_code == 401
+                listed = client.get(listing, headers=signed_headers(listing))
+                assert listed.json() == {"seasons": [SEASON]}
+                with database.pool.connection() as connection:
+                    connection.execute("DELETE FROM army_season_summaries")
+                listed = client.get(listing, headers=signed_headers(listing))
+                assert listed.json() == {"seasons": []}
         finally:
             database.close()
 

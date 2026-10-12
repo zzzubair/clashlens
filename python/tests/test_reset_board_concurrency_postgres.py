@@ -284,8 +284,8 @@ def test_reset_work_goes_before_recent_live_work(database_url: str) -> None:
             # even a Reset reading the collector delayed by 30 minutes: on
             # 2026-10-07 an outage delayed about 19,000 of them, and live
             # pages fell up to 59 minutes behind while they all went first.
-            # This holds for live jobs among those a claim looks at; a retried
-            # live job, due again from its retry time, can still wait longer.
+            # This holds for live jobs among those a claim looks at, which
+            # include the oldest retried live jobs.
             for key, waited in (
                 ("live", "15 minutes"),
                 ("delayed", "30 minutes"),

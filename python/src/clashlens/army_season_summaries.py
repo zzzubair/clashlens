@@ -10,6 +10,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from .army_analytics import public_army_states
 from .army_history import HISTORY_CATEGORIES, count_usage, usage_by_category
 
 # The completed-season gate is shared with the player summaries so both
@@ -254,16 +255,7 @@ def _project_lens(
     coverage_state = "complete" if len(observed) == 28 and not missing else "partial"
     summaries: dict[str, Any] = {}
     usage = usage_by_category(totals["usage"])
-    states = Counter(totals["army_states"])
-    army_states = {
-        "fully_decoded": states.pop("decoded", 0),
-        "partial": states.pop("partial", 0),
-        "missing_code": states.pop("missing_army_share_code", 0),
-        "empty_code": states.pop("empty_army_share_code", 0),
-        "malformed": states.pop("malformed", 0),
-        "structurally_unsupported": states.pop("structurally_unsupported", 0),
-        **dict(sorted(states.items())),
-    }
+    army_states = public_army_states(totals["army_states"])
     for category in sorted(HISTORY_CATEGORIES):
         summaries[category] = {
             "days_observed": len(observed),
@@ -271,7 +263,7 @@ def _project_lens(
             "missing_days": missing,
             "coverage_state": coverage_state,
             "total_attacks": totals["total_attacks"],
-            "usable_army_sample": army_states["fully_decoded"] + army_states["partial"],
+            "usable_army_sample": army_states["fully_decoded"],
             "army_states": army_states,
             "unknown_affected_attacks": totals["unknown_affected_attacks"],
             "unknown_component_occurrences": totals["unknown_component_occurrences"],

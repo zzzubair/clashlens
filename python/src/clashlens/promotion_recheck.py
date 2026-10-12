@@ -1,7 +1,7 @@
 """Re-check the promotion list after each Monday Reset.
 
 Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset,
-and Legend III's into Legend II. After the Reset sweep (05:00-05:10),
+and Legend III's into Legend II. After the Reset sweep (05:03:40-05:10),
 settlement (from 05:20) and the late-battle check (from 05:30), from 06:00 the
 collector asks for the profile of every listed Legend II player (migration
 0076) not checked since 06:00, then every listed Legend III player, at

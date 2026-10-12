@@ -1,0 +1,779 @@
+/*
+ * Dashboard: account tabs, the "Customise dashboard" divider, the 3-column
+ * card grid, Customise and the cards. Cards share the brand's outline and
+ * drop (brand.css); colours come from the --cl-* tokens so light and dark
+ * both work.
+ */
+
+.dash-page {
+  width: min(100% - 2rem, 76rem);
+  padding-top: 1rem;
+}
+
+.dash-icon {
+  flex: 0 0 auto;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.18em;
+}
+
+/* ---------- Small shared pieces ---------- */
+
+.dash-muted {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+.dash-label {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dash-big {
+  display: block;
+  font-family: var(--cl-font-heading);
+  font-size: 2.1rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-page .positive {
+  color: var(--cl-positive);
+}
+
+.dash-page .negative {
+  color: var(--cl-negative);
+}
+
+/* Long, emoji, symbol or right-to-left names are cut with "…"; the title has the full name. */
+.dash-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
+.dash-stars {
+  color: var(--cl-gold);
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.dash-estimate {
+  display: inline-block;
+  padding: 0 0.35rem;
+  color: var(--cl-muted);
+  border: 1.5px dashed var(--cl-muted);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.dash-chip {
+  display: inline-block;
+  justify-self: start;
+  margin: 0;
+  padding: 0.15rem 0.5rem;
+  /* The same warm chip in both themes, as in the mock. */
+  color: var(--cl-brand-night);
+  background: #ffe9c7;
+  border: 1.5px solid #c98a00;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.dash-small-button {
+  min-height: 2rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.dash-size-chip {
+  display: inline-block;
+  padding: 0 0.4rem;
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+/* A choice flipped while looking at the card. */
+.dash-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  overflow: hidden;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 8px;
+}
+
+.dash-switch button {
+  min-height: 1.8rem;
+  padding: 0.1rem 0.55rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.dash-switch button + button {
+  border-left: 2px solid var(--cl-card-line);
+}
+
+.dash-switch button[aria-pressed="true"] {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+}
+
+/* ---------- Account tabs and the Customise divider ---------- */
+
+.dash-accounts {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+  overflow-x: auto;
+  padding: 0.2rem 0.2rem 0.5rem;
+  scrollbar-width: thin;
+}
+
+.dash-account {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 15rem;
+  min-height: 3.6rem;
+  padding: 0.4rem 1rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-card-drop);
+  text-decoration: none;
+}
+
+.dash-account > .dash-name {
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+}
+
+.dash-account-line {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.dash-account[aria-current="page"] {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+}
+
+.dash-account[aria-current="page"] :is(.dash-account-line, .dash-account-line b) {
+  color: var(--cl-brand-night);
+}
+
+.dash-account-add {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  border-style: dashed;
+  box-shadow: none;
+  font-weight: 800;
+}
+
+.dash-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 2.6rem;
+  margin-bottom: 1rem;
+}
+
+.dash-divider::before {
+  flex: 1;
+  height: 2px;
+  background: var(--cl-border);
+  content: "";
+}
+
+.dash-customise {
+  gap: 0.4rem;
+}
+
+/* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.dash-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.9rem 1rem;
+}
+
+/* A card's parts keep their size; a card taller than its slot scrolls instead. */
+.dash-card > * {
+  flex-shrink: 0;
+}
+
+/* Small and Medium cards are a fixed 360 px tall; every design fits inside. */
+.dash-card-s,
+.dash-card-m {
+  height: 360px;
+  overflow: hidden auto;
+}
+
+.dash-card-s {
+  grid-column: span 1;
+}
+
+.dash-card-m {
+  grid-column: span 2;
+}
+
+.dash-card-l {
+  grid-column: 1 / -1;
+}
+
+.dash-card h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.dash-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem 0.6rem;
+}
+
+.dash-card-meta {
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+}
+
+.dash-card-sub {
+  margin: -0.35rem 0 0;
+}
+
+.dash-card-foot {
+  margin: auto 0 0;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
+}
+
+.dash-card-note {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.dash-card-link {
+  align-self: flex-start;
+  margin-top: auto;
+  color: var(--cl-accent);
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.dash-card-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+  margin-top: -0.2rem;
+}
+
+.dash-message {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+  padding: 2.5rem 1.5rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.dash-message h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+.dash-message p {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.dash-link-steps {
+  margin: 0;
+  padding-left: 1.3rem;
+}
+
+.dash-link-steps li + li {
+  margin-top: 0.3rem;
+}
+
+.dash-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 2.5rem 1rem;
+  border: 2px dashed var(--cl-border);
+  border-radius: var(--cl-card-radius);
+  font-family: var(--cl-font-heading);
+  font-size: 1.25rem;
+}
+
+.dash-new-day {
+  margin-bottom: 1rem;
+}
+
+/* ---------- Customise ---------- */
+
+.dash-editbar {
+  position: sticky;
+  z-index: 5;
+  top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  color: #fff4e2;
+  background: var(--cl-brand-night);
+  border: 2px solid #000;
+  border-radius: var(--cl-card-radius);
+  box-shadow: 0 4px 0 var(--cl-brand-orange);
+}
+
+.dash-editbar-title {
+  font-family: var(--cl-font-heading);
+  font-size: 1.1rem;
+  font-weight: 400;
+}
+
+.dash-editbar-state {
+  flex: 1 1 auto;
+  color: #cdbfae;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.dash-editbar-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ffb4b4;
+  font-weight: 700;
+}
+
+:root .dash-grid-editing .dash-card {
+  border-style: dashed;
+  border-color: var(--cl-action);
+  box-shadow: none;
+}
+
+.dash-card-dragging {
+  opacity: 0.45;
+}
+
+.dash-edit-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: -0.4rem -0.5rem 0;
+  padding: 0.3rem 0.4rem;
+  background: var(--cl-panel);
+  border-radius: var(--cl-radius);
+  touch-action: none;
+}
+
+.dash-edit-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-grip {
+  width: 2.2rem;
+  height: 2.2rem;
+  color: var(--cl-ink);
+  background: transparent;
+  border: 0;
+  font-size: 1.3rem;
+  cursor: grab;
+  touch-action: none;
+}
+
+.dash-icon-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  cursor: pointer;
+}
+
+.dash-icon-button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+/* The outlined "⚙ Settings" button inside the card's top-right corner. */
+.dash-card-settings {
+  position: absolute;
+  z-index: 1;
+  top: 3.4rem;
+  right: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.6rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+/* While customising, the Settings button takes the corner the card's note uses. */
+.dash-card-settings ~ .dash-card-head .dash-card-meta {
+  visibility: hidden;
+}
+
+.dash-dialog {
+  width: min(100% - 2rem, 26rem);
+  max-height: min(100% - 2rem, 44rem);
+  padding: 1rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.dash-dialog::backdrop {
+  background: rgb(29 20 38 / 0.55);
+}
+
+.dash-dialog h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.dash-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.dash-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.dash-field {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-weight: 700;
+}
+
+.dash-field legend {
+  margin-bottom: 0.4rem;
+}
+
+.dash-field > .dash-small-button {
+  justify-self: start;
+}
+
+.dash-field input {
+  width: 8rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 1.2rem;
+  font-weight: 900;
+}
+
+.dash-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dash-chip-button {
+  padding: 0.25rem 0.6rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dash-chip-button[aria-pressed="true"] {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+}
+
+.dash-chip-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.dash-add-sheet {
+  width: min(100% - 2rem, 34rem);
+}
+
+.dash-add-list {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-add-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--cl-border);
+}
+
+.dash-add-list p {
+  margin: 0.15rem 0 0;
+}
+
+.dash-add-none {
+  margin: 0;
+}
+
+.dash-welcome {
+  width: min(100% - 2rem, 34rem);
+}
+
+.dash-welcome > p {
+  margin: 0.3rem 0 1rem;
+}
+
+.dash-welcome-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.dash-welcome-option {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+  padding: 1rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dash-welcome-option b {
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+  font-weight: 400;
+}
+
+.dash-welcome-badge {
+  padding: 0 0.4rem;
+  color: var(--cl-surface);
+  background: var(--cl-positive);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+/* ---------- Signed out ---------- */
+
+.dash-teaser {
+  position: relative;
+  min-height: 34rem;
+}
+
+.dash-teaser-behind {
+  filter: blur(6px);
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+}
+
+.dash-teaser-panel {
+  position: absolute;
+  top: 3rem;
+  left: 50%;
+  width: min(100%, 38rem);
+  padding: 1.5rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+  transform: translateX(-50%);
+}
+
+.dash-teaser-panel h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.5rem, 4vw, 2rem);
+}
+
+.dash-teaser-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-teaser-tiles li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.8rem;
+  border: 2px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.dash-teaser-tiles .dash-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--cl-accent);
+}
+
+.dash-teaser-panel .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.dash-note {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.8rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+/* ---------- Phone ---------- */
+
+/* On a phone every card is full width, one under another, as tall as its content. */
+@media (max-width: 40rem) {
+  .dash-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .dash-card-s,
+  .dash-card-m,
+  .dash-card-l {
+    grid-column: 1 / -1;
+    height: auto;
+    overflow: visible;
+  }
+
+  /* The Customise bar sits at the bottom, in thumb reach. */
+  .dash-editbar {
+    position: fixed;
+    inset: auto 0 0;
+    margin: 0;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    border-radius: 16px 16px 0 0;
+  }
+
+  .dash-editbar-state {
+    flex-basis: 60%;
+  }
+
+  .dash-page:has(.dash-editbar) {
+    padding-bottom: 12rem;
+  }
+
+  /* Dialogs open as a sheet from the bottom of the screen. */
+  .dash-dialog {
+    width: 100%;
+    max-width: none;
+    margin: auto 0 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .dash-welcome-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash-teaser-panel {
+    top: 1rem;
+    padding: 1rem;
+  }
+
+  .dash-teaser-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

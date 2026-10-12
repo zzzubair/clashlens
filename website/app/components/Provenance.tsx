@@ -11,6 +11,7 @@ const utcTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 let localTimestampFormatter: Intl.DateTimeFormat | null = null;
+let localTimeFormatter: Intl.DateTimeFormat | null = null;
 
 export function FreshnessText({ freshness }: { freshness: Freshness }) {
   return (
@@ -103,12 +104,24 @@ export function useServerTime(loadedAt: string | undefined) {
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
-  return `${utcTimestampFormatter.format(date)} UTC`;
+  return `${utcTimestampFormatter.format(date).replace("Sept", "Sep")} UTC`;
 }
 
-export function LocalTimestamp({ value }: { value: string }) {
+/** A time in the viewer's own timezone, written the same way on every page. */
+export function LocalTimestamp({
+  value,
+  timeOnly,
+  className,
+}: {
+  value: string;
+  timeOnly?: boolean;
+  className?: string;
+}) {
   const [localTime, setLocalTime] = useState<string | null>(null);
-  const utcTime = formatTimestamp(value);
+  const utcTime =
+    timeOnly && !Number.isNaN(Date.parse(value))
+      ? `${new Date(value).toISOString().slice(11, 16)} UTC`
+      : formatTimestamp(value);
 
   // The browser knows the viewer's timezone. Keep the first render identical
   // to the server's UTC text, then switch after the page becomes interactive.
@@ -118,7 +131,7 @@ export function LocalTimestamp({ value }: { value: string }) {
       setLocalTime("Unknown");
       return;
     }
-    localTimestampFormatter ??= new Intl.DateTimeFormat(undefined, {
+    localTimestampFormatter ??= new Intl.DateTimeFormat("en-GB", {
       day: "numeric",
       month: "short",
       year: "numeric",
@@ -126,11 +139,21 @@ export function LocalTimestamp({ value }: { value: string }) {
       minute: "2-digit",
       timeZoneName: "short",
     });
-    setLocalTime(localTimestampFormatter.format(date));
-  }, [value]);
+    localTimeFormatter ??= new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    const formatter = timeOnly ? localTimeFormatter : localTimestampFormatter;
+    setLocalTime(formatter.format(date).replace("Sept", "Sep"));
+  }, [value, timeOnly]);
 
   return (
-    <time className="local-time" dateTime={value} title={utcTime}>
+    <time
+      className={className ? `local-time ${className}` : "local-time"}
+      dateTime={value}
+      title={utcTime}
+    >
       {localTime ?? utcTime}
     </time>
   );

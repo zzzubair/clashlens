@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,6 +13,7 @@ from . import (
     domain,
     first_battle_log,
     ranked_day_inputs,
+    reading_rule,
     reset_baselines,
 )
 from .db import (
@@ -22,6 +22,7 @@ from .db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     RESET_LOCK_WAIT,
     Claim,
     Database,
@@ -37,9 +38,9 @@ from .domain import (
 from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
+    BattleContribution,
     ReconciliationInput,
     ReconciliationResult,
-    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -81,28 +82,25 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     SELECT DISTINCT ranked_day_start
                     FROM api_player_daily_logs
                     WHERE player_id = %s AND ranked_day_start >= %s
-                      AND official_season_id = %s
+                      AND (official_season_id = %s
+                           OR %s AND ranked_day_start < %s)
                     ORDER BY ranked_day_start
                     """,
-                    (player_id, day_start, claim.input_json["recalculate_season"]),
+                    (player_id, day_start, claim.input_json["recalculate_season"],
+                     claim.input_json.get("trigger") == "season_repair",
+                     ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
-            if claim.input_json.get("trigger") == "day_end":
-                # Its Reset reading usually finished the day already. A day a
-                # reading since may settle or disprove runs again.
-                latest = connection.execute(
-                    f"""
-                    SELECT state = 'Live'
-                           OR {ranked_day_inputs.LATER_READING_DAY_SQL}
-                    FROM ranked_day_versions
-                    WHERE player_id = %s AND ranked_day_start = %s
-                      AND reconciliation_rule_version = %s
-                    ORDER BY version DESC LIMIT 1
-                    """,
-                    (player_id, day_start, RECONCILIATION_RULE_VERSION),
-                ).fetchone()
-                if latest is None or not latest[0]:
-                    day_starts = set()
+            if claim.input_json.get("trigger") == "battle_log_check" and connection.execute(
+                """
+                SELECT 1 FROM ranked_day_versions
+                WHERE player_id = %s AND ranked_day_start = %s
+                  AND reconciliation_rule_version = %s
+                LIMIT 1
+                """,
+                (player_id, day_start, RECONCILIATION_RULE_VERSION),
+            ).fetchone() is None:
+                day_starts = set()
             pending = sorted(day_starts)
             while pending:
                 day_start = pending.pop(0)
@@ -137,46 +135,6 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             )
 
 
-def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
-    """Whether a Legend I profile saved after the day ended still showed no
-    Season, and a later one in the same Season showed the player signed up.
-    A player cannot leave a Season once signed up, so neither answer alone is
-    enough: the first proves no sign-up yet, the second that this Season is
-    the one they joined."""
-    return bool(
-        connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM player_profile_versions AS waiting
-                JOIN player_profile_effects AS waiting_seen
-                  ON waiting_seen.profile_version_id = waiting.id
-                JOIN player_profile_versions AS joined
-                  ON joined.player_id = waiting.player_id
-                JOIN player_profile_effects AS joined_seen
-                  ON joined_seen.profile_version_id = joined.id
-                WHERE waiting.player_id = %(player)s
-                  AND waiting.eligibility_state = 'eligible'
-                  AND waiting.eligibility_reason = 'confirmed_legend_i'
-                  AND waiting.current_league_season_id = '0'
-                  AND waiting_seen.observed_at >= %(day_end)s
-                  AND joined.current_league_season_id = %(season)s
-                  AND joined.eligibility_state = 'eligible'
-                  AND joined.source_contract_state = 'accepted'
-                  AND joined_seen.observed_at > waiting_seen.observed_at
-                  AND joined_seen.observed_at < %(season_end)s
-            )
-            """,
-            {
-                "player": player_id,
-                "day_end": ranked_day.end,
-                "season": ranked_day.official_season_id,
-                "season_end": ranked_day.season_end,
-            },
-        ).fetchone()[0]
-    )
-
-
 def recalculate_ranked_day(
     database: Database,
     connection: Any,
@@ -195,10 +153,7 @@ def recalculate_ranked_day(
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
     # allowing unrelated player-days to reconcile concurrently.
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
-    )
+    ranked_day_inputs.lock_ranked_day(connection, player_id, ranked_day)
     now_row = connection.execute("SELECT clock_timestamp()").fetchone()
     assert now_row is not None
     now = now_row[0]
@@ -275,8 +230,21 @@ def recalculate_ranked_day(
             end_battle_log_observation_id = start_battle_log_observation_id
     if start_baseline is None:
         start_baseline = first_battle_log.season_rule_start(
-            connection, player_id, ranked_day,
+            connection, player_id, ranked_day.start,
             complete=start_battle_log_observation_id is not None,
+        )
+    # Within the Season, a player who has not played yet ends the day at
+    # 5,000 too, once a battle log saved after the day shows no battle of it.
+    if end_baseline is None and ranked_day.end <= now and (
+        ranked_day.end < ranked_day.season_end
+    ) and connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM battle_log_observations"
+        " WHERE player_id = %s AND observed_at >= %s)",
+        (player_id, ranked_day.end),
+    ).fetchone()[0]:
+        end_baseline = first_battle_log.season_rule_start(
+            connection, player_id, ranked_day.end,
+            complete=end_battle_log_observation_id is not None,
         )
     coverage = ranked_day_inputs.load_coverage(
         database,
@@ -308,31 +276,35 @@ def recalculate_ranked_day(
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
-    # A player dropped from Legend I at a Season's end, ranked below 10,000,
-    # has no Legend I reading at that Reset, so their last day had no end:
-    # all 1,993 such players on 5 October 2026. The game's official Season-end
-    # total in their league history, which includes the automatic defense
-    # loss, is that day's end instead; no reset to 5,000 follows it.
+    # A Season-ending Reset reading proves no Season's end: it shows a
+    # survivor reset to 5,000, and a player dropped from Legend I, ranked
+    # below 10,000, has no Legend I reading at all (1,993 players on 5 October
+    # 2026). The game's official Season-end total in the player's league
+    # history, which includes the automatic defense loss, is instead the end
+    # the last day's calculation is checked against and its saved next start;
+    # a day whose calculation differs is Inconsistent and keeps its
+    # calculated EOD: 778 of 9,593 such Complete days on 5 October 2026 did.
+    # No reset to 5,000 follows it; the next Season starts by the Season
+    # rule. It counts even when no Season-ending Reset reading was saved; the
+    # day's battle logs still decide whether its battles are all known.
     official_final = (
         _official_final(connection, player_id, ranked_day.end)
         if boundary_kind == "season"
-        and end_baseline is not None
-        and _dropped_from_legend_i(
-            connection, player_id, ranked_day.end,
-            kept_season=ranked_day_for(ranked_day.end).official_season_id,
-        )
         else None
     )
     if official_final is not None:
-        assert end_baseline is not None
         boundary_kind = None
         end_baseline = {
-            **end_baseline,
+            **(end_baseline or {"id": None}),
             "trophies": official_final,
             "eligibility_state": None,
-            "complete": bool(end_baseline["evidence"]["battle_log_valid"]),
+            "complete": True,
             "evidence": {
-                **end_baseline["evidence"], "official_final_trophies": official_final,
+                **(end_baseline["evidence"] if end_baseline else {
+                    "profile": {"observed_at": None},
+                    "battle_log_observation_id": None,
+                }),
+                "official_final_trophies": official_final,
             },
         }
     # A player ranked below 10,000 at a weekly Monday Reset drops to Legend
@@ -342,30 +314,61 @@ def recalculate_ranked_day(
     # Reset, so a Reset reading taken before a profile showing the lower
     # league is that player's last Legend I total: no raise to 5,000 follows
     # it, and the day it starts is not a Legend I day. Legend I has no
-    # weekly official total to check it against.
-    if (
-        boundary_kind == "weekly"
-        and end_baseline is not None
-        and end_baseline["trophies"] is not None
-        and _dropped_after_reading(connection, player_id, end_baseline, ranked_day.end)
+    # weekly official total to check it against. Without a Reset reading,
+    # any such profile read from the Reset counts.
+    if boundary_kind == "weekly" and _dropped_after_reading(
+        connection, player_id, end_baseline, ranked_day.end
     ):
         boundary_kind = None
-        end_baseline = {
-            **end_baseline,
-            "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
-        }
-    if (
-        start_baseline is not None
-        and start_baseline["eligibility_state"] == "eligible"
+        if end_baseline is not None:
+            end_baseline = {
+                **end_baseline,
+                "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
+            }
+    start_dropped = (
+        (start_baseline is None
+         or start_baseline["eligibility_state"] in {None, "eligible"})
         and ranked_day.start.weekday() == 0
         and season_day is not None
         and season_day.day_number > 1
         and _dropped_after_reading(
             connection, player_id, start_baseline, ranked_day.start
         )
-    ):
+    )
+    if start_dropped and start_baseline is not None:
         start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
+    # A profile read on a Season's first day before the game's reset to 5,000
+    # lands still shows the previous Season's total: the official one, when
+    # league history saved it, which the day before's calculated end can
+    # miss. On 5 October 2026, 14 of 17 such readings that disagreed matched
+    # only the official total (5,343 against a calculated 5,378 for one).
+    # Day 1 still starts at 5,000.
+    season_first_day = season_day is not None and season_day.day_number == 1
+    pre_reset_official = (
+        _official_final(connection, player_id, ranked_day.start)
+        if season_first_day
+        else None
+    )
 
+    # A day whose Reset reading cannot start it, rejected, late or missing,
+    # starts from the day before's calculated end once that day's battles are
+    # all known: the ledger's own arithmetic, shown as calculated until a
+    # reading confirms it. On 7 October 2026, 3,574 days had every battle and
+    # no start for this reason alone. A Season's Day 1 keeps the Season rule.
+    if (
+        (start_baseline is None or start_baseline["trophies"] is None)
+        and (start_baseline is None
+             or start_baseline["eligibility_state"] in {None, "eligible"})
+        and not start_dropped
+        and previous is not None
+        and previous.expected_next_start is not None
+        and season_day is not None
+        and season_day.day_number > 1
+    ):
+        start_baseline = ranked_day_inputs.previous_end_start(
+            start_baseline, previous,
+            complete=start_battle_log_observation_id is not None,
+        )
     trophy_rule_versions = tuple(
         sorted(
             {
@@ -399,6 +402,33 @@ def recalculate_ranked_day(
     perspective_disagreement = any(
         contribution.disagreement for contribution in contributions
     )
+    # Once the day has ended, every reading of it judges it (reading_rule),
+    # and the new day's battles say what each reading already showed.
+    readings: tuple[reading_rule.Reading, ...] = ()
+    new_day_contributions: tuple[BattleContribution, ...] = ()
+    previous_day_contributions: tuple[BattleContribution, ...] = ()
+    first_unshown_report: datetime | None = None
+    unreadable_from: datetime | None = None
+    covered_until: datetime | None = None
+    if now >= ranked_day.end:
+        readings, unreadable_from, covered_until = ranked_day_inputs.load_readings(
+            database, connection, player_id, ranked_day,
+            reset_profile_observation_id=(
+                end_baseline["evidence"].get("profile_observation_id")
+                if end_baseline is not None and end_baseline["trophies"] is not None
+                else None
+            ),
+            end_battle_log_observation_id=end_battle_log_observation_id,
+        )
+        new_day_contributions = ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.end)
+        )
+        previous_day_contributions = ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.start - timedelta(days=1))
+        )
+        first_unshown_report = ranked_day_inputs.load_first_unshown_report(
+            connection, player_id, *domain.battle_window(ranked_day.end)
+        )
     data = ReconciliationInput(
         ranked_day=ranked_day,
         now=now,
@@ -409,7 +439,7 @@ def recalculate_ranked_day(
         ),
         end_baseline_id=(
             int(end_baseline["id"])
-            if end_baseline is not None
+            if end_baseline is not None and end_baseline["id"] is not None
             else None
         ),
         start_trophies=(
@@ -446,16 +476,14 @@ def recalculate_ranked_day(
             else False
         ),
         player_eligible=player_eligible,
-        not_enrolled=not contributions
-        and _known_not_enrolled(connection, player_id, ranked_day),
         perspective_disagreement=perspective_disagreement,
         malformed_evidence=malformed_evidence,
         unclassified_evidence=unclassified_evidence,
-        start_baseline_evidence=(
-            start_baseline["evidence"]
-            if start_baseline is not None
-            else {}
-        ),
+        start_baseline_evidence={
+            **(start_baseline["evidence"] if start_baseline is not None else {}),
+            **({"official_final_trophies": pre_reset_official}
+               if pre_reset_official is not None else {}),
+        },
         end_baseline_evidence=(
             end_baseline["evidence"] if end_baseline is not None else {}
         ),
@@ -464,31 +492,17 @@ def recalculate_ranked_day(
         domain_rule_version=domain_rule_version,
         season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
         trophy_allocation_rule_versions=trophy_rule_versions,
-        season_first_day=season_day is not None and season_day.day_number == 1,
+        season_first_day=season_first_day,
         zero_result_attack_slots=zero_result_attacks,
         zero_result_defense_slots=zero_result_defenses,
+        readings=readings,
+        new_day_contributions=new_day_contributions,
+        previous_day_contributions=previous_day_contributions,
+        first_unshown_report=first_unshown_report,
+        unreadable_from=unreadable_from,
+        covered_until=covered_until,
     )
     result = reconcile_ranked_day(data)
-    reading_at = (
-        end_baseline["evidence"]["profile"]["observed_at"]
-        if end_baseline is not None else None
-    )
-    # The official total already counts every credit and the automatic loss,
-    # so a profile read before the game applied them never settles it.
-    if (
-        reading_at and official_final is None
-        and reads_later_reading(data, result)
-    ):
-        # A later reading can settle an end Reset reading taken before the
-        # game finished crediting the day or charging its automatic loss.
-        later = ranked_day_inputs.load_later_reading(
-            database, connection, player_id, ranked_day,
-            datetime.fromisoformat(reading_at),
-        )
-        if later is not None:
-            result = reconcile_ranked_day(
-                replace(data, later_next_start_reading=later)
-            )
     result_data = {
         "state": result.state,
         "confidence": result.confidence,
@@ -734,7 +748,7 @@ def recalculate_ranked_day(
         result=result,
         contribution_evidence=contribution_evidence,
     )
-    if result.state == "Live":
+    if result.state == "Live" or now < ranked_day.end + DAY_END_RECALCULATION_DELAY:
         _enqueue_day_end_reconciliation(connection, player_id, ranked_day)
     if existing is None:
         # A reset sweep is the sole source of expected population.
@@ -774,33 +788,35 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
 
 
 def _dropped_after_reading(
-    connection: Any, player_id: int, baseline: dict[str, Any], reset: datetime
+    connection: Any, player_id: int, baseline: dict[str, Any] | None,
+    reset: datetime,
 ) -> bool:
-    """Whether a profile read after this Reset reading, and before the next
-    Reset, shows a league below Legend I: the player dropped at ``reset``."""
-    reading_at = baseline["evidence"]["profile"]["observed_at"]
-    return reading_at is not None and _dropped_from_legend_i(
-        connection, player_id, datetime.fromisoformat(reading_at),
+    """Whether a profile read after this Reset reading, or after ``reset``
+    without one, and before the next Reset, shows a league below Legend I:
+    the player dropped at ``reset``."""
+    reading_at = (
+        baseline["evidence"].get("profile", {}).get("observed_at")
+        if baseline is not None
+        else None
+    )
+    return _dropped_from_legend_i(
+        connection, player_id,
+        datetime.fromisoformat(reading_at) if reading_at is not None else reset,
         until=reset + timedelta(days=1),
     )
 
 
 def _dropped_from_legend_i(
-    connection: Any, player_id: int, since: datetime,
-    until: datetime | None = None, kept_season: str | None = None,
+    connection: Any, player_id: int, since: datetime, until: datetime
 ) -> bool:
-    """Whether a profile of the player read from ``since``, and before
-    ``until`` when given, shows a league below Legend I before any Legend I
-    profile naming ``kept_season``, such as the next Season after a Season's
-    end. Each reading counts at its own time; a saved profile can be read
-    again."""
+    """Whether a profile of the player read from ``since`` and before
+    ``until`` shows a league below Legend I. Each reading counts at its own
+    time; a saved profile can be read again."""
     return bool(
         connection.execute(
             """
             WITH version AS (
-                SELECT version.id, version.observed_at, version.eligibility_state,
-                       version.source_contract_state,
-                       version.current_league_season_id
+                SELECT version.id, version.observed_at, version.eligibility_state
                 FROM players AS player
                 JOIN player_profile_versions AS version
                   ON version.normalized_tag = player.normalized_tag
@@ -823,23 +839,10 @@ def _dropped_from_legend_i(
             SELECT EXISTS (
                 SELECT 1 FROM reading AS dropped
                 WHERE dropped.eligibility_state = 'ineligible'
-                  AND (%(until)s::timestamptz IS NULL
-                       OR dropped.read_at < %(until)s)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM reading AS kept
-                      WHERE kept.read_at < dropped.read_at
-                        AND kept.eligibility_state = 'eligible'
-                        AND kept.source_contract_state = 'accepted'
-                        AND kept.current_league_season_id = %(season)s
-                  )
+                  AND dropped.read_at < %(until)s
             )
             """,
-            {
-                "player": player_id,
-                "since": since,
-                "until": until,
-                "season": kept_season,
-            },
+            {"player": player_id, "since": since, "until": until},
         ).fetchone()[0]
     )
 
@@ -1223,21 +1226,36 @@ def _enqueue_live_reconciliation(
         f"reconcile:live:{player_id}:{ranked_day_start_text}:"
         f"{RECONCILIATION_RULE_VERSION}:{projection_hash}"
     )
+    # A day usually waits in one live calculation at most (migration 0104).
+    # One not started reads these battles when it runs, and stays locked
+    # until they are saved; one a worker is starting is skipped, so these
+    # battles queue the next. At 09:42 on 12 Oct 2026, 62,519 waited for
+    # 10,696 player days.
     connection.execute(
-        """
+        f"""
+        WITH waiting AS MATERIALIZED (
+            SELECT job.id FROM python_processing_jobs_worker AS job
+            WHERE job.work_type = 'reconcile_ranked_day' AND job.state = 'pending'
+              AND job.priority = {PYTHON_LIVE_PRIORITY}
+              AND job.input_json ->> 'player_id' = %(player)s
+              AND job.input_json ->> 'ranked_day_start' = %(day)s
+              AND job.deduplication_key LIKE 'reconcile:live:%%'
+            LIMIT 1 FOR UPDATE SKIP LOCKED)
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
             state, due_at, parser_version, processing_version,
             domain_rule_version, analytics_rule_version, priority
-        ) VALUES (
-            NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s, %s
-        )
+        ) SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, 'pending',
+                 clock_timestamp(), %(parser)s, %(processing)s, %(domain)s,
+                 %(analytics)s, %(priority)s
+        WHERE NOT EXISTS (SELECT FROM waiting)
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
-        (
-            deduplication_key,
-            Jsonb(
+        {
+            "player": str(int(player_id)),
+            "day": ranked_day_start_text,
+            "key": deduplication_key,
+            "input": Jsonb(
                 {
                     "player_id": int(player_id),
                     "ranked_day_start": ranked_day_start_text,
@@ -1245,28 +1263,27 @@ def _enqueue_live_reconciliation(
                     "projection_hash": projection_hash,
                 }
             ),
-            DEFAULT_PARSER_VERSION,
-            PROCESSING_VERSION,
-            DOMAIN_RULE_VERSION,
-            ANALYTICS_RULE_VERSION,
-            ended_day_priority(ranked_day_start),
-        ),
+            "parser": DEFAULT_PARSER_VERSION,
+            "processing": PROCESSING_VERSION,
+            "domain": DOMAIN_RULE_VERSION,
+            "analytics": ANALYTICS_RULE_VERSION,
+            "priority": ended_day_priority(ranked_day_start),
+        },
     )
 
 
 def _enqueue_day_end_reconciliation(
     connection: Any, player_id: int, ranked_day: RankedDay
 ) -> None:
-    """Queue one calculation of a day saved Live, due after its Reset.
+    """Queue one calculation of a day saved before
+    DAY_END_RECALCULATION_DELAY after its Reset, or saved Live, due then.
 
-    The Reset reading normally finishes the day, but a player switched off
-    during it, such as one moved out of Legend I when a Season starts, gets
-    none and nothing else calculates the day again. On 2026-10-06 that left
-    2,037 ended Day 1 results Live. Due DAY_END_RECALCULATION_DELAY after the
-    Reset, once its readings have landed, the job runs only when no other
-    work waits, and does nothing once the day is finished, unless a reading
-    since the Reset may settle or disprove it
-    (``ranked_day_inputs.LATER_READING_DAY_SQL``).
+    Every reading and battle saved by then can settle or disprove the day,
+    and a player switched off during the Reset, such as one moved out of
+    Legend I when a Season starts, gets no Reset reading and nothing else
+    calculates the day again: on 2026-10-06 that left 2,037 ended Day 1
+    results Live. So every such day is calculated once more, about 13,000 a
+    Reset, and the job runs only when no other work waits.
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

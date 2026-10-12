@@ -142,7 +142,7 @@ Buying shields with Gems and waiting before buying the **same duration** again a
 
 The costs and waits above are visible in the [official shop image][shield-image]. The one-/two-day Legend waits and historical 5,200 restriction are in the [2019 FAQ][old-faq]. **Current Legend I prices, seven-day eligibility and whether the old trophy restriction survives the 2025/2026 changes are not independently confirmed.** Do not turn the historical restriction into a current rule. The published evidence supports a longer shield option, with that qualification.
 
-General support explicitly permits stacking a one-day and two-day shield into three days. That establishes that two days is not a universal shield-duration ceiling. Clash Lens currently only infers one or two consecutive shielded days; longer sequences become uncertain. This is an existing product limitation to review separately, not a game rule changed here. [General shield support][shields]; [domain shield model](domain.md#inferred-shielded-days); [implementation](../python/src/clashlens/reconciliation.py).
+General support explicitly permits stacking a one-day and two-day shield into three days. That establishes that two days is not a universal shield-duration ceiling, so Clash Lens infers a shielded run of any length. [General shield support][shields]; [domain shield model](domain.md#inferred-shielded-days); [implementation](../python/src/clashlens/reconciliation.py).
 
 ### What Clash Lens can see
 

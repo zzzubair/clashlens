@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   Form,
   Link,
@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
@@ -86,6 +87,15 @@ export default function Home() {
     setQuery(data.query);
   }, [data.query, setQuery]);
 
+  // The browser can show the page and accept typing before its scripts start.
+  // Once they take over, pick up anything typed then, or it sits in the box
+  // with no suggestions.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const typed = inputRef.current?.value ?? data.query;
+    if (typed !== data.query) suggestions.change(typed);
+  }, []);
+
   const seasonExpired = useSeasonReread(
     data.leaderboard?.generatedAt,
     !!data.leaderboard?.seasonResetPending,
@@ -109,22 +119,19 @@ export default function Home() {
       ) : null}
       <section className="home-overview" aria-labelledby="search-title">
         <div className="home-intro">
-          <img
-            className="home-badge"
-            src="/images/legend-league.webp"
-            alt=""
-            width="72"
-            height="72"
-          />
-          <h1 id="search-title">Legend League</h1>
+          <h1 id="search-title">
+            <img
+              className="home-logo"
+              src="/images/clashlens-wordmark.svg"
+              alt="Clash Lens"
+              width="264"
+              height="162"
+            />
+          </h1>
           <p>
             {leaderboard
-              ? `Daily results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
-              : "Daily results, rankings and armies for tracked players."}
-          </p>
-          <p>
-            To look someone up, enter their full player tag, including the #. Legend I
-            players start tracking automatically.
+              ? `Legend League results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
+              : "Legend League results, rankings and armies for tracked players."}
           </p>
         </div>
         <div className="player-search-panel">
@@ -160,6 +167,7 @@ export default function Home() {
                 <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
               </svg>
               <input
+                ref={inputRef}
                 id="player-search"
                 name="q"
                 type="search"
@@ -330,19 +338,13 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
     return (
       <section>
         <h3>No players or profiles found</h3>
-        <p>
-          Name search only finds players and profiles Clash Lens has already saved. To
-          look up anyone else, enter their full player tag, including the #.
-        </p>
+        <p>Enter a full #tag to look up anyone.</p>
       </section>
     );
   }
   return (
     <section>
       <h3>Clash of Clans players</h3>
-      <p className="section-note">
-        Names are not unique. Tag, clan, trophies, and data age distinguish each result.
-      </p>
       <ul className="search-result-list">
         {search.results.map((result) => (
           <li key={result.tag}>
@@ -355,12 +357,17 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
 }
 
 function SearchResult({ result }: { result: SearchResponse["results"][number] }) {
+  const backState = useBackState("Home");
   return (
     <div className="search-result">
       <div>
-        <a className="player-name" href={canonicalPlayerPath(result.tag)}>
+        <Link
+          className="player-name"
+          to={canonicalPlayerPath(result.tag)}
+          state={backState}
+        >
           <bdi>{result.name}</bdi>
-        </a>
+        </Link>
         <span className="player-tag">{result.tag}</span>
       </div>
       <div className="search-context">
@@ -376,6 +383,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 }
 
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
+  const backState = useBackState("Home");
   return (
     <div className="table-wrap">
       <table aria-label="Latest saved standings" className="data-table leaderboard-table">
@@ -401,9 +409,13 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <a className="player-name" href={canonicalPlayerPath(entry.tag)}>
+                <Link
+                  className="player-name"
+                  to={canonicalPlayerPath(entry.tag)}
+                  state={backState}
+                >
                   <bdi>{entry.name}</bdi>
-                </a>
+                </Link>
                 <span className="player-tag">{entry.tag}</span>
               </th>
               <td data-label="Clan">

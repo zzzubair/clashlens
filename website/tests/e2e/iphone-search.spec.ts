@@ -39,7 +39,7 @@ test("tapping a home search suggestion opens that player", async ({ page }) => {
 
 test("tapping a header search suggestion opens that player", async ({ page }) => {
   await tapLikeSafari(page);
-  await page.goto("/about");
+  await page.goto("/blog");
   const input = page.getByRole("searchbox", {
     name: "Search players and Clash Lens profiles",
   });

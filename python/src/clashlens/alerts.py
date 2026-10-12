@@ -99,6 +99,14 @@ CONDITIONS = {
         ),
         "./ops logs worker",
     ),
+    "battle_day": (
+        (
+            "A Legend day today or yesterday has 9 attacks or 9 defenses, or a battle"
+            " report is stamped 05:03:40-05:07:00 UTC: the game's no-attack window"
+            " after the Reset may have changed, so battles may be in the wrong day"
+        ),
+        "./ops logs worker",
+    ),
     "health": (
         "Early warning: a container may soon be restarted by its health check",
         "./ops status, then ./ops logs",
@@ -109,8 +117,8 @@ CONDITIONS = {
     ),
     "monitoring": (
         (
-            "A disk, restart-history, Live Leaderboard, Reset publication, Reset progress or"
-            " untracked battler check has been unreadable for at least 10 minutes"
+            "A disk, restart-history, Live Leaderboard, Reset publication, Reset progress,"
+            " untracked battler or battle-day check has been unreadable for at least 10 minutes"
         ),
         "journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager",
     ),
@@ -144,6 +152,7 @@ UNREADABLE = {
     "Reset publication status unavailable; run ./ops logs website",
     "Reset progress unavailable; run ./ops logs worker",
     "Untracked Legend I battler count unavailable; run ./ops logs worker",
+    "Battle-day check unavailable; run ./ops logs worker",
 }
 
 # A recovery is sent only after this long without the problem, so a problem
@@ -176,8 +185,15 @@ NO_PROGRESS = 120
 # PostgreSQL replays its change log after a crash; the health check waits.
 WARNING_DATABASE_STARTING = 300
 # Minutes after the Reset: collection done, projected inputs, inputs frozen,
-# board readable. Freezing by 05:25 leaves five minutes to publish by 05:30.
-RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 10, 15, 25, 30
+# board readable. Battle logs wait for 05:07:20 (collector_reset), and a
+# Season's opening Reset adds a league history each, at least 3 minutes of
+# six keys. Freezing by 05:25 leaves five minutes to publish by 05:30.
+RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 12, 15, 25, 30
+# Collector numbers sampled longer ago than this are unknown.
+METRICS_MAX_AGE = 300
+# board_deadline.MAX_UNFINISHED: this check runs on the host without the
+# worker's imports.
+BOARD_MAX_UNFINISHED = 50
 
 
 class CheckError(Exception):
@@ -357,7 +373,8 @@ def reset_probe(served: str, read_at: str) -> None:
     """Run inside the worker container; updates the latest Reset's record.
 
     Prints that Reset, its captured members, those whose Reset collection
-    ended, and when its board's inputs froze and it was first readable, or 0.
+    ended, when its board's inputs froze and it was first readable, and its
+    newest board's members waiting for a result and failed for good, or 0.
     ``served`` is the Reset of the board the website's public page showed at
     ``read_at``, both 0 when it showed none or could not be read.
     """
@@ -373,8 +390,28 @@ def reset_probe(served: str, read_at: str) -> None:
             readable_boundary=readable,
             readable_at=datetime.fromtimestamp(int(read_at), UTC) if readable else None,
         )
+        connection.commit()
+        # The newest board's members still without a result, and those whose
+        # day calculation failed for good (board_deadline), so an alert says
+        # what the board waits for; a slow count leaves them unknown, as 0.
+        waiting = (0, 0)
+        try:
+            connection.execute("SET statement_timeout = '5s'")
+            waiting = record and connection.execute(
+                """
+                SELECT count(*) FILTER (WHERE snapshot_status = 'pending'),
+                       count(*) FILTER (WHERE snapshot_status = 'failed')
+                FROM boundary_publication_generation_members
+                WHERE generation_id = (
+                    SELECT id FROM boundary_publication_generations
+                    WHERE boundary_at = %s ORDER BY generation DESC LIMIT 1)
+                """,
+                (record["boundary_at"],),
+            ).fetchone()
+        except psycopg.Error:
+            connection.rollback()
     if record is None:
-        print(0, 0, 0, 0, 0)
+        print(0, 0, 0, 0, 0, 0, 0)
         return
     epoch = lambda value: 0 if value is None else int(value.timestamp())
     print(
@@ -383,6 +420,7 @@ def reset_probe(served: str, read_at: str) -> None:
         record["collected_count"] + record["not_collected_count"],
         epoch(record["inputs_frozen_at"]),
         epoch(record["readable_at"]),
+        *waiting,
     )
 
 
@@ -416,7 +454,12 @@ def website_daily_board(origin: str) -> list[str]:
         or not re.fullmatch(r"[1-9][0-9]?", daily[1])
     ):
         raise CheckError("Daily leaderboard page sent an invalid board address")
-    if f">Day {daily[1]} standings</h1>" not in request(target).decode(errors="replace"):
+    # The board shows a "Day N" label right above its "Leaderboard at" heading;
+    # React separates "Day " and N with an empty comment when it renders.
+    heading = (
+        rf'>Day (?:<!-- -->)?{daily[1]}</p><h1 id="leaderboard-title">Leaderboard at '
+    )
+    if not re.search(heading, request(target).decode(errors="replace")):
         raise CheckError("Daily leaderboard page did not show the board")
     return daily
 
@@ -466,6 +509,51 @@ def completeness_probe() -> None:
                         AND demoted.eligibility_state = 'ineligible'
                         AND demoted_seen.observed_at > seen.last_battle_at
                   )
+                """
+            ).fetchone()[0]
+        )
+
+
+def battle_day_probe() -> None:
+    """Run inside the worker container; prints how many signs of a battle in
+    the wrong day the current and previous Legend days show.
+
+    A report belongs to the day of its stamp less five minutes
+    (``domain.BATTLE_DAY_GRACE``): the game lets no new-day attack start until
+    about 05:07:20 and every ended-day attack had ended by 05:03:38 at all 11
+    Resets from 29 September to 9 October 2026. A day with a 9th attack or
+    defense, or a report stamped 05:03:40-05:07:00 after either day's Reset,
+    means that window moved.
+    """
+    import psycopg
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    with psycopg.connect(url) as connection:
+        print(
+            connection.execute(
+                """
+                WITH since AS (
+                    SELECT date_bin(interval '1 day', clock_timestamp(),
+                                    timestamptz '2000-01-01 05:00:00+00')
+                           - interval '1 day' AS day_start
+                )
+                SELECT (
+                    SELECT count(DISTINCT (player_id, ranked_day_start))
+                    FROM ranked_day_versions
+                    WHERE ranked_day_end > (SELECT day_start FROM since)
+                      AND (attack_count > 8 OR defense_count > 8)
+                ) + (
+                    SELECT count(*)
+                    FROM legend_battles AS battle
+                    JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+                    WHERE battle.ranked_day_start >= (SELECT day_start FROM since)
+                          - interval '1 day'
+                      AND evidence.battle_timestamp >= (SELECT day_start FROM since)
+                      AND evidence.battle_timestamp - date_bin(
+                              interval '1 day', evidence.battle_timestamp,
+                              timestamptz '2000-01-01 05:00:00+00')
+                          BETWEEN interval '3 minutes 40 seconds' AND interval '7 minutes'
+                )
                 """
             ).fetchone()[0]
         )
@@ -619,6 +707,12 @@ def observe(
                 if not math.isfinite(value) or value < 0:
                     raise ValueError
                 metrics[parts[0]] = value
+        # The collector answers from its last database sample, which ages
+        # while its refresh cannot finish: an old one is unknown, not healthy.
+        sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
+        if sampled is not None and now - sampled > METRICS_MAX_AGE:
+            metrics.clear()
+            raise ValueError
         age = metrics.get("clashlens_collector_last_success_age_seconds")
         if age is not None:
             state["last_success"] = now - age
@@ -802,7 +896,8 @@ def observe(
             container = f"clashlens-python-{service}"
             result = command([podman, "exec", container, *probe[3:-1], *arguments], 25)
             values = [int(value) for value in result.stdout.split()]
-            if result.returncode or len(values) != count:
+            # A newer probe may print more values than this check reads.
+            if result.returncode or len(values) < count:
                 raise ValueError
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
@@ -859,6 +954,9 @@ def observe(
     )
     if completeness is not None:
         findings["completeness"] = completeness[0] > UNTRACKED_BATTLER_LIMIT
+    battle_day = run_probe("worker", ["--battle-day"], 1, "Battle-day check")
+    if battle_day is not None:
+        findings["battle_day"] = battle_day[0] > 0
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})
@@ -950,10 +1048,20 @@ def reset_stages(
         return False, False
     # A board that could not be read by 05:30 missed it too.
     late = minutes >= RESET_READABLE
+    blocked = []
+    if record is not None and record[0] == boundary:
+        waiting, failed = (list(record[5:7]) + [0, 0])[:2]
+        if waiting:
+            blocked.append(f"the board waits for {waiting:,} players' day results" + (
+                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30"
+                if waiting > BOARD_MAX_UNFINISHED else ""))
+        if failed:
+            blocked.append(f"{failed:,} players' day calculations failed for good")
     if late:
         state.setdefault("details", {})["publication"] = (
             f"Now: the {start:%Y-%m-%d} 05:00 UTC board was not readable at 05:30"
             + ("; the website check could not read it" if served is None else "")
+            + "".join(f"; {reason}" for reason in blocked)
         )
     if minutes < RESET_COLLECTED:
         return False, late
@@ -969,6 +1077,7 @@ def reset_stages(
         pass  # Inputs frozen; publication is checked at 05:30.
     elif minutes >= RESET_FROZEN:
         reasons.append("the board's inputs were not frozen by 05:25")
+        reasons += blocked
     elif minutes >= RESET_PROJECTED:
         if remaining is None or len(samples) < 2:
             unknown = True
@@ -1108,6 +1217,9 @@ def main() -> int:
             return 0
         if sys.argv[1:] == ["--completeness"]:
             completeness_probe()
+            return 0
+        if sys.argv[1:] == ["--battle-day"]:
+            battle_day_probe()
             return 0
         if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
             state_dir, webhook, *urls = sys.argv[2:]

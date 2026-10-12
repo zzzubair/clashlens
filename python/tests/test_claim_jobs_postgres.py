@@ -1023,16 +1023,14 @@ def test_stuck_repair_is_cancelled_and_retried_without_using_its_last_attempt(
                 )
                 is False
             )
-            time.sleep(1.1)
-            assert database.maintain_queue(max_jobs=10) == 1
-            assert (
-                database.scalar(
-                    "SELECT status || ':' || attempt_count FROM python_processing_jobs "
-                    "WHERE id = %s",
-                    (job_id,),
-                )
-                == "pending:0"
-            )
+            # It hands its lease back to wait out a back-off, and its only
+            # attempt still runs it once that ends.
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = now() WHERE id = %s"
+                    " AND status = 'waiting_dependency' AND lease_owner IS NULL"
+                    " RETURNING attempt_count", (job_id,)).fetchone() == (1,)
+            assert database.claim_job(owner="retry", job_id=job_id) is not None
         finally:
             database.close()
 

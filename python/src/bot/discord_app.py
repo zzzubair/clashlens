@@ -320,7 +320,7 @@ class DiscordApp:
     async def any_player_choices(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        """Autocomplete for /player: own and saved players, then name matches."""
+        """Autocomplete for /player: own players and group members, then name matches."""
         choices = await self._choices(
             self.commands.player_choices, str(interaction.user.id), current
         )

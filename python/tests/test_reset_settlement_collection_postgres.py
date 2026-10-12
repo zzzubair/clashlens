@@ -118,12 +118,9 @@ def _settlement_rows(connection_info: str) -> list[tuple]:
         return connection.execute(
             """
             SELECT work.sweep_id, work.player_id, work.due_at - sweep.boundary_at,
-                   work.lane, work.league_history_status, settlement.delayed_work_id = work.id
+                   work.lane, work.league_history_status
             FROM collector_work AS work
             JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
-            LEFT JOIN reset_boundary_settlements AS settlement
-              ON settlement.player_id = work.player_id
-             AND settlement.boundary_at = sweep.boundary_at
             WHERE work.kind = 'reset_settlement'
             ORDER BY work.sweep_id, work.player_id
             """
@@ -211,7 +208,7 @@ def test_one_delayed_work_per_frozen_member_survives_restart(database_url: str) 
         sweep_id = sweeps[0]
         assert sweeps == [sweep_id, sweep_id]
         expected = [
-            (sweep_id, player, timedelta(minutes=20), "ordinary", "not_applicable", True)
+            (sweep_id, player, timedelta(minutes=20), "ordinary", "not_applicable")
             for player in (first, second)
         ]
         assert _settlement_rows(connection_info) == expected
@@ -712,12 +709,8 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
             early_history = connection.execute(
                 "SELECT league_history_status FROM collector_work WHERE kind = 'reset_baseline'"
             ).fetchone()[0]
-            settlement = connection.execute(
-                "SELECT state, selected_trophies, proof_kind FROM reset_boundary_settlements"
-            ).fetchall()
         # The early Season pair still fetches league history; the check never does.
         assert early_history == ("pending" if boundary == SEASON_RESET else "not_applicable")
-        assert settlement == [("provisional", None, None)]
 
 
 @pytest.mark.parametrize(
@@ -760,7 +753,7 @@ def test_work_with_saves_still_committing_is_not_picked(database_url: str) -> No
         database = CollectorDatabase(connection_info)
         try:
             database.begin_reset(WEDNESDAY_RESET)
-            now = WEDNESDAY_RESET + timedelta(minutes=1)
+            now = WEDNESDAY_RESET + collector_reset.PROFILE_PASS_FROM
             due = database.pending_intents(limit=10, now=now, interactive=False)
             assert len(due) == 2
             held = due[0].work_id
@@ -783,7 +776,7 @@ def test_finishing_work_never_waits_on_worker_rows_that_point_at_it(
         database = CollectorDatabase(connection_info)
         try:
             database.begin_reset(WEDNESDAY_RESET)
-            now = WEDNESDAY_RESET + timedelta(minutes=1)
+            now = WEDNESDAY_RESET + collector_reset.PROFILE_PASS_FROM
             work_id = database.pending_intents(limit=1, now=now, interactive=False)[0].work_id
             with (
                 ThreadPoolExecutor(1) as pool,
@@ -956,3 +949,65 @@ def test_a_new_player_check_goes_ahead_of_the_settlement_backlog(
             ]
         finally:
             database.close()
+
+
+def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
+    database_url: str, tmp_path
+) -> None:
+    # The ended day's last battle ended by 05:03:38 and the new day's first
+    # started at 05:07:20 or later at all 11 Resets from 29 September to
+    # 9 October 2026.
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
+        first, second = _players(connection_info, TAG, "#8QV")
+        database = CollectorDatabase(connection_info)
+        database.begin_reset(SEASON_RESET)
+        collector = _collector(origin, database, tmp_path)
+
+        def due(at: datetime) -> list:
+            return [
+                intent
+                for intent in database.pending_intents(limit=20, now=at, interactive=False)
+                if intent.kind == "reset_baseline"
+            ]
+
+        def needs(intent) -> tuple[int | None, bool, bool, bool]:
+            return (
+                intent.player_id, intent.profile_required,
+                intent.battle_log_required, intent.league_history_required,
+            )
+
+        assert due(SEASON_RESET + timedelta(minutes=3, seconds=39)) == []
+        profiles = due(SEASON_RESET + collector_reset.PROFILE_PASS_FROM)
+        assert [needs(intent) for intent in profiles] == [
+            (first, True, False, False), (second, True, False, False)
+        ]
+        assert asyncio.run(collector.collect_intent(profiles[0])) == "profile_saved"
+        assert [endpoint for endpoint, _at in _Provider.requests] == ["profile"]
+        assert [intent.player_id for intent in due(SEASON_RESET + timedelta(minutes=7, seconds=19))] == [second]
+
+        # From 05:07:20 a profile still owed goes first, with its log after it;
+        # a saved profile's log and the Season's league history follow.
+        owed, saved = due(SEASON_RESET + collector_reset.BATTLE_LOG_PASS_FROM)
+        assert [needs(owed), needs(saved)] == [
+            (second, True, True, True), (first, False, True, True)
+        ]
+        _Provider.requests.clear()
+        for intent in (owed, saved):
+            assert asyncio.run(collector.collect_intent(intent)) == "complete"
+        assert [endpoint for endpoint, _at in _Provider.requests] == [
+            "profile", "battlelog", "leaguehistory", "battlelog", "leaguehistory"
+        ]
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                """
+                SELECT bool_and(work.status = 'complete'
+                                AND log.request_started_at >= profile.response_completed_at)
+                FROM collector_work AS work
+                JOIN collector_observations AS profile ON profile.id = work.profile_observation_id
+                JOIN collector_observations AS log ON log.id = work.battle_log_observation_id
+                WHERE work.kind = 'reset_baseline'
+                """
+            ).fetchone()[0]

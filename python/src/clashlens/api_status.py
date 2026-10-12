@@ -6,26 +6,49 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .api_db import ApiDatabase
+from .db import PYTHON_LIVE_PRIORITY
+from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .reconciliation_db import DAY_END_RECALCULATION_DELAY
 
 # Normal processing takes about a second; a busy Reset can take ten minutes or more.
 DELAY_SECONDS = 900
 
 
 def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
+    latest_day = ranked_day_for(now - RANKED_DAY_DURATION).start.astimezone(UTC)
     with database.pool.connection() as connection:
         row = connection.execute(
             """
+            -- Live work and the day-end calculation of the latest finished
+            -- Legend day, which players see; other background jobs, such as
+            -- Season repair and older days' recalculations, wait by design.
+            -- A day-end calculation is queued when its day starts and waits
+            -- from when it is due, in every state: counted from when it was
+            -- queued, a running one read as waiting since the day before
+            -- (12 Oct 2026). Live data that waits for a retry counts from
+            -- when it was saved, as a retry moves its due time.
             SELECT (SELECT max(last_success_at) FROM collector_response_state
                     WHERE scope = 'player' AND endpoint IN ('profile', 'battle_log')),
-                   (SELECT min(CASE WHEN status = 'pending'
+                   (SELECT min(CASE WHEN input_json->>'trigger' = 'day_end'
+                                    THEN greatest(created_at, %(day_end_due)s)
+                                    WHEN status = 'pending'
                                     THEN greatest(created_at, due_at)
                                     ELSE created_at END)
                     FROM python_processing_jobs
                     WHERE work_type IN ('process_observation', 'reconcile_ranked_day')
+                      AND (priority >= %(live)s
+                           OR (work_type = 'reconcile_ranked_day'
+                               AND input_json->>'trigger' = 'day_end'
+                               AND input_json->>'ranked_day_start' = %(day)s))
                       AND (status IN ('waiting_retry', 'waiting_dependency', 'leased')
-                           OR (status = 'pending' AND due_at <= %s)))
+                           OR (status = 'pending' AND due_at <= %(now)s)))
             """,
-            (now,),
+            {
+                "day_end_due": latest_day + RANKED_DAY_DURATION + DAY_END_RECALCULATION_DELAY,
+                "live": PYTHON_LIVE_PRIORITY,
+                "day": latest_day.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "now": now,
+            },
         ).fetchone()
     now = now.astimezone(UTC)
     limit = now - timedelta(seconds=DELAY_SECONDS)

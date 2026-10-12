@@ -10,6 +10,7 @@ import {
 import { UNSAFE_decodeViaTurboStream } from "react-router";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
+import { ensureAccount, signIn } from "./helpers/account";
 import {
   WORST_SEASON_SUMMARY,
   WORST_SEASONS,
@@ -82,9 +83,12 @@ function pagePlayer(data: ReturnType<typeof decodePageData>) {
   return player!;
 }
 
-// Read the complete response before changing its age. Adding a value to only
+// Read the complete response before changing its data. Adding a value to only
 // the first chunk shifts the references used by later streamed values.
-async function withServerAge(html: string, ageSeconds: number) {
+async function withServerData(
+  html: string,
+  edit: (saved: { player: PlayerPage; seasons?: unknown }) => void,
+) {
   const enqueue =
     /window\.__reactRouterContext\.streamController\.enqueue\(("(?:[^"\\]|\\.)*")\);/g;
   const stream = [...html.matchAll(enqueue)]
@@ -99,7 +103,7 @@ async function withServerAge(html: string, ageSeconds: number) {
     loaderData: Record<string, { player: PlayerPage; pastSeasons: unknown }>;
   };
   const saved = data.loaderData["routes/player"];
-  saved.player.profile.freshness.ageSeconds = ageSeconds;
+  edit(saved);
   saved.pastSeasons = await saved.pastSeasons;
   const escaped = JSON.stringify(encodePageData(data)).replace(
     /[&<>\u2028\u2029]/g,
@@ -113,6 +117,12 @@ async function withServerAge(html: string, ageSeconds: number) {
   });
   expect(served).not.toBe(html);
   return served;
+}
+
+function withServerAge(html: string, ageSeconds: number) {
+  return withServerData(html, (saved) => {
+    saved.player.profile.freshness.ageSeconds = ageSeconds;
+  });
 }
 
 test("saved-page age override preserves streamed history and unrelated counts", async () => {
@@ -420,25 +430,14 @@ test("player page stays within a narrow viewport", async ({ page }) => {
   ).toBe(0);
 });
 
-test("battle stats switch periods without requests at iPhone width", async ({ page }) => {
+test("battle stats fit at iPhone width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await refuseRefreshes(page);
   await page.goto("/players/%232PP");
   const stats = page.getByRole("region", { name: "Season summary" });
   await expect(stats.getByText("Hit rate", { exact: true })).toBeVisible();
   await expect(stats.getByRole("rowheader", { name: "Defenses" })).toBeVisible();
-  await page.waitForLoadState("networkidle");
-  const requests: string[] = [];
-  page.on("request", (request) => requests.push(request.url()));
-  for (const period of ["7", "14"]) {
-    await stats.getByLabel("Showing").selectOption(period);
-    // Early in a Season the window holds only the days so far.
-    await expect(stats).toContainText(/of \d+ days saved/);
-    await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
-  }
-  await stats.getByLabel("Showing").selectOption("season");
-  await expect(stats.getByLabel("Showing")).toHaveValue("season");
-  expect(requests).toEqual([]);
+  await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -478,7 +477,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   // Day 6 of a Season, so every worst-case day belongs to the current Season.
   const now = Date.parse("2026-10-10T12:00:00Z");
   await page.clock.install({ time: now });
-  await page.goto("/about");
+  await page.goto("/blog");
   const saved = await page.request.get("/players/%232PP.data");
   const dataType = saved.headers()["content-type"];
   const decoded = decodePageData(await saved.text());
@@ -501,14 +500,14 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await page.getByRole("button", { name: "Search players" }).click();
   await page.getByRole("searchbox").fill("#2PP");
   await page.getByRole("searchbox").press("Enter");
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link").first().click();
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
+  await seasonMenu.selectOption({ index: 1 });
   const finish = page.locator(".season-summary");
   await expect(finish.getByText("6,498", { exact: true })).toBeVisible();
   await expect(page.getByText("Stars unknown for 1 attack.")).toBeVisible();
   await expectUsableLayout(page);
 
-  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await seasonMenu.selectOption("");
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
   await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
   await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
@@ -536,24 +535,80 @@ test("season navigation clears refresh state for the same player", async ({ page
     return allowed;
   });
   // Fake players have no ended Season with Clash Lens days to list, so the
-  // past Season is opened by its link and left through Current Season.
+  // past Season is opened by its address and left through the Season menu.
   await page.goto("/players/%232PP?season=1788757200");
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link", { name: "Current Season" }).click();
-  await expect(page).toHaveURL(/\/players\/%232PP$/);
   await page.waitForLoadState("networkidle");
   manual = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.getByRole("region", { name: "Player refresh" });
   await expect(refresh).toBeVisible();
 
-  await page.goBack();
-  await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
-  await expect(refresh).toHaveCount(0);
-
-  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await page.getByRole("combobox", { name: "Season", exact: true }).selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   await expect(refresh).toHaveCount(0);
+});
+
+test("Back after switching Seasons returns to Your groups in one step", async ({
+  page,
+}) => {
+  await refuseRefreshes(page);
+  await signIn(page);
+  await ensureAccount(page, "lensscout", "Lens Scout");
+  await page.goto("/account/groups");
+  const group = page.locator(".group-card").filter({
+    has: page.getByRole("heading", { name: "War plan" }),
+  });
+  if ((await group.count()) === 0) {
+    await page.getByLabel("Group name").first().fill("War plan");
+    await page.getByRole("button", { name: "Create group" }).click();
+  }
+  const members = group.getByRole("list", { name: "Players in War plan" });
+  if ((await members.filter({ hasText: "#2PP" }).count()) === 0) {
+    await group.getByRole("link", { name: "Add player" }).click();
+    await group.getByLabel("Player tag").fill("#2PP");
+    await group.getByRole("button", { name: "Add", exact: true }).click();
+  }
+  const groupPlayer = members.getByRole("listitem").filter({ hasText: "#2PP" });
+  await expect(groupPlayer).toBeVisible();
+
+  // Give the saved player past Seasons to switch between.
+  const html = await (await page.request.get("/players/%232PP")).text();
+  const served = await withServerData(html, (saved) => {
+    saved.seasons = WORST_SEASONS;
+  });
+  await page.route("**/players/%232PP", (route) =>
+    route.fulfill({ contentType: "text/html", body: served }),
+  );
+  const saved = await page.request.get("/players/%232PP.data");
+  const decoded = decodePageData(await saved.text());
+  const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
+  Object.assign(data, { seasons: WORST_SEASONS });
+  const current = encodePageData(decoded);
+  Object.assign(data, {
+    selectedSeason: WORST_SEASON_SUMMARY.seasonId,
+    historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
+  });
+  const season = encodePageData(decoded);
+  await page.route("**/players/%232PP.data*", (route) =>
+    route.fulfill({
+      contentType: saved.headers()["content-type"],
+      body: new URL(route.request().url()).searchParams.has("season") ? season : current,
+    }),
+  );
+
+  await groupPlayer.getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  const seasonMenu = page.getByRole("combobox", { name: "Season", exact: true });
+  await seasonMenu.selectOption({ index: 1 });
+  await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
+  await seasonMenu.selectOption("");
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+
+  await page.getByRole("link", { name: "Back to Your groups" }).click();
+  await expect(page).toHaveURL(/\/account\/groups$/);
+  await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
+  // The groups list sits in the main menu, so it has no Back.
+  await expect(page.locator(".back-link")).toHaveCount(0);
 });
 
 test("unknown tag starts anonymously, shows progress, and enters tracking", async ({
@@ -689,7 +744,7 @@ test("a Legend I player without a Season is explained, not prepared forever", as
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();
   await expect(page.locator(".player-identity")).toHaveText("#LQQCSynthetic Clan");
-  await expect(page.locator(".player-trophy-count")).toHaveText("5,000");
+  await expect(page.locator(".player-trophy-count")).toHaveText("5,123");
   await expect(page.getByText("Current trophies", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Daily Legend log" })).toHaveCount(0);
 

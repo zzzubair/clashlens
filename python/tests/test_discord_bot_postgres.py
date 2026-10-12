@@ -7,6 +7,8 @@ from uuid import uuid4
 from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import NOW, seed_profile
 
+from bot.commands import Commands
+from bot.replies import Site
 from bot.store import Store
 from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, RequestBinding
@@ -158,6 +160,62 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             owner.close()
 
 
+def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            # Legend I at 5,000 with no Legend battle, in a profile naming
+            # Season 0 that the game sends before sign-up and is rejected.
+            seed_profile(owner, "#2PP", 5000)
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET source_contract_state = 'conflict',
+                        current_league_season_id = '0',
+                        eligibility_reason = 'confirmed_legend_i'
+                    WHERE normalized_tag = '#2PP'
+                    """
+                )
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = NULL"
+                    " WHERE normalized_tag = '#2PP'"
+                )
+                # Today saved with every battle so far recorded: none yet.
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET coverage = 'complete', partial_reasons = '[]'::jsonb,
+                        ranked_day_end = ranked_day_start + interval '1 day',
+                        attack_count = 0, attack_three_star_count = 0, attack_gain = 0,
+                        defense_count = 0, defense_three_star_count = 0, defense_loss = 0
+                    WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')
+                    """
+                )
+            account_id = _account(owner, "discord", DISCORD_ID, "drift")
+            _verify(owner, account_id, "#2PP")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+
+            (card,) = store.players(account, NOW)
+            assert (card["reason"], card["trophies"]) == (None, 5000)
+            commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
+            assert commands.me(account).body.startswith("5,000 🏆")
+            # With a second player, the overview line shows the known day, not "net pending".
+            seed_profile(owner, "#8QQ", 5300)
+            _verify(owner, account_id, "#8QQ")
+            line = next(
+                line for line in commands.me(account).body.splitlines() if "#2PP" in line
+            )
+            assert "5,000 🏆" in line
+            assert line.endswith("⚔ 0/8 · 🛡 0/8 · net +0 so far")
+        finally:
+            bot.close()
+            owner.close()
+
+
 def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
@@ -168,11 +226,6 @@ def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
             account_id = _account(owner, "discord", DISCORD_ID, "drift")
             group_id = uuid4()
             with owner.pool.connection() as connection:
-                connection.execute(
-                    "INSERT INTO account_saved_players (account_id, player_id)"
-                    " SELECT %s, id FROM players WHERE normalized_tag = '#9RR'",
-                    (account_id,),
-                )
                 internal_group = connection.execute(
                     "INSERT INTO account_groups (public_id, account_id, name, normalized_name)"
                     " VALUES (%s, %s, 'Night Crew', 'night crew') RETURNING id",
@@ -188,7 +241,6 @@ def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
             assert account is not None
 
             assert [item["tag"] for item in store.search("Player #8", NOW)] == ["#8QQ"]
-            assert [item["tag"] for item in store.saved(account)] == ["#9RR"]
             top = store.board(NOW)
             assert [item["tag"] for item in top["entries"]] == ["#8QQ", "#9RR", "#2PP"]
             around = store.board(NOW, "#2PP")

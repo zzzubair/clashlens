@@ -4,8 +4,7 @@ import json
 from datetime import timedelta
 
 import pytest
-import test_reset_settlement_proof_postgres as proof
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, repair_season, store_observation, text
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
     DAY_END,
@@ -15,7 +14,7 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
 )
 
-from clashlens import battle, first_battle_log, ranked_day_inputs, reset_baselines
+from clashlens import battle, ranked_day_inputs, reset_baselines
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -187,20 +186,19 @@ def test_no_opponent_rows_of_the_day_count_once_as_used_slots(
             assert next_day is not None and next_day.zero_result_defense_slots == 1
 
             season = ranked_day_for(DAY_START).official_season_id
-            requeue = first_battle_log.requeue_zero_result_slots
-            preview = requeue(database, season, queue=False, max_jobs=10)
-            queued = requeue(database, season, queue=True, max_jobs=10)
-            again = requeue(database, season, queue=True, max_jobs=10)
+            preview, queued = repair_season(connection_info, season, max_jobs=10)
+            again = repair_season(connection_info, season, max_jobs=10)[1]
             with database.pool.connection() as connection:
                 job = connection.execute(
                     "SELECT input_json, priority FROM python_processing_jobs_worker"
-                    " WHERE input_json ->> 'trigger' = 'zero_result_slots'"
+                    " WHERE input_json ->> 'trigger' = 'season_repair'"
                 ).fetchall()
-            assert (preview["players"], preview["queued"]) == (1, 0)
+            assert (preview["players"], preview["left_to_queue"]) == (1, 1)
             assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-            assert (again["already_queued"], again["queued"]) == (1, 0)
+            assert (again["queued"], again["unfinished"]) == (0, 1)
             assert len(job) == 1 and job[0][1] == PYTHON_BACKFILL_PRIORITY
-            # Yesterday's row makes the saved day before the oldest to recalculate.
+            # The player's first saved day of the Season, yesterday's, and
+            # every later one are recalculated.
             assert job[0][0]["ranked_day_start"] == "2026-08-03T05:00:00Z"
             assert job[0][0]["recalculate_season"] == season
         finally:
@@ -328,52 +326,6 @@ def _log_results(database, observation_id: int) -> tuple[str, bool, int]:
     return text(outcome), gap, kept
 
 
-def test_republication_rechecks_a_complete_reset_whose_delayed_log_had_only_no_opponent_gaps(
-    database_url: str, archive_server, monkeypatch
-) -> None:
-    monkeypatch.setenv(proof.SWITCH, "true")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        # A row from before the two averaged days leaves the automatic loss as it is.
-        older = NO_OPPONENT_ROW | {"battleTimestamp": "20260802T110000.000Z"}
-        scenario = proof._scenario(connection_info, archive_server, check_rows=(older,))
-        # Saved before the row stopped counting as a gap.
-        with monkeypatch.context() as before:
-            before.setattr(battle, "is_no_opponent_row", lambda *_: False)
-            before.setattr(battle, "no_opponent_row_sql", lambda *_: "false")
-            proof._process(connection_info, archive_server,
-                           [scenario[job] for job in proof.ORDERS["named_check_last"]])
-        assert proof._verdict(connection_info)[0] != "settled"
-        database, _ = _processor(connection_info, archive_server)
-        try:
-            with database.pool.connection() as connection:
-                log_id = connection.execute(
-                    "SELECT battle_log_observation_id FROM collector_work WHERE id = %s",
-                    (scenario["work"],),
-                ).fetchone()[0]
-            assert _log_results(database, log_id) == ("processed_with_gaps", True, 1)
-            assert _resets(database) == [("complete", [])]
-            with database.pool.connection() as connection:
-                assert ranked_day_inputs.load_reading(
-                    database, connection, scenario["player"], log_id
-                ).usable
-
-            report = reset_baselines.repair_current_season_reset_baselines(
-                database, max_works=10
-            )
-
-            assert report["evaluated_count"] == 1
-            assert _log_results(database, log_id) == ("processed", False, 1)
-            assert proof._verdict(connection_info)[:3] == (
-                "settled", scenario["target"], []
-            )
-            again = reset_baselines.repair_current_season_reset_baselines(
-                database, max_works=10
-            )
-            assert again["evaluated_count"] == 0
-        finally:
-            database.close()
-
-
 def test_republication_clears_no_opponent_gaps_of_the_delayed_reset_log(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -404,23 +356,17 @@ def test_republication_clears_no_opponent_gaps_of_the_delayed_reset_log(
             with database.pool.connection() as connection:
                 connection.execute(
                     """
-                    WITH check_work AS (
-                        INSERT INTO collector_work (
-                            kind, lane, scope, player_id, normalized_tag, sweep_id,
-                            due_at, coalescing_key, status, battle_log_status,
-                            battle_log_observation_id
-                        )
-                        SELECT 'reset_settlement', 'ordinary', 'player',
-                               settlement.player_id, '#2PP', settlement.sweep_id,
-                               %(due)s, 'reset_settlement:delayed', 'complete',
-                               'observed', %(log)s
-                        FROM reset_boundary_settlements AS settlement
-                        WHERE settlement.boundary_at = %(boundary)s
-                        RETURNING id
+                    INSERT INTO collector_work (
+                        kind, lane, scope, player_id, normalized_tag, sweep_id,
+                        due_at, coalescing_key, status, battle_log_status,
+                        battle_log_observation_id
                     )
-                    UPDATE reset_boundary_settlements
-                    SET delayed_work_id = (SELECT id FROM check_work)
-                    WHERE boundary_at = %(boundary)s
+                    SELECT 'reset_settlement', 'ordinary', 'player', player.id, '#2PP',
+                           sweep.id, %(due)s, 'reset_settlement:delayed', 'complete',
+                           'observed', %(log)s
+                    FROM collector_reset_sweeps AS sweep
+                    JOIN players AS player ON player.normalized_tag = '#2PP'
+                    WHERE sweep.boundary_at = %(boundary)s
                     """,
                     {"due": DAY_START + timedelta(minutes=20), "log": delayed_log,
                      "boundary": DAY_START},

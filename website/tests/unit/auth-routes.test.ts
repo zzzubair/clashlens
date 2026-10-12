@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   // Stands in for the private API's record of logged-out login cookies.
@@ -64,6 +64,7 @@ import { action as refreshAction } from "../../app/routes/refresh";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 import { requireLogin } from "../../app/server/auth-guard.server";
 import { createClientAddressContext } from "../../app/server/client-address.server";
+import { startProviderAuthorization } from "../../app/server/provider-start.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -243,6 +244,13 @@ describe("login loader", () => {
       request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fprofile`),
     } as never);
     expect(result).toEqual({ loginAvailable: true, returnPath: "/account/profile" });
+  });
+
+  it("returns a sign-in started from a page's data request to the page", async () => {
+    const result = await loginLoader({
+      request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups.data`),
+    } as never);
+    expect(result).toEqual({ loginAvailable: true, returnPath: "/account/groups" });
   });
 
   it("falls back to the default path for unsafe return paths", async () => {
@@ -1081,5 +1089,130 @@ describe("auth.google.callback loader", () => {
   it("exports a no-store headers policy", async () => {
     const { headers } = await import("../../app/routes/auth.google.callback");
     expect(headers()).toEqual({ "Cache-Control": "no-store" });
+  });
+});
+
+describe("sign-in counts", () => {
+  const token = `phc_${"A1b2C3d4E5".repeat(4)}`;
+  const sent: Array<Record<string, unknown>> = [];
+  const now = () => Math.floor(Date.now() / 1000);
+  let config: WebsiteConfig;
+  let service: ReturnType<typeof makeService>;
+
+  beforeEach(() => {
+    sent.length = 0;
+    vi.stubEnv("CLASHLENS_POSTHOG_TOKEN", token);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        expect(url).toBe("https://eu.i.posthog.com/i/v0/e/");
+        sent.push(JSON.parse(String(init.body)));
+        return new Response("{}");
+      }),
+    );
+    config = testConfig();
+    mocks.getWebsiteConfig.mockReturnValue(config);
+    service = makeService();
+    mocks.createGoogleOidcService.mockResolvedValue(service.service);
+    mocks.createPythonClient.mockReturnValue({
+      getAccount: vi.fn(async () => ({ providers: ["google"] })),
+      linkProvider: vi.fn(async () => undefined),
+    } as never);
+    service.validateCallback.mockResolvedValue(IDENTITY);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  // Each step with the fixed label of the page it happens on.
+  const stages = () =>
+    sent.map((body) => {
+      const { stage, route } = body.properties as { stage: string; route: string };
+      return `${stage} on ${route}`;
+    });
+  const callback = (transaction: OAuthTransaction, cookie: string) =>
+    callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+        { headers: { cookie } },
+      ),
+    } as never);
+
+  it("counts a sign-in from start to success as anonymous totals", async () => {
+    await googleStartLoader({
+      request: new Request(`${ORIGIN}/auth/google?returnPath=%2Faccount`),
+    } as never);
+    const { transaction, header } = oauthCookie(config);
+    await callback(transaction, header);
+
+    expect(stages()).toEqual([
+      "started on login",
+      "returned on sign_in_callback",
+      "succeeded on sign_in_callback",
+    ]);
+    for (const body of sent) {
+      expect(body).toEqual({
+        api_key: token,
+        event: "sign_in_step",
+        distinct_id: expect.any(String),
+        properties: {
+          route: expect.any(String),
+          provider: "google",
+          stage: expect.any(String),
+          $process_person_profile: false,
+          $geoip_disable: true,
+        },
+      });
+    }
+    expect(new Set(sent.map((body) => body.distinct_id)).size).toBe(3);
+    expect(JSON.stringify(sent)).not.toContain(IDENTITY.providerSubject);
+  });
+
+  it("counts a refused provider answer as a failed sign-in", async () => {
+    service.validateCallback.mockRejectedValue(new OAuthCallbackError("provider_error"));
+    const { transaction, header } = oauthCookie(config);
+    await callback(transaction, header);
+    expect(stages()).toEqual([
+      "returned on sign_in_callback",
+      "failed on sign_in_callback",
+    ]);
+  });
+
+  it("does not count linking a connection or a callback it cannot trust", async () => {
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (now() - 10) * 1000,
+    );
+    await startProviderAuthorization(
+      config,
+      "google",
+      "link",
+      "/account/providers",
+      createLoginSessionBinding(login),
+    );
+    const transaction = createOAuthTransaction(
+      "/account/providers",
+      now() - 10,
+      undefined,
+      "link",
+      "google",
+      createLoginSessionBinding(login),
+    );
+    const linked = await callback(
+      transaction,
+      `${OAUTH_COOKIE_NAME}=${createOAuthTransactionCookieValue(transaction, config.loginSecret)}; ${LOGIN_COOKIE_NAME}=${login}`,
+    );
+    expect((linked as Response).headers.get("Location")).toBe("/account/providers");
+    await callback(oauthCookie(config).transaction, "");
+    expect(sent).toEqual([]);
+  });
+
+  it("sends nothing without a project token", async () => {
+    vi.stubEnv("CLASHLENS_POSTHOG_TOKEN", "");
+    await googleStartLoader({ request: new Request(`${ORIGIN}/auth/google`) } as never);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

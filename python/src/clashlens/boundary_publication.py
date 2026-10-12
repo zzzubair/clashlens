@@ -8,10 +8,13 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle, boundary, reset_baselines
-from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
+from . import battle, board_deadline, boundary, reset_baselines
+from .analytics import (
+    CLASSIFICATION_CONFIDENCE,
+    CLASSIFICATION_VERSION,
+    SNAPSHOT_ORDERING_RULE_VERSION,
+)
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -23,7 +26,11 @@ from .db import (
 )
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_correction_waits
+from .past_reset_pacing import (
+    OPERATOR_CORRECTION,
+    correction_waits,
+    operator_correction_waits,
+)
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
@@ -128,7 +135,11 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
     ).fetchall()
     for (generation_id,) in generations:
         # A player 0057 moved a battle of may have been saved pending
-        # before readiness followed the move; check them again.
+        # before readiness followed the move; check them again. So is any
+        # member left pending on a board whose army is ready, or on one for
+        # a Reset over a day old: its build waits until each settles. A newer
+        # Reset's members settle as their results land, and checking each of
+        # them every pass would hold its lock through the busiest hours.
         for player_id, version_id, snapshot_status in connection.execute(
             """
             SELECT member.player_id, member.ranked_day_version_id,
@@ -137,14 +148,17 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
             JOIN boundary_publication_generations AS generation
               ON generation.id = member.generation_id
             WHERE member.generation_id = %s
-              AND generation.army_state = 'pending'
               AND member.army_status = 'pending'
               AND member.ranked_day_version_id IS NOT NULL
-              AND member.player_id IN (
-                  SELECT attacker_player_id FROM battle_day_repairs
-                  UNION
-                  SELECT defender_player_id FROM battle_day_repairs
-              )
+              AND (generation.army_state = 'ready'
+                   OR (generation.army_state = 'pending'
+                       AND (generation.boundary_at
+                                < clock_timestamp() - interval '1 day'
+                            OR member.player_id IN (
+                                SELECT attacker_player_id FROM battle_day_repairs
+                                UNION
+                                SELECT defender_player_id FROM battle_day_repairs
+                            ))))
             ORDER BY member.player_id
             FOR UPDATE OF member
             """,
@@ -166,6 +180,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
                     """,
                     (army_status, int(generation_id), int(player_id)),
                 )
+        board_deadline.settle_waiting_members(connection, boundary_at, int(generation_id))
         boundary._try_enqueue_boundary_artifacts(
             database,
             connection,
@@ -183,7 +198,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
         (boundary_at,),
     ).fetchall()
     for (source_generation_id,) in corrections:
-        if past_reset_correction_waits(connection, boundary_at):
+        if correction_waits(connection, boundary_at):
             continue
         _maybe_emit_boundary_signal(
             database, connection, generation_id=int(source_generation_id)
@@ -279,22 +294,21 @@ def _maybe_emit_boundary_signal(
             """,
             (generation_id,),
         )
-        # A repair campaign holding this Reset, or a past Reset not yet due
-        # to rebuild, starts no queued correction.
-        if boundary_held(connection, row[0]) or past_reset_correction_waits(
-            connection, row[0]
-        ):
+        # A repair campaign holding this Reset, or a Reset not yet due to
+        # rebuild, starts no queued correction.
+        if boundary_held(connection, row[0]) or correction_waits(connection, row[0]):
             return
         queued = connection.execute(
             """
             SELECT id, affected_artifacts, pending_inputs
             FROM boundary_publication_corrections
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+              AND NOT (%s AND pending_inputs @> %s::jsonb)
             ORDER BY requested_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
-            (row[0],),
+            (row[0], operator_correction_waits(connection), Jsonb([OPERATOR_CORRECTION])),
         ).fetchone()
         if queued is not None:
             source = connection.execute(
@@ -346,6 +360,7 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_corrections SET state = 'activation' WHERE id = %s",
                 (queued[0],),
             )
+            affected = [_text_value(value) for value in (queued[1] or [])]
             new = connection.execute(
                 """
                 INSERT INTO boundary_publication_generations (
@@ -362,7 +377,7 @@ def _maybe_emit_boundary_signal(
                     row[0],
                     int(source[5]),
                     source[0],
-                    source[3],
+                    SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else source[3],
                     source[4],
                     source[1],
                     source[2],
@@ -438,7 +453,6 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_generations SET membership_captured_at = clock_timestamp() WHERE id = %s",
                 (new_id,),
             )
-            affected = [_text_value(value) for value in (queued[1] or [])]
             if "snapshot" not in affected:
                 connection.execute(
                     """
@@ -1040,12 +1054,14 @@ def complete_analytics(database: Database, claim: Claim) -> None:
 
 
 # An army reading's contents: what the army build reads from it, without the
-# row's own identity, the report it was read from or when it was saved.
+# row's own identity, the report it was read from, when it was saved or which
+# unit list was current then (saved armies hold ids, not names).
 _DECODE_CONTENTS = """
     SELECT coalesce(array_agg(contents ORDER BY contents), '{}')
     FROM (
         SELECT to_jsonb(decode)
-               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id']
+               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id',
+                       'catalog_version', 'catalog_hash']
                AS contents
         FROM battle_army_decodes AS decode
         WHERE decode.id = ANY(%s::bigint[])
@@ -1143,7 +1159,8 @@ def _queue_boundary_army_correction(
         return
     current = connection.execute(
         """
-        SELECT snapshot_state, army_state, army_manifest_id, generation
+        SELECT snapshot_state, army_state, army_manifest_id, generation,
+               ordering_rule_version
         FROM boundary_publication_generations
         WHERE id = %s
         FOR UPDATE
@@ -1152,14 +1169,14 @@ def _queue_boundary_army_correction(
     ).fetchone()
     if current is None or current[2] is None or _text_value(current[1]) == "superseded":
         return
-    # A repair campaign holding this Reset, or a past Reset not yet due to
+    # A repair campaign holding this Reset, or a Reset not yet due to
     # rebuild, leaves the published generation and queues the correction,
     # as for one not yet published.
     if (
         _text_value(current[0]) == "published"
         and _text_value(current[1]) == "published"
         and not boundary_held(connection, boundary_at)
-        and not past_reset_correction_waits(connection, boundary_at)
+        and not correction_waits(connection, boundary_at)
     ):
         connection.execute(
             """
@@ -1194,6 +1211,7 @@ def _queue_boundary_army_correction(
             player_ids=player_ids,
             generation=int(current[3]) + 1,
             supersedes_id=generation_id,
+            ordering_rule_version=_text_value(current[4]),
         )
         connection.execute(
             "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
@@ -1400,10 +1418,9 @@ def _enqueue_army_analytics(
           ON decode.battle_id = battle.id
          AND decode.is_active
          AND decode.decoder_version = %s
-         AND decode.catalog_version = %s
         WHERE battle.ranked_day_start = %s
         """,
-        (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+        (DECODER_VERSION, ranked_day_start),
     ).fetchone()
     decode_generation = int(latest_decode[0]) if latest_decode else 0
     day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1421,7 +1438,7 @@ def _enqueue_army_analytics(
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         (
-            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}",
             Jsonb(
                 {
                     "ranked_day_start": day_text,

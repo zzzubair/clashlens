@@ -8,9 +8,8 @@ every member collected by 05:10, yet the first board published at 06:26 with
 40% of its inputs Partial): how many members the sweep captured; when their
 Reset readings were all collected and all processed; when the first frozen
 board's inputs froze, when it was saved as published and when the website
-first showed it; that board's input states (Complete, Partial, Inconsistent
-and the rest); and how many of the Reset's boundaries were settled when the
-website first showed it. Each value is set once, when first seen. A record
+first showed it; and that board's input states (Complete, Partial,
+Inconsistent and the rest). Each value is set once, when first seen. A record
 stays open to its later stages until its readings are processed and its board
 shown, for as long as its sweep is kept: a reading can wait days for the
 archive. Rows are never deleted: one a day, under 1 KB each.
@@ -34,7 +33,6 @@ def refresh(
     and return the latest; None before any sweep."""
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
-        # The settlement count reads the whole settlement table once a day.
         connection.execute("SET LOCAL statement_timeout = '20s'")
         # The previous Reset too, for a stage the check was not running for,
         # and any kept sweep the check never recorded while it was down.
@@ -157,16 +155,6 @@ def _refresh_one(
         changes["published_at"] = published_at
     if record["readable_at"] is None and readable_at is not None:
         changes["readable_at"] = readable_at
-        changes["settlement"] = Jsonb(
-            _counts(
-                connection,
-                """
-                SELECT state, count(*) FROM reset_boundary_settlements
-                WHERE boundary_at = %s GROUP BY state
-                """,
-                (boundary_at,),
-            )
-        )
     if record["board_inputs"] is None and manifest_id is not None:
         changes["board_inputs"] = Jsonb(
             _counts(

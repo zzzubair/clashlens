@@ -1,4 +1,4 @@
-import { data, redirect, useLoaderData, useLocation } from "react-router";
+import { data, Link, redirect, useLoaderData, useLocation } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { formatAge } from "../components/Provenance";
@@ -14,6 +14,7 @@ import {
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
+import { type BackHandle, useBackState } from "../components/BackLink";
 import type { Route } from "./+types/account.groups.$groupId";
 import "../group-compare.css";
 
@@ -25,6 +26,10 @@ const SORTS = {
   defense: "Defense",
 } as const;
 type SortKey = keyof typeof SORTS;
+
+export const handle: BackHandle = {
+  back: { to: "/account/groups", label: "Your groups" },
+};
 
 export interface GroupCompareLoaderData {
   comparison: GroupComparison | null;
@@ -150,6 +155,7 @@ export default function GroupCompareRoute() {
       player.days.map((day) => Math.abs(day.net ?? 0)),
     ),
   );
+  // Switching views replaces this history entry, so the browser's Back skips past them.
   const query = (next: { days?: number; sort?: SortKey }) =>
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
@@ -175,26 +181,30 @@ export default function GroupCompareRoute() {
         <div className="compare-controls">
           <nav aria-label="Days compared" className="leaderboard-view-switch">
             {COMPARISON_DAYS.map((value) => (
-              <a
+              <Link
                 key={value}
                 className="button secondary"
-                href={query({ days: value })}
+                to={query({ days: value })}
                 aria-current={value === days ? "page" : undefined}
+                preventScrollReset
+                replace
               >
                 {value} days
-              </a>
+              </Link>
             ))}
           </nav>
           <nav aria-label="Sort by" className="leaderboard-view-switch">
             {(Object.keys(SORTS) as SortKey[]).map((key) => (
-              <a
+              <Link
                 key={key}
                 className="button secondary"
-                href={query({ sort: key })}
+                to={query({ sort: key })}
                 aria-current={key === sort ? "page" : undefined}
+                preventScrollReset
+                replace
               >
                 {SORTS[key]}
-              </a>
+              </Link>
             ))}
           </nav>
         </div>
@@ -215,93 +225,36 @@ export default function GroupCompareRoute() {
       ) : null}
 
       {comparison.players.length > 0 ? (
-        <>
-          <p className="section-note">
-            Last {days} days adds up each player&apos;s trophy change on counted days
-            only. Won vs lost adds up trophies won in attacks and lost in defenses across
-            every battle recorded in these days, incomplete days included, so the two can
-            differ.
-          </p>
-
-          <div className="compare-board">
-            <table className="compare-table">
-              <caption className="sr-only">
-                {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Player</th>
-                  <th scope="col">Trophies now</th>
-                  <th scope="col">Today so far</th>
-                  <th scope="col">Last {days} days</th>
-                  <th scope="col">Won vs lost</th>
-                  <th scope="col">Vs the group</th>
-                  <th scope="col">Attack</th>
-                  <th scope="col">Defense</th>
-                </tr>
-              </thead>
-              <tbody>
-                {players.map((player) => (
-                  <PlayerRow key={player.tag} player={player} scale={scale} days={days} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <dl className="compare-key">
-            <div>
-              <dt>
-                <span className="day-bar day-complete" aria-hidden="true" /> Counted
-              </dt>
-              <dd>
-                A complete day. Bars go up for trophies won and down for trophies lost.
-              </dd>
-            </div>
-            <div>
-              <dt>
-                <span className="day-bar day-correcting" aria-hidden="true" /> May still
-                change
-              </dt>
-              <dd>
-                The day that ended at the last Reset. It is counted, but battles reported
-                late can still change it.
-              </dd>
-            </div>
-            <div>
-              <dt>
-                <span className="day-bar day-partial" aria-hidden="true" /> Incomplete
-              </dt>
-              <dd>
-                Some battles are missing. Shown, but left out of the Last {days} days
-                total.
-              </dd>
-            </div>
-            <div>
-              <dt>
-                <span className="day-bar day-missing" aria-hidden="true" /> No result
-              </dt>
-              <dd>Nothing recorded. Never counted as zero.</dd>
-            </div>
-            <div>
-              <dt>
-                <span className="day-bar day-retired" aria-hidden="true" /> History no
-                longer kept
-              </dt>
-              <dd>
-                The day belongs to a finished season whose daily detail has been cleaned
-                up. Never counted as zero.
-              </dd>
-            </div>
-          </dl>
-          <p className="section-note">
-            Attack and defense also use every battle recorded in these days; the number of
-            battles is shown with each. Attack success is the average stars and average
-            destruction per attack. Attacks a day count only counted days, out of the 8
-            attacks a Legend day allows. Vs the group compares a player with each other
-            group member on the days both have counted results, then averages across those
-            members; your own players outside the group are never part of it.
-          </p>
-        </>
+        <div className="compare-board">
+          <table className="compare-table">
+            <caption className="sr-only">
+              {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Player</th>
+                <th scope="col">Trophies now</th>
+                <th scope="col">Today so far</th>
+                <th scope="col">Last {days} days</th>
+                <th scope="col">Won vs lost</th>
+                <th scope="col">Vs the group</th>
+                <th scope="col">Attack</th>
+                <th scope="col">Defense</th>
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((player) => (
+                <PlayerRow
+                  key={player.tag}
+                  group={comparison.name}
+                  player={player}
+                  scale={scale}
+                  days={days}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div className="empty-state compare-empty-group">
           <h2>No players in this group yet</h2>
@@ -316,21 +269,28 @@ export default function GroupCompareRoute() {
 }
 
 function PlayerRow({
+  group,
   player,
   scale,
   days,
 }: {
+  group: string;
   player: ComparedPlayer;
   scale: number;
   days: number;
 }) {
   const { attack, defense } = player;
+  const backState = useBackState(group);
   return (
     <tr className={player.you ? "compare-you" : undefined}>
       <th scope="row" data-label="Player">
-        <a className="compare-name" href={canonicalPlayerPath(player.tag)}>
+        <Link
+          className="compare-name"
+          to={canonicalPlayerPath(player.tag)}
+          state={backState}
+        >
           {player.name ?? player.tag}
-        </a>
+        </Link>
         <span className="compare-tag">
           {player.tag}
           {player.you ? <span className="compare-badge">You</span> : null}

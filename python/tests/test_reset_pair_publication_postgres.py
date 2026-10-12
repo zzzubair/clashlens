@@ -105,9 +105,8 @@ def test_repair_rebuilds_dependent_results_in_one_job(monkeypatch, shielded, rep
     if shielded:
         assert saved[days[0]].shield_duration_days == 1
         assert saved[days[1]].shield_duration_days == (2 if repair else 1)
-        assert saved[days[2]].shield_state == (
-            "uncertain_sequence" if repair else "inferred_shielded"
-        )
+        assert saved[days[2]].shield_state == "inferred_shielded"
+        assert saved[days[2]].shield_duration_days == (3 if repair else 2)
     elif repair:
         for day in days[1:]:
             assert saved[day].state == "Complete"
@@ -1260,10 +1259,11 @@ def test_failed_season_opening_reset_finishes_only_the_closing_day(
             }
             for job_id, _ in jobs:
                 assert processor.process_job(job_id, owner="close").outcome == "processed"
-            # The reading names the old Season, so it gives no total either.
+            # The late reading, at 5,000 before any battle, gives the Season
+            # rule's 5,000 but no total for the ended day.
             finished = _latest_day(database, 1, closing)
             assert finished[:4] == ("Partial", "Partial", None, None)
-            assert "missing_end_baseline" in finished[4]
+            assert "end_baseline_incomplete" in finished[4]
             # The repair re-checks this Reset only as day 1's starting
             # evidence; failed evidence starts nothing.
             with database.pool.connection() as connection:

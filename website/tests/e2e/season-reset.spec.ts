@@ -63,7 +63,7 @@ test("Live keeps its way to page 1 when Reset makes the open page unavailable", 
       ),
     }),
   );
-  await page.goto("/about");
+  await page.goto("/blog");
   await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
   await page.evaluate(() => {
     history.pushState(null, "", "/leaderboards/tracked?view=live&page=2");
@@ -170,7 +170,7 @@ for (const view of ["list", "comparison"] as const) {
         body: encode(saved),
       });
     });
-    await page.goto("/about");
+    await page.goto("/blog");
     await page.clock.install({ time: new Date("2026-09-07T05:00:00Z") });
     await page.evaluate((path) => {
       history.pushState(null, "", path);
@@ -178,7 +178,11 @@ for (const view of ["list", "comparison"] as const) {
     }, path);
     const trophies =
       view === "list"
-        ? page.locator("li").filter({ hasText: "#2PP" }).locator(".group-member-detail")
+        ? page
+            .getByRole("list", { name: "Players in Season watch" })
+            .getByRole("listitem")
+            .filter({ hasText: "#2PP" })
+            .locator(".group-member-detail")
         : page
             .getByRole("row")
             .filter({ hasText: "#2PP" })
@@ -258,7 +262,7 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
         json: { error: { code: "unavailable", message: "Unavailable" } },
       });
     });
-    await page.goto("/about");
+    await page.goto("/blog");
     await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
     // Enter through client navigation so the controlled loader data mounts fresh.
     await page.evaluate((path) => {

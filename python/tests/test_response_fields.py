@@ -218,3 +218,31 @@ def test_endpoints_without_a_field_list_keep_byte_identity() -> None:
             )
             == digest
         )
+
+
+def test_a_row_that_cannot_be_classified_changes_the_fingerprint() -> None:
+    """A new malformed or unrecognised row must count as a change, or the
+    collector records an unchanged answer and the gap is never processed
+    (lab finding F5). A row of another mode in plain text still does not."""
+    legend = _legend_entry()
+    first = _battle_log(legend)
+    with_null = _battle_log(legend, None)
+    with_shouting = _battle_log(legend, {"battleType": "LEGEND", "stars": 3})
+    with_other = _battle_log(legend, {"battleType": "homeVillage", "stars": 3})
+
+    first_fp = content_fingerprint(
+        "battle_log", first, http_status=200, response_hash=_digest(first)
+    )
+    fingerprints = {
+        name: content_fingerprint(
+            "battle_log", body, http_status=200, response_hash=_digest(body)
+        )
+        for name, body in (
+            ("null", with_null), ("shouting", with_shouting), ("other", with_other)
+        )
+    }
+
+    assert fingerprints["null"] != first_fp
+    assert fingerprints["shouting"] != first_fp
+    assert fingerprints["null"] != fingerprints["shouting"]
+    assert fingerprints["other"] == first_fp

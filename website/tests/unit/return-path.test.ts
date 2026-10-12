@@ -19,6 +19,15 @@ describe("same-origin return path validation", () => {
     expect(safeReturnPath("/", ORIGIN)).toBe("/");
   });
 
+  it("returns a page's data request to the page itself", () => {
+    expect(safeReturnPath("/account/groups.data", ORIGIN)).toBe("/account/groups");
+    expect(safeReturnPath("/account.data", ORIGIN)).toBe("/account");
+    expect(safeReturnPath("/_.data", ORIGIN)).toBe("/");
+    expect(safeReturnPath("//evil.example.data", ORIGIN)).toBeNull();
+    expect(safeReturnPath("https://evil.example/account.data", ORIGIN)).toBeNull();
+    expect(safeReturnPath("/account/groups.data?_routes=root", ORIGIN)).toBeNull();
+  });
+
   it("rejects external, protocol-relative, and non-path values", () => {
     expect(safeReturnPath("https://evil.example/account", ORIGIN)).toBeNull();
     expect(safeReturnPath("http://evil.example/account", ORIGIN)).toBeNull();

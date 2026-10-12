@@ -56,7 +56,7 @@ const board: TrackedLeaderboard = {
     freshness: "stale",
     confidence: "partial",
     coverage: "partial",
-    version: "tracked-trophies-md5-v1",
+    version: "tracked-trophies-attack-destruction-v2",
   },
   sourceObservations: {
     newestObservedAt: "2026-10-02T11:59:00Z",
@@ -88,17 +88,25 @@ beforeEach(() => {
   mocks.getTrackedLeaderboard.mockReset().mockResolvedValue(structuredClone(board));
 });
 
-it("explains tracked ranks and distinguishes whole-board times from the row's confirmation", async () => {
+it("keeps rank and update explanations off the page but in hover and screen-reader labels", async () => {
   const { html } = await render();
   expect(html).toContain('id="leaderboard-title">Live Leaderboard</h1>');
-  expect(html).toContain("position among players tracked by Clash Lens");
-  expect(html).toContain("not the official global rank");
-  expect(html).toContain("fixed order based on player tags");
-  expect(html).toContain("even if it was unchanged");
-  expect(html).toMatch(/Newest player update: <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
-  expect(html).toMatch(/Oldest player update: <time[^>]+dateTime="2026-10-02T11:30:00Z"/);
-  expect(html).toContain("Across the whole leaderboard");
-  expect(html).toContain("101 listed · 150 tracked players");
+  expect(html).toContain('<p class="sr-only" id="rank-explanation">Rank among players');
+  expect(html).toMatch(
+    /<th scope="col" aria-describedby="rank-explanation" title="Rank among players tracked by Clash Lens, not the official global rank/,
+  );
+  expect(html).toContain(
+    "Equal trophies are marked Tie and go to the higher average attack destruction this Season",
+  );
+  expect(html).toContain(
+    'title="When we last confirmed each player&#x27;s profile, even if it was unchanged."',
+  );
+  expect(html).toMatch(/Updated <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
+  expect(html).not.toContain("2026-10-02T11:30:00Z");
+  expect(html).not.toContain("Tracked player rankings");
+  expect(html).toContain("<p>101–101 of 101</p>");
+  expect(html).toContain('<span class="pagination-status">101–101 of 101</span>');
+  expect(html).toContain(">Previous 100</a>");
   expect(html).toContain('<span class="rank-mark">101</span>');
   expect(html).toMatch(/<summary>Last updated 20 minutes ago/);
   expect(html).toContain("Over 10 min old");
@@ -129,7 +137,35 @@ it.each([
   },
 );
 
-it("formats large ranks and explains why some tracked players are not listed", async () => {
+it("marks only rows on equal trophies as a tie, keeps each rank its own and reserves the tie slot on every row", async () => {
+  const fixture = structuredClone(board);
+  const row = fixture.entries[0];
+  fixture.entries = [
+    { ...row, rank: 101, tag: "#2PP", trophies: 5300, tied: true },
+    { ...row, rank: 102, tag: "#9PJYL8RQ0", trophies: 5300, tied: true },
+    { ...row, rank: 103, tag: "#LQ2UV9GJC", trophies: 5290, tied: false },
+  ];
+  mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+  const { html } = await render();
+  const rows = html.split('<tr class="leaderboard-row"').slice(1);
+  expect(rows.map((item) => item.match(/class="rank-mark">(\d+)</)![1])).toEqual([
+    "101",
+    "102",
+    "103",
+  ]);
+  expect(rows.map((item) => item.includes('class="tie-pill"'))).toEqual([
+    true,
+    true,
+    false,
+  ]);
+  expect(rows[0]).toContain(
+    '<strong>5,300</strong><span class="tie-slot"><span class="tie-pill" title="Same trophies as another player">Tie</span></span>',
+  );
+  // Untied rows keep the same empty slot, so every row's trophies line up.
+  expect(rows[2]).toContain('<strong>5,290</strong><span class="tie-slot"></span>');
+});
+
+it("formats large ranks without explaining unlisted tracked players", async () => {
   mocks.getTrackedLeaderboard.mockResolvedValue({
     ...structuredClone(board),
     entries: [{ ...board.entries[0], rank: 11801 }],
@@ -137,11 +173,37 @@ it("formats large ranks and explains why some tracked players are not listed", a
     totalEntries: 11854,
   });
   const { html } = await render();
-  expect(html).toContain("Ranks 11,801–11,801 · 11,854 listed · 13,263 tracked players");
-  expect(html).toContain(
-    "Tracked players are listed once Clash Lens confirms their current profile.",
-  );
+  expect(html).toContain("11,801–11,801 of 11,854");
+  expect(html).not.toContain("13,263");
+  expect(html).not.toContain("Tracked players are listed once");
 });
+
+it.each([
+  [1, 250, 100, "Next 100"],
+  [2, 250, 200, "Next 50"],
+  [2, 250, 205, "Next 50"],
+  [1, 104, 100, "Next 4"],
+  [1, 104, 104, "Next 4"],
+])(
+  "labels the Next button on page %s of %s ranks ending at %s with the next page's rows",
+  async (page, total, lastRank, label) => {
+    mocks.getTrackedLeaderboard.mockResolvedValue({
+      ...structuredClone(board),
+      entries: [
+        { ...board.entries[0], rank: 1 + (page - 1) * 100 },
+        { ...board.entries[0], tag: "#2PY", rank: lastRank },
+      ],
+      totalEntries: total,
+      page,
+      pageCount: Math.ceil(total / 100),
+      hasPrevious: page > 1,
+      hasNext: true,
+    });
+    const { html } = await render(`view=live&page=${page}`);
+    expect(html).toContain(`>${label}</a>`);
+    expect(html.includes(">Previous 100</a>")).toBe(page > 1);
+  },
+);
 
 it("keeps worst-case names readable and separates five-digit ranks", async () => {
   mocks.getTrackedLeaderboard.mockResolvedValue({
@@ -172,9 +234,9 @@ it("shows an empty message without a table or impossible pagination", async () =
   expect(status).toBe(200);
   expect(html).toContain("No standings available yet");
   expect(html).not.toContain("<table");
-  expect(html).not.toContain("Page 1 of 0");
+  expect(html).not.toContain(" of 0");
   expect(html).not.toContain('aria-label="Leaderboard pages"');
-  expect(html).not.toContain("Newest player update");
+  expect(html).not.toContain("Updated <time");
 });
 
 it.each([
@@ -226,13 +288,12 @@ it.each([
     fixture.entries[0].freshness.observedAt = "2026-10-02T23:59:00Z";
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render("view=daily&season=1788757200&day=26&page=1");
-    expect(html.includes("These standings are incomplete.")).toBe(incomplete);
+    expect(html.includes("<strong>Incomplete:</strong>")).toBe(incomplete);
     if (incomplete) {
-      expect(html).toContain("No player updates were saved in the 4 hours before");
-      expect(html).toContain("Battles recorded after it are added where we can confirm");
-      expect(html).toMatch(
-        /the newest is from <time[^>]+dateTime="2026-10-03T00:00:19Z"/,
+      expect(html).toContain(
+        "no player updates were saved in the 4 hours before this Reset",
       );
+      expect(html).toMatch(/Newest: <time[^>]+dateTime="2026-10-03T00:00:19Z"/);
       expect(html.match(/5 hours before Reset/g)).toHaveLength(2);
     } else expect(html).not.toContain("before Reset");
   },
@@ -261,7 +322,7 @@ it.each([
   },
 );
 
-it("describes Daily trophies as values saved before the Reset, even with recent inputs", async () => {
+it("heads a Daily board with its Reset time and no explanation", async () => {
   const fixture = structuredClone(board);
   fixture.view = "daily";
   fixture.seasonResetPending = 40;
@@ -275,20 +336,62 @@ it("describes Daily trophies as values saved before the Reset, even with recent 
     nextSnapshot: null,
   };
   fixture.provenance.observedAt = "2026-10-05T04:59:00Z";
+  fixture.provenance.version = "tracked-player-order-v3";
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
-  expect(html).toContain('id="leaderboard-title">Day 28 standings</h1>');
-  expect(html).toContain("saved before the Reset plus the battles recorded after it");
-  expect(html).toContain("and not rebuilt since, show the saved");
+  expect(html).toContain('<p class="rankings-kicker">Day 28</p>');
+  // The server writes UTC; the browser then switches it to the viewer's time.
+  expect(html).toMatch(
+    /id="leaderboard-title">Leaderboard at(<!-- -->)? <time class="local-time" datetime="2026-10-05T05:00:00Z"[^>]*>5 Oct 2026, 05:00 UTC<\/time><\/h1>/i,
+  );
+  expect(html).not.toContain("not rebuilt since");
+  expect(html).not.toContain("Legend season");
   expect(html).toContain("7,211");
-  expect(html).not.toContain("These standings are incomplete.");
+  expect(html).toContain(
+    "the player whose trophies changed most recently that Legend day",
+  );
+  expect(html).not.toContain("Incomplete:");
   // The Live board's Season-reset rule never applies to a frozen day.
   expect(html).not.toContain("waiting for their Season reset");
 });
 
 it.each([
+  [
+    "tracked-player-order-v3",
+    "go to the player whose trophies changed most recently that Legend day, then",
+  ],
+  [
+    "tracked-player-order-v2",
+    "go to the higher average attack destruction this Season, then more attacks, then",
+  ],
+  ["tracked-player-order-v1", "follow a fixed order based on player tags."],
+])(
+  "explains ties on a Daily board saved with %s by the order it kept",
+  async (version, order) => {
+    const fixture = structuredClone(board);
+    fixture.view = "daily";
+    fixture.daily = {
+      officialSeasonId: "1788757200",
+      dayNumber: 2,
+      resetAt: "2026-09-09T05:00:00Z",
+      seasonStartAt: "2026-09-07T05:00:00Z",
+      seasonEndAt: "2026-10-05T05:00:00Z",
+      previousSnapshot: null,
+      nextSnapshot: null,
+    };
+    fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
+    fixture.provenance.version = version;
+    mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+    const { html } = await render("view=daily&season=1788757200&day=2&page=1");
+    const explanation = `Equal trophies are marked Tie and ${order}`;
+    expect(html).toContain(`<p class="sr-only" id="rank-explanation">Rank among players`);
+    expect(html.match(new RegExp(explanation, "g"))).toHaveLength(2);
+  },
+);
+
+it.each([
   ["q=%232pp", "#2PP isn&#x27;t on this board.", '<a href="/players/%232PP">Open their'],
-  ["q=Nova", "This search only finds players on this board.", "full player tag"],
+  ["q=Nova", "No players on this board match “Nova”.", "Enter a full #tag"],
 ])(
   "offers a next step when a board search for %s finds nobody",
   async (q, text, next) => {

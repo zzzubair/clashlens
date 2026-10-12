@@ -12,7 +12,10 @@ newest one wait and start together. A waiting correction stays queued, and
 the worker's publication re-check starts it once the Reset may rebuild; no
 correction is dropped. No build for a past Reset starts in the quiet
 window, so one not yet started waits until it ends; builds already running
-finish and publish. The newest swept Reset is live and never waits.
+finish and publish. The newest swept Reset waits only for its own, shorter
+interval (owner decision, 12 Oct 2026), and not at all for a correction that
+adds a member published without a day result, whose day has saved since: it
+appears in the board within seconds.
 """
 
 from __future__ import annotations
@@ -21,13 +24,25 @@ from collections.abc import Collection
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 # A past Reset starts at most one correction generation per interval,
 # counted from its newest generation.
 PAST_RESET_CORRECTION_INTERVAL = timedelta(hours=6)
+NEWEST_RESET_CORRECTION_INTERVAL = timedelta(hours=1)
+# The pending input of a member published without a day result, whose day
+# saved after publication.
+ARRIVAL = {"arrival": True}
 # No past Reset starts a correction generation or its builds in this UTC
 # window, which keeps the worker free for the live Reset's publication.
 PAST_RESET_QUIET_START = time(4, 30)
 PAST_RESET_QUIET_END = time(7, 0)
+# An operator correction (boundary.queue_army_corrections), marked by this
+# pending input, neither starts nor has its leaderboard, statistics or army
+# build claimed in this wider UTC window, for any Reset; those builds run at
+# background priority.
+OPERATOR_CORRECTION = {"kind": "operator"}
+OPERATOR_QUIET_START = time(4, 0)
 
 
 def _now(connection: Any) -> datetime:
@@ -47,6 +62,29 @@ def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
 
 def _in_quiet_window(now: datetime) -> bool:
     return PAST_RESET_QUIET_START <= now.astimezone(UTC).time() < PAST_RESET_QUIET_END
+
+
+def operator_generation(connection: Any, boundary_at: datetime, generation: Any) -> bool:
+    """Whether this Reset generation is an operator correction's rebuild."""
+    return connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM boundary_publication_corrections AS correction
+            JOIN boundary_publication_generations AS rebuilt
+              ON rebuilt.id = correction.generation_id
+            WHERE rebuilt.boundary_at = %s AND rebuilt.generation = %s
+              AND correction.pending_inputs @> %s::jsonb
+        )
+        """,
+        (boundary_at, generation, Jsonb([OPERATOR_CORRECTION])),
+    ).fetchone()[0]
+
+
+def operator_correction_waits(connection: Any) -> bool:
+    """Whether an operator correction, or its builds, must wait now."""
+    now = _now(connection).astimezone(UTC).time()
+    return OPERATOR_QUIET_START <= now < PAST_RESET_QUIET_END
 
 
 def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:
@@ -70,21 +108,34 @@ def past_reset_build_hold(connection: Any) -> str | None:
     return latest_reset.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def past_reset_correction_waits(connection: Any, boundary_at: datetime) -> bool:
-    """Whether a correction to this Reset must wait before it starts."""
-    if not _is_past_reset(connection, boundary_at):
+def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = False) -> bool:
+    """Whether a correction to this Reset must wait before it starts;
+    ``arrival`` when the change waiting to start is one."""
+    latest_reset = _latest_reset(connection)
+    if latest_reset is None:
         return False
     now = _now(connection)
-    if _in_quiet_window(now):
-        return True
+    interval = PAST_RESET_CORRECTION_INTERVAL
+    if boundary_at < latest_reset:
+        if _in_quiet_window(now):
+            return True
+    elif arrival or connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT FROM boundary_publication_corrections
+            WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+              AND pending_inputs @> %s::jsonb)
+        """,
+        (boundary_at, Jsonb([ARRIVAL])),
+    ).fetchone()[0]:
+        return False
+    else:
+        interval = NEWEST_RESET_CORRECTION_INTERVAL
     last_generation_at = connection.execute(
         "SELECT max(created_at) FROM boundary_publication_generations WHERE boundary_at = %s",
         (boundary_at,),
     ).fetchone()[0]
-    return (
-        last_generation_at is not None
-        and now - last_generation_at < PAST_RESET_CORRECTION_INTERVAL
-    )
+    return last_generation_at is not None and now - last_generation_at < interval
 
 
 BUILD_PERMIT_KEY = "population-build-permit"

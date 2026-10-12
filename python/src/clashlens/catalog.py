@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-CATALOG_VERSION = "unit-catalog-v2"
-CATALOG_PROVENANCE = "ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177"
+CATALOG_VERSION = "unit-catalog-v3"
+CATALOG_PROVENANCE = "ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177; v3 adds equipment:61 Portal Pendant (Minion Prince equipment 61 first seen in battle logs 2026-10-08 08:03 UTC and matched Portal Pendant in archived player profiles, 2026-10-09; Zacatac3/clash_widgets@4f12eab15671e305e8b4df1b5e4b11025437cfac clash_widgets/json/mapping.json maps 90000061 to Portal Pendant)"
 CATALOG_LICENSE = "MIT; Supercell Fan Content Policy applies to game metadata"
 
 _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
@@ -133,6 +133,11 @@ _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
         "category": "equipment",
         "is_siege": False,
         "name": "Revenge Deck",
+    },
+    "equipment:61": {
+        "category": "equipment",
+        "is_siege": False,
+        "name": "Portal Pendant",
     },
     "equipment:6": {
         "category": "equipment",
@@ -288,6 +293,22 @@ CATALOG_HASH = hashlib.sha256(_CATALOG_CANONICAL_JSON.encode()).hexdigest()
 def catalog_name(typed_id: str) -> str | None:
     entry = _CATALOG_ENTRIES.get(typed_id)
     return str(entry["name"]) if entry else None
+
+
+def unit_label(typed_id: str) -> str:
+    """The unit's name, or a placeholder until the list names its id.
+
+    Saved armies keep ids only, so a name added here shows everywhere,
+    earlier battles included. Siege machines share the troop ids, so an
+    unnamed troop id may be either.
+    """
+    name = catalog_name(typed_id)
+    if name is not None:
+        return name
+    kind, _, number = typed_id.partition(":")
+    if not number:
+        return f"Unknown {typed_id}"
+    return f"Unknown {'troop or siege' if kind == 'troop' else kind} #{number}"
 
 
 def is_siege_troop(typed_id: str) -> bool:

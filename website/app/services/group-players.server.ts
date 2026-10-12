@@ -2,7 +2,12 @@ import { mapGroupPlayer, type GroupPlayer } from "../lib/account-contracts";
 import type { PlayerLookup } from "../lib/contracts";
 import { isCanonicalUuid } from "../lib/validation";
 import { getPlayerLookup, startPlayerLookup } from "./player-lookup.server";
-import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
+import {
+  PythonApiError,
+  requestJson,
+  type GoogleAccountIdentity,
+  type GroupPage,
+} from "./python.server";
 
 // How long adding a player waits for the game to answer before asking the
 // clasher to press Add again; the check keeps running either way.
@@ -40,10 +45,11 @@ export async function addGroupPlayer(
   groupId: string,
   tag: string,
   idempotencyKey: string,
+  page: GroupPage,
 ): Promise<GroupPlayer> {
   requireIds(groupId, idempotencyKey);
   const payload = await requestJson<unknown>(
-    `/v1/account/groups/${groupId}/players`,
+    `/v1/account/groups/${groupId}/players?page=${page}`,
     "POST",
     Buffer.from(JSON.stringify({ tag }), "utf8"),
     undefined,

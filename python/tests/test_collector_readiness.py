@@ -145,13 +145,16 @@ def test_metrics_show_each_keys_health_and_rate() -> None:
     assert "fixture-" not in metrics
 
 
-def test_metrics_cache_serializes_scrapes_and_retries_failed_refresh(monkeypatch):
+def test_metrics_answer_from_the_last_sample_while_one_read_refreshes_it(monkeypatch):
+    # 12 Oct 2026: counting the queue took 21.6 s with 113,000 jobs waiting,
+    # past the alert check's 10 s, so every alert run lost these numbers.
     from types import SimpleNamespace
 
     import psycopg
 
     instant = [100.0]
     monkeypatch.setattr("clashlens.collector.time", SimpleNamespace(monotonic=lambda: instant[0]))
+    release = threading.Event()
 
     class ChangingStore(_Store):
         calls = 0
@@ -159,6 +162,8 @@ def test_metrics_cache_serializes_scrapes_and_retries_failed_refresh(monkeypatch
 
         def health_metrics(self):
             self.calls += 1
+            if self.calls > 1:
+                assert release.wait(timeout=10)
             if self.failed:
                 raise psycopg.OperationalError("unavailable")
             return {"check_age_p50_seconds": self.calls}
@@ -167,16 +172,33 @@ def test_metrics_cache_serializes_scrapes_and_retries_failed_refresh(monkeypatch
     store = ChangingStore(spool)
     collector = _collector(spool, store, _Client(spool))
 
+    async def refreshed():
+        while collector._metrics_refresh is not None:
+            await asyncio.sleep(0.01)
+
     async def scrape():
+        # Only the first scrape waits, for the first sample, and once.
         first = await asyncio.gather(*(collector.health_response("/metrics") for _ in range(8)))
         assert all(b"clashlens_collector_check_age_p50_seconds 1\n" in response[2] for response in first)
         assert store.calls == 1
         instant[0] = 129.99
         assert (await collector.health_response("/metrics"))[2] == first[0][2]
+        # A slow read refreshes it: scrapes answer with the last sample meanwhile.
         instant[0] = 130
         store.failed = True
-        assert (await collector.health_response("/metrics"))[0] == 503
+        for _ in range(3):
+            assert (await collector.health_response("/metrics"))[2] == first[0][2]
+        release.set()
+        await refreshed()
+        assert store.calls == 2
+        # A failed read keeps the sample, whose time tells its age; the next
+        # read waits 30 seconds.
         store.failed = False
+        instant[0] = 159.99
+        assert (await collector.health_response("/metrics"))[2] == first[0][2]
+        instant[0] = 160
+        await collector.health_response("/metrics")
+        await refreshed()
         recovered = await collector.health_response("/metrics")
         assert recovered[0] == 200
         assert b"clashlens_collector_check_age_p50_seconds 3\n" in recovered[2]

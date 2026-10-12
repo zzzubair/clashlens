@@ -7,8 +7,6 @@ import {
   mapGroupPlayer,
   mapGroups,
   mapPublicUser,
-  mapSavedTagResult,
-  mapSavedTags,
   mapSummary,
   mapVerificationResult,
 } from "../../app/lib/account-contracts";
@@ -90,6 +88,7 @@ describe("Python account response mappers", () => {
       trophies: 5300,
       season_reset_pending: false,
       rank: 12,
+      league: null,
       today: { net: -8, attacks: 5, defenses: 3 },
     };
     const season0 = {
@@ -102,8 +101,17 @@ describe("Python account response mappers", () => {
       rank: null,
       today: null,
     };
+    const notInLegend = {
+      ...season0,
+      tag: "#8PY",
+      state: "not_in_legend",
+      reason: null,
+      league: "Electro League 33",
+    };
     const user = { username: "nova", display_name: "Nova" };
-    expect(mapPublicUser({ ...user, verified_players: [card, season0] })).toEqual({
+    expect(
+      mapPublicUser({ ...user, verified_players: [card, season0, notInLegend] }),
+    ).toEqual({
       username: "nova",
       displayName: "Nova",
       verifiedPlayers: [
@@ -116,6 +124,7 @@ describe("Python account response mappers", () => {
           trophies: 5300,
           seasonResetPending: false,
           rank: 12,
+          league: null,
           today: { net: -8, attacks: 5, defenses: 3 },
         },
         {
@@ -127,6 +136,19 @@ describe("Python account response mappers", () => {
           trophies: null,
           seasonResetPending: false,
           rank: null,
+          league: null,
+          today: null,
+        },
+        {
+          tag: "#8PY",
+          name: null,
+          clan: null,
+          state: "not_in_legend",
+          reason: null,
+          trophies: null,
+          seasonResetPending: false,
+          rank: null,
+          league: "Electro League 33",
           today: null,
         },
       ],
@@ -135,6 +157,7 @@ describe("Python account response mappers", () => {
       { ...card, state: "ranked" },
       { ...card, reason: "other" },
       { ...card, rank: 0 },
+      { ...card, league: 33 },
       { ...card, trophies: "5300" },
       { ...card, today: { net: 1, attacks: -1, defenses: 0 } },
       { tag: "#2PP", name: "Nova" },
@@ -160,20 +183,6 @@ describe("Python account response mappers", () => {
     expect(mapSummary({})).toBeNull();
   });
 
-  it("maps saved tag lists and results", () => {
-    expect(mapSavedTags({ players: [{ tag: "#2PP", name: "Nova" }] })).toEqual([
-      { tag: "#2PP", name: "Nova" },
-    ]);
-    expect(mapSavedTags({ players: [{ tag: "#2PP", name: 4 }] })).toBeNull();
-    expect(mapSavedTags({ players: "x" })).toBeNull();
-    expect(mapSavedTagResult({ tag: "#2PP", saved: true })).toEqual({
-      tag: "#2PP",
-      saved: true,
-    });
-    expect(mapSavedTagResult({ tag: "#2PP", saved: "yes" })).toBeNull();
-    expect(mapSavedTagResult({ tag: "bad", saved: true })).toBeNull();
-  });
-
   it("maps group lists, results, and deletion results", () => {
     const group = {
       group_id: "0e4e5f1a-8d4c-4b6e-9f1a-2b3c4d5e6f70",
@@ -185,7 +194,10 @@ describe("Python account response mappers", () => {
       { tag: "#2PL", name: null, trophies: null, state: "not_in_legend" },
     ];
     const season = "1791176400";
-    expect(mapGroups({ season, groups: [{ ...group, players }] })).toEqual({
+    const createdAt = "2026-10-01T10:00:00+00:00";
+    expect(
+      mapGroups({ season, groups: [{ ...group, players, created_at: createdAt }] }),
+    ).toEqual({
       season,
       groups: [
         {
@@ -193,9 +205,19 @@ describe("Python account response mappers", () => {
           name: "Push team",
           tags: ["#2PP", "#2PL"],
           players: players.map((player) => ({ ...player, seasonResetPending: false })),
+          createdAt,
         },
       ],
     });
+    // A Python from before groups said when they were made still lists them.
+    expect(
+      mapGroups({ season, groups: [{ ...group, players }] })?.groups[0],
+    ).toMatchObject({
+      createdAt: null,
+    });
+    expect(
+      mapGroups({ season, groups: [{ ...group, players, created_at: "soon" }] }),
+    ).toBeNull();
     // Without the Season, an open page could not tell when its trophies expire.
     expect(mapGroups({ groups: [{ ...group, players }] })).toBeNull();
     expect(mapGroups({ season, groups: [group] })).toBeNull();

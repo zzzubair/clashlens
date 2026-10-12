@@ -204,6 +204,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                         "confidence": "confirmed",
                         "public_confidence": "high",
                         "official_rank": 42,
+                        "tied": False,
                     }
                 ],
             }

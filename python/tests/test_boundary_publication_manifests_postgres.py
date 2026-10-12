@@ -16,7 +16,7 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import army_ingestion, boundary, boundary_publication
+from clashlens import army_ingestion, boundary, boundary_publication, past_reset_pacing
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -432,8 +432,10 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
 
 
 def test_army_correction_during_publication_keeps_each_frozen_battle(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
+    # What a correction rebuilds, not when (test_past_reset_pacing_postgres).
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
     # A changed army code for an already-known battle arrives after the
     # army inputs are frozen and before the army build finishes.
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -1333,5 +1335,83 @@ def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
                 ).fetchall() == [
                     (target, frozen["evidence_ids"][0], frozen["decode_ids"][0])
                 ]
+        finally:
+            database.close()
+
+
+def test_army_build_that_gave_up_on_pending_members_runs_once_they_settle(
+    database_url: str, archive_server
+) -> None:
+    # A member left army-pending on a board whose army was ready, though its
+    # day's log was complete and decoded, was never checked again: the
+    # board's army build failed on it and the board stayed unbuilt.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE boundary_publication_generation_members"
+                    " SET army_status = 'pending'"
+                )
+                connection.execute(
+                    "UPDATE python_processing_jobs SET max_attempts = 1 WHERE id = %s",
+                    (army_job,),
+                )
+            assert processor.process_job(army_job, owner="army").outcome == "failed"
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(retry_job, retry_input)] = jobs("build_army_analytics")
+            assert retry_input == army_input
+            assert processor.process_job(retry_job, owner="retry").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT army_state FROM boundary_publication_generations"
+                    " WHERE boundary_at = %s",
+                    (DAY_END,),
+                ).fetchone() == ("published",)
+                # The build that gave up stays failed; it is not run again.
+                assert connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (army_job,),
+                ).fetchone() == ("failed",)
+            boundary_publication.reevaluate_boundary_publications(database)
+            assert jobs("build_army_analytics") == []
+        finally:
+            database.close()
+
+
+def test_reevaluation_settles_members_left_pending_on_an_older_reset(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A member saved army-pending on a board whose army was still pending,
+    # though its day's log was complete and decoded, was checked again only
+    # if a repair had moved one of its battles: the board never built.
+    monkeypatch.setattr(
+        boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs = _reconcile_day(connection_info, archive_server, processor)
+            assert jobs("build_army_analytics") == []
+            monkeypatch.undo()
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_day_repairs"
+                ).fetchone() == (0,)
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(army_job, army_input)] = jobs("build_army_analytics")
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT member.army_status"
+                    " FROM boundary_publication_generation_members AS member"
+                    " JOIN boundary_publication_manifests AS manifest"
+                    "   ON manifest.generation_id = member.generation_id"
+                    " WHERE manifest.id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall() == [("complete",)]
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
         finally:
             database.close()

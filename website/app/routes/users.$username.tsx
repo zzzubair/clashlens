@@ -8,6 +8,7 @@ import {
   useSearchParams,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -29,7 +30,7 @@ export interface UserLoaderData {
 /**
  * GET /users/:username — the public user page from the anonymous Python
  * client. Only the canonical username, display name, and verified player
- * links are shown; Google identity, saved tags, groups, preferences, and
+ * links are shown; Google identity, groups, preferences, and
  * internal IDs never appear.
  */
 export async function loader({ params }: Route.LoaderArgs) {
@@ -141,7 +142,10 @@ export default function UserRoute() {
           <ul className="linked-player-cards">
             {data.user.verifiedPlayers.map((player) => (
               <li key={player.tag}>
-                <LinkedPlayer player={player} />
+                <LinkedPlayer
+                  player={player}
+                  backLabel={isOwnProfile ? "Your account" : data.user!.displayName}
+                />
               </li>
             ))}
           </ul>
@@ -161,7 +165,14 @@ export default function UserRoute() {
  * and tag; the numbers are its description. A player without current results
  * also says what their own page says.
  */
-function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
+function LinkedPlayer({
+  player,
+  backLabel,
+}: {
+  player: LinkedPlayerCard;
+  backLabel: string;
+}) {
+  const backState = useBackState(backLabel);
   const id = `linked-player-${player.tag.slice(1)}`;
   const note =
     player.state === "tracking" && player.reason === null
@@ -170,9 +181,10 @@ function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
           ? lookupExplanation(player.reason, player.name)
           : null) ?? LOOKUP_MESSAGES[player.state]);
   return (
-    <a
+    <Link
       className="linked-player-card"
-      href={canonicalPlayerPath(player.tag)}
+      to={canonicalPlayerPath(player.tag)}
+      state={backState}
       aria-labelledby={`${id}-name ${id}-tag`}
       aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details${note === null ? "" : ` ${id}-note`}`}
     >
@@ -206,7 +218,7 @@ function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
           <small>Rank</small>
           <strong>
             {player.rank === null
-              ? "Unranked"
+              ? (player.league ?? "Unranked")
               : `#${player.rank.toLocaleString("en-GB")}`}
           </strong>
         </span>
@@ -236,7 +248,7 @@ function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
           {note}
         </span>
       )}
-    </a>
+    </Link>
   );
 }
 

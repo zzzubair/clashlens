@@ -201,6 +201,7 @@ export function worstPublicUser(): PublicUser {
     trophies: 6_499 - index,
     seasonResetPending: false,
     rank: 13_204 + index,
+    league: null as string | null,
     today: { net: -320 + index * 40, attacks: 8, defenses: 1 },
     ...overrides,
   });
@@ -228,6 +229,7 @@ export function worstPublicUser(): PublicUser {
         state: "not_in_legend",
         trophies: 4_812,
         rank: null,
+        league: "Electro League 33",
       }),
       card(6, { state: "failed", trophies: null, rank: null, today: null }),
     ],

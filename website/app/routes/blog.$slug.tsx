@@ -1,8 +1,11 @@
 import { Link, data, useLoaderData } from "react-router";
 
+import type { BackHandle } from "../components/BackLink";
 import { blogMeta, formatBlogDate, type BlogPost } from "../lib/blog";
 import type { Route } from "./+types/blog.$slug";
 import "../blog.css";
+
+export const handle: BackHandle = { back: { to: "/blog", label: "Blog" } };
 
 export interface BlogPostLoaderData {
   post: BlogPost;

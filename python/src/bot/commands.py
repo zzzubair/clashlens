@@ -29,7 +29,6 @@ class StoreReads(Protocol):
     def set_main(self, account: AccountContext, tag: str) -> bool: ...
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]: ...
-    def saved(self, account: AccountContext) -> list[dict[str, Any]]: ...
     def board(self, now: datetime, focus_tag: str | None = None) -> dict[str, Any] | None: ...
     def groups(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]: ...
     def group(
@@ -307,8 +306,8 @@ class Commands:
         ]
 
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
-        """Autocomplete for /player: the person's own players and saved
-        players first, then known players whose name matches what is typed;
+        """Autocomplete for /player: the person's own players and the players
+        in their groups first, then known players whose name matches what is typed;
         a known player whose tag is exactly what is typed comes first."""
         account = self.store.account(discord_id)
         if account is None:
@@ -317,7 +316,9 @@ class Commands:
         text = current.strip()
         choices = [replies.choice_for(card) for card in self.store.players(account, now)]
         choices += [
-            replies.choice_for({**item, "trophies": None}) for item in self.store.saved(account)
+            replies.choice_for(player)
+            for group in self.store.groups(account, now)
+            for player in group["players"]
         ]
         if text:
             choices += [replies.choice_for(item) for item in self.store.search(text, now)]

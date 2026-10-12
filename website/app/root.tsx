@@ -1,12 +1,11 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import {
-  Form,
   Link,
   NavLink,
   isRouteErrorResponse,
   useLoaderData,
+  useRouteLoaderData,
   useLocation,
-  useNavigate,
   type LoaderFunctionArgs,
   Links,
   Meta,
@@ -16,10 +15,15 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import { AccountMenu } from "./components/AccountMenu";
+import { Analytics, ReturnVisitsSwitch, useErrorEvent } from "./components/Analytics";
+import { BackLink } from "./components/BackLink";
 import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
+import type { AnalyticsSettings } from "./lib/analytics";
 import type { UpdateStatus } from "./lib/contracts";
+import { DISCORD_INVITE_URL } from "./lib/discord";
 import {
   LOGGED_OUT,
   keepPageOnLostConnection,
@@ -31,6 +35,8 @@ import "./theme.css";
 import "./explore.css";
 import "./appearance.css";
 import "./header-search.css";
+import "./brand.css";
+import "./account-menu.css";
 
 export interface RootLoaderData {
   loggedIn: boolean;
@@ -38,6 +44,9 @@ export interface RootLoaderData {
   accountUsername: string | null;
   logoutIdempotencyKey: string | null;
   updateStatus: UpdateStatus | null;
+  dashboardEnabled?: boolean;
+  crewsEnabled?: boolean;
+  analytics?: AnalyticsSettings | null;
 }
 
 /**
@@ -51,11 +60,26 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   const updateStatus = import("./server/update-status.server")
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
+  const switches = import("./server/config.server")
+    .then(({ isDashboardEnabled, isCrewsEnabled, loadAnalyticsSettings }) => ({
+      dashboardEnabled: isDashboardEnabled(),
+      crewsEnabled: isCrewsEnabled(),
+      analytics: loadAnalyticsSettings(),
+    }))
+    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
-    return { ...(await loadRootNavigation(request)), updateStatus: await updateStatus };
+    return {
+      ...(await loadRootNavigation(request)),
+      updateStatus: await updateStatus,
+      ...(await switches),
+    };
   } catch {
-    return { ...LOGGED_OUT, updateStatus: await updateStatus };
+    return {
+      ...LOGGED_OUT,
+      updateStatus: await updateStatus,
+      ...(await switches),
+    };
   }
 }
 
@@ -73,7 +97,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#ffffff" suppressHydrationWarning />
+        <meta name="theme-color" content="#1d1426" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="/favicon.ico" sizes="32x32" />
@@ -98,9 +122,11 @@ export function Layout({ children }: { children: ReactNode }) {
           </p>
           <nav aria-label="Site information">
             <a href="/blog">Blog</a>
-            <a href="/about">About</a>
+            <a href="/privacy">Privacy</a>
+            <ReturnVisitsSwitch />
           </nav>
         </footer>
+        <Analytics />
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -111,7 +137,6 @@ export function Layout({ children }: { children: ReactNode }) {
 export default function App() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
-  const navigate = useNavigate();
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
   usePreloadInlineAnswerCode();
@@ -121,123 +146,85 @@ export default function App() {
     }
     previousPath.current = location.pathname;
   }, [location.pathname, location.hash]);
-  const backLink = (
-    <Link
-      className="header-back"
-      to="/"
-      replace
-      onClick={(event) => {
-        const hasSameOriginReferrer =
-          window.history.length > 1 &&
-          document.referrer !== "" &&
-          new URL(document.referrer).origin === window.location.origin;
-        if ((window.history.state?.idx ?? 0) > 0 || hasSameOriginReferrer) {
-          event.preventDefault();
-          void navigate(-1);
-        }
-      }}
-    >
-      <span aria-hidden="true">←</span> Back
-    </Link>
-  );
   return (
     <>
-      <header className="site-header">
-        <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <img
-            className="site-brand-logo"
-            src="/images/clashlens-wordmark.svg"
-            alt=""
-            width="78"
-            height="48"
-          />
-        </Link>
-        <nav className="primary-nav" aria-label="Main navigation">
-          <NavLink to="/" end>
-            Home
-          </NavLink>
-          <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
-          <NavLink to="/analytics/armies">Armies</NavLink>
-          <NavLink to="/blog">Blog</NavLink>
-          <NavLink to="/account/saved-players">Saved players</NavLink>
-          <NavLink to="/account/groups">Groups</NavLink>
-          <NavLink to="/about">About</NavLink>
-        </nav>
-        <nav className="site-nav" aria-label="Account and appearance">
-          {/* Home keeps its own large search. */}
-          {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
-          <ThemeToggle />
-          {data.loggedIn ? (
-            <>
-              <Link
-                className="nav-link nav-account"
-                to={
-                  data.accountUsername
-                    ? `/users/${encodeURIComponent(data.accountUsername)}`
-                    : "/account"
-                }
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <circle cx="12" cy="8" r="4" />
-                  <path d="M4 21v-2a8 8 0 0 1 16 0v2" />
-                </svg>
-                <span className="nav-account-name">{data.accountLabel ?? "Account"}</span>
-              </Link>
-              <Form method="post" action="/logout" className="nav-form">
-                <input
-                  type="hidden"
-                  name="idempotencyKey"
-                  value={data.logoutIdempotencyKey ?? ""}
-                />
-                <button type="submit" className="nav-button">
-                  Log out
-                </button>
-              </Form>
-            </>
-          ) : (
-            <Link className="nav-link nav-link-primary" to="/login">
-              Account
-            </Link>
-          )}
-        </nav>
-      </header>
+      <SiteHeader data={data} />
       {data.updateStatus ? <UpdatesNotice status={data.updateStatus} /> : null}
-      {location.pathname !== "/" ? <div className="page-back">{backLink}</div> : null}
+      <BackLink />
       <Outlet />
     </>
+  );
+}
+
+// The same top bar on every page, error pages included. Without the root
+// data (the server failed before it), it shows the signed-out menu.
+function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
+  const location = useLocation();
+  return (
+    <header className="site-header">
+      <Link className="site-brand" to="/" aria-label="Clash Lens home">
+        <img
+          className="site-brand-logo"
+          src="/images/clashlens-wordmark.svg"
+          alt=""
+          width="78"
+          height="48"
+        />
+      </Link>
+      <nav className="primary-nav" aria-label="Main navigation">
+        <NavLink to="/" end>
+          Home
+        </NavLink>
+        {data?.dashboardEnabled && <NavLink to="/dashboard">Dashboard</NavLink>}
+        <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
+        <NavLink to="/analytics/armies">Analytics</NavLink>
+        <NavLink to="/blog">Blog</NavLink>
+        <NavLink to="/account/groups">Groups</NavLink>
+        {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
+      </nav>
+      <nav className="site-nav" aria-label="Account and appearance">
+        {/* Home keeps its own large search. */}
+        {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
+        <ThemeToggle />
+        {data?.loggedIn ? (
+          <AccountMenu
+            label={data.accountLabel ?? "Account"}
+            accountPath={
+              data.accountUsername
+                ? `/users/${encodeURIComponent(data.accountUsername)}`
+                : "/account"
+            }
+            logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
+          />
+        ) : (
+          <Link className="nav-link nav-link-primary" to="/login">
+            Account
+          </Link>
+        )}
+        <a
+          className="nav-link nav-discord"
+          href={DISCORD_INVITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>
+            <span className="nav-discord-join">Join </span>Discord
+          </span>
+          <span className="sr-only">, opens in a new tab</span>
+        </a>
+      </nav>
+    </header>
   );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
   const location = useLocation();
+  const data = useRouteLoaderData<typeof loader>("root");
+  useErrorEvent(isNotFound);
   return (
     <>
-      <header className="site-header">
-        <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <img
-            className="site-brand-logo"
-            src="/images/clashlens-wordmark.svg"
-            alt=""
-            width="78"
-            height="48"
-          />
-        </Link>
-        <div className="site-nav">
-          <HeaderSearch key={location.pathname} />
-          <ThemeToggle />
-        </div>
-      </header>
+      <SiteHeader data={data} />
       <main
         id="main-content"
         tabIndex={-1}

@@ -74,12 +74,6 @@ def _seed_reset(connection: psycopg.Connection, reset: datetime) -> list[int]:
     )
     for player, state in ((players[0], "Complete"), (players[1], "Partial")):
         _day(connection, player, reset, state, version=1)
-    for player, state in ((players[0], "provisional"), (players[1], "unresolved")):
-        connection.execute(
-            "INSERT INTO reset_boundary_settlements (player_id, boundary_at, state)"
-            " VALUES (%s, %s, %s)",
-            (player, reset, state),
-        )
     return players
 
 
@@ -212,11 +206,7 @@ def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
         # The board's inputs froze, but the website does not show it yet.
         record = refresh()
         assert record["board_inputs"] is not None
-        assert record["readable_at"] is record["settlement"] is None
-        # A boundary check finishes before the website shows the board.
-        with psycopg.connect(connection_info, autocommit=True) as owner:
-            owner.execute("SET session_replication_role = replica")
-            owner.execute("UPDATE reset_boundary_settlements SET state = 'unresolved'")
+        assert record["readable_at"] is None
         # The website first showed the board at 05:29; the check saved it later.
         record = refresh(29)
         assert record["proof_processed_at"] == RESET + timedelta(minutes=17)
@@ -224,14 +214,9 @@ def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
         assert record["published_at"] == RESET + timedelta(minutes=24)
         assert record["readable_at"] == RESET + timedelta(minutes=29)
         assert record["board_inputs"] == {"Complete": 1, "Partial": 1, "Unavailable": 1}
-        assert record["settlement"] == {"unresolved": 2}
         # Each value is kept as first seen.
-        with psycopg.connect(connection_info, autocommit=True) as owner:
-            owner.execute("SET session_replication_role = replica")
-            owner.execute("UPDATE reset_boundary_settlements SET state = 'provisional'")
         record = refresh(40)
         assert record["readable_at"] == RESET + timedelta(minutes=29)
-        assert record["settlement"] == {"unresolved": 2}
 
 
 def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
@@ -423,17 +408,19 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         url_file.write_text(_as_worker(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
         alerts.reset_probe("0", "0")
-        assert capsys.readouterr().out.split() == ["0"] * 5
+        assert capsys.readouterr().out.split() == ["0"] * 7
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, reset)
         shown = int(reset.timestamp())
         alerts.reset_probe(str(shown), str(shown + 1500))
-        boundary, captured, ended, frozen, readable = map(
+        boundary, captured, ended, frozen, readable, *board = map(
             int, capsys.readouterr().out.split()
         )
         assert (boundary, captured, ended, frozen) == (shown, 3, 3, 0)
         assert readable == shown + 1500
+        # No board generation yet: no member waits or failed.
+        assert board == [0, 0]
 
 
 def test_the_board_check_resolves_the_board_the_website_showed(

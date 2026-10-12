@@ -17,8 +17,6 @@ import type {
   GroupList,
   PrivateGroup,
   PublicUser,
-  SavedPlayer,
-  SavedTagResult,
   VerificationResult,
 } from "../lib/account-contracts";
 import {
@@ -28,8 +26,6 @@ import {
   mapGroups,
   mapPublicUser,
   mapPublicUserResults,
-  mapSavedTagResult,
-  mapSavedTags,
   mapSummary,
   mapVerificationResult,
 } from "../lib/account-contracts";
@@ -98,6 +94,7 @@ export interface PythonClient {
   getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
   getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
   getArmySeasonSummary(season: string, query: URLSearchParams): Promise<ArmyAnalytics>;
+  getArmySeasons(): Promise<string[]>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
   createAccount(
@@ -109,11 +106,12 @@ export interface PythonClient {
     input: AccountNameInput & { preferences: Record<string, unknown> },
     idempotencyKey: string,
   ): Promise<ClashLensAccount>;
-  listSavedTags(tag?: string): Promise<SavedPlayer[]>;
-  addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
-  removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   listGroups(): Promise<GroupList>;
-  createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
+  createGroup(
+    input: GroupInput,
+    idempotencyKey: string,
+    page: GroupPage,
+  ): Promise<PrivateGroup>;
   updateGroup(
     groupId: string,
     input: GroupInput,
@@ -161,6 +159,9 @@ export interface AccountNameInput {
   displayName: string;
 }
 
+/** The page a group change is made on, as its analytics label. */
+export type GroupPage = "groups" | "group_add";
+
 /** Players join a group one at a time (services/group-players.server.ts). */
 export interface GroupInput {
   name: string;
@@ -188,6 +189,7 @@ export function createPythonClient(
     getPlayerSeason,
     getArmyAnalytics,
     getArmySeasonSummary,
+    getArmySeasons,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
     ...accountOperations,
@@ -284,6 +286,24 @@ async function getArmySeasonSummary(
     undefined,
   );
   return mapArmyAnalytics(payload);
+}
+
+// Finished seasons with saved attack summaries, newest first.
+async function getArmySeasons(): Promise<string[]> {
+  const payload = await requestJson<unknown>(
+    "/v1/analytics/armies/seasons",
+    "GET",
+    undefined,
+    undefined,
+  );
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.seasons) ||
+    !payload.seasons.every(isString)
+  ) {
+    throw new PythonApiError(502, { error: "malformed" });
+  }
+  return payload.seasons;
 }
 
 export class NoCompletedLegendDaysError extends Error {
@@ -648,7 +668,8 @@ function mapLeaderboard(
           ] as const)
         : !isOneOf(entry.confidence, ["exact", "confirmed", "uncertain"] as const)) ||
       !isOneOf(entry.public_confidence, ["high", "partial", "uncertain"] as const) ||
-      !(entry.official_rank === null || isInteger(entry.official_rank))
+      !(entry.official_rank === null || isInteger(entry.official_rank)) ||
+      !(entry.tied === undefined || typeof entry.tied === "boolean")
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -669,6 +690,7 @@ function mapLeaderboard(
             ? "stale"
             : "available",
       confidence: entry.public_confidence,
+      tied: entry.tied === true,
     };
   });
   const mapSelector = (value: unknown) => {
@@ -1068,9 +1090,6 @@ type AccountOperations = Pick<
   | "createAccount"
   | "getAccount"
   | "updateAccount"
-  | "listSavedTags"
-  | "addSavedTag"
-  | "removeSavedTag"
   | "listGroups"
   | "createGroup"
   | "updateGroup"
@@ -1100,12 +1119,9 @@ function createAccountOperations(
     getAccount: () => getAccount(identity, accountReadTimeoutMs),
     updateAccount: (input, idempotencyKey) =>
       updateAccount(input, idempotencyKey, identity),
-    listSavedTags: (tag) => listSavedTags(identity, tag),
-    addSavedTag: (tag, idempotencyKey) => addSavedTag(tag, idempotencyKey, identity),
-    removeSavedTag: (tag, idempotencyKey) =>
-      removeSavedTag(tag, idempotencyKey, identity),
     listGroups: () => listGroups(identity),
-    createGroup: (input, idempotencyKey) => createGroup(input, idempotencyKey, identity),
+    createGroup: (input, idempotencyKey, page) =>
+      createGroup(input, idempotencyKey, page, identity),
     updateGroup: (groupId, input, idempotencyKey) =>
       updateGroup(groupId, input, idempotencyKey, identity),
     deleteGroup: (groupId, idempotencyKey) =>
@@ -1232,66 +1248,6 @@ async function updateAccount(
   return mappedOrMalformed(mapAccount(payload));
 }
 
-async function listSavedTags(
-  identity: GoogleAccountIdentity | undefined,
-  tag?: string,
-): Promise<SavedPlayer[]> {
-  requireIdentity(identity);
-  const path = tag
-    ? `/v1/account/saved-tags?tag=${encodeURIComponent(tag)}`
-    : "/v1/account/saved-tags";
-  const raw = await requestJson(path, "GET", undefined, undefined, undefined, identity);
-  return mappedOrMalformed(mapSavedTags(raw));
-}
-
-async function addSavedTag(
-  tag: string,
-  idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
-): Promise<SavedTagResult> {
-  requireIdentity(identity);
-  if (!isCanonicalUuid(idempotencyKey)) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const normalized = normalizeSubmittedPlayerTag(tag);
-  if (normalized === null) {
-    throw new PythonApiError(422, { error: "invalid_tag" });
-  }
-  const payload = await requestJson<unknown>(
-    "/v1/account/saved-tags",
-    "POST",
-    jsonBody({ tag: normalized }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
-  return mappedOrMalformed(mapSavedTagResult(payload));
-}
-
-async function removeSavedTag(
-  tag: string,
-  idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
-): Promise<SavedTagResult> {
-  requireIdentity(identity);
-  if (!isCanonicalUuid(idempotencyKey)) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const normalized = normalizeSubmittedPlayerTag(tag);
-  if (normalized === null) {
-    throw new PythonApiError(422, { error: "invalid_tag" });
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/account/saved-tags/${encodeURIComponent(normalized)}`,
-    "DELETE",
-    undefined,
-    undefined,
-    idempotencyKey,
-    identity,
-  );
-  return mappedOrMalformed(mapSavedTagResult(payload));
-}
-
 async function listGroups(
   identity: GoogleAccountIdentity | undefined,
 ): Promise<GroupList> {
@@ -1310,6 +1266,7 @@ async function listGroups(
 async function createGroup(
   input: GroupInput,
   idempotencyKey: string,
+  page: GroupPage,
   identity: GoogleAccountIdentity | undefined,
 ): Promise<PrivateGroup> {
   requireIdentity(identity);
@@ -1321,7 +1278,7 @@ async function createGroup(
     throw new PythonApiError(422, { error: "invalid_request" });
   }
   const payload = await requestJson<unknown>(
-    "/v1/account/groups",
+    `/v1/account/groups?page=${page}`,
     "POST",
     jsonBody({ name }),
     undefined,

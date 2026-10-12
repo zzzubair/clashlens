@@ -1,4 +1,5 @@
-"""Every Reset is recorded as provisional, and no day result changes.
+"""How a Reset reading starts and ends Legend days: the Season its profile
+names, a weekly drop and a Season's official total.
 
 The profile read at the 05:00 UTC Reset can come before the game applies the
 previous day's automatic defense loss, so a processed Reset pair proves the
@@ -14,7 +15,6 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database, store_observation
-from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
     DAY_END,
@@ -23,7 +23,7 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import api_players, reconciliation_db, reset_baselines, reset_settlement
+from clashlens import api_players, reconciliation_db, reset_baselines
 from clashlens.api_db import ApiDatabase
 
 TAG = "#2PP"
@@ -119,176 +119,6 @@ def _rows(connection_info: str, query: str) -> list[tuple]:
         return connection.execute(query).fetchall()
 
 
-BOUNDARY_ROWS = """
-    SELECT settlement.boundary_at, settlement.state, settlement.selected_trophies,
-           settlement.reasons, evidence.failure_reasons, settlement.change_number
-    FROM reset_boundary_settlements AS settlement
-    JOIN reset_baseline_evidence AS evidence
-      ON evidence.id = settlement.early_baseline_id
-    ORDER BY settlement.boundary_at
-"""
-
-
-@pytest.mark.parametrize("kind", sorted(BOUNDARIES))
-def test_state_insert_does_not_change_existing_day_results(
-    database_url: str, archive_server, monkeypatch, kind: str
-) -> None:
-    boundary = BOUNDARIES[kind]
-    results = []
-    for record in (False, True):
-        with (
-            domain_database(database_url, include_coordinator=True) as connection_info,
-            monkeypatch.context() as patch,
-        ):
-            if not record:
-                patch.setattr(reset_settlement, "record_provisional_boundary",
-                              lambda *args, **kwargs: None)
-            jobs = _reset_work(connection_info, archive_server,
-                               boundary - timedelta(days=1), profile=_profile(5100),
-                               log=_battle_log(empty=True))
-            jobs += _reset_work(connection_info, archive_server, boundary,
-                                profile=_profile(5140), log=_battle_log())
-            _process(connection_info, archive_server, jobs)
-            results.append((
-                _rows(connection_info, """
-                    SELECT log.ranked_day_start, log.version, version.state,
-                           version.start_trophies, version.next_start_trophies,
-                           version.result_hash
-                    FROM api_player_daily_logs AS log
-                    JOIN ranked_day_versions AS version
-                      ON version.id = log.ranked_day_version_id ORDER BY 1, 2"""),
-                _rows(connection_info, "SELECT work_type, deduplication_key"
-                                       " FROM python_processing_jobs ORDER BY id"),
-                _rows(connection_info, "SELECT count(*) FROM collector_work"),
-            ))
-            states = [row[1:3] for row in _rows(connection_info, BOUNDARY_ROWS)]
-            assert states == ([("provisional", None)] * 2 if record else [])
-    assert results[0][0], "the day was published"
-    assert results[1] == results[0]
-
-
-@pytest.mark.parametrize("trophies,log", [
-    (5140, _battle_log(empty=True)), (5140, _eight_defenses()), (5000, _battle_log()),
-])
-def test_pair_complete_is_still_provisional(
-    database_url: str, archive_server, trophies: int, log: bytes
-) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        _process(connection_info, archive_server, _reset_work(
-            connection_info, archive_server, DAY_END,
-            profile=_profile(trophies), log=log,
-        ))
-        # The profile and battle-log jobs each record the pair as they finish.
-        assert [row[:5] for row in _rows(connection_info, BOUNDARY_ROWS)] == [
-            (DAY_END, "provisional", None, [], [])
-        ]
-
-
-def test_missing_failed_and_unprocessed_endpoints_remain_distinct(
-    database_url: str, archive_server
-) -> None:
-    cases = [  # profile, log, profile HTTP status, work status, jobs to run
-        (None, None, 200, "failed", slice(0)),
-        (_profile(5140), None, 200, "failed", slice(None)),
-        (None, _battle_log(), 200, "failed", slice(None)),
-        (_profile(5140), _battle_log(), 503, "complete", slice(None)),
-        (b'{"tag": "#2PP"}', _battle_log(), 200, "complete", slice(None)),
-        (_profile(5140), _battle_log(), 200, "complete", slice(1, None)),
-    ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        for day, (profile, log, http, status, run) in enumerate(cases):
-            jobs = _reset_work(
-                connection_info, archive_server, DAY_END + timedelta(days=day),
-                profile=profile, log=log, profile_status=http, status=status,
-            )
-            _process(connection_info, archive_server, jobs[run])
-        rows = _rows(connection_info, BOUNDARY_ROWS)
-    assert len(rows) == len(cases)
-    assert {row[1:3] for row in rows} == {("provisional", None)}
-    # Each boundary keeps its own pair's reasons, and no two are alike.
-    assert all(row[3] == row[4] and row[3] for row in rows)
-    assert len({json.dumps(row[3]) for row in rows}) == len(cases)
-
-
-def test_boundary_constraints_and_real_worker_permissions(database_url: str) -> None:
-    with domain_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            player = connection.execute(
-                "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (TAG,)
-            ).fetchone()[0]
-        insert = ("INSERT INTO reset_boundary_settlements (player_id, boundary_at,"
-                  " state, selected_trophies, proof_kind) VALUES (%s, %s, %s, %s, %s)")
-        worker = _role_connection(connection_info, "clashlens_python_worker")
-        worker.autocommit = True
-        worker.execute(insert, (player, DAY_END, "provisional", None, None))
-        worker.execute("UPDATE reset_boundary_settlements SET state = 'unresolved'")
-        for values, error in (
-            ((player, DAY_END + timedelta(minutes=1), "provisional", None, None),
-             psycopg.errors.CheckViolation),
-            ((player, DAY_END + timedelta(days=1), "settled", 5140, "observed_adjustment"),
-             psycopg.errors.CheckViolation),
-            ((player, DAY_END + timedelta(days=1), "unresolved", 5140, None),
-             psycopg.errors.CheckViolation),
-            ((player, DAY_END + timedelta(days=1), "provisional", None, "guess"),
-             psycopg.errors.CheckViolation),
-            ((player, DAY_END, "provisional", None, None), psycopg.errors.UniqueViolation),
-        ):
-            with pytest.raises(error):
-                worker.execute(insert, values)
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            worker.execute("DELETE FROM reset_boundary_settlements")
-        worker.close()
-        for role in ("clashlens_collector", "clashlens_python_api"):
-            with _role_connection(connection_info, role) as other:
-                with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                    other.execute("UPDATE reset_boundary_settlements SET reasons = '[]'")
-
-
-def test_concurrent_provisional_recording_and_replay_preserve_verdict(
-    database_url: str,
-) -> None:
-    with domain_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            player = connection.execute(
-                "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (TAG,)
-            ).fetchone()[0]
-            sweep = connection.execute(
-                "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
-                " membership_captured_at) VALUES (%s, %s, %s) RETURNING id",
-                (DAY_END, [player], DAY_END),
-            ).fetchone()[0]
-
-        def record(baseline: int = 7, connection_info=connection_info) -> None:
-            with psycopg.connect(connection_info) as connection:
-                reset_settlement.record_provisional_boundary(
-                    connection, player_id=player, boundary_at=DAY_END,
-                    sweep_id=sweep, early_baseline_id=baseline,
-                    early_state="complete", reasons=[],
-                )
-
-        writers = [threading.Thread(target=record) for _ in range(2)]
-        for writer in writers:
-            writer.start()
-        for writer in writers:
-            writer.join()
-        state = "SELECT state, change_number, early_baseline_id FROM reset_boundary_settlements"
-        assert _rows(connection_info, state) == [("provisional", 1, 7)]
-        record()  # The same evidence again is not a new change.
-        assert _rows(connection_info, state) == [("provisional", 1, 7)]
-        record(8)
-        assert _rows(connection_info, state) == [("provisional", 2, 8)]
-        # A synthetic later verdict: replaying the Reset pair must not undo it.
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE reset_boundary_settlements SET state = 'settled',"
-                " selected_trophies = 5106, proof_kind = 'calculated_target',"
-                " proof_rule_version = 'test', proof_fingerprint = 'f',"
-                " proof_json = '{\"test\": true}', change_number = 3"
-            )
-        record(9)
-        assert _rows(connection_info, state) == [("settled", 3, 8)]
-
-
 def _season_profile(trophies: int, season_id: int) -> bytes:
     payload = json.loads(_profile(trophies))
     payload["currentLeagueSeasonId"] = season_id
@@ -348,7 +178,6 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
             FROM reset_baseline_evidence
             WHERE boundary_at = (SELECT max(boundary_at) FROM reset_baseline_evidence)
             ORDER BY boundary_at, version DESC""")
-        settlements = {row[1:3] for row in _rows(connection_info, BOUNDARY_ROWS)}
     previous_day = boundary - timedelta(days=1)
     by_start = {row[0]: row[1:] for row in days}
     assert by_start[previous_day][3] == start
@@ -357,9 +186,8 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
         # The calendar names both days even while the profile is old.
         assert by_start[previous_day][:2] == (str(OLD_SEASON), 28)
         assert by_start[boundary][:2] == (str(NEW_SEASON), 1)
-    # The raw reading is kept, and no Reset is settled from it.
+    # The raw reading is kept.
     assert evidence == [("complete", True)]
-    assert settlements == {("provisional", None)}
 
 
 def _conflicting_profile(kind: str) -> bytes:
@@ -379,8 +207,9 @@ CURRENT_PROFILE = """
 
 
 @pytest.mark.parametrize("kind,conflict", [
+    # The day before's 6,400 named this Season, so the player has played:
+    # a Season 0 reading at 5,000 is not their total (test_unplayed_5000).
     ("ordinary", "season_zero"),
-    ("season", "season_zero"),
     ("ordinary", "tier_name"),
 ])
 def test_rejected_reset_profile_gives_no_start(
@@ -625,7 +454,9 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
     assert before[day_1][2] is None
     if later_tier == "Legend I":
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
-        assert after[day_1][2:] == (5000, None, "season_rule")
+        # The login day's Reset saves an empty battle log and 5,000, so Day 1
+        # ends there too.
+        assert after[day_1][2:] == (5000, 5000, "season_rule")
         assert (built, rebuilt_again) == (1, 0)
         assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
             5000, "season_rule"
@@ -717,7 +548,7 @@ def _store_dropped_login(connection_info, archive_server, key, at, final) -> int
     # the game applied what the official total counts, cannot overrule it.
     ("old_season", "later_reading", (-30,), "Inconsistent"),
 ])
-def test_player_dropped_at_the_season_end_ends_at_the_official_total(
+def test_last_season_day_ends_at_the_official_total(
     database_url: str, archive_server, reset_reading: str, login: str | None,
     official_gaps: tuple[int | None, ...], state: str,
 ) -> None:
@@ -780,8 +611,10 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
             )
             _process(connection_info, archive_server, [history_job])
         if login == "after_history":
+            # The official total alone ends the day; a later profile showing
+            # the drop changes nothing.
             assert {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[
-                last_day][1] == "Partial"
+                last_day][1] == state
             _process(connection_info, archive_server, [_store_dropped_login(
                 connection_info, archive_server, "dropped-login",
                 boundary + timedelta(hours=8), final,
@@ -921,3 +754,514 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
     assert len(due) == 1
     assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
     assert ended == [("Complete", final)]
+
+
+def test_weekly_drop_without_a_reset_reading_gives_no_legend_i_monday(
+    database_url: str, archive_server
+) -> None:
+    # The Monday Reset profile fails and its battle log arrives; Legend II
+    # shows 13 minutes later. Sunday's end gets no raise to 5,000, and the
+    # Monday is no Legend I day, so it does not start from Sunday's end.
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    boundary = BOUNDARIES["monday"]
+    last_day = boundary - timedelta(days=1)
+    final = 4900 + WIN - 8 * LOSS
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(4900), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            log=_log(*battles))
+        jobs.append(_store_dropped_login(
+            connection_info, archive_server, "dropped-login",
+            boundary + timedelta(minutes=13), final,
+        ))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary,
+                now=boundary + timedelta(days=1), request_key="monday",
+            )
+            assert processor.process_job(job, owner="monday") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   expected_next_start_trophies, start_trophies, failure_reasons,
+                   input_evidence -> 'start_baseline_evidence'
+                       ->> 'start_trophies_source'
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+
+    assert days[last_day][0] == final
+    assert days[boundary][1] is None and days[boundary][3] is None
+    assert "player_not_eligible" in days[boundary][2]
+
+
+def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The last day's first calculation reads no official total and is still
+    saving when the player's league history saves one, 30 below the day's
+    calculated end. The history waits for that calculation, then queues one
+    more, so the day ends Inconsistent at the official total."""
+    import time
+
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.db import (
+        ANALYTICS_RULE_VERSION,
+        DEFAULT_PARSER_VERSION,
+        DOMAIN_RULE_VERSION,
+        PROCESSING_VERSION,
+        Database,
+    )
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        # Its evidence is saved; its calculation has not run yet.
+        monkeypatch.setattr(reconciliation_db, "recalculate_ranked_day", lambda *_, **__: False)
+        _process(connection_info, archive_server, jobs)
+        monkeypatch.undo()
+        history_job = store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - 30, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]
+        failures: list[BaseException] = []
+
+        def history() -> None:
+            try:
+                _process(connection_info, archive_server, [history_job])
+            except BaseException as error:  # noqa: BLE001
+                failures.append(error)
+
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as calculation, calculation.transaction():
+                player_id = calculation.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                reconciliation_db.recalculate_ranked_day(
+                    database, calculation, player_id=player_id, day_start=last_day,
+                    parser_version=DEFAULT_PARSER_VERSION,
+                    processing_version=PROCESSING_VERSION,
+                    domain_rule_version=DOMAIN_RULE_VERSION,
+                    analytics_rule_version=ANALYTICS_RULE_VERSION,
+                )
+                waiting = threading.Thread(target=history)
+                waiting.start()
+                deadline = time.monotonic() + 30
+                with psycopg.connect(connection_info, autocommit=True) as observer:
+                    while not observer.execute(
+                        "SELECT count(*) FROM pg_locks"
+                        " WHERE locktype = 'advisory' AND NOT granted"
+                    ).fetchone()[0]:
+                        assert time.monotonic() < deadline, "history never waited"
+                        time.sleep(0.05)
+            waiting.join(timeout=60)
+        finally:
+            database.close()
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+
+    assert failures == []
+    assert queued == 1
+    assert after[:2] == (last_day, "Inconsistent")
+
+
+def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
+    database_url: str, archive_server
+) -> None:
+    """A survivor's last day is Complete at 5,020 and the Season repair has
+    recalculated it. On Day 4 of the next Season, league history fetched
+    again gives the official total, 4,980: the day is queued once, however
+    often that total is read, and ends at it."""
+    from domain_test_support import repair_season
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.domain import ranked_day_for
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    start = 5020 - WIN + 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(start), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        repair_season(connection_info, ranked_day_for(last_day).official_season_id)
+        _process(connection_info, archive_server, [])
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        history_jobs = [
+            store_observation(
+                connection_info, archive_server, occurrence_key=f"league-history-{hours}",
+                endpoint="league_history", normalized_tag=TAG,
+                observed_at=boundary + timedelta(days=3, hours=hours),
+                parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                processing_version="clashlens-domain-processing-v1",
+                domain_rule_version="clashlens-domain-rules-v1",
+                body=json.dumps({"items": [{
+                    "leagueSeasonId": str(int(boundary.timestamp())),
+                    "leagueTrophies": 4980, "leagueTierId": 105000036,
+                    "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                    "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                    "defenseStars": 16, "maxBattles": 8,
+                }]}).encode(),
+            )[1]
+            for hours in (2, 3)
+        ]
+        _process(connection_info, archive_server, history_jobs)
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+        repaired = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+            " AND status::text = 'complete'",
+        )[0][0]
+
+    assert (before[1], before[4]) == ("Complete", 5000)
+    assert repaired == 1
+    assert queued == 1
+    assert (after[1], after[4]) == ("Inconsistent", 4980)
+
+
+@pytest.mark.parametrize("gap,state", [(0, "Partial"), (-40, "Inconsistent")])
+@pytest.mark.parametrize("reset_profile_only", [False, True])
+def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
+    database_url: str, archive_server, gap: int, state: str,
+    reset_profile_only: bool,
+) -> None:
+    """The Season-ending Reset was never collected for the player, or only
+    its profile was, without its battle log, so their last day had no
+    proven end. League history then gives the official total: the queued
+    recalculation checks the day against it. Matching, the day stays
+    Partial, as nothing shows the day's battles after its last battle log;
+    40 below the calculated end, it is Inconsistent."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="day-log",
+            endpoint="battle_log", body=_log(*battles),
+            observed_at=last_day + timedelta(hours=10), normalized_tag=TAG,
+        )[1])
+        if reset_profile_only:
+            jobs += _reset_work(connection_info, archive_server, boundary,
+                                profile=_season_profile(5000, NEW_SEASON), log=None)
+        # Queued by the day's battle log while the day is live; this one is past.
+        database, _ = _processor(connection_info, archive_server)
+        jobs.append(reconciliation_db.enqueue_reconciliation(
+            database, player_tag=TAG, day_start=last_day, now=boundary, request_key="live"))
+        database.close()
+        _process(connection_info, archive_server, jobs)
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final + gap, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        recalculations = _rows(
+            connection_info,
+            "SELECT status::text FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )
+
+    assert before[1] == "Partial"
+    if not reset_profile_only:
+        assert before[4] is None
+    assert recalculations == [("complete",)]
+    assert (after[1], after[4]) == (state, final + gap)
+
+
+def test_official_total_recalculates_a_last_day_saved_under_older_rules(
+    database_url: str, archive_server
+) -> None:
+    """The player's last day was saved only under an older calculation rule.
+    League history read twice gives an official total 30 below its
+    calculated end: the day is queued once, recalculated under the current
+    rules and Inconsistent at that total."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+    from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                "UPDATE ranked_day_versions"
+                " SET reconciliation_rule_version = 'legend-ranked-day-reconciliation-v2'"
+            )
+        _process(connection_info, archive_server, [
+            store_observation(
+                connection_info, archive_server, occurrence_key=f"league-history-{hours}",
+                endpoint="league_history", normalized_tag=TAG,
+                observed_at=boundary + timedelta(hours=hours),
+                parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                processing_version="clashlens-domain-processing-v1",
+                domain_rule_version="clashlens-domain-rules-v1",
+                body=json.dumps({"items": [{
+                    "leagueSeasonId": str(int(boundary.timestamp())),
+                    "leagueTrophies": final - 30, "leagueTierId": 105000036,
+                    "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                    "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                    "defenseStars": 16, "maxBattles": 8,
+                }]}).encode(),
+            )[1]
+            for hours in (6, 7)
+        ])
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+        with psycopg.connect(connection_info) as connection:
+            current = connection.execute(
+                "SELECT state, next_start_trophies FROM ranked_day_versions"
+                " WHERE ranked_day_start = %s AND reconciliation_rule_version = %s"
+                " ORDER BY version DESC LIMIT 1",
+                (last_day, RECONCILIATION_RULE_VERSION),
+            ).fetchone()
+
+    assert queued == 1
+    assert current == ("Inconsistent", final - 30)
+
+
+def test_a_late_attack_never_explains_a_survivors_official_total(
+    database_url: str, archive_server
+) -> None:
+    """A survivor's Season-ending Reset reading, 5,000, came 3 minutes after
+    their last attack, on a day whose start the Complete day before proves.
+    The official total is that attack's gain below the day's calculated end.
+    The attack cannot explain the gap, as the official total counts every
+    battle, so the day stays Inconsistent at the official total."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=hour), False) for hour in range(1, 9)]
+    battles.append((boundary - timedelta(minutes=3), True))
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        for reset in (last_day - timedelta(days=1), last_day):
+            jobs += _reset_work(connection_info, archive_server, reset,
+                                profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - WIN, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        days = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}
+
+    assert days[last_day - timedelta(days=1)][1] == "Complete"
+    assert days[last_day][1:5] == ("Inconsistent", "uncertain", 6000, final - WIN)
+
+
+def test_official_total_leaves_an_older_seasons_last_day_as_saved(
+    database_url: str, archive_server
+) -> None:
+    """League history gives the official total for a Season two Seasons back,
+    as one read on 9 October 2026 does for the last day of 6 September. The
+    day's calculation accepts only the current and previous Seasons, so
+    nothing is queued and the saved result stays as it was."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.domain import SEASON_ANCHOR_RULE_VERSION
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    later = boundary + timedelta(days=28)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    saved = (
+        "SELECT id, state, next_start_trophies FROM ranked_day_versions"
+        f" WHERE ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        before = _rows(connection_info, saved)
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            # Two Seasons on, the latest confirmed Season starts 28 days later.
+            connection.execute("SET session_replication_role = replica")
+            connection.execute(
+                "UPDATE legend_season_anchors SET state = 'superseded'"
+                " WHERE state = 'confirmed'"
+            )
+            connection.execute(
+                """
+                INSERT INTO legend_season_anchors (
+                    current_league_season_id, previous_league_season_id,
+                    current_start, previous_start, anchor_rule_version,
+                    source_profile_version_id, state
+                ) VALUES (%s, %s, %s, %s, %s, 1, 'confirmed')
+                """,
+                (str(int(later.timestamp())), str(int(boundary.timestamp())),
+                 later, boundary, SEASON_ANCHOR_RULE_VERSION),
+            )
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=later + timedelta(days=4),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - 30, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        after = _rows(connection_info, saved)
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+
+    assert before
+    assert queued == 0
+    assert after == before
+
+
+def test_day_1_is_judged_with_the_official_total_of_the_season_before(
+    database_url: str, archive_server,
+) -> None:
+    # A Day 1 profile read before the game's reset to 5,000 shows the
+    # previous Season's official total, which Day 1 is judged with; it still
+    # starts at 5,000.
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, boundary - timedelta(days=1),
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON),
+                            log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=5),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": 5965, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 0, "attackLosses": 0,
+                "attackStars": 0, "defenseWins": 0, "defenseLosses": 0,
+                "defenseStars": 0, "maxBattles": 8,
+            }]}).encode(),
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary, now=boundary,
+                request_key="opening",
+            )
+            assert processor.process_job(job, owner="opening") is not None
+        finally:
+            database.close()
+        day_1 = _rows(connection_info, f"""
+            SELECT DISTINCT ON (ranked_day_start) start_trophies,
+                   input_evidence -> 'start_baseline_evidence' ->> 'official_final_trophies'
+            FROM ranked_day_versions WHERE ranked_day_start = '{boundary.isoformat()}'
+            ORDER BY ranked_day_start, version DESC""")
+
+    assert day_1 == [(5000, "5965")]
