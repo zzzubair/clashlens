@@ -556,9 +556,13 @@ pixel images of `mark-cl-block.svg`, in that order. `public/apple-touch-icon.png
 and `public/apple-touch-icon-precomposed.png` are 180 × 180,
 `public/apple-touch-icon-120x120-precomposed.png` is 120 × 120, and
 `public/icon-192.png` and `public/icon-512.png` are listed in
-`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, which fills
-the whole square so phones can round the corners themselves. They were rendered
-from the SVGs with headless Chrome. `public/images/og-clashlens.png` is the
+`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, the CL
+mark on a sky blue square, which fills the whole square so phones can round the
+corners themselves. The manifest's Android crop-to-shape ("maskable") icon is
+`public/icon-maskable-512.png`, from `mark-cl-block-square-maskable.svg`, whose
+letters fit inside the centre circle Android never crops. They were rendered
+from the SVGs with headless Chrome, each drawn at its exact size, with no
+transparency. `public/images/og-clashlens.png` is the
 1200 × 630 link preview image used by player pages, built from the wordmark.
 All are served by the existing static-file handler, with no API calls or database
 queries.
