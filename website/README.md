@@ -209,8 +209,8 @@ Three cards have content; the rest are labelled placeholders.
   with your hit, the base's defenses today as blocks and Hard / Average / Easy
   against today's held share across tracked Legend players (Average is within
   15 points; under 3 defenses is too early). Green is good for the attacker,
-  red bad. A row opens the player's page; its "Add to group" button adds them
-  to one of your groups.
+  red bad. A row opens the player's page; its button adds them to saved
+  players.
 
 These read `GET /v1/players/{tag}/today` on the private API. Its board of every
 tracked player's trophies and today's attack and defense counts is read in one
