@@ -1170,8 +1170,9 @@ def test_discord_bot_is_installed_but_started_only_when_turned_on(
     assert "clashlens-api-database-url," in secrets
     assert "clashlens-discord-bot-token," in secrets
     assert "PublishPort" not in bot["Container"]
-    # Without a website address the bot's links point nowhere real.
-    assert "CLASHLENS_PUBLIC_ORIGIN=https://disabled.invalid" in bot["Container"]["Environment"]
+    # Only the configured website address reaches the bot; with none set the bot refuses to start.
+    origins = [v for v in bot["Container"]["Environment"] if v.startswith("CLASHLENS_PUBLIC_ORIGIN=")]
+    assert origins == ["CLASHLENS_PUBLIC_ORIGIN="]
 
 
 def test_discord_bot_token_becomes_a_secret_only_when_the_bot_is_on(tmp_path, mode_config):

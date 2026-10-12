@@ -29,6 +29,7 @@ only the not-connected pointer and plain errors are private to the person.
   `CLASHLENS_API_KEY_HOST_DIR`). `./ops up` copies it into Podman's private
   secret store; it is never written to a unit, an environment file or a log.
 - Links in replies use the website address in `CLASHLENS_PUBLIC_ORIGIN`.
+  Without it the bot stops at startup and its log names the missing setting.
 - Memory is capped at 384 MiB and CPU at half a core.
 
 ## Reset time in replies

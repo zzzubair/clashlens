@@ -505,7 +505,7 @@ guard_systemd_units() {
     [clashlens-website.service]="$QUADLET_DIR/clashlens-website.container"
     [clashlens-archive.service]="$QUADLET_DIR/clashlens-archive.container"
     [clashlens-clash-api.service]="$QUADLET_DIR/clashlens-clash-api.container"
-    [clashlens-login.service]="$QUADLET_DIR/clashlens-login.container"
+    [clashlens-login.service]="$QUADLET_DIR/clashlens-login.container" [clashlens-discord-bot.service]="$QUADLET_DIR/clashlens-discord-bot.container"
     [clashlens-pod.service]="$QUADLET_DIR/clashlens.pod"
     [clashlens-network.service]="$QUADLET_DIR/clashlens.network"
     [clashlens-postgres-volume.service]="$QUADLET_DIR/clashlens-postgres.volume"
@@ -733,7 +733,7 @@ render_units() {
       WEBSITE_PORT "$WEBSITE_PORT" HEALTH_PORT "$HEALTH_PORT" COLLECTOR_ARGS "$COLLECTOR_ARGS" API_ARGS "$API_ARGS" \
       WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" WORKER_PROCESSES "$WORKER_PROCESSES" \
       WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" \
-      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))" PUBLIC_ORIGIN "$(setting CLASHLENS_PUBLIC_ORIGIN https://disabled.invalid)"
+      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))" PUBLIC_ORIGIN "$(setting CLASHLENS_PUBLIC_ORIGIN)"
   done
   if [[ "$MODE" != fixture ]]; then
     rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
