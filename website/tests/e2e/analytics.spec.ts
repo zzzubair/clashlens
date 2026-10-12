@@ -174,22 +174,41 @@ test("counts pages without player tags and keeps the browser ID until switched o
   expect(outside).toEqual([]);
 });
 
-test("switching return visits off stops a held or retried event carrying the ID", async ({
+test("switching return visits off stops a held, preparing or retried event carrying the ID", async ({
   page,
 }) => {
   await page.clock.install();
   await fakePostHog(page);
-  // Marks each send made while the switch is off.
+  // Marks each send made while the switch is off, and lets any background
+  // preparation of the Blog page view finish only once the switch is off.
   await page.addInitScript((host) => {
+    const switchedOff = () => localStorage.getItem("clashlens-return-visits") === "off";
     const send = window.fetch.bind(window);
     window.fetch = (input, init) =>
       send(
-        String(input).startsWith(host) &&
-          localStorage.getItem("clashlens-return-visits") === "off"
+        String(input).startsWith(host) && switchedOff()
           ? `${String(input)}&switched_off`
           : input,
         init,
       );
+    const Compress = window.CompressionStream;
+    window.CompressionStream = class extends Compress {
+      constructor(format: CompressionFormat) {
+        super(format);
+        const writer = super.writable.getWriter();
+        const writable = new WritableStream<BufferSource>({
+          async write(chunk) {
+            if (new TextDecoder().decode(chunk).includes('"route":"blog"')) {
+              while (!switchedOff()) await new Promise((wait) => setTimeout(wait, 20));
+            }
+            await writer.write(chunk);
+          },
+          close: () => writer.close(),
+          abort: (reason) => writer.abort(reason),
+        });
+        Object.defineProperty(this, "writable", { value: writable });
+      }
+    };
   }, posthogHost);
   const sentWhileOff: SentEvent[] = [];
   let answered = 0;

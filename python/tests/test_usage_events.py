@@ -66,7 +66,11 @@ def test_counts_go_to_the_eu_host_without_location_or_identity(
     first, second = (kwargs["distinct_id"] for _, kwargs in sent)
     assert UUID(first) and first != second
     for _, kwargs in sent:
-        assert kwargs["properties"] == {"provider": "google", "$process_person_profile": False}
+        assert kwargs["properties"] == {
+            "provider": "google",
+            "route": "account_setup",
+            "$process_person_profile": False,
+        }
         assert kwargs["disable_geoip"] is True
 
 
@@ -112,9 +116,13 @@ def test_each_committed_account_group_and_group_change_is_counted_once(
             # Removing a player who is not there changes nothing.
             assert call(client, owner, "DELETE", f"{players}/%232PP").json()["removed"] is False
 
+    # Each count names the website page where its action happens.
     assert [(event, kwargs["properties"]) for event, kwargs in recorder.sent] == [
-        ("signup_completed", {"provider": "discord", "$process_person_profile": False}),
-        ("group_created", {"$process_person_profile": False}),
-        ("group_used", {"action": "add", "$process_person_profile": False}),
-        ("group_used", {"action": "remove", "$process_person_profile": False}),
+        (
+            "signup_completed",
+            {"provider": "discord", "route": "account_setup", "$process_person_profile": False},
+        ),
+        ("group_created", {"route": "groups", "$process_person_profile": False}),
+        ("group_used", {"action": "add", "route": "groups", "$process_person_profile": False}),
+        ("group_used", {"action": "remove", "route": "groups", "$process_person_profile": False}),
     ]

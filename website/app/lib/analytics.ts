@@ -459,7 +459,7 @@ export function onReturnVisitsChange(listener: () => void): () => void {
 // sends it at once, never later from a wait or a retry.
 function send(posthog: PostHog, event: string, properties: Properties): void {
   applyReturnVisits(posthog);
-  posthog.capture(event, properties);
+  posthog.capture(event, properties, { send_instantly: true });
 }
 
 export function startAnalytics(settings: AnalyticsSettings): void {
@@ -494,7 +494,6 @@ export function startAnalytics(settings: AnalyticsSettings): void {
         save_referrer: false,
         save_campaign_params: false,
         before_send: sanitizeEvent,
-        request_batching: false,
       });
       posthog._retryQueue = undefined;
       client = posthog;

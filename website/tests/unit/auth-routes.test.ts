@@ -1126,7 +1126,12 @@ describe("sign-in counts", () => {
     vi.unstubAllGlobals();
   });
 
-  const stages = () => sent.map((body) => (body.properties as { stage: string }).stage);
+  // Each step with the fixed label of the page it happens on.
+  const stages = () =>
+    sent.map((body) => {
+      const { stage, route } = body.properties as { stage: string; route: string };
+      return `${stage} on ${route}`;
+    });
   const callback = (transaction: OAuthTransaction, cookie: string) =>
     callbackLoader({
       request: new Request(
@@ -1142,13 +1147,18 @@ describe("sign-in counts", () => {
     const { transaction, header } = oauthCookie(config);
     await callback(transaction, header);
 
-    expect(stages()).toEqual(["started", "returned", "succeeded"]);
+    expect(stages()).toEqual([
+      "started on login",
+      "returned on sign_in_callback",
+      "succeeded on sign_in_callback",
+    ]);
     for (const body of sent) {
       expect(body).toEqual({
         api_key: token,
         event: "sign_in_step",
         distinct_id: expect.any(String),
         properties: {
+          route: expect.any(String),
           provider: "google",
           stage: expect.any(String),
           $process_person_profile: false,
@@ -1164,7 +1174,10 @@ describe("sign-in counts", () => {
     service.validateCallback.mockRejectedValue(new OAuthCallbackError("provider_error"));
     const { transaction, header } = oauthCookie(config);
     await callback(transaction, header);
-    expect(stages()).toEqual(["returned", "failed"]);
+    expect(stages()).toEqual([
+      "returned on sign_in_callback",
+      "failed on sign_in_callback",
+    ]);
   });
 
   it("does not count linking a connection or a callback it cannot trust", async () => {

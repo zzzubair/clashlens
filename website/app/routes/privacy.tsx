@@ -75,9 +75,10 @@ export default function Privacy() {
         <p>
           When someone signs in, creates an account or a group, or adds or removes a group
           player, our server sends PostHog a count with no account, name or group details,
-          only whether a sign-in used Google or Discord and how far it got. If you sign in
-          with Google or Discord, we keep that service&apos;s ID for your account, never
-          your email address, so you can sign back in. Visitor counts never use it.
+          only which page it happened on and whether a sign-in used Google or Discord and
+          how far it got. If you sign in with Google or Discord, we keep that
+          service&apos;s ID for your account, never your email address, so you can sign
+          back in. Visitor counts never use it.
         </p>
       </section>
 

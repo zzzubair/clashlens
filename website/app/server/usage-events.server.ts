@@ -24,6 +24,7 @@ export function countSignInStep(
       event: "sign_in_step",
       distinct_id: randomUUID(),
       properties: {
+        route: stage === "started" ? "login" : "sign_in_callback",
         provider,
         stage,
         $process_person_profile: false,

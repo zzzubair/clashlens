@@ -18,7 +18,12 @@ from uuid import uuid4
 
 LOGGER = logging.getLogger(__name__)
 
-EVENTS = frozenset({"signup_completed", "group_created", "group_used"})
+# Each listed count and the website page label it is reported under.
+EVENTS = {
+    "signup_completed": "account_setup",
+    "group_created": "groups",
+    "group_used": "groups",
+}
 HOST = "https://eu.i.posthog.com"
 _TOKEN = re.compile(r"phc_[A-Za-z0-9]{20,64}")
 
@@ -50,7 +55,11 @@ class UsageEvents:
             self._client.capture(
                 event,
                 distinct_id=str(uuid4()),
-                properties={**(properties or {}), "$process_person_profile": False},
+                properties={
+                    **(properties or {}),
+                    "route": EVENTS[event],
+                    "$process_person_profile": False,
+                },
                 disable_geoip=True,
             )
         except Exception:  # noqa: BLE001 - a lost count must never fail the request.
