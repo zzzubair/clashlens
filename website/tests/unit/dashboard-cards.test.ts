@@ -593,10 +593,21 @@ function armies(lens: string, days: number) {
         days,
         covered_days,
         rows: [
-          { type_id: 3, name: "Thrower", ...outcome(5, 2, 170) },
-          { type_id: 4, name: "Hydra", ...outcome(3, 3, 120) },
+          {
+            type_id: 3,
+            name: "Thrower",
+            ...outcome(5, 2, 170),
+            legends: outcome(1000, 710, 37000),
+          },
+          {
+            type_id: 4,
+            name: "Hydra",
+            ...outcome(3, 3, 120),
+            legends: outcome(800, 400, 26400),
+          },
         ],
         total: outcome(8, 5, 290),
+        legends_total: outcome(20000, 9600, 640000),
       }
     : {
         tag: MAIN,
@@ -1147,14 +1158,16 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(bases).toContain("Easy held 1 of 4 · 25%");
     expect(bases.indexOf("Ava")).toBeLessThan(bases.indexOf("Bo"));
 
-    // Armies on defense: the costliest armies first, your own numbers only.
+    // Armies on defense: the costliest armies first, each beside the Legends average.
     const armiesDefense = text(cards["armies-defense"]!);
     expect(armiesDefense).toContain("Armies on defense 3 days 7 days Custom");
     expect(armiesDefense).toContain("Last 7 days · 8 defenses");
-    expect(armiesDefense).toContain("Thrower 63% 60% −34");
-    expect(armiesDefense).toContain("Hydra 38% 0% −40");
-    expect(armiesDefense).toContain("All defenses 100% 38% −36");
-    expect(armiesDefense).not.toContain("Legends");
+    expect(armiesDefense).toContain(
+      "Army type Share Held / Legends avg Avg lost / Legends avg",
+    );
+    expect(armiesDefense).toContain("Thrower 63% 60% / 29% −34 / −37");
+    expect(armiesDefense).toContain("Hydra 38% 0% / 50% −40 / −33");
+    expect(armiesDefense).toContain("All defenses 100% 38% / 52% −36 / −32");
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);

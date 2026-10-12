@@ -87,9 +87,18 @@ function legendsHit(army: ArmyRow): number | null {
   return army.legends ? hitPercent(army.legends) : null;
 }
 
-function lost(outcome: ArmyOutcome): string {
-  const average = averageTrophies(outcome);
+function lost(outcome: ArmyOutcome | null): string {
+  const average = outcome ? averageTrophies(outcome) : null;
   return average === null ? "–" : signed(-average);
+}
+
+/** The user's number, then every tracked player's in grey: "29% / 50%". */
+function WithLegends({ own, legends }: { own: string; legends: string }) {
+  return (
+    <span>
+      {own} <span className="dash-muted army-legends">/ {legends}</span>
+    </span>
+  );
 }
 
 /** What the card says instead of numbers, or null when it has numbers to show. */
@@ -165,12 +174,18 @@ function DaySwitch({
 
 /**
  * Armies on defense: the army types that cost the user the most trophies
- * over the chosen finished days, and every defense together.
+ * over the chosen finished days, and every defense together, each beside
+ * every tracked player's defenses against that army.
  */
 export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("defense", data);
   const empty = emptyText(armies, "defense");
-  const row = (name: string, outcome: ArmyOutcome, all = false) => (
+  const row = (
+    name: string,
+    outcome: ArmyOutcome,
+    legends: ArmyOutcome | null,
+    all = false,
+  ) => (
     <div className={`army-defense-row${all ? " is-all" : ""}`} key={name}>
       {all ? <span>{name}</span> : <Name>{name}</Name>}
       <span>
@@ -180,8 +195,13 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
             : null,
         )}
       </span>
-      <span>{percent(heldPercent(outcome))}</span>
-      <span className="negative">{lost(outcome)}</span>
+      <WithLegends
+        own={percent(heldPercent(outcome))}
+        legends={percent(legends ? heldPercent(legends) : null)}
+      />
+      <span className="negative">
+        <WithLegends own={lost(outcome)} legends={lost(legends)} />
+      </span>
     </div>
   );
   return (
@@ -200,11 +220,17 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
           <div className="army-defense-row army-head" aria-hidden="true">
             <span>Army type</span>
             <span>Share</span>
-            <span>Held</span>
-            <span>Avg lost</span>
+            <span>
+              Held <span className="army-legends-head">/ Legends avg</span>
+            </span>
+            <span>
+              Avg lost <span className="army-legends-head">/ Legends avg</span>
+            </span>
           </div>
-          {armies.rows.slice(0, DEFENSE_ROWS).map((army) => row(army.name, army))}
-          {row("All defenses", armies.total, true)}
+          {armies.rows
+            .slice(0, DEFENSE_ROWS)
+            .map((army) => row(army.name, army, army.legends as ArmyOutcome | null))}
+          {row("All defenses", armies.total, armies.legendsTotal, true)}
         </>
       )}
     </div>

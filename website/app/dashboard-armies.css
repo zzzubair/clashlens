@@ -69,7 +69,7 @@
 }
 
 .army-defense-row {
-  grid-template-columns: minmax(0, 1fr) 3rem 3rem 4.25rem;
+  grid-template-columns: minmax(0, 1fr) 3rem 5.75rem 6rem;
 }
 
 .army-offense-row {
@@ -83,6 +83,19 @@
 
 :is(.army-defense-row, .army-offense-row) > :nth-child(n + 2) {
   text-align: right;
+}
+
+/* Every tracked player's number after the user's, and its header. */
+.army-legends {
+  font-weight: 600;
+}
+
+.army-legends-head {
+  display: block;
+  color: var(--cl-muted);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .army-defense-row.is-all {
@@ -132,8 +145,14 @@
 
 @media (max-width: 640px) {
   .army-defense-row {
+    grid-template-columns: minmax(0, 1fr) 2.5rem 3.75rem 3.75rem;
     gap: 0.35rem;
     font-size: 0.85rem;
+  }
+
+  /* The Legends number goes under the user's. */
+  .army-legends {
+    display: block;
   }
 
   .army-head {

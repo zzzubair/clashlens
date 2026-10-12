@@ -37,6 +37,10 @@ def _read(client: TestClient, tag: str, lens: str, days: int) -> dict:
     return response.json()
 
 
+def _lost(battles: int, three_stars: int, trophies: int) -> dict:
+    return {"battles": battles, "three_stars": three_stars, "trophies": trophies}
+
+
 def _rows(result: dict) -> list[tuple]:
     return [
         (row["name"], row["battles"], row["three_stars"], row["trophies"],
@@ -48,6 +52,8 @@ def _rows(result: dict) -> list[tuple]:
 def test_army_cards_from_saved_battles_to_the_api(
     database_url: str, archive_server, monkeypatch
 ) -> None:
+    # Each run may count a day's defenses; the pause between them is below.
+    monkeypatch.setattr(army_types, "DEFENSE_PACE_SECONDS", 0)
     with domain_database(database_url) as ci:
         # Day 23: #8PP triples you with Thrower and #9PP two-stars you with
         # Hydra; you triple #8PP with Thrower; #9PP one-stars #8PP with
@@ -123,30 +129,43 @@ def test_army_cards_from_saved_battles_to_the_api(
             with TestClient(app) as client:
                 # Nothing counts until every saved army has its type; attacks
                 # also wait for the worker to count the day, one a run, newest
-                # day first.
+                # day first. Then it counts each day's defenses the same way,
+                # and the Legends defense numbers come with the days counted.
                 both = [DAY_START.isoformat(), NEXT_DAY.isoformat()]
-                for defended, attacked in (
-                    ([], []), (both, []), (both, [NEXT_DAY.isoformat()]),
+                day_24 = {"Thrower": _lost(1, 0, 29), "Hydra": _lost(0, 0, 0)}
+                for defended, attacked, legends, legends_total in (
+                    ([], [], {}, None),
+                    (both, [], {"Thrower": None, "Hydra": None}, None),
+                    (both, [NEXT_DAY.isoformat()], {"Thrower": None, "Hydra": None}, None),
+                    (both, both, {"Thrower": None, "Hydra": None}, None),
+                    (both, both, day_24, _lost(1, 0, 29)),
                 ):
-                    assert _read(client, "#2PP", "defense", 3)["covered_days"] == defended
+                    defense = _read(client, "#2PP", "defense", 3)
+                    assert defense["covered_days"] == defended
+                    assert {row["name"]: row["legends"] for row in defense["rows"]} == legends
+                    assert defense["legends_total"] == legends_total
                     assert _read(client, "#2PP", "offense", 3)["covered_days"] == attacked
                     army_types.refresh_army_types(database, now=NOW)
                 # Last 3 days: the day before them has no army records, so 2
-                # count. The armies that cost you the most come first, with no
-                # Legends numbers: Thrower cost you 40 + 29.
+                # count. The armies that cost you the most come first, each
+                # beside every tracked player's defenses against it, from the
+                # defenders' own reports: Thrower cost you 40 + 29, and cost
+                # #8PP 40 + 10 on Day 23.
                 defense = _read(client, "#2PP", "defense", 3)
                 assert defense["covered_days"] == [
                     DAY_START.isoformat(), NEXT_DAY.isoformat()
                 ]
                 assert _rows(defense) == [
-                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 0, 26, None),
+                    ("Thrower", 2, 1, 69, _lost(4, 2, 119)),
+                    ("Hydra", 1, 0, 26, _lost(1, 0, 26)),
                 ]
                 assert defense["total"] == {"battles": 3, "three_stars": 1, "trophies": 95}
+                assert defense["legends_total"] == _lost(5, 2, 145)
 
                 # Last day only.
-                assert _rows(_read(client, "#2PP", "defense", 1)) == [
-                    ("Thrower", 1, 0, 29, None),
-                ]
+                last_day = _read(client, "#2PP", "defense", 1)
+                assert _rows(last_day) == [("Thrower", 1, 0, 29, _lost(1, 0, 29))]
+                assert last_day["legends_total"] == _lost(1, 0, 29)
 
                 # Without its own saved day, Day 24 has no army data for #9PP
                 # rather than no battles.
@@ -208,8 +227,11 @@ def test_army_cards_from_saved_battles_to_the_api(
                     ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
                     ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
                 ]
+                # The Legends defense numbers leave out the rebuilt day until
+                # the worker counts it again.
                 assert _rows(_read(client, "#2PP", "defense", 3)) == [
-                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 1, 40, None),
+                    ("Thrower", 2, 1, 69, day_24["Thrower"]),
+                    ("Hydra", 1, 1, 40, day_24["Hydra"]),
                 ]
                 for _run in range(2):
                     assert _read(client, "#9PP", "offense", 3)["covered_days"] == []
@@ -217,6 +239,40 @@ def test_army_cards_from_saved_battles_to_the_api(
                 assert _rows(_read(client, "#9PP", "offense", 3))[1] == (
                     "Hydra", 1, 1, 40, {"battles": 1, "three_stars": 1},
                 )
+                # The new Season's day, then the rebuilt day, at most one
+                # day's defenses a minute.
+                monkeypatch.setattr(army_types, "DEFENSE_PACE_SECONDS", 60)
+                for _run in range(2):
+                    assert _read(client, "#2PP", "defense", 3)["legends_total"] == (
+                        _lost(1, 0, 29)
+                    )
+                    army_types.refresh_army_types(database, now=NOW)
+                assert _read(client, "#2PP", "defense", 3)["legends_total"] == (
+                    _lost(1, 0, 29)
+                )
+                monkeypatch.setattr(army_types, "_defense_at", float("-inf"))
+                army_types.refresh_army_types(database, now=NOW)
+                defense = _read(client, "#2PP", "defense", 3)
+                assert _rows(defense) == [
+                    ("Thrower", 2, 1, 69, _lost(4, 2, 119)),
+                    ("Hydra", 1, 1, 40, _lost(1, 1, 40)),
+                ]
+                assert defense["legends_total"] == _lost(5, 3, 159)
+
+                # Saved per defender and army, like the attack counts.
+                with database.pool.connection() as connection:
+                    assert connection.execute(
+                        """
+                        SELECT player.normalized_tag, saved.defenses,
+                               saved.three_star, saved.trophies_lost
+                        FROM army_package_defense_day_counts AS saved
+                        JOIN players AS player ON player.id = saved.population_player_id
+                        WHERE saved.ranked_day_start = %s
+                        ORDER BY 1, 3
+                        """,
+                        (DAY_START,),
+                    ).fetchall() == [("#2PP", 1, 1, 40), ("#2PP", 1, 1, 40),
+                                     ("#8PP", 2, 1, 50)]
 
                 # A newer Partial version of #2PP's Day 24 log takes that day
                 # out, though the older version is Complete.

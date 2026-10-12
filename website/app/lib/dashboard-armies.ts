@@ -1,7 +1,7 @@
 /**
  * The two army cards: a player's attacks or defenses per army type over the
- * last finished Legend days, attacks beside every tracked Legend player's
- * with each type over the same days.
+ * last finished Legend days, beside every tracked Legend player's with each
+ * type over the same days.
  */
 
 export type ArmyLens = "offense" | "defense";
@@ -26,10 +26,10 @@ export interface ArmyRow extends ArmyOutcome {
   typeId: number;
   name: string;
   /**
-   * Every tracked Legend player's attacks with this type, on attack only:
-   * Clash Lens saves no per-army defense counts to compare defenses with.
+   * Every tracked Legend player's attacks with this type, or on defense their
+   * defenses against it; null on defense until a covered day is counted.
    */
-  legends: ArmyHits | null;
+  legends: ArmyHits | ArmyOutcome | null;
 }
 
 export interface PlayerArmies {
@@ -41,6 +41,8 @@ export interface PlayerArmies {
   rows: ArmyRow[];
   /** Every battle, Other and unreadable armies included. */
   total: ArmyOutcome;
+  /** Every tracked Legend player's defenses, on defense once a covered day is counted. */
+  legendsTotal: ArmyOutcome | null;
 }
 
 export function isArmyDays(value: number, lens: ArmyLens): boolean {
