@@ -19,9 +19,9 @@ for deadlines and the full product map.
 - Keep both all-tracked and final-season Top 100 army statistics. Fix Top 100
   membership from final Clash Lens standings and include those players' recorded
   battles across the whole season, not changing daily membership.
-- Preserve individual Clan Castle troop usage in both populations. The toggle
-  changes regular troops to individual Clan Castle troops; keep BY/AGAINST
-  views, unit identities, quantities, outcomes and denominators distinct.
+- Preserve individual Clan Castle troop usage in both populations; keep
+  BY/AGAINST views, unit identities, quantities, outcomes and denominators
+  distinct.
 - Measure the added summary bytes and six-month cost. An unaffordable result
   requires a decision; do not silently drop an agreed population or troop view.
 - New history views must be ready before the first tracked season ends,

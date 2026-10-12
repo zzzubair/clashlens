@@ -458,9 +458,9 @@ Never delete saved responses or upload rows to shrink the wait.
 **Recovered:** `oldest_pending_upload_age_seconds` is back under two minutes and
 the uploads alert's Discord recovery message arrives.
 
-### Armies page empty
+### Analytics page empty
 
-The Armies page reads only finished Legend days. Each day passes through
+The Analytics page reads only finished Legend days. Each day passes through
 these steps, all run by the worker:
 
 1. At Reset the collector saves each tracked player's profile and battle log,
@@ -658,7 +658,7 @@ against about 2 GB for a whole day at once. Reading two days took 0.03 s
 for Top 100 and 0.93 s for all tracked players.
 
 **Recovered:** `army_analytics_completed_days` lists the backfilled days.
-Check the Armies page against the
+Check the Analytics page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
 
 **Repair campaign:** one saved list, per Season, of every result three past
@@ -862,7 +862,7 @@ Season before is never touched.
 re-read the October 2026 Season's armies (migration 0089, stopped by 0091), a
 Reset could freeze a battle side whose only saved army was under v2 before
 frozen builds read any saved army. Its army records show that side as unread
-(`decode_missing`), leaving it out of the Armies page and Season army
+(`decode_missing`), leaving it out of the Analytics page and Season army
 summaries. A rebuild of the Reset now reads that side's newest saved army.
 Deploy order: migration 0091 can go before or after the background-job cap
 change; this correction runs only once that cap is live, and never from 04:00

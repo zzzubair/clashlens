@@ -114,5 +114,5 @@ use their archive-read credential when archived evidence is needed. The private
 API is reachable only within the stack; the website authenticates its requests.
 
 For bounded current-season repair and republishing, follow
-[Armies page empty](../docs/operating.md#armies-page-empty) for the command,
+[Analytics page empty](../docs/operating.md#analytics-page-empty) for the command,
 stopping conditions, failure reasons and repair limits.
