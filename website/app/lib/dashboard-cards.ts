@@ -33,8 +33,8 @@ export interface SeasonDay {
   endTrophies: number | null;
   /** Rank on the board saved at that Reset. */
   rank: number | null;
-  /** Each attack's stars and trophies, oldest first. */
-  hits: [stars: number, trophies: number][];
+  /** Each attack's stars and trophies, oldest first; null when some may not be recorded. */
+  hits: [stars: number, trophies: number][] | null;
 }
 
 export interface SeasonData {
@@ -132,12 +132,29 @@ export function isShieldDay(day: SeasonDay): boolean {
   return day.attacks === 0 && day.defenses === 0;
 }
 
-function sum(values: (number | null)[]): number {
-  return values.reduce<number>((total, value) => total + (value ?? 0), 0);
-}
-
 function ratio(top: number, bottom: number): number | null {
   return bottom > 0 ? top / bottom : null;
+}
+
+/**
+ * `top` over `bottom`, each summed over only the days where both are known,
+ * so an unknown day never counts as zero. Without `bottom`, the average a day.
+ */
+export function rate(
+  days: SeasonDay[],
+  top: (day: SeasonDay) => number | null,
+  bottom: (day: SeasonDay) => number | null = () => 1,
+): number | null {
+  let over = 0;
+  let under = 0;
+  for (const day of days) {
+    const above = top(day);
+    const below = bottom(day);
+    if (above === null || below === null) continue;
+    over += above;
+    under += below;
+  }
+  return ratio(over, under);
 }
 
 /** The finished days from `first` to `last` that have a saved result. */
@@ -162,7 +179,7 @@ export function lastDays(season: SeasonData, size: number): DayWindow | null {
 }
 
 interface FormTotals {
-  net: number;
+  net: number | null;
   perAttack: number | null;
   tripled: number | null;
   perDefense: number | null;
@@ -170,20 +187,36 @@ interface FormTotals {
 }
 
 function formTotals(days: SeasonDay[]): FormTotals {
-  const attacks = sum(days.map((day) => day.attacks));
-  const defenses = sum(days.map((day) => day.defenses));
   return {
-    net: sum(days.map((day) => day.net)) / days.length,
-    perAttack: ratio(sum(days.map((day) => day.offense)), attacks),
-    tripled: ratio(sum(days.map((day) => day.triples)), attacks),
-    perDefense: ratio(sum(days.map((day) => day.defense)), defenses),
-    held: ratio(sum(days.map((day) => day.held)), defenses),
+    net: rate(days, (day) => day.net),
+    perAttack: rate(
+      days,
+      (day) => day.offense,
+      (day) => day.attacks,
+    ),
+    tripled: rate(
+      days,
+      (day) => day.triples,
+      (day) => day.attacks,
+    ),
+    perDefense: rate(
+      days,
+      (day) => day.defense,
+      (day) => day.defenses,
+    ),
+    held: rate(
+      days,
+      (day) => day.held,
+      (day) => day.defenses,
+    ),
   };
 }
 
 export interface RecentForm {
   window: DayWindow;
-  total: number;
+  /** Days with a known trophy change; the total and a-day numbers cover only these. */
+  counted: number;
+  total: number | null;
   now: FormTotals;
   /** The same numbers for the days before, once the Season has that many. */
   before: FormTotals | null;
@@ -196,9 +229,11 @@ export function recentForm(season: SeasonData, size: number): RecentForm | null 
     window.span === size && window.first - size >= 1
       ? between(season, window.first - size, window.first - 1)
       : [];
+  const nets = window.days.flatMap((day) => (day.net === null ? [] : [day.net]));
   return {
     window,
-    total: sum(window.days.map((day) => day.net)),
+    counted: nets.length,
+    total: nets.length ? nets.reduce((total, net) => total + net, 0) : null,
     now: formTotals(window.days),
     before: earlier.length ? formTotals(earlier) : null,
   };
@@ -207,7 +242,7 @@ export function recentForm(season: SeasonData, size: number): RecentForm | null 
 export interface OffenseConsistency {
   window: DayWindow;
   attacks: number;
-  /** Attack slots in the window, counting 8 a recorded day. */
+  /** Attack slots in the window, counting 8 a day with every attack recorded. */
   slots: number;
   triples: number;
   /** Attacks by stars: 3★, 2★, 1★, 0★. */
@@ -216,25 +251,28 @@ export interface OffenseConsistency {
   perMiss: number | null;
   /** Trophies left on the table against tripling every slot (zero or less). */
   missed: number;
-  perDay: { day: number; triples: number }[];
+  /** Null for a day whose attacks may not all be recorded. */
+  perDay: { day: number; triples: number | null }[];
 }
 
 /**
- * Hit rate assumes 8 attacks a recorded day, so an attack never made counts
- * as a miss; averages use the attacks actually made.
+ * Hit rate assumes 8 attacks a day with every attack recorded, so an attack
+ * never made counts as a miss; a day that may be missing attacks is left
+ * out. Averages use the attacks actually made.
  */
 export function offenseConsistency(
   season: SeasonData,
   size: number,
 ): OffenseConsistency | null {
   const window = lastDays(season, size);
-  if (window === null || window.days.length === 0) return null;
-  const hits = window.days.flatMap((day) => day.hits);
+  const recorded = window?.days.filter((day) => day.hits !== null) ?? [];
+  if (window === null || recorded.length === 0) return null;
+  const hits = recorded.flatMap((day) => day.hits ?? []);
   const stars: [number, number, number, number] = [0, 0, 0, 0];
   for (const [star] of hits) stars[3 - Math.max(0, Math.min(3, star))]!++;
   const trophies = hits.reduce((total, [, gained]) => total + gained, 0);
   const misses = hits.filter(([star]) => star < 3);
-  const slots = window.days.length * DAILY_BATTLES;
+  const slots = recorded.length * DAILY_BATTLES;
   return {
     window,
     attacks: hits.length,
@@ -249,7 +287,7 @@ export function offenseConsistency(
     missed: Math.min(0, trophies - slots * MAX_BATTLE_TROPHIES),
     perDay: window.days.map((day) => ({
       day: day.day,
-      triples: day.hits.filter(([star]) => star === 3).length,
+      triples: day.hits === null ? null : day.hits.filter(([star]) => star === 3).length,
     })),
   };
 }

@@ -112,16 +112,20 @@ function SettingsDialog({
   card,
   settings,
   saving,
+  error,
   onSave,
   onClose,
 }: {
   card: CardId;
   settings: DashboardSettings;
   saving: boolean;
+  error: string | null | undefined;
   onSave: (next: DashboardSettings) => void;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  // Only this dialog's own save failing shows here, not an earlier one.
+  const [tried, setTried] = useState(false);
   const [goal, setGoal] = useState(String(settings.goal));
   const [lines, setLines] = useState<number[]>(settings.cutoffs);
   const [groupWindow, setGroupWindow] = useState<GroupWindow>(settings.groupWindow);
@@ -138,6 +142,7 @@ function SettingsDialog({
         : true;
   const save = () => {
     if (!valid) return;
+    setTried(true);
     onSave(
       card === "goal"
         ? { ...settings, goal: goalNumber }
@@ -252,6 +257,11 @@ function SettingsDialog({
             </div>
           </fieldset>
         )}
+        {tried && error ? (
+          <p className="negative" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="dash-dialog-actions">
           <button
             type="submit"
@@ -269,10 +279,12 @@ function SettingsDialog({
 /** "+ Add a card": every built card not on the dashboard, with its size and one line. */
 function AddSheet({
   cards,
+  saving,
   onAdd,
   onClose,
 }: {
   cards: CardId[];
+  saving: boolean;
   onAdd: (card: CardId) => void;
   onClose: () => void;
 }) {
@@ -312,6 +324,7 @@ function AddSheet({
                 type="button"
                 className="button button-primary dash-small-button"
                 aria-label={`Add ${CARDS[card].title}`}
+                disabled={saving}
                 onClick={() => onAdd(card)}
               >
                 Add
@@ -449,7 +462,6 @@ export function Dashboard({
   const editing = draft !== null;
   const cards = shownCards(editing ? draft : settings.layout);
   const change = (next: CardId[], message: string) => {
-    if (saving) return;
     setDraft(next);
     setStatus(message);
   };
@@ -509,6 +521,7 @@ export function Dashboard({
           <button
             type="button"
             className="button button-secondary dash-customise"
+            disabled={saving}
             onClick={() => {
               setDraft(settings.layout ?? "default");
               setStatus("");
@@ -582,6 +595,7 @@ export function Dashboard({
                   type="button"
                   className="dash-grip"
                   aria-label={`Drag to move ${CARDS[card].title}`}
+                  disabled={saving}
                   onPointerDown={(event) => {
                     if (event.button > 0 || saving) return;
                     event.preventDefault();
@@ -598,7 +612,7 @@ export function Dashboard({
                   type="button"
                   className="dash-icon-button"
                   aria-label={`Move ${CARDS[card].title} earlier`}
-                  disabled={index === 0}
+                  disabled={saving || index === 0}
                   onClick={() =>
                     change(moved(cards, index, -1), `Moved ${CARDS[card].title} earlier`)
                   }
@@ -609,7 +623,7 @@ export function Dashboard({
                   type="button"
                   className="dash-icon-button"
                   aria-label={`Move ${CARDS[card].title} later`}
-                  disabled={index === cards.length - 1}
+                  disabled={saving || index === cards.length - 1}
                   onClick={() =>
                     change(moved(cards, index, 1), `Moved ${CARDS[card].title} later`)
                   }
@@ -620,6 +634,7 @@ export function Dashboard({
                   type="button"
                   className="dash-icon-button"
                   aria-label={`Remove ${CARDS[card].title}`}
+                  disabled={saving}
                   onClick={() =>
                     change(
                       cards.filter((item) => item !== card),
@@ -664,6 +679,7 @@ export function Dashboard({
       {adding && editing ? (
         <AddSheet
           cards={addableCards(cards)}
+          saving={saving}
           onClose={() => setAdding(false)}
           onAdd={(card) =>
             change([...cards, card], `Added ${CARDS[card].title} at the end`)
@@ -675,6 +691,7 @@ export function Dashboard({
           card={editingSettings}
           settings={settings}
           saving={saving}
+          error={error}
           onSave={save}
           onClose={() => setEditingSettings(null)}
         />

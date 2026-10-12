@@ -10,8 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   readLoginIdentity: vi.fn(),
-  createPythonClient: vi.fn(),
-  getGroupComparison: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -24,25 +22,7 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
   return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
 });
 
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, createPythonClient: mocks.createPythonClient };
-});
-
-vi.mock("../../app/services/group-comparison.server", () => ({
-  getGroupComparison: mocks.getGroupComparison,
-}));
-
 import { ClockCard } from "../../app/components/BoardCards";
-import type { LinkedPlayerCard, ListedGroup } from "../../app/lib/account-contracts";
-import type {
-  PlayerPage,
-  RankedBattleEvent,
-  RankedDaySummary,
-  TrackedLeaderboard,
-  TrackedPlayerEntry,
-} from "../../app/lib/contracts";
 import { CARDS, serializeSettings, type CardId } from "../../app/lib/dashboard";
 import {
   around,
@@ -53,20 +33,19 @@ import {
   type GoalData,
   type SeasonData,
 } from "../../app/lib/dashboard-cards";
-import type { ComparedPlayer } from "../../app/lib/group-comparison";
 import DashboardRoute, {
   loader,
   type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
+const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 /** The Season started at this Reset; the page is read on Day 9 at 09:30 UTC. */
-const ANCHOR = Date.UTC(2026, 8, 29, 5);
+const ANCHOR = Date.UTC(2026, 8, 7, 5);
 const SEASON_ID = String(ANCHOR / 1000);
 const NOW = ANCHOR + 8 * DAY + 4.5 * HOUR;
 const MAIN = "#LQ2V8PJ0";
@@ -77,22 +56,27 @@ const BO = "#YQ2LPJ80";
 const CY = "#QL8YPJ20";
 const CLAN_MATES = "0f6c1d8e-7b2a-4c3d-9e5f-1a2b3c4d5e6f";
 const ALPHA = "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d";
+const BOARD_SIZE = 9000;
 
-const iso = (ms: number) => new Date(ms).toISOString();
+/** A timestamp as Python writes it. */
+const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "+00:00");
 const dayStart = (day: number) => ANCHOR + (day - 1) * DAY;
+/** A valid player tag for a board place nobody else holds. */
+const rankTag = (rank: number) =>
+  `#JC${[...String(rank)].map((digit) => "0289PYLQGR"[Number(digit)]).join("")}`;
 
 let battleIds = 0;
-function event(at: number, stars: number, trophyChange: number): RankedBattleEvent {
+function event(at: number, stars: number, trophyChange: number) {
   battleIds += 1;
   return {
-    battleId: `battle-${battleIds}`,
-    battleTimestamp: iso(at),
+    battle_id: `battle-${battleIds}`,
+    battle_timestamp: iso(at),
     opponent: { tag: "#2PY", name: "Opponent" },
-    destructionPercentage: stars === 3 ? 100 : 80,
+    destruction_percentage: stars === 3 ? 100 : 80,
     stars,
-    trophyChange,
-    perspectiveDisagreement: false,
-    armyShareCode: null,
+    trophy_change: trophyChange,
+    perspective_disagreement: false,
+    army_share_code: null,
   };
 }
 
@@ -106,10 +90,12 @@ interface DayPlan {
   rank: number | null;
   attacks?: number;
   defenses?: number;
+  /** The battle log has a gap, so Python leaves the day's trophy change unknown. */
+  gap?: boolean;
 }
 
-/** One finished Legend day as the player page sends it, every battle recorded. */
-function savedDay(plan: DayPlan): RankedDaySummary {
+/** One finished Legend day as Python's player page sends it. */
+function savedDay(plan: DayPlan) {
   const start = dayStart(plan.day);
   const attacks = plan.attacks ?? 8;
   const defenses = plan.defenses ?? 8;
@@ -122,90 +108,121 @@ function savedDay(plan: DayPlan): RankedDaySummary {
   const gain = hits.reduce((total, value) => total + value, 0);
   const loss = losses.reduce((total, value) => total + value, 0);
   return {
-    dayNumber: plan.day,
-    label: "Ranked day",
-    period: `${iso(start)} – ${iso(start + DAY)}`,
-    state: "Complete",
-    confidence: "exact",
-    startTrophies: plan.start,
-    offense: { attacks, threeStars: Math.min(plan.triples, attacks), trophyGain: gain },
-    defense: { defenses, threeStarsAgainst: defenses - plan.held, trophyLoss: loss },
-    trophyChange: gain - loss,
-    resetRank: plan.rank,
-    battlesComplete: true,
-    offenseEvents: hits.map((value, index) =>
+    ranked_day_start: iso(start),
+    ranked_day_end: iso(start + DAY),
+    season_day_number: plan.day,
+    state: plan.gap ? "Partial" : "Complete",
+    confidence: plan.gap ? "partial" : "exact",
+    coverage: plan.gap ? "partial" : "complete",
+    completeness: plan.gap
+      ? { state: "partial", reason: "battle_log_gap" }
+      : { state: "complete", reason: "Complete evidence." },
+    public_confidence: plan.gap ? "partial" : "high",
+    uncertainty_reasons: plan.gap ? ["battle_log_gap"] : [],
+    start_trophies: plan.start,
+    attack_count: attacks,
+    attack_three_star_count: Math.min(plan.triples, attacks),
+    attack_gain: gain,
+    defense_count: defenses,
+    defense_three_star_count: defenses - plan.held,
+    defense_loss: loss,
+    net_trophy_change: plan.gap ? null : gain - loss,
+    reset_rank: plan.rank,
+    battles_complete: !plan.gap && attacks === 8 && defenses === 8,
+    offense_events: hits.map((value, index) =>
       event(start + (index + 1) * HOUR, value === 40 ? 3 : 2, value),
     ),
-    defenseEvents: losses.map((value, index) =>
+    defense_events: losses.map((value, index) =>
       event(start + (index + 1.5) * HOUR, value === 40 ? 3 : 2, -value),
     ),
-    completeness: { state: "complete", reason: "Complete evidence." },
-    uncertainty: [],
   };
 }
 
 /** Day 9 so far. */
 function today(
-  offense: RankedDaySummary["offense"],
-  defense: RankedDaySummary["defense"],
-  events: { offense: RankedBattleEvent[]; defense: RankedBattleEvent[] },
-): RankedDaySummary {
+  totals: [
+    attacks: number,
+    triples: number,
+    gain: number,
+    defenses: number,
+    loss: number,
+  ],
+  events: { offense: ReturnType<typeof event>[]; defense: ReturnType<typeof event>[] },
+) {
   const start = dayStart(9);
+  const [attacks, triples, gain, defenses, loss] = totals;
   return {
-    dayNumber: 9,
-    label: "Ranked day",
-    period: `${iso(start)} – ${iso(start + DAY)}`,
+    ranked_day_start: iso(start),
+    ranked_day_end: iso(start + DAY),
+    season_day_number: 9,
     state: "Live",
     confidence: null,
-    offense,
-    defense,
-    trophyChange: null,
-    battlesComplete: false,
-    offenseEvents: events.offense,
-    defenseEvents: events.defense,
+    coverage: "partial",
     completeness: { state: "partial", reason: "The day is not over." },
-    uncertainty: [],
+    public_confidence: "partial",
+    uncertainty_reasons: [],
+    start_trophies: null,
+    attack_count: attacks,
+    attack_three_star_count: triples,
+    attack_gain: gain,
+    defense_count: defenses,
+    defense_three_star_count: 0,
+    defense_loss: loss,
+    net_trophy_change: null,
+    battles_complete: false,
+    offense_events: events.offense,
+    defense_events: events.defense,
   };
 }
 
+/** GET /v1/players/{tag}, as Python sends it. */
 function playerPage(
   tag: string,
   name: string,
   trophies: number,
-  days: RankedDaySummary[],
-  current: RankedDaySummary | null,
-): PlayerPage {
+  days: ReturnType<typeof savedDay>[],
+  current: ReturnType<typeof today>,
+  publishedAt = NOW - 5 * 60_000,
+) {
+  const observedAt = iso(NOW - 10 * 60_000);
   return {
-    kind: "player-page",
     tag,
-    trackingState: "tracking",
-    profile: {
-      tag,
-      name,
-      clan: "",
-      trophies,
-      seasonResetPending: false,
-      currentLeagueSeasonId: SEASON_ID,
-      freshness: { state: "fresh", observedAt: iso(NOW - 10 * 60_000), ageSeconds: 600 },
-      confidence: "high",
-      coverage: "complete",
-      eligibility: "legend-i",
+    name,
+    trophies,
+    active: true,
+    eligibility: "eligible",
+    clan: null,
+    season_reset_pending: false,
+    current_league_season_id: SEASON_ID,
+    freshness: "fresh",
+    observed_at: observedAt,
+    age_seconds: 600,
+    public_confidence: "high",
+    screen_ready: {
+      season: {
+        id: SEASON_ID,
+        start: iso(ANCHOR),
+        end: iso(ANCHOR + 28 * DAY),
+        current_day_number: 9,
+        anchor_source: "official_league_history",
+        anchor_observed_at: iso(ANCHOR),
+      },
+      days: [...days, current],
+      current_day_start: current.ranked_day_start,
+      current_day_published_at: iso(publishedAt),
+      // The last two days also arrive as recent days; each counts once.
+      recent_day_starts: days.slice(-2).map((day) => day.ranked_day_start),
+      season_day_starts: days.map((day) => day.ranked_day_start),
+      data_quality: [],
+      provenance: {
+        source: "api_player_daily_logs",
+        observed_at: observedAt,
+        freshness: "fresh",
+        confidence: "high",
+        coverage: "partial",
+        version: "test-v1",
+      },
     },
-    season: {
-      id: SEASON_ID,
-      anchor: iso(ANCHOR),
-      currentDayNumber: 9,
-      dayCount: 28,
-      anchorSource: "official_league_history",
-      anchorObservedAt: iso(ANCHOR),
-    },
-    currentDay: current,
-    currentDayPublishedAt: iso(NOW - 5 * 60_000),
-    // The last two days also arrive as recent days; each counts once.
-    recentDays: days.slice(-2),
-    seasonDays: days,
-    dataQuality: [],
-    provenance: {} as PlayerPage["provenance"],
   };
 }
 
@@ -213,58 +230,53 @@ function playerPage(
  * The selected account's Season: Day 3 a shield day, Day 7 never saved.
  * Net by day: +44, +70, 0, +8, +64, +2, (missing), +86.
  */
-const MAIN_DAYS = [
-  savedDay({ day: 1, triples: 6, held: 4, start: 5000, rank: 900 }),
-  savedDay({ day: 2, triples: 7, held: 5, start: 5044, rank: 700 }),
-  savedDay({
-    day: 3,
-    triples: 0,
-    held: 0,
-    start: 5114,
-    rank: 760,
-    attacks: 0,
-    defenses: 0,
-  }),
-  savedDay({ day: 4, triples: 4, held: 3, start: 5114, rank: 800 }),
-  savedDay({ day: 5, triples: 8, held: 4, start: 5122, rank: 500 }),
-  savedDay({ day: 6, triples: 5, held: 2, start: 5186, rank: 520 }),
-  savedDay({ day: 8, triples: 7, held: 6, start: 5238, rank: 318 }),
-];
+function mainDays(day6: Partial<DayPlan> = {}) {
+  return [
+    savedDay({ day: 1, triples: 6, held: 4, start: 5000, rank: 900 }),
+    savedDay({ day: 2, triples: 7, held: 5, start: 5044, rank: 700 }),
+    savedDay({
+      day: 3,
+      triples: 0,
+      held: 0,
+      start: 5114,
+      rank: 760,
+      attacks: 0,
+      defenses: 0,
+    }),
+    savedDay({ day: 4, triples: 4, held: 3, start: 5114, rank: 800 }),
+    savedDay({ day: 5, triples: 8, held: 4, start: 5122, rank: 500 }),
+    savedDay({ day: 6, triples: 5, held: 2, start: 5186, rank: 520, ...day6 }),
+    savedDay({ day: 8, triples: 7, held: 6, start: 5238, rank: 318 }),
+  ];
+}
 
-function mainPage(): PlayerPage {
+function mainPage(day6: Partial<DayPlan> = {}) {
   const start = dayStart(9);
   return playerPage(
     MAIN,
     "Lens Main",
     5370,
-    MAIN_DAYS,
-    today(
-      { attacks: 2, threeStars: 1, trophyGain: 71 },
-      { defenses: 1, threeStarsAgainst: 0, trophyLoss: 16 },
-      {
-        // 07:10 and 07:25 share one mark on the clock.
-        offense: [
-          event(start + 2 * HOUR + 10 * 60_000, 3, 40),
-          event(start + 2 * HOUR + 25 * 60_000, 2, 31),
-        ],
-        defense: [event(start + 4 * HOUR, 1, -16)],
-      },
-    ),
+    mainDays(day6),
+    today([2, 1, 71, 1, 16], {
+      // 07:10 and 07:25 share one mark on the clock.
+      offense: [
+        event(start + 2 * HOUR + 10 * 60_000, 3, 40),
+        event(start + 2 * HOUR + 25 * 60_000, 2, 31),
+      ],
+      defense: [event(start + 4 * HOUR, 1, -16)],
+    }),
   );
 }
 
-/** A rival 1 place above, who was #310 at the last Reset. */
-function tundraPage(): PlayerPage {
+/** A rival 1 place above, who was #310 at the last Reset; today's battles saved 20 min ago. */
+function tundraPage() {
   return playerPage(
     TUNDRA,
     "Tundra",
     5375,
     [savedDay({ day: 8, triples: 8, held: 8, start: 5180, rank: 310 })],
-    today(
-      { attacks: 4, threeStars: 2, trophyGain: 150 },
-      { defenses: 2, threeStarsAgainst: 1, trophyLoss: 60 },
-      { offense: [], defense: [] },
-    ),
+    today([4, 2, 150, 2, 60], { offense: [], defense: [] }),
+    NOW - 20 * 60_000,
   );
 }
 
@@ -282,70 +294,175 @@ const RESET_LINES: Record<number, Record<number, number>> = {
   1: { 200: 5120 },
 };
 
-/** The selected account is #316 live and was #318 on the Day 8 Reset board. */
-function boardEntry(rank: number, day: number | null): TrackedPlayerEntry {
+/** The selected account was #318 on the Day 8 Reset board. */
+function boardEntry(rank: number, day: number | null) {
   const tag =
-    (day === null && rank === 316) || (day === 8 && rank === 318)
+    (day === null && rank === python.liveRank) || (day === 8 && rank === 318)
       ? MAIN
       : rank === 315
         ? TUNDRA
-        : `#P${rank}`;
+        : rankTag(rank);
   const lines = day === null ? LIVE_LINES : (RESET_LINES[day] ?? {});
   return {
-    rank,
+    position: rank,
     tag,
     name: tag === MAIN ? "Lens Main" : tag === TUNDRA ? "Tundra" : `Player ${rank}`,
-    clan: "",
+    clan: null,
     trophies: lines[rank] ?? (day === null ? 5450 : 5414) - 5 * (rank - 300),
-    freshness: { state: "fresh", observedAt: iso(NOW - 3 * 60_000), ageSeconds: 180 },
-    state: "available",
-    confidence: "high",
-  } as TrackedPlayerEntry;
+    observed_at: iso(NOW - 3 * 60_000),
+    age_seconds: 180,
+    freshness: "fresh",
+    confidence: day === null ? "eligible" : "confirmed",
+    public_confidence: "high",
+    official_rank: null,
+    tied: false,
+  };
 }
 
-function board(entries: TrackedPlayerEntry[]): TrackedLeaderboard {
+/** GET /v1/leaderboards/{live,frozen}, as Python pages it. */
+function leaderboard(query: URLSearchParams) {
+  const limit = Number(query.get("limit"));
+  const dayNumber = query.get("season_day_number");
+  const day = dayNumber === null ? null : Number(dayNumber);
+  // A focused read is the page holding the player, with 5 places either side.
+  const focus = query.has("focus_tag") ? python.liveRank : null;
+  const offset =
+    focus === null
+      ? Number(query.get("offset"))
+      : Math.floor((focus - 1) / limit) * limit;
+  const first = Math.max(
+    1,
+    focus === null ? offset + 1 : Math.min(offset + 1, focus - 5),
+  );
+  const last = Math.min(
+    BOARD_SIZE,
+    focus === null ? offset + limit : Math.max(offset + limit, focus + 5),
+  );
+  const observed = iso(NOW - 3 * 60_000);
+  const pages = Math.ceil(BOARD_SIZE / limit);
   return {
-    kind: "tracked-leaderboard",
-    entries,
-    totalEntries: 9000,
-  } as TrackedLeaderboard;
+    kind: day === null ? "live" : "frozen",
+    generated_at: iso(NOW),
+    ...(day === null
+      ? {
+          source_observations: {
+            oldest_observed_at: observed,
+            newest_observed_at: observed,
+            stale_count: 0,
+          },
+        }
+      : {
+          official_season_id: SEASON_ID,
+          season_day_number: day,
+          reset_at: iso(dayStart(day) + DAY),
+          season_start_at: iso(ANCHOR),
+          season_end_at: iso(ANCHOR + 28 * DAY),
+          previous_snapshot: null,
+          next_snapshot: null,
+        }),
+    tracked_population: BOARD_SIZE,
+    total_entries: BOARD_SIZE,
+    page: offset / limit + 1,
+    page_size: limit,
+    page_count: pages,
+    has_previous: offset > 0,
+    has_next: offset / limit + 1 < pages,
+    coverage: {
+      state: "partial",
+      tracked_players: BOARD_SIZE,
+      measured_percent: 50,
+      note: "Tracked players.",
+    },
+    provenance: {
+      source: "test",
+      observed_at: observed,
+      freshness: "fresh",
+      confidence: "partial",
+      coverage: "partial",
+      version: "test-v1",
+    },
+    quality_states: [],
+    entries: Array.from({ length: last - first + 1 }, (_, index) =>
+      boardEntry(first + index, day),
+    ),
+  };
 }
 
+/** The 7 finished days the group comparison covers. */
+const COMPARED_DAYS = Array.from({ length: 7 }, (_, index) => iso(dayStart(2 + index)));
+
+/** One player in GET /v1/account/groups/{id}/comparison, as Python sends it. */
 function compared(
   tag: string,
   name: string,
-  changes: Partial<ComparedPlayer> & { netPerDay: number },
-): ComparedPlayer {
+  netPerDay: number,
+  changes: Record<string, unknown> = {},
+) {
   return {
     tag,
     name,
     you: false,
-    inGroup: true,
+    in_group: true,
     status: "tracking",
     trophies: 5300,
-    seasonResetPending: false,
-    observedAt: null,
-    ageSeconds: null,
+    season_reset_pending: false,
+    observed_at: null,
+    age_seconds: null,
     freshness: null,
     today: null,
-    days: [],
-    countedDays: 7,
-    countedAttacks: 56,
-    net: changes.netPerDay * 7,
-    vsGroup: null,
-    attack: { count: 56, stars: 150, destruction: 5000, threeStars: 28, trophies: 1960 },
+    day_results: COMPARED_DAYS.map((start) => ({
+      start,
+      state: "complete",
+      net: netPerDay,
+    })),
+    counted_days: 7,
+    counted_attacks: 56,
+    net: netPerDay * 7,
+    net_per_day: netPerDay,
+    vs_group: null,
+    attack: { count: 56, stars: 150, destruction: 5000, three_stars: 28, trophies: 1960 },
     defense: {
       count: 56,
       stars: 140,
       destruction: 5000,
       trophies: 1680,
-      starCounts: [0, 0, 0, 0],
+      star_counts: { "0": 0, "1": 0, "2": 0, "3": 0 },
     },
     ...changes,
   };
 }
 
-function linked(tag: string, changes: Partial<LinkedPlayerCard> = {}): LinkedPlayerCard {
+function comparison() {
+  return {
+    kind: "group-comparison",
+    group_id: CLAN_MATES,
+    name: "Clan mates",
+    days: 7,
+    day_starts: COMPARED_DAYS,
+    today_start: iso(dayStart(9)),
+    generated_at: iso(NOW),
+    season: SEASON_ID,
+    players: [
+      compared(MAIN, "Lens Main", 38, { you: true, in_group: false }),
+      compared(AVA, "Ava", 52, { trophies: 5510 }),
+      // Battles of a partial day count in the totals but not in its counted days.
+      compared(BO, "Bo", 12, {
+        day_results: COMPARED_DAYS.map((start, index) =>
+          index === 6
+            ? { start, state: "partial", net: null }
+            : { start, state: "complete", net: 12 },
+        ),
+        counted_days: 6,
+        net: 72,
+      }),
+      // Another linked account outside the group, and a member who left Legend I.
+      compared(ALT, "Lens Alt", 90, { you: true, in_group: false }),
+      compared(CY, "Cy", 99, { status: "not_in_legend" }),
+    ],
+  };
+}
+
+function linked(tag: string, changes: Record<string, unknown> = {}) {
   return {
     tag,
     name: "Lens Main",
@@ -353,7 +470,7 @@ function linked(tag: string, changes: Partial<LinkedPlayerCard> = {}): LinkedPla
     state: "tracking",
     reason: null,
     trophies: 5370,
-    seasonResetPending: false,
+    season_reset_pending: false,
     rank: 316,
     league: null,
     today: { net: 55, attacks: 2, defenses: 1 },
@@ -361,82 +478,92 @@ function linked(tag: string, changes: Partial<LinkedPlayerCard> = {}): LinkedPla
   };
 }
 
+const GROUPS = [
+  {
+    group_id: ALPHA,
+    name: "Alpha",
+    tags: [TUNDRA],
+    players: [],
+    created_at: "2026-10-01T10:00:00+00:00",
+  },
+  {
+    group_id: CLAN_MATES,
+    name: "Clan mates",
+    tags: [AVA, BO, CY],
+    players: [],
+    created_at: "2026-09-01T10:00:00+00:00",
+  },
+];
+
+/** The fake Python service: what it holds, and every request it was sent. */
+const python = {
+  preferences: {} as Record<string, unknown>,
+  pages: {} as Record<string, unknown>,
+  groups: GROUPS as unknown[],
+  liveRank: 316,
+  /** Paths ending in one of these answer 503. */
+  down: [] as string[],
+  requests: [] as { path: string; query: Record<string, string> }[],
+};
+
+function answer(url: URL): [status: number, body: unknown] {
+  const path = decodeURIComponent(url.pathname);
+  python.requests.push({ path, query: Object.fromEntries(url.searchParams) });
+  if (python.down.some((end) => path.endsWith(end)))
+    return [503, { error: "unavailable" }];
+  if (path === "/v1/account")
+    return [
+      200,
+      {
+        username: "nova88",
+        display_name: "Nova",
+        preferences: python.preferences,
+        providers: ["google"],
+      },
+    ];
+  if (path === "/v1/users/nova88")
+    return [
+      200,
+      {
+        username: "nova88",
+        display_name: "Nova",
+        verified_players: [linked(MAIN), linked(ALT, { name: "Lens Alt", rank: 2000 })],
+      },
+    ];
+  if (path === "/v1/account/groups")
+    return [200, { season: SEASON_ID, groups: python.groups }];
+  if (path === `/v1/account/groups/${CLAN_MATES}/comparison`) return [200, comparison()];
+  if (path === `/v1/players/${MAIN}/seasons`)
+    return [
+      200,
+      {
+        seasons: [
+          {
+            official_season_id: String(ANCHOR / 1000 - 28 * 86_400),
+            coverage_state: "partial",
+            days_observed: 0,
+            days_missing: 28,
+            source: "official_league_history",
+            official_history: {
+              source: "official_league_history",
+              observed_at: iso(ANCHOR),
+              eod_trophies: 5288,
+              final_placement: 412,
+            },
+          },
+        ],
+      },
+    ];
+  const page = python.pages[path.replace("/v1/players/", "")];
+  if (path.startsWith("/v1/players/") && page) return [200, page];
+  if (path === "/v1/leaderboards/live" || path === "/v1/leaderboards/frozen")
+    return [200, leaderboard(url.searchParams)];
+  return [404, { error: "not_found" }];
+}
+
 const ALL_CARDS = Object.keys(CARDS).filter(
   (card) => CARDS[card as CardId].built,
 ) as CardId[];
-
-function fakeClient(preferences: Record<string, unknown>) {
-  const groups: ListedGroup[] = [
-    {
-      groupId: ALPHA,
-      name: "Alpha",
-      tags: [TUNDRA],
-      players: [],
-      createdAt: "2026-10-01T10:00:00+00:00",
-    },
-    {
-      groupId: CLAN_MATES,
-      name: "Clan mates",
-      tags: [AVA, BO, CY],
-      players: [],
-      createdAt: "2026-09-01T10:00:00+00:00",
-    },
-  ];
-  return {
-    getAccount: vi.fn(async () => ({
-      username: "nova88",
-      displayName: "Nova",
-      preferences,
-      providers: ["google"],
-    })),
-    getPublicUser: vi.fn(async () => ({
-      username: "nova88",
-      displayName: "Nova",
-      verifiedPlayers: [linked(MAIN), linked(ALT, { name: "Lens Alt", rank: 2000 })],
-    })),
-    getPlayer: vi.fn(async (tag: string) => {
-      if (tag === MAIN) return mainPage();
-      if (tag === TUNDRA) return tundraPage();
-      throw new PythonApiError(404, { error: "not_found" });
-    }),
-    getPlayerSeasons: vi.fn(async () => [
-      {
-        seasonId: String(ANCHOR / 1000 - 28 * 86_400),
-        coverageState: "complete",
-        daysObserved: 28,
-        daysMissing: 0,
-        source: "official_league_history",
-        officialHistory: {
-          observedAt: iso(ANCHOR),
-          eodTrophies: 5288,
-          finalPlacement: 412,
-        },
-      },
-    ]),
-    getTrackedLeaderboard: vi.fn(
-      async (
-        limit = 25,
-        view: "live" | "daily" = "live",
-        offset = 0,
-        selector?: { officialSeasonId: string; dayNumber: number },
-        focus?: string,
-      ) => {
-        if (focus) {
-          return board(
-            Array.from({ length: 11 }, (_, index) => boardEntry(311 + index, null)),
-          );
-        }
-        const day = view === "daily" ? (selector?.dayNumber ?? null) : null;
-        return board(
-          Array.from({ length: limit }, (_, index) =>
-            boardEntry(offset + index + 1, day),
-          ),
-        );
-      },
-    ),
-    listGroups: vi.fn(async () => ({ season: SEASON_ID, groups })),
-  };
-}
 
 const loaderArgs = (url: string) =>
   ({ request: new Request(url), params: {}, context: {} }) as unknown as Parameters<
@@ -483,17 +610,23 @@ function cardsIn(html: string): Record<string, string> {
   return found;
 }
 
-describe("dashboard cards, from saved days through the reads to the page", () => {
-  let client: ReturnType<typeof fakeClient>;
-
-  function useClient(preferences: Record<string, unknown>) {
-    client = fakeClient(preferences);
-    mocks.createPythonClient.mockReturnValue(client);
+describe("dashboard cards, from Python's replies through the reads to the page", () => {
+  function defaultsWith(layout: CardId[]) {
+    return {
+      layout,
+      goal: 200,
+      cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
+      group: null,
+      groupWindow: "7" as const,
+    };
   }
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"], now: NOW });
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+    vi.stubEnv("CLASHLENS_PYTHON_API_URL", "http://python-fixture.test/");
+    vi.stubEnv("CLASHLENS_PYTHON_HMAC_SECRET_B64", TEST_SECRET);
+    vi.stubEnv("CLASHLENS_PYTHON_HMAC_SECRET_FILE", "");
     mocks.getWebsiteConfig.mockReturnValue(
       loadWebsiteConfig({
         NODE_ENV: "test",
@@ -507,37 +640,31 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
       }),
     );
     mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
-    mocks.getGroupComparison.mockReset();
-    mocks.getGroupComparison.mockResolvedValue({
-      groupId: CLAN_MATES,
-      name: "Clan mates",
-      days: 7,
-      players: [
-        compared(MAIN, "Lens Main", { you: true, inGroup: false, netPerDay: 38 }),
-        compared(AVA, "Ava", { netPerDay: 52, trophies: 5510 }),
-        compared(BO, "Bo", { netPerDay: 12 }),
-        // Another linked account outside the group, and a member who left Legend I.
-        compared(ALT, "Lens Alt", { you: true, inGroup: false, netPerDay: 90 }),
-        compared(CY, "Cy", { status: "not_in_legend", netPerDay: 99 }),
-      ],
+    Object.assign(python, {
+      preferences: { dashboard: serializeSettings(defaultsWith(ALL_CARDS)) },
+      pages: { [MAIN]: mainPage(), [TUNDRA]: tundraPage() },
+      groups: GROUPS,
+      liveRank: 316,
+      down: [],
+      requests: [],
     });
-    useClient({ dashboard: serializeSettings({ ...defaultsWith(ALL_CARDS) }) });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL | string) => {
+        const [status, body] = answer(new URL(String(input)));
+        return new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
-
-  function defaultsWith(layout: CardId[]) {
-    return {
-      layout,
-      goal: 200,
-      cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
-      group: null,
-      groupWindow: "7" as const,
-    };
-  }
 
   it("draws all 9 cards with the numbers worked out from the saved days", async () => {
     const data = await load();
@@ -605,6 +732,8 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
     expect(cutoffs).toContain(
       "Top 10 6,100 −730 Top 50 5,800 −430 Top 100 5,650 −280 Top 200 5,420 −50 Lens Main 5,370 Top 500 5,250 +120 Top 1,000 5,100 +270 Top 5,000 5,010 +360",
     );
+    // The account's own reading is older than the board's, so the label goes by it.
+    expect(data.cards.cutoffs?.live.observedAtMs).toBe(NOW - 10 * 60_000);
 
     // Rivals watch: 3 above and 3 below on the live board, with moves since the Reset.
     const rivals = text(cards["rivals-watch"]!);
@@ -621,6 +750,8 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
     expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
     expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
     expect(rivals).toContain("#317 Player 317 5,365 – – –");
+    // Tundra's battles were saved 20 minutes ago, before the board's 3.
+    expect(data.cards["rivals-watch"]?.live?.observedAtMs).toBe(NOW - 20 * 60_000);
 
     // Group watch: the first group made, with you; never another linked account.
     const group = text(cards["group-watch"]!);
@@ -630,7 +761,8 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
     expect(group).toContain("Last 7 days");
     expect(group).toContain("1. Ava 5,510 +52 50% +280 −240");
     expect(group).toContain("2. Lens Main 5,300 +38");
-    expect(group).toContain("3. Bo 5,300 +12");
+    // Bo's battle totals include a partial day, so they divide by all 7 saved days.
+    expect(group).toContain("3. Bo 5,300 +12 50% +280 −240");
     expect(group).not.toContain("Lens Alt");
     expect(group).not.toContain("Cy");
     expect(cards["group-watch"]).toContain(`href="/account/groups/${CLAN_MATES}"`);
@@ -660,41 +792,31 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
 
   it("reads each player page once and asks the boards for the right days", async () => {
     const data = await load();
-    const selector = (dayNumber: number) => ({ officialSeasonId: SEASON_ID, dayNumber });
-    expect(client.getPlayer.mock.calls.filter(([tag]) => tag === MAIN)).toHaveLength(1);
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(
-      1,
-      "live",
-      0,
-      undefined,
-      MAIN,
-    );
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(
-      1,
-      "daily",
-      199,
-      selector(8),
-    );
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(
-      1,
-      "daily",
-      199,
-      selector(1),
-    );
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(1, "live", 4999, undefined);
+    const frozen = (offset: number, day: number, limit = 1) => ({
+      path: "/v1/leaderboards/frozen",
+      query: {
+        limit: String(limit),
+        offset: String(offset),
+        official_season_id: SEASON_ID,
+        season_day_number: String(day),
+      },
+    });
+    expect(
+      python.requests.filter(({ path }) => path === `/v1/players/${MAIN}`),
+    ).toHaveLength(1);
+    expect(python.requests).toContainEqual({
+      path: "/v1/leaderboards/live",
+      query: { limit: "1", offset: "0", focus_tag: MAIN },
+    });
+    expect(python.requests).toContainEqual(frozen(199, 8));
+    expect(python.requests).toContainEqual(frozen(199, 1));
+    expect(python.requests).toContainEqual({
+      path: "/v1/leaderboards/live",
+      query: { limit: "1", offset: "4999" },
+    });
     // Rivals at the last Reset: the two pages of 10 holding #315–#321.
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(
-      10,
-      "daily",
-      310,
-      selector(8),
-    );
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(
-      10,
-      "daily",
-      320,
-      selector(8),
-    );
+    expect(python.requests).toContainEqual(frozen(310, 8, 10));
+    expect(python.requests).toContainEqual(frozen(320, 8, 10));
     expect(data.cards["rivals-watch"]?.season?.rows.map((row) => row.rank)).toEqual([
       315, 316, 317, 318, 319, 320, 321,
     ]);
@@ -718,11 +840,50 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
       ],
       you: 5324,
     });
-    expect(mocks.getGroupComparison).toHaveBeenCalledWith(IDENTITY, CLAN_MATES, 7);
+    expect(python.requests).toContainEqual({
+      path: `/v1/account/groups/${CLAN_MATES}/comparison`,
+      query: { days: "7" },
+    });
+  });
+
+  it("keeps 7 live rivals for the first and last places on the board", async () => {
+    python.liveRank = 1;
+    const top = await load();
+    expect(top.cards["rivals-watch"]?.live?.rows.map((row) => row.rank)).toEqual([
+      1, 2, 3, 4, 5, 6, 7,
+    ]);
+    python.liveRank = BOARD_SIZE;
+    const bottom = await load();
+    expect(bottom.cards["rivals-watch"]?.live?.rows.map((row) => row.rank)).toEqual([
+      8994, 8995, 8996, 8997, 8998, 8999, 9000,
+    ]);
+    expect(bottom.cards["rivals-watch"]?.live?.rows[6]?.you).toBe(true);
+  });
+
+  it("leaves a day not available when Python leaves its result unknown", async () => {
+    // Day 6: six triples recorded, eight defenses for −320, and a gap in the battle log.
+    python.pages[MAIN] = mainPage({ triples: 6, held: 0, attacks: 6, gap: true });
+    const data = await load();
+    expect(data.cards["heat-map"]?.days.find((day) => day.day === 6)).toMatchObject({
+      net: null,
+      endTrophies: null,
+      hits: null,
+    });
+    const cards = cardsIn(await render(data));
+    expect(cards["heat-map"]).toContain('aria-label="Day 6: no data"');
+    expect(cards["season-graph"]).not.toContain('aria-label="Day 6:');
+    const form = text(cards["recent-form"]!);
+    expect(form).toContain("Last 7 days · Days 2–8 · 5 of 7 recorded");
+    expect(form).toContain("Trophies a day +45.6 +228 total");
+    // Day 6's attacks may be missing, so its slots are not counted as misses.
+    const offense = text(cards["offense-consistency"]!);
+    expect(offense).toContain("Last 7 days · 32 attacks");
+    expect(offense).toContain("65% hit rate · 26 of 40 tripled");
+    expect(offense).toMatch(/7 D2 0 D3 4 D4 8 D5 – D6 7 D8/);
   });
 
   it("follows the saved Goal, Cutoffs lines and group for the whole Season", async () => {
-    useClient({
+    python.preferences = {
       dashboard: serializeSettings({
         layout: ["goal", "cutoffs", "group-watch"],
         goal: 50,
@@ -730,20 +891,25 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
         group: ALPHA,
         groupWindow: "season",
       }),
-    });
+    };
     const data = await load();
     const cards = cardsIn(await render(data));
     expect(Object.keys(cards)).toEqual(["goal", "cutoffs", "group-watch"]);
     expect(text(cards.goal!)).toContain("Top 50");
-    expect(client.getTrackedLeaderboard).toHaveBeenCalledWith(1, "daily", 49, {
-      officialSeasonId: SEASON_ID,
-      dayNumber: 8,
+    expect(python.requests).toContainEqual({
+      path: "/v1/leaderboards/frozen",
+      query: {
+        limit: "1",
+        offset: "49",
+        official_season_id: SEASON_ID,
+        season_day_number: "8",
+      },
     });
     expect(data.cards.cutoffs?.live.lines.map((line) => line.top)).toEqual([
       10, 20, 50, 100, 200, 300, 400,
     ]);
     // Whole Season reads each member's page, plus yours; no 7-day comparison.
-    expect(mocks.getGroupComparison).not.toHaveBeenCalled();
+    expect(python.requests.some(({ path }) => path.endsWith("/comparison"))).toBe(false);
     const group = text(cards["group-watch"]!);
     expect(group).toContain("Whole Season · 8 days");
     expect(group).toContain("1. Tundra 5,375 +128 100% +320 −192");
@@ -751,12 +917,7 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
   });
 
   it("shows one card as unavailable when only its reads fail", async () => {
-    client.listGroups.mockRejectedValue(
-      new PythonApiError(503, { error: "unavailable" }),
-    );
-    client.getPlayerSeasons.mockRejectedValue(
-      new PythonApiError(503, { error: "unavailable" }),
-    );
+    python.down = ["/v1/account/groups", "/seasons"];
     const data = await load();
     const cards = cardsIn(await render(data));
     expect(text(cards["group-watch"]!)).toContain(
@@ -768,7 +929,7 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
   });
 
   it("asks to make a group when there is none", async () => {
-    client.listGroups.mockResolvedValue({ season: SEASON_ID, groups: [] });
+    python.groups = [];
     const cards = cardsIn(await render(await load()));
     expect(text(cards["group-watch"]!)).toContain(
       "Make a group first, then this card compares you with its players.",
@@ -778,12 +939,10 @@ describe("dashboard cards, from saved days through the reads to the page", () =>
 
   it("waits for the first Reset on Day 1", async () => {
     const page = mainPage();
-    client.getPlayer.mockResolvedValue({
-      ...page,
-      season: { ...page.season!, currentDayNumber: 1 },
-      seasonDays: [],
-      recentDays: [],
-    });
+    page.screen_ready.season.current_day_number = 1;
+    page.screen_ready.season_day_starts = [];
+    page.screen_ready.recent_day_starts = [];
+    python.pages[MAIN] = page;
     const cards = cardsIn(await render(await load()));
     expect(text(cards.goal!)).toContain(
       "Needs one full day. The plan starts after the first Reset.",

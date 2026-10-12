@@ -454,8 +454,8 @@ export function RecentFormCard({ data }: { data: SeasonData }) {
           <p className="dash-muted dash-card-sub">
             {lastDaysLabel(size, form.window.span)} · Days {form.window.first}–
             {form.window.last}
-            {form.window.days.length < form.window.span
-              ? ` · ${form.window.days.length} of ${form.window.span} recorded`
+            {form.counted < form.window.span
+              ? ` · ${form.counted} of ${form.window.span} recorded`
               : ""}
           </p>
           <div className="form-row">
@@ -578,11 +578,17 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
               {stats.perDay.map((day) => (
                 <li
                   key={day.day}
-                  title={`Day ${day.day}: ${day.triples} of ${DAILY_BATTLES} tripled`}
+                  title={
+                    day.triples === null
+                      ? `Day ${day.day}: not available, some attacks may be missing`
+                      : `Day ${day.day}: ${day.triples} of ${DAILY_BATTLES} tripled`
+                  }
                 >
                   <span className="consistency-box">
-                    <i style={{ height: `${(day.triples / DAILY_BATTLES) * 100}%` }} />
-                    <b>{day.triples}</b>
+                    {day.triples === null ? null : (
+                      <i style={{ height: `${(day.triples / DAILY_BATTLES) * 100}%` }} />
+                    )}
+                    <b>{count(day.triples)}</b>
                   </span>
                   D{day.day}
                 </li>

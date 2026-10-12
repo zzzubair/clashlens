@@ -62,7 +62,10 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect.poll(() => cardOrder(page)).toEqual(ALL_CARDS.slice(0, 4));
 
   // Customise: move, remove and add; Done saves it as the user's own layout.
-  await page.getByRole("button", { name: "Customise dashboard" }).click();
+  // Customise opens once the first pick has saved.
+  const customise = page.getByRole("button", { name: "Customise dashboard" });
+  await expect(customise).toBeEnabled();
+  await customise.click();
   const bar = page.getByRole("region", { name: "Customise dashboard" });
   await expect(bar.getByText("Default layout")).toBeVisible();
   await page.getByRole("button", { name: "Move Goal earlier" }).click();

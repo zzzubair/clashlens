@@ -1,5 +1,10 @@
 import type { LinkedPlayerCard, ListedGroup } from "../lib/account-contracts";
-import type { PlayerPage, RankedDaySummary } from "../lib/contracts";
+import type {
+  PlayerPage,
+  RankedDaySummary,
+  TrackedLeaderboard,
+  TrackedPlayerEntry,
+} from "../lib/contracts";
 import type {
   CardId,
   DashboardSettings,
@@ -10,7 +15,7 @@ import type {
 import {
   GOAL_PACE_DAYS,
   SEASON_START_TROPHIES,
-  around,
+  rate,
   type CardDataMap,
   type CardDataSet,
   type ClockData,
@@ -151,6 +156,8 @@ function periodStart(day: RankedDaySummary): number {
 /**
  * The Season's finished days for one player. A day's end is the next day's
  * Reset reading when that is saved, otherwise its start plus its change.
+ * Python leaves a total unknown when battles may be missing, and so does
+ * this; the battles' sum stands in only when Python found every battle.
  */
 export function seasonData(page: PlayerPage): SeasonData {
   const season = page.season;
@@ -173,12 +180,15 @@ export function seasonData(page: PlayerPage): SeasonData {
     const next = saved.get(number + 1);
     const gain = day.offense.trophyGain;
     const loss = day.defense.trophyLoss;
-    const net = day.trophyChange ?? (gain !== null && loss !== null ? gain - loss : null);
-    const attacks =
-      day.offense.attacks ?? (day.battlesComplete ? day.offenseEvents.length : null);
-    const defenses =
-      day.defense.defenses ?? (day.battlesComplete ? day.defenseEvents.length : null);
+    const net =
+      day.trophyChange ??
+      (day.battlesComplete && gain !== null && loss !== null ? gain - loss : null);
+    const attacks = day.offense.attacks;
+    const defenses = day.defense.defenses;
     const tripledOn = day.defense.threeStarsAgainst;
+    const everyAttack =
+      attacks === day.offenseEvents.length &&
+      (day.battlesComplete || day.logCoverage === "complete");
     days.push({
       day: number,
       attacks,
@@ -192,9 +202,11 @@ export function seasonData(page: PlayerPage): SeasonData {
         next?.startTrophies ??
         (day.startTrophies != null && net !== null ? day.startTrophies + net : null),
       rank: day.resetRank ?? null,
-      hits: [...day.offenseEvents]
-        .sort((a, b) => Date.parse(a.battleTimestamp) - Date.parse(b.battleTimestamp))
-        .map((event) => [event.stars, event.trophyChange]),
+      hits: everyAttack
+        ? [...day.offenseEvents]
+            .sort((a, b) => Date.parse(a.battleTimestamp) - Date.parse(b.battleTimestamp))
+            .map((event) => [event.stars, event.trophyChange])
+        : null,
     });
   }
   return { today: season.currentDayNumber, days };
@@ -251,9 +263,40 @@ async function trophiesAt(
   return entry && entry.rank === rank ? entry : null;
 }
 
-function observedMs(entries: { freshness: { observedAt: string } }[]): number | null {
-  const times = entries.map((entry) => Date.parse(entry.freshness.observedAt));
-  return times.length && times.every(Number.isFinite) ? Math.min(...times) : null;
+/** The oldest of the readings a card shows; null when any of them has no time. */
+function observedMs(times: (string | null | undefined)[]): number | null {
+  const parsed = times.map((time) => Date.parse(time ?? ""));
+  return parsed.length && parsed.every(Number.isFinite) ? Math.min(...parsed) : null;
+}
+
+/**
+ * The board rows from 3 above to 3 below `rank`, filled from the other side
+ * at either end of the board: the rows `first` holds, plus any page of 10
+ * holding the rest.
+ */
+async function rivalEntries(
+  first: TrackedLeaderboard,
+  rank: number,
+  read: (offset: number) => Promise<TrackedLeaderboard>,
+): Promise<TrackedPlayerEntry[]> {
+  const total = first.totalEntries;
+  const start = Math.max(
+    1,
+    Math.min(rank - RIVALS_ABOVE, total - RIVALS_ABOVE - RIVALS_BELOW),
+  );
+  const stop = Math.min(total, start + RIVALS_ABOVE + RIVALS_BELOW);
+  const places = Array.from({ length: stop - start + 1 }, (_, index) => start + index);
+  const held = new Set(first.entries.map((entry) => entry.rank));
+  const offsets = new Set(
+    places
+      .filter((place) => !held.has(place))
+      .map((place) => Math.floor((place - 1) / BOARD_PAGE) * BOARD_PAGE),
+  );
+  const others = await Promise.all([...offsets].map(read));
+  const byRank = new Map<number, TrackedPlayerEntry>();
+  for (const entry of [first, ...others].flatMap((board) => board.entries))
+    if (!byRank.has(entry.rank)) byRank.set(entry.rank, entry);
+  return places.flatMap((place) => byRank.get(place) ?? []);
 }
 
 async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData | null> {
@@ -308,6 +351,7 @@ async function cutoffsData(
   const saved = selector
     ? await Promise.all(lines.map((top) => trophiesAt(ctx, top, selector)))
     : null;
+  const you = ctx.selected.seasonResetPending ? null : ctx.selected.trophies;
   return {
     name: ctx.selected.name ?? ctx.selected.tag,
     live: {
@@ -315,8 +359,11 @@ async function cutoffsData(
         top,
         trophies: live[index]?.trophies ?? null,
       })),
-      you: ctx.selected.seasonResetPending ? null : ctx.selected.trophies,
-      observedAtMs: observedMs(live.filter((entry) => entry !== null)),
+      you,
+      observedAtMs: observedMs([
+        ...live.flatMap((entry) => (entry ? [entry.freshness.observedAt] : [])),
+        ...(you === null ? [] : [reset?.page.profile.freshness.observedAt]),
+      ]),
     },
     reset: saved
       ? {
@@ -345,13 +392,14 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
     };
   }
   const days = seasonData(page).days;
-  const total = (pick: (day: SeasonDay) => number | null) =>
-    days.reduce((sum, day) => sum + (pick(day) ?? 0), 0);
-  const attacks = total((day) => day.attacks);
   return {
-    hitRate: attacks ? total((day) => day.triples) / attacks : null,
-    offense: days.length ? total((day) => day.offense) / days.length : null,
-    defense: days.length ? total((day) => day.defense) / days.length : null,
+    hitRate: rate(
+      days,
+      (day) => day.triples,
+      (day) => day.attacks,
+    ),
+    offense: rate(days, (day) => day.offense),
+    defense: rate(days, (day) => day.defense),
   };
 }
 
@@ -369,25 +417,37 @@ async function rivalsData(
       : (season.days.find((day) => day.day === season.today! - 1)?.rank ?? null);
   };
   const liveRows = async () => {
-    const board = await ctx.client.getTrackedLeaderboard(1, "live", 0, undefined, tag);
-    const index = board.entries.findIndex((entry) => entry.tag === tag);
-    const shown = around(board.entries, index, RIVALS_ABOVE, RIVALS_BELOW);
-    const rows = await Promise.all(
-      shown.map(async (entry): Promise<RivalRow> => {
-        const page = await pages(entry.tag);
-        const before = lastRank(page);
-        return {
-          tag: entry.tag,
-          name: entry.name,
-          rank: entry.rank,
-          trophies: entry.trophies,
-          you: entry.tag === tag,
-          moved: before === null ? null : before - entry.rank,
-          ...rivalNumbers(page, "live"),
-        };
-      }),
+    // The focused read holds 5 places either side of you; the board's first
+    // and last places need a page more for 7 rows.
+    const first = await ctx.client.getTrackedLeaderboard(1, "live", 0, undefined, tag);
+    const rank = first.entries.find((entry) => entry.tag === tag)?.rank;
+    if (rank === undefined) return null;
+    const shown = await rivalEntries(first, rank, (offset) =>
+      ctx.client.getTrackedLeaderboard(BOARD_PAGE, "live", offset),
     );
-    return { rows, observedAtMs: observedMs(shown) };
+    const read = await Promise.all(
+      shown.map(async (entry) => [entry, await pages(entry.tag)] as const),
+    );
+    const rows = read.map(([entry, page]): RivalRow => {
+      const before = lastRank(page);
+      return {
+        tag: entry.tag,
+        name: entry.name,
+        rank: entry.rank,
+        trophies: entry.trophies,
+        you: entry.tag === tag,
+        moved: before === null ? null : before - entry.rank,
+        ...rivalNumbers(page, "live"),
+      };
+    });
+    // Trophies come from the board; today's numbers from each player's battles.
+    const times = [
+      ...shown.map((entry) => entry.freshness.observedAt),
+      ...read.flatMap(([, page]) =>
+        page?.currentDay ? [page.currentDayPublishedAt] : [],
+      ),
+    ];
+    return { rows, observedAtMs: observedMs(times) };
   };
   const seasonRows = async () => {
     const rank = reset?.you?.rank ?? null;
@@ -395,23 +455,8 @@ async function rivalsData(
     const selector = { officialSeasonId: reset.seasonId, dayNumber: reset.finished };
     const read = (offset: number) =>
       ctx.client.getTrackedLeaderboard(BOARD_PAGE, "daily", offset, selector);
-    const home = Math.floor((rank - 1) / BOARD_PAGE) * BOARD_PAGE;
-    const first = await read(home);
-    const total = first.totalEntries;
-    const start = Math.max(
-      1,
-      Math.min(rank - RIVALS_ABOVE, total - RIVALS_ABOVE - RIVALS_BELOW),
-    );
-    const stop = Math.min(total, start + RIVALS_ABOVE + RIVALS_BELOW);
-    const offsets = new Set(
-      [start, stop].map((place) => Math.floor((place - 1) / BOARD_PAGE) * BOARD_PAGE),
-    );
-    offsets.delete(home);
-    const others = await Promise.all([...offsets].map(read));
-    const entries = [first, ...others]
-      .flatMap((board) => board.entries)
-      .filter((entry) => entry.rank >= start && entry.rank <= stop)
-      .sort((a, b) => a.rank - b.rank);
+    const first = await read(Math.floor((rank - 1) / BOARD_PAGE) * BOARD_PAGE);
+    const entries = await rivalEntries(first, rank, read);
     const rows = await Promise.all(
       entries.map(async (entry): Promise<RivalRow> => ({
         tag: entry.tag,
@@ -433,7 +478,11 @@ async function rivalsData(
 }
 
 function comparedRow(player: ComparedPlayer, name: string | null): GroupRow {
-  const days = player.countedDays;
+  // The battle totals cover every saved day, not only the days whose result
+  // counts, so a day's averages divide by the saved days.
+  const days = player.days.filter(
+    (day) => day.state !== "missing" && day.state !== "retired",
+  ).length;
   return {
     tag: player.tag,
     name: name ?? player.name ?? player.tag,
@@ -497,20 +546,20 @@ async function groupWatchData(
     if (page === null || page.trackingState === "not_in_legend") return [];
     const season = seasonData(page);
     days = Math.max(days, season.today === null ? 0 : season.today - 1);
-    const counted = season.days.length;
-    const total = (pick: (day: SeasonDay) => number | null) =>
-      season.days.reduce((sum, day) => sum + (pick(day) ?? 0), 0);
-    const attacks = total((day) => day.attacks);
     return [
       {
         tag,
         name: page.profile.name || tag,
         you: tag === selected,
         trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-        gain: counted ? total((day) => day.net) / counted : null,
-        hitRate: attacks ? total((day) => day.triples) / attacks : null,
-        offense: counted ? total((day) => day.offense) / counted : null,
-        defense: counted ? total((day) => day.defense) / counted : null,
+        gain: rate(season.days, (day) => day.net),
+        hitRate: rate(
+          season.days,
+          (day) => day.triples,
+          (day) => day.attacks,
+        ),
+        offense: rate(season.days, (day) => day.offense),
+        defense: rate(season.days, (day) => day.defense),
       },
     ];
   });
