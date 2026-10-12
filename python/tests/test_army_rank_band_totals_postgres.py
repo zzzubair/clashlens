@@ -262,6 +262,15 @@ def test_each_day_counts_once_by_its_own_board(
                 view("top-5000")
             assert uncounted.value.affected_days == [23, 24]
 
+            # A count never runs alongside an army day build.
+            with database.pool.connection() as build, build.transaction():
+                build.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("army-facts",),
+                )
+                army_rank_bands.refresh_rank_band_totals(database)
+            assert counted == []
+
             # One day a run, newest first, then nothing more to count.
             for _run in range(3):
                 army_rank_bands.refresh_rank_band_totals(database)

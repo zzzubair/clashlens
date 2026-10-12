@@ -101,11 +101,12 @@ def refresh_rank_band_totals(database: Any) -> None:
 
 def _refresh(database: Any) -> dict[str, Any] | None:
     with database.pool.connection() as connection, connection.transaction():
-        # One snapshot for the day marker and the facts it describes.
-        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        # Day builds change facts and day markers, and delete the totals of
+        # a day a battle leaves, under this lock, so neither changes while
+        # a day is counted. A running build waits for the next run.
         if not connection.execute(
             "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
-            ("army-rank-band-totals",),
+            ("army-facts",),
         ).fetchone()[0]:
             return None
         # The newest Season's days, as for army types. Rows counted from
