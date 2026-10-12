@@ -54,18 +54,20 @@ const DEFENSE = {
   days: 3,
   covered_days: [DAY, NEXT_DAY],
   rows: [
-    { type_id: 3, name: "Thrower", ...outcome(2, 1, 69) },
-    { type_id: 4, name: "Hydra", ...outcome(1, 0, 26) },
+    { type_id: 3, name: "Thrower", ...outcome(2, 1, 69), legends: outcome(4, 2, 119) },
+    { type_id: 4, name: "Hydra", ...outcome(1, 0, 26), legends: outcome(1, 0, 26) },
   ],
-  total: outcome(3, 1, 95),
+  total: { ...outcome(3, 1, 95), legends: outcome(5, 2, 145) },
 };
 const OFFENSE = {
   tag: TAG,
   lens: "offense",
   days: 7,
   covered_days: [DAY, NEXT_DAY],
-  rows: [{ type_id: 3, name: "Thrower", ...outcome(1, 1, 40) }],
-  total: outcome(1, 1, 40),
+  rows: [
+    { type_id: 3, name: "Thrower", ...outcome(1, 1, 40), legends: outcome(4, 2, 119) },
+  ],
+  total: { ...outcome(1, 1, 40), legends: outcome(5, 2, 145) },
 };
 
 async function render(element: ReturnType<typeof createElement>) {
@@ -95,7 +97,7 @@ beforeEach(() => {
 });
 
 describe("Armies on defense", () => {
-  it("shows each army's share, held and loss", async () => {
+  it("shows each army's share, held and loss beside the Legends average", async () => {
     const armies = await read(DEFENSE, "defense", 3);
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(TAG)}/armies?lens=defense&days=3`,
@@ -108,12 +110,11 @@ describe("Armies on defense", () => {
     );
     // One of the 3 days has no army records.
     expect(plain).toContain("Last 3 days · 2 with army data · 3 defenses");
-    expect(plain).toContain("Army type Share Held Avg lost");
-    // Thrower: 2 of 3 defenses, 1 of 2 held, 69 lost.
-    expect(plain).toContain("Thrower 67% 50% −35");
-    expect(plain).toContain("Hydra 33% 100% −26");
-    expect(plain).toContain("All defenses 100% 67% −32");
-    expect(plain).not.toContain("Legends");
+    expect(plain).toContain("You held / Legends avg Avg lost / Legends avg");
+    // Thrower: 1 of 2 held, 69 lost; Legends 2 of 4 held, 119 over 4.
+    expect(plain).toContain("Thrower 67% 50% / 50% −35 / −30");
+    expect(plain).toContain("Hydra 33% 100% / 100% −26 / −26");
+    expect(plain).toContain("All defenses 100% 67% / 60% −32 / −29");
     expect(plain.indexOf("Thrower")).toBeLessThan(plain.indexOf("Hydra"));
   });
 
@@ -122,13 +123,14 @@ describe("Armies on defense", () => {
       type_id: index + 3,
       name: `Army ${index + 1}`,
       ...outcome(1, 0, 30 - index),
+      legends: outcome(10, 5, 300),
     }));
     const many = await read(
       {
         ...DEFENSE,
         days: 7,
         rows,
-        total: outcome(7, 0, 189),
+        total: { ...outcome(7, 0, 189), legends: outcome(70, 35, 2100) },
       },
       "defense",
       7,
@@ -144,7 +146,7 @@ describe("Armies on defense", () => {
         ...DEFENSE,
         covered_days: [],
         rows: [],
-        total: outcome(0, 0, 0),
+        total: { ...outcome(0, 0, 0), legends: outcome(0, 0, 0) },
       },
       "defense",
       3,
@@ -163,7 +165,7 @@ describe("Armies on defense", () => {
     });
     mocks.requestJson.mockResolvedValueOnce({
       ...DEFENSE,
-      total: outcome(1, 2, 0),
+      total: { ...outcome(1, 2, 0), legends: outcome(0, 0, 0) },
     });
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
       status: 502,
@@ -175,15 +177,14 @@ describe("Armies on defense", () => {
 });
 
 describe("Armies on offense", () => {
-  it("shows a one-army player's hit rate big", async () => {
+  it("shows a one-army player's hit rate big beside everyone's", async () => {
     const armies = await read(OFFENSE, "offense", 7);
     const plain = await render(
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 2 with army data · 1 attack");
-    expect(plain).toContain("1 attack Thrower Hit rate 100%");
+    expect(plain).toContain("1 attack Thrower You 100% Legends 50%");
     expect(plain).not.toContain("Tripled");
-    expect(plain).not.toContain("Legends");
   });
 
   it("lists 3 armies and puts the rest under Other armies", async () => {
@@ -198,9 +199,10 @@ describe("Armies on offense", () => {
           type_id: index + 3,
           name,
           ...outcome([30, 14, 8, 4][index], [23, 10, 5, 3][index], 0),
+          legends: outcome(1000, [503, 467, 475, 544][index], 0),
         })),
         // 2 unreadable attacks, never tripled.
-        total: outcome(58, 41, 0),
+        total: { ...outcome(58, 41, 0), legends: outcome(5000, 2405, 0) },
       },
       "offense",
       7,
@@ -209,10 +211,10 @@ describe("Armies on offense", () => {
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 58 attacks");
-    // Each army's hit rate only. Dragon Rider and the 2 unreadable attacks:
-    // 3 of 6 tripled.
+    // Each army's hit rate beside everyone's with it. Dragon Rider and the 2
+    // unreadable attacks: 3 of 6 tripled, a mix with no Legends rate.
     expect(plain).toContain(
-      "Army type Hit rate Thrower 77% Super Bowler 71% Hydra 63% Other armies 50%",
+      "Army type You Legends Thrower 77% 50% Super Bowler 71% 47% Hydra 63% 48% Other armies 50% –",
     );
     expect(plain).not.toContain("Dragon Rider");
     expect(plain).not.toContain("of attacks");

@@ -222,19 +222,18 @@ counts, rather than 0.
 The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
 on the private API, through `/resources/players/{tag}/armies`, which their day
 switches call (signed-in users only, behind the same switch). A finished day
-counts only when its army records are complete and the player's newest saved
-daily log for it is complete, and a finished Season's records are deleted 7
-days after it ends, so early in a Season, or for a player tracked only
-lately, a long window covers fewer days and the card says how many have army
-data. A defense's army
-type is the attacker's army. Armies on offense shows only your hit rate with
-each army type, up to 3 and then Other armies, for 3 or 7 days; Armies on
-defense also takes a Custom 1–28 days. Neither card compares with every
-tracked player yet. For Armies on defense that needs trophies lost per army
-type, which the saved daily counts per army don't keep, and working it out
-from each battle's saved army took about 95 seconds a day on production in
-October 2026. Armies on offense's Legends hit rate needs no per-battle read:
-see [dashboard-data.md](../docs/dashboard-data.md).
+counts only when its army records are complete and counted by the worker, and
+the player's newest saved daily log for it is complete, and a finished
+Season's records are deleted 7 days after it ends, so early in a Season, or
+for a player tracked only lately, a long window covers fewer days and the card
+says how many have army data. A defense's army type is the attacker's army.
+Armies on offense shows your hit rate with each army type, up to 3 and then
+Other armies, for 3 or 7 days; Armies on defense also takes a Custom 1–28
+days. Both cards put every tracked Legend player's number with that army
+beside yours in grey: every Legends attack is also a Legends defense, so both
+come from the worker's saved counts for each day (about 35,000 rows a day,
+with the trophies won and lost), kept in the API's memory until the day is
+counted again, so only a day not yet seen is read.
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a

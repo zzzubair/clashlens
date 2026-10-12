@@ -1,6 +1,7 @@
 /**
  * The two army cards: a player's attacks or defenses per army type over the
- * last finished Legend days.
+ * last finished Legend days, beside every tracked Legend player's (the
+ * Legends average) with each type over the same days.
  */
 
 export type ArmyLens = "offense" | "defense";
@@ -20,6 +21,7 @@ export interface ArmyOutcome {
 export interface ArmyRow extends ArmyOutcome {
   typeId: number;
   name: string;
+  legends: ArmyOutcome;
 }
 
 export interface PlayerArmies {
@@ -30,7 +32,7 @@ export interface PlayerArmies {
   /** Named army types only, costliest first on defense, most used first on attack. */
   rows: ArmyRow[];
   /** Every battle, Other and unreadable armies included. */
-  total: ArmyOutcome;
+  total: ArmyOutcome & { legends: ArmyOutcome };
 }
 
 export function isArmyDays(value: number, lens: ArmyLens): boolean {

@@ -839,8 +839,13 @@ export async function getPlayerArmies(
     coveredDays: payload.covered_days.slice(0, days).map(time),
     rows: payload.rows.slice(0, 64).map((row) => {
       if (!isRecord(row) || !isInteger(row.type_id) || !isString(row.name)) malformed();
-      return { typeId: row.type_id, name: row.name, ...outcome(row) };
+      return {
+        typeId: row.type_id,
+        name: row.name,
+        ...outcome(row),
+        legends: outcome(row.legends),
+      };
     }),
-    total: outcome(payload.total),
+    total: { ...outcome(payload.total), legends: outcome(payload.total.legends) },
   };
 }

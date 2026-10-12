@@ -10,6 +10,12 @@
   opacity: 0.6;
 }
 
+.army-card em {
+  color: var(--cl-muted);
+  font-style: normal;
+  font-weight: 600;
+}
+
 .army-switch {
   position: relative;
   display: inline-block;
@@ -69,11 +75,11 @@
 }
 
 .army-defense-row {
-  grid-template-columns: minmax(0, 1fr) 3rem 3rem 4.25rem;
+  grid-template-columns: minmax(0, 1.4fr) 0.5fr 1.3fr 1.3fr;
 }
 
 .army-offense-row {
-  grid-template-columns: minmax(0, 1fr) 4.25rem;
+  grid-template-columns: minmax(0, 1fr) 3.25rem 4.25rem;
 }
 
 .army-head.army-defense-row,
@@ -117,6 +123,12 @@
 }
 
 .army-one-big {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.army-one-big b {
   display: block;
   font-family: var(--cl-font-heading);
   font-size: 2.6rem;
@@ -126,6 +138,7 @@
 
 @media (max-width: 640px) {
   .army-defense-row {
+    grid-template-columns: minmax(0, 1.2fr) 0.5fr 1.1fr 1fr;
     gap: 0.35rem;
     font-size: 0.85rem;
   }

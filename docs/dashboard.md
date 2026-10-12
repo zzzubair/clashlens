@@ -1,6 +1,6 @@
 # Player dashboard design
 
-Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. All 13 cards are built; the two army cards don't compare with Legends yet (see the [website README](../website/README.md)). The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
+Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. All 13 cards are built. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
 
 The dashboard can be built behind the off switch, but nothing goes live until tracking passes the accuracy bar.
 
