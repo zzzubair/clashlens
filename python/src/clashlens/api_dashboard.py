@@ -15,11 +15,9 @@ The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
 
 The two army cards read finished Legend days whose army records are complete:
-a player's attacks or defenses per army type, beside every tracked Legend
-player's (the Legends average) with each type over the same days. A defense's
-type is the attacker's army, and a battle's trophies follow from its stars
-and destruction by the game's rule. Each day's Legends totals are kept in
-memory until that day's records change, so only a day not yet seen is read.
+a player's attacks or defenses per army type. A defense's type is the
+attacker's army, and a battle's trophies follow from its stars and
+destruction by the game's rule.
 """
 
 from __future__ import annotations

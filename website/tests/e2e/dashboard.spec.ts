@@ -123,9 +123,9 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   );
   await expect(armies.locator("[aria-busy]")).toHaveAttribute("aria-busy", "false");
   await expect(armies).not.toContainText("aren't available");
-  expect((await shown.jsonValue()).filter((text) => text.includes("aren't available"))).toEqual(
-    [],
-  );
+  expect(
+    (await shown.jsonValue()).filter((text) => text.includes("aren't available")),
+  ).toEqual([]);
 
   // A day switch whose read fails on the way, a dropped connection or a 502
   // from the server in front of the website, says so in that card alone.
@@ -147,10 +147,12 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     await expect(armies).not.toContainText("aren't available");
   }
   // The browser logs the two failed reads; nothing else went wrong.
-  await expect.poll(() => errors.slice(logged)).toEqual([
-    expect.stringContaining("net::ERR_FAILED"),
-    expect.stringContaining("502"),
-  ]);
+  await expect
+    .poll(() => errors.slice(logged))
+    .toEqual([
+      expect.stringContaining("net::ERR_FAILED"),
+      expect.stringContaining("502"),
+    ]);
   errors.splice(logged);
 
   // A card setting saves at once: the Goal becomes Top 50.

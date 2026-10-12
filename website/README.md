@@ -70,7 +70,7 @@ On a tracked player's current page only two things are live: the current
 trophies next to the name and the Daily Legend log. Everything else uses
 finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
 no Trophy trend section; for the unused
-[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 8 in the
+[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 6 in the
 [dashboard design](../docs/dashboard.md). The player page explains
 itself with titles, labels and short counts rather than help paragraphs.
 
@@ -221,11 +221,12 @@ counts, rather than 0.
 
 The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
 on the private API, through `/resources/players/{tag}/armies`, which their day
-switches call (signed-in users only, behind the same switch). Only finished
-days whose army records are complete and include the player's own complete
-saved day count, and a finished Season's records are deleted 7 days after it
-ends, so early in a Season, or for a player tracked only lately, a long window
-covers fewer days and the card says how many have army data. A defense's army
+switches call (signed-in users only, behind the same switch). A finished day
+counts only when its army records are complete and the player's newest saved
+daily log for it is complete, and a finished Season's records are deleted 7
+days after it ends, so early in a Season, or for a player tracked only
+lately, a long window covers fewer days and the card says how many have army
+data. A defense's army
 type is the attacker's army. Armies on offense shows only your hit rate with
 each army type, up to 3 and then Other armies, for 3 or 7 days; Armies on
 defense also takes a Custom 1–28 days. Neither card compares with every
