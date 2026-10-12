@@ -160,7 +160,7 @@ describe("events read from what a page shows", () => {
     vi.useRealTimers();
   });
 
-  // A saved Daily board was made at the Reset that ended its day.
+  // A saved Reset board was made at the Reset that ended its day.
   const seasonStartAt = Date.parse("2026-09-22T05:00:00Z");
   const board = (view: "live" | "daily", page: number, day?: number) => {
     const resetAt = day
@@ -198,7 +198,7 @@ describe("events read from what a page shows", () => {
         event: "rankings_changed",
         properties: {
           changed: "view+page+day+season",
-          view: "daily",
+          view: "reset",
           page: "later",
           day: "12",
           season: "current",
@@ -210,7 +210,7 @@ describe("events read from what a page shows", () => {
         event: "rankings_changed",
         properties: {
           changed: "day",
-          view: "daily",
+          view: "reset",
           page: "first",
           day: "11",
           season: "current",
@@ -221,7 +221,7 @@ describe("events read from what a page shows", () => {
     expect(rankings(board("live", 1), board("live", 1))).toEqual([]);
   });
 
-  it("calls a Daily board the previous Season once its Season has ended", () => {
+  it("calls a Reset board the previous Season once its Season has ended", () => {
     const day = board("daily", 1, 12);
     expect(day.leaderboard.generatedAt).toBe("2026-10-04T05:00:00+00:00");
     expect(selectionOf("routes/tracked-leaderboard", day)?.labels.season).toBe("current");
@@ -252,7 +252,7 @@ describe("events read from what a page shows", () => {
         selectionOf("routes/army-analytics", armies({})),
         selectionOf(
           "routes/army-analytics",
-          armies({ category: "cc-troops", population: "trophies-5000-5400" }),
+          armies({ category: "cc-troops", population: "top-1000" }),
         )!,
       ),
     ).toEqual([
@@ -261,7 +261,7 @@ describe("events read from what a page shows", () => {
         properties: {
           changed: "category+population",
           category: "cc-troops",
-          population: "trophies",
+          population: "top",
           season: "current",
           sort: "usage-rate",
         },
@@ -281,6 +281,13 @@ describe("events read from what a page shows", () => {
       season: "historical",
       sort: "other",
     });
+    // Player groups and sorts the page no longer offers are not named.
+    expect(
+      selectionOf(
+        "routes/army-analytics",
+        armies({ population: "band-1-100", sort: "zero-star-rate" }),
+      )?.labels,
+    ).toMatchObject({ population: "other", sort: "other" });
     // A selection the page refused shows no results, so nothing changed.
     expect(selectionOf("routes/army-analytics", { analytics: null })).toBeNull();
   });

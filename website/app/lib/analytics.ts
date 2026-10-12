@@ -206,7 +206,7 @@ const ARMY_CATEGORIES = new Set([
   "hero-equipment",
   "cc-composition",
 ]);
-const ARMY_POPULATIONS = ["all", "top", "streak-top", "band", "trophies"];
+const ARMY_POPULATIONS = ["all", "top"];
 const ARMY_SORTS = new Set([
   "name",
   "quantity",
@@ -217,8 +217,6 @@ const ARMY_SORTS = new Set([
   "three-star-rate",
   "average-stars",
   "average-destruction",
-  "zero-star-rate",
-  "exclusions",
 ]);
 
 export function armySort(column: string): string {
@@ -247,7 +245,7 @@ export function selectionOf(routeId: string, data: unknown): Selection | null {
     const board = page.leaderboard as TrackedLeaderboard;
     const daily = board.daily;
     const labels: EventProperties = {
-      view: daily ? "daily" : "live",
+      view: daily ? "reset" : "live",
       page: board.page > 1 ? "later" : "first",
       season:
         daily && Date.now() >= Date.parse(daily.seasonEndAt) ? "previous" : "current",
