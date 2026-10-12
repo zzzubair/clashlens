@@ -221,7 +221,7 @@ describe("dashboard settings", () => {
   it("stores only what differs from the defaults and reads it back", () => {
     const settings: DashboardSettings = {
       layout: ["cutoffs", "goal"],
-      goal: 12_000,
+      goal: 10_000,
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       groupWindow: "season",
@@ -231,7 +231,7 @@ describe("dashboard settings", () => {
     expect(stored).toEqual({
       v: 3,
       layout: ["cutoffs", "goal"],
-      goal: 12_000,
+      goal: 10_000,
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       window: "season",
@@ -262,6 +262,10 @@ describe("dashboard settings", () => {
         bases: "x",
       }),
     ).toEqual({ ...defaultSettings(), layout: ["goal", "bases", "cutoffs"] });
+    // A saved Goal past 10,000 falls back to the default.
+    expect(readSettings({ v: 3, layout: "default", goal: 10_001 }).goal).toBe(
+      defaultSettings().goal,
+    );
     // An empty own layout stays empty; it is not a first visit.
     expect(readSettings({ v: 3, layout: [] }).layout).toEqual([]);
   });
@@ -271,8 +275,7 @@ describe("dashboard settings", () => {
       parsePostedSettings({ v: 3, layout: "default", ...changes });
     expect(posted({})).not.toBeNull();
     expect(posted({ goal: 1 })?.goal).toBe(1);
-    // Any rank, with no top limit.
-    expect(posted({ goal: 12_000 })?.goal).toBe(12_000);
+    expect(posted({ goal: 10_000 })?.goal).toBe(10_000);
     expect(posted({ layout: [] })?.layout).toEqual([]);
     for (const bad of [
       { v: 2 },
@@ -280,6 +283,7 @@ describe("dashboard settings", () => {
       { layout: ["goal", "goal"] },
       { layout: ["nope"] },
       { goal: 0 },
+      { goal: 10_001 },
       { goal: 2.5 },
       { goal: "200" },
       { cutoffs: [10, 50, 100, 200, 500, 1000] },
@@ -775,7 +779,12 @@ describe("dashboard route", () => {
   });
 
   it("refuses bad settings, another site, or settings too big to store", async () => {
-    for (const bad of ['{"v":2}', "not json", '{"v":3,"layout":"default","goal":0}']) {
+    for (const bad of [
+      '{"v":2}',
+      "not json",
+      '{"v":3,"layout":"default","goal":0}',
+      '{"v":3,"layout":"default","goal":10001}',
+    ]) {
       expect(unwrap<DashboardActionData>(await action(saveRequest(bad))).status).toBe(
         400,
       );
