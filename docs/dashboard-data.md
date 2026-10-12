@@ -1,6 +1,6 @@
 # Player dashboard data needs
 
-What each card in the [dashboard design](dashboard.md) needs, checked on **2026-10-12**. The Discord bot commands will reuse this list.
+What each card in the [dashboard design](dashboard.md) needs, checked on **2026-10-12**.
 
 - **Exists:** Clash Lens already stores it and the website can read it.
 - **New read:** the data is stored, but needs a new query, calculation or API field.
