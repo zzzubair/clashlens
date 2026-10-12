@@ -626,25 +626,22 @@ def type_result(
     return result, source_hash
 
 
-def counted_days(
+def all_counted(
     connection: Any, days: list[tuple[datetime, str]], lens: str
-) -> list[tuple[datetime, str]]:
-    """The given (day start, completed-day marker) days whose saved counts
-    for ``lens`` were made from that marker."""
+) -> bool:
+    """Whether every given (day start, completed-day marker) day has saved
+    counts for ``lens`` made from that marker."""
     _table, _battles, counted_table, _recent = _COUNTS[lens]
-    counted = {
-        row[0]
-        for row in connection.execute(
-            f"""
-            SELECT counted.ranked_day_start FROM {counted_table} AS counted
-            JOIN unnest(%s::timestamptz[], %s::text[]) AS day (start, marker)
-              ON counted.ranked_day_start = day.start
-             AND counted.fact_input_hash = day.marker
-            """,
-            ([start for start, _ in days], [marker for _, marker in days]),
-        ).fetchall()
-    }
-    return [day for day in days if day[0] in counted]
+    counted = connection.execute(
+        f"""
+        SELECT count(*) FROM {counted_table} AS counted
+        JOIN unnest(%s::timestamptz[], %s::text[]) AS day (start, marker)
+          ON counted.ranked_day_start = day.start
+         AND counted.fact_input_hash = day.marker
+        """,
+        ([start for start, _ in days], [marker for _, marker in days]),
+    ).fetchone()[0]
+    return counted == len(days)
 
 
 def rules_ready(connection: Any) -> bool:

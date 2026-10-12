@@ -50,7 +50,8 @@ one Reset told the way production lives it:
 1. **Players and their battles.** `Player(tag)` holds every battle the player
    fights. `attacks(start, 40, 40)` gives attacks an hour apart from an hour
    after `start`; `defenses(start, 30, 30)` defenses an hour apart from 30
-   minutes after it; `multiplayer(start, n)` non-Legend battles that take rows
+   minutes after it, by the attacker's army share code given as `army=` (else
+   the fixture's Other army); `multiplayer(start, n)` non-Legend battles that take rows
    of the 50-row battle log. `Battle(at, trophies, attack)` places one battle
    exactly.
 2. **What the collector saves.** `story.reset(boundary, readings)` is a Reset
@@ -69,6 +70,9 @@ one Reset told the way production lives it:
    A job sent to wait (a retry or a dependency) is made due at once, as time
    passing would. Pass `run=False` to `story.reset` to let later readings
    arrive before the worker gets to the Reset, as when it is behind.
+   `story.count_armies(at)` runs the army type labelling and the daily attack
+   and defense counts the worker's maintenance timer runs, without waiting a
+   minute between days' defenses.
 4. **What a Clasher would see.** `story.saved_day(tag, day_start)` is the
    player's newest saved day (state, start, end, next start, automatic loss,
    Monday raise, attack and defense counts, unexplained difference).
@@ -76,6 +80,8 @@ one Reset told the way production lives it:
    newest board. `story.served_board(boundary, offset)` is the page of 100
    the API serves for that Daily board from `offset`, and `_ranked(board)`
    checks a page's order and returns each player's total.
+   `story.served_armies(tag, at)` is the player's Armies on defense card the
+   API serves at `at` for the Legend day before it.
    `story.unfinished_jobs()` lists jobs that failed for good or still wait; a
    finished story has none.
 
@@ -108,7 +114,7 @@ Reset, regular checks during the day and at 04:50, a settlement check at
 reading, marked uncertain, so a story missing those checks tests something
 production never sees.
 
-Keep the file under 1,500 lines: at 1,004 lines, the next big story belongs in a
+Keep the file under 1,500 lines: at 1,053 lines, the next big story belongs in a
 second file that imports `Story` from this one.
 
 ## The Reset-size story

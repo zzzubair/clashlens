@@ -409,9 +409,9 @@ def get_player_armies(
     soon as its newest log is published, so until that day's army records are
     rebuilt it shows the earlier build's battles.
 
-    Every tracked player's defenses count over the covered days the worker
-    has counted for that build; ``legends_total`` and each defense row's
-    ``legends`` are None until it has counted one of them.
+    Every tracked player's defenses count only once the worker has counted
+    every covered day for that day's build; until then ``legends_total`` and
+    each defense row's ``legends`` are None.
     """
     today = ranked_day_for(now).start
     window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
@@ -459,9 +459,9 @@ def get_player_armies(
                 lens=lens, player_id=int(player[0]),
             ))
         markers = [(day[0], day[3]) for day in covered]
-        if lens == "defense":
-            markers = army_types.counted_days(connection, markers, lens)
-        legend_days = army_days.totals(connection, markers, lens)
+        legend_days = army_days.totals(connection, markers, lens) if (
+            lens == "offense" or army_types.all_counted(connection, markers, lens)
+        ) else []
 
     def outcome(counts: list[int]) -> dict[str, int]:
         return dict(zip(("battles", "three_stars", "trophies"), counts, strict=True))

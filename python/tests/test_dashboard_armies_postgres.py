@@ -54,6 +54,7 @@ def test_army_cards_from_saved_battles_to_the_api(
 ) -> None:
     # Each run may count a day's defenses; the pause between them is below.
     monkeypatch.setattr(army_types, "DEFENSE_PACE_SECONDS", 0)
+    monkeypatch.setattr(army_types, "_defense_at", float("-inf"))
     with domain_database(database_url) as ci:
         # Day 23: #8PP triples you with Thrower and #9PP two-stars you with
         # Hydra; you triple #8PP with Thrower; #9PP one-stars #8PP with
@@ -130,20 +131,21 @@ def test_army_cards_from_saved_battles_to_the_api(
                 # Nothing counts until every saved army has its type; attacks
                 # also wait for the worker to count the day, one a run, newest
                 # day first. Then it counts each day's defenses the same way,
-                # and the Legends defense numbers come with the days counted.
+                # and the Legends defense numbers wait for every covered day.
                 both = [DAY_START.isoformat(), NEXT_DAY.isoformat()]
-                day_24 = {"Thrower": _lost(1, 0, 29), "Hydra": _lost(0, 0, 0)}
-                for defended, attacked, legends, legends_total in (
-                    ([], [], {}, None),
-                    (both, [], {"Thrower": None, "Hydra": None}, None),
-                    (both, [NEXT_DAY.isoformat()], {"Thrower": None, "Hydra": None}, None),
-                    (both, both, {"Thrower": None, "Hydra": None}, None),
-                    (both, both, day_24, _lost(1, 0, 29)),
+                waiting = {"Thrower": None, "Hydra": None}
+                for defended, attacked, legends in (
+                    ([], [], {}),
+                    (both, [], waiting),
+                    (both, [NEXT_DAY.isoformat()], waiting),
+                    (both, both, waiting),
+                    # Day 24's defenses are counted, Day 23's not yet.
+                    (both, both, waiting),
                 ):
                     defense = _read(client, "#2PP", "defense", 3)
                     assert defense["covered_days"] == defended
                     assert {row["name"]: row["legends"] for row in defense["rows"]} == legends
-                    assert defense["legends_total"] == legends_total
+                    assert defense["legends_total"] is None
                     assert _read(client, "#2PP", "offense", 3)["covered_days"] == attacked
                     army_types.refresh_army_types(database, now=NOW)
                 # Last 3 days: the day before them has no army records, so 2
@@ -227,12 +229,13 @@ def test_army_cards_from_saved_battles_to_the_api(
                     ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
                     ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
                 ]
-                # The Legends defense numbers leave out the rebuilt day until
-                # the worker counts it again.
-                assert _rows(_read(client, "#2PP", "defense", 3)) == [
-                    ("Thrower", 2, 1, 69, day_24["Thrower"]),
-                    ("Hydra", 1, 1, 40, day_24["Hydra"]),
+                # The Legends defense numbers wait for the worker to count the
+                # rebuilt day again.
+                defense = _read(client, "#2PP", "defense", 3)
+                assert _rows(defense) == [
+                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 1, 40, None),
                 ]
+                assert defense["legends_total"] is None
                 for _run in range(2):
                     assert _read(client, "#9PP", "offense", 3)["covered_days"] == []
                     army_types.refresh_army_types(database, now=NOW)
@@ -243,13 +246,9 @@ def test_army_cards_from_saved_battles_to_the_api(
                 # day's defenses a minute.
                 monkeypatch.setattr(army_types, "DEFENSE_PACE_SECONDS", 60)
                 for _run in range(2):
-                    assert _read(client, "#2PP", "defense", 3)["legends_total"] == (
-                        _lost(1, 0, 29)
-                    )
+                    assert _read(client, "#2PP", "defense", 3)["legends_total"] is None
                     army_types.refresh_army_types(database, now=NOW)
-                assert _read(client, "#2PP", "defense", 3)["legends_total"] == (
-                    _lost(1, 0, 29)
-                )
+                assert _read(client, "#2PP", "defense", 3)["legends_total"] is None
                 monkeypatch.setattr(army_types, "_defense_at", float("-inf"))
                 army_types.refresh_army_types(database, now=NOW)
                 defense = _read(client, "#2PP", "defense", 3)

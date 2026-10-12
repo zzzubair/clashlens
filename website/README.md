@@ -237,8 +237,8 @@ each army, each followed in grey by every tracked Legend player's against
 that army over the same days, from the worker's saved defense counts for
 each day (defenders' own reports, about 88,000 rows a day), kept in the
 API's memory the same way. A defense whose attacking army could not be read
-counts only in All defenses. Until the worker has counted one of the days
-the grey numbers show –.
+counts only in All defenses. Until the worker has counted every one of the
+days the grey numbers show –.
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
