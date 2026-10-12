@@ -56,7 +56,6 @@ import {
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
   rankRange: RankRange | null;
-  legendsHeld: LegendsHeld | null;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
@@ -118,7 +117,14 @@ function opponent(value: unknown): OpponentRow {
       };
     }),
     observedAtMs: nullable(value.observed_at, time),
+    legends: nullable(value.legends_held, legendsHeld),
   };
+}
+
+function legendsHeld(value: unknown): LegendsHeld {
+  if (!isRecord(value)) malformed();
+  const defenses = count(value.defenses);
+  return { held: count(value.held, defenses), defenses };
 }
 
 export async function getPlayerToday(tag: string): Promise<PlayerToday> {
@@ -131,7 +137,6 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
   );
   if (!isRecord(payload) || payload.tag !== tag) malformed();
   const range = payload.rank_range;
-  const held = payload.legends_held;
   return {
     rankRange: nullable(range, (item) => {
       if (!isRecord(item)) malformed();
@@ -139,12 +144,6 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
       const worst = count(item.worst);
       if (best < 1 || worst < best) malformed();
       return { best, worst };
-    }),
-    legendsHeld: nullable(held, (item) => {
-      if (!isRecord(item)) malformed();
-      const defenses = count(item.defenses);
-      const heldCount = count(item.held, defenses);
-      return { held: heldCount, defenses };
     }),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
@@ -772,7 +771,6 @@ export async function loadCardData(
         ? null
         : {
             rows: read.opponents,
-            legends: read.legendsHeld,
             mode: ctx.settings.basesMode,
           };
     },

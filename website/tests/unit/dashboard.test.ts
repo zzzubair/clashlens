@@ -305,7 +305,7 @@ describe("dashboard settings", () => {
     expect(nextResetMs(Date.UTC(2026, 9, 7, 23, 59))).toBe(Date.UTC(2026, 9, 8, 5));
   });
 
-  it("rates a base within 10 points of today's Legends held share as Average", () => {
+  it("rates a base within 15 points of today's Legends held share as Average", () => {
     const legends = { held: 50, defenses: 100 };
     const defenses = (held: number, total: number) =>
       Array.from({ length: total }, (_, index) => ({
@@ -313,11 +313,14 @@ describe("dashboard settings", () => {
         trophyChange: -30,
         yours: false,
       }));
-    // 50% Legends average: 12 of 20 held is +10, 13 of 20 is +15.
-    expect(baseStrength(defenses(12, 20), legends)).toBe("average");
-    expect(baseStrength(defenses(13, 20), legends)).toBe("hard");
-    expect(baseStrength(defenses(8, 20), legends)).toBe("average");
-    expect(baseStrength(defenses(7, 20), legends)).toBe("easy");
+    // 50% Legends average: 13 of 20 held is +15, 14 of 20 is +20.
+    expect(baseStrength(defenses(13, 20), legends)).toBe("average");
+    expect(baseStrength(defenses(14, 20), legends)).toBe("hard");
+    expect(baseStrength(defenses(7, 20), legends)).toBe("average");
+    expect(baseStrength(defenses(6, 20), legends)).toBe("easy");
+    // A 30% base is Easy against 52% but Average against 30% at its trophies.
+    expect(baseStrength(defenses(6, 20), { held: 52, defenses: 100 })).toBe("easy");
+    expect(baseStrength(defenses(6, 20), { held: 30, defenses: 100 })).toBe("average");
     expect(baseStrength(defenses(2, 2), legends)).toBe("early");
     expect(baseStrength(defenses(3, 3), null)).toBe("early");
   });
@@ -448,6 +451,8 @@ describe("Bases you attacked", () => {
     },
     defenses,
     observedAtMs: null,
+    // Legends at similar trophies today: 41% held.
+    legends: { held: 41, defenses: 100 },
   });
   const held = (count: number, total: number) =>
     Array.from({ length: total }, (_, index) => ({
@@ -464,16 +469,15 @@ describe("Bases you attacked", () => {
           row("Early", held(0, 2)),
           row("Hard one", held(5, 6)),
         ],
-        legends: { held: 52, defenses: 100 },
         timeZone: "UTC",
       }),
     );
     const plain = text(html);
-    expect(plain).toContain("Base strength · Legends 52% held");
+    expect(plain).toContain("Base strength · vs Legends at similar trophies today");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
-    expect(plain).toContain("Hard held 5 of 6 · 83%");
-    expect(plain).toContain("Easy held 1 of 4 · 25%");
+    expect(plain).toContain("Hard held 5 of 6 · 83% vs 41%");
+    expect(plain).toContain("Easy held 1 of 4 · 25% vs 41%");
     expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
     expect(plain).not.toContain("not yet");
     // Each opponent can be saved into one of the account's groups.
@@ -484,9 +488,7 @@ describe("Bases you attacked", () => {
   it("says today's battles aren't saved yet rather than no attacks", async () => {
     const render = async (rows: OpponentRow[] | null) =>
       text(
-        await renderInRouter(
-          createElement(OpponentsCard, { rows, legends: null, timeZone: "UTC" }),
-        ),
+        await renderInRouter(createElement(OpponentsCard, { rows, timeZone: "UTC" })),
       ).replace(/&#x27;/g, "'");
     const unsaved = await render(null);
     expect(unsaved).toContain(
@@ -502,7 +504,6 @@ describe("Bases you attacked", () => {
       await renderInRouter(
         createElement(OpponentsCard, {
           rows: [row("Easy one", held(1, 4)), row("Hard one", held(5, 6))],
-          legends: { held: 52, defenses: 100 },
           timeZone: "UTC",
           mode: "trophies",
         }),
@@ -522,11 +523,10 @@ describe("today read for the Legend day and Bases cards", () => {
     mocks.requestJson.mockReset();
   });
 
-  it("reads the Next Reset range, Legends held and the bases attacked", async () => {
+  it("reads the Next Reset range and the bases attacked with their Legends held", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
-      legends_held: { held: 52, defenses: 100 },
       open_defenses: 7,
       automatic_defense_each: 21,
       opponents: [
@@ -542,12 +542,12 @@ describe("today read for the Legend day and Bases cards", () => {
           },
           defenses: [{ stars: 3, trophy_change: -40, yours: true }],
           observed_at: "2026-10-07T09:10:00+00:00",
+          legends_held: { held: 41, defenses: 100 },
         },
       ],
     });
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
-      legendsHeld: { held: 52, defenses: 100 },
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [
@@ -563,6 +563,7 @@ describe("today read for the Legend day and Bases cards", () => {
           },
           defenses: [{ stars: 3, trophyChange: -40, yours: true }],
           observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
+          legends: { held: 41, defenses: 100 },
         },
       ],
     });
@@ -578,7 +579,6 @@ describe("today read for the Legend day and Bases cards", () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
-      legends_held: null,
       open_defenses: null,
       automatic_defense_each: null,
       opponents: null,
@@ -593,7 +593,6 @@ describe("today read for the Legend day and Bases cards", () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
       rank_range: { best: 9, worst: 3 },
-      legends_held: null,
       open_defenses: null,
       automatic_defense_each: null,
       opponents: [],

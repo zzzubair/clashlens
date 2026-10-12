@@ -14,6 +14,12 @@ range is an estimate: a battle not yet read leaves a slot looking open.
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
 
+Each base you attacked is compared with players at similar trophies: today's
+held share among players whose day started within 100 trophies of the
+base's, widened evenly until it holds 200 defenses, because held share falls
+as trophies rise (last Season: about 65% under 4,900, 30% at 5,400 and up).
+A base whose Reset trophies are unknown is compared with every player.
+
 The two army cards read finished Legend days whose army records are complete:
 a player's attacks or defenses per army type. A defense's type is the
 attacker's army, and a battle's trophies follow from its stars and
@@ -41,6 +47,10 @@ from .domain import (
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
+# Bases you attacked: compare with players whose day started this near the
+# base's Reset trophies, widened until the comparison holds enough defenses.
+SIMILAR_TROPHIES = 100
+SIMILAR_MIN_DEFENSES = 200
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
 MAX_ARMY_DAYS = 28
@@ -100,6 +110,11 @@ class _Board:
     worst_ends: list[int]
     held: int
     defenses: int
+    # Distinct day start trophies, ascending, and the defenses and held
+    # defenses of players who started below each (one more entry than starts).
+    starts: list[int]
+    defenses_below: list[int]
+    held_below: list[int]
 
 
 def _open(used: Any, allowed: int) -> int:
@@ -113,6 +128,8 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     ).fetchall()
     ends: dict[str, tuple[int, int]] = {}
     held = defenses = 0
+    # Day start trophies -> [defenses, held defenses].
+    by_start: dict[int, list[int]] = {}
     for (
         tag, trophies, start, attacks, gained, defended, lost, tripled,
         zero_attacks, zero_defenses,
@@ -134,6 +151,15 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         if defended:
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
+            if start is not None:
+                tally = by_start.setdefault(int(start), [0, 0])
+                tally[0] += int(defended)
+                tally[1] += int(defended) - int(tripled or 0)
+    starts = sorted(by_start)
+    defenses_below, held_below = [0], [0]
+    for value in starts:
+        defenses_below.append(defenses_below[-1] + by_start[value][0])
+        held_below.append(held_below[-1] + by_start[value][1])
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -142,6 +168,9 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         worst_ends=sorted(worst for _, worst in ends.values()),
         held=held,
         defenses=defenses,
+        starts=starts,
+        defenses_below=defenses_below,
+        held_below=held_below,
     )
 
 
@@ -183,6 +212,38 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
     # count includes this player, whose best end always reaches its own worst.
     maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, worst_end)
     return {"best": surely_above + 1, "worst": maybe_above_or_self}
+
+
+def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
+    """Today's held and all defenses of players whose day started within
+    100 trophies of ``trophies``, widened evenly until there are 200 defenses
+    or no more players; every player's when ``trophies`` is unknown. None
+    without defenses."""
+    if trophies is None:
+        held, defenses = board.held, board.defenses
+    else:
+        def within(reach: int) -> tuple[int, int]:
+            low = bisect_left(board.starts, trophies - reach)
+            high = bisect_right(board.starts, trophies + reach)
+            return (
+                board.held_below[high] - board.held_below[low],
+                board.defenses_below[high] - board.defenses_below[low],
+            )
+
+        reach = SIMILAR_TROPHIES
+        if board.starts and within(reach)[1] < SIMILAR_MIN_DEFENSES:
+            # The narrowest wider reach with enough defenses, by halving
+            # between one too narrow and one that takes every player.
+            narrow = reach
+            reach = max(reach, trophies - board.starts[0], board.starts[-1] - trophies)
+            while reach - narrow > 1:
+                middle = (narrow + reach) // 2
+                if within(middle)[1] < SIMILAR_MIN_DEFENSES:
+                    narrow = middle
+                else:
+                    reach = middle
+        held, defenses = within(reach)
+    return {"held": held, "defenses": defenses} if defenses else None
 
 
 def _battles_known(day: tuple[Any, ...]) -> bool:
@@ -295,11 +356,12 @@ def get_player_today(
                 "at": attack["battle_timestamp"],
             })
         defenses.sort(key=lambda defense: defense["at"])
+        reset_trophies = None if row is None or row[7] is None else int(row[7])
         opponents.append(
             {
                 "tag": opponent_tag,
                 "name": attack["opponent"]["name"],
-                "reset_trophies": None if row is None or row[7] is None else int(row[7]),
+                "reset_trophies": reset_trophies,
                 "hit": {
                     "stars": attack["stars"],
                     "destruction_percentage": attack["destruction_percentage"],
@@ -311,6 +373,7 @@ def get_player_today(
                     for defense in defenses
                 ],
                 "observed_at": None if row is None else _iso(row[6]),
+                "legends_held": similar_held(board, reset_trophies),
             }
         )
 
@@ -322,9 +385,8 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": _iso(board.computed_at),
         "rank_range": rank_range(board, tag),
-        "legends_held": {"held": board.held, "defenses": board.defenses}
-        if board.defenses
-        else None,
+        # Every player's; the website before each base had its own read this.
+        "legends_held": similar_held(board, None),
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
         "opponents": None if today is None else opponents,

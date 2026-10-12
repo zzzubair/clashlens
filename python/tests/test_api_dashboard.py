@@ -221,7 +221,11 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             assert api_dashboard.get_player_today(database, board, "#8PY", now=NOW)[
                 "rank_range"
             ] == {"best": 1, "worst": 3}
-            assert today["legends_held"] == {"held": 4, "defenses": 5}
+            # Under 200 defenses on the board, each base is compared with
+            # every player: 4 of 5 held.
+            assert [row["legends_held"] for row in today["opponents"]] == [
+                {"held": 4, "defenses": 5}
+            ] * 2
             assert today["open_defenses"] == 6
             assert today["automatic_defense_each"] == 23
             assert [
@@ -381,3 +385,37 @@ def test_dashboard_today_skips_a_yesterday_the_worker_rejects(
             assert today["automatic_defense_each"] is None
         finally:
             database.close()
+
+
+def test_bases_compare_within_100_trophies_widened_to_200_defenses() -> None:
+    class Rows:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.rows = rows
+
+        def execute(self, _sql: str, _params: Any) -> Rows:
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self.rows
+
+    def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
+        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0)
+
+    # 150 defenses at 5,000 (all held), 100 at 5,150 (none held) and 100 at
+    # 5,600 (none held); 8 more by a player whose start is unknown.
+    board = api_dashboard._read_board(Rows(
+        [player(f"#A{n}", 5000, 5, 0) for n in range(30)]
+        + [player(f"#B{n}", 5150, 5, 5) for n in range(20)]
+        + [player(f"#C{n}", 5600, 5, 5) for n in range(20)]
+        + [player("#D", None, 8, 0)]
+    ), NOW)
+
+    # Within 100 of 5,050: both groups, 250 defenses.
+    assert api_dashboard.similar_held(board, 5050) == {"held": 150, "defenses": 250}
+    # Within 100 of 5,000 there are 150; widened to 150 the 5,150 group joins.
+    assert api_dashboard.similar_held(board, 5000) == {"held": 150, "defenses": 250}
+    # Within 100 of 5,620 there are 100; widened to 470 the 5,150 group
+    # joins, short of the 5,000 group.
+    assert api_dashboard.similar_held(board, 5620) == {"held": 0, "defenses": 200}
+    # Unknown Reset trophies: every player, 158 of 358.
+    assert api_dashboard.similar_held(board, None) == {"held": 158, "defenses": 358}

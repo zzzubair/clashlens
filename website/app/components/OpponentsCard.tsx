@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router";
 
-import type { BaseStrength, BasesMode, LegendsHeld, OpponentRow } from "../lib/dashboard";
+import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
 import {
   BASE_STRENGTH_MIN_DEFENSES,
   LEGENDS_DEFENSE_LOSS,
@@ -33,20 +33,18 @@ function lostEach(trophies: number, defenses: number): string {
 
 /**
  * Card 3: one row per attack today, hardest bases first. Strength compares
- * the base's held share today with today's across tracked Legend players
- * (Held % mode), or the trophies it gave up a defense with the fixed Legends
- * 32 (Trophies mode). Colours follow the attacker: green is good for you,
- * red is bad.
+ * the base's held share today with today's among tracked Legend players at
+ * similar trophies (Held % mode), or the trophies it gave up a defense with
+ * the fixed Legends 32 (Trophies mode). Colours follow the attacker: green
+ * is good for you, red is bad.
  */
 export function OpponentsCard({
   rows,
-  legends,
   timeZone,
   mode = "held",
   nowMs = null,
 }: {
   rows: OpponentRow[] | null;
-  legends: LegendsHeld | null;
   timeZone: string;
   mode?: BasesMode;
   nowMs?: number | null;
@@ -83,7 +81,7 @@ export function OpponentsCard({
       ? heldShare(defenses)
       : defenses.length && -trophiesGivenUp(defenses) / defenses.length;
   const sorted = rows
-    .map((row) => ({ row, strength: baseStrength(row.defenses, legends, mode) }))
+    .map((row) => ({ row, strength: baseStrength(row.defenses, row.legends, mode) }))
     .sort(
       (a, b) =>
         STRENGTH_ORDER.indexOf(a.strength) - STRENGTH_ORDER.indexOf(b.strength) ||
@@ -101,9 +99,7 @@ export function OpponentsCard({
             Base strength
             {mode === "trophies"
               ? ` · Legends ${signed(-LEGENDS_DEFENSE_LOSS)} a defense`
-              : legends?.defenses
-                ? ` · Legends ${Math.round((100 * legends.held) / legends.defenses)}% held`
-                : ""}
+              : " · vs Legends at similar trophies today"}
           </span>
           <span />
         </div>
@@ -160,7 +156,11 @@ export function OpponentsCard({
                   {row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
                     ? `held ${held} of ${row.defenses.length} · needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
                     : mode === "held"
-                      ? `held ${held} of ${row.defenses.length} · ${Math.round(heldShare(row.defenses) * 100)}%`
+                      ? `held ${held} of ${row.defenses.length} · ${Math.round(heldShare(row.defenses) * 100)}%${
+                          row.legends
+                            ? ` vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
+                            : ""
+                        }`
                       : `gave up ${lostEach(trophiesGivenUp(row.defenses), row.defenses.length)} a defense`}
                 </span>
               </div>

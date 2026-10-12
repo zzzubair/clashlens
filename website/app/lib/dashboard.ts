@@ -337,9 +337,14 @@ export interface OpponentRow {
   defenses: { stars: number; trophyChange: number; yours: boolean }[];
   /** When the opponent's newest battle log was read, Unix milliseconds. */
   observedAtMs: number | null;
+  /** Today's held share among Legend players at similar trophies. */
+  legends: LegendsHeld | null;
 }
 
-/** Today's held share across all tracked Legend players. */
+/**
+ * Today's held share among tracked Legend players whose day started near the
+ * base's Reset trophies (within 100, widened until 200 defenses).
+ */
 export interface LegendsHeld {
   held: number;
   defenses: number;
@@ -349,8 +354,11 @@ export type BaseStrength = "hard" | "average" | "easy" | "early";
 /** Bases you attacked: the base's held share, or trophies it gave up a defense. */
 export type BasesMode = "held" | "trophies";
 
-/** Held % mode: Average is within 10 points of today's Legends held share. */
-export const BASE_STRENGTH_BAND = 10;
+/**
+ * Held % mode: Average is within 15 points of today's held share among
+ * Legends at similar trophies.
+ */
+export const BASE_STRENGTH_BAND = 15;
 /**
  * Trophies mode: tracked Legend players lose this many trophies a defense,
  * fixed because it held between 31.94 and 32.31 a day over 29 Sep–11 Oct 2026.
