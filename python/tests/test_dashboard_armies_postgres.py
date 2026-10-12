@@ -121,11 +121,15 @@ def test_army_cards_from_saved_battles_to_the_api(
                 clock=lambda: SIGNED_AT, now=lambda: NOW, dashboard_enabled=True,
             )
             with TestClient(app) as client:
-                # Nothing counts until every saved army has its type and the
-                # worker has counted the day: one step a run, newest day first.
-                for counted in ([], [], [NEXT_DAY]):
-                    waiting = _read(client, "#2PP", "defense", 3)
-                    assert waiting["covered_days"] == [day.isoformat() for day in counted]
+                # Nothing counts until every saved army has its type; attacks
+                # also wait for the worker to count the day, one a run, newest
+                # day first.
+                both = [DAY_START.isoformat(), NEXT_DAY.isoformat()]
+                for defended, attacked in (
+                    ([], []), (both, []), (both, [NEXT_DAY.isoformat()]),
+                ):
+                    assert _read(client, "#2PP", "defense", 3)["covered_days"] == defended
+                    assert _read(client, "#2PP", "offense", 3)["covered_days"] == attacked
                     army_types.refresh_army_types(database, now=NOW)
                 # Last 3 days: the day before them has no army records, so 2
                 # count. The armies that cost you the most come first, with no
@@ -165,9 +169,19 @@ def test_army_cards_from_saved_battles_to_the_api(
                     ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
                 ]
 
-                # A rebuilt day counts again once the worker has counted it:
-                # #9PP's Hydra two-star becomes a triple.
+                # A day rebuilt after a new Season has begun: #9PP's Hydra
+                # two-star becomes a triple. Defenses show it at once; attacks
+                # once the worker has counted the new Season's day and then it.
                 with database.pool.connection() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO army_analytics_completed_days (
+                            ranked_day_start, official_season_id,
+                            season_day_number, fact_input_hash
+                        ) VALUES (%s, 'next-season', 1, %s)
+                        """,
+                        (NEXT_DAY + timedelta(days=1), "d" * 64),
+                    )
                     connection.execute(
                         """
                         UPDATE army_analytics_battle_facts SET stars = 3,
@@ -181,11 +195,12 @@ def test_army_cards_from_saved_battles_to_the_api(
                         " WHERE ranked_day_start = %s",
                         ("c" * 64, DAY_START),
                     )
-                assert _read(client, "#2PP", "defense", 3)["covered_days"] == [
-                    NEXT_DAY.isoformat()
+                assert _rows(_read(client, "#2PP", "defense", 3)) == [
+                    ("Thrower", 2, 1, 69, None), ("Hydra", 1, 1, 40, None),
                 ]
-                assert _read(client, "#9PP", "offense", 3)["covered_days"] == []
-                army_types.refresh_army_types(database, now=NOW)
+                for _run in range(2):
+                    assert _read(client, "#9PP", "offense", 3)["covered_days"] == []
+                    army_types.refresh_army_types(database, now=NOW)
                 assert _rows(_read(client, "#9PP", "offense", 3))[1] == (
                     "Hydra", 1, 1, 40, {"battles": 1, "three_stars": 1},
                 )

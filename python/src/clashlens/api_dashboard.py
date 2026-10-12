@@ -44,7 +44,7 @@ BOARD_SECONDS = 60
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
 MAX_ARMY_DAYS = 28
-OFFENSE_ARMY_DAYS = (3, 7)
+OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
@@ -396,10 +396,10 @@ def get_player_armies(
     finished Legend days, attacks beside every tracked player's with each
     type; None for an unknown tag.
 
-    Only days whose army records are complete and counted by the worker, and
-    whose newest saved daily log for this player is Complete with complete
-    coverage, count, and only once every saved army has its type under the
-    current rules: ``covered_days`` names them. A finished Season's
+    Only days whose army records are complete, for attacks also counted by
+    the worker, and whose newest saved daily log for this player is Complete
+    with complete coverage, count, and only once every saved army has its type
+    under the current rules: ``covered_days`` names them. A finished Season's
     records go 7 days after it ends. Known limit: a corrected day counts as
     soon as its newest log is published, so until that day's army records are
     rebuilt it shows the earlier build's battles.
@@ -420,10 +420,12 @@ def get_player_armies(
                 SELECT day.ranked_day_start, day.official_season_id,
                        day.season_day_number, day.fact_input_hash
                 FROM army_analytics_completed_days AS day
-                JOIN army_type_counted_days AS counted
-                  ON counted.ranked_day_start = day.ranked_day_start
-                 AND counted.fact_input_hash = day.fact_input_hash
                 WHERE day.ranked_day_start = ANY(%s::timestamptz[])
+                  AND (%s <> 'offense' OR EXISTS (
+                      SELECT 1 FROM army_type_counted_days AS counted
+                      WHERE counted.ranked_day_start = day.ranked_day_start
+                        AND counted.fact_input_hash = day.fact_input_hash
+                  ))
                   AND (
                       SELECT daily.state = 'Complete'
                              AND daily.coverage = 'complete'
@@ -435,7 +437,7 @@ def get_player_armies(
                   )
                 ORDER BY day.ranked_day_start
                 """,
-                (window, int(player[0])),
+                (window, lens, int(player[0])),
             ).fetchall()
         ] if army_types.rules_ready(connection) else []
         seasons: dict[str, list[int]] = {}

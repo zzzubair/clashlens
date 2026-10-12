@@ -189,6 +189,10 @@ def label_new_army(connection: Any, exact_army_id: int, home_troops: Iterable[An
 # Reset, the same window past Resets wait out.
 QUIET_START, QUIET_END = time(4, 30), time(7, 0)
 LABEL_BATCH = 50_000
+# The dashboard's Armies on offense card compares up to the last 7 finished
+# Legend days with these counts, so those days are counted whatever their
+# Season.
+OFFENSE_CARD_DAYS = 7
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
 
@@ -198,9 +202,10 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
 
     Runs on the worker's maintenance timer. The first run under a new
     ``RULES_VERSION`` labels every saved distinct army, ``LABEL_BATCH`` per
-    run; then each run counts one completed day of the current Season whose
-    counts are missing or older than the day, newest first. A failure is
-    reported and tried again after ``RETRY_SECONDS``.
+    run; then each run counts one completed day of the current Season, or of
+    the last ``OFFENSE_CARD_DAYS``, whose counts are missing or older than the
+    day, newest first. A failure is reported and tried again after
+    ``RETRY_SECONDS``.
     """
     global _retry_at
     current = (now or datetime.now(UTC)).astimezone(UTC).time()
@@ -287,12 +292,17 @@ def _count_day(connection: Any) -> dict[str, Any] | None:
         FROM army_analytics_completed_days AS day
         LEFT JOIN army_type_counted_days AS counted
           ON counted.ranked_day_start = day.ranked_day_start
-        WHERE day.official_season_id = (
-                SELECT official_season_id FROM army_analytics_completed_days
-                ORDER BY ranked_day_start DESC LIMIT 1)
+        CROSS JOIN (
+            SELECT official_season_id, ranked_day_start
+            FROM army_analytics_completed_days
+            ORDER BY ranked_day_start DESC LIMIT 1) AS newest
+        WHERE (day.official_season_id = newest.official_season_id
+               OR day.ranked_day_start
+                  > newest.ranked_day_start - %s * interval '1 day')
           AND counted.fact_input_hash IS DISTINCT FROM day.fact_input_hash
         ORDER BY day.ranked_day_start DESC LIMIT 1
-        """
+        """,
+        (OFFENSE_CARD_DAYS,),
     ).fetchone()
     if day is None:
         return None
