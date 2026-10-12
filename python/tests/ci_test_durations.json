@@ -98,6 +98,7 @@
   "test_reset_board_concurrency_postgres.py": 4.76,
   "test_reset_pair_publication_postgres.py": 7.1,
   "test_reset_reading_before_loss_postgres.py": 0.82,
+  "test_reset_scenarios_postgres.py": 150.0,
   "test_reset_settlement_collection_postgres.py": 20.68,
   "test_reset_settlement_state_postgres.py": 20.78,
   "test_response_fields.py": 0.0,

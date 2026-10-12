@@ -75,6 +75,9 @@ If you introduce a new term, add it here in the same PR. One plain sentence.
 - Check line counts before editing source or test files. If a target is over 1,500 lines, report its path and count and propose a way to make the change without growing it.
 - Use `gh` for issues, PRs and checks.
 
+## Testing
+- Any change to calculations, jobs, boards or the Reset ships with an end-to-end test: the real worker against a real PostgreSQL, from saved game data to a published board. It must fail on the old code; unit tests alone are not enough. See docs/testing.md.
+
 ## Reporting
 
 End every piece of work with:
