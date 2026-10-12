@@ -108,7 +108,7 @@ Reset, regular checks during the day and at 04:50, a settlement check at
 reading, marked uncertain, so a story missing those checks tests something
 production never sees.
 
-Keep the file under 1,500 lines: at 1,003 lines, the next big story belongs in a
+Keep the file under 1,500 lines: at 1,004 lines, the next big story belongs in a
 second file that imports `Story` from this one.
 
 ## The Reset-size story

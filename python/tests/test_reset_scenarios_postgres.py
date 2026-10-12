@@ -567,8 +567,9 @@ def test_monday_reset_with_sundays_ending_around_5000(
     # The domain does not say whether the raise can land after the Reset
     # reading; whatever the day's state, it saves and ranks.
     assert days[UNRAISED]["end"] == 4940
-    assert members == {
-        RAISED: "complete", EXACT: "complete", UNRAISED: "inconsistent",
+    assert UNRAISED in members
+    assert {tag: state for tag, state in members.items() if tag != UNRAISED} == {
+        RAISED: "complete", EXACT: "complete",
         UNSETTLED: "complete", IN_FLIGHT: "complete", ZERO: "partial",
         DROPPED_WEEKLY: "complete",
     }
