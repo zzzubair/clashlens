@@ -107,7 +107,7 @@ Reset, regular checks during the day and at 04:50, a settlement check at
 reading, marked uncertain, so a story missing those checks tests something
 production never sees.
 
-Keep the file under 1,500 lines: at 991 lines, the next big story belongs in a
+Keep the file under 1,500 lines: at 996 lines, the next big story belongs in a
 second file that imports `Story` from this one.
 
 ## The Reset-size story
@@ -210,9 +210,9 @@ Every boundary case in section 8 of the three reliability reports of
 | Case | Reports | End-to-end test | Other tests |
 |---|---|---|---|
 | A reading during the day contradicts, and a later one matches | O7, F25, S contradiction | Wednesday story CONTRADICTED | `test_reading_rule.py`, `test_reconciliation.py` |
-| A reading taken before the game credited the latest attack | S delayed credit | Wednesday story LAGGED | `test_reading_rule.py::test_only_the_latest_attacks_can_lag` |
+| A reading taken before the game credited the latest attack | S delayed credit | Wednesday story LAGGED: read 15 minutes after its last attack, past the 10 minutes a battle has to land, still without its gain | `test_reading_rule.py::test_only_the_latest_attacks_can_lag` |
 | Reset reading taken before the automatic loss | O5, F7, S before the loss | Wednesday story UNSETTLED_LOSS | `test_reset_reading_before_loss_postgres.py` |
-| More than six battles in flight at a reading | S six ambiguous | Wednesday story CROWDED | |
+| More than six battles in flight at a reading | S six ambiguous | Wednesday story CROWDED: 7 in flight and a total no mix of them fits. **Fails on today's code:** `docs/domain.md` reads every battle in flight both ways, so the day is Inconsistent, but the worker skips a reading with more than 6 in flight (`MAX_AMBIGUOUS_BATTLES` in `reading_rule.py`, not in `docs/domain.md`) and saves the day Complete. The owner decides which is right | |
 | Reset reading rejected (Season 0), so the day starts from the day before's end | F27, S Season 0 | Wednesday story CHAIN_BROKEN, where the day before has no end either | `test_first_battle_log_postgres.py::test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end` |
 | Chain start when the day before is Partial | F28 | Wednesday story CHAIN_BROKEN | |
 | A reading still missing the day before's automatic loss | F26 | Not in a story: needs the game to apply the loss more than 15 minutes late, seen 0 times on 9 October | `test_reading_rule.py::test_a_season_reset_removes_the_day_befores_pending_loss` |
@@ -262,7 +262,7 @@ Every boundary case in section 8 of the three reliability reports of
 | A job that always times out or finds the Reset busy retries forever | O22 | Backing off is covered; never alerting is not | `test_reset_reliability_postgres.py::test_a_day_meeting_a_busy_reset_hands_its_lease_back_and_backs_off` |
 | A day saved after the board's first build | O18, S frozen generation | 12 October story: Sunday days join the board at the hourly rebuild | `test_boundary_publication_manifests_postgres.py` |
 | Board member with no accepted profile ("missing") | F36 | Reset-size story: the 100 never-played players are missing but rank | |
-| Army build gives up on pending members | F38, S failed build | Every story checks that no job is left failed or waiting, army builds included | `test_boundary_publication_manifests_postgres.py::test_army_build_that_gave_up_on_pending_members_runs_once_they_settle` |
+| Army build gives up on pending members | F38, S failed build | Every story checks, after its last worker run, that no job is left failed or waiting, army builds included | `test_boundary_publication_manifests_postgres.py::test_army_build_that_gave_up_on_pending_members_runs_once_they_settle` |
 | A Reset profile never answered | S missing baseline | Wednesday story NO_START | `test_reset_settlement_state_postgres.py` |
 | A job of an unsupported version | S invalid job | Not end to end: needs two worker versions running at once | `test_claim_bounded_postgres.py` |
 

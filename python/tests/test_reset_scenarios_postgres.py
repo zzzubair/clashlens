@@ -114,11 +114,12 @@ class Player:
 
     def log(self, at: datetime) -> bytes:
         """The battle log as the game shows it at ``at``: the newest 50
-        battles reported before then, newest first."""
+        battles reported before then, newest first, each against the same
+        opponent in every log that shows it."""
         template = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
         shown = sorted((b for b in self.battles if b.at < at), key=lambda b: b.at)
         items = []
-        for index, battle in enumerate(shown[-50:]):
+        for index, battle in list(enumerate(shown))[-50:]:
             stars, destruction = RESULTS[abs(battle.trophies)]
             attack = battle.trophies > 0 if battle.attack is None else battle.attack
             items.append({
@@ -434,11 +435,11 @@ def test_monday_reset_of_12_october_2026(
             story.read(tag, monday + timedelta(minutes=15), later)
             story.read(tag, monday + timedelta(minutes=20))
         story.run_worker()
-        unfinished = story.unfinished_jobs()
         days = {tag: story.saved_day(tag, sunday) for tag in story.players}
         # A day saved after the board's first build joins it at the hourly
         # rebuild.
         story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
 
@@ -533,9 +534,9 @@ def test_monday_reset_with_sundays_ending_around_5000(
         story.reads(monday + timedelta(minutes=20), {
             tag: 5000 for tag in story.players if tag != DROPPED_WEEKLY}, season)
         story.run_worker()
-        unfinished = story.unfinished_jobs()
         days = {tag: story.saved_day(tag, sunday) for tag in story.players}
         story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
     assert unfinished == []
@@ -659,8 +660,8 @@ def test_season_end_reset_and_its_first_day(
         story.reads(day_2 + timedelta(minutes=20), {**day_1_ends, DAY_1_LOSS: 5030})
         story.run_worker()
         first_day = {tag: story.saved_day(tag, day_1) for tag in playing}
-        unfinished = story.unfinished_jobs()
         story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
         first_day_members = story.board_members(day_2)
         first_day_board = story.served_board(day_2)
     assert unfinished == []
@@ -765,11 +766,13 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
             # The same battles, but a 17:00 reading is 10 below what they
             # add up to by then: 5,180.
             CONTRADICTED: attacks(tuesday, 40, 40) + defenses(tuesday, *[30] * 8),
-            # The same battles, read a minute after the second attack, before
-            # the game credited it: a delay, not a contradiction.
+            # The same battles, read 15 minutes after the second attack, past
+            # its 10 minutes to land, still without its gain: the game
+            # crediting the attacker late, not a contradiction.
             LAGGED: attacks(tuesday, 40, 40) + defenses(tuesday, *[30] * 8),
             # 4 attacks and 3 defenses in the 10 minutes before a 23:00
-            # reading, too many in flight to judge it: 5,260.
+            # reading of 5,265, which no mix of these battles, each a
+            # multiple of 10, adds up to: 5,260.
             CROWDED: defenses(tuesday, *[30] * 5) + [
                 Battle(tuesday + timedelta(hours=17, minutes=51 + n), 30, False) if n % 2
                 else Battle(tuesday + timedelta(hours=17, minutes=51 + n), 40, True)
@@ -795,9 +798,9 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
         })
         story.read(CONTRADICTED, tuesday + timedelta(hours=12), 5170, season)
         story.read(CONTRADICTED, tuesday + timedelta(hours=12, minutes=1))
-        story.read(LAGGED, tuesday + timedelta(hours=2, minutes=1), 5320, season)
-        story.read(LAGGED, tuesday + timedelta(hours=2, minutes=2))
-        story.read(CROWDED, tuesday + timedelta(hours=18), 5260, season)
+        story.read(LAGGED, tuesday + timedelta(hours=2, minutes=15), 5320, season)
+        story.read(LAGGED, tuesday + timedelta(hours=2, minutes=16))
+        story.read(CROWDED, tuesday + timedelta(hours=18), 5265, season)
         story.read(CROWDED, tuesday + timedelta(hours=18, minutes=1))
         ends = {
             SHIELD_RUN: 5340, GAP_BEFORE: 5320, FULL_WITH_GAP: 5420, NO_START: 5420,
@@ -812,7 +815,6 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
             **ends, GAP_BEFORE: 5140, UNSETTLED_LOSS: 5140, ZERO_CHARGED: 5180,
             NO_OPPONENT: 5172}, season)
         story.run_worker()
-        unfinished = story.unfinished_jobs()
         days = {tag: story.saved_day(tag, tuesday) for tag in story.players}
         with psycopg.connect(connection_info) as connection:
             shielded = connection.execute(
@@ -822,6 +824,7 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
                 " ORDER BY day.version DESC LIMIT 1", (SHIELD_RUN, tuesday),
             ).fetchone()
         story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
         members = story.board_members(wednesday)
         board = story.served_board(wednesday)
     assert unfinished == []
@@ -850,8 +853,10 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
                                   "next_start": 5180, "attacks": 2, "defenses": 8}
     assert days[LAGGED] == {**played, "end": 5180, "next_start": 5180, "attacks": 2,
                             "defenses": 8}
-    assert days[CROWDED] == {**played, "end": 5260, "next_start": 5260, "attacks": 4,
-                             "defenses": 8}
+    # docs/domain.md reads every battle in flight both ways, however many,
+    # so a reading no way fits contradicts the day.
+    assert days[CROWDED] == {**played, "state": "Inconsistent", "end": 5260,
+                             "next_start": 5260, "attacks": 4, "defenses": 8}
     assert days[UNSETTLED_LOSS] == {**played, "end": 5140, "next_start": 5140,
                                     "automatic_loss": 180, "attacks": 1, "defenses": 2}
     assert days[NO_OPPONENT] == {**played, "end": 5172, "next_start": 5172,
@@ -861,7 +866,7 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
     assert members == {
         SHIELD_RUN: "complete", GAP_BEFORE: "partial", FULL_WITH_GAP: "complete",
         NO_START: "partial", NINTH: "partial", CHAIN_BROKEN: "partial",
-        CONTRADICTED: "inconsistent", LAGGED: "complete", CROWDED: "complete",
+        CONTRADICTED: "inconsistent", LAGGED: "complete", CROWDED: "inconsistent",
         UNSETTLED_LOSS: "complete",
         ZERO_CHARGED: "complete", NO_OPPONENT: "complete",
     }
