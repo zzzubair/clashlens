@@ -482,14 +482,19 @@ def test_daily_results_keep_one_lane_each_while_live_work_stays_late(database_ur
         try:
             # A Reset turn takes no background work.
             assert claim(0) == (4, 0, 0)
-            # The other turns take one of each priority with none running,
-            # ahead of live work, and no more while those run.
-            assert claim(1) == (2, 1, 1)
+            # The other turns each take one daily result of a priority with
+            # none running, ahead of live work, while live work runs.
+            first = claim(1)
             assert claim(2) == (4, 0, 0)
-            assert claim(3) == (4, 0, 0)
+            second = claim(3)
+            assert [first[0], second[0]] == [3, 3]
+            assert [sum(kind) for kind in zip(first[1:], second[1:], strict=True)] == [1, 1]
+            # No more while those run.
+            assert claim(4) == (4, 0, 0)
+            assert claim(5) == (4, 0, 0)
             # Lanes finish every job before the next claim.
             taken = []
-            for turn in range(4, 12):
+            for turn in range(6, 14):
                 with psycopg.connect(connection_info) as connection:
                     connection.execute(
                         "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
@@ -499,9 +504,8 @@ def test_daily_results_keep_one_lane_each_while_live_work_stays_late(database_ur
         finally:
             database.close()
 
-    # The other background jobs ran too, and live work kept at least half of each claim.
-    assert [sum(kind) for kind in zip(*taken, strict=True)][1:] == [2, 2]
-    assert [live for live, *_ in taken] == [4, 2, 4, 2, 4, 4, 4, 4]
+    # With no live daily result running, none starts beside the claim's live work.
+    assert taken == [(4, 0, 0)] * 8
 
 
 def test_one_job_claims_run_live_results_and_both_background_priorities_beside_reset_work(
