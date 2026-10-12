@@ -103,10 +103,9 @@ The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
 The current Season's box counts only finished Legend days, never the day in
-progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
-14 finished days, never days before the current Season. Early in a Season the
-option says how many finished days so far, such as Last 7 days (2 so far), and
-the box's one short line gives the dates and finished days saved. Counts,
+progress; its one short line gives the dates and finished days saved. The box's
+Season menu, in the same bold style as the Analytics filters, lists the current
+Season and each past Season with Clash Lens days and opens the chosen one. Counts,
 stars, hit rate and averages all use every recorded battle of those days,
 leaving out only days without battles that saved profiles prove were before
 the player signed up. Offense per day is trophies gained from attacks divided by the saved
@@ -120,8 +119,7 @@ recorded Legend day, and when coverage is partial it says how many of the 28 day
 recorded. A Season known only from in-game history shows just the rank, which
 reads Not published yet until the game publishes it, and trophies.
 
-With JavaScript enabled, changing the period uses battle details already loaded with
-the player page and makes no request or additional database read. It adds no stored data; the
+The box adds no stored data; the
 [saved-history limits](../docs/history-retention.md) still apply. The calculations
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
@@ -136,7 +134,7 @@ even when a trophy count or rank is missing: those cells say "Not recorded"
 instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
 in-game row and gets one linked credit line. This table needs JavaScript and
 loads after the rest of the page; absent or unavailable history hides only the
-table. It is separate from the Seasons links that open Clash Lens's saved days.
+table. It is separate from the Season menu that opens Clash Lens's saved days.
 
 Opening a tracked player's profile with JavaScript enabled automatically submits
 the existing Refresh request once when the server reports its saved check is

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -16,8 +15,14 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { PlayerActions } from "../components/PlayerActions";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
+import { SeasonMenu } from "../components/SeasonMenu";
 import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummary";
-import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
+import {
+  LocalTimestamp,
+  formatAge,
+  useCurrentTime,
+  useServerTime,
+} from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
   dayEnd,
@@ -403,6 +408,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   );
   const statisticsTime =
     seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now;
+  const seasonMenu = (currentAvailable: boolean) =>
+    data.requestedTag && (
+      <SeasonMenu
+        tag={data.requestedTag}
+        seasons={data.seasons}
+        selectedSeason={data.selectedSeason}
+        currentAvailable={currentAvailable}
+        label={seasonLabel}
+      />
+    );
   const history = selectPlayerHistory(player, statisticsTime);
   const todayEnded =
     player?.currentDay != null &&
@@ -633,23 +648,25 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.error && !(lookup && data.error.error.code === "missing") ? (
           <ErrorNotice error={data.error} />
         ) : null}
-        <SeasonNav
-          tag={data.requestedTag}
-          seasons={data.seasons}
-          error={data.seasonsError ?? null}
-          selectedSeason={data.selectedSeason}
-          currentAvailable={current !== null}
-        />
+        {data.seasonsError ? (
+          <SeasonsError tag={data.requestedTag} selectedSeason={data.selectedSeason} />
+        ) : null}
         {data.selectedSeason !== null ? (
           <SelectedSeason
             seasonId={data.selectedSeason}
             summary={data.historical}
             error={data.historicalError}
+            menu={seasonMenu(current !== null)}
           />
-        ) : null}
-        {data.selectedSeason === null && current ? (
-          <BattleStatistics player={current} now={statisticsTime} />
-        ) : null}
+        ) : current ? (
+          <BattleStatistics
+            player={current}
+            now={statisticsTime}
+            menu={seasonMenu(current !== null)}
+          />
+        ) : (
+          seasonMenu(false)
+        )}
         {data.selectedSeason === null && player && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
@@ -754,24 +771,23 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           ? "Player not found. Clash of Clans did not find this tag at its latest check."
           : "Now tracking in Legend I."}
       </p>
-      <SeasonNav
-        tag={trackedPlayer.tag}
-        seasons={data.seasons}
-        error={data.seasonsError ?? null}
-        selectedSeason={data.selectedSeason}
-      />
-
+      {data.seasonsError ? (
+        <SeasonsError tag={trackedPlayer.tag} selectedSeason={data.selectedSeason} />
+      ) : null}
       {data.selectedSeason !== null ? (
         <SelectedSeason
           seasonId={data.selectedSeason}
           summary={data.historical}
           error={data.historicalError}
+          menu={seasonMenu(true)}
         />
-      ) : null}
-
-      {data.selectedSeason === null ? (
-        <BattleStatistics player={trackedPlayer} now={statisticsTime} />
-      ) : null}
+      ) : (
+        <BattleStatistics
+          player={trackedPlayer}
+          now={statisticsTime}
+          menu={seasonMenu(true)}
+        />
+      )}
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
@@ -850,68 +866,22 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
   );
 }
 
-function SeasonNav({
+function SeasonsError({
   tag,
-  seasons,
-  error,
   selectedSeason,
-  currentAvailable = true,
 }: {
   tag: string;
-  seasons: SummarizedSeasonRef[];
-  error: WebsiteErrorResponse | null;
   selectedSeason: string | null;
-  currentAvailable?: boolean;
 }) {
-  const location = useLocation();
-  // Only Seasons with Clash Lens days; older finishes are in the separate Older history table.
-  seasons = seasons.filter((season) => season.source === "tracked_summary");
-  // A selected past Season always keeps its way back, even if the list failed.
-  if (seasons.length === 0 && selectedSeason === null && !error) return null;
   return (
-    <nav className="data-section" aria-label="Seasons">
-      <div className="section-heading">
-        <h2>Seasons</h2>
-      </div>
-      {error ? (
-        <aside className="notice notice-unavailable" role="alert">
-          <strong>Season history could not be loaded.</strong>{" "}
-          <a
-            href={`${canonicalPlayerPath(tag)}${selectedSeason === null ? "" : `?season=${encodeURIComponent(selectedSeason)}`}`}
-          >
-            Try again
-          </a>
-        </aside>
-      ) : null}
-      <ul className="season-list">
-        {currentAvailable || selectedSeason !== null ? (
-          <li key="current">
-            {selectedSeason === null ? (
-              <strong aria-current="page">Current Season</strong>
-            ) : (
-              <Link to={canonicalPlayerPath(tag)} state={location.state} replace>
-                Current Season
-              </Link>
-            )}
-          </li>
-        ) : null}
-        {seasons.map((season) => (
-          <li key={season.seasonId}>
-            {selectedSeason === season.seasonId ? (
-              <strong aria-current="page">{seasonLabel(season.seasonId)}</strong>
-            ) : (
-              <Link
-                to={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
-                state={location.state}
-                replace
-              >
-                {seasonLabel(season.seasonId)}
-              </Link>
-            )}
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <aside className="notice notice-unavailable" role="alert">
+      <strong>Season history could not be loaded.</strong>{" "}
+      <a
+        href={`${canonicalPlayerPath(tag)}${selectedSeason === null ? "" : `?season=${encodeURIComponent(selectedSeason)}`}`}
+      >
+        Try again
+      </a>
+    </aside>
   );
 }
 
@@ -919,15 +889,17 @@ function SelectedSeason({
   seasonId,
   summary,
   error,
+  menu,
 }: {
   seasonId: string;
   summary: HistoricalSeasonSummary | null;
   error: WebsiteErrorResponse | null;
+  menu: React.ReactNode;
 }) {
   if (summary !== null) {
     return (
       <>
-        <SeasonFinish summary={summary} />
+        <SeasonFinish summary={summary} menu={menu} />
         {summary.source === "tracked_summary" ? (
           <HistoricalSeasonPanel summary={summary} />
         ) : null}
@@ -938,6 +910,7 @@ function SelectedSeason({
     <section className="data-section" aria-labelledby="historical-title">
       <div className="section-heading">
         <h2 id="historical-title">{seasonLabel(seasonId)}</h2>
+        {menu}
       </div>
       {error ? <ErrorNotice error={error} /> : null}
       <p className="section-note">Results for {seasonLabel(seasonId)} are unavailable.</p>
@@ -945,7 +918,13 @@ function SelectedSeason({
   );
 }
 
-function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
+function SeasonFinish({
+  summary,
+  menu,
+}: {
+  summary: HistoricalSeasonSummary;
+  menu: React.ReactNode;
+}) {
   const tracked = summary.source === "tracked_summary";
   const side = (
     count: number | null,
@@ -968,6 +947,7 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
   return (
     <SeasonSummary
       title={seasonLabel(summary.seasonId, summary.seasonEnd)}
+      controls={menu}
       {...(tracked &&
         summary.coverageState !== "complete" && {
           meta: `${summary.daysObserved} of 28 days recorded`,
@@ -1105,11 +1085,6 @@ const playerDateFormatter = new Intl.DateTimeFormat("en-GB", {
   year: "numeric",
   timeZone: "UTC",
 });
-const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
-  hour: "2-digit",
-  minute: "2-digit",
-  timeZone: "UTC",
-});
 
 function formatPlayerDate(date: Date): string {
   return playerDateFormatter.format(date).replace("Sept", "Sep");
@@ -1146,21 +1121,17 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
     <>
       <p className="player-freshness">
         <span>Updated</span>{" "}
-        <time className="player-updated" dateTime={observedAt}>
-          {formatPlayerTimestamp(observedAt)}
-        </time>
+        <LocalTimestamp className="player-updated" value={observedAt} />
         {oldAge(observedAt)}
       </p>
       <p className="player-freshness">
         <span>Battle history updated</span>{" "}
         {profile.battleHistoryUpdatedAt ? (
           <>
-            <time
+            <LocalTimestamp
               className="player-history-updated"
-              dateTime={profile.battleHistoryUpdatedAt}
-            >
-              {formatPlayerTimestamp(profile.battleHistoryUpdatedAt)}
-            </time>
+              value={profile.battleHistoryUpdatedAt}
+            />
             {oldAge(profile.battleHistoryUpdatedAt)}
           </>
         ) : (
@@ -1169,12 +1140,6 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
       </p>
     </>
   );
-}
-
-function formatPlayerTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Time unavailable";
-  return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
 function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): boolean {
@@ -1387,9 +1352,7 @@ function BattleColumn({
                 {event.opponent.name ? (
                   <span className="player-tag">{event.opponent.tag}</span>
                 ) : null}
-                <time dateTime={event.battleTimestamp}>
-                  {playerTimeFormatter.format(new Date(event.battleTimestamp))} UTC
-                </time>
+                <LocalTimestamp value={event.battleTimestamp} timeOnly />
               </div>
               <div
                 className="battle-score"

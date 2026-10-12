@@ -41,7 +41,6 @@ vi.mock("../../app/services/group-players.server", () => ({
 
 import {
   crewRefusal,
-  formatInviteExpiry,
   joiningCount,
   mapCrew,
   mapInvitePreview,
@@ -296,10 +295,6 @@ describe("crew answers", () => {
       }),
     ).toEqual({ state: "invalid", inCrew: false, crewCount: 2, accounts: [] });
     expect(mapInvitePreview(invitePayload({ state: "maybe" }))).toBeNull();
-  });
-
-  it("shows when a link stops working in UTC", () => {
-    expect(formatInviteExpiry(EXPIRES)).toBe("Mon 19 Oct, 14:20 UTC");
   });
 });
 

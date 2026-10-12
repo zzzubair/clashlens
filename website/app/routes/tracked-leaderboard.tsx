@@ -29,13 +29,6 @@ const PAGE_SIZE = 100;
 // 30 minutes before Reset. Collection pauses at 04:55, so normal boards end about
 // 5 minutes before Reset; the Oct 3, 2026 outage board ended 5 hours before.
 const INCOMPLETE_INPUT_GAP_SECONDS = 30 * 60;
-const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
-// Built by hand so the server and every browser print the same text.
-function formatReset(value: string) {
-  const date = new Date(value);
-  const time = date.toISOString().slice(11, 16);
-  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}, ${time} UTC`;
-}
 // Each board explains the tie order it was saved with: Daily boards since v3
 // by the latest trophy change, which matched the game's Reset order more
 // often; the Live board and older v2 Daily boards by attack destruction; older
@@ -243,11 +236,15 @@ export default function TrackedLeaderboardRoute() {
           <div>
             {daily ? <p className="rankings-kicker">Day {daily.dayNumber}</p> : null}
             <h1 id="leaderboard-title">
-              {daily
-                ? `Leaderboard at ${formatReset(daily.resetAt)}`
-                : view === "live"
-                  ? "Live Leaderboard"
-                  : "Daily leaderboard"}
+              {daily ? (
+                <>
+                  Leaderboard at <LocalTimestamp value={daily.resetAt} />
+                </>
+              ) : view === "live" ? (
+                "Live Leaderboard"
+              ) : (
+                "Daily leaderboard"
+              )}
             </h1>
           </div>
           <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
@@ -263,7 +260,7 @@ export default function TrackedLeaderboardRoute() {
               aria-current={view === "daily" ? "page" : undefined}
               to="/leaderboards/tracked?view=daily&page=1"
             >
-              Daily
+              Reset
             </Link>
           </nav>
         </div>

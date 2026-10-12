@@ -67,7 +67,7 @@ test("home and the full leaderboard show collected synthetic players", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Legend League", exact: true }),
+    page.getByRole("heading", { name: "Clash Lens", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),

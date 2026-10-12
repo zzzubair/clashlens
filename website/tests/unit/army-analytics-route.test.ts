@@ -387,7 +387,7 @@ describe("army analytics route historical reads", () => {
     );
     expect(html).toMatch(/aria-current="page"[^>]*><strong>Armies</);
     expect(text).toContain("Thrower 6 / 12 50.0%");
-    expect(text).toContain("not which army is best");
+    expect(text).not.toContain("not which army is best");
     // Unreadable attacks are a row of their own, not excluded.
     expect(text).toContain("Records included 12 Every attack, Unreadable included");
     expect(text).toContain("Records excluded 0");
@@ -764,7 +764,7 @@ describe("army analytics attacks and season picker", () => {
     expect(text).not.toContain("Defenses");
     expect(text).not.toContain("From Legend day");
     expect(text).toContain("usage in attacks by top-100 players");
-    expect(text).toContain("Days 1–2 · Attacks");
+    expect(text).toContain("2 of 28 days");
   });
 
   it("names the unit types as the owner asked, under Unit Type", async () => {
@@ -803,7 +803,7 @@ describe("army analytics attacks and season picker", () => {
     // The first season: nothing to pick but the current one.
     const first = picker(await renderArmyRoute("season=current"));
     expect(first.match(/<option/g)).toHaveLength(1);
-    expect(first).toContain(">Current season</option>");
+    expect(first).toContain(">Current Season</option>");
 
     // A later season lists each finished season the API reports.
     getArmySeasons.mockResolvedValue([SEASON]);

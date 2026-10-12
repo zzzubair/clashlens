@@ -15,7 +15,6 @@ import { TrophyMark } from "../components/LeaderboardShared";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   crewRefusal,
-  formatInviteExpiry,
   INVITE_CODE,
   joiningCount,
   MAX_CREW_SIZE,
@@ -23,6 +22,7 @@ import {
   type InviteAccount,
   type InvitePreview,
 } from "../lib/crew-contracts";
+import { LocalTimestamp } from "../components/Provenance";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.join.$code";
 import "../crews.css";
@@ -205,7 +205,7 @@ export default function JoinCrewRoute() {
       <p className="crew-meta">
         {invite.ownerName ? `Owner: ${invite.ownerName} · ` : null}
         {invite.used} of {invite.size} places · Works until{" "}
-        {formatInviteExpiry(invite.expiresAt)}
+        <LocalTimestamp value={invite.expiresAt} />
       </p>
       {invite.inCrew ? (
         <p className="notice crew-notice-action">

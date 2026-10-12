@@ -6,7 +6,9 @@ test("army analytics loads the real backend's current honest state", async ({ pa
   const response = await page.goto("/analytics/armies?saved=1&season=current");
 
   expect([200, 404]).toContain(response?.status());
-  await expect(page.getByRole("heading", { name: "Army analytics" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Analytics", exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("form", { name: "Army analytics filters" })).toBeVisible();
   await expect(
     page.getByRole("region", { name: "Army statistics" }).or(

@@ -329,7 +329,7 @@ describe("player route historical independence", () => {
       params: { tag: TAG },
     } as never);
     const html = await renderRoute({ ...data, selectedSeason: null });
-    expect(html).toContain(`season=${SEASON}`);
+    expect(html).toContain(`<option value="${SEASON}"`);
   });
 
   it("does not show current-day content for a requested missing season", async () => {
@@ -543,7 +543,7 @@ describe("automatic tag lookup", () => {
       expect(html).toContain(message);
       const visible = html.split("<script")[0];
       expect(visible).not.toContain("The requested player data is not available.");
-      expect(html).toContain('aria-label="Seasons"');
+      expect(html).toContain('<select name="season"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
     },
@@ -580,7 +580,7 @@ describe("automatic tag lookup", () => {
     expect(html).not.toMatch(
       /Season summary|Current Season|Current trophies|refresh-form/,
     );
-    expect(html).toContain(`?season=${SEASON}`);
+    expect(html).toContain(`<option value="${SEASON}"`);
   });
 
   it.each([null, SEASON])(
@@ -603,7 +603,7 @@ describe("automatic tag lookup", () => {
       const html = await renderRoute(result);
       expect(html).toContain(result.lookupError!.error.message);
       expect(html).toContain("could not confirm they are in Legend I");
-      expect(html).toContain('aria-label="Seasons"');
+      expect(html).toContain('<select name="season"');
       expect(html).toContain(
         season === null ? "Saved Legend history" : "Daily trophy totals",
       );

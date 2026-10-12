@@ -95,22 +95,6 @@ export function canJoin(account: LinkedAccount): boolean {
 /** A made invite with its full address on this website. */
 export type InviteLink = MadeInvite & { link: string };
 
-/** When an invite link stops working, in UTC: "Mon 19 Oct, 14:20 UTC". */
-export function formatInviteExpiry(expiresAt: string): string {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZone: "UTC",
-  }).formatToParts(new Date(expiresAt));
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("weekday")} ${part("day")} ${part("month")}, ${part("hour")}:${part("minute")} UTC`;
-}
-
 /** The code in an invite link, as the private API makes it. */
 export const INVITE_CODE = /^[A-Za-z0-9_-]{22}$/;
 

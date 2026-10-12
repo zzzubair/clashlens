@@ -125,24 +125,8 @@
   min-height: 2.75rem;
 }
 /* Text links are underlined so they read as links before hover. */
-.player-page a:not([class]):not(.season-list a) {
+.player-page a:not([class]) {
   text-decoration: underline;
-}
-.player-page nav.data-section {
-  margin-top: 1rem;
-  padding-bottom: 1.1rem;
-  border-bottom: 1px solid var(--cl-border);
-}
-.player-page nav.data-section h2 {
-  font-size: 1rem;
-}
-.player-page .season-list {
-  gap: 0.4rem;
-}
-.player-page .season-list :is(a, strong) {
-  min-height: 2.75rem;
-  padding: 0.62rem 0.8rem;
-  border-radius: var(--cl-radius);
 }
 .player-page > .data-section {
   margin-top: 1.65rem;
@@ -528,20 +512,22 @@
 .analytics-page .army-view-choice:active {
   transform: translateY(1px);
 }
-/* The Season, a bold menu on the right of the filter row. */
+/* Bold menus, with Season on the right. */
 .analytics-page .analytics-season:empty {
   display: none;
+}
+.analytics-page .analytics-filter-row .filter-field {
+  color: var(--cl-ink);
+  font-weight: 800;
 }
 .analytics-page .analytics-filter-row .analytics-season-picker {
   flex: 0 1 14rem;
   margin-left: auto;
-  color: var(--cl-ink);
-  font-weight: 800;
 }
-.analytics-page .analytics-season-picker select {
+.analytics-page .analytics-filter-row .filter-field select {
   color: var(--cl-ink);
   background-color: var(--cl-panel);
-  border: 2px solid var(--cl-brand-orange);
+  border-width: 2px;
   font-weight: 800;
   cursor: pointer;
 }
@@ -626,10 +612,10 @@
 .analytics-page .analytics-table :is(th, td):not(:first-child) {
   text-align: right;
 }
+/* Table headings match Rankings: small bold capitals. */
 .analytics-page .analytics-table thead th {
-  color: var(--cl-muted);
+  color: var(--cl-ink);
   background: var(--cl-panel);
-  text-transform: none;
 }
 .analytics-page .analytics-table th.analytics-sort-heading {
   padding: 0;
@@ -648,6 +634,7 @@
   border-radius: var(--cl-radius);
   box-shadow: none;
   font: inherit;
+  text-transform: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -961,10 +948,19 @@
   color: var(--cl-muted);
   font-size: 0.85rem;
 }
-.season-summary select {
-  max-width: 100%;
-  min-height: 2.75rem;
-  font: inherit;
+/* The same bold menu as the Analytics filters. */
+.season-menu .filter-field {
+  gap: 0.3rem;
+  color: var(--cl-ink);
+  font-weight: 800;
+}
+.season-menu .filter-field select {
+  min-height: 2.5rem;
+  padding: 0.5rem 0.65rem;
+  background-color: var(--cl-panel);
+  border-width: 2px;
+  font-weight: 800;
+  cursor: pointer;
 }
 .season-summary :is(.season-summary-headline, .season-summary-averages) {
   display: grid;
@@ -1044,8 +1040,10 @@
   text-align: right;
 }
 .season-summary-table thead th {
-  color: var(--cl-muted);
-  font-size: 0.8rem;
+  color: var(--cl-ink);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 .season-summary-table tbody td {
   font-weight: 750;

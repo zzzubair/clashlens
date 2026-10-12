@@ -577,7 +577,7 @@ export default function ArmyAnalyticsRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell analytics-page">
       <section className="hero" aria-labelledby="army-analytics-title">
-        <h1 id="army-analytics-title">Army analytics</h1>
+        <h1 id="army-analytics-title">Analytics</h1>
         <p className="hero-copy">
           Compare usage and battle results across tracked Legend League armies.
         </p>
@@ -691,7 +691,7 @@ export default function ArmyAnalyticsRoute() {
             <label className="filter-field analytics-season-picker">
               Season
               <select name="season" defaultValue={requestedSeason}>
-                <option value="current">Current season</option>
+                <option value="current">Current Season</option>
                 {[
                   ...pastSeasons,
                   ...(requestedSeason !== "current" &&
@@ -795,23 +795,13 @@ export default function ArmyAnalyticsRoute() {
             <span className="section-note">
               {snapshot
                 ? `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
-                : `Days ${analytics.selection.startDay}–${analytics.selection.endDay}`}{" "}
-              · Attacks
+                : `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`}
             </span>
           </div>
           {!isHistorical && !snapshot && untrackedDays.length > 0 ? (
             <p className="section-note analytics-coverage-note">
               Days {dayList(coveredDays)} of 28; days not tracked:{" "}
               {dayList(untrackedDays)}.
-            </p>
-          ) : null}
-          {armyTypes ? (
-            <p className="section-note analytics-coverage-note" id="army-rate-help">
-              Each attack counts once, under the army its home troops make, so usage adds
-              up to 100%. Other is every army no type fits; Unreadable is every army we
-              could not read. Heroes, equipment, spells, siege machines and Clan Castle
-              troops do not change the army. These numbers show what was used and how it
-              went, not which army is best.
             </p>
           ) : null}
           <div
@@ -824,9 +814,7 @@ export default function ArmyAnalyticsRoute() {
               className="data-table analytics-table analytics-results-table"
               role="table"
               aria-label="Army analytics results"
-              aria-describedby={
-                armyTypes ? "army-selection-help army-rate-help" : "army-selection-help"
-              }
+              aria-describedby="army-selection-help"
             >
               <thead role="rowgroup">
                 <tr role="row">

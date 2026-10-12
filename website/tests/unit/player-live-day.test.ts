@@ -132,7 +132,7 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
-    expect(summary).toContain("Last 7 days (3 so far)");
+    expect(summary).toContain("of 3 finished days saved");
     expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
