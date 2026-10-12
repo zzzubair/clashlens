@@ -156,8 +156,8 @@ function periodStart(day: RankedDaySummary): number {
 
 /**
  * The Season's finished days for one player. A day's end is the next day's
- * Reset reading when that is saved, otherwise its start plus its change.
- * Python leaves a total unknown when battles may be missing, and so does
+ * Reset reading when that is saved, otherwise its start plus its change and
+ * any weekly or Season reset at its closing Reset. Python leaves a total unknown when battles may be missing, and so does
  * this; the battles' sum stands in only when Python found every battle.
  */
 export function seasonData(page: PlayerPage): SeasonData {
@@ -191,6 +191,7 @@ export function seasonData(page: PlayerPage): SeasonData {
       attacks === day.offenseEvents.length &&
       gain === day.offenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) &&
       !day.offenseEvents.some((event) => event.perspectiveDisagreement) &&
+      day.offenseEvents.length <= DAILY_BATTLES &&
       (attacks === DAILY_BATTLES || day.logCoverage === "complete");
     days.push({
       day: number,
@@ -203,7 +204,9 @@ export function seasonData(page: PlayerPage): SeasonData {
       held: defenses === null || tripledOn === null ? null : defenses - tripledOn,
       endTrophies:
         next?.startTrophies ??
-        (day.startTrophies != null && net !== null ? day.startTrophies + net : null),
+        (day.startTrophies != null && net !== null
+          ? day.startTrophies + net + (day.resetAdjustment?.amount ?? 0)
+          : null),
       rank: day.resetRank ?? null,
       hits: everyAttack
         ? [...day.offenseEvents]

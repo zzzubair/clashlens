@@ -921,6 +921,37 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const group = text(cardsIn(await render(await load()))["group-watch"]!);
     expect(group).toContain("Your numbers could not be loaded.");
     expect(group).not.toContain("Tundra");
+    // The same note when nobody else in the group has numbers either.
+    python.groups = [{ ...GROUPS[0], tags: [] }];
+    const empty = text(cardsIn(await render(await load()))["group-watch"]!);
+    expect(empty).toContain("Your numbers could not be loaded.");
+  });
+
+  it("adds a reset at the closing Reset to a day's end when the next day has no start", async () => {
+    const page = mainPage();
+    Object.assign(
+      page.screen_ready.days.find((day) => day.season_day_number === 8)!,
+      {
+        adjustments: [{ type: "weekly_reset", amount: 80 }],
+      },
+    );
+    python.pages[MAIN] = page;
+    const data = await load();
+    // 5,238 at the start, +86 from battles, +80 from the reset.
+    expect(
+      data.cards["season-graph"]?.days.find((day) => day.day === 8)?.endTrophies,
+    ).toBe(5404);
+    expect(data.cards.cutoffs?.reset?.you).toBe(5404);
+  });
+
+  it("leaves a day's attacks unknown when more than 8 are recorded", async () => {
+    // Day 6: nine recorded triples in an unbroken battle log.
+    python.pages[MAIN] = mainPage({ attacks: 9, triples: 9 });
+    const data = await load();
+    expect(data.cards["heat-map"]?.days.find((day) => day.day === 6)?.hits).toBeNull();
+    const offense = text(cardsIn(await render(data))["offense-consistency"]!);
+    expect(offense).toContain("65% hit rate · 26 of 40 tripled");
+    expect(offense).toMatch(/7 D2 0 D3 4 D4 8 D5 – D6 7 D8/);
   });
 
   it("follows the saved Goal, Cutoffs lines and group for the whole Season", async () => {

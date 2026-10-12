@@ -424,11 +424,7 @@ export function GroupWatchCard({
           </tbody>
         </table>
       ) : (
-        <CardNote>
-          {data.rows.length
-            ? "Your numbers could not be loaded."
-            : "No results for this group yet."}
-        </CardNote>
+        <CardNote>Your numbers could not be loaded.</CardNote>
       )}
       <Link className="dash-card-link" to={`/account/groups/${data.groupId}`}>
         Open full comparison →
