@@ -727,6 +727,59 @@ def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
     assert day_a_row[2] is None
 
 
+def test_monday_day_contradicted_after_a_fitting_reset_reading_is_saved(
+    database_url: str, archive_server
+) -> None:
+    # As four players on 12 October 2026: day Z, ending at the Monday Reset,
+    # has 2 attacks and 1 defense, so 7 missing defenses cost 7 * LOSS and take
+    # it below 5,000, where the weekly raise returns it. The Reset reading
+    # shows its end before that loss and fits; a 05:15 reading, which a 05:20
+    # log covers, shows one LOSS taken and fits nothing. The day is
+    # Inconsistent and saved, so the Monday board can build; its numbers once
+    # broke the database check and the board waited for the day forever.
+    day_y, day_z = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
+    defenses = [(day_y + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_z_battles = [(day_z + timedelta(hours=hour), hour < 3) for hour in range(1, 4)]
+    end_before_loss = 5000 + 2 * WIN - LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, day_y,
+                           profile=_profile(5000 + 8 * LOSS), log=_log())
+        jobs += _reset_work(connection_info, archive_server, day_z,
+                            profile=_profile(5000), log=_log(*defenses))
+        jobs += _reset_work(connection_info, archive_server, DAY_A,
+                            profile=_profile(end_before_loss), log=_log(*day_z_battles))
+        for endpoint, body, after in (
+            ("profile", _profile(end_before_loss - LOSS), timedelta(minutes=15)),
+            ("battle_log", _log(*day_z_battles), timedelta(minutes=20)),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"later-{endpoint}",
+                endpoint=endpoint, body=body, observed_at=DAY_A + after,
+                normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        day_z_rows = _latest_days(connection_info, (day_z,))
+        with psycopg.connect(connection_info) as connection:
+            retrying = connection.execute(
+                "SELECT count(*) FROM python_processing_jobs"
+                " WHERE status IN ('waiting_retry', 'failed')"
+            ).fetchone()[0]
+            board = connection.execute(
+                "SELECT snapshot_state FROM boundary_publication_generations"
+                " WHERE boundary_at = %s",
+                (DAY_A,),
+            ).fetchone()
+
+    assert (retrying, board) == (0, ("ready",))
+    [day_z_row] = day_z_rows
+    assert day_z_row[:7] == (
+        "Inconsistent", "uncertain", 5000, end_before_loss - 7 * LOSS, 5000,
+        7 * LOSS, "calculated",
+    )
+    assert day_z_row[7]["unexplained_residual"] == 0
+    assert day_z_row[7]["next_start_reading_correction"] == 5000 - end_before_loss
+
+
 def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
     database_url: str, archive_server
 ) -> None:

@@ -496,11 +496,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             end_available = True
         elif verdict is not None and verdict.outcome == "contradicted":
-            # The saved residual is the Reset reading's, when there is one;
-            # the contradicting reading's own is kept with that reading.
+            # The saved residual is the Reset reading's, less what it was found
+            # to show above, so the saved next start still adds up; the
+            # contradicting reading's own is kept with that reading.
             residual = (
-                data.next_start_trophies - expected_next
-                if data.next_start_trophies is not None
+                next_start_trophies - expected_next
+                if next_start_trophies is not None
                 else None
             )
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
