@@ -19,7 +19,7 @@ from test_army_analytics_publication_postgres import (
 
 from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase
-from clashlens.army_analytics import ArmyAnalyticsUnavailable
+from clashlens.army_analytics import ArmyTypesPreparing
 
 THROWER_CODE = "u9x132-4x7"
 OTHER_THROWER_CODE = "u10x132-2x7"
@@ -135,10 +135,10 @@ def test_army_types_from_saved_battles_to_the_armies_page(
 
             # Nothing is shown until every saved army has its type under
             # these rules, and nothing is counted during the Reset window.
-            with pytest.raises(ArmyAnalyticsUnavailable):
+            with pytest.raises(ArmyTypesPreparing):
                 _types(api)
             army_types.refresh_army_types(database, now=NOON.replace(hour=5))
-            with pytest.raises(ArmyAnalyticsUnavailable):
+            with pytest.raises(ArmyTypesPreparing):
                 _types(api)
 
             # Labelled: the page adds up the day's attacks until it is counted.
@@ -200,7 +200,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             rules, combinations = army_types.RULES_VERSION, army_types.COMBINATIONS
             monkeypatch.setattr(army_types, "RULES_VERSION", "army-types-test")
             monkeypatch.setattr(army_types, "COMBINATIONS", ())
-            with pytest.raises(ArmyAnalyticsUnavailable):
+            with pytest.raises(ArmyTypesPreparing):
                 _types(api)
             untraced = trace(database.pool)
             army_types.refresh_army_types(database, now=NOON)
@@ -223,7 +223,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             # Rolling back relabels them under the earlier rules again.
             monkeypatch.setattr(army_types, "RULES_VERSION", rules)
             monkeypatch.setattr(army_types, "COMBINATIONS", combinations)
-            with pytest.raises(ArmyAnalyticsUnavailable):
+            with pytest.raises(ArmyTypesPreparing):
                 _types(api)
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected

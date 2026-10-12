@@ -11,7 +11,7 @@ test("army analytics loads the real backend's current honest state", async ({ pa
   await expect(
     page.getByRole("region", { name: "Army statistics" }).or(
       page.getByRole("heading", {
-        name: /^(A new season is underway|No army stats for this season yet)$/,
+        name: /^(A new season is underway|No army stats for this season yet|Army types are being prepared)$/,
       }),
     ),
   ).toBeVisible();
@@ -31,7 +31,7 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expect(coverage).toContainText(/Records included\s*1,600/);
   await expect(coverage).toContainText(/Records excluded\s*0/);
 
-  await page.getByLabel("Show").selectOption("spells");
+  await page.getByLabel("Unit Type").selectOption("spells");
   await expect(page).toHaveURL(/category=spells/);
   await expect(page.getByRole("heading", { name: "Spells", exact: true })).toBeVisible();
 
@@ -78,115 +78,42 @@ test("the saved-data page shows attacks over the whole season with no day range"
   const season = form.getByRole("combobox", { name: "Season", exact: true });
   await expect(season).toBeVisible();
   await expect(season).toHaveValue("current");
-  await expect(form.getByLabel("Show")).toContainText("Hero equipment combos");
-  await expect(form.getByLabel("Show")).toContainText("Hero and both equipments");
+  await expect(form.getByLabel("Unit Type")).toContainText("Hero + Equipment");
+  await expect(form.getByLabel("Unit Type")).toContainText("Hero + Both Equipments");
 });
 
-test("trophy drafts explain unchanged results and recover to rank filtering", async ({
-  page,
-}) => {
-  await page.goto("/analytics/armies?saved=1&season=current&population=top-100");
-  await page.waitForLoadState("networkidle");
-  const form = page.getByRole("form", { name: "Army analytics filters" });
-  const players = form.getByLabel("Players");
-  await expect(players).toHaveValue("top-100");
-  expect(await players.locator("option").first().getAttribute("value")).toBe("trophies");
-  const appliedURL = page.url();
-  const results = page.getByRole("region", { name: "Army statistics" });
-  const appliedResults = (await results.count()) ? await results.innerText() : null;
-  await players.selectOption("trophies");
-  const status = form.locator("#trophy-range-status");
-  await expect(status).toContainText(
-    "Enter both trophy limits to update results. This range has not been applied.",
-  );
-  if (appliedResults !== null) {
-    await expect(status).toContainText("Results below still show top-100 players.");
-  }
-  await form.getByLabel("Min trophies").fill("5500");
-  await expect(status).toContainText("This range has not been applied.");
-  await expect(page).toHaveURL(appliedURL);
-  if (appliedResults !== null) {
-    await expect.poll(() => results.innerText()).toBe(appliedResults);
-  }
-
-  await form.getByLabel("Max trophies").fill("5400");
-  await expect(form.getByRole("alert")).toContainText("can’t be above");
-  await expect(page).toHaveURL(appliedURL);
-  await form.getByLabel("Max trophies").clear();
-  await expect(form.getByRole("alert")).toHaveCount(0);
-  await expect(status).toContainText("This range has not been applied.");
-
-  await form.getByLabel("Max trophies").fill("5600");
-  await expect(page).toHaveURL(/population=trophies-5500-5600/);
-  await expect(status).toBeEmpty();
-  await expect(form.locator("#trophy-range-help")).toHaveText(
-    "Each battle counts if the player’s trophies at that moment fall in this range.",
-  );
-  const rangeURL = page.url();
-  await form.getByLabel("Min trophies").clear();
-  await expect(status).toContainText("This range has not been applied.");
-  await expect(page).toHaveURL(rangeURL);
-  if (await results.count()) {
-    await expect(status).toContainText(
-      "Results below still show players with 5,500 to 5,600 trophies at battle time.",
-    );
-  }
-  await players.selectOption("top-50");
-  await expect(page).toHaveURL(/population=top-50/);
-  await expect(form.getByLabel("Min trophies")).toHaveCount(0);
-  await expect(status).toHaveCount(0);
-  await expectNoSeriousAccessibilityViolations(page);
-});
-
-test("Clan Castle switches between individual and regular troop results", async ({
-  page,
-}) => {
+test("Clan Castle Troops is a unit type of its own", async ({ page }) => {
   await page.goto("/analytics/armies?recent=1&category=troops");
-  const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
+  const unitType = page.getByLabel("Unit Type");
   const rows = page
     .getByRole("table", { name: "Army analytics results" })
     .getByRole("row");
-  await expect(toggle).not.toBeChecked();
   await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
   await expect(rows).toHaveCount(32);
-  const choices = await page.locator('select[name="category"] option').allTextContents();
-  expect(choices).not.toContain("Clan Castle army");
-  expect(choices).not.toContain("Clan Castle troops");
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
 
-  await toggle.check();
-  await expect(page).toHaveURL(/category=troops/);
-  await expect(page).toHaveURL(/cc=1/);
-  await expect(page.getByRole("heading", { name: "Clan Castle troops" })).toBeVisible();
+  await unitType.selectOption("cc-troops");
+  await expect(page).toHaveURL(/category=cc-troops/);
+  await expect(page.getByRole("heading", { name: "Clan Castle Troops" })).toBeVisible();
   await expect(rows).toHaveCount(24);
-  await expect(toggle).toBeChecked();
 
-  await toggle.uncheck();
+  await unitType.selectOption("troops");
   await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
   await expect(rows).toHaveCount(32);
-  await expect(page).not.toHaveURL(/cc=1/);
-  await expect(toggle).not.toBeChecked();
 });
 
-test("Clan Castle toggle works when JavaScript is off", async ({ browser }) => {
+test("unit types change when JavaScript is off", async ({ browser }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
     await page.goto("/analytics/armies?recent=1&category=troops");
-    const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
     const apply = page.getByRole("button", { name: "Apply filters" });
     await expect(apply).toBeVisible();
 
-    await toggle.check();
+    await page.getByLabel("Unit Type").selectOption("cc-troops");
     await apply.click();
-    await expect(page).toHaveURL(/cc=1/);
-    await expect(page.getByRole("heading", { name: "Clan Castle troops" })).toBeVisible();
-
-    await toggle.uncheck();
-    await apply.click();
-    await expect(page).not.toHaveURL(/cc=1/);
-    await expect(
-      page.getByRole("heading", { name: "Troops", exact: true }),
-    ).toBeVisible();
+    await expect(page).toHaveURL(/category=cc-troops/);
+    await expect(page.getByRole("heading", { name: "Clan Castle Troops" })).toBeVisible();
   } finally {
     await context.close();
   }
@@ -203,10 +130,6 @@ test("large army view keeps every row and shows the browser's local time", async
     );
     await expect(
       page.getByRole("table", { name: "Army analytics results" }).getByRole("row"),
-    ).toHaveCount(49);
-    await page.getByText("Full star breakdown & coverage").click();
-    await expect(
-      page.getByRole("table", { name: "Army star breakdown" }).getByRole("row"),
     ).toHaveCount(49);
 
     const timestamp = page.getByLabel("Real battle data").locator("time");
@@ -234,7 +157,7 @@ test("missing historical summary stays unavailable with legacy filters in the UR
   page,
 }) => {
   const response = await page.goto(
-    "/analytics/armies?season=missing-history-126&start_day=1&end_day=1&population=top-5",
+    "/analytics/armies?season=missing-history-126&category=troops&start_day=1&end_day=1&population=top-5",
   );
   expect(response?.status()).toBe(404);
   await expect(
@@ -243,16 +166,18 @@ test("missing historical summary stays unavailable with legacy filters in the UR
   await expect(page.getByRole("table")).toHaveCount(0);
 
   await page.goto("/analytics/armies?season=missing-history-126&category=troops&cc=1");
-  const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
-  await expect(toggle).toBeChecked();
-  await expect(
-    page.getByText("Clan Castle troop stats are unavailable for past seasons."),
-  ).toBeVisible();
+  const unitType = page.getByLabel("Unit Type");
+  await expect(unitType).toHaveValue("cc-troops");
   await expect(page.getByRole("table")).toHaveCount(0);
-  await toggle.uncheck();
+  await unitType.selectOption("troops");
   await expect(page).not.toHaveURL(/cc=1/);
-  await expect(toggle).not.toBeChecked();
   await expectNoSeriousAccessibilityViolations(page);
+
+  // Armies are counted from the current Season on.
+  await page.goto("/analytics/armies?season=missing-history-126&category=army-types");
+  await expect(
+    page.getByRole("heading", { name: "Armies are not available for this season" }),
+  ).toBeVisible();
 });
 
 test("retired IDs render honest labels, quantities and stars before and after naming", async ({

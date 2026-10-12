@@ -1007,15 +1007,6 @@
   margin-top: 1.5rem;
 }
 
-.analytics-breakdown summary {
-  width: fit-content;
-  min-height: 2.75rem;
-  padding: 0.75rem 0;
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
 .filter-footer .button {
   flex-shrink: 0;
 }
@@ -1084,10 +1075,6 @@
 
 .analytics-results .metric-card > strong {
   font-size: 2rem;
-}
-
-.analytics-breakdown {
-  margin-top: 1rem;
 }
 
 @media (hover: hover) and (pointer: fine) {

@@ -28,6 +28,7 @@ from .api_db import (
 from .army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    ArmyTypesPreparing,
     CurrentSeasonEmpty,
     build_army_result,
     finish_army_result,
@@ -606,7 +607,7 @@ def get_army_analytics(
                 source_hash = _rank_band_source_hash(saved[1], requested, snapshot_ids)
             elif resolved.category == army_types.CATEGORY:
                 if not army_types.rules_ready(connection):
-                    raise ArmyAnalyticsUnavailable(covered_days)
+                    raise ArmyTypesPreparing(covered_days)
                 result, source_hash = army_types.type_result(
                     connection,
                     resolved,
