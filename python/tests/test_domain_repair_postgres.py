@@ -411,6 +411,8 @@ def test_campaign_hold_defers_only_affected_artifacts(
     monkeypatch.setattr(
         past_reset_pacing, "_now", lambda _connection: NOW + timedelta(hours=7)
     )
+    # A clock set before the boards were made: the hourly wait isn't tested here.
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
     # The player's two saved days list the Resets ending them, not the third.
     held, held_next, free = START + 5 * DAY, START + 6 * DAY, START + 7 * DAY
     with _campaign_database(database_url) as (connection_info, worker):

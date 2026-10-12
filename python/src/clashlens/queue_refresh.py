@@ -13,7 +13,14 @@ each pass is queued in full with due times spread evenly over
 ``RECHECK_SPREAD`` and each created when due, and in the lane a recheck for
 new evidence goes before it (``background_pacing``). Evidence merges only
 into a recheck already due, which then goes first as evidence; one not yet
-due still runs later."""
+due still runs later.
+
+A pass starts only while its lane has room and live work keeps up, and the
+night one only before midnight, due by 03:00 at the latest: on 11 Oct 2026
+the 23:00 pass queued about 17,500 rechecks into a lane finishing 5,800 to
+8,250 an hour, and the work due rose from 5,314 at 23:40 to 20,405 at 04:00,
+into the Reset. A pass with no room tries again at the next check; rechecks
+for new evidence still run."""
 
 from __future__ import annotations
 
@@ -26,13 +33,21 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import db, domain
-from .background_pacing import DAY_RECHECK_PRIORITY
+from .background_pacing import (
+    DAY_RECHECK_PRIORITY,
+    LIVE_LAG_MIN_JOBS,
+    LIVE_LAG_PAUSE_SECONDS,
+    LIVE_WORK_TYPES,
+)
 from .reconciliation import RECONCILIATION_RULE_VERSION
 from .season_retirement import SEASON_CLOSE_WAIT
 
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600
 RECHECK_SPREAD = timedelta(hours=4)
+# A pass waits while this many rechecks are already due in its lane.
+RECHECK_ROOM = 5000
+NIGHT_PASS_DUE_BY = timedelta(hours=22)  # 03:00 UTC, counted from the Reset.
 _VERSIONS = {
     "parser": db.DEFAULT_PARSER_VERSION, "processing": db.PROCESSING_VERSION,
     "domain": db.DOMAIN_RULE_VERSION, "analytics": db.ANALYTICS_RULE_VERSION,
@@ -200,10 +215,11 @@ def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Itera
                    f"reconcile:report:{observation_id}:{player_id}")
 
 
-def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
+def queue_recheck(database: db.Database, slot: str, boundary: datetime,
+                  spread: timedelta = RECHECK_SPREAD) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
     Reset before, once per ``slot``, unless already waiting, due evenly over
-    ``RECHECK_SPREAD`` from now; count them. Each is created when it falls
+    ``spread`` from now; count them. Each is created when it falls
     due, so the backlog metrics count it from then."""
     with database.pool.connection() as connection, connection.transaction():
         return connection.execute(
@@ -240,19 +256,48 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
             {**_VERSIONS, "priority": DAY_RECHECK_PRIORITY, "slot": slot,
-             "spread": RECHECK_SPREAD, "last": boundary - timedelta(days=1),
+             "spread": spread, "last": boundary - timedelta(days=1),
              "before": boundary - timedelta(days=2)},
         ).rowcount
 
 
-def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | None:
-    """The recheck due at ``now`` and its Reset: the morning one once no
-    day-end recheck waits, the night one from 23:00; none from 04:00 to 07:00."""
+def _room(connection: Any) -> bool:
+    """Whether fewer than ``RECHECK_ROOM`` rechecks are due and live work
+    keeps up, as ``background_pacing`` counts late live work."""
+    due, late = connection.execute(
+        f"""
+        SELECT (SELECT count(*) FROM (
+                    SELECT FROM python_processing_jobs_worker AS job
+                    WHERE job.state = 'pending' AND job.priority = {DAY_RECHECK_PRIORITY}
+                      AND job.work_type = 'reconcile_ranked_day'
+                      AND job.due_at <= clock_timestamp()
+                    LIMIT %(room)s) AS due),
+               (SELECT count(*) FROM (
+                    SELECT FROM python_processing_jobs_worker AS job
+                    WHERE job.state = 'pending' AND job.priority IN ({db.PYTHON_LIVE_PRIORITY},
+                                                                   {db.PYTHON_RESET_PRIORITY})
+                      AND job.work_type = ANY(%(live)s)
+                      AND job.due_at <= clock_timestamp() - %(lag)s * interval '1 second'
+                    LIMIT %(late)s) AS late)
+        """,
+        {"room": RECHECK_ROOM, "lag": LIVE_LAG_PAUSE_SECONDS, "late": LIVE_LAG_MIN_JOBS,
+         "live": list(LIVE_WORK_TYPES)},
+    ).fetchone()
+    return due < RECHECK_ROOM and late < LIVE_LAG_MIN_JOBS
+
+
+def due_recheck_slot(
+    connection: Any, now: datetime
+) -> tuple[str, datetime, timedelta] | None:
+    """The recheck due at ``now``, its Reset and spread: the morning one once
+    no day-end recheck waits, the night one from 23:00 to midnight, due by
+    03:00; none from midnight to 07:00, nor while ``_room`` says no."""
     boundary = domain.ranked_day_for(now).start
-    if 4 <= now.astimezone(UTC).hour < 7:
+    if now.astimezone(UTC).hour < 7:
         return None
     if now >= boundary.replace(hour=23):
-        return f"{boundary:%Y-%m-%d}:night", boundary
+        spread = min(RECHECK_SPREAD, boundary + NIGHT_PASS_DUE_BY - now)
+        return (f"{boundary:%Y-%m-%d}:night", boundary, spread) if _room(connection) else None
     waiting = connection.execute(
         """SELECT EXISTS (SELECT 1 FROM python_processing_jobs_worker
             WHERE work_type = 'reconcile_ranked_day'
@@ -261,7 +306,9 @@ def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | N
               AND state IN ('pending', 'leased', 'waiting_retry'))""",
         (_day_text(boundary - timedelta(days=1)),),
     ).fetchone()[0]
-    return None if waiting else (f"{boundary:%Y-%m-%d}:morning", boundary)
+    if waiting or not _room(connection):
+        return None
+    return f"{boundary:%Y-%m-%d}:morning", boundary, RECHECK_SPREAD
 
 
 class DailyRecheck:

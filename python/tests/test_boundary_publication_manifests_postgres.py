@@ -16,7 +16,7 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import army_ingestion, boundary, boundary_publication
+from clashlens import army_ingestion, boundary, boundary_publication, past_reset_pacing
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -432,8 +432,10 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
 
 
 def test_army_correction_during_publication_keeps_each_frozen_battle(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
+    # What a correction rebuilds, not when (test_past_reset_pacing_postgres).
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
     # A changed army code for an already-known battle arrives after the
     # army inputs are frozen and before the army build finishes.
     with domain_database(database_url, include_coordinator=True) as connection_info:

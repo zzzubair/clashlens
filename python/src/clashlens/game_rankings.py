@@ -3,7 +3,7 @@
 With ``CLASHLENS_GAME_RANKINGS_ENABLED=true`` the collector pulls, for each
 Reset R, the global top 200 at R+30 s, then every 3 minutes until its
 ``previousRank`` differs from that early pull's, then every country's top 200
-(migration 0099). Untracked Legend I players in country lists are saved as due
+(migration 0099). An early pull that already holds R's ranks is R's list. Untracked Legend I players in country lists are saved as due
 a discovery check. From R+2 h each newly published frozen Daily board for R is
 scored against the pulls: S1-S6 from the 11 Oct 2026 blind review, ``unknown``
 whenever a pull failed or is missing. Schedule, storage and the score's
@@ -109,6 +109,28 @@ def switched(rows: list[Row], reference: list[Row]) -> bool:
     common = [row for row in rows if row.previous_rank and row.tag in before]
     changed = sum(row.previous_rank != before[row.tag] for row in common)
     return bool(common) and changed >= SWITCHED_SHARE * len(common)
+
+
+def holds_reset_ranks(rows: list[Row]) -> bool:
+    """Whether a list read just after a Reset already gives that Reset's
+    ranks as ``previousRank``: fewer than a quarter of its players have
+    moved from them. Before the game switches, ``previousRank`` holds the
+    Reset before, a day of battles away. On 12 Oct 2026 the 05:00:35 pull
+    gave all 200 players their own rank, so no later poll differed from it
+    and no country list was pulled."""
+    ranked = [(position, row.previous_rank)
+              for position, row in enumerate(rows, 1) if row.previous_rank]
+    moved = sum(position != previous for position, previous in ranked)
+    return bool(ranked) and moved < SWITCHED_SHARE * len(ranked)
+
+
+def _reset_pull(pulls: list[Pull]) -> Pull | None:
+    """R's global list: the poll seen to switch, or the early pull when it
+    already holds R's ranks."""
+    early = _latest(pulls, "global_early")
+    if early is not None and early.body is not None and holds_reset_ranks(read_rows(early.body)):
+        return early
+    return _latest(pulls, "global_reset")
 
 
 def _utc(moment: datetime) -> str:
@@ -334,8 +356,8 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
         database, boundary, ("global_early", "global_reset", "locations", "country")
     )
     reasons = []
-    early, reset, locations = (_latest(pulls, purpose)
-                               for purpose in ("global_early", "global_reset", "locations"))
+    early, locations = _latest(pulls, "global_early"), _latest(pulls, "locations")
+    reset = _reset_pull(pulls)
     if early is None:
         reasons.append("global_early_missing")
     if reset is None:
@@ -476,13 +498,13 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
     early = _latest(pulls, "global_early")
     if (
         early is not None
-        and _latest(pulls, "global_reset") is None
+        and _reset_pull(pulls) is None
         and boundary + POLL_FROM <= now < boundary + POLL_UNTIL
         and now - (_last_try(pulls, "global_poll") or boundary) >= POLL_EVERY
     ):
         reference = read_rows(early.body)
         await pull("global_poll", None, judge=lambda rows: switched(rows, reference))
-    if _latest(pulls, "global_reset") is None or now >= boundary + SCORE_FROM:
+    if _reset_pull(pulls) is None or now >= boundary + SCORE_FROM:
         return counts
     locations = _latest(pulls, "locations")
     last = _last_try(pulls, "locations")

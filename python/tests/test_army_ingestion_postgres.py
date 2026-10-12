@@ -1308,8 +1308,12 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
                     ProcessResult(limited, "retrying", reason),
                     ProcessResult(other, "processed"),
                 ]
-                # Nothing of the limited log was kept, and its try is refunded.
-                assert _job_state(db, limited) == ("leased", 0)
+                # Nothing of the limited log was kept, and its try is refunded,
+                # or, for a busy lock or a slow statement, kept while it hands
+                # its lease back to wait out a back-off.
+                deferred = reason in {"database_lock_busy", "database_timeout"}
+                assert _job_state(db, limited) == (
+                    ("waiting_dependency", 1) if deferred else ("leased", 0))
                 with db.pool.connection() as conn:
                     assert conn.execute(
                         "SELECT count(*) FROM legend_battles"
@@ -1317,8 +1321,12 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
                         (datetime(2026, 8, 5, 5, tzinfo=UTC),),
                     ).fetchone()[0] == 0
                 publisher.rollback()
-            db.expire_lease(limited)
-            assert db.maintain_queue(max_jobs=1) == 1
+            with db.pool.connection() as conn:
+                conn.execute("UPDATE python_processing_jobs SET due_at = now() WHERE id = %s",
+                             (limited,))
+            if not deferred:
+                db.expire_lease(limited)
+                assert db.maintain_queue(max_jobs=1) == 1
             assert proc.process_job(limited, owner="retry").outcome == "processed"
             assert _job_state(db, limited) == ("complete", 1)
         finally:

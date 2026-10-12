@@ -128,6 +128,7 @@ class Collector:
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
+        self._metrics_refresh: asyncio.Task[None] | None = None
         self._database_metrics: dict[str, int | float] = {}
         # When each main loop last came round, and database calls running with
         # their loop and start, for the container health check.
@@ -1115,6 +1116,14 @@ class Collector:
                 uploads.cancel()
                 await _drain_awaitable(asyncio.gather(uploads, return_exceptions=True))
 
+    async def _refresh_metrics(self) -> None:
+        try:
+            self._database_metrics = await asyncio.to_thread(self.database.health_metrics)
+        except psycopg.Error:
+            pass  # The sample ages; the alert check judges how old.
+        finally:
+            self._metrics_refresh = None
+
     async def health_response(self, path: str) -> tuple[int, str, bytes]:
         if path == "/livez":
             return collector_liveness.livez(self)
@@ -1156,16 +1165,20 @@ class Collector:
                 state = "ready"
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
-        try:
-            async with self._metrics_lock:
-                if time.monotonic() >= self._metrics_refresh_after:
-                    self._database_metrics = await asyncio.to_thread(
-                        self.database.health_metrics
-                    )
-                    self._metrics_refresh_after = time.monotonic() + 30
-                database_metrics = self._database_metrics
-        except psycopg.Error:
+        # Counting the queue took 21.6 s on 12 Oct 2026 with 113,000 jobs
+        # waiting, past the alert check's 10 s, so every alert run lost the
+        # collector's numbers. The last sample answers at once, with its time
+        # (metrics_sample_timestamp_seconds), while one read refreshes it.
+        async with self._metrics_lock:
+            if time.monotonic() >= self._metrics_refresh_after and self._metrics_refresh is None:
+                self._metrics_refresh_after = time.monotonic() + 30
+                self._metrics_refresh = asyncio.create_task(self._refresh_metrics())
+            refresh = self._metrics_refresh
+        if not self._database_metrics and refresh is not None:
+            await asyncio.wait([refresh])
+        if not self._database_metrics:
             return 503, "text/plain", b"database_unavailable\n"
+        database_metrics = self._database_metrics
         stats = None
         if not self._spool_io_failed:
             try:

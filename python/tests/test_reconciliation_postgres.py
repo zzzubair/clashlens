@@ -14,7 +14,7 @@ from domain_test_support import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import api_players, reconciliation_db
+from clashlens import api_players, past_reset_pacing, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
@@ -258,9 +258,10 @@ def test_reset_evidence_rejects_a_different_work_identity(
 
 
 def test_durable_reconciliation_versions_late_corrections_without_rewriting_history(
-    database_url: str,
-    archive_server,
+    database_url: str, archive_server, monkeypatch
 ) -> None:
+    # Each correction rebuilds at once; the hourly wait isn't tested here.
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
     with domain_database(database_url, include_coordinator=True) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(

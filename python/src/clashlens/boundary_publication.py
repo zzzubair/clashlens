@@ -8,7 +8,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle, boundary, reset_baselines
+from . import battle, board_deadline, boundary, reset_baselines
 from .analytics import (
     CLASSIFICATION_CONFIDENCE,
     CLASSIFICATION_VERSION,
@@ -28,8 +28,8 @@ from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
 from .past_reset_pacing import (
     OPERATOR_CORRECTION,
+    correction_waits,
     operator_correction_waits,
-    past_reset_correction_waits,
 )
 
 
@@ -180,6 +180,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
                     """,
                     (army_status, int(generation_id), int(player_id)),
                 )
+        board_deadline.settle_waiting_members(connection, boundary_at, int(generation_id))
         boundary._try_enqueue_boundary_artifacts(
             database,
             connection,
@@ -197,7 +198,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
         (boundary_at,),
     ).fetchall()
     for (source_generation_id,) in corrections:
-        if past_reset_correction_waits(connection, boundary_at):
+        if correction_waits(connection, boundary_at):
             continue
         _maybe_emit_boundary_signal(
             database, connection, generation_id=int(source_generation_id)
@@ -293,11 +294,9 @@ def _maybe_emit_boundary_signal(
             """,
             (generation_id,),
         )
-        # A repair campaign holding this Reset, or a past Reset not yet due
-        # to rebuild, starts no queued correction.
-        if boundary_held(connection, row[0]) or past_reset_correction_waits(
-            connection, row[0]
-        ):
+        # A repair campaign holding this Reset, or a Reset not yet due to
+        # rebuild, starts no queued correction.
+        if boundary_held(connection, row[0]) or correction_waits(connection, row[0]):
             return
         queued = connection.execute(
             """
@@ -1170,14 +1169,14 @@ def _queue_boundary_army_correction(
     ).fetchone()
     if current is None or current[2] is None or _text_value(current[1]) == "superseded":
         return
-    # A repair campaign holding this Reset, or a past Reset not yet due to
+    # A repair campaign holding this Reset, or a Reset not yet due to
     # rebuild, leaves the published generation and queues the correction,
     # as for one not yet published.
     if (
         _text_value(current[0]) == "published"
         and _text_value(current[1]) == "published"
         and not boundary_held(connection, boundary_at)
-        and not past_reset_correction_waits(connection, boundary_at)
+        and not correction_waits(connection, boundary_at)
     ):
         connection.execute(
             """

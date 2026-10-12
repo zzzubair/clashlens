@@ -22,6 +22,7 @@ from .db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     RESET_LOCK_WAIT,
     Claim,
     Database,
@@ -1225,21 +1226,36 @@ def _enqueue_live_reconciliation(
         f"reconcile:live:{player_id}:{ranked_day_start_text}:"
         f"{RECONCILIATION_RULE_VERSION}:{projection_hash}"
     )
+    # A day usually waits in one live calculation at most (migration 0104).
+    # One not started reads these battles when it runs, and stays locked
+    # until they are saved; one a worker is starting is skipped, so these
+    # battles queue the next. At 09:42 on 12 Oct 2026, 62,519 waited for
+    # 10,696 player days.
     connection.execute(
-        """
+        f"""
+        WITH waiting AS MATERIALIZED (
+            SELECT job.id FROM python_processing_jobs_worker AS job
+            WHERE job.work_type = 'reconcile_ranked_day' AND job.state = 'pending'
+              AND job.priority = {PYTHON_LIVE_PRIORITY}
+              AND job.input_json ->> 'player_id' = %(player)s
+              AND job.input_json ->> 'ranked_day_start' = %(day)s
+              AND job.deduplication_key LIKE 'reconcile:live:%%'
+            LIMIT 1 FOR UPDATE SKIP LOCKED)
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
             state, due_at, parser_version, processing_version,
             domain_rule_version, analytics_rule_version, priority
-        ) VALUES (
-            NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s, %s
-        )
+        ) SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, 'pending',
+                 clock_timestamp(), %(parser)s, %(processing)s, %(domain)s,
+                 %(analytics)s, %(priority)s
+        WHERE NOT EXISTS (SELECT FROM waiting)
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
-        (
-            deduplication_key,
-            Jsonb(
+        {
+            "player": str(int(player_id)),
+            "day": ranked_day_start_text,
+            "key": deduplication_key,
+            "input": Jsonb(
                 {
                     "player_id": int(player_id),
                     "ranked_day_start": ranked_day_start_text,
@@ -1247,12 +1263,12 @@ def _enqueue_live_reconciliation(
                     "projection_hash": projection_hash,
                 }
             ),
-            DEFAULT_PARSER_VERSION,
-            PROCESSING_VERSION,
-            DOMAIN_RULE_VERSION,
-            ANALYTICS_RULE_VERSION,
-            ended_day_priority(ranked_day_start),
-        ),
+            "parser": DEFAULT_PARSER_VERSION,
+            "processing": PROCESSING_VERSION,
+            "domain": DOMAIN_RULE_VERSION,
+            "analytics": ANALYTICS_RULE_VERSION,
+            "priority": ended_day_priority(ranked_day_start),
+        },
     )
 
 

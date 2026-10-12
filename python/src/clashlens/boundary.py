@@ -36,11 +36,12 @@ from .db import (
 from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
 from .past_reset_pacing import (
+    ARRIVAL,
     OPERATOR_CORRECTION,
+    correction_waits,
     operator_correction_waits,
     operator_generation,
     past_reset_build_waits,
-    past_reset_correction_waits,
 )
 
 
@@ -920,14 +921,14 @@ def _record_boundary_generation(
             _text_value(current[2]) == "published"
             and _text_value(current[3]) == "published"
             # A correction already waiting, a repair campaign holding this
-            # Reset, or a past Reset not yet due to rebuild keeps the change
+            # Reset, or a Reset not yet due to rebuild keeps the change
             # queued, so waiting inputs start together.
             and not (
                 changed
                 and (
                     queued is not None
                     or boundary_held(connection, boundary_at)
-                    or past_reset_correction_waits(connection, boundary_at)
+                    or correction_waits(connection, boundary_at, prior_member[0] is None)
                 )
             )
         )
@@ -1012,6 +1013,7 @@ def _record_boundary_generation(
                 "player_id": player_id,
                 "ranked_day_version_id": ranked_day_version_id,
                 "input_hash": ranked_day_input_hash,
+                **(ARRIVAL if prior_member[0] is None else {}),
             }
             correction_artifacts = frozen_artifacts
             if queued is None:

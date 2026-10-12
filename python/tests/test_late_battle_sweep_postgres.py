@@ -1110,11 +1110,14 @@ def test_daily_job_on_a_busy_lock_retries_without_using_an_attempt(
                     "retrying",
                     "database_lock_busy",
                 )
-                assert _job(connection_info, job_id) == ("leased", 0)
+                # It hands its lease back to wait out a back-off, keeping
+                # its attempt for the next try.
+                assert _job(connection_info, job_id) == ("waiting_dependency", 1)
                 assert _published(connection_info, DAY) == before
-            database.expire_lease(job_id)
-            assert database.maintain_queue(max_jobs=1) == 1
-            assert _job(connection_info, job_id) == ("pending", 0)
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = now() WHERE id = %s", (job_id,)
+                )
             _process(processor, job_id)
             assert _job(connection_info, job_id) == ("complete", 1)
             after = _published(connection_info, DAY)

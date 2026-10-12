@@ -969,6 +969,13 @@ class ObservationProcessor:
             pass
         except DATABASE_REJECTIONS as error:
             return self._fail_rejected(claim, error)
+        except (AssertionError, KeyError, TypeError, ValueError) as error:
+            if claim.work_type != "reconcile_ranked_day":
+                raise
+            # A calculation fault fails this day within its attempts; raised,
+            # it stopped every lane of the process, on each of its tries.
+            return self._fail(claim, "calculation_error",
+                              detail=type(error).__name__, retryable=True)
         except LockNotAvailable:
             # A short lock wait limit, such as a battle log's on a busy Reset,
             # gave up and its transaction rolled back.
@@ -996,25 +1003,13 @@ class ObservationProcessor:
                     ctypes.CDLL("libc.so.6").malloc_trim(ctypes.c_size_t(0))
                 except (OSError, AttributeError):
                     pass  # glibc or malloc_trim is unavailable on this platform.
-        # The failed or cancelled transaction recorded no outcome. Restore its
-        # retry slot so queue maintenance can recover it later, rather than
-        # failing it if this was its last attempt, even if conflicts outlast
-        # the lease. Report retrying once the refund commits, or once the pool
-        # has no connection for it; it is lost only if another worker or
-        # maintenance took the job.
-        while True:
-            try:
-                self.database.refund_claim_attempt(claim)
-                break
-            except LeaseLost:
-                return ProcessResult(claim.job_id, "lease_lost")
-            except (DeadlockDetected, SerializationFailure, QueryCanceled):
-                continue
-            except (*POOL_BUSY, LockNotAvailable, *SESSION_ENDED):
-                # No connection, or the refund's own short lock wait or
-                # session ran out. Leave the lease to run out so queue
-                # maintenance retries the job or fails its last try.
-                break
+        # The failed or cancelled transaction recorded no outcome: hand the
+        # job back without using an attempt. It is lost only if another
+        # worker or maintenance took it.
+        try:
+            job_outcomes.release_conflicted(self.database, claim, reason)
+        except LeaseLost:
+            return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, "retrying", reason)
 
     def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:

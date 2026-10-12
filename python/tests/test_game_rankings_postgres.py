@@ -54,10 +54,11 @@ def _list(rows: list[tuple[str, int, int, int, dict]]) -> bytes:
 
 
 def _global(ranks: dict[str, int], trophies: dict[str, int] | None = None) -> bytes:
+    """The global list, in the game's order by trophies, with ``ranks`` as previousRank."""
     board = {tag: value for tag, _position, value, _confidence in BOARD}
     trophies = {**board, **(trophies or {})}
-    return _list([(tag, trophies[tag], 40, rank, LEGEND_I)
-                  for tag, rank in sorted(ranks.items(), key=lambda item: item[1])])
+    return _list([(tag, trophies[tag], 40, rank, LEGEND_I) for tag, rank in sorted(
+        ranks.items(), key=lambda item: (-trophies[item[0]], item[1]))])
 
 
 LOCATIONS = json.dumps({"items": [
@@ -332,6 +333,42 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     assert printed["game_faults"] == {
         "stuck_5000": ["#2LL", "#2VV"], "tag_in_two_countries": [],
     }
+
+
+def test_an_early_pull_already_switched_still_pulls_every_country_once(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    # On 12 Oct 2026 the 05:00:35 pull already held that Reset's ranks, so no
+    # poll differed from it, no country list was pulled and 290 Legend I
+    # players in them stayed unknown to Clash Lens.
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, LOCATIONS),
+        "/v1/locations/global/rankings/players": (200, _global(TODAY_RANKS)),
+        "/v1/locations/32000087/rankings/players": (200, FRANCE),
+        "/v1/locations/32000249/rankings/players": (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        early, later = _day(
+            info, origin, tmp_path, [timedelta(seconds=40), timedelta(minutes=3)]
+        )
+        printed = _printed_score(info, capsys)
+        with psycopg.connect(info) as connection:
+            due = connection.execute(
+                "SELECT normalized_tag FROM players"
+                " WHERE NOT active AND eligibility_due_at IS NOT NULL ORDER BY normalized_tag"
+            ).fetchall()
+    assert early == Counter(global_early=1, locations=1, country=2, added_to_discovery=2)
+    assert later == Counter()
+    # One global list, no poll, and each country once.
+    assert [path.split("?")[0] for path in _Game.asked] == [
+        "/v1/locations/global/rankings/players", "/v1/locations",
+        "/v1/locations/32000087/rankings/players", "/v1/locations/32000249/rankings/players",
+    ]
+    assert due == [("#2CC",), ("#2RR",)]
+    assert printed["status"] == "scored"
+    assert printed["global_reset_at"] == printed["global_early_at"]
 
 
 def test_a_list_never_seen_to_switch_leaves_the_day_unknown(

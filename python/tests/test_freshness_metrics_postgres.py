@@ -611,6 +611,61 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
             collector.close()
 
 
+def test_update_status_counts_a_running_day_end_calculation_from_when_it_was_due(
+    database_url,
+):
+    # A day-end calculation is queued when its day starts and due two hours
+    # after its Reset. On 12 Oct 2026 a running one made the notice say data
+    # had waited since the day before.
+    now = datetime.fromtimestamp(NOW, UTC)
+    day_start = datetime(2027, 1, 14, 5, tzinfo=UTC)
+    due = day_start + timedelta(days=1, hours=2)
+    with domain_database(database_url) as info:
+        with psycopg.connect(info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true) RETURNING id"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, created_at, due_at,
+                    priority, status, lease_owner, lease_token, lease_expires_at
+                ) VALUES ('reconcile_ranked_day', 'status-running-day-end',
+                          jsonb_build_object('player_id', %s::bigint,
+                              'ranked_day_start', '2027-01-14T05:00:00Z',
+                              'trigger', 'day_end'),
+                          %s, %s, 25, 'leased', 'worker', gen_random_uuid(), %s)
+                """,
+                (player_id, day_start + timedelta(minutes=19), due, now + timedelta(minutes=5)),
+            )
+        client = TestClient(
+            create_app(
+                database=ApiDatabase(as_api_role(info)),
+                keys={("typescript-website", "current"): KEY},
+                clock=lambda: NOW,
+            )
+        )
+
+        def status():
+            response = client.get("/v1/status", headers=_signed_headers("/v1/status"))
+            assert response.status_code == 200
+            body = response.json()
+            return body["processing_delayed"], body["oldest_waiting_saved_at"]
+
+        with client:
+            # Due an hour ago, not 26 hours ago when it was queued.
+            assert status() == (True, due.isoformat())
+            # Handed back to wait for a lock, it still waits from then.
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'waiting_dependency',"
+                    " due_at = %s, lease_owner = NULL, lease_token = NULL,"
+                    " lease_expires_at = NULL",
+                    (now + timedelta(minutes=1),),
+                )
+            assert status() == (True, due.isoformat())
+
+
 def test_player_page_reports_battle_history_publication_separately(database_url):
     now = datetime.fromtimestamp(NOW, UTC)
     with domain_database(database_url) as info:
