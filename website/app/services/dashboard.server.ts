@@ -13,6 +13,7 @@ import type {
   RankRange,
 } from "../lib/dashboard";
 import {
+  DAILY_BATTLES,
   GOAL_PACE_DAYS,
   SEASON_START_TROPHIES,
   rate,
@@ -188,7 +189,9 @@ export function seasonData(page: PlayerPage): SeasonData {
     const tripledOn = day.defense.threeStarsAgainst;
     const everyAttack =
       attacks === day.offenseEvents.length &&
-      (day.battlesComplete || day.logCoverage === "complete");
+      gain === day.offenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) &&
+      !day.offenseEvents.some((event) => event.perspectiveDisagreement) &&
+      (attacks === DAILY_BATTLES || day.logCoverage === "complete");
     days.push({
       day: number,
       attacks,
@@ -351,7 +354,8 @@ async function cutoffsData(
   const saved = selector
     ? await Promise.all(lines.map((top) => trophiesAt(ctx, top, selector)))
     : null;
-  const you = ctx.selected.seasonResetPending ? null : ctx.selected.trophies;
+  const profile = reset?.page.profile ?? null;
+  const you = profile === null || profile.seasonResetPending ? null : profile.trophies;
   return {
     name: ctx.selected.name ?? ctx.selected.tag,
     live: {
@@ -362,7 +366,7 @@ async function cutoffsData(
       you,
       observedAtMs: observedMs([
         ...live.flatMap((entry) => (entry ? [entry.freshness.observedAt] : [])),
-        ...(you === null ? [] : [reset?.page.profile.freshness.observedAt]),
+        ...(you === null ? [] : [profile?.freshness.observedAt]),
       ]),
     },
     reset: saved

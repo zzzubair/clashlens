@@ -527,7 +527,11 @@ function answer(url: URL): [status: number, body: unknown] {
       {
         username: "nova88",
         display_name: "Nova",
-        verified_players: [linked(MAIN), linked(ALT, { name: "Lens Alt", rank: 2000 })],
+        // The linked list holds an older reading than the player page's 5,370.
+        verified_players: [
+          linked(MAIN, { trophies: 5360 }),
+          linked(ALT, { name: "Lens Alt", rank: 2000 }),
+        ],
       },
     ];
   if (path === "/v1/account/groups")
@@ -732,7 +736,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cutoffs).toContain(
       "Top 10 6,100 −730 Top 50 5,800 −430 Top 100 5,650 −280 Top 200 5,420 −50 Lens Main 5,370 Top 500 5,250 +120 Top 1,000 5,100 +270 Top 5,000 5,010 +360",
     );
-    // The account's own reading is older than the board's, so the label goes by it.
+    // Your trophies and their time come from the player page; that reading is
+    // older than the board's, so the label goes by it.
     expect(data.cards.cutoffs?.live.observedAtMs).toBe(NOW - 10 * 60_000);
 
     // Rivals watch: 3 above and 3 below on the live board, with moves since the Reset.
@@ -880,6 +885,42 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(offense).toContain("Last 7 days · 32 attacks");
     expect(offense).toContain("65% hit rate · 26 of 40 tripled");
     expect(offense).toMatch(/7 D2 0 D3 4 D4 8 D5 – D6 7 D8/);
+  });
+
+  it("keeps a day's attacks when only its defenses may be missing", async () => {
+    // Day 6: all 8 attacks recorded, 6 defenses, and a gap in the battle log.
+    python.pages[MAIN] = mainPage({ defenses: 6, gap: true });
+    const data = await load();
+    const day6 = data.cards["heat-map"]?.days.find((day) => day.day === 6);
+    expect(day6).toMatchObject({ net: null, triples: 5, offense: 290 });
+    expect(day6?.hits).toHaveLength(8);
+    const offense = text(cardsIn(await render(data))["offense-consistency"]!);
+    expect(offense).toContain("Last 7 days · 40 attacks");
+    expect(offense).toContain("65% hit rate · 31 of 48 tripled");
+    expect(offense).toMatch(/7 D2 0 D3 4 D4 8 D5 5 D6 7 D8/);
+  });
+
+  it("takes your Cutoffs trophies and Season reset from the player page", async () => {
+    python.pages[MAIN] = { ...mainPage(), season_reset_pending: true };
+    const data = await load();
+    expect(data.cards.cutoffs?.live).toMatchObject({
+      you: null,
+      observedAtMs: NOW - 3 * 60_000,
+    });
+  });
+
+  it("says when your own Group watch row could not be loaded", async () => {
+    python.preferences = {
+      dashboard: serializeSettings({
+        ...defaultsWith(["group-watch"]),
+        group: ALPHA,
+        groupWindow: "season",
+      }),
+    };
+    python.down = [`/v1/players/${MAIN}`];
+    const group = text(cardsIn(await render(await load()))["group-watch"]!);
+    expect(group).toContain("Your numbers could not be loaded.");
+    expect(group).not.toContain("Tundra");
   });
 
   it("follows the saved Goal, Cutoffs lines and group for the whole Season", async () => {

@@ -396,7 +396,7 @@ export function GroupWatchCard({
       <p className="dash-muted dash-card-sub">
         {data.window === "7" ? "Last 7 days" : `Whole Season · ${data.days} days`}
       </p>
-      {shown.length ? (
+      {index >= 0 ? (
         <table className="group-table">
           <thead>
             <tr>
@@ -424,7 +424,11 @@ export function GroupWatchCard({
           </tbody>
         </table>
       ) : (
-        <CardNote>No results for this group yet.</CardNote>
+        <CardNote>
+          {data.rows.length
+            ? "Your numbers could not be loaded."
+            : "No results for this group yet."}
+        </CardNote>
       )}
       <Link className="dash-card-link" to={`/account/groups/${data.groupId}`}>
         Open full comparison →
