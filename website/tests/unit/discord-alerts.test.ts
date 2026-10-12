@@ -76,12 +76,12 @@ function post(fields: Record<string, string>): Request {
   });
 }
 
-async function renderPage(): Promise<string> {
+async function renderPage(search = ""): Promise<string> {
   const path = "/account/discord-alerts";
   const handler = createStaticHandler([
     { path, Component: AlertsRoute, loader: alertsLoader as never },
   ]);
-  const context = await handler.query(new Request(`${ORIGIN}${path}`));
+  const context = await handler.query(new Request(`${ORIGIN}${path}${search}`));
   if (context instanceof Response) throw new Error("unexpected route response");
   return renderToString(
     createElement(StaticRouterProvider, {
@@ -129,15 +129,19 @@ describe("Discord attack alerts settings", () => {
     mocks.requestJson.mockResolvedValue({ kind: "discord-attack-alerts", ...ALERTS });
   });
 
-  it("shows one switch per verified player, off unless turned on", async () => {
+  it("says in words whether each player's alerts are on, and highlights on", async () => {
     const html = await renderPage();
-    expect(html).toContain("Alerts");
-    expect(html).toMatch(
-      /role="switch" aria-checked="true" aria-label="Attack alerts for Wanderer #2PP"/,
+    const rows = html.split("<li").slice(1);
+    expect(rows[0]).toContain("attack-alert-on");
+    expect(rows[0]).toContain("✓ On");
+    expect(rows[0]).toContain(
+      "You&#x27;ll get a Discord DM when someone attacks Wanderer.",
     );
-    expect(html).toMatch(
-      /role="switch" aria-checked="false" aria-label="Attack alerts for Nightfall #8QQ"/,
-    );
+    expect(rows[0]).toContain('aria-label="Turn off attack alerts for Wanderer #2PP"');
+    expect(rows[1]).not.toContain("attack-alert-on");
+    expect(rows[1]).toContain(">Off<");
+    expect(rows[1]).toContain("No alerts for Nightfall.");
+    expect(rows[1]).toContain('aria-label="Turn on attack alerts for Nightfall #8QQ"');
     expect(html).toContain("was attacked");
     expect(html).not.toContain("wasn&#x27;t delivered");
     expect(html).not.toContain("Reconnect Discord");
@@ -148,7 +152,7 @@ describe("Discord attack alerts settings", () => {
     const html = await renderPage();
     expect(html).toContain("Connect Discord first");
     expect(html).toContain('name="intent" value="connect-discord"');
-    expect(html).not.toContain('role="switch"');
+    expect(html).not.toContain("Turn on");
   });
 
   it("connects Discord through the existing flow and comes back here", async () => {
@@ -212,8 +216,16 @@ describe("Discord attack alerts settings", () => {
       IDENTITY,
     );
     expect(response.headers.get("Location")).toBe(
-      `/account/discord-alerts?alerts=${outcome}`,
+      `/account/discord-alerts?alerts=${outcome}&tag=%238QQ`,
     );
+  });
+
+  it("shows whether a switch saved on that player's row", async () => {
+    const saved = (await renderPage("?alerts=on&tag=%238QQ")).split("<li").slice(1);
+    expect(saved[0]).not.toContain("Saved.");
+    expect(saved[1]).toContain("Saved. The bot is sending you a confirmation message");
+    const failed = (await renderPage("?alerts=failed&tag=%232PP")).split("<li").slice(1);
+    expect(failed[0]).toContain("Not saved. Try again.");
   });
 
   it("refuses a switch that is neither on nor off", async () => {

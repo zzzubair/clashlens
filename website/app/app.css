@@ -570,6 +570,33 @@ h3 {
   gap: 0.8rem;
 }
 
+/* Each player's attack alerts: on rows are tinted and edged in green. */
+:root .player-link-list li.attack-alert-row {
+  align-items: center;
+}
+
+:root .player-link-list li.attack-alert-on {
+  border-color: var(--cl-positive);
+  background: color-mix(in srgb, var(--cl-positive) 12%, var(--cl-paper));
+  box-shadow: inset 6px 0 0 var(--cl-positive);
+}
+
+.attack-alert-state {
+  display: grid;
+  justify-items: start;
+  gap: 0.3rem;
+}
+
+.attack-alert-meaning {
+  color: var(--cl-muted);
+}
+
+.attack-alert-saved {
+  flex-basis: 100%;
+  margin: 0;
+  font-weight: 650;
+}
+
 /* An example Discord attack alert, with the bot's gold edge. */
 .attack-alert-example {
   display: grid;

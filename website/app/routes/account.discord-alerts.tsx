@@ -11,13 +11,13 @@ const PAGE = "/account/discord-alerts";
 
 export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
 
-type Saved = "on" | "off" | "failed" | null;
+/** The outcome of the last switch and its player, shown once on that row. */
+type Saved = { outcome: "on" | "off" | "failed"; tag: string } | null;
 
 export interface DiscordAlertsLoaderData {
   connected: boolean;
   /** Each verified player's attack alert switch; null when unreadable. */
   alerts: AttackAlerts | null;
-  /** The outcome of the last switch, shown once. */
   saved: Saved;
   idempotencyKey: string;
   error: WebsiteErrorResponse | null;
@@ -33,9 +33,12 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  const outcome = new URL(request.url).searchParams.get("alerts");
-  const saved =
-    outcome === "on" || outcome === "off" || outcome === "failed" ? outcome : null;
+  const params = new URL(request.url).searchParams;
+  const outcome = params.get("alerts");
+  const saved: Saved =
+    outcome === "on" || outcome === "off" || outcome === "failed"
+      ? { outcome, tag: params.get("tag") ?? "" }
+      : null;
   try {
     const { createPythonClient } = await import("../services/python.server");
     const { getAttackAlerts } = await import("../services/discord-alerts.server");
@@ -112,7 +115,7 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       throw redirect("/login");
     }
   }
-  const on = form["on"];
+  let on = form["on"];
   if (form["intent"] !== "attack-alert" || (on !== "on" && on !== "off")) {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
@@ -125,9 +128,10 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       form["idempotencyKey"] ?? "",
     );
   } catch {
-    return redirect(`${PAGE}?alerts=failed`, { headers: NO_STORE });
+    on = "failed";
   }
-  return redirect(`${PAGE}?alerts=${on}`, { headers: NO_STORE });
+  const tag = encodeURIComponent(form["tag"] ?? "");
+  return redirect(`${PAGE}?alerts=${on}&tag=${tag}`, { headers: NO_STORE });
 }
 
 export function headers() {
@@ -213,6 +217,21 @@ function ConnectDiscord({
   );
 }
 
+/** What happened to the last switch. */
+function SavedNote({ outcome }: { outcome: "on" | "off" | "failed" }) {
+  return outcome === "failed" ? (
+    <p className="attack-alert-saved notice notice-unavailable" role="alert">
+      Not saved. Try again.
+    </p>
+  ) : (
+    <p className="attack-alert-saved" role="status">
+      {outcome === "on"
+        ? "Saved. The bot is sending you a confirmation message on Discord now. If it doesn't arrive, reload this page."
+        : "Saved."}
+    </p>
+  );
+}
+
 /** Per-player switches for a Discord DM each time the player is attacked. */
 function AttackAlertSwitches({
   alerts,
@@ -231,19 +250,8 @@ function AttackAlertSwitches({
   return (
     <section className="form-panel stack-form" aria-labelledby="alerts-title">
       <h2 id="alerts-title">Attack alerts</h2>
-      {saved === "on" ? (
-        <p className="notice" role="status">
-          Attack alerts are on. The bot is sending you a confirmation message on Discord
-          now. If it doesn&apos;t arrive, reload this page.
-        </p>
-      ) : saved === "off" ? (
-        <p className="notice" role="status">
-          Attack alerts are off.
-        </p>
-      ) : saved === "failed" ? (
-        <p className="notice notice-unavailable" role="alert">
-          Attack alerts could not be saved. Try again.
-        </p>
+      {saved && !alerts?.players.some((player) => player.tag === saved.tag) ? (
+        <SavedNote outcome={saved.outcome} />
       ) : null}
       {alerts === null ? (
         <p className="notice notice-unavailable" role="alert">
@@ -257,7 +265,8 @@ function AttackAlertSwitches({
       ) : (
         <>
           <p id="attack-alerts-help" className="form-help">
-            Turning alerts on sends you a confirmation message on Discord straight away.
+            Each player&apos;s alerts are on or off on their own. Turning them on sends
+            you a confirmation message on Discord straight away.
           </p>
           {missed ? (
             <div className="notice notice-unavailable" role="alert">
@@ -278,8 +287,23 @@ function AttackAlertSwitches({
           ) : null}
           <ul className="player-link-list" aria-describedby="attack-alerts-help">
             {alerts.players.map((player) => (
-              <li key={player.tag}>
-                <span>{label(player)}</span>
+              <li
+                key={player.tag}
+                className={`attack-alert-row${player.on ? " attack-alert-on" : ""}`}
+              >
+                <div className="attack-alert-state">
+                  <strong>{label(player)}</strong>
+                  <span
+                    className={`state-badge ${player.on ? "state-live" : "state-missing"}`}
+                  >
+                    {player.on ? "✓ On" : "Off"}
+                  </span>
+                  <span className="attack-alert-meaning">
+                    {player.on
+                      ? `You'll get a Discord DM when someone attacks ${player.name ?? player.tag}.`
+                      : `No alerts for ${player.name ?? player.tag}.`}
+                  </span>
+                </div>
                 <form method="post" className="inline-form">
                   <input type="hidden" name="intent" value="attack-alert" />
                   <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
@@ -287,14 +311,13 @@ function AttackAlertSwitches({
                   <input type="hidden" name="on" value={player.on ? "off" : "on"} />
                   <button
                     type="submit"
-                    role="switch"
-                    aria-checked={player.on}
-                    aria-label={`Attack alerts for ${label(player)}`}
-                    className={`button ${player.on ? "button-primary" : "button-secondary"}`}
+                    aria-label={`Turn ${player.on ? "off" : "on"} attack alerts for ${label(player)}`}
+                    className={`button ${player.on ? "button-secondary" : "button-primary"}`}
                   >
-                    {player.on ? "Alerts on" : "Alerts off"}
+                    {player.on ? "Turn off" : "Turn on"}
                   </button>
                 </form>
+                {saved?.tag === player.tag ? <SavedNote outcome={saved.outcome} /> : null}
               </li>
             ))}
           </ul>
