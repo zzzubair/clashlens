@@ -69,8 +69,9 @@ tracks the remaining launch work.
 On a tracked player's current page only two things are live: the current
 trophies next to the name and the Daily Legend log. Everything else uses
 finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
-no Trophy trend section; [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx)
-keeps that calculation for a later dashboard card. The player page explains
+no Trophy trend section; for the unused
+[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 8 in the
+[dashboard design](../docs/dashboard.md). The player page explains
 itself with titles, labels and short counts rather than help paragraphs.
 
 The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
