@@ -17,6 +17,7 @@ import psycopg
 from domain_test_support import (
     domain_database,
     repair_season,
+    seed_battles,
     store_observation,
 )
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -617,3 +618,142 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
     assert _rows_read(search[0]["Plan"], "player_profile_effects") <= 18, search
     assert _rows_read(board[0]["Plan"], "api_player_daily_logs") == 0, board
     assert _rows_read(board[0]["Plan"], "player_profile_effects") == 0, board
+
+
+def _reading_at_5000(connection, tag: str, read_at) -> tuple[int, int]:
+    """A tracked player and their one Legend I profile at 5,000, accepted
+    for the Season of ``read_at``: (player id, profile id)."""
+    player = connection.execute(
+        "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (tag,)
+    ).fetchone()[0]
+    profile = connection.execute(
+        """
+        INSERT INTO player_profile_versions (
+            player_id, observation_id, normalized_tag, endpoint_version,
+            schema_version, parser_version, observed_at, source_http_status,
+            name, trophies, league_tier_id, league_tier_name,
+            eligibility_state, current_league_season_id, eligibility_reason,
+            source_contract_state, profile_json)
+        VALUES (%s, %s, %s, 'v1', 'v1', 'p1', %s, 200, %s, 5000, 105000034,
+                'Legend League', 'eligible', %s, 'confirmed_legend_i',
+                'accepted', '{}')
+        RETURNING id
+        """,
+        (player, -player, tag, read_at, tag,
+         ranked_day_for(read_at).official_season_id),
+    ).fetchone()[0]
+    return player, profile
+
+
+def test_only_a_battle_of_the_season_before_the_reading_shows_a_player_played(
+    database_url: str,
+) -> None:
+    # Each player's one profile at 5,000 is read after a Reset. A battle
+    # belongs to the Legend day of its end time less 5 minutes.
+    cases = {
+        # name: (Reset, read after it, battles (end, trophy change), unplayed)
+        "no battle": (DAY_3, 4, [], True),
+        "attack only": (DAY_3, 4, [(DAY_2 + timedelta(hours=1), WIN)], False),
+        "defense only": (DAY_3, 4, [(DAY_2 + timedelta(hours=1), -LOSS)], False),
+        "defense on Day 1": (DAY_3, 4, [(DAY_1 + timedelta(hours=1), -LOSS)], False),
+        "defense ending the day before, after the Reset": (
+            DAY_3, 4, [(DAY_3 + timedelta(minutes=2), -LOSS)], False),
+        "defense after the reading": (
+            DAY_3, 4, [(DAY_3 + timedelta(minutes=6), -LOSS)], True),
+        "battles only in the previous Season": (
+            DAY_3, 4, [(DAY_0 + timedelta(hours=1), WIN),
+                       (DAY_0 + timedelta(hours=2), -LOSS)], True),
+        "Day 1, defense ending the previous Season": (
+            DAY_1, 4, [(DAY_1 + timedelta(minutes=2), -LOSS)], True),
+        "Day 1, defense of Day 1 before the reading": (
+            DAY_1, 10, [(DAY_1 + timedelta(minutes=6), -LOSS)], False),
+    }
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET session_replication_role = replica")
+            readings = {}
+            for number, (name, (reset, minutes, battles, _)) in enumerate(
+                cases.items()
+            ):
+                read_at = reset + timedelta(minutes=minutes)
+                player, profile = _reading_at_5000(
+                    connection, f"#CASE{number}", read_at
+                )
+                seed_battles(connection, player, battles)
+                readings[name] = (player, reset, profile, read_at)
+            unplayed = {
+                name: reset_baselines._unplayed(connection, *reading)
+                for name, reading in readings.items()
+            }
+
+    assert unplayed == {name: case[3] for name, case in cases.items()}
+
+
+def test_the_never_played_check_reads_only_the_players_own_battles(
+    database_url: str, monkeypatch
+) -> None:
+    # 12 October 2026: the check searched every saved battle for the player
+    # as attacker or defender, 500 ms a call among production's 1.2 million,
+    # and Legend day results fell 88,000 behind after the Reset. Here 40,000
+    # battles among 2,000 other players, over the previous Season's last day
+    # and three days of this one.
+    reset = DAY_4
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("SET session_replication_role = replica")
+            connection.execute(
+                """
+                INSERT INTO players (id, normalized_tag) OVERRIDING SYSTEM VALUE
+                SELECT 100000 + i, '#OTHER' || i FROM generate_series(1, 2000) AS i
+                """
+            )
+            connection.execute(
+                """
+                WITH battle AS (
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT %(day_0)s + day * interval '24 hours',
+                           100001 + i %% 2000,
+                           100001 + (i %% 2000 + 1 + i / 2000 * 37 + day) %% 2000
+                    FROM generate_series(0, 3) AS day, generate_series(0, 9999) AS i
+                    RETURNING id, ranked_day_start, attacker_player_id
+                )
+                INSERT INTO battle_evidence (
+                    battle_id, source_row_id, observation_id, reporting_player_id,
+                    perspective, battle_timestamp, stars, destruction_percentage,
+                    army_share_code, attacker_gain, defender_loss,
+                    trophy_rule_version, source_observed_at, parser_version)
+                SELECT id, -id, -id, attacker_player_id, 'attacker',
+                       ranked_day_start + interval '1 hour', 3, 100, '', 40, 40,
+                       'test', ranked_day_start + interval '1 hour', 'test'
+                FROM battle
+                """,
+                {"day_0": DAY_0},
+            )
+            player, profile = _reading_at_5000(
+                connection, "#NEVER", reset + READ_AFTER
+            )
+            connection.execute("ANALYZE")
+        queries: list[tuple[str, dict]] = []
+        execute = psycopg.Connection.execute
+
+        def record(connection, query, params=None, **kwargs):
+            if "legend_battles" in str(query):
+                queries.append((str(query), params))
+            return execute(connection, query, params, **kwargs)
+
+        monkeypatch.setattr(psycopg.Connection, "execute", record)
+        with psycopg.connect(connection_info) as connection:
+            unplayed = reset_baselines._unplayed(
+                connection, player, reset, profile, reset + READ_AFTER
+            )
+        monkeypatch.undo()
+        (query, params), = queries
+        with psycopg.connect(connection_info) as connection:
+            plan = connection.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + query, params
+            ).fetchone()[0]
+    plan = json.loads(plan) if isinstance(plan, str) else plan
+
+    assert unplayed
+    assert _rows_read(plan[0]["Plan"], "legend_battles") == 0, plan

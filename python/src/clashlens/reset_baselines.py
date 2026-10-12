@@ -1351,12 +1351,34 @@ def _unplayed(
               AND profile.trophies <> %(start)s
               AND COALESCE(effect.observed_at, profile.observed_at) < %(before)s
         ) AND NOT EXISTS (
-            SELECT 1 FROM battle_evidence AS evidence
-            JOIN legend_battles AS battle ON battle.id = evidence.battle_id
-            WHERE (battle.attacker_player_id = %(player)s
-                   OR battle.defender_player_id = %(player)s)
+            -- The battle index holds each day's battles by attacker, so it
+            -- finds the player's attacks of each day directly.
+            SELECT 1 FROM legend_battles AS battle
+            JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+            WHERE battle.attacker_player_id = %(player)s
               AND battle.ranked_day_start >= %(season_start)s
               AND evidence.battle_timestamp < %(before)s
+        ) AND NOT EXISTS (
+            -- A defense is found only by reading a day's battles in that
+            -- index, so each day up to the reading, as no battle's day starts
+            -- after it was fought, is its own lookup: LIMIT 1 keeps the days
+            -- apart, or the database may read the whole table instead.
+            -- Attacks and defenses in one lookup read every saved battle:
+            -- 500 ms a call at the 12 October 2026 Reset.
+            SELECT 1
+            FROM generate_series(
+                %(season_start)s::timestamptz, %(before)s::timestamptz,
+                interval '24 hours'
+            ) AS day (start)
+            CROSS JOIN LATERAL (
+                SELECT 1 FROM legend_battles AS battle
+                JOIN battle_evidence AS evidence
+                  ON evidence.battle_id = battle.id
+                WHERE battle.ranked_day_start = day.start
+                  AND battle.defender_player_id = %(player)s
+                  AND evidence.battle_timestamp < %(before)s
+                LIMIT 1
+            ) AS defense
         )
         """,
         {"player": player_id, "profile": profile_id,
