@@ -1036,9 +1036,9 @@ class Database:
                 for priority, room in lanes or ():
                     rows += claim(min(room, limit - len(rows)), backfill=(priority,))
                 # Paused by late live work, but for a daily result of each priority.
-                ahead = [] if lanes is not None or not floor else background_pacing.background_floor(
-                    connection, self._jobs_relation, limit, claim)
-                rows = ahead + rows[:limit - len(ahead)]
+                if lanes is None and floor:
+                    rows = background_pacing.background_floor(
+                        connection, self._jobs_relation, rows, limit, claim)
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(

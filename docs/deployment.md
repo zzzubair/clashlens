@@ -1228,7 +1228,9 @@ responses waited under 14 seconds on 2026-10-09) or a statement of the
 worker's own has been blocked on a lock for a second or more (sessions of
 other database roles do not show what they wait on), and while it is 2
 minutes behind none starts but one day result of each priority, which a claim
-that does not take Reset work first takes ahead of its live work: from 06:16
+that does not take Reset work first takes ahead of its live work, keeping one
+place for live work, or as a one-job claim only while another live day result
+of the job's priority runs: from 06:16
 on 2026-10-12 live day results waited hours, and by 09:42 none of about
 50,000 background jobs had run. Army re-decodes stay paused. A few stragglers are not enough: between 16:00 and 18:00 UTC on
 2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first

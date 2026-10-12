@@ -48,8 +48,9 @@ stops it 39% of 05:00 to 06:20, when up to 21,800 live jobs waited.
 
 Pausing is not stopping, though. A claim that finds live work late still
 takes one daily result of each background priority with none running, ahead
-of its live work (``background_floor``), except on a Reset turn. From 06:16 on 12 Oct
-2026 live daily results waited hours and the pause never lifted: by 09:42
+of its live work (``background_floor``), except on a Reset turn, while
+another live daily result runs or the claim keeps a place for one. From
+06:16 on 12 Oct 2026 live daily results waited hours and the pause never lifted: by 09:42
 none of about 50,000 background jobs had run, among them the day-end
 results of the day the Reset ended and the 23:00 recheck pass. Army
 re-decodes stay paused, as their battle locks are what held live work up.
@@ -90,27 +91,41 @@ LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranke
 
 
 def background_floor(
-    connection: Any, jobs_relation: str, limit: int, claim: Callable[..., list[Any]]
+    connection: Any, jobs_relation: str, rows: list[Any], limit: int,
+    claim: Callable[..., list[Any]],
 ) -> list[Any]:
-    """Up to ``limit`` rows ``claim`` found, one daily result of each
-    background priority with no job leased.
+    """Up to ``limit`` jobs: a daily result ``claim`` finds of each
+    background priority with no job leased, then ``rows``, the claim's live work.
 
-    For a claim that holds the permit and found live work late: it takes
-    them ahead of its live work, so background work holds one lane of each
-    priority and live work the rest. Holding the permit, it counts every
-    background claim committed before this one.
+    For a claim that holds the permit and found live work late, so
+    background work holds at most one lane of each priority. It leaves one
+    of the claim's places to its live work, so a claim of one or two takes
+    at most one. A claim of one gives up its live job only while another
+    live or Reset daily result of that job's priority runs, or, having
+    found none, while any does: Reset-first turns keep Reset work running,
+    and live work at 100 keeps a lane of its own. The priorities go in
+    random order in proportion to their limits, so one-job claims run both.
+    Holding the permit, it counts every background claim committed before
+    this one.
     """
-    from .db import PYTHON_BACKFILL_PRIORITY
+    from .db import PYTHON_BACKFILL_PRIORITY, PYTHON_LIVE_PRIORITY
 
     priorities = [PYTHON_BACKFILL_PRIORITY, DAY_RECHECK_PRIORITY]
+    if random.random() * (BACKGROUND_JOB_LIMIT + DAY_RECHECK_JOB_LIMIT) >= BACKGROUND_JOB_LIMIT:
+        priorities.reverse()
     leased = {row[0] for row in connection.execute(
-        f"SELECT DISTINCT priority FROM {jobs_relation}"
-        " WHERE state = 'leased' AND priority = ANY(%s)", (priorities,))}
-    rows: list[Any] = []
+        f"SELECT DISTINCT priority FROM {jobs_relation} WHERE state = 'leased' AND (priority = ANY(%s)"
+        " OR work_type = 'reconcile_ranked_day' AND priority >= %s)", (priorities, PYTHON_LIVE_PRIORITY))}
+    running = {priority for priority in leased if priority >= PYTHON_LIVE_PRIORITY}
+    if limit == 1 and rows:
+        running &= {connection.execute(
+            f"SELECT priority FROM {jobs_relation} WHERE id = %s", (rows[0][0],)).fetchone()[0]}
+    room = max(limit - 1 if rows else 0, int(bool(running)))
+    ahead: list[Any] = []
     for priority in priorities:
-        rows += [] if priority in leased else claim(
-            min(1, limit - len(rows)), backfill=(priority,), work_types=["reconcile_ranked_day"])
-    return rows
+        ahead += [] if priority in leased else claim(
+            min(1, room - len(ahead)), backfill=(priority,), work_types=["reconcile_ranked_day"])
+    return ahead + rows[:limit - len(ahead)]
 
 
 def background_lanes(
