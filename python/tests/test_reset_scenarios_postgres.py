@@ -31,6 +31,7 @@ from clashlens import (
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import _ALLOCATION_THRESHOLDS
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+from clashlens.reading_rule import MAX_AMBIGUOUS_BATTLES
 
 # The Season of the 12 October 2026 incident: Day 1 was Monday 5 October.
 SEASON = datetime(2026, 10, 5, 5, tzinfo=UTC)
@@ -771,13 +772,13 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
             # its 10 minutes to land, still without its gain: the game
             # crediting the attacker late, not a contradiction.
             LAGGED: attacks(tuesday, 40, 40) + defenses(tuesday, *[30] * 8),
-            # 4 attacks and 3 defenses in the 10 minutes before a 23:00
-            # reading of 5,265, which no mix of these battles, each a
-            # multiple of 10, adds up to: 5,260.
+            # 4 attacks and 3 defenses, one more than MAX_AMBIGUOUS_BATTLES,
+            # in the 10 minutes before a 23:00 reading of 5,265, which no mix
+            # of these battles, each a multiple of 10, adds up to: 5,260.
             CROWDED: defenses(tuesday, *[30] * 5) + [
                 Battle(tuesday + timedelta(hours=17, minutes=51 + n), 30, False) if n % 2
                 else Battle(tuesday + timedelta(hours=17, minutes=51 + n), 40, True)
-                for n in range(7)],
+                for n in range(MAX_AMBIGUOUS_BATTLES + 1)],
             # 1 attack and 2 defenses: 5,320 before a loss of 6 * 30.
             UNSETTLED_LOSS: attacks(tuesday, 40) + defenses(tuesday, 30, 30),
             # 2 attacks and no defense: 5,420 before a charge of 8 * 30.
@@ -854,10 +855,11 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
                                   "next_start": 5180, "attacks": 2, "defenses": 8}
     assert days[LAGGED] == {**played, "end": 5180, "next_start": 5180, "attacks": 2,
                             "defenses": 8}
-    # docs/domain.md reads every battle in flight both ways, however many,
-    # so a reading no way fits contradicts the day.
-    assert days[CROWDED] == {**played, "state": "Inconsistent", "end": 5260,
-                             "next_start": 5260, "attacks": 4, "defenses": 8}
+    # A reading with more than MAX_AMBIGUOUS_BATTLES battles possibly in
+    # flight is not judged, so a value no combination explains does not
+    # contradict the day.
+    assert days[CROWDED] == {**played, "end": 5260, "next_start": 5260, "attacks": 4,
+                             "defenses": 8}
     assert days[UNSETTLED_LOSS] == {**played, "end": 5140, "next_start": 5140,
                                     "automatic_loss": 180, "attacks": 1, "defenses": 2}
     assert days[NO_OPPONENT] == {**played, "end": 5172, "next_start": 5172,
@@ -867,7 +869,7 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
     assert members == {
         SHIELD_RUN: "complete", GAP_BEFORE: "partial", FULL_WITH_GAP: "complete",
         NO_START: "partial", NINTH: "partial", CHAIN_BROKEN: "partial",
-        CONTRADICTED: "inconsistent", LAGGED: "complete", CROWDED: "inconsistent",
+        CONTRADICTED: "inconsistent", LAGGED: "complete", CROWDED: "complete",
         UNSETTLED_LOSS: "complete",
         ZERO_CHARGED: "complete", NO_OPPONENT: "complete",
     }

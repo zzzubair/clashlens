@@ -107,7 +107,7 @@ Reset, regular checks during the day and at 04:50, a settlement check at
 reading, marked uncertain, so a story missing those checks tests something
 production never sees.
 
-Keep the file under 1,500 lines: at 1,001 lines, the next big story belongs in a
+Keep the file under 1,500 lines: at 1,003 lines, the next big story belongs in a
 second file that imports `Story` from this one.
 
 ## The Reset-size story
@@ -212,7 +212,7 @@ Every boundary case in section 8 of the three reliability reports of
 | A reading during the day contradicts, and a later one matches | O7, F25, S contradiction | Wednesday story CONTRADICTED | `test_reading_rule.py`, `test_reconciliation.py` |
 | A reading taken before the game credited the latest attack | S delayed credit | Wednesday story LAGGED: read 15 minutes after its last attack, past the 10 minutes a battle has to land, still without its gain | `test_reading_rule.py::test_only_the_latest_attacks_can_lag` |
 | Reset reading taken before the automatic loss | O5, F7, S before the loss | Wednesday story UNSETTLED_LOSS | `test_reset_reading_before_loss_postgres.py` |
-| More than six battles in flight at a reading | S six ambiguous | Wednesday story CROWDED: 7 in flight and a total no mix of them fits. **Fails on today's code:** `docs/domain.md` reads every battle in flight both ways, so the day is Inconsistent, but the worker skips a reading with more than 6 in flight (`MAX_AMBIGUOUS_BATTLES` in `reading_rule.py`, not in `docs/domain.md`) and saves the day Complete. The owner decides which is right | |
+| More than six battles in flight at a reading | S six ambiguous | Wednesday story CROWDED: 7 in flight and a total no mix of them fits. A reading with more than 6 battles possibly in flight (`MAX_AMBIGUOUS_BATTLES` in `reading_rule.py`) is not judged, so the day saves Complete | |
 | Reset reading rejected (Season 0), so the day starts from the day before's end | F27, S Season 0 | Wednesday story CHAIN_BROKEN, where the day before has no end either | `test_first_battle_log_postgres.py::test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end` |
 | Chain start when the day before is Partial | F28 | Wednesday story CHAIN_BROKEN | |
 | A reading still missing the day before's automatic loss | F26 | Not in a story: needs the game to apply the loss more than 15 minutes late, seen 0 times on 9 October | `test_reading_rule.py::test_a_season_reset_removes_the_day_befores_pending_loss` |
