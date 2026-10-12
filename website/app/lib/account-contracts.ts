@@ -27,16 +27,6 @@ export interface AccountSummary {
   verifiedPlayers: VerifiedPlayer[];
 }
 
-export interface SavedPlayer {
-  tag: string;
-  name: string | null;
-}
-
-export interface SavedTagResult {
-  tag: string;
-  saved: boolean;
-}
-
 export interface PrivateGroup {
   groupId: string;
   name: string;
@@ -63,6 +53,8 @@ export interface GroupPlayer {
 
 export interface ListedGroup extends PrivateGroup {
   players: GroupPlayer[];
+  /** When the group was made; the dashboard shows the first one made. */
+  createdAt?: string | null;
 }
 
 export interface GroupList {
@@ -89,6 +81,8 @@ export interface LinkedPlayerCard extends VerifiedPlayer {
   seasonResetPending: boolean;
   /** Live Leaderboard position; null when not on the board. */
   rank: number | null;
+  /** League its newest saved profile names; shown when it has no rank. */
+  league: string | null;
   /** Today's battles so far; `net` only once every one is recorded. */
   today: { net: number | null; attacks: number | null; defenses: number | null } | null;
 }
@@ -243,28 +237,6 @@ export function mapSummary(value: unknown): AccountSummary | null {
   };
 }
 
-export function mapSavedTags(value: unknown): SavedPlayer[] | null {
-  if (!isRecord(value) || !Array.isArray(value.players)) return null;
-  const players: SavedPlayer[] = [];
-  for (const entry of value.players) {
-    const player = asVerifiedPlayer(entry);
-    if (player === null) return null;
-    players.push(player);
-  }
-  return players;
-}
-
-export function mapSavedTagResult(value: unknown): SavedTagResult | null {
-  if (
-    !isRecord(value) ||
-    !isCanonicalTag(value.tag) ||
-    typeof value.saved !== "boolean"
-  ) {
-    return null;
-  }
-  return { tag: value.tag, saved: value.saved };
-}
-
 interface GroupPayload {
   group_id: string;
   name: string;
@@ -329,7 +301,15 @@ export function mapGroups(value: unknown): GroupList | null {
   const groups: ListedGroup[] = [];
   for (const entry of value.groups) {
     const payload = asGroupPayload(entry);
-    if (payload === null || !isRecord(entry) || !Array.isArray(entry.players)) {
+    if (
+      payload === null ||
+      !isRecord(entry) ||
+      !Array.isArray(entry.players) ||
+      !(
+        entry.created_at === undefined ||
+        (isString(entry.created_at) && Number.isFinite(Date.parse(entry.created_at)))
+      )
+    ) {
       return null;
     }
     const players = entry.players.map(mapGroupPlayer);
@@ -339,6 +319,7 @@ export function mapGroups(value: unknown): GroupList | null {
       name: payload.name,
       tags: payload.tags,
       players: players as GroupPlayer[],
+      createdAt: (entry.created_at as string | undefined) ?? null,
     });
   }
   return { groups, season: value.season };
@@ -411,8 +392,10 @@ function asLinkedPlayerCard(
 ): LinkedPlayerCard | null {
   if (!isRecord(value)) return null;
   const { clan, state, reason, trophies, season_reset_pending, rank, today } = value;
+  const league = value.league ?? null;
   if (
     !isNullableString(clan) ||
+    !isNullableString(league) ||
     !LOOKUP_STATES.includes(state as PlayerLookup["state"]) ||
     (reason !== null &&
       !LOOKUP_REASONS.includes(reason as NonNullable<PlayerLookup["reason"]>)) ||
@@ -437,6 +420,7 @@ function asLinkedPlayerCard(
     trophies,
     seasonResetPending: season_reset_pending,
     rank: rank as number | null,
+    league,
     today:
       today === null
         ? null

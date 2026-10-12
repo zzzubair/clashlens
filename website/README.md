@@ -7,7 +7,7 @@ The Live Leaderboard's Find your rank search accepts player names and tags.
 A tag typed with `#` opens its row directly when that tag is on the board, or
 links to that player's page when it is not; other searches show up to 20
 tracked players whose name matches, or whose tag matches without the `#`, with
-their whole-board ranks and trophies and a prompt to narrow larger results.
+their whole-board ranks and trophies, noting when only the first 20 are shown.
 Selecting a player loads their current page, highlights the row and scrolls it
 into view, adding up to 5 players from the next or previous page when the row
 sits at a page edge. The page is located again when
@@ -30,13 +30,16 @@ that arrives after that limit still replaces the waiting message. The Check
 progress link also works without JavaScript. A tracked player whose newest
 profile was rejected is not waiting, so the page explains why there are no
 current results and rereads saved data once a minute while visible instead of
-once a second. For a Legend I profile with Season ID 0 and no Legend battle
-this Season it shows that profile's name, tag, clan and trophies, says the
-player hasn't played a Legend League battle this Season, and shows no daily
-log. A rejected newest profile is explained even when older results were
-accepted; those stay as saved history, never as current trophies, until a
-lookup shows an accepted profile again. Season 0
-trophies stay out of search, the Live board and groups.
+once a second. A Legend I profile at 5,000 with no Legend battle this Season,
+accepted or naming Season ID 0, whatever Season it names, needs no explanation: the
+player has not played yet, so their normal page shows them at 5,000 with a
+daily log of 0/0 days from 5,000 to 5,000, and every board ranks them at
+5,000. Another Legend I profile with Season ID 0 and no Legend battle this
+Season shows that profile's name, tag, clan and trophies and says the player
+hasn't played a Legend League battle this Season. A rejected newest profile
+is explained even when older results were accepted; those stay as saved
+history, never as current trophies, until a lookup shows an accepted profile
+again. Season 0 trophies stay out of search and groups.
 
 Player profiles reread their own data in the background: these progress checks
 and after Refresh, including when a phone wakes mid-wait. When one of those rereads
@@ -53,58 +56,77 @@ Name results include active players or players with recorded history. Empty
 day records marked `player_not_eligible` do not count as history unless they
 contain battles. A full current profile and Refresh appear only when the displayed
 player response itself confirms active tracking, including after Refresh. Other
-pages show the eligibility explanation or lookup error and any saved history.
+pages show the eligibility explanation or lookup error and any saved history. A
+player outside Legend I, or not confirmed in it, is named by its newest saved
+profile, with that profile's league when known, and shows no current Season
+unless it has a saved Legend day this Season.
 Saved daily history combines available season, recent and current-day records
 without duplicate dates. Records with unconfirmed season membership show Date
 only instead of a season day number. This adds no weekly recheck or clan discovery
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
-Tracked players' current pages show a Trophy trend for the last 7 and 14 finished
-Legend days of the current Season. Each window ends at the latest Reset at 05:00
-UTC and excludes today. Early in a Season a window holds only the finished days
-so far and its title says so, such as Last 7 days (3 so far); before the
-Season's first finished day the trend is hidden. The cards sum complete saved
-daily trophy changes. Missing, partial or uncertain days and unknown changes are
-omitted. Days counted shows the coverage, such as 5 of 7; no counted days shows
-Unavailable, while a known zero displays 0. Selecting a past Season hides these
-cards. The player page explains itself with titles, labels and short counts
-rather than help paragraphs.
+On a tracked player's current page only two things are live: the current
+trophies next to the name and the Daily Legend log. Everything else uses
+finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
+no Trophy trend section; for the unused
+[`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 6 in the
+[dashboard design](../docs/dashboard.md). The player page explains
+itself with titles, labels and short counts rather than help paragraphs.
+
+The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
+trophy change, end of day and Reset rank. A finished day's end of day is the
+next day's start, from any saved record of that day, even one the log leaves
+out, such as a day after the player left Legend I; it carries the day's Verified, Calculated or Uncertain dot.
+Only the latest finished day, with no next day saved yet, uses its start plus
+its trophy change plus any weekly or Season reset at its closing Reset; an
+older day without the next day's start shows Unavailable. When that sum
+disagrees with the next day's start, the end shows the next day's start and
+the whole day is Uncertain, its badges and explanation both, which says so,
+such as Battles add up to 5,050; next day started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
+automatic defense loss at Reset shows it, such as -32 automatic loss, so
+attacks minus defenses minus that loss equals the trophy change. A weekly or
+Season reset is not part of the trophy change and shows under it, such as +80
+weekly reset.
+Today's end of day and Reset rank read After Reset.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
-trophies; the current Season's leads with
-the Clash Lens rank at the latest Reset this Season (the page has no live rank),
-shown as Not ranked yet when that Reset's board has no rank for the player, and
-current trophies. Below that: hit rate, the percentage of all attacks that got
-three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
-trophies per day on offense and defense, per attack and per defense. A note
-names stars of unknown battles only when there are some.
+trophies. The current Season's box leads with the Clash Lens rank at the
+latest Reset this Season, shown as Not ranked yet when that Reset's board has
+no rank for the player, and trophies at the latest Reset, the end of day of
+the day that Reset ended, with that day's dot. Before the Season's first
+finished day, trophies read No finished day yet. Below that: hit rate, the
+percentage of all attacks that got three stars; attacks and defenses by 3, 2,
+1 and 0 stars; and trophies per day on offense and defense, per attack and per
+defense. A note names stars of unknown battles only when there are some.
 The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
-Per-day averages on offense count only days with attacks, and on defense only
-days with defenses, so shielded or unplayed days don't lower them. A past
-Season's box uses its saved summary and, when coverage is partial, says how many
-of the 28 days are recorded; a Season known only from in-game history shows just
-the rank, which reads Not published yet until the game publishes it, and
-trophies. The current Season's box uses recorded battles and can show This
-Season, Last 7 days or Last 14 days, with one short line of dates and days saved.
-Recent windows include the current Legend day and the previous 6 or 13 days, but
-never days before the current Season; early in a Season the option says how many
-days so far, such as Last 7 days (2 so far). Per-day averages leave out the
-Legend day in progress; per-battle averages use individual recorded battles.
-Automatic Reset losses and missing or unplayed battles are excluded. Empty samples show Unavailable for rates and
-averages. Partial history and conflicting reports are flagged; retained
-past-Season totals cannot fill missing battle details.
+The current Season's box counts only finished Legend days, never the day in
+progress; its one short line gives the dates and finished days saved. The box's
+Season menu, in the same bold style as the Analytics filters, lists the current
+Season and each past Season with Clash Lens days and opens the chosen one. Counts,
+stars, hit rate and averages all use every recorded battle of those days,
+leaving out only days without battles that saved profiles prove were before
+the player signed up. Offense per day is trophies gained from attacks divided by the saved
+finished Legend days, battles or not, and defense per day is trophies lost on defense the same
+way; per attack and per defense divide by those days' recorded battles.
+Automatic Reset losses are not part of defense averages. Empty samples show
+Unavailable for rates and averages. Partial history and conflicting reports
+are flagged; retained past-Season totals cannot fill missing battle details. A
+past Season's box uses its saved summary, with per-day averages over every
+recorded Legend day, and when coverage is partial it says how many of the 28 days are
+recorded. A Season known only from in-game history shows just the rank, which
+reads Not published yet until the game publishes it, and trophies.
 
-With JavaScript enabled, changing the period uses battle details already loaded with
-the player page and makes no request or additional database read. It adds no stored data; the
+The box adds no stored data; the
 [saved-history limits](../docs/history-retention.md) still apply. The calculations
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
-The separate Older Seasons table shows saved finishes from January 2025 up to
-the Season that ended on 7 September 2026, newest first, with three columns:
+The separate Older history table, closed until the visitor opens it, shows
+saved finishes from January 2025 up to the Season that ended on 7 September
+2026, newest first, with three columns:
 Season ended, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
@@ -113,7 +135,7 @@ even when a trophy count or rank is missing: those cells say "Not recorded"
 instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
 in-game row and gets one linked credit line. This table needs JavaScript and
 loads after the rest of the page; absent or unavailable history hides only the
-table. It is separate from the Seasons links that open Clash Lens's saved days.
+table. It is separate from the Season menu that opens Clash Lens's saved days.
 
 Opening a tracked player's profile with JavaScript enabled automatically submits
 the existing Refresh request once when the server reports its saved check is
@@ -149,6 +171,88 @@ started Refresh that fails, becomes unavailable or can't be checked says it
 couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
+
+The Dashboard at `/dashboard` is for signed-in users, and only exists while
+`CLASHLENS_DASHBOARD_ENABLED=true`; otherwise it is a page-not-found page with
+no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
+not signed in see a blurred preview and the sign-in buttons. The card designs
+are in the [dashboard design](../docs/dashboard.md).
+
+Signed-in users get one page: account tabs for their linked players (name,
+trophies, rank, net today), then a divider with "⚙ Customise dashboard" and a
+3-column grid of Small (1 column), Medium (2) and Large (full row) cards; empty
+grid slots stay empty. The cards follow the selected tab, and one layout serves
+every account. An account outside Legend I gets the Legend I only message
+instead of cards and Customise; one not tracked yet gets the player page's
+status message; with no linked player the page shows how to link one. On a
+phone every card is full width, the Customise bar stays at the bottom and
+dialogs open as bottom sheets.
+
+All 13 cards are built. Each card reads saved player pages, tracked
+leaderboards and groups through the private API; a player page is read once
+per load however many cards use it, and a card whose reads fail says it could
+not be loaded without taking the other cards down. A page left open past the
+Reset hides the day's numbers behind a new-day notice until it reloads.
+
+Bases you attacked rates each base Hard / Average / Easy in the mode its
+settings choose. Held % compares the base's held share today with today's held
+share across tracked Legend players (Average is within 10 points); Trophies
+compares the trophies it gave up a defense today with the fixed Legends −32 a
+defense (`LEGENDS_DEFENSE_LOSS`; Average is within `BASE_TROPHY_BAND`
+trophies). Under 3 defenses is too early.
+
+The first visit offers "Use our layout" or "Build my own". Customise moves
+(drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
+card settings and the group picked on Group watch save at once. A user is on
+the default layout (`DEFAULT_LAYOUT` in
+[`dashboard.ts`](app/lib/dashboard.ts)), which follows each release, or on
+their own. Settings are saved in the account's existing 4,096-byte preferences
+box, so there is no database change. The Legend clock uses the device's time
+zone.
+
+Legend day and Bases you attacked share one read of `GET /v1/players/{tag}/today`
+on the private API, for the selected account only. Its board of every
+tracked player's trophies and today's attack and defense counts is read in one
+query and kept for a minute, so all dashboards share one read per minute.
+Opponents' defenses come from their own published daily logs, so an untracked
+opponent shows only your hit. Until the account's own log for today is saved,
+Bases you attacked says so and Legend day shows – for its attack and defense
+counts, rather than 0.
+
+The army cards read `GET /v1/players/{tag}/armies?lens=defense|offense&days=N`
+on the private API, through `/resources/players/{tag}/armies`, which their day
+switches call (signed-in users only, behind the same switch). A finished day
+counts only when its army records are complete (for Armies on offense, also
+counted by the worker) and the player's newest saved daily log for it is
+complete, and a finished Season's records are deleted 7 days after it ends, so
+early in a Season, or for a player tracked only lately, a long window covers
+fewer days and the card says how many have army data. A defense's army type is the attacker's army.
+Armies on offense shows your hit rate with each army type, up to 3 and then
+Other armies, for 3 or 7 days, beside every tracked Legend player's hit rate
+with that army in grey, from the worker's saved attack counts for each day
+(about 35,000 rows a day), kept in the API's memory until the day is counted
+again, so only a day not yet seen is read. Armies on defense also takes a
+Custom 1–28 days and shows your own numbers only: a Legends average against
+each army needs saved defense counts from defenders' own reports, which
+Clash Lens does not keep (see [dashboard.md](../docs/dashboard.md)).
+
+Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
+see their crews (at most 5) and can create one at `/crews/new` with a name, a
+number of places and which linked accounts join. A crew's page at
+`/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,
+Best defenders, Worst defenders and Highest streaks, the last four switched
+between Today, Last 7 days and Season (the default). Each card shows its top 5
+and links to the full board at `/crews/<id>/boards/<board>`, which also lists
+who is not on it and why. Invite on a crew's page makes or reuses the clasher's
+48-hour link and shows it with Copy and Share; a new crew opens with it. The
+link, `/crews/join/<code>`, shows the crew and which of the clasher's linked
+accounts can join, and "Link another account" goes through
+`/account/verify-player?return=/crews/join/<code>` and comes back. Members at
+`/crews/<id>/members` lets clashers add or remove their own accounts and leave,
+the owner make or remove admins, and the owner or an admin kick accounts. Edit
+crew at `/crews/<id>/settings` renames, resizes (never below the places in
+use), turns off links, hands over and deletes; members only see that the owner
+and admins change settings.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
@@ -358,13 +462,15 @@ public `/users/:username` profile, including after successful player linking.
 Only the owner sees edit, sign-in connection and account-linking controls.
 The linking form includes the in-game API token instructions.
 Each linked account on a profile is one card that opens its player page: name,
-tag, clan, current trophies, Live Leaderboard rank ("Unranked" when off the
-board) and today's net so far with attacks and defenses done. The one profile
+tag, clan, current trophies, Live Leaderboard rank (when off the board, the
+league its newest saved profile names, or "Unranked" when none is known) and
+today's net so far with attacks and defenses done. The one profile
 read returns every card. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
-last accepted profile (for example after leaving Legend I), its rank whenever
-it is on the board, and "Unknown" or "Not available yet" where nothing valid is
-saved.
+last accepted profile, its rank whenever it is on the board, and "Unknown" or
+"Not available yet" where nothing valid is saved. An account outside Legend I,
+or not confirmed in it, shows its newest saved profile's trophies instead, as
+its player page does.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change
@@ -372,7 +478,7 @@ requests to support. Account setup preserves names typed before the page's
 JavaScript loads and validates the current form values when submitted.
 Search accepts Clash Lens usernames (with or without `@`),
 display names and linked Clash of Clans player names. Results expose only public
-names, usernames and linked-account counts, never saved players or private groups.
+names, usernames and linked-account counts, never private groups.
 Clash Lens profiles in suggestions and results have a tinted background and a
 "Clash Lens profile" label so they are not mistaken for game players.
 Every page except home, including error pages, has the same search behind a
@@ -450,9 +556,13 @@ pixel images of `mark-cl-block.svg`, in that order. `public/apple-touch-icon.png
 and `public/apple-touch-icon-precomposed.png` are 180 × 180,
 `public/apple-touch-icon-120x120-precomposed.png` is 120 × 120, and
 `public/icon-192.png` and `public/icon-512.png` are listed in
-`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, which fills
-the whole square so phones can round the corners themselves. They were rendered
-from the SVGs with headless Chrome. `public/images/og-clashlens.png` is the
+`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, the CL
+mark on a sky blue square, which fills the whole square so phones can round the
+corners themselves. The manifest's Android crop-to-shape ("maskable") icon is
+`public/icon-maskable-512.png`, from `mark-cl-block-square-maskable.svg`, whose
+letters fit inside the centre circle Android never crops. They were rendered
+from the SVGs with headless Chrome, each drawn at its exact size, with no
+transparency. `public/images/og-clashlens.png` is the
 1200 × 630 link preview image used by player pages, built from the wordmark.
 All are served by the existing static-file handler, with no API calls or database
 queries.

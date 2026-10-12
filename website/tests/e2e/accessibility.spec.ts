@@ -7,11 +7,10 @@ import {
 } from "./helpers/account";
 
 for (const [name, path, heading] of [
-  ["home", "/", "Legend League"],
+  ["home", "/", "Clash Lens"],
   ["player", "/players/%232PP", "Synthetic Clasher 001"],
   ["leaderboard", "/leaderboards/tracked", "Live Leaderboard"],
   ["login", "/login", "Sign in"],
-  ["about", "/about", "About Clash Lens"],
 ] as const) {
   test(`${name} has no serious or critical accessibility violations`, async ({
     page,
@@ -109,7 +108,7 @@ for (const theme of ["light", "dark"] as const) {
   test(`open header search has a visible focus ring and border in ${theme} mode`, async ({
     page,
   }) => {
-    await page.goto("/about");
+    await page.goto("/blog");
     await useTheme(page, theme);
     await page.getByRole("button", { name: "Search players" }).click();
     const input = page.getByRole("searchbox", {
@@ -145,7 +144,8 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
     }
     await useTheme(page, theme);
-    const input = page.getByLabel("Add player").first();
+    await page.getByRole("link", { name: "Add player" }).first().click();
+    const input = page.getByLabel("Player tag").first();
     await expectVisibleBorder(input);
 
     await input.focus();

@@ -396,6 +396,17 @@ the worker logs a `late_battle_sweep` line with status `complete` once every
 player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
+Every five minutes the worker also recounts each player's attacks and attack
+destruction this Season into `live_attack_tallies`, which orders equal trophies
+on the Live Leaderboard, and logs a `live_attack_tallies` line with status
+`complete` and how many players' counts changed, or `failed`; the board keeps
+the last counts until the next one succeeds. On the same timer it saves into
+`live_unplayed_profiles` each tracked Legend I player the Live Leaderboard
+ranks at 5,000 because they have not played this Season, and logs a
+`live_unplayed_profiles` line with status `complete`, how many players it
+found and how many rows changed, or `failed`; the board keeps the last list
+until the next one succeeds. On 11 October 2026 the search found 1,328 players
+and took about 6 s with its pages read from disk.
 
 A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
 points at the archive or the uploads process: see
@@ -447,9 +458,9 @@ Never delete saved responses or upload rows to shrink the wait.
 **Recovered:** `oldest_pending_upload_age_seconds` is back under two minutes and
 the uploads alert's Discord recovery message arrives.
 
-### Armies page empty
+### Analytics page empty
 
-The Armies page reads only finished Legend days. Each day passes through
+The Analytics page reads only finished Legend days. Each day passes through
 these steps, all run by the worker:
 
 1. At Reset the collector saves each tracked player's profile and battle log,
@@ -473,11 +484,25 @@ these steps, all run by the worker:
    `army_analytics_battle_facts_with_armies`.
 4. Within 10 seconds of a day's facts and frozen leaderboard both being saved,
    the worker's maintenance timer counts `army_analytics_rank_band_totals`:
-   each Legend day's totals for the 17 rank bands covering ranks 1-10,000 of
-   that Season's newest leaderboard. Top N and rank-band views add these up.
-   Streak views, trophy ranges, ranges ending before the newest day, and any
-   day rebuilt since its totals were counted read facts instead. The worker
-   log shows each count as an `army_rank_band_totals` event.
+   that day's totals for the 17 rank bands covering ranks 1-10,000 of the
+   day's own leaderboard, as published then. Top N and rank-band views add
+   these up and never read facts; army types use the same leaderboards. Each
+   run counts one day of the newest Season, newest first, in about a minute.
+   Counts and army day builds never overlap: a run that finds a build going
+   counts nothing, and a build waits for a running count. A corrected
+   leaderboard is never counted again; a day whose facts are rebuilt is, and
+   the page serves its older totals until then, except that a day a battle
+   moves out of loses its totals at once. Until a day is counted,
+   `season=current` views leave it out and other views of it are unavailable.
+   The worker log shows each count as an `army_rank_band_totals` event naming
+   the day and leaderboard.
+5. The same timer gives each saved distinct army its
+   [army type](domain.md#army-types), 50,000 a run after a rules change, then
+   saves one completed day's attack counts per attacker and distinct army in
+   `army_package_day_counts`, outside 04:30-07:00 UTC. The
+   Armies view stays unavailable until that labelling finishes. The worker
+   log shows each run as an `army_types` event; a `failed` run is retried
+   after 10 minutes.
 
 **First checks**, read-only:
 
@@ -552,9 +577,49 @@ queued or running wait for a later run. A request that failed while its
 result is still the latest is not queued again but listed, at most
 `--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed
 ending Reset check never recalculated its day, which left 4,705 ended days
-`Live` on 2026-10-03. A day saved `Live` also queues one recalculation of
-that day, `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its
-Reset at the lowest priority; it does nothing once the day is finished. Before
+`Live` on 2026-10-03. A day saved `Live`, or saved at all before two hours
+after its Reset, also queues one recalculation of that day,
+`reconcile:day-end:<player>:<day>:<rule>`, due two hours after its Reset at
+the lowest priority, so every tracked player's ended day is calculated once
+more with the readings and battles saved since: about 13,000 jobs a Reset,
+run when no other work waits, or one at a time while live work is 2 minutes
+behind. New evidence also queues each ended day
+it can change (`queue_refresh.py`), at priority 26 in its own lane: each saved
+profile or battle-log response the player's newest ended day
+(`reconcile:reading:` and `reconcile:log:`), each successful unchanged
+battle-log check after a profile read since the last one the day that ended
+at the latest Reset (`reconcile:check:`, queued by the collector), and each
+battle report added, changed or corrected, never one repeated unchanged, the
+battle's own day and the day before it for both players
+(`reconcile:report:`). A battle changes both players' profiles and logs and
+brings two reports, so about 104,000 battles a day make up to about
+1,250,000 such pieces of evidence. A day usually waits in one such job at
+most: evidence for a day whose job has not started queues nothing, as that
+job reads the newest evidence when it runs, and evidence saved while it runs
+queues one more. Two saves for the same day committing at the same moment
+can each queue one, and both run. From 16:40 to 17:19 UTC on 9 October 2026 the evidence
+queued about 535 jobs a minute for 3,782 player days; replayed with this
+rule and 4 at a time, about 410 a minute, none waiting over 10 seconds. They
+are removed with other finished jobs after 48 hours. Every
+active player's last two ended days are also queued twice a day in the same
+lane, once the day-end recheck has finished and from 23:00 UTC, never from
+04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
+time at 13,000 players, and evidence for such a day merges into its waiting
+job only once that job is due, which then counts as a recheck for evidence.
+Each pass is queued in full, in one
+statement, so a Reset or restart drops none; its jobs are due evenly over 4
+hours, each with that due time as its creation time. In the lane a recheck
+for new evidence goes before every due daily recheck, which fill only what
+evidence leaves, in the order they came due (migration 0100). From 11:30 to
+16:50 UTC on 2026-10-11, with daily rechecks taken in the order they came
+due, evidence waited behind every one due before it: 55 minutes to 2 hours on
+average, against 1 to 15 minutes on 2026-10-10, as the pass added about 105
+jobs a minute to 50 to 90 for evidence and the lane finished 140 to 230.
+The order changes only which job waits, not how many the lane finishes, so a
+pass still ends when the lane's backlog clears. Outside the
+claim, job creation times are read only by the backlog metrics, which count
+a job from the later of its creation and due time. The worker logs each
+run's count as `daily_recheck`. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.
@@ -594,16 +659,16 @@ against about 2 GB for a whole day at once. Reading two days took 0.03 s
 for Top 100 and 0.93 s for all tracked players.
 
 **Recovered:** `army_analytics_completed_days` lists the backfilled days.
-Check the Armies page against the
+Check the Analytics page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
 
-**Repair campaign:** one saved list, per Season, of every result four past
+**Repair campaign:** one saved list, per Season, of every result three past
 fixes change, held back from republishing until a single coordinated rebuild
 finishes. `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
-that Season that the 2-star/55% payout, five-minute day move, catalogue v2
-decodes and accepted Reset settlements change, plus each affected player's
-first saved day of the next Season, to recalculate, and which are excluded
+that Season that the 2-star/55% payout, five-minute day move and reports with
+no saved army change, plus each
+affected player's first saved day of the next Season, to recalculate, and which are excluded
 (raw response gone, Season finalized, correction window closed). Later
 next-Season days are left to the repair itself. `--campaign register` saves
 that list as a dormant campaign that holds nothing and queues nothing;
@@ -626,7 +691,8 @@ each player whose first saved battle log was saved on Day 1, from Day 1, and
 each player first tracked later whose battles reach an earlier day, from
 that day. `--first-logs queue --season <Season ID>` queues up to `--max-jobs`
 of them (default 100), at backfill priority: a worker thread runs them only
-when no higher-priority work that thread can claim is due; run it again until
+when no higher-priority work that thread can claim is due, or one at a time
+while live work is 2 minutes behind; run it again until
 `left_to_queue` is 0. Each player
 is queued once for their earliest saved battle log. A Day 1 waits for the
 player's accepted Legend I profile naming the Season, which its Season-rule
@@ -683,7 +749,10 @@ day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
 every such board in one run, at most one per Reset (28 per Season), at the
 normal publication priority, not backfill, until every board correction of
-the Season has finished (`boards_rebuilding`); then `summaries`, storing each saved Season summary
+the Season requested by the time this step began has finished
+(`boards_rebuilding`; one requested since, as late battles reach a Live board
+or pacing reaches a past one, runs as ordinary work and is not waited for);
+then `summaries`, storing each saved Season summary
 again from its days, since a summary's final rank reads the Season's last
 board, then each one that still differs from its days, as when a board
 correction since moved an earlier player's final rank, reading every summary
@@ -708,6 +777,45 @@ Reset's newest generation shows `snapshot_state` and `army_state` as
 `published` (see [Reset publication missing](#reset-publication-missing)).
 The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
+
+To recalculate only the players a rule change can affect, add
+`--players day-1-or-unplayed` to each of the three commands. It takes the
+players with saved days of the Season whose Day 1 was saved Inconsistent,
+the only Day 1 results the official Season-end total check (#441) can
+change, and those whose newest profile shows Legend I at 5,000 (accepted,
+or naming Season 0 before sign-up) with no Legend battle of the Season
+saved, whose days rank at 5,000 with no battles once that rule is deployed.
+If PR #451 (never-played players ranked at 5,000) has not deployed when
+this repair runs, run the scoped repair again after it deploys, so this
+group is recalculated under that rule; its new rule revision gives it a
+fresh receipt. It chooses the players when its
+first `queue` runs and saves that list on its receipt, so a player whose
+days change meanwhile stays in it; `preview` shows how many (`players`)
+before anything is queued. Each chosen player's job
+recalculates every saved day of the Season from the first, as above; the
+`inputs`, `boards` and `summaries` steps are the full repair's, except that
+summaries are stored again only for the chosen players before the check of
+every summary. It keeps its own receipt, so a full repair of the same
+revision afterwards still recalculates every player.
+
+**Known limits of refresh triggers:** these cases queue no recalculation of
+their own. A battle report is compared with that side's report before it, in
+time, length, stars, destruction and trophies, so one repeating it exactly
+queues nothing. A profile read before the latest Reset is not covered by a
+later unchanged battle-log check, so after failed calculations leave an older
+newest saved day, that reading waits. A corrected battle's own day for the
+other player is queued only through that player's saved day, not through
+their newest ended day. A refresh that needs the day's saved end reading is
+skipped while that reading is missing. A report or reading of the previous
+Season's days queues them only until 7 days after that Season ended, when it
+stops taking corrections. A correction that changes only a day's automatic
+defense loss, not its state or trophy totals, does not recalculate the day
+after it, which judges its readings against that loss. The 07:00 day-end recheck of each day of the Reset
+and the twice-daily recheck of each player's last two ended days judge those
+days again within a day; an older day waits for the 05:30 late-battle check,
+which looks back 7 days, or a Season repair; a correction more than 7 days
+old within the current Season escapes these checks until the planned nightly
+recalculation pass.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
@@ -735,7 +843,9 @@ podman exec clashlens-python-worker \
 `preview` writes nothing and lists each of that Season's Reset boards whose
 frozen input still ranks such a player, with how many went missing
 (`profile_not_found`), or whose saved entries differ from those rules in
-trophies or in being marked proven, with how many (`late_battles`). `queue` adds one correction for
+trophies or in being marked proven, with how many (`late_battles`), or that
+orders equal trophies by an older rule than the
+[Daily boards' tie order](domain.md#live-leaderboard-ordering) (`reordered`). `queue` adds one correction for
 each, rebuilding its leaderboard and army records; `correction` reads `queued`, or
 `already_queued` when one was waiting. The worker starts each correction as
 any other: the newest Reset at once, an older one after the 04:30–07:00 UTC
@@ -749,6 +859,44 @@ finished only when each listed Reset's newest `generation` shows
 [Reset publication missing](#reset-publication-missing). A board frozen after
 the deploy needs nothing. Only Resets inside the given Season are read, so the
 Season before is never touched.
+
+**Army rebuild after the unit catalogue v3 re-read:** while unit catalogue v3
+re-read the October 2026 Season's armies (migration 0089, stopped by 0091), a
+Reset could freeze a battle side whose only saved army was under v2 before
+frozen builds read any saved army. Its army records show that side as unread
+(`decode_missing`), leaving it out of the Analytics page and Season army
+summaries. A rebuild of the Reset now reads that side's newest saved army.
+Deploy order: migration 0091 can go before or after the background-job cap
+change; this correction runs only once that cap is live, and never from 04:00
+to 07:00 UTC (`queue` refuses in that window):
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies queue --max-jobs 2 --season 1791176400
+```
+
+`preview` writes nothing and lists each of that Season's Resets with such
+sides, with how many (`sides`), counting a side only when its newest saved
+army was read (a failed reading restores nothing); their total is the size of
+the correction, and the number of listed Resets is how many rebuild. It was
+not measured before release, so read it from `preview`. `queue` adds one
+army-only operator correction for each listed Reset while fewer than
+`--max-jobs` corrections of the Season wait or rebuild (`in_flight`);
+`correction` reads `queued`, `already_queued`, `rebuilding` (a newer build
+not yet published) or `not_queued` (a preview, or the cap reached). The
+worker starts each as any other correction, an older Reset also 6 hours after
+its last rebuild, except that no operator correction starts, and no worker
+claims its builds, from 04:00 to 07:00 UTC, for any Reset including the
+newest; one queued at 03:55 waits until 07:00. The same holds for its
+leaderboard and statistics builds when a revised day result joins it. Those
+builds and its army build run at background priority; corrections not
+queued here keep their usual priority and hours. The army build takes no
+battle lock and, like every army day build, holds the one army-build lock
+for about 80 seconds. Run `queue` again after
+those finish until `resets` is empty; a second run while one is waiting
+queues nothing more.
 
 ### Raw-response cleanup failed
 
@@ -836,7 +984,7 @@ This alert fires when the website's public Daily leaderboard page does not
 show the latest Reset's frozen leaderboard by 05:30 UTC, including when that
 page cannot be read then, and when an earlier Reset is still unpublished. The **Reset
 behind its 05:30 target** early warning comes first and names the stage:
-collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
+collection not ended at 05:12, Reset work projected past 05:25 at 05:15, or
 inputs not frozen at 05:25.
 
 **First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
@@ -852,8 +1000,20 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 
 The second shows, for the latest Resets, when collection ended, when the Reset
 readings were processed, when the board's inputs froze, when it was saved as
-published and when the website first showed it, with the board's input states
-and how many of the Reset's boundaries were settled.
+published and when the website first showed it, with the board's input states.
+Its `settlement` column is no longer filled: nothing proves a Reset settled.
+
+An army build that failed with `boundary army publication dependency is not
+terminal` on a board whose `army_state` is `ready` needs no action: about every
+10 seconds the worker checks each member still army-pending again, and once
+none is left it queues that build again as a new job. The failed job stays
+failed; once the new one has published, accept it with `./ops failed-items
+--accept-job-id ID --reason 'army build ran again as a new job' --apply` so the
+failed-work count stops counting it.
+
+A board whose `army_state` is still `pending` for a Reset more than a day old
+needs no action either: the worker checks each of its army-pending members the
+same way, and queues the board's army build once none is left.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
@@ -893,6 +1053,24 @@ battles have stayed untracked for over an hour, not counting players whose
 saved profile showed a lower tier after their latest such battle, such as
 Monday demotions.
 
+### Battles may be in the wrong day
+
+**What it means:** a battle report belongs to the Legend day of its stamp
+less five minutes. That holds because the game lets no new-day attack start
+until about 05:07:20 and every ended-day attack had ended by 05:03:38 at all
+11 Resets from 29 September to 9 October 2026; the Reset sweep also reads
+every profile in that gap. A saved day of the current or previous Legend day
+with 9 attacks or 9 defenses, or a report stamped 05:03:40 to 05:07:00 after
+either day's Reset, means that gap moved.
+
+**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then
+look at the days and reports the alert counts.
+
+**Fix or escalate:** escalate; the battle-day rule and the sweep's profile
+window need re-measuring before any change. Nothing is moved automatically.
+
+**Recovered:** neither sign appears in the current or previous Legend day.
+
 ### Season final ranks missing
 
 Ended-Season pages show "Not published yet" until Clash of Clans league history
@@ -925,9 +1103,10 @@ SSH, it is powered off or offline.
 ### When alerts themselves fail
 
 The monitoring warning means a disk, restart-history, Live Leaderboard,
-Reset publication or untracked battler check has been unreadable for ten minutes. Run
+Reset publication, Reset progress, untracked battler or battle-day check has
+been unreadable for ten minutes. Run
 `journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`
-to see which diagnostic repeats. Its recovery only means all five checks can
+to see which diagnostic repeats. Its recovery only means all seven checks can
 be read again; a disk, Live Leaderboard or publication problem they then
 report keeps its own alert open.
 

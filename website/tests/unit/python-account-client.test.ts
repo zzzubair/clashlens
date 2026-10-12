@@ -267,66 +267,6 @@ describe("server-only Python account client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("lists, adds, and removes saved tags with exact payloads", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ players: [{ tag: "#2PP", name: "Nova" }] }))
-      .mockResolvedValueOnce(jsonResponse({ tag: "#2PP", saved: true }))
-      .mockResolvedValueOnce(jsonResponse({ tag: "#2PP", saved: false }));
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-
-    await expect(client.listSavedTags()).resolves.toEqual([
-      { tag: "#2PP", name: "Nova" },
-    ]);
-    await expect(client.addSavedTag("2PP", IDEMPOTENCY_KEY)).resolves.toEqual({
-      tag: "#2PP",
-      saved: true,
-    });
-    await expect(client.removeSavedTag("#2PP", IDEMPOTENCY_KEY)).resolves.toEqual({
-      tag: "#2PP",
-      saved: false,
-    });
-
-    const [addUrl, addInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
-    expect(addUrl).toEqual(
-      new URL("/v1/account/saved-tags", "http://python-fixture.test/"),
-    );
-    expect(addInit.method).toBe("POST");
-    expect(decodeBody(addInit)).toBe('{"tag":"#2PP"}');
-    const [removeUrl, removeInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
-    expect(removeUrl).toEqual(
-      new URL("/v1/account/saved-tags/%232PP", "http://python-fixture.test/"),
-    );
-    expect(removeInit.method).toBe("DELETE");
-  });
-
-  it("can read only the profile's saved state through the signed account API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ players: [] }));
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-    await expect(client.listSavedTags("#2PP")).resolves.toEqual([]);
-    expect(fetchMock.mock.calls[0][0]).toEqual(
-      new URL("/v1/account/saved-tags?tag=%232PP", "http://python-fixture.test/"),
-    );
-  });
-
-  it("rejects invalid saved tags before contacting the service", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-
-    await expect(client.addSavedTag("!!!", IDEMPOTENCY_KEY)).rejects.toMatchObject({
-      status: 422,
-      payload: { error: "invalid_tag" },
-    });
-    await expect(client.removeSavedTag("!!!", IDEMPOTENCY_KEY)).rejects.toMatchObject({
-      status: 422,
-      payload: { error: "invalid_tag" },
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("lists, creates, updates, and deletes groups with exact payloads", async () => {
     const fetchMock = vi
       .fn()
@@ -339,6 +279,7 @@ describe("server-only Python account client", () => {
               name: "Favorites",
               tags: ["#2PP"],
               players: [{ tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" }],
+              created_at: "2026-10-01T10:00:00+00:00",
             },
           ],
         }),
@@ -369,11 +310,12 @@ describe("server-only Python account client", () => {
               state: "tracking",
             },
           ],
+          createdAt: "2026-10-01T10:00:00+00:00",
         },
       ],
     });
     await expect(
-      client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY, "groups"),
     ).resolves.toMatchObject({ groupId: GROUP_ID });
     await expect(
       client.updateGroup(GROUP_ID, { name: "Favorites" }, IDEMPOTENCY_KEY),
@@ -385,7 +327,7 @@ describe("server-only Python account client", () => {
 
     const [createUrl, createInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
     expect(createUrl).toEqual(
-      new URL("/v1/account/groups", "http://python-fixture.test/"),
+      new URL("/v1/account/groups?page=groups", "http://python-fixture.test/"),
     );
     expect(createInit.method).toBe("POST");
     // Players join one at a time, so neither call sends or replaces them.
@@ -415,7 +357,7 @@ describe("server-only Python account client", () => {
       },
     );
     await expect(
-      client.createGroup({ name: " " }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: " " }, IDEMPOTENCY_KEY, "groups"),
     ).rejects.toMatchObject({ status: 422, payload: { error: "invalid_request" } });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -435,7 +377,7 @@ describe("server-only Python account client", () => {
     const players = await import("../../app/services/group-players.server");
 
     await expect(
-      players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY),
+      players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY, "group_add"),
     ).resolves.toEqual({ ...added, seasonResetPending: false });
     await players.removeGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY);
     const sleep = vi.fn(async () => undefined);
@@ -446,7 +388,10 @@ describe("server-only Python account client", () => {
 
     const calls = fetchMock.mock.calls as [URL, RequestInit][];
     expect(calls[0][0]).toEqual(
-      new URL(`/v1/account/groups/${GROUP_ID}/players`, "http://python-fixture.test/"),
+      new URL(
+        `/v1/account/groups/${GROUP_ID}/players?page=group_add`,
+        "http://python-fixture.test/",
+      ),
     );
     expect(calls[0][1].method).toBe("POST");
     expect(decodeBody(calls[0][1])).toBe('{"tag":"#2PP"}');
@@ -614,7 +559,7 @@ describe("server-only Python account client", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ username: "nova88" }))
-      .mockResolvedValueOnce(jsonResponse({ players: [{ tag: "not-a-tag" }] }))
+      .mockResolvedValueOnce(jsonResponse({ groups: [{ group_id: "not-a-group" }] }))
       .mockResolvedValueOnce(jsonResponse({ status: "linked" }));
     vi.stubGlobal("fetch", fetchMock);
     const client = await importClient();
@@ -623,7 +568,7 @@ describe("server-only Python account client", () => {
       status: 502,
       payload: { error: "malformed" },
     });
-    await expect(client.listSavedTags()).rejects.toMatchObject({
+    await expect(client.listGroups()).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });

@@ -38,16 +38,23 @@ def test_confirmed_player_lookup_needs_no_collection_history(
     active, eligibility, confirmed, state
 ):
     rows = [(1, active, eligibility, confirmed, False)]
+    expected = {"tag": "#2PP", "state": state}
     if active:
         # Its newest profile is the accepted current one.
         rows.append(
-            ("1783918800", "confirmed_legend_i", "eligible", "accepted", "Clasher", None, 6000, False)
+            ("1783918800", "confirmed_legend_i", "eligible", "accepted", "Clasher", None, 6000, False, "Legend I")
         )
+    else:
+        # Off the board, its newest profile still names it, and its league
+        # when that profile is itself outside Legend I.
+        rows.append(
+            ("1791176400", "confirmed_non_legend_i", eligibility, "accepted", "Clasher", None, 152, False, "Electro League 32")
+        )
+        expected["profile"] = {"name": "Clasher", "clan": None, "trophies": 152}
+        if state == "not_in_legend":
+            expected["profile"]["league"] = "Electro League 32"
     database = lookup_database(*rows)
-    assert api_player_lookup.get_lookup(database, "#2PP") == {
-        "tag": "#2PP",
-        "state": state,
-    }
+    assert api_player_lookup.get_lookup(database, "#2PP") == expected
 
 
 @pytest.mark.parametrize("work", ["failed", "cancelled"])
@@ -58,7 +65,7 @@ def test_profile_processing_keeps_lookup_checking_after_collection_failure(
     work, processing
 ):
     database = lookup_database(
-        (1, False, "uncertain", False, False), (work, "provider_failure", processing)
+        (1, False, "uncertain", False, False), (work, "provider_failure", processing, False)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
 
@@ -70,7 +77,7 @@ def test_explicit_not_found_remains_terminal_while_profile_processing_is_outstan
     processing,
 ):
     database = lookup_database(
-        (1, False, "uncertain", False, False), ("failed", "player_not_found", processing)
+        (1, False, "uncertain", False, False), ("failed", "player_not_found", processing, False)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "not_found"
 

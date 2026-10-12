@@ -47,7 +47,6 @@ API_ROUTES = (
     "basic_analytics",
     "public_user",
     "account",
-    "saved_players",
     "groups",
     "exports",
     "providers",
@@ -208,8 +207,6 @@ def api_route(path: str) -> str:
         return "basic_analytics"
     if path.startswith("/v1/users/"):
         return "public_user"
-    if path.startswith("/v1/account/saved-tags"):
-        return "saved_players"
     if path.startswith("/v1/account/groups"):
         return "groups"
     if path.startswith("/v1/account/exports"):

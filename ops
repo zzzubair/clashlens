@@ -184,6 +184,8 @@ load_production_config() {
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY must be true or false"
+  [[ "$(setting CLASHLENS_DASHBOARD_ENABLED false)" =~ ^(true|false)$ ]] || die "CLASHLENS_DASHBOARD_ENABLED must be true or false"
+  [[ "$(setting CLASHLENS_GAME_RANKINGS_ENABLED false)" =~ ^(true|false)$ ]] || die "CLASHLENS_GAME_RANKINGS_ENABLED must be true or false"
   local previous_id previous_file
   previous_id=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)
   previous_file=$(setting CLASHLENS_HMAC_PREVIOUS_SECRET_FILE)
@@ -250,7 +252,7 @@ load_production_config() {
   HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
   WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60) WORKER_PROCESSES=$(setting CLASHLENS_WORKER_PROCESSES 1)
   WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12) WORKER_RESPONSE_LANES=$(setting CLASHLENS_WORKER_RESPONSE_LANES)
-  WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
+  WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE "$WORKER_CONCURRENCY")
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
   POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 6g)
   POSTGRES_SHARED_BUFFERS=2048MB
@@ -318,6 +320,7 @@ validate_runtime_values() {
   [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
   (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 32 + 64 <= COLLECTOR_PIDS )) || die "collector save, request and 32 upload threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
   item=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND ''); [[ -z "$item" || "$item" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number of requests a second, 0 or more"
+  for item in CLASHLENS_BACKGROUND_JOB_LIMIT CLASHLENS_DAY_RECHECK_JOB_LIMIT; do [[ "$(setting "$item" 1)" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]] || die "$item must be a whole number from 1 to 64"; done; (( WORKER_DB_POOL >= WORKER_CONCURRENCY )) || die "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be at least CLASHLENS_WORKER_CONCURRENCY, one database connection a worker thread"; (( WORKER_DB_POOL <= 16 && WORKER_PROCESSES * (WORKER_DB_POOL + 3) <= 38 )) || die "CLASHLENS_WORKER_DATABASE_POOL_SIZE (default CLASHLENS_WORKER_CONCURRENCY) allows at most 16 database connections a worker process and 38 in all, counting 3 more a process"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
   local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}
@@ -796,32 +799,31 @@ write_environment() {
     "CLASHLENS_SPOOL_MAX_BYTES=$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "CLASHLENS_SPOOL_MAX_OBJECTS=$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
     "CLASHLENS_SPOOL_FREE_SPACE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_SPACE_FLOOR 1073741824)" "CLASHLENS_SPOOL_FREE_INODE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_INODE_FLOOR 10000)"
     "CLASHLENS_MAX_BODY_BYTES=$(setting CLASHLENS_MAX_BODY_BYTES 4194304)")
-  local collector_optional=() regular_parallelism promotion_rate
+  local collector_optional=() item
   [[ -z "$official_proxy" ]] || collector_optional+=("CLASHLENS_OFFICIAL_API_PROXY_URL=$official_proxy")
-  regular_parallelism=$(setting CLASHLENS_REGULAR_PARALLELISM '')
-  [[ -z "$regular_parallelism" ]] || collector_optional+=("CLASHLENS_REGULAR_PARALLELISM=$regular_parallelism")
-  promotion_rate=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND '')
-  [[ -z "$promotion_rate" ]] || collector_optional+=("CLASHLENS_PROMOTION_RECHECK_PER_SECOND=$promotion_rate")
+  for item in CLASHLENS_REGULAR_PARALLELISM CLASHLENS_PROMOTION_RECHECK_PER_SECOND CLASHLENS_GAME_RANKINGS_ENABLED; do [[ -z "$(setting "$item" '')" ]] || collector_optional+=("$item=$(setting "$item" '')"); done
   write_env collector.env "${common[@]}" "${collector_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
     "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" \
     "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=$KEY_RATE" CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
-  write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
+  local worker_optional=() item; for item in CLASHLENS_BACKGROUND_JOB_LIMIT CLASHLENS_DAY_RECHECK_JOB_LIMIT; do [[ -z "$(setting "$item" '')" ]] || worker_optional+=("$item=$(setting "$item" '')"); done; write_env worker.env "${common[@]}" "${worker_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
-  local hmac_caller hmac_key_id
+  local hmac_caller hmac_key_id dashboard_enabled
+  dashboard_enabled=CLASHLENS_DASHBOARD_ENABLED=$(setting CLASHLENS_DASHBOARD_ENABLED false)
+  local posthog=(); [[ "$MODE" == fixture || -z "$(setting CLASHLENS_POSTHOG_TOKEN '')" ]] || posthog=("CLASHLENS_POSTHOG_TOKEN=$(setting CLASHLENS_POSTHOG_TOKEN '')")
   hmac_caller=$(setting CLASHLENS_HMAC_CALLER typescript-website)
   hmac_key_id=$(setting CLASHLENS_HMAC_KEY_ID current)
   local api_environment=(CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url "CLASHLENS_HMAC_CALLER=$hmac_caller" "CLASHLENS_HMAC_KEY_ID=$hmac_key_id"
     CLASHLENS_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current CLASHLENS_OFFICIAL_KEY_FILE=/run/secrets/clashlens-interactive-1
-    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin")
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "$dashboard_enabled")
   [[ -z "$official_proxy" ]] || api_environment+=("CLASHLENS_OFFICIAL_PROXY_URL=$official_proxy")
   if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
     api_environment+=("CLASHLENS_HMAC_PREVIOUS_KEY_ID=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" CLASHLENS_HMAC_PREVIOUS_SECRET_FILE=/run/secrets/clashlens-hmac-previous)
   fi
-  write_env api.env "${api_environment[@]}"
+  write_env api.env "${api_environment[@]}" "${posthog[@]}"
   if [[ "$MODE" == fixture ]]; then
-    write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+    write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 "$dashboard_enabled" \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
       CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
       CLASHLENS_GOOGLE_ISSUER_URL=http://127.0.0.1:8011 CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
@@ -842,9 +844,9 @@ write_environment() {
     [[ -z "$trusted_proxy_ip" ]] || website_environment+=("CLASHLENS_TRUSTED_PROXY_IP=$trusted_proxy_ip")
     [[ -z "$BLOG_DIR" ]] || website_environment+=(CLASHLENS_BLOG_DIR=/blog)
     [[ -z "$(setting CLASHLENS_BLOG_OWNER)" ]] || website_environment+=("CLASHLENS_BLOG_OWNER=$(setting CLASHLENS_BLOG_OWNER)")
-    write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+    write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 "$dashboard_enabled" \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
-      "${website_environment[@]}" \
+      "${website_environment[@]}" "${posthog[@]}" \
       "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
       CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
       "CLASHLENS_DISCORD_CLIENT_ID=$discord_id" CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret

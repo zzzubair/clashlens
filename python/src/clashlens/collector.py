@@ -23,6 +23,7 @@ from . import (
     collector_intents,
     collector_liveness,
     collector_reset,
+    game_rankings,
     promotion_recheck,
     weekly_eligibility,
 )
@@ -127,6 +128,7 @@ class Collector:
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
+        self._metrics_refresh: asyncio.Task[None] | None = None
         self._database_metrics: dict[str, int | float] = {}
         # When each main loop last came round, and database calls running with
         # their loop and start, for the container health check.
@@ -788,6 +790,7 @@ class Collector:
             if self.weekly_eligibility_enabled:
                 tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
             tasks.append(asyncio.create_task(promotion_recheck.run(self, stop_requested)))
+            tasks.append(asyncio.create_task(game_rankings.run(self, stop_requested)))
             done, _pending = await asyncio.wait(
                 [*tasks, stop_task], return_when=asyncio.FIRST_COMPLETED
             )
@@ -946,7 +949,16 @@ class Collector:
         rankings_enabled: bool,
         idle_seconds: float,
     ) -> None:
-        active: dict[int, tuple[bool, asyncio.Task[str]]] = {}
+        active: dict[int, tuple[str, asyncio.Task[str]]] = {}
+        # Reset pairs hold regular checks until they finish, so they may use
+        # the regular checks' slots. Settlement checks, due once those pairs
+        # are done, share them behind any pair still owed: each holds its slot
+        # through two saves, so 32 slots took hours. Other work keeps its few.
+        slots = {
+            "interactive": 6,
+            "reset": self.regular_parallelism,
+            "ordinary": _ORDINARY_INTENT_PARALLELISM,
+        }
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
         next_expiry_at = next_rankings_at
@@ -978,47 +990,62 @@ class Collector:
                             )
                             if sweep_id is not None:
                                 scheduled_boundary = boundary
-                for job_id, (_interactive, task) in list(active.items()):
+                for job_id, (_lane, task) in list(active.items()):
                     if task.done():
                         await task
                         del active[job_id]
-                for is_interactive, limit in (
-                    (True, 6),
-                    (False, _ORDINARY_INTENT_PARALLELISM),
+                for is_interactive, lanes in (
+                    (True, ("interactive",)),
+                    (False, ("reset", "ordinary")),
                 ):
-                    used = sum(
-                        kind == is_interactive for kind, _task in active.values()
-                    )
-                    available = limit - used
-                    if available <= 0:
+                    available = {
+                        lane: slots[lane]
+                        - sum(kind == lane for kind, _task in active.values())
+                        for lane in lanes
+                    }
+                    if max(available.values()) <= 0:
                         continue
                     intents = await self._database_call(
                         self.database.pending_intents,
-                        limit=limit,
+                        limit=sum(slots[lane] for lane in lanes),
                         now=now,
                         interactive=is_interactive,
                         held=self.held_work(),
                     )
+                    # A stop can arrive during any wait above; start nothing after it.
+                    if stop_requested.is_set():
+                        break
                     for intent in intents:
-                        if intent.work_id is not None and intent.work_id not in active:
+                        lane = (
+                            "interactive"
+                            if is_interactive
+                            else "reset"
+                            if intent.kind in {"reset_baseline", "reset_settlement"}
+                            else "ordinary"
+                        )
+                        if (
+                            intent.work_id is not None
+                            and intent.work_id not in active
+                            and available[lane] > 0
+                        ):
                             active[intent.work_id] = (
-                                is_interactive,
+                                lane,
                                 asyncio.create_task(self.collect_intent(intent)),
                             )
-                            available -= 1
-                            if available == 0:
+                            available[lane] -= 1
+                            if max(available.values()) <= 0:
                                 break
                 await _wait_or_stop(stop_requested, idle_seconds)
             graceful = True
         finally:
             if not graceful:
-                for _interactive, task in active.values():
+                for _lane, task in active.values():
                     if not task.done():
                         task.cancel()
             if active:
                 results = await _drain_awaitable(
                     asyncio.gather(
-                        *(task for _interactive, task in active.values()),
+                        *(task for _lane, task in active.values()),
                         return_exceptions=True,
                     )
                 )
@@ -1089,6 +1116,14 @@ class Collector:
                 uploads.cancel()
                 await _drain_awaitable(asyncio.gather(uploads, return_exceptions=True))
 
+    async def _refresh_metrics(self) -> None:
+        try:
+            self._database_metrics = await asyncio.to_thread(self.database.health_metrics)
+        except psycopg.Error:
+            pass  # The sample ages; the alert check judges how old.
+        finally:
+            self._metrics_refresh = None
+
     async def health_response(self, path: str) -> tuple[int, str, bytes]:
         if path == "/livez":
             return collector_liveness.livez(self)
@@ -1130,16 +1165,20 @@ class Collector:
                 state = "ready"
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
-        try:
-            async with self._metrics_lock:
-                if time.monotonic() >= self._metrics_refresh_after:
-                    self._database_metrics = await asyncio.to_thread(
-                        self.database.health_metrics
-                    )
-                    self._metrics_refresh_after = time.monotonic() + 30
-                database_metrics = self._database_metrics
-        except psycopg.Error:
+        # Counting the queue took 21.6 s on 12 Oct 2026 with 113,000 jobs
+        # waiting, past the alert check's 10 s, so every alert run lost the
+        # collector's numbers. The last sample answers at once, with its time
+        # (metrics_sample_timestamp_seconds), while one read refreshes it.
+        async with self._metrics_lock:
+            if time.monotonic() >= self._metrics_refresh_after and self._metrics_refresh is None:
+                self._metrics_refresh_after = time.monotonic() + 30
+                self._metrics_refresh = asyncio.create_task(self._refresh_metrics())
+            refresh = self._metrics_refresh
+        if not self._database_metrics and refresh is not None:
+            await asyncio.wait([refresh])
+        if not self._database_metrics:
             return 503, "text/plain", b"database_unavailable\n"
+        database_metrics = self._database_metrics
         stats = None
         if not self._spool_io_failed:
             try:

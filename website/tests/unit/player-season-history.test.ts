@@ -114,7 +114,13 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
-const CURRENT_LINK = '<a href="/players/%232PP" data-discover="true">Current Season</a>';
+const CURRENT_LINK = '<option value="">Current Season</option>';
+
+// The names in the Season menu, or none when there is no menu.
+function seasonOptions(html: string) {
+  const menu = html.match(/<select name="season"[^>]*>(.*?)<\/select>/)?.[1] ?? "";
+  return [...menu.matchAll(/<option[^>]*>(.*?)<\/option>/g)].map(([, name]) => name);
+}
 
 async function loadAndRender(
   client: Record<string, unknown>,
@@ -305,7 +311,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("leaves days without battles, such as shielded days, out of per-day averages", async () => {
+  it("averages over quiet and unproven days, but not days before sign-up", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(
       {
@@ -313,14 +319,26 @@ describe("past-Season view", () => {
         getPlayerSeasons: vi.fn().mockResolvedValue([]),
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
-          dailyEntries: [DAY, { ...quiet, dayNumber: 27 }, { ...quiet, dayNumber: 28 }],
+          daysObserved: 6,
+          dailyEntries: [
+            { ...quiet, dayNumber: 23, flags: ["not_enrolled"] },
+            DAY,
+            { ...DAY, dayNumber: 25, flags: ["player_not_eligible"] },
+            { ...DAY, dayNumber: 26 },
+            {
+              ...quiet,
+              dayNumber: 27,
+              flags: ["missing_start_baseline", "player_not_eligible"],
+            },
+            { ...quiet, dayNumber: 28 },
+          ],
         }),
       },
       SEASON,
     );
-    // 1,600 attack trophies and 1,300 defense trophies over 3 days with battles.
-    expect(html).toMatch(/Offense per day<\/dt><dd>\+533</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-433</);
+    // 1,600 attack trophies and 1,300 defense trophies over 5 Legend days, 2 quiet.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
   });
 
@@ -448,11 +466,11 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(recoveredHtml).not.toContain('aria-label="Seasons"');
+      expect(seasonOptions(recoveredHtml)).toEqual(player ? ["Current Season"] : []);
     },
   );
 
-  it("shows no Season navigation on the current page when the list is empty", async () => {
+  it("offers only Current Season on the current page when the list is empty", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -461,8 +479,7 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(html).not.toContain('aria-label="Seasons"');
-    expect(html).not.toContain("Current Season");
+    expect(seasonOptions(html)).toEqual(["Current Season"]);
   });
 
   // Day 1 of the Season starting 5 Oct, after the September Season ended.
@@ -514,13 +531,13 @@ describe("past-Season view", () => {
     expect(current).toContain("Day 1");
     for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
       expect(current).not.toContain(hidden);
-    expect(current).toMatch(/Seasons\s+Current Season\s+5 Oct 2026/);
+    expect(current).toMatch(/Season\s+Current Season\s+5 Oct 2026/);
     expect(current).not.toContain("7 Sep 2026");
 
     const past = await loadAndRender(client, SEASON);
     for (const number of [24, 25, 26, 27, 28])
       expect(past).toContain(`<summary>${number}<span class="day-mark`);
-    expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+    expect(past).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
   it("sends an ended Season's day link to that Season with the day marked", async () => {
@@ -542,7 +559,7 @@ describe("past-Season view", () => {
     expect(html).toContain(
       '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
     );
-    expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+    expect(html).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
   it("says when an ended Season has no saved log for the linked day", async () => {

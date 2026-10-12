@@ -19,9 +19,9 @@ for deadlines and the full product map.
 - Keep both all-tracked and final-season Top 100 army statistics. Fix Top 100
   membership from final Clash Lens standings and include those players' recorded
   battles across the whole season, not changing daily membership.
-- Preserve individual Clan Castle troop usage in both populations. The toggle
-  changes regular troops to individual Clan Castle troops; keep BY/AGAINST
-  views, unit identities, quantities, outcomes and denominators distinct.
+- Preserve individual Clan Castle troop usage in both populations; keep
+  BY/AGAINST views, unit identities, quantities, outcomes and denominators
+  distinct.
 - Measure the added summary bytes and six-month cost. An unaffordable result
   requires a decision; do not silently drop an agreed population or troop view.
 - New history views must be ready before the first tracked season ends,
@@ -101,9 +101,8 @@ included, that is not published or superseded; any correction from
 Season start onwards that is not finalized with a published or superseded
 generation; and any
 [Reset settlement check](domain.md#8-evidence-and-confidence-states) that
-reads the Season's days and is unfinished, has an unprocessed response, or
-is still provisional, unless it is a judged candidate held back only
-because `CLASHLENS_ENABLE_NEW_RESET_PROOFS` is off. A missing table, failed query or check over 10 seconds blocks.
+reads the Season's days and is unfinished or has an unprocessed response.
+A missing table, failed query or check over 10 seconds blocks.
 Each blocker lists at most five example ids under `blocking_work`; missing
 tables and failed checks are listed by name instead. Until
 the expanded history above can be checked, it also always reports
@@ -202,9 +201,8 @@ detail is retained; no cleanup is authorized by this migration.
 Each daily entry keeps `eod_change` beside the battle-result `net_change`:
 the day's EOD minus the previous day's EOD, with Day 1 measured from 5,000.
 A missing, non-adjacent or unknown previous EOD leaves it unknown. Its
-`eod_state` and `eod_change_state` are `accepted` only when the EOD comes from
-a Complete day whose Reset reading has a settled boundary (both ends, for the
-change), otherwise `provisional`. This is summary format
+`eod_state` and `eod_change_state` are `provisional` whenever known: no Reset
+reading is proven settled. This is summary format
 `player-season-summary-v2`. An older summary stays listed and readable with
 those three fields unknown; the command below rebuilds it from retained detail
 where the Season's detail has not been retired. Season closure already refuses
@@ -570,10 +568,10 @@ Player trophy summaries and current/live analytics are unchanged.
 The implemented v3 reads do not offer destruction, combinations, day ranges or
 population cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
-Unknown units have deterministic labels such as `Unknown spell (ID 900)`.
+Unknown units have deterministic labels such as `Unknown spell #900`.
 Unclassified troop IDs appear in both troop and siege views as
-`Unknown troop or siege (ID 900)` and keep coverage partial. These are the same
-retained uses, not two separate units. Once the catalogue establishes their
+`Unknown troop or siege #900`. These are the same retained uses, not two
+separate units. Once the catalogue establishes their
 category, they appear only in that category with the current catalogue name.
 Other unknown namespaces likewise resolve their names at read time. Separate player trophy-history records remain unchanged.
 The API pages unit results in groups of 200.

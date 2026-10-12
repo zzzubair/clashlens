@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
@@ -28,10 +29,20 @@ const PAGE_SIZE = 100;
 // 30 minutes before Reset. Collection pauses at 04:55, so normal boards end about
 // 5 minutes before Reset; the Oct 3, 2026 outage board ended 5 hours before.
 const INCOMPLETE_INPUT_GAP_SECONDS = 30 * 60;
-const formatDate = (value: string) =>
-  new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
-    new Date(value),
-  );
+// Each board explains the tie order it was saved with: Daily boards since v3
+// by the latest trophy change, which matched the game's Reset order more
+// often; the Live board and older v2 Daily boards by attack destruction; older
+// boards by player tags alone.
+function rankExplanation(orderVersion: string | undefined) {
+  const tieOrder =
+    orderVersion === "tracked-player-order-v3"
+      ? "go to the player whose trophies changed most recently that Legend day, then a fixed order based on player tags"
+      : orderVersion === "tracked-player-order-v2" ||
+          orderVersion === "tracked-trophies-attack-destruction-v2"
+        ? "go to the higher average attack destruction this Season, then more attacks, then a fixed order based on player tags"
+        : "follow a fixed order based on player tags";
+  return `Rank among players tracked by Clash Lens, not the official global rank. Equal trophies are marked Tie and ${tieOrder}.`;
+}
 
 function leaderboardUrl(
   view: "live" | "daily",
@@ -181,6 +192,7 @@ export default function TrackedLeaderboardRoute() {
   const search = seasonExpired ? null : savedSearch;
   const unlistedTag = search?.results.length === 0 ? normalizePlayerTag(query) : null;
   const navigation = useNavigation();
+  const backState = useBackState("Rankings");
   const selectedRow = useRef<HTMLTableRowElement>(null);
   useEffect(() => {
     if (focusTag && selectedRow.current) {
@@ -190,8 +202,18 @@ export default function TrackedLeaderboardRoute() {
   }, [focusTag, leaderboard]);
   const daily = leaderboard?.daily;
   const entries = leaderboard?.entries ?? [];
+  const lastRank = entries.at(-1)?.rank ?? 0;
+  const range =
+    leaderboard && entries.length
+      ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()}`
+      : null;
+  const nextCount = leaderboard
+    ? Math.min(
+        leaderboard.pageSize,
+        leaderboard.totalEntries - leaderboard.page * leaderboard.pageSize,
+      )
+    : 0;
   const newestObservedAt = leaderboard?.sourceObservations?.newestObservedAt ?? null;
-  const oldestObservedAt = leaderboard?.sourceObservations?.oldestObservedAt ?? null;
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
     Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
@@ -212,13 +234,17 @@ export default function TrackedLeaderboardRoute() {
       <section className="rankings-header" aria-labelledby="leaderboard-title">
         <div className="rankings-heading">
           <div>
-            <p className="rankings-kicker">Tracked player rankings</p>
+            {daily ? <p className="rankings-kicker">Day {daily.dayNumber}</p> : null}
             <h1 id="leaderboard-title">
-              {daily
-                ? `Day ${daily.dayNumber} standings`
-                : view === "live"
-                  ? "Live Leaderboard"
-                  : "Daily standings"}
+              {daily ? (
+                <>
+                  Leaderboard at <LocalTimestamp value={daily.resetAt} />
+                </>
+              ) : view === "live" ? (
+                "Live Leaderboard"
+              ) : (
+                "Daily leaderboard"
+              )}
             </h1>
           </div>
           <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
@@ -234,38 +260,20 @@ export default function TrackedLeaderboardRoute() {
               aria-current={view === "daily" ? "page" : undefined}
               to="/leaderboards/tracked?view=daily&page=1"
             >
-              Daily
+              Reset
             </Link>
           </nav>
         </div>
-        {daily ? (
+        {!daily && newestObservedAt ? (
           <p className="rankings-context">
-            Legend season {formatDate(daily.seasonStartAt)} –{" "}
-            {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s
-            total at this Reset, before the game&apos;s automatic defense loss: their last
-            value saved before the Reset plus the battles recorded after it. Boards
-            published before we started adding those battles, and not rebuilt since, show
-            the saved value alone, as do players whose later battles we can&apos;t
-            confirm.
-          </p>
-        ) : newestObservedAt ? (
-          <p className="rankings-context">
-            Newest player update: <LocalTimestamp value={newestObservedAt} />
-            {oldestObservedAt && oldestObservedAt !== newestObservedAt ? (
-              <>
-                . Oldest player update: <LocalTimestamp value={oldestObservedAt} />
-              </>
-            ) : null}
-            . Across the whole leaderboard.
+            Updated <LocalTimestamp value={newestObservedAt} />
           </p>
         ) : null}
         {!daily && leaderboard?.seasonResetPending ? (
           <p className="rankings-context" role="status">
             {leaderboard.seasonResetPending.toLocaleString()} tracked{" "}
             {leaderboard.seasonResetPending === 1 ? "player is" : "players are"} waiting
-            for their Season reset and will be ranked once their profile shows the new
-            Season.
+            for their Season reset.
           </p>
         ) : null}
         {incomplete && newestInput ? (
@@ -274,13 +282,9 @@ export default function TrackedLeaderboardRoute() {
             role="status"
           >
             <p>
-              <strong>These standings are incomplete.</strong> No player updates were
-              saved in the {formatAge(secondsBeforeReset(newestInput))} before this
-              day&apos;s Reset; the newest is from <LocalTimestamp value={newestInput} />.
-              Trophies start from each player&apos;s last saved value before then. Battles
-              recorded after it are added where we can confirm them, except on boards
-              published before we started adding them, so trophies may still miss changes
-              made before the Reset.
+              <strong>Incomplete:</strong> no player updates were saved in the{" "}
+              {formatAge(secondsBeforeReset(newestInput))} before this Reset. Newest:{" "}
+              <LocalTimestamp value={newestInput} />.
             </p>
           </div>
         ) : null}
@@ -318,19 +322,20 @@ export default function TrackedLeaderboardRoute() {
           </Form>
           {search ? (
             <div aria-live="polite" aria-busy={navigation.state !== "idle"}>
-              <p>
-                {search.results.length ? (
-                  `Players matching “${query}”. Choose a player to see their place on the board.`
-                ) : unlistedTag ? (
-                  <>
-                    {unlistedTag} isn't on this board.{" "}
-                    <a href={canonicalPlayerPath(unlistedTag)}>Open their player page</a>{" "}
-                    to look them up.
-                  </>
-                ) : (
-                  `No tracked players matching “${query}”. This search only finds players on this board. To look up anyone else, search their full player tag, including the #.`
-                )}
-              </p>
+              {search.results.length ? null : (
+                <p>
+                  {unlistedTag ? (
+                    <>
+                      {unlistedTag} isn't on this board.{" "}
+                      <a href={canonicalPlayerPath(unlistedTag)}>
+                        Open their player page
+                      </a>
+                    </>
+                  ) : (
+                    `No players on this board match “${query}”. Enter a full #tag to look up anyone.`
+                  )}
+                </p>
+              )}
               <ul className="rank-search-results">
                 {search.results.map((entry) => (
                   <li key={entry.tag}>
@@ -349,12 +354,7 @@ export default function TrackedLeaderboardRoute() {
                   </li>
                 ))}
               </ul>
-              {search.hasMore ? (
-                <p>
-                  Showing the first 20 matches. Add more of the name or use a tag to
-                  narrow your search.
-                </p>
-              ) : null}
+              {search.hasMore ? <p>First 20 matches shown.</p> : null}
             </div>
           ) : null}
         </section>
@@ -377,24 +377,8 @@ export default function TrackedLeaderboardRoute() {
           <div className="standings-toolbar">
             <div>
               <h2 id="standings-table-title">Standings</h2>
-              <p>
-                {entries.length > 0
-                  ? `Ranks ${entries[0].rank.toLocaleString()}–${entries[entries.length - 1].rank.toLocaleString()}`
-                  : "No listed players"}
-                {` · ${leaderboard.totalEntries.toLocaleString()} listed · ${leaderboard.totalTracked.toLocaleString()} tracked players`}
-              </p>
-              {leaderboard.totalTracked > leaderboard.totalEntries ? (
-                <p>
-                  Tracked players are listed once Clash Lens confirms their current
-                  profile.
-                </p>
-              ) : null}
+              <p>{range ?? "No listed players"}</p>
             </div>
-            {entries.length > 0 ? (
-              <span className="page-position">
-                Page {leaderboard.page} of {leaderboard.pageCount}
-              </span>
-            ) : null}
           </div>
           {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
             <nav aria-label="Other days" className="snapshot-pagination">
@@ -417,13 +401,8 @@ export default function TrackedLeaderboardRoute() {
             </div>
           ) : (
             <>
-              <p className="standings-explanation" id="rank-explanation">
-                Rank is your position among players tracked by Clash Lens, not the
-                official global rank. Equal trophies use a fixed order based on player
-                tags.
-                {view === "live"
-                  ? " Last updated is when we last confirmed each player's profile, even if it was unchanged."
-                  : null}
+              <p className="sr-only" id="rank-explanation">
+                {rankExplanation(leaderboard?.provenance.version)}
               </p>
               <div
                 aria-label={`${view === "daily" ? "Daily" : "Live"} leaderboard table`}
@@ -442,13 +421,26 @@ export default function TrackedLeaderboardRoute() {
                   </caption>
                   <thead>
                     <tr>
-                      <th scope="col" aria-describedby="rank-explanation">
+                      <th
+                        scope="col"
+                        aria-describedby="rank-explanation"
+                        title={rankExplanation(leaderboard?.provenance.version)}
+                      >
                         Rank
                       </th>
                       <th scope="col">Player</th>
                       <th scope="col">Clan</th>
                       <th scope="col">Trophies</th>
-                      <th scope="col">Last updated</th>
+                      <th
+                        scope="col"
+                        title={
+                          view === "live"
+                            ? "When we last confirmed each player's profile, even if it was unchanged."
+                            : undefined
+                        }
+                      >
+                        Last updated
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -470,12 +462,13 @@ export default function TrackedLeaderboardRoute() {
                           <span className="rank-mark">{entry.rank.toLocaleString()}</span>
                         </td>
                         <th scope="row" data-label="Player">
-                          <a
+                          <Link
                             className="player-name"
-                            href={canonicalPlayerPath(entry.tag)}
+                            to={canonicalPlayerPath(entry.tag)}
+                            state={backState}
                           >
                             <bdi>{entry.name}</bdi>
-                          </a>
+                          </Link>
                           <span className="player-tag">{entry.tag}</span>
                           <details className="player-update-mobile">
                             <summary>
@@ -499,6 +492,16 @@ export default function TrackedLeaderboardRoute() {
                         <td className="trophy-cell" data-label="Trophies">
                           <TrophyMark />
                           <strong>{entry.trophies.toLocaleString()}</strong>
+                          <span className="tie-slot">
+                            {entry.tied ? (
+                              <span
+                                className="tie-pill"
+                                title="Same trophies as another player"
+                              >
+                                Tie
+                              </span>
+                            ) : null}
+                          </span>
                         </td>
                         <td data-label="Last updated">
                           <LocalTimestamp value={entry.freshness.observedAt} />
@@ -524,18 +527,16 @@ export default function TrackedLeaderboardRoute() {
                     className="button button-secondary"
                     to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}
                   >
-                    Previous
+                    Previous {PAGE_SIZE}
                   </Link>
                 ) : null}
-                <span className="pagination-status">
-                  Page {leaderboard.page} of {leaderboard.pageCount}
-                </span>
+                <span className="pagination-status">{range}</span>
                 {leaderboard.hasNext ? (
                   <Link
                     className="button button-secondary"
                     to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
                   >
-                    Next
+                    Next {nextCount}
                   </Link>
                 ) : null}
               </nav>

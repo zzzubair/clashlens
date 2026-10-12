@@ -22,10 +22,15 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
+from .analytics import latest_trophy_changes, unplayed_sql
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_START_TROPHIES,
+    ranked_day_for,
+    season_is_current,
+)
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -466,35 +471,34 @@ def _snapshot_rows(
         if official_version_id is not None
         else {}
     )
-    # Each player's newest accepted profile at the Reset, chosen exactly as
-    # for one player, with the population in one query.
+    # Each player's latest trophy change in the ended day before the Reset,
+    # which orders equal trophies (analytics.latest_change_order_key).
+    latest_changes = latest_trophy_changes(
+        connection,
+        day_start=boundary_at - RANKED_DAY_DURATION,
+        cutoff=boundary_at,
+        player_ids=player_ids,
+    )
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            """
-            SELECT member.player_id, profile.*
-            FROM unnest(%s::bigint[]) AS member (player_id)
-            CROSS JOIN LATERAL (
-                SELECT profile.id,
-                       COALESCE(effect.observation_id, profile.observation_id),
-                       COALESCE(effect.observed_at, profile.observed_at),
-                       profile.profile_json, profile.normalized_tag,
-                       profile.name, profile.trophies, profile.eligibility_state,
-                       profile.current_league_season_id
-                FROM player_profile_versions AS profile
-                LEFT JOIN player_profile_effects AS effect
-                  ON effect.profile_version_id = profile.id
-                WHERE profile.player_id = member.player_id
-                  AND COALESCE(effect.observed_at, profile.observed_at) <= %s
-                  AND profile.source_contract_state = 'accepted'
-                ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
-                         COALESCE(effect.id, profile.id) DESC
-                LIMIT 1
-            ) AS profile
-            """,
-            (player_ids, boundary_at),
+            _NEWEST_PROFILES_SQL.replace("{versions}", _ACCEPTED_VERSIONS),
+            {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
+    unplayed = unplayed_profiles(
+        connection, boundary_at,
+        [
+            player_id for player_id in player_ids
+            if player_id not in profiles
+            or profiles[player_id][6] == SEASON_START_TROPHIES
+            or not season_is_current(
+                _text_value(profiles[player_id][8]),
+                boundary_at - RANKED_DAY_DURATION,
+            )
+        ],
+    )
+    profiles.update(unplayed)
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
@@ -543,7 +547,12 @@ def _snapshot_rows(
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
         classification = _STATUS_CLASSIFICATIONS.get(status, "Pending")
-        if _rechecks(status, version_id):
+        # A member ranked at 5,000 before their first Legend battle was saved
+        # missing, as boundary._boundary_snapshot_status finds no accepted
+        # profile.
+        if _rechecks(status, version_id) or (
+            status == "missing" and player_id in unplayed and version_id is not None
+        ):
             # The member's status, checked again against its ranked day and
             # accepted profile now, as boundary._boundary_snapshot_status.
             snapshot_status = _RANKED_SNAPSHOT_STATUSES.get(
@@ -570,6 +579,10 @@ def _snapshot_rows(
             if official_entry
             else None
         )
+        latest_change = latest_changes.get(player_id)
+        identity["latest_change_at"] = (
+            latest_change.astimezone(UTC).isoformat() if latest_change else None
+        )
         profile = profiles.get(player_id)
         if profile is not None:
             identity["profile_version_id"] = int(profile[0])
@@ -589,7 +602,7 @@ def _snapshot_rows(
             }
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif not season_is_current(
+            elif player_id not in unplayed and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
@@ -627,6 +640,88 @@ def _snapshot_rows(
             identity["snapshot_quality"] = snapshot_quality
         manifest_rows.append(identity)
     return manifest_rows
+
+
+# Each player's newest accepted profile at the Reset, chosen exactly as
+# for one player, with the population in one query: the newest of each
+# profile's sightings (its effects, or the profile itself when it has
+# none) up to the Reset, ordered by time and then id. Each profile's
+# newest sighting comes from the effects' own time index and the
+# profiles from migration 0098's index, so the query reads index entries
+# instead of every profile's and sighting's row. On 10 October 2026
+# reading those rows took over 6 of the freeze's 10 minutes.
+# The same lookup of any source state lists the player's profiles from the
+# (tag, time) index instead.
+_ACCEPTED_VERSIONS = (
+    "version.player_id = member.player_id"
+    " AND version.source_contract_state = 'accepted'"
+)
+_ANY_VERSIONS = """version.normalized_tag = (
+            SELECT owner.normalized_tag FROM players AS owner
+            WHERE owner.id = member.player_id)"""
+_NEWEST_PROFILES_SQL = """
+    SELECT member.player_id, profile.id,
+           COALESCE(effect.observation_id, profile.observation_id),
+           newest.observed_at, profile.profile_json,
+           profile.normalized_tag, profile.name, profile.trophies,
+           profile.eligibility_state, profile.current_league_season_id
+    FROM unnest(%(players)s::bigint[]) AS member (player_id)
+    CROSS JOIN LATERAL (
+        SELECT version.id AS profile_id, sighting.id AS effect_id,
+               COALESCE(sighting.observed_at, version.observed_at)
+                   AS observed_at
+        FROM player_profile_versions AS version
+        LEFT JOIN LATERAL (
+            SELECT effect.id, effect.observed_at
+            FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = version.id
+              AND effect.observed_at <= %(boundary)s
+            ORDER BY effect.observed_at DESC, effect.id DESC
+            LIMIT 1
+        ) AS sighting ON true
+        WHERE {versions}
+          AND (sighting.id IS NOT NULL
+               OR version.observed_at <= %(boundary)s
+                  AND NOT EXISTS (
+                      SELECT FROM player_profile_effects AS effect
+                      WHERE effect.profile_version_id = version.id
+                  ))
+        ORDER BY COALESCE(sighting.observed_at, version.observed_at) DESC,
+                 COALESCE(sighting.id, version.id) DESC
+        LIMIT 1
+    ) AS newest
+    JOIN player_profile_versions AS profile ON profile.id = newest.profile_id
+    LEFT JOIN player_profile_effects AS effect ON effect.id = newest.effect_id
+    """
+
+
+def unplayed_profiles(
+    connection: Any, boundary_at: datetime, player_ids: list[int]
+) -> dict[int, tuple[Any, ...]]:
+    """The players among ``player_ids`` the board at ``boundary_at`` ranks at
+    5,000 with their newest profile at the Reset, as the population freeze
+    reads a profile: a Legend I one at 5,000 when their saved days of the
+    Season hold no battle. They have not played yet, whatever Season it
+    names. On 11 October 2026, 1,374 such players' profiles named Season 0."""
+    if not player_ids:
+        return {}
+    return {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            f"""
+            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{versions}", _ANY_VERSIONS)})
+                AS newest (player_id, id, observation_id, observed_at,
+                           profile_json, normalized_tag, name, trophies,
+                           eligibility_state, current_league_season_id)
+            JOIN player_profile_versions AS version ON version.id = newest.id
+            WHERE {unplayed_sql("newest.player_id", "version",
+                                "%(season_start)s", "%(boundary)s")}
+            """,
+            {"players": player_ids, "boundary": boundary_at,
+             "season_start": ranked_day_for(
+                 boundary_at - RANKED_DAY_DURATION).season_start},
+        ).fetchall()
+    }
 
 
 def profiles_not_found(
@@ -679,27 +774,48 @@ def reset_trophies(
 
     ``readings`` maps a player to the version of their day ending at
     ``boundary_at``, their reading's saved response, its time and its
-    trophies. A Complete day already proves the total: its Reset readings at
+    trophies. A Complete day already gives the total: its Reset readings at
     both ends and every battle between agree, so its end plus its automatic
-    loss is the total whatever the reading shows. An attacker's profile can
+    loss is the total whatever the reading shows. It proves it with exact
+    confidence, or when a reading from its end Reset on matched it with
+    every battle landed and none in flight, even before the automatic loss
+    landed: that reading shows the total itself. A day started by the day
+    before's calculated end, or read before its loss, otherwise has a part
+    no reading matched. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. A Reset that resets trophies
     proves only the start, so there the reading must agree too.
 
     Otherwise the total is the reading plus the day's battles stamped after
-    it, which needs the day's continuous battle logs with no trophy
-    mismatch, a reading taken at least 15 minutes into that day, after the
-    previous day's last reports and automatic defense loss, a time on every
-    battle the day counts, none stamped between the reading's request and its
-    response, no defense stamped in the 4 minutes before that request, since
-    its attack can end up to 4 minutes after the defender's report, and no
-    battle amount the two players' logs disagree on. A reading proves no
-    battle stamped before it, so that total is proven only when the day's
-    start reading plus all its battles, or without a start its end Reset
-    reading, with or without its known automatic loss, comes to it too.
-    Without the battles' proof the total is the reading alone; any total not
-    proven is marked uncertain.
+    it, which needs the day's continuous battle logs, a reading taken at
+    least 15 minutes into that day, after the previous day's last reports
+    and automatic defense loss, a time on every battle the day counts, none
+    stamped between the reading's request and its response, no defense
+    stamped in the 4 minutes before that request, since its attack can end
+    up to 4 minutes after the defender's report, and no battle amount the
+    two players' logs disagree on. A reading proves no battle stamped before
+    it, and a Partial or inferred day's start and end are calculations or
+    readings no rule judged, so that total is never proven. A day whose
+    trophies don't add up still counts the battles after the reading: on
+    11 October 2026 #PVVQPGRQL's reading of 5,232 missed a later defense
+    for 30, and the reading plus it, 5,202, matched the game's order, where
+    the reading alone broke 31 country order pairs with three other such
+    players. Without the battles' proof the total is
+    the reading alone; any total not proven is marked uncertain.
+
+    The total is taken at exactly the Reset, as the game's own Reset rank
+    is: a battle whose attack ended at or after it still counts for the
+    ended day, but not in this total. The attacker's report time is the
+    attack's end, so only a battle with that report saved at or after the
+    Reset comes off. A defense whose attacker's report is not saved stays
+    in the total, and when that defense is reported in the 4 minutes before
+    the Reset, its attack may have ended after it, so the total is not
+    proven. Only battles the total counts come off it: a reading never
+    holds one, so a reading's total loses only the battles after it. On 11
+    October 2026, 42 battles ending 05:00:00 to 05:03:10 moved 83 players'
+    totals, and taking them off cut order breaks against the game's country
+    Reset ranks from 400 to 40 of 342,472 pairs.
     """
     if not readings:
         return {}
@@ -707,28 +823,18 @@ def reset_trophies(
         int(row[0]): row[1:]
         for row in connection.execute(
             """
-            SELECT reading.player_id, ranked.state,
+            SELECT reading.player_id, ranked.state, ranked.confidence,
+                   ranked.input_evidence -> 'end_reading' ->> 'clean' = 'true',
                    ranked.final_trophies_before_reset,
                    ranked.automatic_defense_loss,
-                   ranked.automatic_defense_evidence_state,
                    ranked.input_evidence->>'boundary_kind',
-                   CASE WHEN NOT ranked.failure_reasons
-                                 ?| ARRAY['missing_start_baseline',
-                                          'start_baseline_incomplete']
-                        THEN ranked.start_trophies
-                   END,
-                   CASE WHEN NOT ranked.failure_reasons
-                                 ?| ARRAY['missing_end_baseline',
-                                          'end_baseline_incomplete']
-                        THEN (ranked.input_evidence->>'next_start_trophies')::integer
-                   END,
                    ranked.coverage_complete
                    AND reading.observed_at
                        >= ranked.ranked_day_start + interval '15 minutes'
-                   AND ranked.state <> 'Inconsistent'
                    AND NOT ranked.failure_reasons ?| %s::text[]
                    AND battles.every_battle_proven IS NOT FALSE,
-                   battles.after_reading, battles.whole_day
+                   battles.after_reading, battles.after_reset,
+                   battles.after_reset_after_reading, battles.end_unknown
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -742,7 +848,6 @@ def reset_trophies(
                 SELECT COALESCE(sum(battle.change) FILTER (
                            WHERE battle.stamped_at > reading.observed_at
                        ), 0),
-                       COALESCE(sum(battle.change), 0),
                        bool_and(
                            battle.stamped_at IS NOT NULL
                            AND battle.stamped_at
@@ -752,7 +857,15 @@ def reset_trophies(
                                                   ELSE interval '0' END
                                        AND reading.observed_at
                            AND battle.disputed IS DISTINCT FROM 'true'
-                       )
+                       ),
+                       COALESCE(sum(battle.change) FILTER (
+                           WHERE ending.after_reset
+                       ), 0),
+                       COALESCE(sum(battle.change) FILTER (
+                           WHERE ending.after_reset
+                             AND battle.stamped_at > reading.observed_at
+                       ), 0),
+                       COALESCE(bool_or(ending.unknown), false)
                 FROM jsonb_array_elements(ranked.input_evidence->'contributions')
                     AS contribution
                 CROSS JOIN LATERAL (
@@ -761,10 +874,39 @@ def reset_trophies(
                            * (contribution.value->>'amount_used')::integer,
                            (contribution.value->>'battle_timestamp')::timestamptz,
                            contribution.value->>'lens',
-                           contribution.value->>'disagreement'
-                ) AS battle (change, stamped_at, lens, disputed)
+                           contribution.value->>'disagreement',
+                           contribution.value->>'battle_identity'
+                ) AS battle (change, stamped_at, lens, disputed, battle_id)
+                -- A defense's own report is stamped near the attack's start,
+                -- and the attack can end up to 4 minutes later, when the
+                -- attacker's report is stamped.
+                LEFT JOIN LATERAL (
+                    SELECT evidence.battle_timestamp
+                    FROM battle_perspectives AS side
+                    JOIN battle_evidence AS evidence
+                      ON evidence.id = side.evidence_id
+                    WHERE battle.lens = 'defense'
+                      AND battle.stamped_at
+                          >= ranked.ranked_day_end - interval '4 minutes'
+                      AND side.battle_id = battle.battle_id::bigint
+                      AND side.perspective = 'attacker'
+                ) AS attack (reported_at) ON true
+                CROSS JOIN LATERAL (
+                    SELECT CASE WHEN battle.lens = 'defense'
+                                THEN attack.reported_at
+                                ELSE battle.stamped_at END
+                           >= ranked.ranked_day_end,
+                           battle.lens = 'defense'
+                           AND attack.reported_at IS NULL
+                           AND battle.stamped_at
+                               >= ranked.ranked_day_end - interval '4 minutes'
+                           AND battle.stamped_at < ranked.ranked_day_end
+                ) AS ending (after_reset, unknown)
                 WHERE contribution.value->>'included' = 'true'
-            ) AS battles (after_reading, whole_day, every_battle_proven)
+            ) AS battles (
+                after_reading, every_battle_proven, after_reset,
+                after_reset_after_reading, end_unknown
+            )
             """,
             (
                 sorted(DISPUTED_BATTLE_REASONS),
@@ -788,32 +930,26 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     if day is None:
         return reading, False
     (
-        state, final, automatic_loss, automatic_state, boundary_kind,
-        start, end, battles_proven, after_reading, whole_day,
+        state, confidence, read_clean, final, automatic_loss, boundary_kind,
+        battles_proven, after_reading, after_reset, after_reset_after_reading,
+        end_unknown,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
-    # The game resets trophies at a Season's end, and raises a total at or
-    # below 5,000 at a weekly one, so that Reset's reading proves nothing.
-    end_reset = _text_value(boundary_kind) == "season" or (
-        _text_value(boundary_kind) == "weekly"
-        and (final if final is not None else end if end is not None else 0) <= 5000
-    )
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
+        # The game resets trophies at a Season's end, and raises a total at
+        # or below 5,000 at a weekly one, so that Reset's reading proves
+        # nothing and the reading must agree.
+        end_reset = _text_value(boundary_kind) == "season" or (
+            _text_value(boundary_kind) == "weekly" and int(final) <= 5000
+        )
         if not end_reset or total == settled:
-            return settled, True
+            return settled - int(after_reset), (
+                _text_value(confidence) == "exact" or bool(read_clean)
+            ) and not end_unknown
     if total is None:
         return reading, False
-    if start is not None:
-        return total, int(start) + int(whole_day) == total
-    known_loss = (
-        int(automatic_loss or 0)
-        if _text_value(automatic_state) in {"calculated", "confirmed"}
-        else 0
-    )
-    return total, end is not None and not end_reset and int(end) in {
-        total, total - known_loss
-    }
+    return total - int(after_reset_after_reading), False
 
 
 def _army_rows(
@@ -953,29 +1089,23 @@ def _army_selections(
     )
     decodes: dict[int, list[int]] = {}
     for battle_id, decode_id in connection.execute(
-        """
-        SELECT battle_id, id FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[]) AND is_active
-          AND decoder_version = %s AND catalog_version = %s
-        """,
-        (listed, DECODER_VERSION, CATALOG_VERSION),
+        f"SELECT battle_id, id FROM {CURRENT_DECODES} AS decode",
+        (DECODER_VERSION, listed),
     ).fetchall():
         decodes.setdefault(int(battle_id), []).append(int(decode_id))
     moved_decodes: dict[tuple[int, str], list[int]] = {}
     for battle_id, perspective, decode_id in connection.execute(
-        """
+        f"""
         SELECT decode.battle_id, decode.perspective, decode.id
-        FROM battle_army_decodes AS decode
+        FROM {CURRENT_DECODES} AS decode
         JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
           USING (battle_id, perspective)
-        WHERE decode.is_active
-          AND decode.decoder_version = %s AND decode.catalog_version = %s
         """,
         (
+            DECODER_VERSION,
+            [to_id for to_id, _ in moved_sides],
             [to_id for to_id, _ in moved_sides],
             [perspective for _, perspective in moved_sides],
-            DECODER_VERSION,
-            CATALOG_VERSION,
         ),
     ).fetchall():
         moved_decodes.setdefault(
@@ -1171,14 +1301,8 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
             *(
                 int(row[0])
                 for row in connection.execute(
-                    """
-                    SELECT id
-                    FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[])
-                      AND decoder_version = %s AND catalog_version = %s
-                      AND is_active
-                    """,
-                    (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                    (DECODER_VERSION, season_battle_ids),
                 ).fetchall()
             ),
             *_moved_decode_ids(connection, season_moved),
@@ -1229,14 +1353,12 @@ def _moved_decode_ids(
     return [
         int(row[0])
         for row in connection.execute(
-            """
+            f"""
             SELECT decode.id
-            FROM battle_army_decodes AS decode
+            FROM {CURRENT_DECODES} AS decode
             JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
               USING (battle_id, perspective)
-            WHERE decode.is_active
-              AND decode.decoder_version = %s AND decode.catalog_version = %s
             """,
-            (*_moved_side_arrays(moved), DECODER_VERSION, CATALOG_VERSION),
+            (DECODER_VERSION, list(moved.values()), *_moved_side_arrays(moved)),
         ).fetchall()
     ]

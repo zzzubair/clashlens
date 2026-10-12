@@ -493,6 +493,7 @@ describe("server-only Python client response boundary", () => {
                 confidence: "exact",
                 public_confidence: "partial",
                 official_rank: 1,
+                tied: true,
               },
             ],
           }),
@@ -509,7 +510,7 @@ describe("server-only Python client response boundary", () => {
     });
     expect(leaderboard).toMatchObject({
       view: "daily",
-      entries: [{ name: "Unknown", clan: "Unknown" }],
+      entries: [{ name: "Unknown", clan: "Unknown", tied: true }],
       page: 1,
       pageSize: 25,
       daily: {
@@ -724,6 +725,7 @@ describe("server-only Python client response boundary", () => {
       screen_ready: {
         days: [currentDay, previousDay],
         current_day_start: currentDay.ranked_day_start,
+        current_day_published_at: "2026-08-06T11:30:00+00:00",
         recent_day_starts: [previousDay.ranked_day_start],
         season_day_starts: [currentDay.ranked_day_start, previousDay.ranked_day_start],
         season: {
@@ -753,6 +755,7 @@ describe("server-only Python client response boundary", () => {
         ...full.screen_ready,
         days: [],
         current_day_start: null,
+        current_day_published_at: null,
         season: null,
         recent_day_starts: [],
         season_day_starts: [],
@@ -830,6 +833,7 @@ describe("server-only Python client response boundary", () => {
     expect(mapped.seasonDays.map((day) => day.dayNumber)).toEqual([3, 2]);
     expect(mapped.recentDays.map((day) => day.dayNumber)).toEqual([2]);
     expect(mapped.profile.notFoundAt).toBeNull();
+    expect(mapped.currentDayPublishedAt).toBe("2026-08-06T11:30:00+00:00");
     const mappedCurrentDay = mapped.currentDay;
     if (mappedCurrentDay === null) throw new Error("expected active day");
     const mapExpectedEvent = (event: (typeof offenseEvents)[number]) => ({
@@ -847,6 +851,7 @@ describe("server-only Python client response boundary", () => {
     await expect(createPythonClient().getPlayer("#2PP")).resolves.toMatchObject({
       season: null,
       currentDay: null,
+      currentDayPublishedAt: null,
       seasonDays: [],
       dataQuality: [{ code: "unavailable" }],
       profile: { notFoundAt: "2026-08-06T12:30:00+00:00", confidence: "uncertain" },
@@ -1099,6 +1104,28 @@ describe("server-only Python client response boundary", () => {
       threeStarCount: 1,
     });
     expect(mapped.rows[0].starCounts).toBeUndefined();
+  });
+
+  it("reads the finished seasons that have army data and rejects a malformed list", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ seasons: ["1785714000", "1783296000"] }))
+      .mockResolvedValueOnce(Response.json({ seasons: [1785714000] }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getArmySeasons()).resolves.toEqual([
+      "1785714000",
+      "1783296000",
+    ]);
+    expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe(
+      "/v1/analytics/armies/seasons",
+    );
+    await expect(createPythonClient().getArmySeasons()).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
   });
 
   it("rejects an army analytics payload with malformed evidence coverage", async () => {

@@ -3,15 +3,41 @@ import type { AddressInfo } from "node:net";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
+  RouterProvider,
   StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  openPage: null as { states: unknown[]; next: number } | null,
 }));
+
+// A page left open keeps its state from one in-page visit to the next, as
+// React does in the browser; server renders otherwise start fresh.
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (initialState: unknown) => {
+      const [value, setValue] = actual.useState(initialState);
+      const page = mocks.openPage;
+      if (!page) return [value, setValue];
+      const index = page.next++;
+      if (index === page.states.length) page.states.push(value);
+      return [
+        page.states[index],
+        (next: unknown) => {
+          page.states[index] = next;
+          setValue(next);
+        },
+      ];
+    },
+  };
+});
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
@@ -20,7 +46,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import ArmyRoute, { loader as armyLoader } from "../../app/routes/army-analytics";
-import { dayRangeProblem } from "../../app/lib/validation";
 import { PythonApiError } from "../../app/services/python.server";
 
 const SEASON = "1785714000";
@@ -115,7 +140,7 @@ describe("army analytics route historical reads", () => {
     mocks.createPythonClient.mockReset();
   });
 
-  it("serves a historical season from the whole-season summary without day or population filters", async () => {
+  it("serves a historical season's attacks from the whole-season summary without day or population filters", async () => {
     const getArmySeasonSummary = vi.fn().mockResolvedValue({ selection: {} });
     const getArmyAnalytics = vi.fn();
     mocks.createPythonClient.mockReturnValue({
@@ -137,7 +162,7 @@ describe("army analytics route historical reads", () => {
       URLSearchParams,
     ];
     expect(season).toBe(SEASON);
-    expect(query.get("lens")).toBe("defense");
+    expect(query.has("lens")).toBe(false);
     expect(query.get("category")).toBe("troops");
     expect(query.get("sort")).toBe("usage-rate");
     expect(query.has("start_day")).toBe(false);
@@ -204,7 +229,13 @@ describe("army analytics route historical reads", () => {
       getArmySeasonSummary,
       getArmyAnalytics: vi.fn(),
     });
-    const text = renderedText(await renderArmyRoute(`season=${SEASON}`));
+    const html = await renderArmyRoute(`season=${SEASON}&category=troops`);
+    const text = renderedText(html);
+    // The view picker stays on a past Season.
+    expect(html).toMatch(/aria-current="page"[^>]*><strong>Unit usage</);
+    expect(html).toContain(
+      `href="/analytics/armies?season=${SEASON}&amp;category=army-types"`,
+    );
     expect(text).toContain("Quantity");
     expect(text).toContain("1-star");
     expect(text).toContain("2-star");
@@ -214,6 +245,20 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("50.0%");
     expect(text).toContain("1 battle");
     expect(text).toContain("2 battles");
+  });
+
+  it("says army types are being prepared while the saved armies are sorted", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi
+        .fn()
+        .mockRejectedValue(new PythonApiError(404, { error: "army_types_preparing" })),
+    });
+    const html = await renderArmyRoute("");
+    const text = renderedText(html);
+    expect(text).toContain("Army types are being prepared");
+    expect(text).toContain("Back in a few minutes; Unit usage works now.");
+    expect(text).not.toContain("No army stats for this season yet");
+    expect(html).toContain('href="/analytics/armies?category=troops"');
   });
 
   it("reports unavailable when historical detail exists but its summary is missing", async () => {
@@ -265,7 +310,7 @@ describe("army analytics route historical reads", () => {
     }
   });
 
-  it("keeps day ranges and population filters for the current season", async () => {
+  it("asks for the current season's attacks over every finished day, keeping a top group", async () => {
     const getArmySeasonSummary = vi.fn();
     const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
     mocks.createPythonClient.mockReturnValue({
@@ -274,17 +319,143 @@ describe("army analytics route historical reads", () => {
     });
     const data = await armyLoader({
       request: requestFor(
-        "season=current&lens=defense&start_day=3&end_day=9&population=band-51-100&category=troops&sort=usage-rate",
+        "season=current&lens=defense&start_day=3&end_day=9&population=top-300&category=troops&sort=usage-rate",
       ),
       params: {},
     } as never);
     expect(getArmySeasonSummary).not.toHaveBeenCalled();
     expect(getArmyAnalytics).toHaveBeenCalledTimes(1);
     const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
-    expect(query.get("start_day")).toBe("3");
-    expect(query.get("end_day")).toBe("9");
-    expect(query.get("population")).toBe("band-51-100");
+    // Old links may still carry a lens or day range; the API's defaults
+    // (attacks, Day 1 to the latest finished day) apply instead.
+    expect(query.has("lens")).toBe(false);
+    expect(query.has("start_day")).toBe(false);
+    expect(query.has("end_day")).toBe(false);
+    expect(query.get("population")).toBe("top-300");
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
+
+    // Only leaderboard tops are offered; a visit without one, or an old link
+    // to any other group, shows the Top 1,000.
+    for (const old of [
+      "",
+      "band-51-100",
+      "streak-top-100",
+      "trophies-3800-4999",
+      "top-3000",
+    ]) {
+      await armyLoader({
+        request: requestFor(`season=current&category=troops&population=${old}`),
+        params: {},
+      } as never);
+      const [oldQuery] = getArmyAnalytics.mock.lastCall as [URLSearchParams];
+      expect(oldQuery.get("population")).toBe("top-1000");
+    }
+
+    // Switching between Armies and Unit usage starts again from Top 1,000.
+    getArmyAnalytics.mockResolvedValue(currentAnalytics("top-50", [1], 0));
+    const html = await renderArmyRoute(
+      "season=current&category=troops&population=top-50",
+    );
+    expect(html).toContain(
+      'href="/analytics/armies?season=current&amp;category=army-types"',
+    );
+  });
+
+  it("opens on armies, attacks only, with a picker for unit usage", async () => {
+    const getArmyAnalytics = vi.fn().mockResolvedValue({
+      ...currentAnalytics("top-100", [1, 2], 0),
+      selection: {
+        ...currentAnalytics("top-100", [1, 2], 0).selection,
+        category: "army-types",
+      },
+      totalAttacks: 12,
+      usableArmySample: 10,
+      perspectiveDisagreementCount: 0,
+      rows: [
+        {
+          key: "army-type:3",
+          label: "Thrower",
+          usageCount: 6,
+          usageDenominator: 12,
+          usageRate: 0.5,
+          starCounts: [0, 1, 2, 3],
+          starRates: [0, 1 / 6, 2 / 6, 3 / 6],
+          threeStarRate: 0.5,
+          averageStars: 2.33,
+          averageDestruction: 91,
+          unknownExcludedAttacks: 0,
+        },
+        {
+          key: "army-type:2",
+          label: "Unreadable",
+          usageCount: 2,
+          usageDenominator: 12,
+          usageRate: 2 / 12,
+          starCounts: [1, 1, 0, 0],
+          starRates: [0.5, 0.5, 0, 0],
+          threeStarRate: 0,
+          averageStars: 0.5,
+          averageDestruction: 40,
+          unknownExcludedAttacks: 0,
+        },
+      ],
+    });
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const html = await renderArmyRoute("season=current&lens=defense");
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("category")).toBe("army-types");
+    expect(query.has("lens")).toBe(false);
+    const text = renderedText(html);
+    // Attacks only: the Armies view offers no Attacks/Defenses choice.
+    expect(html).not.toContain('name="lens"');
+    expect(text).toContain(
+      "Armies The army each attack used Unit usage Troops, spells, heroes and more",
+    );
+    expect(html).toMatch(/aria-current="page"[^>]*><strong>Armies</);
+    expect(text).toContain("Thrower 6 / 12 50.0%");
+    expect(text).not.toContain("not which army is best");
+    // Unreadable attacks are a row of their own, not excluded.
+    expect(text).toContain("Records included 12 Every attack, Unreadable included");
+    expect(text).toContain("Records excluded 0");
+    expect(text).toContain("Unreadable 2 / 12 16.7%");
+    expect(html).toContain(
+      'href="/analytics/armies?season=current&amp;lens=defense&amp;category=troops"',
+    );
+  });
+
+  it("says Armies are not available for a past Season, staying on Armies", async () => {
+    const getArmySeasonSummary = vi.fn();
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary,
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
+    });
+    const html = await renderArmyRoute(`season=${SEASON}&category=army-types`);
+    expect(getArmySeasonSummary).not.toHaveBeenCalled();
+    const text = renderedText(html);
+    expect(text).toContain("Armies are not available for this season");
+    expect(html).toMatch(/aria-current="page"[^>]*><strong>Armies</);
+    expect(html).toMatch(new RegExp(`<option value="${SEASON}" selected="">`));
+  });
+
+  it("opens a visit with no query on armies, not the captured unit preview", async () => {
+    const getArmyAnalytics = vi
+      .fn()
+      .mockResolvedValue(currentAnalytics("top-100", [1], 0));
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const result = await armyLoader({ request: requestFor(""), params: {} } as never);
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("category")).toBe("army-types");
+    expect(result).toMatchObject({ requestedSeason: "current", error: null });
+
+    const units = await armyLoader({
+      request: requestFor("category=troops"),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics).toHaveBeenCalledTimes(1);
+    expect(units).toMatchObject({
+      analytics: { selection: { category: "troops" } },
+      error: null,
+    });
   });
 
   it("names the finished days covered when current-season days are missing", async () => {
@@ -295,117 +466,34 @@ describe("army analytics route historical reads", () => {
         .mockResolvedValueOnce(
           currentAnalytics("top-100", [23, 25, 26], 100, 0, untracked),
         )
-        .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100)),
+        .mockResolvedValueOnce(currentAnalytics("top-100", [1, 2, 3], 100)),
     });
     const html = await renderArmyRoute("season=current");
     expect(renderedText(html)).toContain(
       "Days 23, 25–26 of 28; days not tracked: 1–22, 24.",
     );
-    // The form keeps asking for the whole range so later days appear once ready.
-    expect(html).toMatch(/name="start_day"[^>]*value="1"/);
-    expect(html).toMatch(/name="end_day"[^>]*value="28"/);
-    // Consistent top needs every selected day, so it points at the tracked run.
-    expect(html).toContain('value="top-100"');
-    expect(html).not.toContain("streak-top-");
-    expect(renderedText(html)).toContain(
-      "To compare players who stayed in the top ranks on every selected day, choose days tracked throughout. Use days 25–26",
-    );
-    expect(html).toMatch(/href="[^"]*start_day=25&amp;end_day=26/);
-    const chosen = await renderArmyRoute("season=current&start_day=25");
-    expect(renderedText(chosen)).not.toContain("days not tracked");
-    expect(chosen).toContain('value="streak-top-100"');
-    expect(renderedText(chosen)).not.toContain("choose days tracked throughout");
+    // There are no day fields to change; the page always reads the Season.
+    expect(html).not.toContain('name="start_day"');
+    expect(html).not.toContain('name="end_day"');
+    const complete = await renderArmyRoute("season=current");
+    expect(renderedText(complete)).not.toContain("days not tracked");
   });
 
-  it("withholds Consistent top while a selected ended day lacks a saved board", async () => {
+  it("keeps notes short: no old-rank warning or star-rate explanation", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi
         .fn()
-        .mockResolvedValueOnce(
-          currentAnalytics("top-100", [23, 24, 25, 26], 100, 0, [24]),
-        )
-        .mockResolvedValueOnce(currentAnalytics("top-100", [23, 24], 100, 0, [25, 26])),
+        .mockResolvedValue(currentAnalytics("top-100", [25, 26], 100, 100)),
     });
-    const middle = await renderArmyRoute("season=current&start_day=23&end_day=26");
-    expect(middle).not.toContain("streak-top-");
-    expect(renderedText(middle)).toContain(
-      "To compare players who stayed in the top ranks on every selected day, choose days tracked throughout. Use days 25–26",
-    );
-    expect(middle).toMatch(/href="[^"]*start_day=25&amp;end_day=26/);
-    const trailing = await renderArmyRoute("season=current&start_day=23&end_day=26");
-    expect(trailing).not.toContain("streak-top-");
-    expect(trailing).toMatch(/href="[^"]*start_day=23&amp;end_day=24/);
+    const html = await renderArmyRoute("season=current&category=troops");
+    const text = renderedText(html);
+    expect(text).not.toContain("These numbers cover");
+    expect(text).not.toContain("Star rates show");
+    expect(text).not.toContain("Full star breakdown");
+    expect(html).not.toContain("<details");
   });
 
-  it("explains how Consistent top is decided, including an empty group", async () => {
-    const getArmyAnalytics = vi
-      .fn()
-      .mockResolvedValueOnce(currentAnalytics("streak-top-100", [25, 26], 66, 66))
-      .mockResolvedValueOnce(currentAnalytics("streak-top-5", [25, 26], 0));
-    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
-    const filled = renderedText(
-      await renderArmyRoute(
-        "season=current&start_day=25&end_day=26&population=streak-top-100",
-      ),
-    );
-    expect(filled).toContain("players in the top 100 on every selected day.");
-    expect(filled).toContain(
-      "66 players were in the top 100 on every selected day. Top 100 on a day means the top 100 of the leaderboard saved just before that day’s Reset (05:00 UTC), ranked by each player’s total at that Reset, before the game’s automatic defense loss: their last value saved before the Reset plus the battles recorded after it. Boards published before we started adding those battles, and not rebuilt since, use the saved value alone, as do players whose later battles we can’t confirm. 66 of these players had a trophy count over 10 minutes old at Reset on at least one day. Comparison with settled end-of-day ranks: not available yet.",
-    );
-    const empty = renderedText(
-      await renderArmyRoute(
-        "season=current&start_day=25&end_day=26&population=streak-top-5",
-      ),
-    );
-    expect(empty).toContain("No player was in the top 5 on every selected day.");
-    expect(empty).not.toContain("of these players");
-    expect(empty).toContain(
-      "Comparison with settled end-of-day ranks: not available yet.",
-    );
-  });
-
-  it("warns about old saved ranks for top and rank-range groups only", async () => {
-    const getArmyAnalytics = vi
-      .fn()
-      .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100, 100))
-      .mockResolvedValueOnce(currentAnalytics("band-101-200", [25, 26], 100, 7))
-      .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100, 0))
-      .mockResolvedValueOnce(currentAnalytics("all", [25, 26], 0, 0));
-    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
-    const render = async (population: string) =>
-      renderedText(
-        await renderArmyRoute(
-          `season=current&start_day=25&end_day=26&population=${population}`,
-        ),
-      );
-    expect(await render("top-100")).toContain(
-      "Ranks come from the leaderboard saved just before the last selected day’s Reset (05:00 UTC). 100 of these 100 players had a trophy count over 10 minutes old at that Reset, so their rank may be out of date.",
-    );
-    expect(await render("band-101-200")).toContain(
-      "7 of these 100 players had a trophy count over 10 minutes old at that Reset",
-    );
-    expect(await render("top-100")).not.toContain("Ranks come from");
-    expect(await render("all")).not.toContain("Ranks come from");
-  });
-
-  it("keeps a Consistent top choice when its days are unavailable", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getArmyAnalytics: vi.fn().mockRejectedValue(
-        new PythonApiError(404, {
-          error: "army_analytics_unavailable",
-          affected_days: [24],
-        }),
-      ),
-    });
-    const html = await renderArmyRoute(
-      "season=current&start_day=24&end_day=26&population=streak-top-50",
-    );
-    expect(renderedText(html)).toContain("No army stats for these days yet");
-    expect(html).toMatch(/<option value="streak-top-50" selected="">/);
-    expect(html).not.toContain("Selected player group");
-  });
-
-  it("reads individual Clan Castle troops when the toggle is on", async () => {
+  it("offers Clan Castle Troops as a unit type, keeping old checkbox links", async () => {
     const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
     mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
 
@@ -420,6 +508,11 @@ describe("army analytics route historical reads", () => {
       params: {},
     } as never);
     expect(getArmyAnalytics.mock.calls[1][0].get("category")).toBe("troops");
+
+    getArmyAnalytics.mockResolvedValue(currentAnalytics("top-100", [1], 0));
+    const html = await renderArmyRoute("season=current&category=troops");
+    expect(html).toContain('<option value="cc-troops">Clan Castle Troops</option>');
+    expect(html).not.toContain('type="checkbox"');
   });
 
   it("does not show regular troop results for an unavailable past-season Clan Castle selection", async () => {
@@ -472,7 +565,7 @@ describe("army analytics route historical reads", () => {
     expect(selected).toMatchObject({
       analytics: {
         selection: {
-          lens: "defense",
+          lens: "offense",
           population: "top-50",
           category: "spells",
           sort: "usage-count",
@@ -492,7 +585,6 @@ describe("army analytics route historical reads", () => {
   });
 
   it.each([
-    "lens=sideways",
     "population=top-99",
     "category=unknown",
     "sort=alphabetical",
@@ -527,14 +619,11 @@ describe("army analytics route historical reads", () => {
     );
   });
 
-  it("reconciles recorded, included and excluded captured defense records", async () => {
-    const text = renderedText(
-      await renderArmyRoute("recent=1&lens=defense&population=top-100"),
-    );
-    expect(text).toContain("Battle records 1,593 Recorded in this selection");
-    expect(text).toContain("Records included 1,591");
-    expect(text).toContain("Records excluded 2");
-    expect(text).toContain("1 other battle record had no opponent and was excluded");
+  it("reconciles recorded, included and excluded captured attack records", async () => {
+    const text = renderedText(await renderArmyRoute("recent=1&population=top-100"));
+    expect(text).toContain("Battle records 1,600 Recorded in this selection");
+    expect(text).toContain("Records included 1,600");
+    expect(text).toContain("Records excluded 0");
   });
 });
 
@@ -557,6 +646,7 @@ describe("army analytics current season end", () => {
     vi.setSystemTime(SEASON_END);
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [27], 100)),
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
     });
     const html = await renderArmyRoute("season=current");
     expect(html).not.toContain('aria-label="Army statistics"');
@@ -583,26 +673,18 @@ describe("army analytics player groups", () => {
     mocks.createPythonClient.mockReset();
   });
 
-  it("offers the larger tops, rank ranges and a custom trophy range", async () => {
+  it("offers only leaderboard tops", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-10000", [23], 0)),
     });
     const html = await renderArmyRoute("season=current&population=top-10000");
-    for (const population of [
-      "top-1000",
-      "top-2000",
-      "top-5000",
-      "top-10000",
-      "band-1-100",
-      "band-901-1000",
-      "band-1001-2000",
-      "band-2001-5000",
-      "band-5001-10000",
-      "trophies",
-    ]) {
-      expect(html).toContain(`value="${population}"`);
-    }
-    expect(html).not.toContain("Selected player group");
+    const picker = html.match(/<select name="population"[^>]*>(.*?)<\/select>/)?.[1];
+    expect(
+      [...(picker ?? "").matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]),
+    ).toEqual(
+      [5, 10, 20, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000].map((n) => `top-${n}`),
+    );
+    expect(html).not.toContain("<optgroup");
     expect(html).not.toContain('name="trophy_min"');
     // An empty group still shows the page, with zero records and no rows.
     const text = renderedText(html);
@@ -611,92 +693,19 @@ describe("army analytics player groups", () => {
     expect(text).toContain("No recognized components in this selection.");
   });
 
-  it("puts trophy filtering first without changing the default player group", async () => {
-    const getArmyAnalytics = vi
-      .fn()
-      .mockResolvedValue(currentAnalytics("top-100", [25, 26], 100));
-    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
-    const html = await renderArmyRoute("saved=1&season=current");
-    const picker = html.match(/<select name="population"[^>]*>(.*?)<\/select>/)?.[1];
-    expect(picker?.match(/<option value="([^"]+)"/)?.[1]).toBe("trophies");
-    expect(picker).toContain('<option value="top-100" selected="">');
-    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
-    expect(query.get("population")).toBe("top-100");
-    expect(query.get("start_day")).toBe("1");
-    expect(query.get("end_day")).toBe("28");
-  });
-
-  it.each(["offense", "defense"])(
-    "keeps trophy help relevant for %s despite missing rank days",
-    async (lens) => {
-      const analytics = currentAnalytics("trophies-5500-5600", [25, 26], 0, 0, [24]);
-      analytics.selection.lens = lens;
-      mocks.createPythonClient.mockReturnValue({
-        getArmyAnalytics: vi.fn().mockResolvedValue(analytics),
-      });
-      const text = renderedText(
-        await renderArmyRoute(
-          `saved=1&season=current&lens=${lens}&population=trophies-5500-5600`,
-        ),
-      );
-      expect(text).not.toContain("choose days tracked throughout");
-      expect(text).not.toContain("Use days 25–26");
-      expect(text).toContain(
-        "Each battle counts if the player’s trophies at that moment fall in this range.",
-      );
-      expect(text).toContain(
-        `${lens === "offense" ? "by" : "against"} players with 5,500 to 5,600 trophies at battle time`,
-      );
-      expect(text).not.toContain("This range has not been applied");
+  it.each(["top-300", "top-2000", "top-10000"])(
+    "asks the API for %s",
+    async (population) => {
+      const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
+      mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+      await armyLoader({
+        request: requestFor(`season=current&population=${population}`),
+        params: {},
+      } as never);
+      const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+      expect(query.get("population")).toBe(population);
     },
   );
-
-  it.each([
-    "top-2000",
-    "top-5000",
-    "top-10000",
-    "band-1-100",
-    "band-1001-2000",
-    "band-5001-10000",
-    "trophies-3800-4999",
-  ])("asks the API for %s", async (population) => {
-    const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
-    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
-    await armyLoader({
-      request: requestFor(`season=current&population=${population}`),
-      params: {},
-    } as never);
-    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
-    expect(query.get("population")).toBe(population);
-  });
-
-  it("turns the custom trophy fields into one shareable range", async () => {
-    const result = await armyLoader({
-      request: requestFor(
-        "season=current&population=trophies&trophy_min=3800&trophy_max=05200&lens=defense",
-      ),
-      params: {},
-    } as never);
-    expect((result as Response).status).toBe(302);
-    expect((result as Response).headers.get("location")).toBe(
-      "/analytics/armies?season=current&population=trophies-3800-5200&lens=defense",
-    );
-  });
-
-  it("shows a chosen trophy range in its fields", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getArmyAnalytics: vi
-        .fn()
-        .mockResolvedValue(currentAnalytics("trophies-3800-5200", [23], 0)),
-    });
-    const html = await renderArmyRoute("season=current&population=trophies-3800-5200");
-    expect(html).toMatch(/<option value="trophies" selected="">/);
-    expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
-    expect(html).toMatch(/name="trophy_max"[^>]*value="5200"/);
-    expect(renderedText(html)).toContain(
-      "by players with 3,800 to 5,200 trophies at battle time",
-    );
-  });
 
   it("keeps the picker and explains a request that hits the 5-second limit", async () => {
     const actual = await vi.importActual<
@@ -715,25 +724,25 @@ describe("army analytics player groups", () => {
     mocks.createPythonClient.mockImplementation(actual.createPythonClient);
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(100));
-    const tooWide =
-      "This trophy range is too wide to load right now. Try a narrower range.";
+    const tooLong =
+      "This player group took too long to load right now. Try a smaller group.";
     const json = { "content-type": "application/json" };
     try {
       for (const [when, send, message] of [
-        ["waiting for the reply", () => {}, tooWide],
+        ["waiting for the reply", () => {}, tooLong],
         [
           "reading the reply",
           (response: ServerResponse) => {
             response.writeHead(200, json);
             response.write('{"kind":');
           },
-          tooWide,
+          tooLong,
         ],
         [
           "the database cancels",
           (response: ServerResponse) =>
             response.writeHead(503, json).end('{"error":"timeout"}'),
-          tooWide,
+          tooLong,
         ],
         [
           "the service fails another way",
@@ -743,25 +752,14 @@ describe("army analytics player groups", () => {
         ],
       ] as const) {
         reply = send;
-        const html = await renderArmyRoute(
-          "season=current&population=trophies-3800-6100",
-        );
+        const html = await renderArmyRoute("season=current&population=top-10000");
         const text = renderedText(html);
         expect(text, when).toContain(message);
         expect(text, when).not.toContain("malformed");
         expect(html).not.toContain("<table");
-        expect(html).toMatch(/<option value="trophies" selected="">/);
-        expect(html).toContain('value="top-10000"');
-        expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
-        expect(html).toMatch(/name="trophy_max"[^>]*value="6100"/);
+        expect(html).toMatch(/<option value="top-10000" selected="">/);
       }
       expect(limit).toHaveBeenCalledWith(5_000);
-      reply = () => {};
-      const top = renderedText(
-        await renderArmyRoute("season=current&population=top-10000"),
-      );
-      expect(top).toContain("This player group took too long to load right now.");
-      expect(top).not.toContain("trophy range is too wide");
     } finally {
       limit.mockRestore();
       server.closeAllConnections();
@@ -775,59 +773,151 @@ describe("army analytics player groups", () => {
       }
     }
   });
+});
 
-  it.each([
-    ["population=trophies&trophy_min=6000&trophy_max=5000", "can’t be above"],
-    ["population=trophies-6000-5000", "can’t be above"],
-    ["population=trophies&trophy_min=&trophy_max=5000", "whole numbers"],
-    ["population=trophies&trophy_min=-1&trophy_max=5000", "whole numbers"],
-    ["population=trophies&trophy_min=12.5&trophy_max=5000", "whole numbers"],
-    ["population=trophies-5000-100000", "whole numbers"],
-    ["population=trophies-abc", "whole numbers"],
-  ])("rejects the trophy range %s before asking the API", async (query, message) => {
-    const getArmyAnalytics = vi.fn();
-    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
-    const result = await armyLoader({
-      request: requestFor(`season=current&${query}`),
-      params: {},
-    } as never);
-    expect(getArmyAnalytics).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      init: { status: 422 },
-      data: { analytics: null, error: { error: { code: "invalid_input" } } },
+describe("army analytics attacks and season picker", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("shows attacks only, with no perspective or day-range controls", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1, 2], 0)),
     });
-    const error = (result as { data: { error: { error: { message: string } } } }).data
-      .error.error.message;
-    expect(error).toContain(message);
+    const html = await renderArmyRoute("season=current&lens=defense");
+    const text = renderedText(html);
+    expect(html).not.toContain('name="lens"');
+    expect(text).not.toContain("Defenses");
+    expect(text).not.toContain("From Legend day");
+    expect(text).toContain("usage in attacks by top-100 players");
+    expect(text).toContain("2 of 28 days");
+  });
+
+  it("names the unit types as the owner asked, under Unit Type", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
+    });
+    const html = await renderArmyRoute("season=current&category=troops");
+    const picker = html.match(
+      /Unit Type<select name="category"[^>]*>(.*?)<\/select>/,
+    )?.[1];
+    expect(
+      [...(picker ?? "").matchAll(/<option[^>]*>([^<]+)</g)].map((m) => m[1]),
+    ).toEqual([
+      "Troops",
+      "Spells",
+      "Siege Machines",
+      "Heroes",
+      "Pets",
+      "Equipments",
+      "Hero + Equipment",
+      "Hero + Pet",
+      "Hero + Both Equipments",
+      "Clan Castle Troops",
+    ]);
+    expect(renderedText(html)).not.toContain("Show ");
+  });
+
+  it("lists only seasons that have army data", async () => {
+    const getArmySeasons = vi.fn().mockResolvedValue([]);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
+      getArmySeasons,
+    });
+    const picker = (html: string) =>
+      html.match(/<select name="season"[^>]*>(.*?)<\/select>/)?.[1] ?? "";
+    // The first season: nothing to pick but the current one.
+    const first = picker(await renderArmyRoute("season=current"));
+    expect(first.match(/<option/g)).toHaveLength(1);
+    expect(first).toContain(">Current Season</option>");
+
+    // A later season lists each finished season the API reports.
+    getArmySeasons.mockResolvedValue([SEASON]);
+    const later = picker(await renderArmyRoute("season=current"));
+    expect(later.match(/<option/g)).toHaveLength(2);
+    // Named by the day it ended.
+    expect(later).toContain(`value="${SEASON}">30 Aug 2026</option>`);
+
+    // A failed list still leaves the current season to pick.
+    getArmySeasons.mockRejectedValue(new Error("boom"));
+    const failed = await renderArmyRoute("season=current");
+    expect(failed).toContain('aria-label="Army statistics"');
+    expect(picker(failed).match(/<option/g)).toHaveLength(1);
   });
 });
 
-describe("army analytics day range", () => {
-  it.each([
-    ["1", "28", null],
-    ["14", "14", null],
-    ["27", "26", "can’t be after"],
-    ["", "26", "whole numbers"],
-    ["0", "26", "whole numbers"],
-    ["1", "29", "whole numbers"],
-    ["1.5", "26", "whole numbers"],
-  ])("checks From %s to %s before the page asks for results", (start, end, message) => {
-    const problem = dayRangeProblem(start, end);
-    if (message === null) expect(problem).toBeNull();
-    else expect(problem).toContain(message);
+describe("army analytics top-bar link", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
   });
 
-  it("links both day fields to the message that explains a rejected range", async () => {
+  it("drops a chosen sort and lists Usage highest first again", async () => {
+    const rows = (
+      [
+        ["Archer", 1],
+        ["Wizard", 3],
+      ] as const
+    ).map(([label, count]) => ({
+      key: `troop:${label}`,
+      label,
+      usageCount: count,
+      usageDenominator: 4,
+      usageRate: count / 4,
+      starCounts: [0, 0, 0, count],
+      starRates: [0, 0, 0, 1],
+      threeStarRate: 1,
+      averageStars: 3,
+      averageDestruction: 100,
+      unknownExcludedAttacks: 0,
+    }));
     mocks.createPythonClient.mockReturnValue({
-      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [23], 0)),
+      getArmyAnalytics: vi
+        .fn()
+        .mockResolvedValue({ ...currentAnalytics("top-100", [1], 1), rows }),
     });
-    const html = await renderArmyRoute("season=current&start_day=20&end_day=23");
-    for (const name of ["start_day", "end_day"]) {
-      expect(html).toMatch(
-        new RegExp(`aria-describedby="day-range-help" name="${name}"`),
-      );
+    const page = { states: [] as unknown[], next: 0 };
+    function OpenPage() {
+      page.next = 0;
+      mocks.openPage = page;
+      try {
+        return ArmyRoute();
+      } finally {
+        mocks.openPage = null;
+      }
     }
-    expect(html).toMatch(/id="day-range-help"[^>]*>Only completed Legend days/);
+    const router = createMemoryRouter(
+      [{ path: "/analytics/armies", Component: OpenPage, loader: armyLoader }],
+      {
+        initialEntries: [
+          "/analytics/armies?season=current&category=troops&population=top-100",
+        ],
+      },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const shown = () => {
+      const html = renderToString(createElement(RouterProvider, { router }));
+      return {
+        rows: [...html.matchAll(/role="rowheader">(.*?)<\/th>/g)].map(([, name]) => name),
+        sorted: html.match(/data-column="([^"]+)" aria-sort="([^"]+)"/)?.slice(1),
+      };
+    };
+    expect(shown()).toEqual({
+      rows: ["Wizard", "Archer"],
+      sorted: ["usage-rate", "descending"],
+    });
+
+    // Sort by Name, A to Z: the table's chosen sort is the state that starts empty.
+    page.states[page.states.indexOf(null)] = { column: "name", direction: "ascending" };
+    expect(shown()).toEqual({
+      rows: ["Archer", "Wizard"],
+      sorted: ["name", "ascending"],
+    });
+
+    await router.navigate("/analytics/armies");
+    expect(shown()).toEqual({
+      rows: ["Wizard", "Archer"],
+      sorted: ["usage-rate", "descending"],
+    });
   });
 });
 
@@ -877,29 +967,20 @@ describe("army analytics worst-case data", () => {
         rows: worstRows,
       }),
     });
-    const text = renderedText(
-      await renderArmyRoute("season=current&start_day=1&end_day=1&population=top-100"),
-    );
-    expect(text).toContain(
-      "This player had a trophy count over 10 minutes old at that Reset",
-    );
+    const text = renderedText(await renderArmyRoute("season=current&population=top-100"));
     expect(text).toContain("1 of the included armies is partly readable.");
-    expect(text).toContain(
-      "1 completed Legend day. 1 battle has conflicting reports. 1 battle record had missing or unreadable army details and is excluded from every row.",
-    );
     expect(text).toContain("128,473 / 131,020");
-    expect(text).toContain("91,388 (71.1%)");
-    expect(text).toContain("12,847");
+    expect(text).toContain("71.1% 91,388 battles");
     expect(text).toContain("Unknown ID 4000123");
+    expect(text).toContain("100.0% 1 battle");
   });
 
-  it("says an empty breakdown has no components instead of showing a bare header", async () => {
+  it("says an empty table has no components instead of showing a bare header", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
     });
-    const html = await renderArmyRoute("season=current&start_day=1&end_day=1");
-    expect(html.match(/No recognized components in this selection\./g)).toHaveLength(2);
-    expect(html).toMatch(/aria-label="Star breakdown table" hidden=""/);
+    const html = await renderArmyRoute("season=current");
+    expect(html.match(/No recognized components in this selection\./g)).toHaveLength(1);
   });
 
   it("formats past-season quantities and result totals", async () => {
@@ -922,7 +1003,7 @@ describe("army analytics worst-case data", () => {
       }),
       getArmyAnalytics: vi.fn(),
     });
-    const text = renderedText(await renderArmyRoute(`season=${SEASON}`));
+    const text = renderedText(await renderArmyRoute(`season=${SEASON}&category=troops`));
     expect(text).toContain("385,419");
     expect(text).toContain("Showing 2 of 1,284 results");
   });

@@ -1,11 +1,11 @@
-// One side of a Season's recorded battles. Trophies are totals moved, never
+// One side of a Season's recorded battles. Averages are trophies moved, never
 // signed; null anywhere means that part is unknown.
 export interface SummarySide {
   count: number | null;
   stars: Array<number | null>;
   unknown: number | null;
-  trophies: number | null;
   perDay: number | null;
+  perBattle: number | null;
 }
 
 const count = (value: number | null) =>
@@ -43,7 +43,7 @@ export function SeasonSummary({
   controls?: React.ReactNode;
   rank: [label: string, value: string];
   finalRank?: boolean;
-  trophies: [label: string, value: string];
+  trophies: [label: string, value: string, mark?: React.ReactNode];
   attack?: SummarySide;
   defense?: SummarySide;
   children?: React.ReactNode;
@@ -75,13 +75,16 @@ export function SeasonSummary({
         {controls}
       </div>
       <dl className="season-summary-headline">
-        {[rank, trophies].map(([label, value]) => (
+        {[rank, trophies].map(([label, value, mark]) => (
           <div
             key={label}
             className={finalRank && label === rank[0] ? "season-summary-rank" : undefined}
           >
             <dt>{label}</dt>
-            <dd className={words(value)}>{value}</dd>
+            <dd className={words(value)}>
+              {value}
+              {mark}
+            </dd>
           </div>
         ))}
         {attack ? (
@@ -148,15 +151,15 @@ export function SeasonSummary({
                 [
                   "Offense per day",
                   signed(attack.perDay, 1),
-                  "Averaged over finished Legend days with attacks",
+                  "Averaged over every finished Legend day",
                 ],
                 [
                   "Defense per day",
                   signed(defense.perDay, -1),
-                  "Averaged over finished Legend days with defenses",
+                  "Averaged over every finished Legend day",
                 ],
-                ["Per attack", signed(per(attack.trophies, attack.count), 1, 1)],
-                ["Per defense", signed(per(defense.trophies, defense.count), -1, 1)],
+                ["Per attack", signed(attack.perBattle, 1, 1)],
+                ["Per defense", signed(defense.perBattle, -1, 1)],
               ] as const
             ).map(([label, value, hint]) => (
               <div key={label}>

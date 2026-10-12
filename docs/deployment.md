@@ -463,6 +463,39 @@ Keep `CLASHLENS_GLOBAL_RANKINGS_ENABLED=false` until real collection is
 approved; with it off and no tracked players, the collector makes no
 official API calls at all.
 
+`CLASHLENS_GAME_RANKINGS_ENABLED=true` turns on the daily pulls of the game's
+ranking lists and the Daily board's score against them (default `false`;
+[collector polling](collector-polling.md#the-games-ranking-lists-once-a-day)).
+
+The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
+`app.env` (`true` or `false`, default `false`). While it is off, `/dashboard`
+shows the normal page-not-found page, the navigation bar has no Dashboard
+link, saving a dashboard layout is refused, and the private API refuses the
+dashboard's own player reads (`/v1/players/{tag}/today` and
+`/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
+API, so turning it on or off takes `./ops up`.
+
+Crews use the same setting: they ship with the dashboard and have no switch of
+their own. While it is off, every private API crew route
+(`/v1/account/crews…` and `/v1/account/crew-invites/…`) answers 404
+`crews_disabled` before reading anything, every `/crews` page shows the normal
+page-not-found page, and the navigation bar has no Crews link. Migration 0095
+creates the crew tables either way; they stay empty while the setting is off.
+
+Visitor counting stays off, with no script and no requests, until
+`CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only
+send events) is set in `app.env`. Counts go only to PostHog's EU cloud,
+`https://eu.i.posthog.com`; the address is fixed in the code. `./ops` passes
+the token to the website and the private API in production only, so turning
+counting on or off takes `./ops up`. Never put a personal API key (`phx_`)
+here. The `/privacy` page explains the counting and the return-visits switch
+in the site footer.
+
+Before setting the token, confirm in the PostHog project's settings that
+discarding client IP data is switched on. Without it PostHog stores each
+visitor's IP address with every count, which the privacy page and the agreed
+plan rule out. Clash Lens cannot check or change that setting itself.
+
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
 
@@ -792,7 +825,7 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    that log line is the replay time; `pg_last_wal_replay_lsn()` minus the
    backup's `start_lsn` is the WAL it replayed, and the two give the replay rate
    that decides how much WAL fits in the restore target. Compare expected
-   accounts, saved-player links, player history, battle links and army
+   accounts, group memberships, player history, battle links and army
    summaries. Read every retained raw object referenced by the sample and
    verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
@@ -1161,16 +1194,63 @@ jobs every thread claims, however recently the live work arrived. On
 2026-10-08 the rest still went by waiting time, so live responses that arrived
 after 05:09 waited 21 minutes behind the Reset backlog. Build claims always
 take Reset-priority work first, so the board's build and checks never wait
-behind an army build. Among live work, a claim looks only at the 32 jobs that
-became due first, so a retried live job, due again from its retry time, can
-wait behind older live work. On 2026-10-07 the collector's outage delayed about 19,000
+behind an army build. Among live work, a claim looks at the 32 jobs that
+became due first and, separately, the 32 oldest jobs that already failed once,
+so a retried live job, due again from its retry time, still goes ahead of
+Reset work 20 minutes after it first arrived instead of waiting behind newer
+live work. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
 (`republish-current-season --first-logs` and `--repair`)
 are queued at backfill priority, 25, which a worker thread only runs when no
-higher-priority work that thread can claim is due; a thread that does not process saved
-responses can run one while responses still wait. On a thread's Reset-first
+higher-priority work that thread can claim is due, or one at a time while live
+work is 2 minutes behind; a thread that does not process saved
+responses can run one while responses still wait. All worker processes together
+run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
+2), and beside them at most `CLASHLENS_DAY_RECHECK_JOB_LIMIT` day rechecks after
+new evidence or twice a day (priority 26, `queue_refresh.py`; default 4); see
+[Worker processes](#worker-processes). A claim takes any live work it can
+first, then fills the rest of its size with background jobs, each kind up to
+its own free room, the kind using less of its limit first, ties going at
+random in proportion to the limits. Only one claim at a time counts and
+takes background jobs; a claim that found no live work waits up to half a
+second for that turn instead of giving up and sleeping the 1 second poll. On
+2026-10-09 a claim gave up at once and took one background job, the older
+kind first, so raising the limits from 2 and 4 to 6 and 6 cut background work
+from about 217 jobs a minute to 178, with rechecks averaging 0.05 running.
+Live work is behind by a wait when at least 5 live responses and day results, and at
+least 1 in 20 of those due and unfinished, have waited that long, counting
+at most 200 in each state: waiting, waiting on its saved response, or
+leased, including one that keeps its lease after a lock conflict. Each limit
+halves, rounded up, while live work is 30 seconds behind (9 in 10 live
+responses waited under 14 seconds on 2026-10-09) or a statement of the
+worker's own has been blocked on a lock for a second or more (sessions of
+other database roles do not show what they wait on), and while it is 2
+minutes behind none starts but one day result of each priority, one a claim,
+which a claim that does not take Reset work first takes ahead of its live work
+only while a live or Reset day result runs, and in place of a one-job claim's
+own job only while one of that job's priority runs: from 06:16
+on 2026-10-12 live day results waited hours, and by 09:42 none of about
+50,000 background jobs had run. Army re-decodes stay paused. A few stragglers are not enough: between 16:00 and 18:00 UTC on
+2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first
+try, and stopping for any one of them stopped background work 32% of the
+time; replayed every 5 seconds, this rule stops it 0.6% of that time and
+halves it 3.2%, and stops it 39% of 05:00 to 06:20, when up to 21,800 live
+jobs waited. A leased job counts
+until it leaves its lease, even after the lease runs out, because its work can
+still be running; queue maintenance clears dead ones
+([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
+2026-10-09 six army re-decodes ran at once, 568 jobs were leased beside Season
+repair, and live responses fell to about 8,000 players over 2 minutes late. An
+army re-decode saves 10 battles per transaction and waits at most a
+millisecond for any lock: when a live job holds one, it rolls those 10 back and
+tries again a quarter second later, up to 20 times, so a live job waits at most
+for one group of 10. A live battle log never waits for a battle's lock: it
+skips a battle another job holds and leaves its armies to a later battle log
+that lists it. The
+website's delayed-updates notice counts live work and the latest finished
+Legend day's day-end calculation, not other backfill. On a thread's Reset-first
 turn, a claim from the newest-job plan takes its planned job only if, in the
 same database statement, no Reset-priority work it could take is waiting: due,
 waiting on its saved response, or with an expired lease. If there is any, the
@@ -1230,10 +1310,26 @@ In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
 worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
 12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
 two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
-(default 12, at most 16) each process's connections. All processes share the container's
-memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
-worker refuses to start with more than 16 connections a process or 38 in
-all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+(default one a thread, at most 16) each process's connections; `./ops` and
+the worker refuse fewer connections than threads, so no job waits for one.
+`CLASHLENS_BACKGROUND_JOB_LIMIT` (default 2) and
+`CLASHLENS_DAY_RECHECK_JOB_LIMIT` (default 4), each from 1 to 64, set how many
+backfill jobs and day rechecks all processes together run at once while live
+work keeps up. They are ceilings, not threads set aside: background work
+runs only on the threads that do not process only responses, 4 a process in
+production on 2026-10-09 (16 threads, 12 for responses), which also run live
+day results, publication builds and the maintenance timer's turn, and a
+claim takes live work first. So 2 backfill jobs and 4 rechecks run together
+only when those threads are otherwise free, and raising the limits past
+those threads adds nothing; giving fewer threads to responses, such as
+`CLASHLENS_WORKER_RESPONSE_LANES=10` for 6 a process, makes room for more
+without more connections. Season repair jobs took 0.8 seconds each on
+average on 2026-10-09 (13,390 of them, 2 at a time, about 5 hours); with
+`CLASHLENS_BACKGROUND_JOB_LIMIT=6` and 6 such threads a process, a Season's
+15,400 take at least 35 minutes, longer while live work pauses them. All processes share the container's
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit.
+`./ops`, before it stops anything, and the worker refuse more than 16
+connections a process or 38 in all; see [the database connection budget](architecture.md#structured-data-and-evidence)
 for how that fits with the other processes.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages

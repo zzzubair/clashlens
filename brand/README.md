@@ -16,12 +16,12 @@ The thick dark outline lets it sit on light or dark backgrounds without a box be
 
 For the browser tab icon, the phone home-screen icon and the Discord or social avatar.
 
-- **Chosen:** [`assets/mark-cl-block.svg`](../assets/mark-cl-block.svg), "CL" in the wordmark's own letters and colours. [`assets/mark-cl-block-app.svg`](../assets/mark-cl-block-app.svg) is the same on a dark rounded tile, for the app icon and avatars.
+- **Chosen:** [`assets/mark-cl-block.svg`](../assets/mark-cl-block.svg), "CL" in the wordmark's own letters and colours. [`assets/mark-cl-block-app.svg`](../assets/mark-cl-block-app.svg) is the same on a dark rounded tile. The app icons and the Discord server icon use the sky blue square below instead.
 - **Kept as a backup:** [`assets/mark-lens-arrow.svg`](../assets/mark-lens-arrow.svg) and [`assets/mark-lens-arrow-app.svg`](../assets/mark-lens-arrow-app.svg), the gold lens with an arrow behind it.
 
 At 16 pixels the CL mark reads as two orange blocks rather than letters.
 
-[`assets/mark-cl-block-square.svg`](../assets/mark-cl-block-square.svg) is the CL mark filling a whole dark square. The site's home-screen and web app icons are made from it, and so is [`discord-avatar-512.png`](discord-avatar-512.png), ready to upload as the Discord server or bot avatar. The browser tab icon is `mark-cl-block.svg` on a transparent background. Player-page link previews use [`website/public/images/og-clashlens.png`](../website/public/images/og-clashlens.png), the wordmark on the night background.
+[`assets/mark-cl-block-square.svg`](../assets/mark-cl-block-square.svg) is the CL mark, a little smaller, filling a whole sky blue square with soft white sun rays. The owner chose sky blue over the old dark square on 2026-10-12 to make the icon lighter and more fun; the letters are unchanged. The site's home-screen and web app icons are made from it, and so is [`discord-avatar-512.png`](discord-avatar-512.png), which is the Discord server icon. [`assets/mark-cl-block-square-maskable.svg`](../assets/mark-cl-block-square-maskable.svg) is the same square with the letters shrunk to fit inside the circle Android never crops, for Android's own icon shapes. The browser tab icon is `mark-cl-block.svg` on a transparent background. Player-page link previews use [`website/public/images/og-clashlens.png`](../website/public/images/og-clashlens.png), the wordmark on the night background.
 
 ## Colours
 

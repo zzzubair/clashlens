@@ -132,6 +132,13 @@ def get_player_page(
 ) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         metadata_join, metadata_columns = database._current_profile_metadata(connection)
+        # A player who has not played yet this Season shows the newest
+        # profile that ranks them at 5,000, as the Live Leaderboard does.
+        unplayed = connection.execute(
+            api_leaderboard.UNPLAYED_PROFILE_SQL,
+            {**api_leaderboard._season_params(now), "tag": normalized_tag},
+        ).fetchone()
+        unplayed_id = None if unplayed is None else int(unplayed[0])
         row = connection.execute(
             f"""
             SELECT player.normalized_tag, player.active, player.eligibility_state,
@@ -155,21 +162,25 @@ def get_player_page(
                            OR checked.last_not_found_at > checked.last_success_at))
             FROM players AS player
             JOIN player_profile_versions AS profile
-                ON profile.id = player.current_profile_version_id
+                ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
             {metadata_join}
             WHERE player.normalized_tag = %s
-              AND profile.source_contract_state = 'accepted'
+              AND (profile.source_contract_state = 'accepted'
+                   OR profile.id = %s::bigint)
             """,
-            (season_opening_reset(now), season_opening_reset(now), normalized_tag),
+            (season_opening_reset(now), season_opening_reset(now), unplayed_id,
+             normalized_tag, unplayed_id),
         ).fetchone()
         if row is None:
             return None
-        observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
+        observed_at = (
+            max(row[5], row[11] or row[5]) if unplayed is None else unplayed[1]
+        ).astimezone(UTC)
         not_found_at = None if row[16] is None else row[16].astimezone(UTC)
         # A profile naming an earlier Season, or still showing the frozen
         # pre-Reset trophies on a Season's first day, shows trophies from
         # before this player's Season reset, not their current Season total.
-        season_reset_pending = awaits_season_reset(
+        season_reset_pending = unplayed_id is None and awaits_season_reset(
             _text(row[12]), int(row[4]), row[13], row[14], now
         )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
@@ -408,6 +419,9 @@ def get_player_page(
                 "current_day_start": None
                 if current_day is None
                 else current_day["ranked_day_start"],
+                "current_day_published_at": None
+                if current_day_raw is None
+                else current_day_raw[20].astimezone(UTC).isoformat(),
                 "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
                 "season_day_starts": season_day_starts,
                 "season": None
@@ -445,19 +459,20 @@ def get_player_page(
 
 def player_cards(
     connection: Any,
-    players: list[tuple[int, str, str | None, str | None]],
+    players: list[tuple[int, str, str | None, str | None, str | None]],
     *,
     now: datetime,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
     battles so far, read for every player at once.
 
-    ``players`` holds (player id, tag, name, clan). Every card carries the
+    ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
-    Leaderboard position whenever it is on the board. Trophies and today come
-    only from an accepted current profile, including for a player who has left
-    Legend I. While a newer profile goes unaccepted they stay unknown, so
-    Season 0 trophies stay on that page alone.
+    Leaderboard position whenever it is on the board, and the league its newest
+    saved profile names. For a player outside Legend I, trophies come from its
+    newest saved profile. Otherwise trophies and today come only from an
+    accepted current profile. While a newer profile goes unaccepted they stay
+    unknown, so a Legend I player's Season 0 trophies stay on its page alone.
     """
     ids = [player[0] for player in players]
     profiles = {
@@ -493,8 +508,8 @@ def player_cards(
         ).fetchall()
     }
     cards = []
-    for player_id, tag, name, clan in players:
-        lookup = api_player_lookup._lookup(connection, tag)
+    for player_id, tag, name, clan, league in players:
+        lookup = api_player_lookup._lookup(connection, tag, now)
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
         if lookup["state"] == "tracking" and reason is None and profile is None:
@@ -508,9 +523,13 @@ def player_cards(
             "trophies": None,
             "season_reset_pending": False,
             "rank": None,
+            "league": league,
             "today": None,
         }
-        if reason is None and profile is not None:
+        if lookup["state"] in ("not_in_legend", "uncertain"):
+            # Off the board, the newest saved profile's trophies, as on its page.
+            card["trophies"] = lookup["profile"]["trophies"]
+        elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(
                 _text(profile[1]), int(profile[0]), profile[2], profile[3], now

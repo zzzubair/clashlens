@@ -31,8 +31,7 @@ body {
   .button-secondary,
   .button.secondary,
   .theme-toggle,
-  .header-search-toggle,
-  .page-position
+  .header-search-toggle
 ),
 .leaderboard-row[data-podium-rank] .rank-mark {
   box-shadow: var(--cl-raise);
@@ -168,6 +167,19 @@ summary {
 main {
   scroll-margin-top: 6rem;
 }
+@media (max-width: 64rem) {
+  html {
+    scroll-padding-top: 8rem;
+  }
+  main {
+    scroll-margin-top: 0.5rem;
+  }
+}
+@media (max-width: 40rem) {
+  html {
+    scroll-padding-top: 11rem;
+  }
+}
 .lede,
 .coverage-summary,
 .table-detail,
@@ -194,8 +206,7 @@ main {
 .segmented-control input:checked + span {
   box-shadow: inset 0 0 0 1px var(--cl-action-text);
 }
-.button[aria-current="page"],
-.season-list [aria-current="page"] {
+.button[aria-current="page"] {
   border-color: var(--cl-action-border);
 }
 .form-field input,
@@ -262,22 +273,15 @@ main {
   color: var(--cl-ink);
   background: var(--cl-panel);
 }
-[data-theme="dark"] .header-back:focus-visible {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-}
 @media (hover: hover) and (pointer: fine) {
   [data-theme="dark"] .legend-day[open] > summary:hover {
     background: var(--cl-action-soft);
   }
   [data-theme="dark"]
     :is(
-      .header-back,
       .home-page .analytics-link,
       .home-leaderboard .leaderboard-more,
-      .battle-army,
-      .season-list a
+      .battle-army
     ):hover {
     color: var(--cl-action-text);
     background: var(--cl-action-soft);
@@ -346,8 +350,7 @@ main {
     outline-color: Highlight;
   }
   .segmented-control input:checked + span,
-  .button[aria-current="page"],
-  .season-list [aria-current="page"] {
+  .button[aria-current="page"] {
     outline: 2px solid Highlight;
   }
 }

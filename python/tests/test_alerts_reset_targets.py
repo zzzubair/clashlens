@@ -39,13 +39,13 @@ def reset_warnings(rt) -> list[str]:
     return posts(rt, "behind its 05:30")
 
 
-def test_reset_stage_warnings_from_0510_until_the_board_is_readable(rt) -> None:
-    reset = at(rt, 5, 9)
+def test_reset_stage_warnings_from_0512_until_the_board_is_readable(rt) -> None:
+    reset = at(rt, 5, 11)
     rt.served = reset - 86400  # Only yesterday's board is out.
     rt.reset = f"{reset} 13251 13000 0 0"
     assert rt.run() == 0
-    assert not rt.posts  # Collection has until 05:10.
-    at(rt, 5, 10)
+    assert not rt.posts  # Collection has until 05:12.
+    at(rt, 5, 12)
     assert rt.run() == 0
     assert "Reset collection has ended for 13,000 of 13,251 players" in (
         reset_warnings(rt)[0]
@@ -68,8 +68,8 @@ def test_reset_stage_warnings_from_0510_until_the_board_is_readable(rt) -> None:
     assert not posts(rt, "not readable by 05:30")
 
 
-def test_a_reset_that_never_starts_warns_at_0510(rt) -> None:
-    reset = at(rt, 5, 10)
+def test_a_reset_that_never_starts_warns_at_0512(rt) -> None:
+    reset = at(rt, 5, 12)
     rt.served = reset - 86400
     rt.reset = f"{reset - 86400} 13251 13251 {reset - 85800} {reset - 85500}"
     assert rt.run() == 0

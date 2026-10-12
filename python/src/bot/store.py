@@ -15,6 +15,7 @@ from typing import Any
 
 from clashlens import api_accounts, api_leaderboard, api_player_lookup, api_players
 from clashlens.api_db import AccountContext, ApiDatabase
+from clashlens.domain import SEASON_START_TROPHIES
 
 # The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
@@ -22,16 +23,20 @@ FRESHNESS_SECONDS = 900
 
 def _linked_players(
     connection: Any, account_id: int
-) -> list[tuple[int, str, str | None, str | None]]:
-    """Every verified player's id, tag, and newest saved name and clan: the
-    website's own read, without its 500-player cutoff, so the bot lists them all."""
+) -> list[tuple[int, str, str | None, str | None, str | None]]:
+    """Every verified player's id, tag, and newest saved name, clan and league:
+    the website's own read, without its 500-player cutoff, so the bot lists
+    them all."""
     rows = connection.execute(
         """
-        SELECT player.id, player.normalized_tag, profile.name, profile.clan
+        SELECT player.id, player.normalized_tag, profile.name, profile.clan,
+               profile.league
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
             SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+                   CASE WHEN version.eligibility_state <> 'uncertain'
+                        THEN version.league_tier_name END AS league,
                    version.player_id
             FROM player_profile_versions AS version
             CROSS JOIN LATERAL (
@@ -49,8 +54,13 @@ def _linked_players(
         (account_id,),
     ).fetchall()
     return [
-        (int(row[0]), str(row[1]), None if row[2] is None else str(row[2]),
-         None if row[3] is None else str(row[3]))
+        (
+            int(row[0]),
+            str(row[1]),
+            None if row[2] is None else str(row[2]),
+            None if row[3] is None else str(row[3]),
+            None if row[4] is None else str(row[4]),
+        )
         for row in rows
     ]
 
@@ -83,7 +93,9 @@ class Store:
     def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
         """Each verified player's card, read with the website's own code, and
         when its saved profile was last seen, both from one database snapshot
-        so the time always belongs to the numbers."""
+        so the time always belongs to the numbers. A player who has not played
+        yet this Season shows the profile that ranks them at 5,000, as their
+        page and the Live Leaderboard do."""
         with self.database.pool.connection() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cards = api_players.player_cards(
@@ -102,6 +114,24 @@ class Store:
                     ([card["tag"] for card in cards],),
                 ).fetchall()
             )
+            for card in cards:
+                if (
+                    card["state"] != "tracking"
+                    or card["reason"] not in (None, "pending")
+                    or card["trophies"] is not None
+                ):
+                    continue
+                unplayed = connection.execute(
+                    api_leaderboard.UNPLAYED_PROFILE_SQL,
+                    {**api_leaderboard._season_params(now), "tag": card["tag"]},
+                ).fetchone()
+                if unplayed is not None:
+                    card.update(
+                        reason=None,
+                        trophies=SEASON_START_TROPHIES,
+                        season_reset_pending=False,
+                    )
+                    seen[card["tag"]] = unplayed[1]
         for card in cards:
             card["observed_at"] = seen.get(card["tag"])
         return cards

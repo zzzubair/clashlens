@@ -26,7 +26,6 @@ from clashlens import (
 )
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION
 from clashlens.army_decoder import DECODER_VERSION
-from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
 from clashlens.domain import (
     HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
@@ -376,6 +375,20 @@ def _unpublished_correction(connection_info: str, boundary_at: datetime, pending
         )
 
 
+def test_campaign_counts_a_decode_under_any_unit_list_as_done(database_url: str) -> None:
+    # Saved armies hold ids, so one saved under an older unit list needs no
+    # decoding again.
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#V2"), _player(connection, "#OTHER")
+            evidence_id = _report(connection, player, opponent, START, destruction=56,
+                                  code="u1x0-2x1")
+            _population(connection, START + DAY, player, opponent)
+        assert domain_repair.preview(worker, SEASON, now=NOW)["items"]["decode_batch"] == 1
+        _decoded(connection_info, evidence_id)
+        assert domain_repair.preview(worker, SEASON, now=NOW)["items"] == {}
+
+
 def _decoded(connection_info: str, evidence_id: int) -> None:
     with _owner(connection_info) as connection:
         connection.execute(
@@ -386,7 +399,7 @@ def _decoded(connection_info: str, evidence_id: int) -> None:
             ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable'
             FROM battle_evidence WHERE id = %s
             """,
-            (DECODER_VERSION, CATALOG_VERSION, "a" * 64, evidence_id),
+            (DECODER_VERSION, "unit-catalog-v1", "a" * 64, evidence_id),
         )
 
 
@@ -398,6 +411,8 @@ def test_campaign_hold_defers_only_affected_artifacts(
     monkeypatch.setattr(
         past_reset_pacing, "_now", lambda _connection: NOW + timedelta(hours=7)
     )
+    # A clock set before the boards were made: the hourly wait isn't tested here.
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
     # The player's two saved days list the Resets ending them, not the third.
     held, held_next, free = START + 5 * DAY, START + 6 * DAY, START + 7 * DAY
     with _campaign_database(database_url) as (connection_info, worker):
@@ -680,10 +695,25 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
                 database, NEXT_SEASON, "receipt", max_jobs=100
             )
             with database.pool.connection() as connection:
-                # As once the worker has rebuilt the board.
+                # As late battles reaching the board since the step began.
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_corrections
+                        (boundary_at, source_generation_id, affected_artifacts)
+                    SELECT boundary_at, source_generation_id, ARRAY['snapshot']
+                    FROM boundary_publication_corrections
+                    """
+                )
+            still = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+            with database.pool.connection() as connection:
+                # As once the worker has rebuilt the board, the later
+                # correction still queued.
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
                     "UPDATE boundary_publication_corrections SET state = 'finalized'"
+                    " WHERE id = (SELECT min(id) FROM boundary_publication_corrections)"
                 )
                 connection.execute("UPDATE leaderboard_snapshot_entries SET trophies = 4931")
             done = domain_repair.season_repair(
@@ -716,6 +746,9 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
         "stored": 0, "stale": 0, "stale_players": [],
     }
     assert receipt["rule_revision"] == domain_repair.DAY_RULES_REVISION
+    # The correction requested by the time the step began still holds the
+    # summaries; the one requested since does not.
+    assert (still["phase"], still["boards_rebuilding"]) == ("boards", 1)
     # A Season in progress has no summaries to store again.
     assert (done["phase"], done["summaries_refreshed"]) == ("done", 0)
 
@@ -1126,3 +1159,162 @@ def test_season_repair_judges_a_failed_reset_repair_by_the_days_it_names(
     else:
         assert (report["phase"], report["failed"]) == ("inputs", 1)
         assert [blocker["job_id"] for blocker in report["failed_blockers"]] == [failed_id]
+
+
+@pytest.mark.parametrize("group", ["day_1_inconsistent", "unplayed_at_5000"])
+def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affects(
+    database_url: str, archive_server, monkeypatch, group: str
+) -> None:
+    """One player whose Day 1 was saved Inconsistent, or who sits at 5,000 in
+    Legend I with no Legend battle this Season, and one ordinary player each
+    have two saved days. The scoped repair previews one player, queues one
+    job, and running it recalculates that player's days oldest first while
+    the ordinary player's saved days stay as they were. The full repair of
+    the same rules still has both players to recalculate."""
+    from test_player_season_summaries_postgres import _log, _ranked
+    from test_reconciliation_postgres import _processor
+
+    from clashlens import reconciliation_db
+
+    scope = "day-1-or-unplayed"
+    days = [START, START + DAY]
+    calculated: list[tuple[int, datetime]] = []
+    recalculate = reconciliation_db.recalculate_ranked_day
+    monkeypatch.setattr(
+        reconciliation_db, "recalculate_ranked_day",
+        lambda *args, player_id, day_start, **kwargs: calculated.append(
+            (player_id, day_start)
+        ) or recalculate(*args, player_id=player_id, day_start=day_start, **kwargs),
+    )
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
+            for player in (affected, ordinary):
+                for number, start in enumerate(days, start=1):
+                    version_id = _ranked(
+                        connection, player, number, start, start + DAY, season=SEASON
+                    )
+                    _log(connection, player, number, version_id, start, season=SEASON)
+                if group == "unplayed_at_5000":
+                    connection.execute(
+                        """
+                        INSERT INTO player_profile_versions (
+                            player_id, observation_id, normalized_tag, endpoint_version,
+                            schema_version, parser_version, observed_at,
+                            source_http_status, name, trophies, league_tier_id,
+                            league_tier_name, eligibility_state, profile_json
+                        ) SELECT id, id, normalized_tag, 'profile-v1', 'profile-schema-v1',
+                                 'profile-parser-v1', %s, 200, 'Player', 5000, 105000036,
+                                 'Legend I', 'eligible', '{}'::jsonb
+                        FROM players WHERE id = %s
+                        """,
+                        (START + DAY + timedelta(hours=1), player),
+                    )
+            if group == "day_1_inconsistent":
+                connection.execute(
+                    "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                    " confidence = 'uncertain'"
+                    " WHERE player_id = %s AND ranked_day_start = %s",
+                    (affected, START),
+                )
+            else:
+                # Also at 5,000, but with a Legend battle this Season.
+                _report(connection, ordinary, _player(connection, "#2RR"), START)
+            untouched = connection.execute(
+                "SELECT id, version, state FROM ranked_day_versions"
+                " WHERE player_id = %s ORDER BY id",
+                (ordinary,),
+            ).fetchall()
+
+        def run(action: str, **scoped: str) -> dict:
+            return domain_repair.season_repair(
+                worker, SEASON, action, max_jobs=100, **scoped
+            )
+
+        preview = run("preview", scope=scope)
+        queued = run("queue", scope=scope)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with database.pool.connection() as connection:
+                jobs = connection.execute(
+                    "SELECT id, input_json ->> 'player_id' FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                ).fetchall()
+            for job_id, _player_id in jobs:
+                assert processor.process_job(int(job_id), owner="repair") is not None
+            with database.pool.connection() as connection:
+                after = connection.execute(
+                    "SELECT id, version, state FROM ranked_day_versions"
+                    " WHERE player_id = %s ORDER BY id",
+                    (ordinary,),
+                ).fetchall()
+        finally:
+            database.close()
+        full = run("preview")
+
+    assert (preview["scope"], preview["players"], preview["left_to_queue"]) == (scope, 1, 1)
+    assert (queued["phase"], queued["queued"]) == ("days", 1)
+    assert [int(player) for _job, player in jobs] == [affected]
+    assert calculated[:2] == [(affected, START), (affected, START + DAY)]
+    assert {player for player, _day in calculated} == {affected}
+    assert after == untouched
+    assert (full["scope"], full["players"], full["left_to_queue"]) == (None, 2, 2)
+
+
+def test_scoped_season_repair_keeps_its_players_after_their_day_1_is_saved_again(
+    database_url: str,
+) -> None:
+    """A player whose Day 1 was saved Inconsistent is chosen when the scoped
+    repair first queues. A recheck then saves a newer Day 1 and the scheduled
+    compaction deletes the Inconsistent one, so choosing again would leave the
+    player out. The repair still counts that player and their unfinished job,
+    and does not move on to the boards."""
+    from test_player_season_summaries_postgres import _log, _ranked
+
+    scope = "day-1-or-unplayed"
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
+            for player in (affected, ordinary):
+                for number, start in enumerate([START, START + DAY], start=1):
+                    version_id = _ranked(
+                        connection, player, number, start, start + DAY, season=SEASON
+                    )
+                    _log(connection, player, number, version_id, start, season=SEASON)
+            connection.execute(
+                "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                " confidence = 'uncertain'"
+                " WHERE player_id = %s AND ranked_day_start = %s",
+                (affected, START),
+            )
+
+        queued = domain_repair.season_repair(
+            worker, SEASON, "queue", max_jobs=100, scope=scope
+        )
+        with _owner(connection_info) as connection:
+            inconsistent = connection.execute(
+                "SELECT id FROM ranked_day_versions"
+                " WHERE player_id = %s AND ranked_day_start = %s",
+                (affected, START),
+            ).fetchone()[0]
+            _ranked(connection, affected, 1, START, START + DAY, season=SEASON, version=2)
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_version_id = %s",
+                (inconsistent,),
+            )
+            connection.execute(
+                "DELETE FROM ranked_day_versions WHERE id = %s", (inconsistent,)
+            )
+        with worker.pool.connection() as connection:
+            chosen_now = domain_repair._scoped_players(connection, START)
+        receipt = domain_repair.season_repair(
+            worker, SEASON, "receipt", max_jobs=100, scope=scope
+        )
+        again = domain_repair.season_repair(
+            worker, SEASON, "queue", max_jobs=100, scope=scope
+        )
+
+    assert (queued["phase"], queued["queued"]) == ("days", 1)
+    assert chosen_now == []
+    assert (receipt["players"], receipt["left_to_queue"], receipt["unfinished"]) == (1, 0, 1)
+    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 1)

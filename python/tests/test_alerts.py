@@ -53,6 +53,7 @@ def runtime(tmp_path, monkeypatch):
         reset=None,
         database="healthy 0",
         completeness="0",
+        battle_day="0",
         health_streaks={},
         site_status=200,
         disk_used=10,
@@ -60,7 +61,10 @@ def runtime(tmp_path, monkeypatch):
         read_requests=[],
         probe_status=200,
         website_status=302,
-        board_page='<h1 id="leaderboard-title">Day 7 standings</h1>',
+        board_page=(
+            '<p class="rankings-kicker">Day <!-- -->7</p>'
+            '<h1 id="leaderboard-title">Leaderboard at 9 Oct 2026, 05:00 UTC</h1>'
+        ),
         calls=[],
     )
     key = b"a" * 32
@@ -186,6 +190,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = 0, rt.database
         elif "--completeness" in args:
             code, output = 0, rt.completeness
+        elif "--battle-day" in args:
+            code, output = 0, rt.battle_day
         elif "inspect" in args:
             code, output = 0, str(rt.health_streaks.get(args[-1], 0))
         else:
@@ -254,6 +260,8 @@ def trigger(rt, condition, value=True):
         rt.publication = "1" if value else "0"
     elif condition == "completeness":
         rt.completeness = "11" if value else "10"
+    elif condition == "battle_day":
+        rt.battle_day = "1" if value else "0"
 
 
 @pytest.mark.parametrize(
@@ -272,6 +280,7 @@ def trigger(rt, condition, value=True):
         "upload",
         "publication",
         "completeness",
+        "battle_day",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):
@@ -455,6 +464,23 @@ def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runti
     rt.leaderboard = ""
     assert rt.run() == 1
     assert len(rt.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        (
+            '<p class="rankings-kicker">Day <!-- -->6</p>'
+            '<h1 id="leaderboard-title">Leaderboard at 8 Oct 2026, 05:00 UTC</h1>'
+        ),
+        '<h1 id="leaderboard-title">Daily leaderboard</h1>',
+    ],
+)
+def test_daily_page_without_the_board_fails_the_check(runtime, page, capsys):
+    rt = runtime
+    rt.board_page = page
+    assert rt.run() == 1
+    assert "Reset publication status unavailable" in capsys.readouterr().err
 
 
 def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):

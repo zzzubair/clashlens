@@ -30,16 +30,19 @@ from psycopg.errors import (
 from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import (
+    analytics,
+    api_leaderboard,
     army_ingestion,
     army_rank_bands,
+    army_types,
     battle_ingestion,
     boundary_publication,
     collector_uploads,
     ingestion,
     job_outcomes,
     late_battle_sweep,
+    queue_refresh,
     reconciliation_db,
-    reset_settlement,
     snapshots,
 )
 from .archive import ArchiveReadError, ArchiveReadResult, S3ArchiveReader
@@ -248,12 +251,12 @@ MAX_WORKER_POOL_SIZE = 16
 WORKER_CONNECTION_BUDGET = 38
 
 
-def check_connection_budget(processes: int, pool_size: int) -> None:
+def check_connection_budget(processes: int, pool_size: int, lanes: int = 1) -> None:
     total = processes * (pool_size + MAINTENANCE_POOL_SIZE + 1)
-    if pool_size > MAX_WORKER_POOL_SIZE or total > WORKER_CONNECTION_BUDGET:
+    if pool_size > MAX_WORKER_POOL_SIZE or total > WORKER_CONNECTION_BUDGET or pool_size < lanes:
         raise ValueError(
-            f"worker processes may have at most {MAX_WORKER_POOL_SIZE} database"
-            f" connections each and {WORKER_CONNECTION_BUDGET} in all"
+            f"worker processes may have at most {MAX_WORKER_POOL_SIZE} database connections"
+            f" each and {WORKER_CONNECTION_BUDGET} in all, and one a lane, so no job waits for one"
         )
 
 
@@ -330,8 +333,9 @@ class TimedMaintenance:
     """Reset publication checks and queue maintenance, each every 10 seconds.
 
     The publication checks also count the newest leaderboard's army rank-band
-    totals once they are missing or stale. They run only in the worker
-    process holding the maintenance permit.
+    totals and army types once missing or stale, and every five minutes recount the
+    Season's attacks the Live Leaderboard orders equal trophies by. They run
+    only in the worker process holding the maintenance permit.
 
     Given ``derived_turns``, the publication checks and correction sweep run
     only after taking a derived lane's turn, and stay due without one; queue
@@ -342,6 +346,7 @@ class TimedMaintenance:
         self.database = database
         self.stage_metrics = stage_metrics
         self.late_battles = late_battle_sweep.LateBattleSweep(database)
+        self.daily_recheck = queue_refresh.DailyRecheck(database)
         self.next_reevaluation_at = float("-inf")
         self.next_queue_maintenance_at = float("-inf")
         self.permit = (
@@ -357,7 +362,6 @@ class TimedMaintenance:
     def reevaluate(self) -> None:
         if isinstance(self.database, Database):
             boundary_publication.reevaluate_boundary_publications(self.database)
-            reset_settlement.refresh_terminal_work(self.database)
 
     def run_due(self, derived_turns: Semaphore | None = None) -> None:
         current_time = monotonic()
@@ -373,8 +377,12 @@ class TimedMaintenance:
                 self.next_reevaluation_at = current_time + 10
                 self.reevaluate()
                 self.late_battles.run_when_due()
+                self.daily_recheck.run_when_due()
                 if isinstance(self.database, Database):
                     army_rank_bands.refresh_rank_band_totals(self.database)
+                    army_types.refresh_army_types(self.database)
+                    analytics.refresh_live_attack_tallies(self.database)
+                    api_leaderboard.refresh_live_unplayed(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
@@ -455,7 +463,7 @@ def start_processes(
     """
     response_lane_count(arguments.concurrency, getattr(arguments, "response_lanes", None))
     processes = getattr(arguments, "processes", 1)
-    check_connection_budget(processes, pool_size)
+    check_connection_budget(processes, pool_size, arguments.concurrency)
     if processes == 1 or getattr(arguments, "process_index", 0):
         return None
     if not arguments.run_forever:
@@ -961,6 +969,13 @@ class ObservationProcessor:
             pass
         except DATABASE_REJECTIONS as error:
             return self._fail_rejected(claim, error)
+        except (AssertionError, KeyError, TypeError, ValueError) as error:
+            if claim.work_type != "reconcile_ranked_day":
+                raise
+            # A calculation fault fails this day within its attempts; raised,
+            # it stopped every lane of the process, on each of its tries.
+            return self._fail(claim, "calculation_error",
+                              detail=type(error).__name__, retryable=True)
         except LockNotAvailable:
             # A short lock wait limit, such as a battle log's on a busy Reset,
             # gave up and its transaction rolled back.
@@ -988,25 +1003,13 @@ class ObservationProcessor:
                     ctypes.CDLL("libc.so.6").malloc_trim(ctypes.c_size_t(0))
                 except (OSError, AttributeError):
                     pass  # glibc or malloc_trim is unavailable on this platform.
-        # The failed or cancelled transaction recorded no outcome. Restore its
-        # retry slot so queue maintenance can recover it later, rather than
-        # failing it if this was its last attempt, even if conflicts outlast
-        # the lease. Report retrying once the refund commits, or once the pool
-        # has no connection for it; it is lost only if another worker or
-        # maintenance took the job.
-        while True:
-            try:
-                self.database.refund_claim_attempt(claim)
-                break
-            except LeaseLost:
-                return ProcessResult(claim.job_id, "lease_lost")
-            except (DeadlockDetected, SerializationFailure, QueryCanceled):
-                continue
-            except (*POOL_BUSY, LockNotAvailable, *SESSION_ENDED):
-                # No connection, or the refund's own short lock wait or
-                # session ran out. Leave the lease to run out so queue
-                # maintenance retries the job or fails its last try.
-                break
+        # The failed or cancelled transaction recorded no outcome: hand the
+        # job back without using an attempt. It is lost only if another
+        # worker or maintenance took it.
+        try:
+            job_outcomes.release_conflicted(self.database, claim, reason)
+        except LeaseLost:
+            return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, "retrying", reason)
 
     def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:

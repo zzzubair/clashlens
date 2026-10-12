@@ -1,0 +1,879 @@
+"""Background work never holds up live tracking.
+
+On 9 Oct 2026 six army re-decodes ran at once, each holding about 103 battle
+locks for 5 to 14 seconds; live battle logs that needed those battles gave
+way, and live responses fell to about 8,000 players over 2 minutes late.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+
+import psycopg
+from domain_test_support import domain_database, store_observation, text
+from test_army_ingestion_postgres import _live_row, _processor
+
+from clashlens import army_ingestion, background_pacing
+from clashlens.background_pacing import (
+    BACKGROUND_JOB_LIMIT,
+    DAY_RECHECK_PRIORITY,
+    LIVE_LAG_MIN_JOBS,
+)
+from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    Database,
+    _claim_select_statement,
+)
+
+DAY = datetime(2026, 10, 8, 5, tzinfo=UTC)
+OPPONENTS = [f"#8{first}{second}" for first in "PYLQGRJCUV" for second in "PYL"]
+
+
+def _queue_redecodes(connection_info: str, batches: list[list[int]]) -> list[int]:
+    """Re-decode jobs exactly as migration 0089 queues them."""
+    with psycopg.connect(connection_info) as connection:
+        return [
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, priority,
+                    processing_version, domain_rule_version, analytics_rule_version
+                ) VALUES ('redecode_army', %s, %s::jsonb, 25, %s, %s, %s)
+                RETURNING id
+                """,
+                (f"redecode-test:{index}", json.dumps({"battle_ids": battle_ids}),
+                 PROCESSING_VERSION, DOMAIN_RULE_VERSION, ARMY_ANALYTICS_RULE_VERSION),
+            ).fetchone()[0]
+            for index, battle_ids in enumerate(batches)
+        ]
+
+
+def _queue_result(
+    connection_info: str, key: str, *, priority: int = 100,
+    due_at: datetime | None = None, processing_version: str = PROCESSING_VERSION,
+) -> int:
+    """A daily-result job: live at priority 100, background at 25."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                work_type, deduplication_key, input_json, priority, due_at,
+                parser_version, processing_version, domain_rule_version,
+                analytics_rule_version
+            ) VALUES ('reconcile_ranked_day', %s,
+                      '{"player_id": 1, "ranked_day_start": "2026-10-08T05:00:00Z"}', %s,
+                      COALESCE(%s, clock_timestamp()), %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (key, priority, due_at, DEFAULT_PARSER_VERSION, processing_version,
+             DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
+        ).fetchone()[0]
+
+
+def _queue_live(connection_info: str, key: str, due_at: datetime,
+                count: int = LIVE_LAG_MIN_JOBS) -> list[int]:
+    """``count`` live daily results due at ``due_at``: enough to be behind."""
+    with psycopg.connect(connection_info) as connection:
+        return [row[0] for row in connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                work_type, deduplication_key, input_json, priority, due_at,
+                parser_version, processing_version, domain_rule_version,
+                analytics_rule_version
+            )
+            SELECT 'reconcile_ranked_day', %s || ':' || job,
+                   '{"player_id": 1, "ranked_day_start": "2026-10-08T05:00:00Z"}', 100,
+                   %s, %s, %s, %s, %s
+            FROM generate_series(1, %s) AS job
+            RETURNING id
+            """,
+            (key, due_at, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+             DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION, count),
+        ).fetchall()]
+
+
+def test_at_most_two_background_jobs_run_across_worker_processes(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[index] for index in range(1, 6)])
+        first, second = Database(connection_info), Database(connection_info)
+        try:
+            # One claim of up to 8 jobs fills the free background turns, never
+            # more; on 9 Oct 2026 568 jobs were leased at once.
+            claimed = [
+                first.claim_jobs(owner="process-1", limit=8),
+                second.claim_jobs(owner="process-2", limit=8),
+            ]
+            assert [[claim.work_type for claim in claims] for claims in claimed] == [
+                ["redecode_army", "redecode_army"], []
+            ]
+            assert BACKGROUND_JOB_LIMIT == 2
+            assert first.claim_jobs(owner="process-1", limit=8) == []
+            # Live work is never held behind them.
+            live = [_queue_result(connection_info, f"live:{index}") for index in range(2)]
+            claims = second.claim_jobs(owner="process-2", limit=8)
+            assert sorted(claim.job_id for claim in claims) == live
+            # A finished background job frees its turn, and live work still goes first.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete',"
+                    " lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL"
+                    " WHERE id = %s",
+                    (claimed[0][0].job_id,),
+                )
+            later = _queue_result(connection_info, "live:later")
+            claims = first.claim_jobs(owner="process-1", limit=8)
+            assert [(claim.job_id, claim.work_type) for claim in claims] == [
+                (later, "reconcile_ranked_day"), (claims[1].job_id, "redecode_army")
+            ]
+            assert first.claim_jobs(owner="process-1", limit=8) == []
+            # Still running past their leases, their transactions holding the
+            # rows, they keep both turns.
+            running = [claimed[0][1].job_id, claims[1].job_id]
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET lease_expires_at ="
+                    " clock_timestamp() - interval '1 minute' WHERE id = ANY(%s)",
+                    (running,),
+                )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "SELECT FROM python_processing_jobs WHERE id = ANY(%s) FOR UPDATE",
+                    (running,),
+                )
+                assert first.claim_jobs(owner="process-1", limit=8) == []
+        finally:
+            first.close()
+            second.close()
+
+
+def test_background_work_waits_while_live_work_is_two_minutes_late(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2]])
+        now = datetime.now(UTC)
+        live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
+        database = Database(connection_info)
+        try:
+            # This lane cannot take the late results, but starts no background job.
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            # Season repair waiting an hour is background too and pauses nothing.
+            _queue_result(connection_info, "season-repair", priority=25,
+                          due_at=now - timedelta(hours=1))
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = %s WHERE id = ANY(%s)",
+                    (now - timedelta(minutes=1), live),
+                )
+            assert [claim.work_type for claim in database.claim_jobs(
+                owner="lane", work_types=["redecode_army"]
+            )] == ["redecode_army"]
+            # Live work this worker cannot take, such as a newer version's, never
+            # pauses background work for good, nor halves it once the late
+            # results it can take are done.
+            for job_id in live:
+                _finish(connection_info, job_id)
+            _queue_live(connection_info, "newer", now - timedelta(hours=1))
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET processing_version = 'future'"
+                    " WHERE deduplication_key LIKE 'newer:%'"
+                )
+            assert [claim.work_type for claim in database.claim_jobs(
+                owner="lane", work_types=["redecode_army"]
+            )] == ["redecode_army"]
+        finally:
+            database.close()
+
+
+def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2]])
+        now = datetime.now(UTC)
+        live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
+        database = Database(connection_info)
+        try:
+            # Live lanes take the late results, hit a busy battle lock and
+            # keep their leases with the attempts refunded, as on 9 Oct 2026.
+            claims = database.claim_jobs(owner="live", limit=len(live),
+                                         work_types=["reconcile_ranked_day"])
+            assert sorted(claim.job_id for claim in claims) == sorted(live)
+            for claim in claims:
+                database.refund_claim_attempt(claim)
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            # Still running past their leases on their last attempts, they pause it too.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET attempt_count = max_attempts,"
+                    " lease_expires_at = clock_timestamp() - interval '1 minute'"
+                    " WHERE id = ANY(%s)",
+                    (live,),
+                )
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            # Waiting for their saved responses on their last tries, they can
+            # still resume, so they pause background work too.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'waiting_dependency',"
+                    " attempt_count = max_attempts, lease_owner = NULL,"
+                    " lease_token = NULL, lease_expires_at = NULL WHERE id = ANY(%s)",
+                    (live,),
+                )
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete' WHERE id = ANY(%s)",
+                    (live,),
+                )
+            assert [claim.work_type for claim in database.claim_jobs(
+                owner="lane", work_types=["redecode_army"]
+            )] == ["redecode_army"]
+        finally:
+            database.close()
+
+
+def _finish(connection_info: str, job_id: int) -> None:
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+            " lease_token = NULL, lease_expires_at = NULL WHERE id = %s",
+            (job_id,),
+        )
+
+
+def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(
+    database_url: str,
+) -> None:
+    # From 16:41 on 9 Oct 2026 about 530 day rechecks a minute were queued
+    # and two background jobs at a time finished about 350; Season repair
+    # would have waited behind them, or they behind it.
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = [_queue_result(connection_info, f"season-repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(3)]
+        rechecks = [_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(5)]
+        database = Database(connection_info)
+        try:
+            claimed = []
+            while claims := database.claim_jobs(owner="lane", limit=8):
+                claimed += [claim.job_id for claim in claims]
+            assert sorted(claimed) == sorted(repair[:2] + rechecks[:4])
+            # A finished job frees a turn in its own lane only.
+            _finish(connection_info, repair[0])
+            assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [repair[2]]
+            assert database.claim_jobs(owner="lane") == []
+            # Live work two minutes late pauses both lanes, leased or waiting.
+            _finish(connection_info, rechecks[0])
+            live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
+            assert sorted(claim.job_id for claim in database.claim_jobs(
+                owner="lane", limit=8)) == sorted(live)
+            assert database.claim_jobs(owner="lane", limit=8) == []
+            for job_id in live:
+                _finish(connection_info, job_id)
+            assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [rechecks[4]]
+        finally:
+            database.close()
+
+
+def test_background_limits_from_settings_halve_while_live_work_strains(
+    database_url: str, monkeypatch
+) -> None:
+    # Raised in the deploy settings, 4 backfill jobs and 8 rechecks run while
+    # live work keeps up; each limit halves while enough live jobs have waited
+    # 30 seconds or a worker statement has been blocked on a lock as long as
+    # the lock limit, 2 seconds here, however long it ran before.
+    monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 4)
+    monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 8)
+    monkeypatch.setattr(background_pacing, "LOCK_STRAIN_SECONDS", 2)
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = {_queue_result(connection_info, f"repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(14)}
+        for index in range(28):
+            _queue_result(connection_info, f"recheck:{index}", priority=DAY_RECHECK_PRIORITY)
+        database = Database(connection_info)
+
+        def claim_all() -> tuple[int, int]:
+            """How many backfill jobs and rechecks claims take until none."""
+            claimed = []
+            while claims := database.claim_jobs(owner="lane", limit=8):
+                claimed += [claim.job_id for claim in claims]
+            return len(repair & set(claimed)), len(set(claimed) - repair)
+
+        def finish_all() -> None:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+                    " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
+                )
+
+        try:
+            healthy = claim_all()
+            finish_all()
+            live = _queue_live(connection_info, "live", now - timedelta(seconds=60))
+            assert sorted(claim.job_id for claim in database.claim_jobs(
+                owner="live", limit=len(live))) == sorted(live)
+            live_strained = claim_all()
+            finish_all()
+            with psycopg.connect(connection_info, autocommit=True) as holder, \
+                    psycopg.connect(connection_info, autocommit=True) as waiter:
+                holder.execute("SELECT pg_advisory_lock(7)")
+                waiting = threading.Thread(
+                    target=waiter.execute, args=("SELECT pg_sleep(2.5), pg_advisory_lock(7)",)
+                )
+                waiting.start()
+                # The statement has run 2.8 seconds but been blocked only 0.3.
+                time.sleep(2.8)
+                just_blocked = claim_all()
+                finish_all()
+                time.sleep(2)
+                lock_strained = claim_all()
+                holder.execute("SELECT pg_advisory_unlock(7)")
+                waiting.join(10)
+            recovered = claim_all()
+        finally:
+            database.close()
+
+    assert healthy == (4, 8)
+    assert live_strained == (2, 4)
+    assert just_blocked == (4, 8)
+    assert lock_strained == (2, 4)
+    assert recovered == (2, 4)
+
+
+def test_each_background_kind_fills_its_own_limit_after_live_work(
+    database_url: str, monkeypatch
+) -> None:
+    # On 9 Oct 2026, with limits of 6 and 6, a claim took one background job,
+    # the older kind first: rechecks averaged 0.05 running against 2.6 other
+    # background jobs, fewer than with limits of 2 and 4.
+    monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 6)
+    monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 6)
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = {_queue_result(connection_info, f"repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(8)}
+        rechecks = {_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(8)}
+        live = {_queue_result(connection_info, f"live:{index}") for index in range(2)}
+        database = Database(connection_info)
+
+        def claim(limit: int) -> tuple[int, int, int]:
+            """How many live jobs, other background jobs and rechecks one claim takes."""
+            claimed = {claim.job_id for claim in database.claim_jobs(owner="lane", limit=limit)}
+            return len(claimed & live), len(claimed & repair), len(claimed & rechecks)
+
+        try:
+            # Live work first, then background work fills the rest of the claim.
+            live_taken, *background = claim(4)
+            assert live_taken == 2 and sorted(background) == [0, 2]
+
+            def first_won(taken: tuple[int, int, int]) -> tuple[int, int, int]:
+                return taken if background[0] else (taken[0], taken[2], taken[1])
+
+            # The kind using less of its limit goes first, whichever's jobs
+            # have waited longer.
+            assert claim(1) == first_won((0, 0, 1))
+            assert claim(8) == first_won((0, 3, 5))
+            # Each stops at its own limit.
+            assert claim(8) == first_won((0, 1, 0))
+            assert claim(8) == (0, 0, 0)
+        finally:
+            database.close()
+
+
+def test_a_claim_with_no_live_work_waits_briefly_for_the_background_permit(
+    database_url: str,
+) -> None:
+    # On 9 Oct 2026 a claim that found another claim holding the permit took
+    # no background job, and its thread slept the 1 second poll.
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2]])
+        database = Database(connection_info)
+
+        def claim_while_permit_held(seconds: float, **kwargs) -> tuple[list[int], float]:
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                               (background_pacing.BACKGROUND_PERMIT_KEY,))
+                release = threading.Timer(seconds, holder.commit)
+                release.start()
+                started = time.monotonic()
+                claims = database.claim_jobs(owner="lane", **kwargs)
+                elapsed = time.monotonic() - started
+                release.join()
+            return [claim.job_id for claim in claims], elapsed
+
+        try:
+            claimed, waited = claim_while_permit_held(0.2, work_types=["redecode_army"])
+            assert len(claimed) == 1 and waited >= 0.15
+            # Held past the wait, the claim gives up without failing.
+            claimed, waited = claim_while_permit_held(2, work_types=["redecode_army"])
+            assert claimed == [] and waited < 1.5
+            # A claim that took live work never holds it back to wait.
+            live = _queue_result(connection_info, "live")
+            claimed, waited = claim_while_permit_held(2, limit=8)
+            assert claimed == [live] and waited < 0.4
+        finally:
+            database.close()
+
+
+def test_a_few_straggling_live_jobs_never_stop_background_work(database_url: str) -> None:
+    # From 16:00 to 18:00 on 9 Oct 2026 about 120 saved responses waited 2 to 7
+    # minutes for their first try while 9 in 10 waited under 14 seconds, and
+    # stopping for any one of them stopped background work 32% of the time.
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2], [3]])
+        now = datetime.now(UTC)
+        _queue_live(connection_info, "fresh", now - timedelta(seconds=5), count=30)
+        _queue_live(connection_info, "straggler", now - timedelta(minutes=3),
+                    count=LIVE_LAG_MIN_JOBS - 1)
+        database = Database(connection_info)
+        lane = {"owner": "lane", "work_types": ["redecode_army"]}
+        try:
+            # Neither stopped nor halved: both background turns are taken.
+            first = [database.claim_jobs(**lane) for _ in range(3)]
+            # One more straggler is enough live work behind to stop it.
+            _finish(connection_info, first[0][0].job_id)
+            _queue_live(connection_info, "late", now - timedelta(minutes=3), count=1)
+            stopped = database.claim_jobs(**lane)
+            # Among 200 more waiting live jobs those 5 are under 1 in 20.
+            _queue_live(connection_info, "busy", now - timedelta(seconds=5), count=200)
+            resumed = database.claim_jobs(**lane)
+        finally:
+            database.close()
+
+    assert [len(claims) for claims in first] == [1, 1, 0]
+    assert stopped == []
+    assert [claim.work_type for claim in resumed] == ["redecode_army"]
+
+
+def test_daily_results_keep_one_lane_each_while_live_work_stays_late(database_url: str) -> None:
+    # From 06:16 on 12 Oct 2026 live daily results waited hours, the pause
+    # never lifted, and by 09:42 none of about 50,000 background jobs had
+    # run: day-end results, the 23:00 recheck pass and weekly drops among them.
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        day_ends = {_queue_result(connection_info, f"day-end:{index}", priority=25,
+                                  due_at=now - timedelta(hours=2)) for index in range(3)}
+        rechecks = {_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(3)}
+        redecodes = set(_queue_redecodes(connection_info, [[1]]))
+        database = Database(connection_info)
+
+        def claim(turn: int) -> tuple[int, int, int]:
+            """Live jobs, day-end results and rechecks one lane's claim of 4
+            takes, with more live work arriving late than lanes finish."""
+            _queue_live(connection_info, f"live:{turn}", now - timedelta(minutes=3), count=8)
+            claimed = {job.job_id for job in database.claim_jobs(
+                owner="lane", limit=4, reset_first=turn % 2 == 0)}
+            assert not claimed & redecodes
+            return (len(claimed - day_ends - rechecks), len(claimed & day_ends),
+                    len(claimed & rechecks))
+
+        try:
+            # A Reset turn takes no background work.
+            assert claim(0) == (4, 0, 0)
+            # The other turns each take one daily result of a priority with
+            # none running, ahead of live work, while live work runs.
+            first = claim(1)
+            assert claim(2) == (4, 0, 0)
+            second = claim(3)
+            assert [first[0], second[0]] == [3, 3]
+            assert [sum(kind) for kind in zip(first[1:], second[1:], strict=True)] == [1, 1]
+            # No more while those run.
+            assert claim(4) == (4, 0, 0)
+            assert claim(5) == (4, 0, 0)
+            # Lanes finish every job before the next claim.
+            taken = []
+            for turn in range(6, 14):
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+                        " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
+                    )
+                taken.append(claim(turn))
+        finally:
+            database.close()
+
+    # With no live daily result running, none starts beside the claim's live work.
+    assert taken == [(4, 0, 0)] * 8
+
+
+def test_one_job_claims_run_live_results_and_both_background_priorities_beside_reset_work(
+    database_url: str,
+) -> None:
+    # A lane with one free thread claims one job. With live daily results
+    # late and Reset work due, every other claim takes Reset work first; each
+    # other one took a background job, priority 25 whenever none ran, so
+    # live results at 100 never ran.
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        resets = {_queue_result(connection_info, f"reset:{index}", priority=300)
+                  for index in range(60)}
+        day_ends = {_queue_result(connection_info, f"day-end:{index}", priority=25,
+                                  due_at=now - timedelta(hours=2)) for index in range(30)}
+        rechecks = {_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(30)}
+        live = set(_queue_live(connection_info, "live", now - timedelta(minutes=3), count=60))
+        database = Database(connection_info)
+        running: list[int] = []
+        claimed: set[int] = set()
+        try:
+            # Three lanes: each job stays leased for the next two claims.
+            for turn in range(120):
+                if len(running) == 3:
+                    _finish(connection_info, running.pop(0))
+                running += [claim.job_id for claim in database.claim_jobs(
+                    owner="lane", reset_first=turn % 2 == 0)]
+                claimed.update(running)
+                with psycopg.connect(connection_info) as connection:
+                    assert connection.execute(
+                        "SELECT priority FROM python_processing_jobs WHERE status = 'leased'"
+                        " AND priority IN (25, %s) GROUP BY priority HAVING count(*) > 1",
+                        (DAY_RECHECK_PRIORITY,),
+                    ).fetchall() == []
+        finally:
+            database.close()
+
+    taken = [len(claimed & kind) for kind in (resets, live, day_ends, rechecks)]
+    assert all(taken), taken
+
+
+def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, priority, parser_version,
+                    processing_version, domain_rule_version, analytics_rule_version
+                )
+                SELECT 'reconcile_ranked_day', 'recheck:' || player,
+                       jsonb_build_object('player_id', player, 'trigger', 'evidence',
+                                          'ranked_day_start', '2026-10-08T05:00:00Z'),
+                       %s, %s, %s, %s, %s
+                FROM generate_series(1, 2000) AS player
+                """,
+                (DAY_RECHECK_PRIORITY, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+                 DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            statement, params = _claim_select_statement(
+                "python_processing_jobs_worker", backfill=()
+            )
+            plan = "\n".join(text(row[0]) for row in connection.execute(
+                f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
+            ).fetchall())
+
+    removed = [int(rows) for rows in re.findall(r"Rows Removed by Filter: (\d+)", plan)]
+    assert "Seq Scan on python_processing_jobs" not in plan, plan
+    assert max(removed, default=0) < 100, plan
+
+
+def test_a_recheck_claim_finds_evidence_without_reading_the_pass_due_before_it(
+    database_url: str,
+) -> None:
+    # 2,000 rechecks of the twice-daily pass came due before one for evidence.
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, priority, due_at,
+                    parser_version, processing_version, domain_rule_version,
+                    analytics_rule_version
+                )
+                SELECT 'reconcile_ranked_day', 'recheck:' || player,
+                       jsonb_build_object('player_id', player, 'trigger',
+                                          CASE WHEN player = 1 THEN 'evidence' ELSE 'recheck' END,
+                                          'ranked_day_start', '2026-10-08T05:00:00Z'),
+                       %s, clock_timestamp() - interval '1 second' * player, %s, %s, %s, %s
+                FROM generate_series(1, 2001) AS player
+                """,
+                (DAY_RECHECK_PRIORITY, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+                 DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            statement, params = _claim_select_statement(
+                "python_processing_jobs_worker", backfill=(DAY_RECHECK_PRIORITY,)
+            )
+            first = connection.execute(statement, params).fetchone()
+            plan = "\n".join(text(row[0]) for row in connection.execute(
+                f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
+            ).fetchall())
+
+    removed = [int(rows) for rows in re.findall(r"Rows Removed by Filter: (\d+)", plan)]
+    assert first[2] == "recheck:1"
+    assert "python_processing_jobs_evidence_recheck_claim" in plan, plan
+    assert "Seq Scan on python_processing_jobs" not in plan, plan
+    assert max(removed, default=0) < 100, plan
+
+
+def _seed_redecode(
+    connection_info: str, archive_server, database, processor, *, readable: bool = False
+) -> list[int]:
+    """30 saved battles whose armies failed to read, or (readable) were read
+    under the old unit list, and one re-decode job for them all."""
+    _, job_id = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="seed",
+        endpoint="battle_log",
+        body=json.dumps({"items": [
+            _live_row(True, tag, f"u{index + 1}x0", DAY + timedelta(minutes=index))
+            for index, tag in enumerate(OPPONENTS)
+        ]}).encode(),
+        observed_at=DAY + timedelta(hours=1),
+        normalized_tag="#2PP",
+    )
+    assert processor.process_job(job_id, owner="seed").outcome == "processed"
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            """
+            INSERT INTO ranked_day_versions (
+                player_id, ranked_day_start, ranked_day_end,
+                official_season_id, season_day_number,
+                season_anchor_rule_version, reconciliation_rule_version,
+                result_hash, version, state, confidence, coverage_complete
+            )
+            SELECT id, %s, %s, 'test-season', 4, 'test-anchor', 'test-reconciliation',
+                   repeat('a', 64), 1, 'Live', 'exact', false
+            FROM players WHERE normalized_tag = '#2PP'
+            """,
+            (DAY, DAY + timedelta(days=1)),
+        )
+        if readable:
+            connection.execute(
+                "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'"
+            )
+        else:
+            # Saved while the unit list was unavailable, as earlier code did; a
+            # re-decode reads these armies again.
+            connection.execute(
+                """
+                UPDATE battle_army_decodes
+                SET status = 'failed', failure_category = 'catalog_version_unavailable',
+                    failure_detail = 'pinned unit catalog is unavailable or has the wrong hash',
+                    exact_army_id = NULL, identity_hash = NULL
+                """
+            )
+        battle_ids = [row[0] for row in connection.execute(
+            "SELECT id FROM legend_battles ORDER BY id"
+        ).fetchall()]
+    assert len(battle_ids) == len(OPPONENTS)
+    return battle_ids
+
+
+def _upgraded(database: Database) -> int:
+    with database.pool.connection() as connection:
+        return connection.execute(
+            "SELECT count(DISTINCT battle_id) FROM battle_army_decodes"
+            " WHERE is_active AND status = 'decoded'"
+        ).fetchone()[0]
+
+
+def _battle_locks(connection: psycopg.Connection, pid: int, battle_ids: list[int]) -> int:
+    return connection.execute(
+        """
+        SELECT count(*) FROM pg_locks AS lock
+        JOIN unnest(%s::bigint[]) AS battle (id)
+          ON lock.classid::bigint
+                 = (hashtextextended('army-redecode-battle:' || battle.id, 0) >> 32) & 4294967295
+         AND lock.objid::bigint
+                 = hashtextextended('army-redecode-battle:' || battle.id, 0) & 4294967295
+        WHERE lock.locktype = 'advisory' AND lock.objsubid = 1
+          AND lock.granted AND lock.pid = %s
+        """,
+        (battle_ids, pid),
+    ).fetchone()[0]
+
+
+def test_a_live_battle_log_never_waits_for_a_whole_redecode(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
+            [redecode] = _queue_redecodes(connection_info, [battle_ids])
+            # A later battle log of the same player repeats its newest battle.
+            _, live = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="live",
+                endpoint="battle_log",
+                body=json.dumps({"items": [_live_row(
+                    True, OPPONENTS[-1], f"u{len(OPPONENTS)}x0",
+                    DAY + timedelta(minutes=len(OPPONENTS) - 1),
+                )]}).encode(),
+                observed_at=DAY + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            # Hold the re-decode inside its first write, with its locks taken.
+            holding, release = threading.Event(), threading.Event()
+            holder: list[int] = []
+            upsert = army_ingestion._upsert_army_decodes
+
+            def held_upsert(db, connection, ids, **kwargs):
+                upsert(db, connection, ids, **kwargs)
+                if threading.current_thread().name == "redecode" and not holding.is_set():
+                    holder.append(connection.info.backend_pid)
+                    holding.set()
+                    assert release.wait(20)
+
+            monkeypatch.setattr(army_ingestion, "_upsert_army_decodes", held_upsert)
+            results: dict[str, str] = {}
+
+            def run(name: str, job_id: int) -> threading.Thread:
+                thread = threading.Thread(name=name, target=lambda: results.update(
+                    {name: processor.process_job(job_id, owner=name).outcome}))
+                thread.start()
+                return thread
+
+            background = run("redecode", redecode)
+            try:
+                assert holding.wait(10)
+                with psycopg.connect(connection_info, autocommit=True) as monitor:
+                    held = _battle_locks(monitor, holder[0], battle_ids)
+                # The live battle log needs a battle the re-decode has not reached.
+                run("live", live).join(10)
+                assert results.get("live") == "processed"
+            finally:
+                release.set()
+                background.join(20)
+            assert results["redecode"] == "processed"
+            assert held == army_ingestion.REDECODE_GROUP
+            assert _upgraded(database) == len(battle_ids)
+        finally:
+            database.close()
+
+
+def test_a_redecode_gives_way_to_a_live_job_holding_its_battle(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
+            [redecode] = _queue_redecodes(connection_info, [battle_ids])
+            results: list[str] = []
+            thread = threading.Thread(target=lambda: results.append(
+                processor.process_job(redecode, owner="redecode").outcome))
+            with psycopg.connect(connection_info) as live, psycopg.connect(
+                connection_info
+            ) as other_live:
+                # A live battle log is saving the sixth battle.
+                live.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"army-redecode-battle:{battle_ids[5]}",),
+                )
+                thread.start()
+                time.sleep(0.5)
+                # The re-decode keeps none of the five battles before it while it
+                # waits, so another live battle log saves the first at once.
+                other_live.execute("SET lock_timeout = '200ms'")
+                other_live.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"army-redecode-battle:{battle_ids[0]}",),
+                )
+                other_live.commit()
+                live.commit()
+            thread.join(20)
+            assert results == ["processed"]
+            assert _upgraded(database) == len(battle_ids)
+            with database.pool.connection() as connection:
+                assert text(connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s", (redecode,)
+                ).fetchone()[0]) == "complete"
+        finally:
+            database.close()
+
+
+def _live_job_beside_held_battles(
+    connection_info: str, archive_server, processor, battle_ids: list[int]
+) -> list[str]:
+    """Run a live battle log repeating the newest battle while another
+    connection holds every battle's lock; return its outcome if it finished
+    within 10 seconds."""
+    _, live = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="live",
+        endpoint="battle_log",
+        body=json.dumps({"items": [_live_row(
+            True, OPPONENTS[-1], f"u{len(OPPONENTS)}x0",
+            DAY + timedelta(minutes=len(OPPONENTS) - 1),
+        )]}).encode(),
+        observed_at=DAY + timedelta(hours=2),
+        normalized_tag="#2PP",
+    )
+    results: list[str] = []
+    thread = threading.Thread(target=lambda: results.append(
+        processor.process_job(live, owner="live").outcome))
+    with psycopg.connect(connection_info) as other_live:
+        # Other live battle logs are saving these battles.
+        other_live.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended("
+            "'army-redecode-battle:' || id, 0)) FROM unnest(%s::bigint[]) AS id",
+            (battle_ids,),
+        )
+        thread.start()
+        thread.join(10)
+        finished = list(results)
+        other_live.commit()
+    thread.join(20)
+    return finished
+
+
+def _saved_armies(database: Database) -> list[tuple[str, str]]:
+    with database.pool.connection() as connection:
+        return [(text(row[0]), text(row[1])) for row in connection.execute(
+            "SELECT status, catalog_version FROM battle_army_decodes ORDER BY id"
+        ).fetchall()]
+
+
+def test_a_live_battle_log_reuses_an_older_catalog_decode(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(
+                connection_info, archive_server, database, processor, readable=True
+            )
+            before = _saved_armies(database)
+            assert _live_job_beside_held_battles(
+                connection_info, archive_server, processor, battle_ids
+            ) == ["processed"]
+            # Nothing was read again: the armies saved under the old list stand.
+            assert _saved_armies(database) == before
+            assert {row[1] for row in before} == {"unit-catalog-v2"}
+        finally:
+            database.close()
+
+
+def test_a_live_battle_log_skips_a_busy_battle_it_would_save_again(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
+            # The repeated battle's failed army now reads, so the live job
+            # would save it again, but another job holds that battle.
+            assert _live_job_beside_held_battles(
+                connection_info, archive_server, processor, battle_ids
+            ) == ["processed"]
+            assert _upgraded(database) == 0
+            assert len(_saved_armies(database)) == len(battle_ids)
+        finally:
+            database.close()

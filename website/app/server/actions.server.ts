@@ -9,7 +9,7 @@
  * those rules and never echoes secret or personal values.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   RESERVED_USERNAMES,
@@ -193,6 +193,21 @@ export async function parseBoundedFormData(
 /** Fresh canonical idempotency UUID for one form render or action target. */
 export function freshIdempotencyKey(): string {
   return randomUUID();
+}
+
+/**
+ * The same follow-up key every time for one key and one step, so replaying
+ * a request replays its follow-ups too.
+ */
+export function followUpIdempotencyKey(key: string, step: string): string {
+  const hex = createHash("sha256").update(`${key}\n${step}`).digest("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
 }
 
 /** Strict canonical lowercase UUID check for idempotency keys. */

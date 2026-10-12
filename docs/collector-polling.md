@@ -77,7 +77,7 @@ and Legend III totals afterwards. About 130 bytes a row with its indexes: the la
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
 seen Legend II and III players.
 
-Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
+Each Monday, after the Reset sweep (05:03:40-05:10 UTC), settlement (from 05:20)
 and the late-battle check (from 05:30), from 06:00 the collector asks for the
 profile of every listed Legend II player not checked since 06:00, oldest
 check first, then every listed Legend III player the same way (an answer saved
@@ -146,6 +146,88 @@ collection, weekly checks, processing, storage and cost before deciding whether
 additional keys or wiring changes are necessary. Weekly scheduling and reuse of
 finished checks have not been verified by the manual-import test.
 
+## The game's ranking lists, once a day
+
+With `CLASHLENS_GAME_RANKINGS_ENABLED=true` in `app.env` (default `false`),
+the collector pulls the game's own ranking lists around each Reset, on the
+regular keys, one request at a time and at most two a second
+(`game_rankings.py`, migration 0099):
+
+- the global top 200 at 05:00:30, tried again a minute apart until 05:05, for
+  trophies close to the Reset;
+- the global top 200 every 3 minutes from 05:03 until its `previousRank`
+  field holds this Reset's ranks. It counts as switched when at least a
+  quarter of the players with a known `previousRank` in both it and that
+  morning's 05:00:30 pull show a different one; a rank turning unknown is
+  not a switch. A 05:00:30 pull where fewer than a quarter of the players
+  with a known `previousRank` have moved from it already holds this
+  Reset's ranks, as on 12 Oct 2026: it is the Reset's list and there is no
+  poll. With no 05:00:30 pull there is no poll. Polling
+  stops at 06:00; a day never seen to switch pulls no country lists and
+  scores `unknown`;
+- once switched, every country's top 200, with the location list first when
+  the saved one is over 7 days old. A failed pull is tried again 2 minutes
+  later, until 07:00. A location list already over 7 days old at the Reset
+  is never used: while it can't be refreshed no country list is pulled, and
+  the day scores `unknown`.
+
+That is about 258 requests a day plus up to 19 polls. Each pull keeps its raw
+bytes gzip-compressed, its request time and location in `game_ranking_pulls`,
+deleted 28 days after its Reset: about 4 MB a day compressed (43 MB raw), so
+about 115 MB at most. Every Legend I player in a country list who is not
+tracked is saved as due a discovery check, the same path as a Monday
+promotion, so each is asked again once a day. A country pull with a player
+another job holds at that moment is saved as failed and tried again 2 minutes
+later. On 11 October 2026, 570 Legend I players in the lists were missing from
+the board; tracked ones are skipped.
+
+From 07:00, each newly published frozen Daily board for a Reset up to 28 days
+old, while its pulls are kept, is scored against those pulls: the
+board the website shows, including one a later correction or Season repair
+republished, and one with no entries. Scoring a board republished later is
+best effort: the location list a Reset used can be up to 7 days older than
+its Reset and is deleted 28 days after its own, so once it is gone that
+board's country part is `unknown`, never scored. A board for a Reset older
+than the oldest pull still kept is not scored at all. The score is kept forever in
+`game_ranking_scores` (about 2 KB a day per board version). A score is `unknown`, never a pass, when any pull
+above failed or is missing, including a day with no pulls since collection
+began; its numbers then cover only what arrived. The game's own faults are
+left out of every number, S6 included, but listed: stuck 5,000 rows, which
+are Legend I rows at exactly 5,000 trophies with 0 attack wins for players
+with a stored Legend battle, attack or defense, on an earlier Legend day this
+Season; and tags the game lists in two countries. Saved profiles don't keep
+their attack and defense counts, so the stored battles are the evidence.
+Order comparisons still use every published board position. A
+`previousRank` of 0 or less counts as unknown. Each score also saves the
+board's own measured coverage, the share of our eligible players it holds,
+as `board_measured_coverage`, separate from S5's coverage of the game's lists.
+
+| score | meaning | 11 Oct 2026 board |
+|---|---|---:|
+| S1 | same-country order breaks per 100,000 pairs of Legend I players on the board | 116.8 |
+| S2 | global top 200 whose Reset rank falls inside the board positions of their trophy count | 164 |
+| S3 | confirmed board entries in at least one same-country pair the game orders the other way, each counted once | not measured |
+| S4 | Legend I players in country lists not on the board, not at 5,000 with 0 attack wins | 9 at the 14:07 pull |
+| S5 | percent of Legend I players in country lists who are on the board | 91.46 |
+| S6 | percent of board entries, faults left out, marked uncertain | not measured |
+
+The score also counts exact global ranks, tied pairs and how often the
+board's order inside a tie matches the game's, and how many 05:00:30 global
+trophies equal the board value. The 11 October column is this code's score of
+that day's board against the lists pulled at 13:56-14:07 UTC: 342,472 pairs,
+400 breaks, 27 exact global ranks, 1,155 tied pairs, 45 stuck 5,000 rows and
+3 tags in two countries, matching the 11 October blind review. S3 and S6 need
+the board's confidence labels, which that export did not have; S4 counts 8
+players who signed up after that Reset, which a pull at about 05:20 mostly
+avoids. S4 and S5 there are from before S4 stopped requiring a known Reset
+rank and before the stuck rows left S5; they have not been re-run, nor has
+the stuck-row count under the stored-battle rule.
+
+`podman exec clashlens-collector python -m clashlens.cli game-ranking-score
+--database-url-file /run/secrets/database-url [--days 14]` prints one JSON
+line per recent Reset: its latest board version's score. Each tick's pulls,
+scores and prunes also print a `game_rankings` line in the collector log.
+
 ## Weekly eligibility switch
 
 `ops` passes `CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=true` to the collector, for
@@ -160,9 +242,12 @@ Migration `0037_weekly_eligibility.sql` makes the shared
 as soon as the migration is applied, independently of the switch. First-time
 tags still enqueue immediately. Pending profile checks across older cycles are
 reused, and terminal routine attempts do not restart on every repeat sighting.
-Migration `0068_weekly_eligibility_direct_selection.sql` keeps that selection
-but finds due players with plain lookups, so a finished week costs one cheap
-lookup per inactive player instead of the per-player evidence checks.
+Migration `0090_weekly_eligibility_next_players.sql` keeps that selection but
+saves on each inactive player the week the weekly search finished with them, so
+a search reads from an index only players not yet finished that week, oldest
+finished week first and then by ID, and a finished week reads none. The search
+it replaced tested every player already checked that week: on 9 October 2026,
+with 9,510 of 13,215 checked, it took up to 58.6 seconds.
 
 Weekly and ordinary discovery work make one request per endpoint per run. A
 temporary failure (a transport failure, a rate limit or a server error) puts the
@@ -408,8 +493,8 @@ grows only with the number of players checked, and is not saved. After a restart
 responses again: up to about 26,500 extra battle-log requests, three minutes of
 all six keys, but never a missed battle.
 
-The 05:00 UTC Reset, Refresh and interactive first-time collection still fetch
-both responses together. A newly found player's first regular battle-log check
+The 05:00 UTC Reset still fetches both responses, the profile first (below),
+and Refresh and interactive first-time collection fetch both together. A newly found player's first regular battle-log check
 can reuse its saved profile within the five-second profile cache window; if that
 window expires or the battle-log request fails, it fetches the profile again.
 
@@ -469,7 +554,7 @@ answering again, the work gets three more failed runs, then fails and settles
 as missing, so a few failing players cannot hold ordinary collection. The
 count is kept in collector memory, so a restart allows three more. Reset
 work fetches the profile, then the battle log, then any league history, one
-after another. A Reset retry fetches only the responses that have no usable
+after another, the last two from 05:07:20 UTC (below). A Reset retry fetches only the responses that have no usable
 answer yet, so a profile saved before the player's first battle is kept; a
 battle log saved before the profile is fetched again, even after a restart.
 Reset work stops retrying at 04:55 UTC, five minutes before its Legend day
@@ -515,8 +600,27 @@ due time. Player-token verification and interactive collection use the
 
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
-profile/battle work row per member. Regular work stays blocked until all Reset
+profile/battle work row per member, due at 05:03:40. At all 11 Resets from 29
+September to 9 October 2026 the ended day's last battle ended by 05:03:38 and
+the new day's first started at 05:07:20 or later, and no profile showed the
+automatic defense loss before 05:07:38. So from 05:03:40 the sweep fetches only
+profiles, each showing the ended day's end before that loss; from 05:07:20 it
+fetches each player's battle log, which only has to come after the profile,
+and any league history, after any profile still owed, which is then followed
+at once by its battle log. A new-day battle cannot reach a profile before about
+05:09:50: a defense shows about 2 minutes after it starts, an attack about 4
+minutes after its report. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
+So the Reset pairs may use the regular checks' slots (`CLASHLENS_REGULAR_PARALLELISM`,
+300 with six keys) instead of the 32 the other durable work shares, and the
+keys set their pace: 13,295 profiles take at least 89 seconds at six keys' 150
+starts a second. With 32 slots, each fetching a profile and then a battle log,
+the 8 October 2026 sweep read 23 profiles a second. On 9 October 2026 the
+collector, run locally against the fake API with production-sized answers
+taking 0.14 seconds each, read 13,295 profiles in 93 seconds with 300 slots
+and in 170 with 32, and their battle logs in 142 and 217 seconds after 05:07:20;
+the same machine ran the earlier pairs-at-once sweep at 43 players a second,
+1.9 times production's pace.
 Regular checks paused by a full spool or a provider-outage pause do not count
 as admitted work, so they never delay the sweep; once admission closes they
 wait for their next pass.
@@ -595,9 +699,11 @@ A regular check of a player whose last profile from this collector reported
 Legend I with Season ID 0, with the same trophies, attackWins, defenseWins and
 Unbreakable count as the profile before it, fetches the profile only when that
 profile is at least 15 minutes old. This includes a player whose older,
-accepted profile is still their current one; it stays current and the Season 0
-profile's trophies are never used. The worker's own profile rules decide what
-counts as Season 0, so an empty, malformed or non-Legend profile does not wait.
+accepted profile is still their current one; it stays current, and the Season 0
+profile's trophies are used only to rank a player who has not played yet at
+5,000 ([Live Leaderboard ordering](domain.md#live-leaderboard-ordering)).
+The worker's own profile rules decide what counts as Season 0, so an empty,
+malformed or non-Legend profile does not wait.
 The battle log keeps every rule above, but sees a profile change only at the
 15-minute recheck, so a battle can wait up to about 15 minutes; the game keeps
 recent battles in the log, so none is lost. A Season 0 profile with changed
@@ -633,8 +739,7 @@ The game can apply the previous day's automatic defense loss minutes after
 the Reset, so the Reset pair is only provisional
 ([boundary settlement](domain.md#8-evidence-and-confidence-states)). In the same transaction that freezes the
 sweep, the collector schedules one `reset_settlement` work row per frozen
-member, due at 05:20 UTC, and links it to that member's boundary settlement
-row. Only the sweep's first capture schedules them, so restarts, finished or
+member, due at 05:20 UTC. Only the sweep's first capture schedules them, so restarts, finished or
 failed checks and members joining later add none, and a member leaving keeps
 its check. Each check fetches a new profile, saves it, then fetches the battle
 log; it never reuses a recent profile or skips the log. It keeps its first
@@ -645,8 +750,11 @@ work row keeps pointing at them, so the worker processes them behind newer
 responses instead of skipping them. Settlement checks fetch no league history;
 a Season-opening Reset schedules a separate refresh for that (below).
 
-The checks run in the 32 ordinary intent slots behind any unfinished Reset
-work, with the same retries as Reset work. They never block regular
+The checks share the Reset pairs' slots (`CLASHLENS_REGULAR_PARALLELISM`,
+300 with six keys), behind any unfinished Reset pair, with the same retries
+as Reset work; the pairs finished by 05:13 on 8-10 October 2026, so the slots
+are otherwise idle at 05:20. Regular checks keep running beside them and the
+keys' start and concurrency limits still bound every request. They never block regular
 admission, the next Reset or the 05:30 late-battle check, which does not wait
 for their responses' processing: every attempt's processing job, including
 one a retry replaced, has a `process-settlement:` key. No request starts 23 hours 55 minutes after
@@ -656,15 +764,25 @@ a check past it stops without changing its work row. From 04:55 the
 collector's scheduling loop fails unfinished checks as `settlement_expired`
 without a request, up to 1,000 rows per transaction, until a pass finds none
 left, before the next Reset. Responses already saved are still
-processed. Nothing reads the pair yet; every published result is unchanged.
+processed. The worker judges the check's profile like any other reading
+when it calculates the day.
 
 Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
-Six regular keys at 25 starts per second take at least 177 seconds, but the
-32 slots are the real limit: production's early Reset pass, the same work,
-finished in 7m45s and 10m10s on October 1 and 2, but the October 6 pass ran
-from 05:20 to 08:18. Discovery and ranking checks go ahead of the pass and of
-the season-end league-history refresh, so a player first seen at 05:30 is
-checked within seconds, not after the pass. Each finished check keeps a work
+Six regular keys at 25 starts per second take at least 177 seconds. Each
+check holds its slot from its profile request until its battle log is saved,
+and both answers are always written to the spool and the database, never
+skipped as unchanged. In the 32 ordinary slots it used until October 2026
+that took about 21-28 seconds a check once regular checks resumed: production
+finished about 60-100 checks a minute (05:20 to 08:18 on October 6; 5,986 of
+13,251 by 06:28 on October 8; 1,872 of 13,393 by 05:47 on October 10). On
+October 10 the Reset pass, the same requests and saves in 300 slots with
+regular checks held, read 13,393 profiles from 05:03:40 to 05:07:00 and their
+logs from 05:07:20 to 05:13:00. In the Reset slots the settlement pass gets
+about nine times the room; how much faster it finishes beside regular checks
+is not yet measured. Due discovery and ranking checks are fetched ahead of
+the pass and of the season-end league-history refresh and keep their own 32
+slots, so a player first seen at 05:30 is checked within seconds, not after
+the pass. Each finished check keeps a work
 row, about 220 bytes plus three index entries: 3-5 MB a day, about 1.8 GB a
 year, never deleted. A saved profile and log average 23 KB and 74 KB of raw
 bytes, up to 1.3 GB a day before identical bytes are stored once.
@@ -760,7 +878,9 @@ picked until they land. Starting a Reset sweep also waits at most 3 seconds,
 then tries again on a later pass. Restart replay, the update that checks a Clasher who
 finished the Legend day less often, and marking work finished wait the same 3
 seconds: replay leaves the rest to the background, the Clasher keeps the normal
-check cadence, and finishing is retried. A shared body already sighted earlier the same UTC day
+check cadence, and finishing is retried. The update for a finished Clasher
+gives up after 3 seconds in total, even when it first queues behind its own
+saved response's background retry and then waits for the worker. A shared body already sighted earlier the same UTC day
 keeps its earlier latest sighting time, which only orders spool cleanup and
 sets the archive retention deadline, the same for every sighting that day. A
 body already marked for deletion is never recorded this way; it is saved

@@ -3,6 +3,8 @@ import type {
   PlayerLookup,
   PlayerPage,
   RankedDaySummary,
+  RefreshStatus,
+  RefreshWork,
   SummarizedSeasonRef,
 } from "./contracts";
 
@@ -14,13 +16,86 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
   tracking: "Now tracking in Legend I. The first results are being prepared.",
   not_found:
     "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
-  not_in_legend:
-    "This player is not in Legend I. Clash Lens tracks Legend League players only. We have kept the tag and any saved history.",
+  not_in_legend: "This player is not in Legend I.",
   uncertain:
     "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",
   failed:
     "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
 };
+
+/** The page's lookup note, naming the league of a player outside Legend I. */
+export function lookupMessage(lookup: PlayerLookup): string {
+  const league = lookup.state === "not_in_legend" ? lookup.profile?.league : undefined;
+  const message = LOOKUP_MESSAGES[lookup.state];
+  return league ? `${message} Current league: ${league}.` : message;
+}
+
+// The saved player, or a finished refresh's player when that is newer.
+export function newestPlayer(
+  status: RefreshStatus | RefreshWork | null,
+  data: { requestedTag: string | null; player: PlayerPage | null },
+): PlayerPage | null {
+  const refreshed =
+    status && "player" in status && status.tag === data.requestedTag
+      ? status.player
+      : null;
+  return refreshed &&
+    (data.player === null ||
+      Date.parse(refreshed.profile.freshness.observedAt) >
+        Date.parse(data.player.profile.freshness.observedAt))
+    ? refreshed
+    : data.player;
+}
+
+// A newest profile we cannot use is explained, even over saved results.
+export function explainsNoResults(lookup: PlayerLookup | null): boolean {
+  return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
+}
+
+// What a visit shows and how often it rereads saved data. A successful lookup
+// alone decides the state; saved results show as current only when it says
+// tracking too. Once explained, the visit rereads once a minute, through failed
+// or partial reads, until a successful lookup gives a normal page or a final
+// answer.
+export function playerLookupView(
+  player: PlayerPage | null,
+  fetched: PlayerLookup | null,
+  explainedVisit: boolean,
+) {
+  const current =
+    fetched === null
+      ? !explainedVisit
+      : fetched.state === "tracking" && !explainsNoResults(fetched);
+  const trackedPlayer = current && player?.trackingState === "tracking" ? player : null;
+  const lookup: PlayerLookup | null =
+    fetched ??
+    (player && !explainedVisit ? { tag: player.tag, state: player.trackingState } : null);
+  const minuteChecks =
+    explainedVisit &&
+    trackedPlayer === null &&
+    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
+  const isChecking =
+    !explainedVisit &&
+    (lookup?.state === "checking" ||
+      (lookup?.state === "tracking" && trackedPlayer === null));
+  return { trackedPlayer, lookup, minuteChecks, isChecking };
+}
+
+/**
+ * Whether a player without current results has a current Season to show. A
+ * player outside Legend I needs a saved Legend day this Season, so the page
+ * never shows them an empty Season.
+ */
+export function showsCurrentSeason(
+  lookup: PlayerLookup | null,
+  history: { day: RankedDaySummary }[],
+) {
+  return (
+    history.some(({ day }) =>
+      isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
+    ) || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "")
+  );
+}
 
 /**
  * Why a tracked player's newest profile gives no current results, or null
@@ -201,6 +276,8 @@ const REASON_TEXT: Record<string, string> = {
   start_baseline_incomplete: "The start-of-day trophy reading is incomplete.",
   missing_end_baseline: "Trophies at the end of this day were not recorded.",
   end_baseline_incomplete: "The end-of-day trophy reading is incomplete.",
+  end_reading_unverified:
+    "No trophy reading after this day could confirm its end: a battle may still have been landing, an attack's trophies may have shown late, part of a battle log could not be read, or the weekly raise to 5,000 hid the automatic defense loss.",
   battle_log_stale_window:
     "The battle log was not checked often enough to be sure every battle was seen.",
   battle_log_overlap_gap: "Some battles may be missing between two battle log checks.",
@@ -270,6 +347,50 @@ export function legendDayKey(period: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Every saved record of a player, in the order the log prefers them.
+function savedDays(player: PlayerPage) {
+  return [
+    ...player.seasonDays,
+    ...(player.currentDay ? [player.currentDay] : []),
+    ...player.recentDays,
+  ];
+}
+
+// A saved day is not a Legend day only when saved profiles prove the player
+// had not signed up yet and it has no battles. Not eligible is no such proof:
+// a missing Reset reading alone sets it.
+export function isLegendDay(codes: string[], battles: number) {
+  return battles > 0 || !codes.includes("not_enrolled");
+}
+
+// A finished day's end-of-day trophies: the next day's start, from any saved
+// record of that day, shown in the log or not. Only the latest finished day,
+// ended at the latest Reset, can fall back to its start plus its trophy change
+// and any weekly or Season reset at its closing Reset; an older day without
+// the next day's start has none. When both exist and disagree the whole day is
+// Uncertain and its reasons lead with the gap.
+export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
+  const ended = Date.parse(day.period.split(" – ")[1]);
+  const own =
+    day.startTrophies != null && day.trophyChange !== null
+      ? day.startTrophies + day.trophyChange + (day.resetAdjustment?.amount ?? 0)
+      : null;
+  const following =
+    savedDays(player).find((saved) => Date.parse(saved.period.split(" – ")[0]) === ended)
+      ?.startTrophies ?? null;
+  const conflict =
+    own !== null && following !== null && own !== following
+      ? `Battles add up to ${own.toLocaleString("en-GB")}; next day started at ${following.toLocaleString("en-GB")}.`
+      : null;
+  const evidence = presentDay(dayEvidence(day), false);
+  return {
+    trophies: following ?? (ended <= now && now - ended < DAY_MS ? own : null),
+    status: conflict ? "Uncertain" : evidence.status,
+    reasons: conflict ? [conflict, ...evidence.reasons] : evidence.reasons,
+    conflict,
+  };
+}
+
 // The log keeps only the current Season's days at the server time, numbered
 // from its start; an ended Season's days are under that Season in Seasons.
 export function selectPlayerHistory(player: PlayerPage | null, now: number) {
@@ -278,11 +399,7 @@ export function selectPlayerHistory(player: PlayerPage | null, now: number) {
     anchor !== null && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
   const seasonDay = (day: RankedDaySummary) =>
     Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
-  const days = [
-    ...(player?.seasonDays ?? []),
-    ...(player?.currentDay ? [player.currentDay] : []),
-    ...(player?.recentDays ?? []),
-  ].filter(
+  const days = (player ? savedDays(player) : []).filter(
     (day) =>
       seasonDay(day) >= 1 &&
       seasonDay(day) <= 28 &&

@@ -11,6 +11,7 @@ from clashlens import (
     army_ingestion,
     boundary,
     boundary_publication,
+    past_reset_pacing,
     reset_baselines,
     snapshots,
 )
@@ -18,6 +19,12 @@ from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY_START = BOUNDARY - timedelta(days=1)
+
+
+@pytest.fixture(autouse=True)
+def _corrections_start_at_once(monkeypatch) -> None:
+    # What a correction rebuilds, not when (test_past_reset_pacing_postgres).
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
 
 
 def _player_and_version(

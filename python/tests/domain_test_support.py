@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -15,6 +15,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 from clashlens import army_ingestion, boundary_publication
+from clashlens.domain import ranked_day_for
 
 
 def text(value: Any) -> Any:
@@ -63,7 +64,6 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
             LEFT JOIN battle_army_decodes AS decode
               ON decode.battle_id = battle.id AND decode.is_active
              AND decode.decoder_version = 'army-decoder-v2'
-             AND decode.catalog_version = 'unit-catalog-v2'
             WHERE battle.ranked_day_start = %s
             """,
             (ranked_day_start,),
@@ -222,6 +222,113 @@ def repair_season(
         raise AssertionError("the evidence repairs did not finish")
     finally:
         database.close()
+
+
+def seed_attacks(
+    connection: psycopg.Connection[Any],
+    attacker_id: int,
+    attacks: list[tuple[datetime, int]],
+) -> None:
+    """Record each (Legend day start, destruction) as one attack the player's
+    own battle log reported, on a new untracked opponent, an hour into that
+    day. Saved without source rows or responses."""
+    with connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for day, destruction in attacks:
+            connection.execute(
+                """
+                WITH defender AS (
+                    INSERT INTO players (normalized_tag, active)
+                    VALUES (%(defender)s, false) RETURNING id
+                ), battle AS (
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT %(day)s, %(attacker)s, id FROM defender RETURNING id
+                ), evidence AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        attacker_gain, defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT id, -id, -id, %(attacker)s, 'attacker',
+                           %(day)s + interval '1 hour',
+                           CASE WHEN %(destruction)s = 100 THEN 3
+                                WHEN %(destruction)s >= 50 THEN 1 ELSE 0 END,
+                           %(destruction)s, '', 0, 0, 'test',
+                           %(day)s + interval '1 hour', 'test'
+                    FROM battle RETURNING id, battle_id
+                )
+                INSERT INTO battle_perspectives
+                    (battle_id, perspective, evidence_id, source_observed_at)
+                SELECT battle_id, 'attacker', id, %(day)s + interval '1 hour'
+                FROM evidence
+                """,
+                {
+                    "defender": f"#Q{uuid4().hex[:12].upper()}",
+                    "day": day,
+                    "attacker": attacker_id,
+                    "destruction": destruction,
+                },
+            )
+
+
+
+def seed_battles(
+    connection: psycopg.Connection[Any],
+    player_id: int,
+    battles: list[tuple[datetime, int]],
+) -> None:
+    """Record each (end time, trophy change) as one battle on the player's
+    own battle log against a new untracked opponent: an attack for a gain or
+    no change, a defense for a loss. It belongs to the Legend day of its end
+    time less 5 minutes. Saved without source rows or responses."""
+    with connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for ended_at, change in battles:
+            attack = change >= 0
+            connection.execute(
+                """
+                WITH opponent AS (
+                    INSERT INTO players (normalized_tag, active)
+                    VALUES (%(opponent)s, false) RETURNING id
+                ), battle AS (
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT %(day)s,
+                           CASE WHEN %(attack)s THEN %(player)s ELSE id END,
+                           CASE WHEN %(attack)s THEN id ELSE %(player)s END
+                    FROM opponent RETURNING id
+                ), evidence AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        attacker_gain, defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT id, -id, -id, %(player)s, %(perspective)s, %(ended)s,
+                           %(stars)s, %(stars)s * 33, '', %(gain)s, %(loss)s,
+                           'test', %(ended)s, 'test'
+                    FROM battle RETURNING id, battle_id
+                )
+                INSERT INTO battle_perspectives
+                    (battle_id, perspective, evidence_id, source_observed_at)
+                SELECT battle_id, %(perspective)s, id, %(ended)s FROM evidence
+                """,
+                {
+                    "opponent": f"#Q{uuid4().hex[:12].upper()}",
+                    "day": ranked_day_for(ended_at - timedelta(minutes=5)).start,
+                    "attack": attack,
+                    "player": player_id,
+                    "perspective": "attacker" if attack else "defender",
+                    "ended": ended_at,
+                    "stars": min(3, abs(change) // 10),
+                    "gain": max(change, 0),
+                    "loss": max(-change, 0),
+                },
+            )
 
 
 @contextmanager

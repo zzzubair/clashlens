@@ -11,6 +11,7 @@ _RESERVED_USERNAMES = frozenset(
         "analytics",
         "api",
         "clashlens",
+        "crews",
         "groups",
         "leaderboard",
         "login",
@@ -96,6 +97,10 @@ def normalize_display_name(value: str) -> str:
 
 def normalize_group_name(value: str) -> str:
     return _normalize_name(value, "group name")
+
+
+def normalize_crew_name(value: str) -> str:
+    return _normalize_name(value, "crew name")
 
 
 def _normalize_name(value: str, label: str) -> str:

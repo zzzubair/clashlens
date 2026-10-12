@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import (
     api_accounts,
     api_analytics,
+    api_dashboard,
     api_groups,
     api_leaderboard,
     api_player_lookup,
@@ -37,6 +38,7 @@ from .api_db import (
 from .army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    ArmyTypesPreparing,
     CurrentSeasonEmpty,
 )
 from .clashking import ClashKingClient, get_past_seasons
@@ -44,6 +46,7 @@ from .domain import ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
 from .profile import normalize_player_tag
+from .usage_events import UsageEvents
 from .verification import (
     OfficialVerificationResponse,
     VerificationOutcome,
@@ -73,13 +76,13 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "account.create",
         "account.read",
         "account.update",
+        "crews.read",
+        "crews.write",
         "groups.read",
         "groups.write",
         "player_links.verify",
         "providers.link",
         "providers.unlink",
-        "saved_tags.read",
-        "saved_tags.write",
         "session.check",
         "session.revoke",
         "summary.read",
@@ -106,7 +109,7 @@ class AccountUpdateBody(AccountCreateBody):
     preferences: dict[str, Any] = Field(default_factory=dict)
 
 
-class SavedTagBody(StrictBody):
+class TagBody(StrictBody):
     tag: str = Field(min_length=4, max_length=16)
 
 
@@ -177,6 +180,8 @@ def create_app(
     verification_cooldown_seconds: int = 5,
     api_metrics: ApiMetrics | None = None,
     clashking_client: ClashKingClient | None = None,
+    dashboard_enabled: bool = False,
+    usage_events: UsageEvents | None = None,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -197,10 +202,14 @@ def create_app(
             raise ValueError("a caller may have only current and previous HMAC keys")
 
     production_database = database
+    events = usage_events or UsageEvents.from_environment()
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
     operating_metrics = api_metrics or ApiMetrics()
     clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
+    dashboard_board = api_dashboard.DashboardBoard()
+    dashboard_army_days = api_dashboard.ArmyDays()
+    live_board = api_leaderboard.LiveBoardCache()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
 
@@ -208,6 +217,7 @@ def create_app(
     async def lifespan(_app: FastAPI):
         yield
         database.close()
+        events.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -402,6 +412,38 @@ def create_app(
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
 
+    @app.get("/v1/players/{tag}/today")
+    def player_today(tag: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if not dashboard_enabled:
+            raise ApiError(404, "dashboard_disabled")
+        result = api_dashboard.get_player_today(
+            production_database, dashboard_board, _safe_tag(tag), now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(content=_json_safe(result))
+
+    @app.get("/v1/players/{tag}/armies")
+    def player_armies(
+        tag: str,
+        request: Request,
+        lens: Literal["offense", "defense"] = Query(),
+        days: int = Query(ge=1, le=api_dashboard.MAX_ARMY_DAYS),
+    ) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if not dashboard_enabled:
+            raise ApiError(404, "dashboard_disabled")
+        if lens == "offense" and days not in api_dashboard.OFFENSE_ARMY_DAYS:
+            raise ApiError(422, "invalid_request")
+        result = api_dashboard.get_player_armies(
+            production_database, dashboard_army_days, _safe_tag(tag),
+            lens=lens, days=days, now=current_time(),
+        )
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(content=_json_safe(result))
+
     @app.get("/v1/players/{tag}/lookup")
     def player_lookup(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)
@@ -504,7 +546,7 @@ def create_app(
             raise ApiError(422, "invalid_request")
         return JSONResponse(
             content=api_leaderboard.search_live_leaderboard(
-                production_database, q, now=current_time()
+                production_database, q, now=current_time(), cache=live_board
             )
         )
 
@@ -531,6 +573,7 @@ def create_app(
                 offset=offset,
                 now=current_time(),
                 focus_tag=None if focus_tag is None else _safe_tag(focus_tag),
+                cache=live_board,
             )
         else:
             if focus_tag is not None:
@@ -580,6 +623,8 @@ def create_app(
             if empty.previous_season_id:
                 content["previous_season_id"] = empty.previous_season_id
             return JSONResponse(status_code=404, content=content)
+        except ArmyTypesPreparing as preparing:
+            raise ApiError(404, "army_types_preparing") from preparing
         except ArmyAnalyticsUnavailable as unavailable:
             raise ApiError(
                 404,
@@ -593,6 +638,14 @@ def create_app(
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
         return JSONResponse(status_code=200, content=_json_safe(result))
+
+    @app.get("/v1/analytics/armies/seasons")
+    def army_seasons(request: Request) -> JSONResponse:
+        _authorize(request, "analytics.read", production_database)
+        return JSONResponse(
+            status_code=200,
+            content={"seasons": api_analytics.list_army_seasons(production_database)},
+        )
 
     @app.get("/v1/analytics/armies/seasons/{season_id}")
     def army_season_summary(
@@ -694,6 +747,8 @@ def create_app(
             normalized_username=username,
             display_name=display_name,
         )
+        if result.status_code == 201 and not result.replayed:
+            events.capture("signup_completed", {"provider": binding.provider})
         return _operation_response(result)
 
     @app.get("/v1/account")
@@ -761,41 +816,6 @@ def create_app(
         )
         return _operation_response(result)
 
-    @app.get("/v1/account/saved-tags")
-    def saved_tags(request: Request, tag: str | None = None) -> JSONResponse:
-        context = _authorize(request, "saved_tags.read", production_database)
-        assert production_database is not None and context.account is not None
-        return JSONResponse(
-            status_code=200,
-            content={
-                "players": api_accounts.list_saved_players(production_database,
-                    context.account.internal_id, normalized_tag=_safe_tag(tag) if tag else None
-                )
-            },
-        )
-
-    @app.post("/v1/account/saved-tags")
-    def add_saved_tag(body: SavedTagBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "saved_tags.write", production_database)
-        assert production_database is not None
-        tag = _safe_tag(body.tag)
-        result = api_accounts.add_saved_player(production_database,
-            _binding(request, context, "saved_tags.add", {"tag": tag}),
-            normalized_tag=tag,
-        )
-        return _operation_response(result)
-
-    @app.delete("/v1/account/saved-tags/{tag}")
-    def remove_saved_tag(tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "saved_tags.write", production_database)
-        assert production_database is not None
-        normalized_tag = _safe_tag(tag)
-        result = api_accounts.remove_saved_player(production_database,
-            _binding(request, context, "saved_tags.remove", {"tag": normalized_tag}),
-            normalized_tag=normalized_tag,
-        )
-        return _operation_response(result)
-
     @app.get("/v1/account/groups")
     def groups(request: Request) -> JSONResponse:
         context = _authorize(request, "groups.read", production_database)
@@ -828,6 +848,8 @@ def create_app(
             normalized_name=normalized_name,
             normalized_tags=tags,
         )
+        if result.status_code == 201 and not result.replayed:
+            events.capture("group_created", page=request.query_params.get("page"))
         return _operation_response(result)
 
     @app.patch("/v1/account/groups/{group_id}")
@@ -863,7 +885,7 @@ def create_app(
 
     @app.post("/v1/account/groups/{group_id}/players")
     def add_group_player(
-        group_id: str, body: SavedTagBody, request: Request
+        group_id: str, body: TagBody, request: Request
     ) -> JSONResponse:
         context = _authorize(request, "groups.write", production_database)
         assert production_database is not None
@@ -877,6 +899,10 @@ def create_app(
             normalized_tag=tag,
             now=current_time(),
         )
+        if result.status_code == 200 and not result.replayed:
+            events.capture(
+                "group_used", {"action": "add"}, page=request.query_params.get("page")
+            )
         return _operation_response(result)
 
     @app.delete("/v1/account/groups/{group_id}/players/{tag}")
@@ -895,6 +921,8 @@ def create_app(
             group_id=group_id,
             normalized_tag=normalized_tag,
         )
+        if result.payload.get("removed") and not result.replayed:
+            events.capture("group_used", {"action": "remove"})
         return _operation_response(result)
 
     @app.get("/v1/account/groups/{group_id}/comparison")
@@ -1108,6 +1136,15 @@ def create_app(
         )
         return _operation_response(result)
 
+    # A local import: the crew routes reuse this module's request checks.
+    from .api_crews_http import register_crew_routes
+
+    register_crew_routes(
+        app,
+        database=production_database,
+        current_time=current_time,
+        enabled=dashboard_enabled,
+    )
     return app
 
 

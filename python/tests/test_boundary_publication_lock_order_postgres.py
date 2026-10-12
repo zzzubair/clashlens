@@ -439,13 +439,16 @@ def test_redecode_after_its_evidence_check_keeps_a_later_correction(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     # A redecode that had already checked the battle's report replaced a
-    # correction saved meanwhile with the older army.
+    # correction saved meanwhile with the older army. A live correction now
+    # skips the busy battle without waiting, and a later battle log listing
+    # the battle saves the newer army.
     with domain_database(database_url) as ci:
         ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
         jobs = []
         for occurrence, code, minutes in (
             ("before-correction", "u1x58", 1),
             ("after-correction", "u2x58", 5),
+            ("later-log", "u2x58", 9),
         ):
             _, job_id = store_observation(
                 ci,
@@ -510,21 +513,22 @@ def test_redecode_after_its_evidence_check_keeps_a_later_correction(
             redecoder.start()
             assert checked.wait(timeout=10), "redecode never checked the report"
             corrector.start()
-            deadline = time.monotonic() + 10
-            with psycopg.connect(ci, autocommit=True) as observer:
-                while corrector.is_alive() and not _advisory_waiters(observer):
-                    assert time.monotonic() < deadline, "correction never finished or waited"
-                    time.sleep(0.02)
+            corrector.join(timeout=10)
+            assert not corrector.is_alive(), "correction waited on the busy battle"
             resume.set()
             redecoder.join(timeout=20)
-            corrector.join(timeout=20)
+            active_query = """
+                SELECT raw_code FROM battle_army_decodes
+                WHERE is_active AND decoder_version = %s
+            """
+            with db.pool.connection() as connection:
+                skipped = connection.execute(
+                    active_query, (army_ingestion.DECODER_VERSION,)
+                ).fetchall()
+            assert proc.process_job(jobs[2], owner="later").outcome == "processed"
             with db.pool.connection() as connection:
                 active = connection.execute(
-                    """
-                    SELECT raw_code FROM battle_army_decodes
-                    WHERE is_active AND decoder_version = %s
-                    """,
-                    (army_ingestion.DECODER_VERSION,),
+                    active_query, (army_ingestion.DECODER_VERSION,)
                 ).fetchall()
         finally:
             resume.set()
@@ -534,4 +538,5 @@ def test_redecode_after_its_evidence_check_keeps_a_later_correction(
             db.close()
 
     assert results == {"redecode": "processed", "correction": "processed"}
+    assert [text(row[0]) for row in skipped] == ["u1x58"]
     assert [text(row[0]) for row in active] == ["u2x58"]

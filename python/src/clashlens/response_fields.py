@@ -103,6 +103,19 @@ def _profile_projection(payload: Any) -> dict[str, Any] | None:
     }
 
 
+def is_unrecognised_battle_row(entry: Any) -> bool:
+    """A battle-log row Clash Lens cannot classify: not an object, a type
+    that is not text, or one that spells "legend" other than exactly. The
+    game's other modes are plain text types and are ignored on purpose; this
+    shape is a gap, so it must count as a change and be recorded."""
+    if not isinstance(entry, dict):
+        return True
+    kind = entry.get("battleType")
+    return not isinstance(kind, str) or (
+        kind != "legend" and kind.strip().lower() == "legend"
+    )
+
+
 def _battle_log_projection(payload: Any) -> list[Any] | None:
     if isinstance(payload, list):
         items = payload
@@ -110,8 +123,12 @@ def _battle_log_projection(payload: Any) -> list[Any] | None:
         items = payload["items"]
     else:
         return None
+    # A row Clash Lens cannot classify is part of the content: a new one
+    # must not read as an unchanged answer, or its gap is never recorded.
     return [
-        {name: entry.get(name) for name in BATTLE_LOG_ENTRY_FIELDS}
+        {"unrecognised": entry}
+        if is_unrecognised_battle_row(entry)
+        else {name: entry.get(name) for name in BATTLE_LOG_ENTRY_FIELDS}
         for entry in items
-        if isinstance(entry, dict) and entry.get("battleType") == "legend"
+        if is_unrecognised_battle_row(entry) or entry.get("battleType") == "legend"
     ]

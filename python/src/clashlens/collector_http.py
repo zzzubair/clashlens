@@ -824,12 +824,18 @@ class OfficialApiClient:
             raise ValueError("unknown player endpoint")
         return await self._fetch(pool, endpoint, self.origin + suffix, start_before)
 
-    async def fetch_rankings(self, pool: KeyPool) -> FetchedResponse:
+    async def fetch_rankings(
+        self, pool: KeyPool, location: str = "global"
+    ) -> FetchedResponse:
+        """One location's top 200 players: ``global`` or a game location ID."""
         return await self._fetch(
             pool,
-            "global_player_rankings",
-            self.origin + "/v1/locations/global/rankings/players?limit=200",
+            "global_player_rankings" if location == "global" else "location_player_rankings",
+            self.origin + f"/v1/locations/{quote(location, safe='')}/rankings/players?limit=200",
         )
+
+    async def fetch_locations(self, pool: KeyPool) -> FetchedResponse:
+        return await self._fetch(pool, "locations", self.origin + "/v1/locations?limit=1000")
 
     async def _fetch(
         self,

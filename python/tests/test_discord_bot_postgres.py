@@ -7,6 +7,8 @@ from uuid import uuid4
 from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import NOW, seed_profile
 
+from bot.commands import Commands
+from bot.replies import Site
 from bot.store import Store
 from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, RequestBinding
@@ -153,6 +155,42 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             assert (page["tag"], page["state"], page["reason"], page["rank"]) == (
                 "#8QQ", card["state"], card["reason"], card["rank"]
             )
+        finally:
+            bot.close()
+            owner.close()
+
+
+def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            # Legend I at 5,000 with no Legend battle, in a profile naming
+            # Season 0 that the game sends before sign-up and is rejected.
+            seed_profile(owner, "#2PP", 5000)
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET source_contract_state = 'conflict',
+                        current_league_season_id = '0',
+                        eligibility_reason = 'confirmed_legend_i'
+                    WHERE normalized_tag = '#2PP'
+                    """
+                )
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = NULL"
+                    " WHERE normalized_tag = '#2PP'"
+                )
+            _verify(owner, _account(owner, "discord", DISCORD_ID, "drift"), "#2PP")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+
+            (card,) = store.players(account, NOW)
+            assert (card["reason"], card["trophies"]) == (None, 5000)
+            reply = Commands(store, Site("https://clashlens.test"), now=lambda: NOW).me(account)
+            assert reply.body.startswith("5,000 🏆")
         finally:
             bot.close()
             owner.close()

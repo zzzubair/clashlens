@@ -20,6 +20,13 @@ ROOT = OPS.parent
 KNOWN = sorted(
     int(path.name.split("_", 1)[0]) for path in (ROOT / "deploy/migrations").glob("*.sql")
 )
+# The trial runs only migrations in a transaction; one that builds an index
+# without blocking writes, such as 0093, is applied for real only.
+NEWEST_TRIED = max(
+    path for path in (ROOT / "deploy/migrations").glob("*.sql")
+    if "BEGIN;" in path.read_text().splitlines()
+)
+TRIED_PENDING = [number for number in KNOWN if number < int(NEWEST_TRIED.name[:4])]
 # The real up, with the host and configuration checks and the writing of
 # settings and secrets skipped. Unit files hold a marker, or are rejected.
 UP = r"""
@@ -107,9 +114,8 @@ def test_a_release_missing_an_applied_migration_is_refused_before_stopping(
 
 def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # noqa: F811
     # Tried in a transaction that is rolled back: nothing is applied. The
-    # newest migration fails on its first line, whichever migration that is.
-    (newest,) = (ROOT / "deploy/migrations").glob(f"{KNOWN[-1]:04d}_*.sql")
-    result = up(stack, KNOWN[:-1], failing=newest.read_text().splitlines()[0])
+    # newest tried migration fails on its first line, whichever that is.
+    result = up(stack, TRIED_PENDING, failing=NEWEST_TRIED.read_text().splitlines()[0])
     assert result.returncode != 0
     assert "a pending migration failed when tried on the running database" in result.stderr
     assert "psql trial" in result.calls
@@ -123,10 +129,10 @@ def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # n
 def test_a_failed_up_after_stopping_restarts_the_alert_schedule(
     stack,  # noqa: F811
 ) -> None:
-    # The newest migration is still to apply: it is only tried, and rolled
-    # back, before anything stops. This test's up then fails after
+    # The newest tried migration is still to apply: it is only tried, and
+    # rolled back, before anything stops. This test's up then fails after
     # stopping, as a real one can at any later step.
-    result = up(stack, KNOWN[:-1])
+    result = up(stack, TRIED_PENDING)
     assert result.returncode != 0
     assert "lacks" not in result.stderr
     assert result.calls.index("psql trial") < result.stops[0]

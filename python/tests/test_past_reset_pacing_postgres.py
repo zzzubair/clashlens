@@ -339,7 +339,8 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
         try:
             with database.pool.connection() as connection:
                 player_id = _published_resets(database, connection)
-                _created(connection, PAST, NOON - timedelta(hours=10))
+                for boundary_at in (PAST, LIVE):
+                    _created(connection, boundary_at, NOON - timedelta(hours=10))
                 _record(database, connection, player_id, PAST, 2)
                 assert _build_jobs(connection, PAST, 2) == [
                     "build_army_analytics",
@@ -402,16 +403,27 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
             database.close()
 
 
-def test_live_reset_correction_rebuilds_at_once(database_url: str, monkeypatch) -> None:
-    Clock(monkeypatch, datetime(2026, 8, 5, 5, 30, tzinfo=UTC))
+def test_newest_reset_corrections_within_an_hour_start_together_after_it(
+    database_url: str, monkeypatch
+) -> None:
+    # Owner decision, 12 Oct 2026: the newest board rebuilds at most hourly.
+    clock = Clock(monkeypatch, datetime(2026, 8, 5, 5, 30, tzinfo=UTC))
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 player_id = _published_resets(database, connection)
                 _created(connection, LIVE, datetime(2026, 8, 5, 5, 20, tzinfo=UTC))
-                corrected_version = _record(database, connection, player_id, LIVE, 2)
-                assert _latest(connection, LIVE)[1:] == (2, corrected_version)
+                _record(database, connection, player_id, LIVE, 2)
+                latest_version = _record(database, connection, player_id, LIVE, 3)
+                connection.commit()
+                clock.now = datetime(2026, 8, 5, 6, 19, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, LIVE)[1] == 1
+
+                clock.now = datetime(2026, 8, 5, 6, 20, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, LIVE)[1:] == (2, latest_version)
         finally:
             database.close()
 

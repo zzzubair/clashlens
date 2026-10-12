@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from urllib.parse import urlencode
 
 import pytest
+from domain_test_support import as_api_role, seed_attacks
 from fastapi.testclient import TestClient
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
 from test_freshness_metrics_postgres import seed_check
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
-from clashlens import api_leaderboard, api_players
+from clashlens import analytics, api_leaderboard, api_players
+from clashlens.analytics import tie_order_key
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 
 @pytest.fixture()
@@ -34,6 +38,8 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     database = board_database
     board = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
     target = board["entries"][102]
+    # All 105 share 6,000 trophies: each row is a tie, with its own rank.
+    assert all(entry["tied"] for entry in board["entries"])
     with database.pool.connection() as connection:
         connection.execute(
             "UPDATE player_profile_versions SET name = %s WHERE normalized_tag = %s",
@@ -67,7 +73,130 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     assert moved["page"] == 1
     assert moved["entries"][0]["tag"] == target["tag"]
     assert moved["entries"][0]["position"] == 1
+    # Alone on 7,000 it is no longer a tie; the rest still are.
+    assert [entry["tied"] for entry in moved["entries"][:3]] == [False, True, True]
     assert len(moved["entries"]) == 100
+
+
+def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
+    database = board_database
+    clock = [0.0]
+    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    home = api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
+    target = home["entries"][24]["tag"]
+    with database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET trophies = 7000 WHERE normalized_tag = %s",
+            (target,),
+        )
+    clock[0] = 29.9
+    rankings = api_leaderboard.get_live_leaderboard(
+        database, limit=100, now=NOW, cache=cache
+    )
+    assert rankings["entries"][:25] == home["entries"]
+    clock[0] = 30.0
+    later = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
+    assert later["entries"][0]["tag"] == target
+    assert later["entries"][0]["trophies"] == 7000
+    # A new Season is read at once: these profiles still name the old one.
+    next_season = api_leaderboard.get_live_leaderboard(
+        database, limit=100, now=NOW + timedelta(days=28), cache=cache
+    )
+    assert next_season["total_entries"] == 0
+    assert next_season["season_reset_pending"] == 105
+
+
+def test_search_then_focus_read_the_same_cached_board(board_database):
+    database = board_database
+    clock = [0.0]
+    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
+    seed_profile(database, "#PQQ", 7000)
+    with database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET trophies = 6500 WHERE normalized_tag = '#P22'"
+        )
+
+    def search_then_focus(query):
+        found = api_leaderboard.search_live_leaderboard(
+            database, query, now=NOW, cache=cache
+        )
+        for result in found["results"]:
+            focused = api_leaderboard.get_live_leaderboard(
+                database, limit=100, now=NOW, focus_tag=result["tag"], cache=cache
+            )
+            entry = next(e for e in focused["entries"] if e["tag"] == result["tag"])
+            assert (entry["position"], entry["trophies"]) == (
+                result["rank"],
+                result["trophies"],
+            )
+        return found
+
+    clock[0] = 29.9
+    assert search_then_focus("#PQQ") == {
+        "exact_tag": None, "has_more": False, "results": []
+    }
+    assert search_then_focus("#P22")["results"][0]["trophies"] == 6000
+    assert len(search_then_focus("Player")["results"]) == 20
+    clock[0] = 30.0
+    found = search_then_focus("#PQQ")
+    assert found["exact_tag"] == "#PQQ"
+    assert [(r["rank"], r["trophies"]) for r in found["results"]] == [(1, 7000)]
+    assert search_then_focus("#P22")["results"][0]["rank"] == 2
+
+
+def test_equal_trophies_follow_season_attack_destruction(board_database, monkeypatch):
+    database = board_database
+    season_start = ranked_day_for(NOW).season_start
+    # Per tag, the destruction of each attack this Season: 100% over one;
+    # 80% over four beats 80% over two; three zero-star attacks at 0% beat
+    # none at all.
+    seeded = {"#P22": [100], "#P28": [100, 60, 80, 80], "#P29": [100, 60], "#P2P": [0, 0, 0]}
+    with database.pool.connection() as connection:
+        ids = dict(connection.execute("SELECT normalized_tag, id FROM players").fetchall())
+        for tag, destructions in seeded.items():
+            seed_attacks(
+                connection,
+                ids[tag],
+                [(season_start + timedelta(days=day), d) for day, d in enumerate(destructions)],
+            )
+        # An attack from the previous Season does not count.
+        seed_attacks(connection, ids["#P2Y"], [(season_start - timedelta(days=1), 100)])
+    before = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
+    monkeypatch.setattr(analytics, "_next_live_tally_at", float("-inf"))
+    analytics.refresh_live_attack_tallies(database, now=NOW)
+    reader = ApiDatabase(as_api_role(database.pool.conninfo))
+    try:
+        board = api_leaderboard.get_live_leaderboard(reader, limit=200, now=NOW)
+        found = api_leaderboard.search_live_leaderboard(reader, "#P2P", now=NOW)
+        with reader.pool.connection() as connection:
+            positions = api_leaderboard.live_positions(connection, ["#P28"], now=NOW)
+    finally:
+        reader.close()
+
+    tags = [entry["tag"] for entry in board["entries"]]
+    assert tags[:4] == ["#P22", "#P28", "#P29", "#P2P"]
+    # The Daily board's order for the same counts; before any count, the tag hash.
+    counts = {tag: (len(values), sum(values)) for tag, values in seeded.items()}
+    assert tags == sorted(tags, key=lambda tag: tie_order_key(*counts.get(tag, (0, 0)), tag))
+    assert [entry["tag"] for entry in before["entries"]] == sorted(
+        tags, key=lambda tag: tie_order_key(0, 0, tag)
+    )
+    assert board["ordering_rule_version"] == "tracked-trophies-attack-destruction-v2"
+    assert found["results"][0]["rank"] == 4
+    assert positions == {"#P28": 2}
+
+    # Battles moved out of the Season leave a player with no attacks.
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(
+            "UPDATE legend_battles SET ranked_day_start = %s WHERE attacker_player_id = %s",
+            (season_start - timedelta(days=1), ids["#P22"]),
+        )
+    monkeypatch.setattr(analytics, "_next_live_tally_at", float("-inf"))
+    analytics.refresh_live_attack_tallies(database, now=NOW)
+    moved = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
+    assert [entry["tag"] for entry in moved["entries"]][:3] == ["#P28", "#P29", "#P2P"]
 
 
 def test_search_hides_not_found_inactive_and_unaccepted_players(board_database):
@@ -184,6 +313,12 @@ def test_only_hash_tags_select_and_name_matches_stay_listed(board_database):
     found = api_leaderboard.search_live_leaderboard(board_database, "#nova", now=NOW)
     assert found["exact_tag"] is None
     assert [entry["tag"] for entry in found["results"]] == ["#P08"]
+    with board_database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET name = 'ΟΣ' WHERE normalized_tag = '#P09'"
+        )
+    found = api_leaderboard.search_live_leaderboard(board_database, "Σ", now=NOW)
+    assert [entry["tag"] for entry in found["results"]] == ["#P09"]
     assert (
         api_leaderboard.search_live_leaderboard(board_database, "nobody", now=NOW)["results"]
         == []
@@ -419,7 +554,7 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                     )
                 with database.pool.connection() as connection:
                     ids = connection.execute(
-                        "SELECT id, normalized_tag, NULL, NULL FROM players"
+                        "SELECT id, normalized_tag, NULL, NULL, NULL FROM players"
                     ).fetchall()
                     cards = api_players.player_cards(connection, ids, now=now)
                 assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting

@@ -175,18 +175,6 @@ def _days(connection, player_id, eods, *, version=1):
         _log(connection, player_id, day, ranked, start, version=version)
 
 
-def _settle(connection, player_id, day, trophies):
-    connection.execute(
-        """
-        INSERT INTO reset_boundary_settlements (
-            player_id, boundary_at, state, selected_trophies, proof_kind,
-            proof_rule_version, proof_fingerprint, proof_json
-        ) VALUES (%s, %s, 'settled', %s, 'observed_adjustment', 'test', 'f', '{"t": 1}')
-        """,
-        (player_id, DAY0 + timedelta(days=day), trophies),
-    )
-
-
 def _movement(connection, player_id):
     materialize_player_season(connection, player_id, SEASON)
     connection.commit()
@@ -206,19 +194,11 @@ def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> Non
                 player_id = _player(connection, "#2PP")
                 _days(connection, player_id, {1: (5000, 5050), 2: (5050, 4950), 3: (4950, 5000)})
                 connection.commit()
-                # Unsettled Resets keep known movement provisional; the
-                # battle-result net stays the recorded 10 on every day.
+                # No Reset is proven settled, so known movement stays
+                # provisional; the battle-result net stays the recorded 10.
                 assert _movement(connection, player_id) == {
                     1: (50, "provisional", "provisional", 10),
                     2: (-100, "provisional", "provisional", 10),
-                    3: (50, "provisional", "provisional", 10),
-                }
-                _settle(connection, player_id, 1, 5050)
-                _settle(connection, player_id, 2, 4950)
-                _settle(connection, player_id, 3, 4990)  # not the trophies day 3 used
-                assert _movement(connection, player_id) == {
-                    1: (50, "accepted", "accepted", 10),
-                    2: (-100, "accepted", "accepted", 10),
                     3: (50, "provisional", "provisional", 10),
                 }
             page = api_players.get_player_season_summary(database, "#2PP", SEASON)

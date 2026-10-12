@@ -11,6 +11,7 @@
 
 import { readFileSync } from "node:fs";
 
+import type { AnalyticsSettings } from "../lib/analytics";
 import { decodeSecretValue, loadSecretFile } from "./signer.server";
 
 export const GOOGLE_ISSUER = "https://accounts.google.com";
@@ -57,6 +58,28 @@ export function isWebsiteLoginEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.CLASHLENS_LOGIN_ENABLED === "true" || env.CLASHLENS_LOGIN_ENABLED === "1";
+}
+
+/** The dashboard stays hidden, as an unknown page, until this is "true". */
+export function isDashboardEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CLASHLENS_DASHBOARD_ENABLED === "true";
+}
+
+/** Crews ship with the dashboard, so they stay hidden behind the same switch. */
+export const isCrewsEnabled = isDashboardEnabled;
+
+/**
+ * Visitor counting stays off, with no script and no requests, unless the
+ * PostHog project token is set. The token is public by design: it can only
+ * send events.
+ */
+export function loadAnalyticsSettings(
+  env: Record<string, string | undefined> = process.env,
+): AnalyticsSettings | null {
+  const token = env.CLASHLENS_POSTHOG_TOKEN?.trim() ?? "";
+  return /^phc_[A-Za-z0-9]{20,64}$/.test(token) ? { token } : null;
 }
 
 export function loadWebsiteConfig(

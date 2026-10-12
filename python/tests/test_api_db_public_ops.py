@@ -261,7 +261,7 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             }
             assert [entry["tag"] for entry in live["entries"]] == ["#8PY", "#2PP"]
             assert live["kind"] == "live"
-            assert live["ordering_rule_version"] == "tracked-trophies-md5-v1"
+            assert live["ordering_rule_version"] == "tracked-trophies-attack-destruction-v2"
             assert live["generated_at"] == NOW.isoformat()
             assert live["source_observations"] == {
                 "oldest_observed_at": "2026-08-06T12:00:00+00:00",
@@ -534,10 +534,10 @@ def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
         )
     )
 
-    assert [component["typed_id"] for component in army["components"]] == ["pet:9"]
-    assert army["unknown_components"] == [
-        {"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}
-    ]
+    assert [
+        (component["typed_id"], component["name"]) for component in army["components"]
+    ] == [("hero:999", "Unknown hero #999"), ("pet:9", "Frosty")]
+    assert army["state"] == "decoded"
 
 
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:
@@ -819,6 +819,8 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 "anchor_source": "daily_publication",
                 "anchor_observed_at": "2026-08-06T11:30:00+00:00",
             }
+            # The earlier days were published after today's log.
+            assert screen["current_day_published_at"] == "2026-08-06T11:30:00+00:00"
             assert all(
                 day["official_season_id"] == "current-season"
                 for day in season_days

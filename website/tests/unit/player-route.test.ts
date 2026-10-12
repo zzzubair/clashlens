@@ -45,10 +45,8 @@ import type {
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
-import PlayerRoute, {
-  loader as playerLoader,
-  playerLookupView,
-} from "../../app/routes/player";
+import { playerLookupView } from "../../app/lib/player-lookup-text";
+import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
 import { createClientAddressContext } from "../../app/server/client-address.server";
 
@@ -329,7 +327,7 @@ describe("player route historical independence", () => {
       params: { tag: TAG },
     } as never);
     const html = await renderRoute({ ...data, selectedSeason: null });
-    expect(html).toContain(`season=${SEASON}`);
+    expect(html).toContain(`<option value="${SEASON}"`);
   });
 
   it("does not show current-day content for a requested missing season", async () => {
@@ -528,7 +526,7 @@ describe("automatic tag lookup", () => {
 
   it.each([
     ["not_found", "Player not found"],
-    ["not_in_legend", "not in Legend I. Clash Lens tracks Legend League players only."],
+    ["not_in_legend", "This player is not in Legend I."],
     ["uncertain", "Clash Lens tracks Legend League players only."],
     ["failed", "could not finish checking"],
   ])(
@@ -543,7 +541,7 @@ describe("automatic tag lookup", () => {
       expect(html).toContain(message);
       const visible = html.split("<script")[0];
       expect(visible).not.toContain("The requested player data is not available.");
-      expect(html).toContain('aria-label="Seasons"');
+      expect(html).toContain('<select name="season"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
     },
@@ -560,22 +558,27 @@ describe("automatic tag lookup", () => {
     expect(html).not.toContain("Try refreshing");
   });
 
-  it("hides the old current profile when newer evidence says the player left Legend I", async () => {
+  it.each([
+    ["Electro League 33", "not in Legend I. Current league: Electro League 33."],
+    [undefined, "This player is not in Legend I."],
+  ])("names a player outside Legend I in %s", async (league, note) => {
+    const state = "not_in_legend";
     mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, trackingState: "not_in_legend" }),
+      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, trackingState: state }),
       getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
       getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
     });
-    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "not_in_legend" });
-    const result = await playerLoader({
-      request: requestFor(SEASON),
-      params: { tag: TAG },
-    } as never);
-    const html = await renderRoute(result);
-    expect(html).toContain("not in Legend I");
-    expect(html).not.toContain("Current trophies");
-    expect(html).not.toContain('class="player-refresh-form"');
-    expect(html).toContain('aria-label="Seasons"');
+    const profile = { name: "Sloothy", clan: null, trophies: 152, league };
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state, profile });
+    const html = await renderRoute(
+      await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
+    );
+    expect(html).toMatch(/<h1><bdi>Sloothy<\/bdi><\/h1>/);
+    expect(html).toContain(note);
+    expect(html).not.toMatch(
+      /Season summary|Current Season|Current trophies|refresh-form/,
+    );
+    expect(html).toContain(`<option value="${SEASON}"`);
   });
 
   it.each([null, SEASON])(
@@ -598,7 +601,7 @@ describe("automatic tag lookup", () => {
       const html = await renderRoute(result);
       expect(html).toContain(result.lookupError!.error.message);
       expect(html).toContain("could not confirm they are in Legend I");
-      expect(html).toContain('aria-label="Seasons"');
+      expect(html).toContain('<select name="season"');
       expect(html).toContain(
         season === null ? "Saved Legend history" : "Daily trophy totals",
       );

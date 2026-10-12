@@ -100,7 +100,7 @@
   border-color: var(--cl-brand-night);
   box-shadow: 0 3px 0 #000000;
 }
-:root .site-nav :is(.nav-link:not(.nav-link-primary), .nav-button),
+:root .site-nav .nav-link:not(.nav-link-primary),
 :root .site-header :is(.theme-toggle, .header-search-toggle) {
   color: var(--cl-header-ink);
   background: transparent;
@@ -108,9 +108,7 @@
   border-radius: 999px;
   box-shadow: none;
 }
-:root
-  .site-nav
-  :is(.nav-link:not(.nav-link-primary), .nav-button):is(:hover, :focus-visible),
+:root .site-nav .nav-link:not(.nav-link-primary):is(:hover, :focus-visible),
 :root .site-header :is(.theme-toggle, .header-search-toggle):is(:hover, :active) {
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);
@@ -121,7 +119,7 @@
 
 :root
   :is(
-    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
     .search-controls button,
@@ -137,7 +135,7 @@
 }
 :root
   :is(
-    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
     .search-controls button,
@@ -153,8 +151,7 @@
     .button-secondary,
     .section-link,
     .player-refresh-form button,
-    .snapshot-pagination a,
-    .page-position
+    .snapshot-pagination a
   ) {
   color: var(--cl-ink);
   background: var(--cl-surface);
@@ -204,27 +201,13 @@
 :root
   :is(
     .leaderboard-view-switch .button[aria-current="page"],
-    .segmented-control input:checked + span,
-    .season-list [aria-current="page"]
+    .segmented-control input:checked + span
   ) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill);
   border-color: var(--cl-brand-night);
   box-shadow: 0 2px 0 var(--cl-brand-night);
   font-weight: 900;
-}
-:root .season-list :is(a, strong) {
-  border: 2px solid var(--cl-card-line);
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-raise);
-  font-weight: 800;
-}
-:root .season-list a:not([aria-current="page"]) {
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-}
-:root .season-list a:not([aria-current="page"]):hover {
-  background: var(--cl-action-soft);
 }
 
 /* ---------- Cards: one outline, one hard drop, one corner size ---------- */
@@ -250,6 +233,7 @@
     .group-card,
     .compare-board,
     .linked-player-card,
+    .dash-card,
     .blog-list article,
     .analytics-filters,
     .analytics-kpis,
@@ -356,7 +340,11 @@
   border-color: var(--cl-input-border);
 }
 
-/* Narrow phones: let short buttons wrap instead of spilling out of their card. */
+/* A button never shrinks past its own text. Narrow phones let short buttons wrap
+   instead of spilling out of their card. */
+:root .section-link {
+  min-width: min-content;
+}
 @media (max-width: 24rem) {
   :root .section-link {
     white-space: normal;

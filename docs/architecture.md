@@ -53,7 +53,8 @@ after the provider confirms the sign-in, so a fresh login is accepted even in
 the same second as the removal; cookies from before that field count from the
 start of their second. The backend sends the cookie's issue time with each
 check for this, so the website and the API must be deployed together. The browser talks only
-to that backend. Neither the browser nor TypeScript may access PostgreSQL or
+to that backend, apart from optional anonymous visitor counts sent to PostHog
+([deployment](deployment.md#production-configuration)). Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.
 
@@ -224,8 +225,10 @@ leaves two for operators within an application budget of 84 of PostgreSQL's
 100 (checked on 8 October 2026). The 16 outside the budget, 13 ordinary plus
 the 3 reserved for superusers, stay free for maintenance and inspection.
 
-All threads in a process share its one `--database-pool-size` pool; giving response and
-derived threads separate connection limits is deferred. A thread that waits
+All threads in a process share its one `--database-pool-size` pool, which has
+at least one connection a thread: the worker refuses fewer, and the pool
+defaults to one a thread, at least 8 (4 for a single thread). Giving response and derived threads
+separate connection limits is deferred. A thread that waits
 30 seconds without getting a connection from that pool affects only itself.
 If it was claiming, it logs `worker_claim` with `pool_busy`, waits
 `--poll-interval-seconds` and claims again. If it was running a job, that job

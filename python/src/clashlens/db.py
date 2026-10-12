@@ -10,9 +10,12 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
+from . import background_pacing
+from .background_pacing import DAY_RECHECK_PRIORITY, background_lanes
 from .operating import database_pool_health
 from .past_reset_pacing import (
     build_permit_busy,
+    operator_correction_waits,
     past_reset_build_hold,
     take_build_permit,
 )
@@ -30,7 +33,7 @@ CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
 # Reset readings, ended-day results, board builds; only other work gains 10 a minute,
-# so live jobs in the claim window pass it at 20 minutes; retried live jobs may not.
+# so live jobs in the claim window, retried ones included, pass it at 20 minutes.
 PYTHON_RESET_PRIORITY = 300
 
 
@@ -215,6 +218,7 @@ def _supported_claim_filter(
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
     past_reset_build_hold: str | None = None,
+    operator_build_hold: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Parameterized supported-job predicate for the claim SELECT.
 
@@ -225,6 +229,9 @@ def _supported_claim_filter(
     also bind the claim time and direct job id. ``past_reset_build_hold`` is
     the newest Reset while past-Reset builds wait out the quiet
     window; those builds stay queued until it is None again.
+    ``operator_build_hold`` holds operator corrections' leaderboard,
+    statistics and army builds, the only builds at background priority,
+    while it is True.
     """
     # The source contract is denormalized onto the job row by migration 0009
     # (trigger python_processing_jobs_set_source_contract_v3), so every
@@ -327,7 +334,11 @@ def _supported_claim_filter(
             AND NOT COALESCE(
                 {alias}.work_type IN ('build_snapshot', 'build_army_analytics')
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
-                false))
+                false)
+            AND NOT (%(operator_build_hold)s
+                AND {alias}.work_type IN
+                    ('build_snapshot', 'build_analytics', 'build_army_analytics')
+                AND {alias}.priority = {PYTHON_BACKFILL_PRIORITY}))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -340,6 +351,7 @@ def _supported_claim_filter(
             "army_work_types": ["build_army_analytics", "redecode_army"],
             "army_analytics_rule_version": ARMY_ANALYTICS_RULE_VERSION,
             "past_reset_build_hold": past_reset_build_hold,
+            "operator_build_hold": operator_build_hold,
         },
     )
 
@@ -352,17 +364,17 @@ def _supported_claim_filter(
 # empty queue even while eligible work remains behind it.
 _CLAIM_CANDIDATE_LIMIT = 32
 
-# Priority classes that can appear in the Python queue. Backfill has its own
-# indexed class so its probe stays bounded without sharing live work's class.
+# Priority classes that can appear in the Python queue. Backfill and day
+# rechecks each have their own indexed class so their probes stay bounded
+# without sharing live work's class, nor the catch-all's (migration 0093).
 # The catch-all still claims other operator priorities. Its index also holds
 # Reset work, so each side of Reset priority is its own probe that the index
 # bounds by itself: NOT IN read 6,404 rows a claim at 05:50 on 8 Oct 2026.
-_PYTHON_CLAIM_PRIORITIES = (
-    f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"
-)
+_BACKGROUND = f"{PYTHON_BACKFILL_PRIORITY}, {DAY_RECHECK_PRIORITY}"
+_PYTHON_CLAIM_PRIORITIES = (f"({PYTHON_BACKFILL_PRIORITY}), ({DAY_RECHECK_PRIORITY}),"
+                            f" ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})")
 _PYTHON_OTHER_CLAIM_PRIORITIES = (
-    (f"job.priority NOT IN ({PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY})"
-     f" AND job.priority < {PYTHON_RESET_PRIORITY}"),
+    f"job.priority NOT IN ({_BACKGROUND}, {PYTHON_LIVE_PRIORITY}) AND job.priority < {PYTHON_RESET_PRIORITY}",
     f"job.priority > {PYTHON_RESET_PRIORITY}",
 )
 
@@ -374,6 +386,8 @@ def _claim_filters(
     supports_coordinator: bool,
     work_types: Collection[str] | None,
     past_reset_build_hold: str | None,
+    operator_build_hold: bool = False,
+    backfill: Collection[int] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
     supported_filter, params = _supported_claim_filter(
@@ -382,12 +396,16 @@ def _claim_filters(
         denormalized_contract=denormalized_contract,
         supports_coordinator=supports_coordinator,
         past_reset_build_hold=past_reset_build_hold,
+        operator_build_hold=operator_build_hold,
     )
     if work_types is not None:
         if not work_types or not set(work_types) <= set(SUPPORTED_WORK_TYPES):
             raise ValueError("claim work types must be supported work types")
         supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
         params["claim_work_types"] = sorted(work_types)
+    if backfill is not None:
+        supported_filter = (f"({supported_filter} AND job.priority {'' if backfill else 'NOT '}"
+                            f"IN ({', '.join(map(str, backfill)) or _BACKGROUND}))")
     dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     return supported_filter, f"""(((job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
             AND job.due_at <= statement_timestamp())
@@ -426,11 +444,13 @@ def _claim_select_statement(
     supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
+    operator_build_hold: bool = False,
     reset_first: bool | None = None,
+    backfill: Collection[int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT for up to ``limit`` jobs and its named parameters.
 
-    The candidate CTE probes indexed oldest-first ordinary and dependency
+    The candidate CTE probes indexed oldest-first ordinary, retried and dependency
     ranges per declared priority, matching catch-all probes outside those classes
     (scored exactly like the known probes so ordering stays globally
     correct), and the indexed expired-lease set. Every probe applies the full
@@ -446,6 +466,8 @@ def _claim_select_statement(
     ``planned`` makes a ``job_ids`` claim refuse, and an ordinary one run only, while
     Reset-priority work it could take waits; ``reset_first`` puts that work first,
     False puts other due work but backfill before it, and None keeps waiting time.
+    ``backfill`` probes and rechecks only those background priorities, which
+    no other probe holds, and empty every other class.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -453,7 +475,11 @@ def _claim_select_statement(
         supports_coordinator=supports_coordinator,
         work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
+        operator_build_hold=operator_build_hold,
+        backfill=backfill,
     )
+    priorities = _PYTHON_CLAIM_PRIORITIES if backfill is None else ", ".join(
+        f"({priority})" for priority in backfill or (PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY))
     params["claim_limit"] = limit
     if job_id is not None:
         job_ids = [job_id]
@@ -462,10 +488,11 @@ def _claim_select_statement(
     gate = "AND NOT " if job_ids is not None else "AND "
     reset_gate = gate + _reset_waiting(jobs_relation, supported_filter) if planned else ""
     first = {None: "", True: f"job.priority = {PYTHON_RESET_PRIORITY}, ", False: "job.priority"
-             f" NOT IN ({PYTHON_RESET_PRIORITY}, {PYTHON_BACKFILL_PRIORITY}), "}[reset_first]
-    score = f"""{first}CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
+             f" NOT IN ({PYTHON_RESET_PRIORITY}, {_BACKGROUND}), "}[reset_first]
+    score = f"""{first}CASE WHEN job.priority IN ({_BACKGROUND})
         THEN 0 ELSE 1 END,
         CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
+        WHEN {background_pacing.RECHECK_PASS} THEN job.priority - 1
         ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10 END"""
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
@@ -474,49 +501,49 @@ def _claim_select_statement(
     # Dependency resumptions do not consume the ordinary attempt budget. Keep
     # them in their own partial-index probe rather than expressing that rule as
     # an OR across every state, which makes PostgreSQL bitmap-scan the queue
-    # before applying LIMIT.
-    dependency_probe = ""
-    if supports_dependency:
-        dependency_probe = f"""
-                    UNION ALL
-                    (
+    # before applying LIMIT. Jobs that already failed get their own probe too,
+    # oldest first: due again from their retry time, they hid behind 32 newer
+    # jobs of their priority.
+    def state_probe(state: str, job_filter: str, order: str = "job.due_at, job.created_at") -> str:
+        return f"""(
                         SELECT job.id, job.due_at, job.created_at
                         FROM {jobs_relation} AS job
                         LEFT JOIN collector_observations AS source_observation
-                            ON source_observation.id = COALESCE(
-                                job.observation_id, job.replay_observation_id
-                            )
-                        WHERE job.state = 'waiting_dependency'
+                            ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
+                        WHERE {state}
                           AND job.priority = claim_priority.priority
                           AND job.due_at <= statement_timestamp()
-                          AND {supported_filter}
-                        ORDER BY job.due_at, job.created_at, job.id
+                          AND {job_filter}
+                        ORDER BY {order}, job.id
                         LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                    )
-        """
+                    )"""
 
-    def other_priorities(state: str, job_filter: str) -> str:
+    dependency_probe = (" UNION ALL " + state_probe("job.state = 'waiting_dependency'",
+                        supported_filter) if supports_dependency else "")
+    retried_probe = state_probe("job.state IN ('pending', 'waiting_retry') AND job.attempt_count > 0",
+                                ordinary_job_filter, "job.created_at")
+
+    def other_priorities(state: str, job_filter: str, classes: Collection[str] = () if backfill
+                         else _PYTHON_OTHER_CLAIM_PRIORITIES, union: str = "UNION ALL") -> str:
         return "".join(f"""
-                UNION ALL
+                {union}
                 (
                     SELECT job.id
                     FROM {jobs_relation} AS job
                     LEFT JOIN collector_observations AS source_observation
-                        ON source_observation.id = COALESCE(
-                            job.observation_id, job.replay_observation_id
-                        )
+                        ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
                     WHERE {state}
                       AND {priority}
                       AND job.due_at <= statement_timestamp()
                       AND {job_filter}
                     ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                )""" for priority in _PYTHON_OTHER_CLAIM_PRIORITIES)
+                )""" for priority in classes)
 
-    unknown_dependency_probe = (
-        other_priorities("job.state = 'waiting_dependency'", supported_filter)
-        if supports_dependency else ""
-    )
+    unknown_dependency_probe = other_priorities(
+        "job.state = 'waiting_dependency'", supported_filter) if supports_dependency else ""
+    evidence_probe = other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter, [
+        background_pacing.EVIDENCE_RECHECK] if DAY_RECHECK_PRIORITY in (backfill or ()) else [], "UNION")
     if job_ids is not None:
         probe = f"""
             SELECT job.id
@@ -541,30 +568,20 @@ def _claim_select_statement(
             SELECT pick.id
             FROM (
                 SELECT claim_id.id
-                FROM (VALUES {_PYTHON_CLAIM_PRIORITIES}) AS claim_priority (priority)
+                FROM (VALUES {priorities}) AS claim_priority (priority)
                 CROSS JOIN LATERAL (
-                    SELECT eligible.id
-                    FROM (
-                        (
-                            SELECT job.id, job.due_at, job.created_at
-                            FROM {jobs_relation} AS job
-                            LEFT JOIN collector_observations AS source_observation
-                                ON source_observation.id = COALESCE(
-                                    job.observation_id, job.replay_observation_id
-                                )
-                            WHERE job.state IN ('pending', 'waiting_retry')
-                              AND job.priority = claim_priority.priority
-                              AND job.due_at <= statement_timestamp()
-                              AND {ordinary_job_filter}
-                            ORDER BY job.due_at, job.created_at, job.id
-                            LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                        )
-                        {dependency_probe}
-                    ) AS eligible
-                    ORDER BY eligible.due_at, eligible.created_at, eligible.id
-                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                    (
+                        SELECT eligible.id
+                        FROM ({state_probe("job.state IN ('pending', 'waiting_retry')",
+                                           ordinary_job_filter)} {dependency_probe}) AS eligible
+                        ORDER BY eligible.due_at, eligible.created_at, eligible.id
+                        LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                    )
+                    UNION
+                    SELECT retried.id FROM {retried_probe} AS retried
                 ) AS claim_id
                 {other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter)}
+                {evidence_probe}
                 {unknown_dependency_probe}
                 UNION ALL
                 (
@@ -688,8 +705,8 @@ class Database:
         self.player_discovery_enabled = player_discovery_enabled
 
         def configure(connection: Any) -> None:
-            connection.execute(
-                f"SET statement_timeout = '{statement_timeout_seconds}s'"
+            connection.execute(  # JIT: collector_liveness.bound_statements.
+                f"SET statement_timeout = '{statement_timeout_seconds}s'; SET jit = off"
             )
             connection.commit()
 
@@ -1000,17 +1017,28 @@ class Database:
                 "work_types": work_types,
                 "reset_first": reset_first,
                 "limit": limit,
-                "past_reset_build_hold": (
-                    past_reset_build_hold(connection) if supports_coordinator else None
-                ),
+                "past_reset_build_hold": past_reset_build_hold(connection) if supports_coordinator else None,
+                "operator_build_hold": supports_coordinator and operator_correction_waits(connection),
             }
-            rows = connection.execute(*_claim_select_statement(
-                self._jobs_relation, job_ids=job_ids, planned=planned, **options
-            )).fetchall()
-            if not rows and planned and job_ids is not None:
-                rows = connection.execute(*_claim_select_statement(
-                    self._jobs_relation, planned=True, **options
-                )).fetchall()
+
+            def claim(size: int, **kwargs: Any) -> list[Any]:
+                return [] if size < 1 else connection.execute(*_claim_select_statement(
+                    self._jobs_relation, **{**options, "limit": size, **kwargs})).fetchall()
+
+            rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
+            if job_ids is None or (not rows and planned):
+                rows = claim(limit, planned=planned, backfill=())
+                floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
+                # Backfill fills only what live work leaves; see background_pacing.
+                lanes = [] if planned or (len(rows) >= limit and not floor) else background_lanes(
+                    connection, self._jobs_relation, self._supports_denormalized_contract,
+                    supports_coordinator, self._supports_dependency_deferral, wait=not rows)
+                for priority, room in lanes or ():
+                    rows += claim(min(room, limit - len(rows)), backfill=(priority,))
+                # Paused by late live work, but for a daily result of each priority.
+                if lanes is None and floor:
+                    rows = background_pacing.background_floor(
+                        connection, self._jobs_relation, rows, limit, claim)
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(
