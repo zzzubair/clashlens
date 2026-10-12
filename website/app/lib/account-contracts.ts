@@ -53,6 +53,8 @@ export interface GroupPlayer {
 
 export interface ListedGroup extends PrivateGroup {
   players: GroupPlayer[];
+  /** When the group was made; the dashboard shows the first one made. */
+  createdAt?: string | null;
 }
 
 export interface GroupList {
@@ -299,7 +301,15 @@ export function mapGroups(value: unknown): GroupList | null {
   const groups: ListedGroup[] = [];
   for (const entry of value.groups) {
     const payload = asGroupPayload(entry);
-    if (payload === null || !isRecord(entry) || !Array.isArray(entry.players)) {
+    if (
+      payload === null ||
+      !isRecord(entry) ||
+      !Array.isArray(entry.players) ||
+      !(
+        entry.created_at === undefined ||
+        (isString(entry.created_at) && Number.isFinite(Date.parse(entry.created_at)))
+      )
+    ) {
       return null;
     }
     const players = entry.players.map(mapGroupPlayer);
@@ -309,6 +319,7 @@ export function mapGroups(value: unknown): GroupList | null {
       name: payload.name,
       tags: payload.tags,
       players: players as GroupPlayer[],
+      createdAt: (entry.created_at as string | undefined) ?? null,
     });
   }
   return { groups, season: value.season };

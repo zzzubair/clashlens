@@ -279,6 +279,7 @@ describe("server-only Python account client", () => {
               name: "Favorites",
               tags: ["#2PP"],
               players: [{ tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" }],
+              created_at: "2026-10-01T10:00:00+00:00",
             },
           ],
         }),
@@ -309,6 +310,7 @@ describe("server-only Python account client", () => {
               state: "tracking",
             },
           ],
+          createdAt: "2026-10-01T10:00:00+00:00",
         },
       ],
     });

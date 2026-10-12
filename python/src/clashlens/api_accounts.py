@@ -997,7 +997,8 @@ def list_groups(
                    player.active, COALESCE(accepted.name, latest.name),
                    accepted.trophies, accepted.current_league_season_id,
                    {_frozen_trophies_sql("player.id", "%s")},
-                   {_opening_day_battles_sql("player.id", "%s")}
+                   {_opening_day_battles_sql("player.id", "%s")},
+                   group_row.created_at
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
             {_MEMBER_JOINS}
@@ -1010,12 +1011,19 @@ def list_groups(
         groups: dict[str, dict[str, Any]] = {}
         for row in rows:
             public_id = str(row[0])
+            # The dashboard shows the first group made, so each says when.
             group = groups.setdefault(
                 public_id,
-                {"group_id": public_id, "name": _text(row[1]), "tags": [], "players": []},
+                {
+                    "group_id": public_id,
+                    "name": _text(row[1]),
+                    "created_at": row[-1].astimezone(UTC).isoformat(),
+                    "tags": [],
+                    "players": [],
+                },
             )
             if row[2] is not None:
-                player = _group_player(connection, row[2:], now)
+                player = _group_player(connection, row[2:-1], now)
                 group["tags"].append(player["tag"])
                 group["players"].append(player)
         return list(groups.values())
