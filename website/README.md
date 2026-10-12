@@ -230,9 +230,11 @@ data. A defense's army
 type is the attacker's army. Armies on offense shows only your hit rate with
 each army type, up to 3 and then Other armies, for 3 or 7 days; Armies on
 defense also takes a Custom 1–28 days. Neither card compares with every
-tracked player yet:
-working that out from each battle's saved army took about 95 seconds a day
-on production in October 2026.
+tracked player yet. For Armies on defense that needs trophies lost per army
+type, which the saved daily counts per army don't keep, and working it out
+from each battle's saved army took about 95 seconds a day on production in
+October 2026. Armies on offense's Legends hit rate needs no per-battle read:
+see [dashboard-data.md](../docs/dashboard-data.md).
 
 Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a

@@ -32,7 +32,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Group watch | Your groups in the order you made them | Exists | `/v1/account/groups` returns each group's `created_at`; the card shows the oldest first. |
 | | Group comparison over the last 7 days | Exists | `/v1/account/groups/{id}/comparison?days=7`. |
 | | Each member's whole-Season numbers | Exists | The comparison only offers 3, 7 or 14 days, so Whole Season reads `/v1/players/{tag}` (this Season's finished days) for each member and you: up to 21 reads. |
-| Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Mostly exists | `/v1/players/{tag}/armies?lens=offense` returns your attacks per type (counts saved since #458); the Legends hit rate is what the Armies page already adds up. |
+| Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Mostly exists | `/v1/players/{tag}/armies?lens=offense` returns your attacks per type (counts saved since #458). The card doesn't show the Legends hit rate yet; it could come from the saved daily counts per army (`army_package_day_counts`, which keep three-star attacks), the counts the Armies page already adds up. |
 
 ## Shared
 
