@@ -18,11 +18,12 @@ from uuid import uuid4
 
 LOGGER = logging.getLogger(__name__)
 
-# Each listed count and the website page label it is reported under.
+# Each listed count and the website page labels it can happen on; the first
+# is used unless the website names another of them.
 EVENTS = {
-    "signup_completed": "account_setup",
-    "group_created": "groups",
-    "group_used": "groups",
+    "signup_completed": ("account_setup",),
+    "group_created": ("groups", "group_add"),
+    "group_used": ("groups", "group_add"),
 }
 HOST = "https://eu.i.posthog.com"
 _TOKEN = re.compile(r"phc_[A-Za-z0-9]{20,64}")
@@ -47,9 +48,15 @@ class UsageEvents:
 
         return cls(Posthog(token, host=HOST, disable_geoip=True))
 
-    def capture(self, event: str, properties: Mapping[str, str] | None = None) -> None:
+    def capture(
+        self,
+        event: str,
+        properties: Mapping[str, str] | None = None,
+        page: str | None = None,
+    ) -> None:
         """Queue one listed count; sending happens in the background and never fails a request."""
-        if self._client is None or event not in EVENTS:
+        pages = EVENTS.get(event)
+        if self._client is None or pages is None:
             return
         try:
             self._client.capture(
@@ -57,7 +64,7 @@ class UsageEvents:
                 distinct_id=str(uuid4()),
                 properties={
                     **(properties or {}),
-                    "route": EVENTS[event],
+                    "route": page if page in pages else pages[0],
                     "$process_person_profile": False,
                 },
                 disable_geoip=True,

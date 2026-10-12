@@ -313,7 +313,7 @@ describe("server-only Python account client", () => {
       ],
     });
     await expect(
-      client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY, "groups"),
     ).resolves.toMatchObject({ groupId: GROUP_ID });
     await expect(
       client.updateGroup(GROUP_ID, { name: "Favorites" }, IDEMPOTENCY_KEY),
@@ -325,7 +325,7 @@ describe("server-only Python account client", () => {
 
     const [createUrl, createInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
     expect(createUrl).toEqual(
-      new URL("/v1/account/groups", "http://python-fixture.test/"),
+      new URL("/v1/account/groups?page=groups", "http://python-fixture.test/"),
     );
     expect(createInit.method).toBe("POST");
     // Players join one at a time, so neither call sends or replaces them.
@@ -355,7 +355,7 @@ describe("server-only Python account client", () => {
       },
     );
     await expect(
-      client.createGroup({ name: " " }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: " " }, IDEMPOTENCY_KEY, "groups"),
     ).rejects.toMatchObject({ status: 422, payload: { error: "invalid_request" } });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -375,7 +375,7 @@ describe("server-only Python account client", () => {
     const players = await import("../../app/services/group-players.server");
 
     await expect(
-      players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY),
+      players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY, "group_add"),
     ).resolves.toEqual({ ...added, seasonResetPending: false });
     await players.removeGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY);
     const sleep = vi.fn(async () => undefined);
@@ -386,7 +386,10 @@ describe("server-only Python account client", () => {
 
     const calls = fetchMock.mock.calls as [URL, RequestInit][];
     expect(calls[0][0]).toEqual(
-      new URL(`/v1/account/groups/${GROUP_ID}/players`, "http://python-fixture.test/"),
+      new URL(
+        `/v1/account/groups/${GROUP_ID}/players?page=group_add`,
+        "http://python-fixture.test/",
+      ),
     );
     expect(calls[0][1].method).toBe("POST");
     expect(decodeBody(calls[0][1])).toBe('{"tag":"#2PP"}');

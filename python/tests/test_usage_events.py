@@ -74,6 +74,25 @@ def test_counts_go_to_the_eu_host_without_location_or_identity(
         assert kwargs["disable_geoip"] is True
 
 
+def test_a_group_count_names_only_an_approved_page_from_the_website() -> None:
+    recorder = Recorder()
+    events = UsageEvents(recorder)
+    events.capture("group_created", page="group_add")
+    events.capture("group_used", {"action": "add"}, page="groups")
+    # Any other page falls back to the Groups page and is never passed on.
+    events.capture("group_used", {"action": "add"}, page="privacy")
+    events.capture("group_created", page="#2PP")
+    events.capture("signup_completed", {"provider": "google"}, page="group_add")
+
+    assert [kwargs["properties"]["route"] for _, kwargs in recorder.sent] == [
+        "group_add",
+        "groups",
+        "groups",
+        "groups",
+        "account_setup",
+    ]
+
+
 def test_each_committed_account_group_and_group_change_is_counted_once(
     database_url: str,
 ) -> None:
@@ -102,12 +121,26 @@ def test_each_committed_account_group_and_group_change_is_counted_once(
             taken = call(client, {**owner, "subject": "usage-subject-2"}, "POST", "/v1/account", account)
             assert taken.status_code == 409
             for _ in range(2):
-                made = call(client, owner, "POST", "/v1/account/groups", group, request_id=group_request)
+                made = call(
+                    client,
+                    owner,
+                    "POST",
+                    "/v1/account/groups?page=group_add",
+                    group,
+                    request_id=group_request,
+                )
                 assert made.status_code == 201
             players = f"/v1/account/groups/{made.json()['group_id']}/players"
             add_request, remove_request = str(uuid4()), str(uuid4())
             for _ in range(2):
-                added = call(client, owner, "POST", players, {"tag": "#2PP"}, request_id=add_request)
+                added = call(
+                    client,
+                    owner,
+                    "POST",
+                    f"{players}?page=group_add",
+                    {"tag": "#2PP"},
+                    request_id=add_request,
+                )
                 assert added.status_code == 200
             assert call(client, owner, "POST", players, {"tag": "#2PP"}).status_code == 409
             for _ in range(2):
@@ -122,7 +155,7 @@ def test_each_committed_account_group_and_group_change_is_counted_once(
             "signup_completed",
             {"provider": "discord", "route": "account_setup", "$process_person_profile": False},
         ),
-        ("group_created", {"route": "groups", "$process_person_profile": False}),
-        ("group_used", {"action": "add", "route": "groups", "$process_person_profile": False}),
+        ("group_created", {"route": "group_add", "$process_person_profile": False}),
+        ("group_used", {"action": "add", "route": "group_add", "$process_person_profile": False}),
         ("group_used", {"action": "remove", "route": "groups", "$process_person_profile": False}),
     ]

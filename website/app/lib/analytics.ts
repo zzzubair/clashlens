@@ -510,10 +510,14 @@ export function startAnalytics(settings: AnalyticsSettings): void {
  * Sends one listed event with label-only properties and the page it happened
  * on; a no-op when counting is off.
  */
-export function track(event: string, labels: EventProperties = {}): void {
+export function track(
+  event: string,
+  labels: EventProperties = {},
+  pathname = window.location.pathname,
+): void {
   const allowed = EVENTS[event];
   if (!allowed) return;
-  const { route, path } = routeOf(window.location.pathname);
+  const { route, path } = routeOf(pathname);
   // Kept with the event, so one sent after PostHog loads still names its page.
   const properties: Properties = {
     route,

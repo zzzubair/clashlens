@@ -100,11 +100,12 @@ export function Analytics() {
     document.addEventListener("click", click, true);
     document.addEventListener("submit", onSubmit, true);
     const timing = () => {
-      const result = pagePerformance(
-        performance.getEntriesByType?.("navigation")[0] as
-          PerformanceNavigationTiming | undefined,
-      );
-      if (result) track(result.event, result.properties);
+      const measured = performance.getEntriesByType?.("navigation")[0] as
+        PerformanceNavigationTiming | undefined;
+      const result = pagePerformance(measured);
+      if (result && measured) {
+        track(result.event, result.properties, new URL(measured.name).pathname);
+      }
     };
     // The load time is final only once the page's load event has finished.
     const afterLoad = () => setTimeout(timing);

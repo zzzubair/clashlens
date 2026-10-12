@@ -246,6 +246,37 @@ test("switching return visits off stops a held, preparing or retried event carry
   );
 });
 
+test("a sampled load time names the page that was loading", async ({ page }) => {
+  const posthog = await fakePostHog(page);
+  // Every load is sampled.
+  await page.addInitScript(() => {
+    const random = Math.random;
+    Math.random = () => random() * 0.1;
+  });
+  // The logo keeps the privacy page loading until the test lets it finish.
+  let finishLoading = () => {};
+  const loading = new Promise<void>((resolve) => (finishLoading = resolve));
+  await page.route("**/images/clashlens-wordmark.svg", async (route) => {
+    await loading;
+    await route.continue();
+  });
+
+  await page.goto(`${analyticsFixtureOrigin}/privacy`, { waitUntil: "domcontentloaded" });
+  await expect.poll(() => posthog.events.length).toBeGreaterThan(0);
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  finishLoading();
+  await expect
+    .poll(() => posthog.events.find(({ event }) => event === "page_performance"))
+    .toMatchObject({
+      properties: {
+        route: "privacy",
+        $current_url: `${analyticsFixtureOrigin}/privacy`,
+        $pathname: "/privacy",
+      },
+    });
+});
+
 test("switching return visits off in one tab stops the ID in every tab", async ({
   context,
 }) => {

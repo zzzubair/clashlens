@@ -828,7 +828,7 @@ def create_app(
             normalized_tags=tags,
         )
         if result.status_code == 201 and not result.replayed:
-            events.capture("group_created")
+            events.capture("group_created", page=request.query_params.get("page"))
         return _operation_response(result)
 
     @app.patch("/v1/account/groups/{group_id}")
@@ -879,7 +879,9 @@ def create_app(
             now=current_time(),
         )
         if result.status_code == 200 and not result.replayed:
-            events.capture("group_used", {"action": "add"})
+            events.capture(
+                "group_used", {"action": "add"}, page=request.query_params.get("page")
+            )
         return _operation_response(result)
 
     @app.delete("/v1/account/groups/{group_id}/players/{tag}")

@@ -136,6 +136,7 @@ describe("adding and removing one group player", () => {
       GROUP_ID,
       TAG,
       IDEMPOTENCY_KEY,
+      "groups",
     );
     expect(added.data.playerIdempotencyKey).not.toBe(IDEMPOTENCY_KEY);
   });
