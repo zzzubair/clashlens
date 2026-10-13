@@ -107,7 +107,8 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
     Sunday at 17:00 and another as its Monday Reset reading, then defends at
     05:30. Tuesday's sweep reads the players still tracked, as the collector
     does, and Monday's Daily board is published from it. REPEATED is
-    promoted back on 12 October, plays, and the Season is repaired."""
+    promoted back on 12 October, attacks at 05:41, before its first Legend I
+    answer at 06:10, and again after it, and the Season is repaired."""
     season = PREVIOUS_SEASON
     saturday, sunday = day(20, season), day(21, season)
     monday, tuesday, wednesday = day(22, season), day(23, season), day(24, season)
@@ -230,12 +231,18 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         days = _days(story, sunday, monday)
         board = story.served_board(tuesday)
         sunday_board = story.served_board(monday)
-        # REPEATED, promoted back two weeks later, reads Legend I, then attacks.
+        # REPEATED, promoted back two weeks later, attacks before its first
+        # Legend I answer and after it.
         promoted = day(8)
-        story.read(REPEATED, promoted + timedelta(minutes=30), 5000, SEASON)
+        story.players[REPEATED].dropped = False
+        story.players[REPEATED].battles += [Battle(promoted + timedelta(minutes=41), 40, True),
+                                            Battle(promoted + timedelta(hours=2), 40, True)]
+        story.read(REPEATED, promoted + timedelta(hours=1))
         story.run_worker()
-        story.players[REPEATED].battles.append(Battle(promoted + timedelta(hours=1), 40, True))
-        story.read(REPEATED, promoted + timedelta(hours=2))
+        story.read(REPEATED, promoted + timedelta(hours=1, minutes=10), 5040, SEASON)
+        story.run_worker()
+        promoted_tracking = _tracked(story)[REPEATED]
+        story.read(REPEATED, promoted + timedelta(hours=2, minutes=30))
         story.run_worker()
         repair_season(connection_info, str(int(season.timestamp())))
         story.run_worker()
@@ -291,6 +298,8 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         ONCE: 4840, PLAYING: 4880, STOPPED: 4840, RESET: 4840, SKIPPED: 4840,
         RETURNS: 4840, EARLY: 4840}
     assert _ranked(sunday_board)[RESET] == 4940
-    # REPEATED's Legend battle after its promotion back shows nothing about
-    # the week it left: the repaired Season keeps its drop.
+    # REPEATED's Legend I answer tracks it again, but its Legend battles from
+    # the Monday Reset it was promoted at, before that answer or after it,
+    # show nothing about the week it left: the repaired Season keeps its drop.
+    assert promoted_tracking == (True, "eligible")
     assert repaired == (dropped, False)

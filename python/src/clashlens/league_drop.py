@@ -10,13 +10,14 @@ A lower-league answer proves the player left Legend I when the parser
 accepted it, or when the player's next or previous answer, from another API
 response, is a lower league too, no profile response between the two went
 unsaved, and the player has no Legend battle after the earlier of the two and
-before their next Legend I answer that could show a promotion back. Real
-demotions are proven by their next saved answer: at latest the next Reset
-reading, which is always saved, and that Reset's Daily board leaves out the
-day they left by (``boundary_manifest``). Tracking (``judge``), the day
-results' weekly drop (``reconciliation_db._dropped_from_legend_i``) and a
-Reset reading's league (``reset_baselines._load_reset_baseline``) all
-follow this; a saved battle log re-checks them (``recheck_battle_players``).
+before the first Monday Reset after the later, when a league can next
+change. Real demotions are proven by their next saved answer: at latest the
+next Reset reading, which is always saved, and that Reset's Daily board
+leaves out the day they left by (``boundary_manifest``). Tracking
+(``judge``), the day results' weekly drop
+(``reconciliation_db._dropped_from_legend_i``) and a Reset reading's league
+(``reset_baselines._load_reset_baseline``) all follow this; a saved battle
+log re-checks them (``recheck_battle_players``).
 """
 
 from __future__ import annotations
@@ -33,8 +34,8 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 # answer from another API response: one response can be saved under more
 # than one parser version.
 _NEIGHBOURS = 5
-# Enough of a player's answers to pass a run of lower-league ones and reach
-# the Legend I answer before or after them.
+# Enough of a player's newest answers to reach back past a run of lower-league
+# ones to the Legend I answer before them.
 _NEWEST = 50
 
 
@@ -101,23 +102,20 @@ def battle_after(
     connection: Any, player_id: int, after: datetime, later: datetime
 ) -> bool:
     """Whether the player has a saved Legend battle, attack or defense, fought
-    after ``after`` and before their first Legend I answer read from the
-    Monday Reset after ``later``, or now without one. Leagues change only at
-    a Monday Reset, so a Legend I answer before then shows no promotion back,
-    and a battle after one that does may follow it.
-    The battle index holds each day's battles by attacker, then defender, so
-    each day is its own lookup: one lookup over every day reads the whole
-    table (500 ms a call at the 12 October 2026 Reset)."""
+    after ``after`` and before the first Monday Reset after ``later``.
+    Leagues change only at a Monday Reset, so a Legend I answer before then
+    shows no promotion back, and a battle from then on may follow one, even
+    before a Legend I answer shows it. The battle index holds each day's
+    battles by attacker, then defender, so each day is its own lookup: one
+    lookup over every day reads the whole table (500 ms a call at the 12
+    October 2026 Reset)."""
     day = domain.ranked_day_for(later).start
-    back = next((answer.read_at for answer in readings(
-        connection, player_id, since=day + timedelta(days=7 - day.weekday()), limit=_NEWEST,
-    ) if answer.eligible), None)
+    reset = day + timedelta(days=7 - day.weekday())
     return bool(connection.execute(
         """
         SELECT EXISTS (
             SELECT 1
-            FROM generate_series(%(day)s::timestamptz,
-                                 COALESCE(%(back)s::timestamptz, clock_timestamp()),
+            FROM generate_series(%(day)s::timestamptz, %(last)s::timestamptz,
                                  interval '24 hours') AS day (start)
             CROSS JOIN LATERAL (
                 (SELECT 1 FROM legend_battles AS battle
@@ -125,7 +123,7 @@ def battle_after(
                  WHERE battle.ranked_day_start = day.start
                    AND battle.attacker_player_id = %(player)s
                    AND evidence.battle_timestamp > %(after)s
-                   AND evidence.battle_timestamp < COALESCE(%(back)s::timestamptz, 'infinity')
+                   AND evidence.battle_timestamp < %(reset)s
                  LIMIT 1)
                 UNION ALL
                 (SELECT 1 FROM legend_battles AS battle
@@ -133,12 +131,13 @@ def battle_after(
                  WHERE battle.ranked_day_start = day.start
                    AND battle.defender_player_id = %(player)s
                    AND evidence.battle_timestamp > %(after)s
-                   AND evidence.battle_timestamp < COALESCE(%(back)s::timestamptz, 'infinity')
+                   AND evidence.battle_timestamp < %(reset)s
                  LIMIT 1)
             ) AS battle
         )
         """,
-        {"day": domain.ranked_day_for(after).start - timedelta(days=1), "back": back,
+        {"day": domain.ranked_day_for(after).start - timedelta(days=1),
+         "last": reset - timedelta(days=1), "reset": reset,
          "player": player_id, "after": after},
     ).fetchone()[0])
 
@@ -318,6 +317,8 @@ def recheck_battle_players(
     lower-league answers made no Legend I day, once those answers no longer
     prove it. The caller holds no player row; rows are taken in order."""
     players = sorted(set(player_ids))
+    # Before the saved-day lookup, deliberately: a player stopped too recently
+    # to have a saved day showing it must still be tracked again.
     for (player_id,) in connection.execute(
         """
         SELECT id FROM players
