@@ -8,17 +8,19 @@ off has a discord_day_summary_off row (migration 0111).
 Nothing is read for a Reset until its Daily board is published, so the
 summaries never compete with the Reset's own work, and a late board only
 makes them late.
-They go out only during the Legend day that Reset starts: a bot that was
+They go out only during the Legend day that Reset starts: no summary is
+logged, nor any of its DMs tried, from the next Reset, and a bot that was
 down for a whole day skips that day's summaries.
 
 Each player's day is read with the website's own player page read, so the
 numbers and the label (Verified, Calculated, Uncertain) are the ones their
-page shows; the end of day is the day's own, before any weekly or Season
-reset, which is shown beside it. Every place in a round's summaries is read
-from one version of the Reset's Daily board. A player whose day is not saved
-yet, or whom that board went without, is named as not finished; one with no
-Legend day that day is left out, and a Clasher with no finished day gets no
-DM.
+page shows; the end of day is the one the worker saved with that version of
+the day, as its Season page shows it, before any weekly or Season reset,
+which is shown beside it, and unavailable when the worker saved none. Every
+place in a round's summaries is read from one version of the Reset's Daily
+board. A player whose day is not saved yet, or whom that board went without,
+is named as not finished; one with no Legend day that day is left out, and a
+Clasher with no finished day gets no DM.
 
 Each summary is logged before its first DM and sent by the attack alert
 loop, with the same tries again; so no Clasher is sent the same day's
@@ -33,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from clashlens.api_db import ApiDatabase
@@ -49,14 +51,15 @@ log = logging.getLogger("clashlens.bot.summaries")
 # Accounts read in one round, so attack alerts never wait long behind them.
 BATCH = 10
 
-# Where an account's summary, or one of its DMs, is still due: Discord still
-# connected as the same user, and every player in %(tags)s still verified to
-# the account with its summary on.
+# Where an account's summary, or one of its DMs, is still due: before the
+# Reset closing its Legend day, Discord still connected as the same user, and
+# every player in %(tags)s still verified to the account with its summary on.
 _STILL_ON = """
     FROM clash_lens_accounts AS account
     JOIN account_provider_identities AS identity
         ON identity.account_id = account.id AND identity.provider = 'discord'
     WHERE account.id = %(account_id)s AND identity.provider_subject = %(discord_user_id)s
+      AND %(now)s < %(until)s
       AND NOT EXISTS (
           SELECT 1 FROM unnest(%(tags)s::text[]) AS named (tag)
           WHERE NOT EXISTS (
@@ -169,6 +172,7 @@ class Summaries:
                     if (page := self.store.player_page(tag, now)) is not None
                     and (day := replies.summary_day(page, reset, *standing[tag])) is not None
                 ]
+                self._saved_ends(reset, days)
             except Exception:
                 # Unlogged, so the next round reads this account again.
                 log.exception("Legend day summary for account %s could not be read", account_id)
@@ -178,13 +182,34 @@ class Summaries:
             # A summary is for no one player, so it has no player id.
             delivery = Delivery(
                 int(account_id), 0, str(discord_user_id), None, reset, reply,
-                log=self, tags=named, more=parts[1:],
+                log=self, tags=named, more=parts[1:], until=reset + timedelta(days=1),
             )
             if parts:
                 due.append(delivery)
             elif (skipped := self.claim(delivery)) is not None:
                 self.finish(skipped, "skipped", None)
         return due
+
+    def _saved_ends(self, reset: datetime, days: list[dict[str, Any]]) -> None:
+        """Set each finished day's end of day to the one the worker saved
+        with the version of the day its page showed; None when it saved none."""
+        finished = {(day["tag"], day["version"]): day for day in days if day["finished"]}
+        if not finished:
+            return
+        with self.database.pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT player.normalized_tag, daily.version, ranked.final_trophies_before_reset
+                FROM api_player_daily_logs AS daily
+                JOIN players AS player ON player.id = daily.player_id
+                JOIN ranked_day_versions AS ranked ON ranked.id = daily.ranked_day_version_id
+                WHERE player.normalized_tag = ANY(%s::text[]) AND daily.ranked_day_start = %s
+                """,
+                ([tag for tag, _ in finished], reset - timedelta(days=1)),
+            ).fetchall()
+        for tag, version, end in rows:
+            if (day := finished.get((tag, version))) is not None:
+                day["end"] = end
 
     def claim(self, delivery: Delivery) -> int | None:
         """Log the account's summary as being sent while it is still due for
@@ -234,11 +259,12 @@ class Summaries:
                 (KEEP,),
             )
 
-    @staticmethod
-    def _params(delivery: Delivery, tags: tuple[str, ...]) -> dict[str, Any]:
+    def _params(self, delivery: Delivery, tags: tuple[str, ...]) -> dict[str, Any]:
         return {
             "account_id": delivery.account_id,
             "discord_user_id": delivery.discord_user_id,
             "reset": delivery.since,
+            "now": self.now(),
+            "until": delivery.until,
             "tags": list(tags),
         }

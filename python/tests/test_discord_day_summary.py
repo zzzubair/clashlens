@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 from bot import replies
@@ -17,7 +18,7 @@ def _day(start: datetime, **fields: object) -> dict:
     """A player page day as the private API sends it: a Complete, exact day
     with all 8 of each battle, 5,000 to 5,080."""
     return {
-        "ranked_day_start": start.isoformat(),
+        "ranked_day_start": start.isoformat(), "version": 1,
         "state": "Complete", "confidence": "exact", "coverage": "complete",
         "completeness": {"state": "complete"}, "uncertainty_reasons": [],
         "battles_complete": True, "adjustments": [],
@@ -34,13 +35,16 @@ def _page(tag: str, *days: dict, name: str = "Wanderer") -> dict:
 
 def test_a_finished_day_reads_as_its_page_shows_it() -> None:
     """The day ended at RESET, labelled as the website labels it, with the
-    place given from the Reset's Daily board. A day not saved yet is not
-    finished, nor is a player that board went without before their day
-    saved; a day the player had not signed up for is no Legend day."""
+    place given from the Reset's Daily board, and its end of day left for
+    the one saved with its version, never worked out from its start and
+    change. A day not saved yet is not finished, nor is a player that board
+    went without before their day saved; a day the player had not signed up
+    for is no Legend day."""
     yesterday = RESET - timedelta(days=1)
     verified = replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1234, False)
     assert verified is not None
-    assert (verified["status"], verified["end"], verified["place"]) == ("Verified", 5080, 1234)
+    assert (verified["status"], verified["version"], verified["end"], verified["place"]) == (
+        "Verified", 1, None, 1234)
     calculated = replies.summary_day(
         _page("#2PP", _day(yesterday, confidence="inferred")), RESET, 1234, False)
     assert calculated is not None and calculated["status"] == "Calculated"
@@ -56,26 +60,29 @@ def test_a_finished_day_reads_as_its_page_shows_it() -> None:
     assert replies.summary_day(_page("#2PP", _day(RESET)), RESET, None, False) is None
 
 
-def test_the_end_of_day_is_before_any_weekly_or_season_reset() -> None:
+def test_the_end_of_day_is_the_saved_one_before_any_weekly_or_season_reset() -> None:
     """A Season's last day from 5,440 loses 120, and the Season reset takes
-    the 5,320 to 5,000: the end of day is 5,320, as its Season page shows,
-    with the reset beside the change, and the next day starting at 5,000
-    leaves it Verified. A Monday raise from 4,980 is shown the same way."""
+    the 5,320 saved as its end of day to 5,000: the end shown is 5,320, as
+    its Season page shows, with the reset beside the change, and the next
+    day starting at 5,000 leaves it Verified. A day lost 20 before a Monday
+    raise, and the worker saved no end of day for it: its end stays
+    unavailable."""
     yesterday = RESET - timedelta(days=1)
     season_end = replies.summary_day(_page("#2PP", _day(
         yesterday, start_trophies=5440, net_trophy_change=-120,
         adjustments=[{"type": "season_reset", "amount": -320}],
     ), _day(RESET)), RESET, 3, False)
-    assert season_end is not None
-    assert (season_end["status"], season_end["end"]) == ("Verified", 5320)
-    body = replies.day_summary(SITE, RESET, [season_end])[0][0].body
-    assert body.split("\n")[1] == "5,440 → 5,320 (−120, −320 Season reset)"
-    weekly = replies.summary_day(_page("#2PP", _day(
+    weekly = replies.summary_day(_page("#8PP", _day(
         yesterday, net_trophy_change=-20, adjustments=[{"type": "weekly_reset", "amount": 20}],
-    ), _day(RESET)), RESET, 3, False)
-    assert weekly is not None
-    body = replies.day_summary(SITE, RESET, [weekly])[0][0].body
-    assert body.split("\n")[1] == "5,000 → 4,980 (−20, +20 weekly reset)"
+    ), _day(RESET)), RESET, 4, False)
+    assert season_end is not None and weekly is not None
+    assert season_end["status"] == "Verified"
+    season_end["end"] = 5320
+    body = replies.day_summary(SITE, RESET, [weekly, season_end])[0][0].body
+    assert [block.split("\n")[1] for block in body.split("\n\n")[:2]] == [
+        "5,440 → 5,320 (−120, −320 Season reset)",
+        "5,000 → Unavailable (−20, +20 weekly reset)",
+    ]
 
 
 def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
@@ -277,3 +284,121 @@ def test_a_slow_dm_to_one_clasher_does_not_cost_another_their_next_dm(monkeypatc
     assert asyncio.run(rounds()) == [2, 0]
     assert discord.sent == ["first, one", "first, two"]
     assert summaries.finished == {7: "sent", 8: "failed"}
+
+
+def test_a_summary_dm_is_cut_off_at_the_next_reset() -> None:
+    """A summary DM first tried 0.2 seconds before the next Reset has those
+    0.2 seconds, not 2 minutes: Discord taking a second is too late, and
+    the summary is logged as not delivered."""
+    log, discord = _SummaryLog(None), _SlowDiscord()
+    until = RESET + timedelta(days=1)
+    loop = AlertLoop(_NoAlerts(), discord, SITE,  # type: ignore[arg-type]
+                     now=lambda: until - timedelta(seconds=0.2))
+    delivery = Delivery(2, 0, "2", None, RESET, Reply("late"), log=log,  # type: ignore[arg-type]
+                        tags=("#A",), until=until)
+    assert asyncio.run(loop._claim(delivery)) == 0
+    assert discord.sent == []
+    assert log.finished == [(7, "failed")]
+
+
+class _DefenseSavedDuringSummaries:
+    """Attack alerts with no database: one defense, saved as the summaries
+    are read, its alert due for `window` seconds, as alerts are for 15
+    minutes."""
+
+    def __init__(self, window: float) -> None:
+        self.window = window
+        self.saved_at: float | None = None
+        self.claimed = False
+
+    def prune(self) -> None:
+        pass
+
+    def confirmations_due(self) -> list:
+        return []
+
+    def due(self) -> list[dict]:
+        if self.saved_at is None or self.claimed:
+            return []
+        return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
+                 "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
+                 "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
+                 "destruction_percentage": 87, "trophies_lost": 24, "saved_at": RESET,
+                 "ranked_day_start": RESET}]
+
+    def hit_rate(self, *_read: object) -> str:
+        return "Unavailable"
+
+    def claim(self, _delivery: Delivery) -> int | None:
+        assert self.saved_at is not None
+        self.claimed = time.monotonic() < self.saved_at + self.window
+        return 3 if self.claimed else None
+
+    def finish(self, *_outcome: object) -> None:
+        pass
+
+
+class _TenSummaries:
+    """Ten Clashers' summaries, each due until it is logged."""
+
+    NONCE_PREFIX = "summary-"
+
+    def __init__(self, alerts: _DefenseSavedDuringSummaries) -> None:
+        self.alerts = alerts
+        self.unsent = list(range(10, 20))
+
+    def due(self) -> list[Delivery]:
+        if self.alerts.saved_at is None:
+            self.alerts.saved_at = time.monotonic()
+        return [Delivery(account, 0, str(account), None, RESET, Reply(f"summary {account}"),
+                         log=self, tags=(f"#{account}",)) for account in self.unsent]
+
+    def prune(self) -> None:
+        pass
+
+    def claim(self, delivery: Delivery) -> int:
+        self.unsent.remove(delivery.account_id)
+        return delivery.account_id
+
+    def still_due(self, _delivery: Delivery) -> bool:
+        return True
+
+    def finish(self, *_outcome: object) -> None:
+        pass
+
+
+class _SlowSummaryDiscord:
+    """Takes 0.1 seconds over each summary DM."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send_dm(self, _user: str, reply: Reply, nonce: int | str, _left: float) -> None:
+        if isinstance(nonce, str):
+            await asyncio.sleep(0.1)
+        self.sent.append(reply.title or reply.body)
+
+
+def test_slow_summaries_do_not_hold_an_attack_alert_past_its_window(monkeypatch) -> None:
+    """A defense is saved as 10 Clashers' summaries are read, each taking
+    Discord 0.1 seconds, and its alert is due for 0.6 seconds, as alerts are
+    for 15 minutes; sending all 10 first would take a second. The round
+    starts no summary once 0.25 seconds have gone on them, so the next
+    round sends the alert in time, and the rest of the summaries go in the
+    rounds after it, each once."""
+    monkeypatch.setattr("bot.alerts.SUMMARY_SECONDS", 0.0)
+    monkeypatch.setattr("bot.alerts.SUMMARY_BUDGET_SECONDS", 0.25)
+    alerts = _DefenseSavedDuringSummaries(window=0.6)
+    summaries, discord = _TenSummaries(alerts), _SlowSummaryDiscord()
+    loop = AlertLoop(alerts, discord, SITE, summaries=summaries)  # type: ignore[arg-type]
+
+    async def rounds() -> None:
+        while summaries.unsent:
+            await loop.tick()
+
+    asyncio.run(rounds())
+    alert = "Wanderer #2PP was attacked"
+    assert discord.sent.count(alert) == 1
+    assert sorted(title for title in discord.sent if title != alert) == [
+        f"summary {account}" for account in range(10, 20)
+    ]

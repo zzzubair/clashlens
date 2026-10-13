@@ -51,8 +51,10 @@ whose summary is on: starting and end-of-day trophies, the trophy change,
 attacks and defenses with their trophies, the day's label (Verified,
 Calculated, Uncertain) and its place on that Daily board, with a link to the
 day on the player page. The numbers come from the player page's own read, so
-they match it. The end of day is the day's own, before any weekly or Season
-reset at that Reset, which is shown beside the change. Every place in one
+they match it. The end of day is the one the worker saved with that version
+of the day, as the Season page shows it, before any weekly or Season reset at
+that Reset, which is shown beside the change; it shows as Unavailable when the
+worker saved none. Every place in one
 round of summaries comes from the same version of that Daily board. A player
 whose day is not saved yet, or whom that board went without, is named as not
 finished; a player with no Legend day that day is left out, and an account
@@ -67,7 +69,11 @@ several, each sent as soon as the one before is delivered.
 - Nothing is read for a Reset until its board is published, so a late board
   makes the summaries late and they never compete with the Reset's own work.
   A day's summaries go out only until the next Reset, at most 10 accounts a
-  minute.
+  minute: none is logged, and no DM tried, from the next Reset on.
+- Summaries are sent after each round's attack alerts. Once a round has spent
+  30 seconds sending summaries it starts no more; the rest wait for a later
+  round, so an attack alert waits for at most those 30 seconds and the one
+  summary then being sent.
 - Each summary is logged before its first DM and never sent twice, across
   restarts too. A DM Discord did not take is tried again exactly as an attack
   alert is. Before each DM, and each try again, the bot checks that every

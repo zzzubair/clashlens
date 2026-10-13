@@ -49,6 +49,9 @@ REVOKE ALL PRIVILEGES ON TABLE discord_day_summary_off, discord_day_summary_deli
 GRANT SELECT, INSERT, DELETE ON TABLE discord_day_summary_off TO clashlens_python_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE discord_day_summary_deliveries
     TO clashlens_python_api;
+-- A summary's end of day is the one the worker saved, as on the Season page.
+GRANT SELECT (final_trophies_before_reset) ON TABLE ranked_day_versions
+    TO clashlens_python_api;
 
 CREATE OR REPLACE FUNCTION clashlens_forget_day_summary_off()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$

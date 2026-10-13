@@ -502,8 +502,9 @@ def summary_day(
     page: Mapping[str, Any], reset: datetime, place: int | None, unfinished: bool
 ) -> dict[str, Any] | None:
     """The player's Legend day that ended at `reset`, as their page shows it:
-    its label, its own end of day before any weekly or Season reset at
-    `reset`, and `place`, its place on that Reset's Daily board. "finished"
+    its label, its saved "version", and `place`, its place on that Reset's
+    Daily board. Its "end" is None until set to the end of day saved with
+    that version, before any weekly or Season reset at `reset`. "finished"
     is False while its final result is not saved yet, as for a player that
     board went without (`unfinished`) with no saved day. None when the page
     has no such Legend day."""
@@ -519,18 +520,16 @@ def summary_day(
         return None
     if day["state"] == "Live":
         return {"tag": page["tag"], "name": page["name"], "finished": False}
-    start = day["start_trophies"]
-    net = day["net_trophy_change"]
     automatic = _adjustment(day, "automatic_defense")
     return {
         "tag": page["tag"],
         "name": page["name"],
         "finished": True,
         "status": _day_status(day),
-        "start": start,
-        # The saved end of day: the Season pages' end_trophies.
-        "end": None if start is None or net is None else start + net,
-        "net": net,
+        "version": day["version"],
+        "start": day["start_trophies"],
+        "end": None,
+        "net": day["net_trophy_change"],
         "raised": _adjustment(day, "weekly_reset", "season_reset"),
         "attack_count": day["attack_count"],
         "attack_gain": day["attack_gain"],
