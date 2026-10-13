@@ -8,18 +8,20 @@ cannot tell them apart.
 
 A lower-league answer proves the player left Legend I when the parser
 accepted it, or when the player's next or previous answer, from another API
-response, is a lower league too and the player has no Legend battle after
-the earlier of the two. Real demotions are proven by their next saved
-answer: at latest the next Reset reading, which is always saved, and that
-Reset's Daily board leaves out the day they left by
-(``boundary_manifest``). Tracking (``judge``) and the day results' weekly
-drop (``reconciliation_db._dropped_from_legend_i``) both follow this.
+response, is a lower league too, no profile response between the two went
+unsaved, and the player has no Legend battle after the earlier of the two.
+Real demotions are proven by their next saved answer: at latest the next
+Reset reading, which is always saved, and that Reset's Daily board leaves
+out the day they left by (``boundary_manifest``). Tracking (``judge``), the
+day results' weekly drop (``reconciliation_db._dropped_from_legend_i``) and
+a Reset reading's league (``reset_baselines._load_reset_baseline``) all
+follow this.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import domain, first_battle_log
@@ -127,6 +129,32 @@ def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
     ).fetchone()[0])
 
 
+def _unsaved_between(
+    connection: Any, player_id: int, start: datetime, end: datetime
+) -> bool:
+    """Whether a profile response of the player received after ``start`` and
+    before ``end`` saved no answer: processing skipped it, as a profile a
+    later one from the same Legend day covers (``ingestion.supersede_profile``),
+    or has not reached it yet. It may have shown Legend I, so the answers
+    either side of it are not next to each other."""
+    return bool(connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM collector_observations AS observed
+            WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
+              AND observed.response_completed_at > %(start)s
+              AND observed.response_completed_at < %(end)s
+              AND observed.http_status BETWEEN 200 AND 299
+              AND NOT EXISTS (SELECT 1 FROM player_profile_effects AS seen
+                              WHERE seen.observation_id = observed.id)
+              AND NOT EXISTS (SELECT 1 FROM player_profile_versions AS version
+                              WHERE version.observation_id = observed.id)
+        )
+        """,
+        {"player": player_id, "start": start, "end": end},
+    ).fetchone()[0])
+
+
 def _pair(answers: list[Reading], index: int) -> tuple[Reading | None, Reading | None]:
     """The answers before and after ``answers[index]`` from other responses."""
     observation = answers[index].observation_id
@@ -148,12 +176,12 @@ def left_legend_i(
     if answer.accepted:
         return True
     before, after = _pair(answers, index)
-    return (
-        before is not None and not before.eligible
-        and not battle_after(connection, player_id, before.read_at)
-    ) or (
-        after is not None and not after.eligible
-        and not battle_after(connection, player_id, answer.read_at)
+    return any(
+        not first.eligible and not second.eligible
+        and not battle_after(connection, player_id, first.read_at)
+        and not _unsaved_between(connection, player_id, first.read_at, second.read_at)
+        for first, second in ((before, answer), (answer, after))
+        if first is not None and second is not None
     )
 
 
@@ -231,9 +259,11 @@ def judge(connection: Any, player_id: int) -> None:
     else:
         # Never seen in Legend I: not tracked, as before.
         judged = "ineligible"
-    for answer in proof:
-        if answer is not None:
-            first_battle_log.queue_weekly_drop(connection, player_id, answer.read_at)
+    # Once for each Legend day of the proving answers, named by the newest of
+    # them that day, so a later proof after tracking again queues its own.
+    for answer in {domain.ranked_day_for(answer.read_at).start: answer
+                   for answer in proof if answer is not None}.values():
+        first_battle_log.queue_weekly_drop(connection, player_id, answer.read_at)
     eligible = judged == "eligible"
     if state == judged and active == eligible and due == eligible:
         return
@@ -251,12 +281,14 @@ def judge(connection: Any, player_id: int) -> None:
     )
     if eligible and not active and state == "ineligible" and stretch:
         # The days those lower-league answers made non-Legend days, and every
-        # later saved day of their Season.
+        # later saved day of their Season, once for each newest answer that
+        # tracks them again.
         day = domain.ranked_day_for(stretch[0].read_at).start - timedelta(days=1)
         day_text = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         first_battle_log._queue(
             connection, player_id, day, None,
             key=(f"reconcile:league-return:{player_id}:{day_text}:"
+                 f"{newest.read_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
                  f"{RECONCILIATION_RULE_VERSION}"),
             trigger="league_return", priority=PYTHON_BACKFILL_PRIORITY,
         )

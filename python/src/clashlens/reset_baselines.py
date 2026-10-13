@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, ranked_day_inputs
+from . import boundary, league_drop, ranked_day_inputs
 from .analytics import unplayed_profile_sql
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -1261,6 +1261,15 @@ def _load_reset_baseline(
         evidence["season_reset_pending"] = True
     if season_rule:
         evidence["start_trophies_source"] = "season_rule"
+    # A lower-league reading counts only once it proves the player left
+    # Legend I (``league_drop``): one the parser marked conflict, such as
+    # Legend II naming Season ID 0, needs another lower-league answer next
+    # to it; until then the reading leaves them a Legend I player.
+    eligibility = _text_value(row[17]) if row[17] is not None else None
+    if eligibility == "ineligible" and not profile_accepted and not league_drop.dropped_between(
+        connection, player_id, row[19], row[19] + timedelta(microseconds=1)
+    ):
+        eligibility = "eligible"
     return {
         "id": int(row[0]),
         "version": int(row[1]),
@@ -1276,13 +1285,7 @@ def _load_reset_baseline(
             and not season_reset_pending
             else None
         ),
-        "eligibility_state": (
-            "eligible"
-            if season_rule
-            else _text_value(row[17])
-            if row[17] is not None
-            else None
-        ),
+        "eligibility_state": "eligible" if season_rule else eligibility,
         "evidence": evidence,
     }
 

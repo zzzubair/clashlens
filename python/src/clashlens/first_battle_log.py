@@ -305,9 +305,10 @@ def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) ->
     below Legend I, recalculate the day before that Reset and each saved day
     after it, which then show the drop (see
     ``reconciliation_db._dropped_after_reading``), for a player with a Reset
-    reading there. Runs once per player and Monday, when no other work
-    waits, no earlier than ``DAY_END_RECALCULATION_DELAY`` after that Reset,
-    once any calculation running when the profile arrived has saved."""
+    reading there. Runs once per player and profile read at ``observed_at``,
+    when no other work waits, no earlier than ``DAY_END_RECALCULATION_DELAY``
+    after that Reset, once any calculation running when the profile arrived
+    has saved."""
     from .reconciliation_db import DAY_END_RECALCULATION_DELAY
 
     day = domain.ranked_day_for(observed_at)
@@ -322,8 +323,9 @@ def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) ->
         return
     _queue(
         connection, player_id, ended, None,
-        key=(f"reconcile:weekly-drop:{player_id}:"
-             f"{ended:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+        key=(f"reconcile:weekly-drop:{player_id}:{ended:%Y-%m-%dT%H:%M:%SZ}:"
+             f"{observed_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
+             f"{RECONCILIATION_RULE_VERSION}"),
         trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
         due_at=day.start + DAY_END_RECALCULATION_DELAY,
     )
