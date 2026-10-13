@@ -485,7 +485,7 @@ def test_the_page_lists_every_verified_player(database_url: str) -> None:
         players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
 
     assert len(players) == 501
-    assert players[-1] == {"tag": "#2PP", "name": None, "on": True}
+    assert players[-1] == {"tag": "#2PP", "name": None, "on": True, "summary_on": True}
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
@@ -507,4 +507,4 @@ def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
         finally:
             api.close()
             owner.close()
-    assert players == [{"tag": "#2PP", "name": None, "on": False}]
+    assert players == [{"tag": "#2PP", "name": None, "on": False, "summary_on": True}]

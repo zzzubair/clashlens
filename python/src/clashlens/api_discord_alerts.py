@@ -1,17 +1,26 @@
-"""Discord attack alert switches, saved from the website's Discord alerts page.
+"""Discord alert switches, saved from the website's Discord alerts page.
 
-One switch per verified player, off until turned on. The Discord bot sends a
-confirmation and then the alerts, and logs each one; the website reads that
-log only to show a DM Discord would not deliver.
+Two switches per verified player. Attack alerts are off until turned on; the
+Discord bot sends a confirmation and then the alerts, and logs each one; the
+website reads that log only to show a DM Discord would not deliver. The
+Legend day summary is on until turned off; the players turned off are listed
+in the account's preferences under `SUMMARY_OFF`, and only while verified to
+the account, so moving a player away and back turns it on again.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import psycopg
+
 from . import api_db
 from .api_accounts import _verified_players
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+
+# The account preference listing the tags whose Legend day summary is off;
+# the bot reads it as bot.summaries.OFF_KEY.
+SUMMARY_OFF = "discord_day_summary_off"
 
 
 def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
@@ -20,6 +29,11 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     has been asked for since: a switch going on or Discord connected again."""
     with database.pool.connection() as connection:
         players = _verified_players(connection, account_id, limit=None)
+        summary_off = connection.execute(
+            "SELECT preferences -> %s FROM clash_lens_accounts WHERE id = %s",
+            (SUMMARY_OFF, account_id),
+        ).fetchone()
+        summary_off = set(summary_off[0] or []) if summary_off else set()
         on = {
             _text(row[0])
             for row in connection.execute(
@@ -59,7 +73,10 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
         }
     return {
         "kind": "discord-attack-alerts",
-        "players": [{**player, "on": player["tag"] in on} for player in players],
+        "players": [
+            {**player, "on": player["tag"] in on, "summary_on": player["tag"] not in summary_off}
+            for player in players
+        ],
         "undelivered": undelivered,
     }
 
@@ -104,5 +121,61 @@ def set_attack_alert(
                         (binding.account_id, link[0]),
                     )
                 result = OperationResult(200, {"tag": normalized_tag, "on": on})
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
+def set_day_summary(
+    database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str, on: bool
+) -> OperationResult:
+    """Turn one verified player's Legend day summary on or off, keeping only
+    the account's verified players in its list of those turned off."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            link = connection.execute(
+                """
+                SELECT link.account_id
+                FROM verified_player_links AS link
+                JOIN players AS player ON player.id = link.player_id
+                WHERE player.normalized_tag = %s
+                FOR SHARE OF link
+                """,
+                (normalized_tag,),
+            ).fetchone()
+            if link is None or int(link[0]) != binding.account_id:
+                result = OperationResult(404, {"error": "player_not_verified"})
+            else:
+                try:
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            UPDATE clash_lens_accounts AS account
+                            SET preferences = jsonb_set(
+                                    account.preferences, ARRAY[%(key)s],
+                                    COALESCE((
+                                        SELECT jsonb_agg(player.normalized_tag
+                                                         ORDER BY player.normalized_tag)
+                                        FROM verified_player_links AS link
+                                        JOIN players AS player ON player.id = link.player_id
+                                        WHERE link.account_id = account.id
+                                          AND CASE WHEN player.normalized_tag = %(tag)s
+                                                   THEN NOT %(on)s
+                                                   ELSE COALESCE(account.preferences -> %(key)s,
+                                                                 '[]') ? player.normalized_tag
+                                              END
+                                    ), '[]')),
+                                updated_at = clock_timestamp()
+                            WHERE account.id = %(account)s
+                            """,
+                            {"key": SUMMARY_OFF, "tag": normalized_tag, "on": on,
+                             "account": binding.account_id},
+                        )
+                    result = OperationResult(200, {"tag": normalized_tag, "summary_on": on})
+                except psycopg.errors.CheckViolation:
+                    # The preferences box holds at most 4,096 bytes.
+                    result = OperationResult(409, {"error": "preferences_full"})
             api_db._complete_request(connection, binding.request_id, result)
             return result

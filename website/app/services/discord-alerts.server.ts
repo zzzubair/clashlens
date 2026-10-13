@@ -19,12 +19,14 @@ export async function getAttackAlerts(
   return alerts;
 }
 
-/** Turn one verified player's Discord attack alerts on or off. */
+/** Turn one verified player's Discord attack alerts, or its Legend day
+ * summary, on or off. */
 export async function setAttackAlert(
   identity: GoogleAccountIdentity,
   tag: string,
   on: boolean,
   idempotencyKey: string,
+  alert: "attack" | "day_summary" = "attack",
 ): Promise<void> {
   if (!isCanonicalUuid(idempotencyKey)) {
     throw new PythonApiError(400, { error: "invalid_input" });
@@ -32,7 +34,7 @@ export async function setAttackAlert(
   await requestJson<unknown>(
     "/v1/account/discord-alerts",
     "POST",
-    Buffer.from(JSON.stringify({ tag, on }), "utf8"),
+    Buffer.from(JSON.stringify({ tag, on, alert }), "utf8"),
     undefined,
     idempotencyKey,
     identity,

@@ -398,7 +398,7 @@ class ReplyView(_OwnedView):
 
 
 class DiscordMessenger:
-    """Sends attack alerts as normal DMs from the bot. discord.py waits out
+    """Sends attack alerts and Legend day summaries as normal DMs from the bot. discord.py waits out
     Discord's rate limits before each request, tries a request again itself
     after a rate limit or a server error, and gives up on one after aiohttp's
     5 minutes, or at once on a rate limit longer than the DM's time left. The
@@ -410,7 +410,7 @@ class DiscordMessenger:
         self.client = client
 
     async def send_dm(
-        self, discord_user_id: str, reply: Reply, nonce: int, time_left: float
+        self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
     ) -> None:
         embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
         view = discord.ui.View(timeout=None)
@@ -435,7 +435,7 @@ class DiscordMessenger:
             raise Refused(_REFUSALS.get(error.code, reason)) from error
         except Exception as error:
             # A timeout or a dropped connection: the DM may or may not have gone.
-            log.warning("an attack alert could not reach Discord", exc_info=True)
+            log.warning("a DM could not reach Discord", exc_info=True)
             raise Unreachable from error
         finally:
             http.max_ratelimit_timeout = limit

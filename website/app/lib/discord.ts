@@ -1,11 +1,12 @@
 /** The permanent Clash Lens Discord invite, linked from the site header. */
 export const DISCORD_INVITE_URL = "https://discord.gg/792KJQTtRf";
 
-/** One verified player's Discord attack alert switch. */
+/** One verified player's Discord attack alert and Legend day summary switches. */
 export interface AttackAlertPlayer {
   tag: string;
   name: string | null;
   on: boolean;
+  summaryOn: boolean;
 }
 
 /** Why Discord did not deliver an attack alert, as the private API reports it. */
@@ -39,11 +40,17 @@ export function mapAttackAlerts(value: unknown): AttackAlerts | null {
       !isRecord(player) ||
       typeof player.tag !== "string" ||
       (player.name !== null && typeof player.name !== "string") ||
-      typeof player.on !== "boolean"
+      typeof player.on !== "boolean" ||
+      typeof player.summary_on !== "boolean"
     ) {
       return null;
     }
-    players.push({ tag: player.tag, name: player.name, on: player.on });
+    players.push({
+      tag: player.tag,
+      name: player.name,
+      on: player.on,
+      summaryOn: player.summary_on,
+    });
   }
   const missed = value.undelivered;
   if (missed === null) return { players, undelivered: null };

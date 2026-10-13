@@ -10,7 +10,8 @@ Settings come from the environment:
     CLASHLENS_DATABASE_URL_FILE       file holding the database address
     CLASHLENS_PUBLIC_ORIGIN           the website, for links in replies
 
-While it runs it also sends the attack alert DMs Clashers turned on.
+While it runs it also sends the attack alert DMs Clashers turned on, and
+each Legend day's summary DM.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from .commands import Commands
 from .discord_app import READ_SLOTS, DiscordMessenger, build_client
 from .replies import Site
 from .store import Store
+from .summaries import Summaries
 
 log = logging.getLogger("clashlens.bot")
 
@@ -88,7 +90,8 @@ def _commands(config: Config) -> Commands:
         database_url = read_secret_file(config.database_url_file)
     except BootstrapError as error:
         raise ConfigError("the database address file cannot be read") from error
-    # One more connection than command reads, for the attack alert loop.
+    # One more connection than command reads, for the attack alert loop,
+    # which also sends the Legend day summaries.
     database = ApiDatabase(database_url, min_size=1, max_size=READ_SLOTS + 1)
     return Commands(Store(database), Site(config.origin))
 
@@ -109,14 +112,19 @@ def run(config: Config) -> None:
 
     store = commands.store
     assert isinstance(store, Store)
-    loop = AlertLoop(AlertStore(store.database, store), DiscordMessenger(client), commands.site)
+    loop = AlertLoop(
+        AlertStore(store.database, store),
+        DiscordMessenger(client),
+        commands.site,
+        summaries=Summaries(store.database, store, commands.site),
+    )
 
     running: list[asyncio.Task[None]] = []
 
     async def start_alerts() -> None:
         # Runs once after login, so a reconnect never starts a second loop.
         running.append(asyncio.create_task(loop.run()))
-        log.info("attack alerts on")
+        log.info("attack alerts and Legend day summaries on")
 
     client.setup_hook = start_alerts  # type: ignore[method-assign]
 

@@ -18,8 +18,9 @@ only the not-connected pointer and plain errors are private to the person.
   "gateway") and listens on no port, so it adds no public endpoint.
 - It reads Clash Lens data with the private API's own read code and the API's
   database login, so numbers in Discord match the website. While it runs it
-  also sends the attack alert DMs Clashers turn on; its one write is their
-  delivery log, see [architecture](architecture.md).
+  also sends the attack alert DMs Clashers turn on, and the Legend day
+  summary; its only writes are their delivery logs, see
+  [architecture](architecture.md).
 - It needs no privileged Discord access ("intents"), and its replies can never
   mention or ping anyone.
 - `./ops up` always installs the unit
@@ -40,6 +41,30 @@ Only `/stats` replies, which show Legend data, include the next Reset as a
 Discord timestamp, which each viewer sees in their own local time. Errors,
 instructions, `/help`, `/link` and the "which player?" prompt have no Reset line
 on purpose.
+
+## Legend day summary
+
+Once a minute the bot checks whether the Daily board for the latest Reset is
+published. Once it is, each Clash Lens account with Discord connected gets
+one DM summing up the Legend day that Reset ended, for each verified player
+whose summary is on: starting and end-of-day trophies, the trophy change,
+attacks and defenses with their trophies, the day's label (Verified,
+Calculated, Uncertain) and its place on that Daily board, with a link to the
+day on the player page. The numbers come from the player page's own read, so
+they match it. A player whose day is not saved yet is named as not finished;
+a player with no Legend day that day is left out, and an account with no
+finished day gets no DM. A summary too long for one message goes as several.
+
+- Each player's summary is on until turned off on the website's Discord
+  alerts page, separately from its attack alerts. The players turned off are
+  listed in the account's preferences under `discord_day_summary_off`.
+- Nothing is read for a Reset until its board is published, so a late board
+  makes the summaries late and they never compete with the Reset's own work.
+  A day's summaries go out only until the next Reset, at most 10 accounts a
+  minute.
+- Each summary is logged before its first DM and never sent twice, across
+  restarts too. A DM Discord did not take is tried again exactly as an attack
+  alert is.
 
 ## Go-live checklist
 
@@ -88,7 +113,10 @@ Nothing below has been done yet. Do the steps in order.
    a test player on the website's Discord alerts page. A DM saying "Attack
    alerts are on for …" should arrive; then, after that player's next real
    defense, the attack alert DM should arrive too.
-9. **Launch.** Turn "Public Bot" on when ready, and share the install link.
+9. **Test the Legend day summary.** With a test player verified and
+   Discord connected, a DM titled "Legend day summary" should arrive
+   shortly after the next Reset's Daily board is published.
+10. **Launch.** Turn "Public Bot" on when ready, and share the install link.
 
 To turn the bot off, set `CLASHLENS_DISCORD_BOT=off` (or remove the line) and
 run `./ops up`; the token file can stay. To stop it at once without `up`:
