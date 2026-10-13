@@ -755,17 +755,31 @@ them.
 
 The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 6 GB memory cap;
 128 MB for fake-service runs; `./ops` refuses a `CLASHLENS_POSTGRES_MEMORY`
-below twice the cache), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
+below twice the cache), `checkpoint_timeout=15min`, `max_wal_size=8GB` and `wal_compression=zstd`.
+It also sets `jit=off`: query compilation took 3.8 CPU-hours a day on average
+from 10 to 11 Oct 2026 and 22 on the evening of 11 Oct, up to 75% of the run
+time of daily result recalculations that run in 56-97 ms.
 Commit flushing, full-page writes, checksums and archiving are unchanged. A
 70-minute page-by-page replay of production's change log predicts 225 instead of
-393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
-1 MB/s of change log (about 85 GB/day) and 60–70 GB/day of backup uploads.
+393 page copies per second; zstd shrinks each copy to about 37%. That tuning,
+`checkpoint_timeout=10min` and `max_wal_size=2GB`, predicted about 85 GB/day
+of change log. From 10 to 11 Oct 2026 it averaged 135 GB/day: 81 of 287
+checkpoints started early because 2 GB filled, and 60.9 million of 688 million
+change-log records were whole pages. A quiet evening with no early checkpoint
+ran at 85.6 GB/day, so the extra comes at busy times (Reset, Season repair).
+The 15-minute, 8 GB spacing was estimated on 11 Oct to cut the change log, its
+disk writes and backup uploads by 15–30%; measure them again after a deploy.
 Crash recovery replays the change log written since the last checkpoint.
 `max_wal_size` is a soft limit that heavy load or stalled archiving can exceed,
-so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
-14 seconds to save, so 2 GB takes about four minutes. From 30 Sep to 8 Oct
-2026 the most written between two of its 3,008 checkpoints was 1.1 GB, so a
-crash just before a checkpoint finishes replays up to about 2.2 GB. A stopped
+so 8 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
+14 seconds to save, about 9.4 MB/s. A checkpoint starts every 15 minutes, or
+sooner once about 4.2 GB has been written since the last one (8 GB over 1 plus
+the 0.9 completion target; under the old 2 GB, about 1.05 GB, and the most
+measured from 30 Sep to 8 Oct 2026 was 1.1 GB). A crash just before a
+checkpoint finishes replays up to two of those intervals: about 2.8 GB, about
+five minutes, at the 1.56 MB/s day average of 10–11 Oct, and at most about
+8 GB, about 15 minutes, while writing stays over 4.7 MB/s; under the old
+settings it was at most about 2.2 GB, four minutes. A stopped
 replay only starts again from the beginning, so no fixed time limit stops one:
 the unit waits for the database as long as it takes (`TimeoutStartSec=infinity`),
 and the regular health check, which kills the container after twelve failures

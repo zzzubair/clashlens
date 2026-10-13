@@ -259,6 +259,13 @@ use the [operating notes](operating.md#respond-to-alerts).
   existing day lookup, like the untracked battler check, and the two days'
   saved results through their existing day-end lookup.
 
+These two checks run once a quarter hour (:00, :15, :30, :45 UTC), not every
+minute: on 11 Oct 2026 each read about a gigabyte a run, and both look at
+conditions at least an hour old. The checks in between reuse that reading, so
+either alert can fire, or recover, up to 15 minutes later. A failed reading is
+not kept and is retried the next minute, so the unreadable-check alert below
+still counts its ten minutes as before.
+
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.
 

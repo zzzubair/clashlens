@@ -165,6 +165,10 @@ LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
 # Untracked recent Legend I battlers tolerated before the completeness alert.
 UNTRACKED_BATTLER_LIMIT = 10
+# The untracked battler and battle-day checks each read about a gigabyte of
+# battles (11 Oct 2026) for conditions at least an hour old, so they run once
+# a quarter hour (:00, :15, :30, :45 UTC) and other checks reuse that reading.
+SLOW_PROBE_INTERVAL = 900
 # The early warning. Podman kills a container after six failed health checks
 # in a row, about three minutes, so two failures leave time to act. Overdue
 # work normally reaches 35 minutes after a Reset (6 Oct 2026), hence the
@@ -949,12 +953,21 @@ def observe(
         findings["publication"] = publication[0] > 0 or late
     elif late:
         findings["publication"] = True
-    completeness = run_probe(
-        "worker", ["--completeness"], 1, "Untracked Legend I battler count"
-    )
+
+    def slow_probe(argument: str, unavailable: str):
+        # A failed reading is not kept, so the next check retries it.
+        last = state.setdefault("slow_probes", {}).get(argument)
+        if last and last["at"] // SLOW_PROBE_INTERVAL == now // SLOW_PROBE_INTERVAL:
+            return last["values"]
+        values = run_probe("worker", [argument], 1, unavailable)
+        if values is not None:
+            state["slow_probes"][argument] = {"at": now, "values": values}
+        return values
+
+    completeness = slow_probe("--completeness", "Untracked Legend I battler count")
     if completeness is not None:
         findings["completeness"] = completeness[0] > UNTRACKED_BATTLER_LIMIT
-    battle_day = run_probe("worker", ["--battle-day"], 1, "Battle-day check")
+    battle_day = slow_probe("--battle-day", "Battle-day check")
     if battle_day is not None:
         findings["battle_day"] = battle_day[0] > 0
     # Each unreadable check keeps its own first-failure time; one readable

@@ -19,6 +19,7 @@ from clashlens.collector_db import (
     CollectorDatabase,
     ResponseHandoff,
 )
+from clashlens.collector_metrics import health_metrics
 from clashlens.collector_uploads import claim_upload, complete_upload, fail_upload
 from clashlens.db import (
     ARMY_ANALYTICS_RULE_VERSION,
@@ -745,3 +746,132 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
         finally:
             worker_database.close()
             database.close()
+
+
+class _Recorded:
+    """A connection that keeps the last statement it ran."""
+
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self.connection = connection
+        self.last: tuple[str, object] | None = None
+
+    def execute(self, query: str, params: object = None) -> psycopg.Cursor:
+        self.last = (query, params)
+        return self.connection.execute(query, params)
+
+
+def test_upload_wait_matches_the_old_count_without_reading_every_upload(
+    database_url: str,
+) -> None:
+    # Production on 8 October 2026 held 2.93 million upload rows, nearly all
+    # archived; the old count read every one of them each minute to find none.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO archive_instances (
+                    instance_id, endpoint, region, bucket, marker_key,
+                    marker_hash, marker_payload_version
+                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                          'evidence', 'clashlens/archive-instance.json',
+                          repeat('f', 64), 'v1')
+                """
+            )
+            # Every 1,000th row of each kind is in flight: pending (also with
+            # no due time), leased, failed with a retry, failed for good.
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state, next_attempt_at,
+                    lease_owner, lease_token, lease_expires_at, archive_reference,
+                    archive_instance_id, completed_at, created_at
+                )
+                SELECT encode(sha256(n::text::bytea), 'hex'), 'sha256/' || n, 1,
+                       kind.state,
+                       CASE WHEN kind.kind IN ('pending_never', 'failed_final')
+                            THEN 'infinity'::timestamptz
+                            ELSE clock_timestamp() + interval '1 minute' END,
+                       CASE WHEN kind.state = 'leased' THEN 'owner' END,
+                       CASE WHEN kind.state = 'leased' THEN 'token' END,
+                       CASE WHEN kind.state = 'leased'
+                            THEN clock_timestamp() + interval '1 minute' END,
+                       CASE WHEN kind.state = 'complete' THEN 's3://evidence/' || n END,
+                       CASE WHEN kind.state = 'complete' THEN 'fixture-instance' END,
+                       CASE WHEN kind.state = 'complete' THEN clock_timestamp() END,
+                       clock_timestamp() - n * interval '1 second'
+                FROM generate_series(1, 200000) AS n
+                CROSS JOIN LATERAL (
+                    SELECT CASE n % 1000 WHEN 1 THEN 'pending' WHEN 2 THEN 'pending_never'
+                                         WHEN 3 THEN 'leased' WHEN 4 THEN 'failed_retry'
+                                         WHEN 5 THEN 'failed_final' ELSE 'complete' END
+                ) AS named (kind)
+                CROSS JOIN LATERAL (
+                    SELECT named.kind, split_part(named.kind, '_', 1) AS state
+                ) AS kind
+                """
+            )
+            connection.execute("VACUUM ANALYZE collector_response_uploads")
+
+            def compare() -> int:
+                metrics = health_metrics(connection)
+                old_count, old_age = connection.execute(
+                    """
+                    SELECT count(*), COALESCE(extract(epoch FROM
+                               clock_timestamp() - min(created_at)), 0)
+                    FROM collector_response_uploads
+                    WHERE state IN ('pending', 'leased')
+                       OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)
+                    """
+                ).fetchone()
+                assert metrics["pending_uploads"] == old_count
+                assert metrics["oldest_pending_upload_age_seconds"] == pytest.approx(
+                    float(old_age), abs=5
+                )
+                return int(old_count)
+
+            assert compare() == 4 * 200
+            # Whichever waiting kind holds the oldest row sets the age; an
+            # archived or finally failed row never does.
+            for state, next_attempt in (
+                ("complete", "> now()"),
+                ("failed", "= 'infinity'"),
+                ("pending", "< 'infinity'"),
+                ("pending", "= 'infinity'"),
+                ("leased", "> now()"),
+                ("failed", "< 'infinity'"),
+            ):
+                connection.execute(
+                    f"""
+                    UPDATE collector_response_uploads
+                    SET created_at = created_at - interval '30 days'
+                    WHERE response_hash = (
+                        SELECT response_hash FROM collector_response_uploads
+                        WHERE state = %s AND next_attempt_at {next_attempt}
+                        ORDER BY created_at DESC LIMIT 1)
+                    """,
+                    (state,),
+                )
+                compare()
+            assert health_metrics(connection)["oldest_pending_upload_age_seconds"] >= 30 * 86400
+
+            recorded = _Recorded(connection)
+            health_metrics(recorded)
+            assert recorded.last is not None
+            with connection.transaction(force_rollback=True):
+                plan = connection.execute(
+                    "EXPLAIN (FORMAT JSON) " + recorded.last[0], recorded.last[1]
+                ).fetchone()[0][0]["Plan"]
+            nodes, scans = [plan], []
+            while nodes:
+                node = nodes.pop()
+                nodes.extend(node.get("Plans", []))
+                if node.get("Relation Name") == "collector_response_uploads":
+                    scans.append(node["Node Type"])
+            assert scans and "Seq Scan" not in scans, scans
+
+            connection.execute(
+                "UPDATE collector_response_uploads SET state = 'failed',"
+                " next_attempt_at = 'infinity', lease_owner = NULL, lease_token = NULL,"
+                " lease_expires_at = NULL WHERE state IN ('pending', 'leased', 'failed')"
+            )
+            assert compare() == 0

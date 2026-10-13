@@ -262,6 +262,8 @@ def trigger(rt, condition, value=True):
         rt.completeness = "11" if value else "10"
     elif condition == "battle_day":
         rt.battle_day = "1" if value else "0"
+    if condition in ("completeness", "battle_day"):
+        rt.now += alerts.SLOW_PROBE_INTERVAL  # Read at its next quarter-hour run.
 
 
 @pytest.mark.parametrize(

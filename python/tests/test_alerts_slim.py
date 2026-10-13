@@ -423,6 +423,53 @@ def test_retried_monitoring_alert_waits_15_minutes_after_delivery(runtime, monke
     assert f"recovered at {cleared}" in rt.posts[1]["content"]
 
 
+def slow_probe_runs(rt, argument):
+    return sum(argument in call for call in rt.calls)
+
+
+@pytest.mark.parametrize(
+    ("argument", "condition", "bad", "good"),
+    [("--completeness", "completeness", "11", "10"), ("--battle-day", "battle_day", "1", "0")],
+)
+def test_slow_checks_run_each_quarter_hour_and_keep_their_reading_between(
+    runtime, argument, condition, bad, good
+):
+    rt = runtime
+    start = rt.now  # 12:00 UTC.
+    setattr(rt, condition, bad)
+    assert at(rt, 0, start) == 0
+    assert slow_probe_runs(rt, argument) == 1
+    assert len(rt.posts) == 1
+    # Until 12:15 every check reuses the 12:00 reading: no new reading, no recovery.
+    setattr(rt, condition, good)
+    for seconds in range(60, 900, 60):
+        assert at(rt, seconds, start) == 0
+    assert slow_probe_runs(rt, argument) == 1
+    assert len(rt.posts) == 1
+    assert at(rt, 900, start) == 0
+    assert slow_probe_runs(rt, argument) == 2
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[1]["content"]
+
+
+@pytest.mark.parametrize("argument", ["--completeness", "--battle-day"])
+def test_an_unreadable_slow_check_is_retried_every_minute(runtime, argument):
+    rt = runtime
+    start = rt.now
+    rt.completeness = rt.battle_day = ""
+    for seconds in range(0, 600, 60):
+        assert at(rt, seconds, start) == 1
+    assert slow_probe_runs(rt, argument) == 10
+    assert not rt.posts
+    assert at(rt, 600, start) == 1
+    assert len(monitoring(rt)) == 1
+    rt.completeness = rt.battle_day = "0"
+    assert at(rt, 660, start) == 0
+    assert at(rt, 720, start) == 0
+    assert slow_probe_runs(rt, argument) == 12
+    assert "recovered" in rt.posts[1]["content"]
+
+
 def test_old_state_works_and_saved_state_stays_bounded(runtime, capsys):
     rt = runtime
     rt.state_dir.mkdir()
