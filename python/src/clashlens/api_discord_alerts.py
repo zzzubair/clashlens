@@ -16,8 +16,8 @@ from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 
 def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     """Each verified player with its switch, and the newest DM that could not
-    be delivered when nothing has been delivered since and no switch has gone
-    on since, which sends a fresh confirmation."""
+    be delivered when nothing has been delivered since and no confirmation
+    has been asked for since: a switch going on or Discord connected again."""
     with database.pool.connection() as connection:
         players = _verified_players(connection, account_id)
         on = {
@@ -42,7 +42,8 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
             JOIN players AS player ON player.id = delivery.player_id
             WHERE delivery.account_id = %s AND delivery.state <> 'sending'
               AND delivery.created_at >= (
-                  SELECT max(enabled_at) FROM discord_attack_alerts WHERE account_id = %s
+                  SELECT max(confirm_requested_at) FROM discord_attack_alerts
+                  WHERE account_id = %s
               )
             ORDER BY delivery.finished_at DESC, delivery.id DESC
             LIMIT 1

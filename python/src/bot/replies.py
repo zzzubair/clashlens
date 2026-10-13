@@ -434,12 +434,13 @@ def attack_alert(site: Site, alert: Mapping[str, Any], attacker_hit_rate: str) -
 
 
 def alerts_on(site: Site, switch: Mapping[str, Any]) -> Reply:
-    """The DM sent once when attack alerts go on for a player, which also
-    proves the bot can reach the person."""
+    """The DM sent when attack alerts go on for a player, and again when
+    Discord is connected again, which also proves the bot can reach the
+    person."""
     player = safe(switch["name"])
     return Reply(
         f"You'll get a message here as soon as {player} is attacked.",
         title=f"Attack alerts are on for {player} {switch['tag']}",
-        updated=switch["enabled_at"],
+        updated=switch["confirm_requested_at"],
         links=(Link("Alert settings", site.url(DISCORD_ALERTS)),),
     )

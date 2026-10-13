@@ -5,6 +5,7 @@ See docs/testing.md."""
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
-from bot.alerts import AlertLoop, AlertStore, Refused
+from bot.alerts import WINDOW, AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.replies import Reply, Site
 from bot.store import Store
@@ -36,15 +37,23 @@ NAME = "Synthetic Legend I"
 
 
 class FakeDiscord:
-    """Records each DM; refuses users in `refusing` as Discord would."""
+    """Records each try by its nonce and each DM delivered; refuses users in
+    `refusing` as Discord would, and cannot be reached for the next `outages`
+    tries."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Reply]] = []
+        self.tries: list[int] = []
         self.refusing: dict[str, str] = {}
+        self.outages = 0
 
-    async def send_dm(self, discord_user_id: str, reply: Reply) -> None:
+    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
+        self.tries.append(nonce)
         if discord_user_id in self.refusing:
             raise Refused(self.refusing[discord_user_id])
+        if self.outages:
+            self.outages -= 1
+            raise Unreachable
         self.sent.append((discord_user_id, reply))
 
 
@@ -68,17 +77,30 @@ def _switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
     ).status_code
 
 
+def _defend(connection_info: str, player_id: int, *, saved_ago: timedelta = timedelta(0)) -> None:
+    """A defense of the player by a new untracked opponent, saved `saved_ago` ago."""
+    with psycopg.connect(connection_info, autocommit=True) as connection:
+        seed_battles(connection, player_id, [(SEASON + timedelta(hours=3), -16)])
+        connection.execute(
+            "UPDATE legend_battles SET created_at = clock_timestamp() - %s"
+            " WHERE id = (SELECT max(id) FROM legend_battles)",
+            (saved_ago,),
+        )
+
+
 def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """DEFENDER's alerts go on after Clash Lens saved their Day 1 defense, so
-    the bot confirms that, then only the Day 3 defense saved later sends a DM,
-    once however often the loop looks. The attacker's hit rate is the one
-    /stats shows for them."""
+    the bot confirms that, then only the Day 3 defenses saved later send a
+    DM each, once however often the loop looks. The attacker's hit rate is
+    the one /stats shows for them; an attacker Clash Lens never read is
+    named as DEFENDER's log names them, with no hit rate tracked yet."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
     # The fixture names each log row's opponent by its place in the log, so
-    # DEFENDER's second defense is by the player tagged _tag(2).
-    attacker = f"#{_tag(2)}"
+    # DEFENDER's second defense is by the player tagged _tag(2), and the
+    # third by _tag(3), whose profile Clash Lens never read.
+    attacker, stranger = f"#{_tag(2)}", f"#{_tag(3)}"
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (DEFENDER, attacker)})
@@ -119,9 +141,11 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             )
             before = asyncio.run(loop.tick())
 
-            # Attacked during Day 3, then the collector reads DEFENDER's log.
-            story.players[DEFENDER].battles.append(
-                Battle(day_3 + timedelta(hours=1), -30, False))
+            # Attacked twice during Day 3, then the collector reads DEFENDER's log.
+            story.players[DEFENDER].battles += [
+                Battle(day_3 + timedelta(hours=1), -30, False),
+                Battle(day_3 + timedelta(hours=1, minutes=30), -20, False),
+            ]
             story.read(DEFENDER, day_3 + timedelta(hours=2))
             story.run_worker()
             sent = [asyncio.run(loop.tick()) for _ in range(3)]
@@ -134,27 +158,38 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             api.close()
             owner.close()
 
-    assert (before, sent) == (1, [1, 0, 0])
+    assert (before, sent) == (1, [2, 0, 0])
     stars, destruction = RESULTS[30]
-    assert len(discord.sent) == 2
+    stranger_stars, stranger_destruction = RESULTS[20]
+    assert len(discord.sent) == 3
     assert discord.sent[0][1].title == f"Attack alerts are on for {NAME} {DEFENDER}"
-    user, reply = discord.sent[1]
-    assert user == DISCORD_ID
-    assert reply.title == f"{NAME} {DEFENDER} was attacked"
-    assert reply.body.splitlines() == [
-        f"{NAME} {attacker}: {stars}★ · {destruction}% · −30 trophies",
-        f"{NAME}'s hit rate this Season: 75%",
-    ]
+    alerts = [reply for _, reply in discord.sent[1:]]
+    assert {user for user, _ in discord.sent} == {DISCORD_ID}
+    assert {reply.title for reply in alerts} == {f"{NAME} {DEFENDER} was attacked"}
+    assert sorted(reply.body.splitlines() for reply in alerts) == sorted([
+        [
+            f"{NAME} {attacker}: {stars}★ · {destruction}% · −30 trophies",
+            f"{NAME}'s hit rate this Season: 75%",
+        ],
+        [
+            f"Opponent {stranger}: {stranger_stars}★ · {stranger_destruction}% · −20 trophies",
+            "Opponent's hit rate this Season: not tracked yet",
+        ],
+    ])
     assert "hit rate 75% (3 three-stars)" in stats.body
-    assert not reply.private
+    assert not any(reply.private for reply in alerts)
 
 
-def test_alerts_follow_the_switch_skip_stale_battles_and_record_refusals(
-    database_url: str,
+def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
+    database_url: str, monkeypatch
 ) -> None:
     """Battles saved more than 15 minutes ago, battles saved before the switch
     went on and players whose switch is off send nothing. A DM Discord refuses
-    is logged once, shown on the website with its reason, and not retried."""
+    is tried once, logged, and shown on the website with its reason. A DM
+    Discord can't take just then is tried again with the same nonce and
+    delivered once; one still undelivered 15 minutes after its battle was
+    saved is logged and shown as not delivered."""
+    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
@@ -175,17 +210,12 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_record_refusals(
             now = SEASON + timedelta(hours=3)
 
             def defend(tag: str, *, saved_ago: timedelta = timedelta(0)) -> None:
-                with psycopg.connect(connection_info, autocommit=True) as connection:
-                    seed_battles(connection, ids[tag], [(now, -16)])
-                    connection.execute(
-                        "UPDATE legend_battles SET created_at = clock_timestamp() - %s"
-                        " WHERE id = (SELECT max(id) FROM legend_battles)",
-                        (saved_ago,),
-                    )
+                _defend(connection_info, ids[tag], saved_ago=saved_ago)
 
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 connection.execute(
-                    "UPDATE discord_attack_alerts SET enabled_at = enabled_at - interval '1 hour'"
+                    "UPDATE discord_attack_alerts SET enabled_at = enabled_at - interval '1 hour',"
+                    " confirm_requested_at = confirm_requested_at - interval '1 hour'"
                 )
             defend("#2PP", saved_ago=timedelta(minutes=20))
             defend("#2PP", saved_ago=timedelta(minutes=70))
@@ -204,19 +234,41 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_record_refusals(
             delivered = asyncio.run(loop.tick())
             cleared = api_discord_alerts.get_attack_alerts(api, mine)
 
+            discord.outages = 1
+            defend("#2PP")
+            retried = [asyncio.run(loop.tick()) for _ in range(3)]
+
+            # Saved 2 seconds before its 15 minutes run out, with Discord down.
+            discord.outages = 100
+            defend("#2PP", saved_ago=WINDOW - timedelta(seconds=2))
+            expiring = asyncio.run(loop.tick())
+            time.sleep(2)
+            expired = asyncio.run(loop.tick())
+            gave_up = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
+            discord.outages = 0
+
             assert _switch(api, mine, "#2PP", False) == 200
             defend("#2PP")
             off = asyncio.run(loop.tick())
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 log = connection.execute(
-                    "SELECT state, reason FROM discord_attack_alert_deliveries ORDER BY battle_id"
+                    "SELECT id, state, reason FROM discord_attack_alert_deliveries"
+                    " ORDER BY battle_id"
                 ).fetchall()
         finally:
             api.close()
             owner.close()
 
-    assert (quiet, refused, delivered, off) == (0, [0, 0], 1, 0)
-    assert log == [("refused", "no_shared_server"), ("sent", None)]
+    assert (quiet, refused, delivered, retried, [expiring, expired], off) == (
+        0, [0, 0], 1, [0, 1, 0], [0, 0], 0)
+    assert [(state, reason, discord.tries.count(id)) for id, state, reason in log] == [
+        ("refused", "no_shared_server", 1),
+        ("sent", None, 1),
+        ("sent", None, 2),
+        ("failed", None, 1),
+    ]
+    assert len(discord.sent) == 2
+    assert gave_up is not None and gave_up["reason"] == "unreachable"
     assert shown["undelivered"]["tag"] == "#2PP"
     assert shown["undelivered"]["reason"] == "no_shared_server"
     assert [(player["tag"], player["on"]) for player in shown["players"]] == [
@@ -230,14 +282,17 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
 ) -> None:
     """Turning alerts on sends one confirmation. Discord refusing it shows on
     the website, and it is not retried; reconnecting Discord, which adds the
-    bot, clears that and confirms again."""
+    bot, clears that and confirms again, and still sends an attack saved
+    before the reconnect."""
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
-                connection.execute(
-                    "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true)")
+                player = connection.execute(
+                    "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true)"
+                    " RETURNING id"
+                ).fetchone()[0]
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             _verify(owner, mine, "#2PP")
             discord = FakeDiscord()
@@ -250,6 +305,8 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
             del discord.refusing[DISCORD_ID]
             assert _switch(api, mine, "#2PP", True) == 200
             still_on = asyncio.run(loop.tick())
+            # Attacked, then Discord connected again before the bot looks.
+            _defend(connection_info, player)
             reconnected = api_accounts.link_provider(
                 api,
                 RequestBinding(
@@ -273,10 +330,13 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
             api.close()
             owner.close()
 
-    assert (refused, still_on, reconnected, confirmed) == ([0, 0], 0, 200, [1, 0])
+    assert (refused, still_on, reconnected, confirmed) == ([0, 0], 0, 200, [2, 0])
     assert shown is not None and (shown["tag"], shown["reason"]) == ("#2PP", "no_shared_server")
     assert cleared is None
-    assert [reply.title for _, reply in discord.sent] == ["Attack alerts are on for Unnamed #2PP"]
+    assert [reply.title for _, reply in discord.sent] == [
+        "Attack alerts are on for Unnamed #2PP",
+        "Unnamed #2PP was attacked",
+    ]
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:

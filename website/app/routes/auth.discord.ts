@@ -6,7 +6,8 @@ import type { Route } from "./+types/auth.discord";
  * GET /auth/discord — start a fresh Discord authorization transaction.
  *
  * Discord uses OAuth2 Authorization Code with PKCE S256, asking for `identify`
- * and a user install of the bot (`applications.commands`). The return path is validated against the exact public origin,
+ * and a user install of the bot (`applications.commands`), or `identify` only
+ * to unlink. The return path is validated against the exact public origin,
  * a new one-time transaction is created for this provider with its intent
  * (login, or a link/unlink started from an authenticated account), and its
  * signed transaction cookie is set before the browser is redirected to

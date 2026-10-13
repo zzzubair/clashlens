@@ -348,10 +348,10 @@ def link_provider(
                     reason="linked from the authenticated account",
                 )
             if provider == "discord":
-                # Connecting Discord again adds the bot; restarting the attack
-                # alert switches has the bot confirm each one again.
+                # Connecting Discord again adds the bot, which then confirms
+                # each attack alert switch again; when each went on is kept.
                 connection.execute(
-                    "UPDATE discord_attack_alerts SET enabled_at = clock_timestamp()"
+                    "UPDATE discord_attack_alerts SET confirm_requested_at = clock_timestamp()"
                     " WHERE account_id = %s",
                     (account_id,),
                 )

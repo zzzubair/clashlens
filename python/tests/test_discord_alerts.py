@@ -1,5 +1,5 @@
-"""Attack alerts without a database: what Discord's refusals become, the
-switch that turns alerts on, and the message itself."""
+"""Attack alerts without a database: what Discord's refusals and outages
+become, and the message itself."""
 
 from __future__ import annotations
 
@@ -10,17 +10,11 @@ from types import SimpleNamespace
 import discord
 import pytest
 
-from bot.__main__ import ConfigError, load_config
 from bot.alerts import Refused, Unreachable
 from bot.discord_app import DiscordMessenger
 from bot.replies import Reply, Site, attack_alert
 
 SITE = Site("https://clashlens.test")
-SETTINGS = {
-    "CLASHLENS_DISCORD_BOT_TOKEN_FILE": "/run/token",
-    "CLASHLENS_DATABASE_URL_FILE": "/run/database",
-    "CLASHLENS_PUBLIC_ORIGIN": "https://clashlens.test",
-}
 
 
 class FakeClient:
@@ -39,8 +33,8 @@ class FakeClient:
         return SimpleNamespace(send=send)
 
 
-def _answer(status: int, code: int) -> discord.HTTPException:
-    response = SimpleNamespace(status=status, reason="refused")
+def _answer(status: int, code: int, headers: dict[str, str] | None = None) -> discord.HTTPException:
+    response = SimpleNamespace(status=status, reason="refused", headers=headers or {})
     kind = {403: discord.Forbidden, 404: discord.NotFound}.get(
         status, discord.DiscordServerError if status >= 500 else discord.HTTPException
     )
@@ -54,29 +48,26 @@ def _answer(status: int, code: int) -> discord.HTTPException:
         (403, 50007, "dms_closed"),
         (404, 10013, "unknown_user"),
         (400, 50033, "unknown_user"),
-        (429, 40003, "other"),
+        (400, 50035, "other"),
     ],
 )
 def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -> None:
     messenger = DiscordMessenger(FakeClient(_answer(status, code)))  # type: ignore[arg-type]
     with pytest.raises(Refused) as refused:
-        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t")))
+        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
     assert refused.value.reason == reason
 
 
-def test_discord_outages_count_as_undelivered_not_refused() -> None:
-    for error in (_answer(503, 0), TimeoutError()):
+def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
+    for error, wait in (
+        (_answer(503, 0), 0.0),
+        (TimeoutError(), 0.0),
+        (_answer(429, 0, {"Retry-After": "7.5"}), 7.5),
+    ):
         messenger = DiscordMessenger(FakeClient(error))  # type: ignore[arg-type]
-        with pytest.raises(Unreachable):
-            asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t")))
-
-
-def test_alerts_are_off_unless_turned_on_and_a_typo_stops_the_bot() -> None:
-    assert load_config(SETTINGS).alerts is False
-    assert load_config({**SETTINGS, "CLASHLENS_DISCORD_ALERTS": "off"}).alerts is False
-    assert load_config({**SETTINGS, "CLASHLENS_DISCORD_ALERTS": "on"}).alerts is True
-    with pytest.raises(ConfigError):
-        load_config({**SETTINGS, "CLASHLENS_DISCORD_ALERTS": "yes"})
+        with pytest.raises(Unreachable) as outage:
+            asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
+        assert outage.value.retry_after == wait
 
 
 def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
@@ -95,7 +86,7 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
         },
         "Unavailable",
     )
-    asyncio.run(DiscordMessenger(client).send_dm("1", reply))  # type: ignore[arg-type]
+    asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1))  # type: ignore[arg-type]
     embed = client.sent[0]["embed"]
     assert embed.title == "Wanderer #2PP was attacked"
     assert embed.description.splitlines() == [

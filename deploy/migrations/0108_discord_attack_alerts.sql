@@ -2,6 +2,8 @@
 -- Discord attack alerts: a Clasher turns them on per verified player on the
 -- website, and the Discord bot then sends a short confirmation DM, and a DM
 -- for each defense of that player saved after the switch went on.
+-- Reconnecting Discord asks for the confirmation again without moving when
+-- the switch went on, so no saved defense is skipped.
 --
 -- discord_attack_alerts holds one row per player whose alerts are on, so it
 -- is never larger than the verified player list. Turning alerts off deletes
@@ -9,9 +11,9 @@
 -- in the same transaction, so moving it away and back does not restore it.
 --
 -- discord_attack_alert_deliveries is the bot's log of every DM it tried: one
--- row per battle and account, and one per confirmation of a switch going on.
--- The bot writes the row before it sends, so nothing is ever sent twice, even
--- after a crash. It is the only table the bot writes; the bot deletes rows
+-- row per battle and account, and one per confirmation asked for. The bot
+-- writes the row before it sends, so nothing is ever sent twice, even after a
+-- crash. It is the only table the bot writes; the bot deletes rows
 -- older than 7 days, so at most 7 days of alerts are kept: about 8 rows a day
 -- per player with alerts on.
 BEGIN;
@@ -20,21 +22,26 @@ CREATE TABLE IF NOT EXISTS discord_attack_alerts (
     account_id bigint NOT NULL REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
     player_id bigint NOT NULL REFERENCES players (id) ON DELETE CASCADE,
     enabled_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    -- When the bot was last asked to confirm the switch: when it went on, or
+    -- when Discord was last connected again since.
+    confirm_requested_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (account_id, player_id)
 );
 
 -- battle_id is a legend_battles row, without a reference so the log never
 -- holds up the worker changing or removing battles. A confirmation has no
--- battle; `confirms` is the enabled_at of the switch it confirms.
+-- battle; `confirms` is the confirm_requested_at it answers.
 CREATE TABLE IF NOT EXISTS discord_attack_alert_deliveries (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id bigint NOT NULL REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
     player_id bigint NOT NULL,
     battle_id bigint,
     confirms timestamptz,
-    -- sending: claimed, the DM may or may not have gone out; never retried.
+    -- sending: claimed and not finished; the bot tries it again while Discord
+    -- cannot be reached, and a crash leaves it here, never tried again.
     -- refused: Discord would not deliver it, for `reason`; failed: Discord
-    -- could not be reached in time.
+    -- could not be reached within 15 minutes of the battle being saved or
+    -- the confirmation asked for.
     state text NOT NULL CHECK (state IN ('sending', 'sent', 'refused', 'failed')),
     reason text CHECK (reason IN ('no_shared_server', 'dms_closed', 'unknown_user', 'other')),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -70,11 +77,12 @@ FOR EACH ROW EXECUTE FUNCTION clashlens_forget_attack_alerts();
 -- The alerts due now: each defense saved since `since` against a player
 -- whose alerts are on, saved after they went on, for the owning account's
 -- Discord user, and not yet in the delivery log. The battle's numbers come
--- from the defender's report when saved, else the attacker's. The bot cannot
--- read battles itself; this shows it only these. Battle ids grow as battles
--- are saved, so only battles above the newest one saved 5 minutes before
--- `since` are read: a short walk back from the newest battle, then the few
--- hundred battles saved since, without a new index.
+-- from the defender's report when saved, else the attacker's. An attacker
+-- with no saved profile is named as the defender's report names them. The
+-- bot cannot read battles itself; this shows it only these. Battle ids grow
+-- as battles are saved, so only battles above the newest one saved 5 minutes
+-- before `since` are read: a short walk back from the newest battle, then the
+-- few hundred battles saved since, without a new index.
 CREATE OR REPLACE FUNCTION clashlens_discord_attack_alerts_due(since timestamptz)
 RETURNS TABLE (
     account_id bigint,
@@ -94,7 +102,7 @@ LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
     SELECT alert.account_id, identity.provider_subject, battle.id, battle.defender_player_id,
            defender.normalized_tag, defender_profile.name,
-           attacker.normalized_tag, attacker_profile.name,
+           attacker.normalized_tag, COALESCE(attacker_profile.name, evidence.opponent_name),
            evidence.stars, evidence.destruction_percentage, evidence.defender_loss,
            battle.created_at
     FROM discord_attack_alerts AS alert
@@ -113,9 +121,17 @@ AS $$
        AND battle.created_at >= since
        AND battle.created_at > alert.enabled_at
     JOIN LATERAL (
-        SELECT report.stars, report.destruction_percentage, report.defender_loss
+        SELECT report.stars, report.destruction_percentage, report.defender_loss,
+               CASE WHEN side.perspective = 'defender' THEN
+                   CASE report.parser_version
+                       WHEN 'supercell-source-parser-v1'
+                           THEN source_row.source_json -> 'opponent' ->> 'name'
+                       ELSE source_row.source_json ->> 'opponentName'
+                   END
+               END AS opponent_name
         FROM battle_perspectives AS side
         JOIN battle_evidence AS report ON report.id = side.evidence_id
+        LEFT JOIN battle_source_rows AS source_row ON source_row.id = report.source_row_id
         WHERE side.battle_id = battle.id
         ORDER BY side.perspective = 'defender' DESC
         LIMIT 1

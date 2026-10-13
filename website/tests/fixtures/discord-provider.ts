@@ -5,7 +5,8 @@
  * This server is test-only. It serves the OAuth2 Authorization Code + PKCE
  * endpoints and the `identify` user endpoint that the website's Discord
  * service uses: /oauth2/authorize, /api/oauth2/token, and /api/users/@me.
- * Authorization must ask for the bot's user install along with `identify`.
+ * Authorization must ask for the bot's user install along with `identify`,
+ * or `identify` alone, as unlinking does.
  * Access tokens are opaque, single-user, in-memory values; the immutable
  * numeric subject is the only identity ever returned. Codes are one-time and
  * expire quickly. No secret or token is ever logged.
@@ -17,7 +18,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 const BIND_HOST = envOr("CLASHLENS_FIXTURE_BIND_HOST", "127.0.0.1");
 const DEFAULT_PORT = 8012;
-const SCOPE = "identify applications.commands";
+const INSTALL_SCOPE = "identify applications.commands";
 const AUTH_CODE_TTL_SECONDS = 60;
 const MAX_CODE_ENTRIES = 5_000;
 const MAX_QUERY_BYTES = 8_192;
@@ -37,6 +38,7 @@ const PORT = Number(process.env.CLASHLENS_FIXTURE_DISCORD_PORT ?? DEFAULT_PORT);
 
 interface AuthorizationCode {
   codeChallenge: string;
+  scope: string;
   createdAtMs: number;
 }
 
@@ -134,7 +136,12 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
     authorizationRedirect(response, callback, { error: "unsupported_response_type" });
     return;
   }
-  if (parameters.get("scope") !== SCOPE || parameters.get("integration_type") !== "1") {
+  const scope = parameters.get("scope") ?? "";
+  const install = parameters.get("integration_type");
+  if (
+    !(scope === INSTALL_SCOPE && install === "1") &&
+    !(scope === "identify" && install === null)
+  ) {
     authorizationRedirect(response, callback, { error: "invalid_scope" });
     return;
   }
@@ -149,7 +156,7 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
   }
   prune(Date.now());
   const code = randomBytes(32).toString("base64url");
-  codes.set(code, { codeChallenge: challenge, createdAtMs: Date.now() });
+  codes.set(code, { codeChallenge: challenge, scope, createdAtMs: Date.now() });
   authorizationRedirect(response, callback, { code });
 }
 
@@ -213,7 +220,7 @@ async function handleToken(
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: 300,
-    scope: SCOPE,
+    scope: entry.scope,
   });
 }
 

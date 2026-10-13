@@ -75,8 +75,8 @@ attack alert delivery log (`discord_attack_alert_deliveries`, migration 0108),
 which records each alert DM, and the confirmation DM sent when alerts go on,
 before it is sent so none is sent twice; it reads
 new defenses only through that migration's `clashlens_discord_attack_alerts_due`
-function, never the battle tables. Attack alerts run only with
-`CLASHLENS_DISCORD_ALERTS=on`. The agreed Discord setup
+function, never the battle tables. Attack alerts run whenever the bot runs.
+The agreed Discord setup
 also uses a private incoming webhook for operator alerts and an existing ticket
 bot for support; neither needs the product database or archive. Isolate future
 integrations only where availability or measured resource use requires it.

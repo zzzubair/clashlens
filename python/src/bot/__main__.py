@@ -9,9 +9,8 @@ Settings come from the environment:
     CLASHLENS_DISCORD_BOT_TOKEN_FILE  file holding the bot token
     CLASHLENS_DATABASE_URL_FILE       file holding the database address
     CLASHLENS_PUBLIC_ORIGIN           the website, for links in replies
-    CLASHLENS_DISCORD_ALERTS          "on" to send attack alert DMs; off when
-                                      unset, so alerts can stop without
-                                      stopping the bot
+
+While it runs it also sends the attack alert DMs Clashers turned on.
 """
 
 from __future__ import annotations
@@ -46,7 +45,6 @@ class Config:
     token_file: str
     database_url_file: str
     origin: str
-    alerts: bool = False
 
 
 def load_config(environ: Mapping[str, str]) -> Config:
@@ -61,9 +59,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
     missing = [name for name, value in values.items() if not value]
     if missing:
         raise ConfigError(f"missing settings: {', '.join(missing)}")
-    alerts = environ.get("CLASHLENS_DISCORD_ALERTS", "").strip()
-    if alerts not in {"", "on", "off"}:
-        raise ConfigError("CLASHLENS_DISCORD_ALERTS must be on or off")
     origin = values["CLASHLENS_PUBLIC_ORIGIN"]
     parts = urlsplit(origin)
     if parts.scheme not in {"https", "http"} or not parts.netloc or parts.path not in {"", "/"}:
@@ -72,7 +67,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
         values["CLASHLENS_DISCORD_BOT_TOKEN_FILE"],
         values["CLASHLENS_DATABASE_URL_FILE"],
         origin.rstrip("/"),
-        alerts == "on",
     )
 
 
@@ -113,21 +107,18 @@ def run(config: Config) -> None:
     async def on_ready() -> None:
         log.info("connected to Discord as application %s", client.application_id)
 
-    if config.alerts:
-        store = commands.store
-        assert isinstance(store, Store)
-        loop = AlertLoop(
-            AlertStore(store.database, store), DiscordMessenger(client), commands.site
-        )
+    store = commands.store
+    assert isinstance(store, Store)
+    loop = AlertLoop(AlertStore(store.database, store), DiscordMessenger(client), commands.site)
 
-        running: list[asyncio.Task[None]] = []
+    running: list[asyncio.Task[None]] = []
 
-        async def start_alerts() -> None:
-            # Runs once after login, so a reconnect never starts a second loop.
-            running.append(asyncio.create_task(loop.run()))
-            log.info("attack alerts on")
+    async def start_alerts() -> None:
+        # Runs once after login, so a reconnect never starts a second loop.
+        running.append(asyncio.create_task(loop.run()))
+        log.info("attack alerts on")
 
-        client.setup_hook = start_alerts  # type: ignore[method-assign]
+    client.setup_hook = start_alerts  # type: ignore[method-assign]
 
     # discord.py reconnects on its own after network drops.
     client.run(token, log_handler=None)

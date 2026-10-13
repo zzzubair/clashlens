@@ -67,6 +67,13 @@ describe("Discord OAuth service", () => {
     expect(url.searchParams.get("state")).toBe(transaction().state);
   });
 
+  it("asks only to identify the user when unlinking, without adding the bot", async () => {
+    const service = await createDiscordOAuthService(config());
+    const url = service.authorizationUrl({ ...transaction(), intent: "unlink" });
+    expect(url.searchParams.get("scope")).toBe("identify");
+    expect(url.searchParams.has("integration_type")).toBe(false);
+  });
+
   it("exchanges the code and returns only the immutable numeric user ID", async () => {
     const service = await createDiscordOAuthService(config(), {
       fetchJson: fakeFetch((url) =>

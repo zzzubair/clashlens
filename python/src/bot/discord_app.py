@@ -37,7 +37,7 @@ READ_SLOTS = 4
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
-# An attack alert DM that Discord has not taken by then counts as failed.
+# An attack alert DM that Discord has not taken by then is tried again later.
 DM_SECONDS = 30
 # Discord's JSON error codes for a DM it will not deliver
 # (https://docs.discord.com/developers/topics/opcodes-and-status-codes):
@@ -406,7 +406,7 @@ class DiscordMessenger:
     def __init__(self, client: discord.Client) -> None:
         self.client = client
 
-    async def send_dm(self, discord_user_id: str, reply: Reply) -> None:
+    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
         embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
         view = discord.ui.View(timeout=None)
         for link in reply.links:
@@ -414,10 +414,12 @@ class DiscordMessenger:
         try:
             async with asyncio.timeout(DM_SECONDS):
                 channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
-                await channel.send(embed=embed, view=view)
+                await channel.send(embed=embed, view=view, nonce=nonce)
         except discord.DiscordServerError as error:
             raise Unreachable from error
         except discord.HTTPException as error:
+            if error.status == 429:
+                raise Unreachable(float(error.response.headers.get("Retry-After", 0))) from error
             reason = "unknown_user" if isinstance(error, discord.NotFound) else "other"
             raise Refused(_REFUSALS.get(error.code, reason)) from error
         except Exception as error:

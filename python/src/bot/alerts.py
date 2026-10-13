@@ -1,17 +1,24 @@
 """Attack alerts: a Discord DM each time one of a Clasher's players is attacked.
 
 Clashers turn alerts on per verified player on the website. Every few seconds
-the loop sends a short confirmation DM for each switch turned on in the last
-15 minutes, then asks the database for defenses saved in the last 15 minutes
-against those players, after their alerts went on, and sends each one once.
-Older ones are skipped, so a bot that was down does not send a flood of stale
-alerts when it starts again.
+the loop sends a short confirmation DM for each switch turned on, or Discord
+connected again, in the last 15 minutes, then asks the database for defenses
+saved in the last 15 minutes against those players, after their alerts went
+on, and sends each one once. Older ones are skipped, so a bot that was down
+does not send a flood of stale alerts when it starts again.
 
-Each DM is written to the delivery log before it is sent and never sent
-again, so a crash or a timeout can lose an alert but never send it twice.
-Discord refusing a DM (bot not added, DMs closed, unknown user) is logged
-with the reason, which the website shows with what the Clasher can do. That
-DM is not tried again.
+Each DM is written to the delivery log just before it is sent, and only
+while the switch is still on, the player still verified to the account and
+Discord still connected as the same user. When Discord cannot be reached
+(a 5xx answer, a 429 rate limit, a network error or a timeout) the DM is
+tried again, waiting longer each time and at least as long as Discord asks,
+for as long as those still hold and within 15 minutes of the battle being
+saved or the confirmation asked for; after that it is logged as not
+delivered. Every try sends the same Discord nonce, which Discord keeps for a
+few minutes, so a try soon after one Discord took does not post it again. A
+crash can lose an alert but never send it twice. Discord refusing a DM (bot
+not added, DMs closed, unknown user) is logged with the reason, which the
+website shows with what the Clasher can do. That DM is not tried again.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -30,10 +38,15 @@ from .store import Store
 
 log = logging.getLogger("clashlens.bot.alerts")
 
-# Battles saved, or switches turned on, longer ago than this are never sent.
+# Battles saved, or confirmations asked for, longer ago than this are never
+# sent, nor tried again.
 WINDOW = timedelta(minutes=15)
 # How often the loop looks for new battles.
 INTERVAL_SECONDS = 10.0
+# The wait before trying again a DM Discord could not take, doubling with
+# each try up to the longest.
+RETRY_SECONDS = 10.0
+RETRY_LONGEST_SECONDS = 120.0
 # Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
 
@@ -57,8 +70,24 @@ _CONFIRM_COLUMNS = (
     "player_id",
     "tag",
     "name",
-    "enabled_at",
+    "confirm_requested_at",
 )
+# Where a DM is still due: its switch on since before the battle was saved, or
+# still asking for this confirmation, the player still verified to the account,
+# Discord still connected as the same user, and within `WINDOW`.
+_STILL_DUE = """
+    FROM discord_attack_alerts AS alert
+    JOIN verified_player_links AS link
+        ON link.player_id = alert.player_id AND link.account_id = alert.account_id
+    JOIN account_provider_identities AS identity
+        ON identity.account_id = alert.account_id AND identity.provider = 'discord'
+    WHERE alert.account_id = %(account_id)s AND alert.player_id = %(player_id)s
+      AND identity.provider_subject = %(discord_user_id)s
+      AND CASE WHEN %(battle_id)s::bigint IS NULL
+               THEN alert.confirm_requested_at = %(since)s
+               ELSE alert.enabled_at < %(since)s END
+      AND clock_timestamp() < %(since)s + %(window)s
+"""
 
 
 class Refused(Exception):
@@ -70,11 +99,44 @@ class Refused(Exception):
 
 
 class Unreachable(Exception):
-    """Discord could not be reached in time; the DM may or may not have gone."""
+    """Discord could not be reached in time; the DM may or may not have gone.
+    `retry_after` is how many seconds Discord asked to wait, if it did."""
+
+    def __init__(self, retry_after: float = 0.0) -> None:
+        super().__init__(retry_after)
+        self.retry_after = retry_after
 
 
 class Messenger(Protocol):
-    async def send_dm(self, discord_user_id: str, reply: Reply) -> None: ...
+    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None: ...
+
+
+@dataclass
+class Delivery:
+    """One DM: for a battle, or confirming a switch when `battle_id` is None."""
+
+    account_id: int
+    player_id: int
+    discord_user_id: str
+    battle_id: int | None
+    # When its `WINDOW` started: the battle saved, or the confirmation asked for.
+    since: datetime
+    reply: Reply
+    # Its delivery log id once claimed, also the nonce of every try.
+    id: int = 0
+    # The loop's clock time of the next try, and the wait before it.
+    retry_at: float = 0.0
+    wait: float = 0.0
+
+    def params(self) -> dict[str, Any]:
+        return {
+            "account_id": self.account_id,
+            "player_id": self.player_id,
+            "discord_user_id": self.discord_user_id,
+            "battle_id": self.battle_id,
+            "since": self.since,
+            "window": WINDOW,
+        }
 
 
 class AlertStore:
@@ -95,13 +157,13 @@ class AlertStore:
         return [dict(zip(_DUE_COLUMNS, row, strict=True)) for row in rows]
 
     def confirmations_due(self) -> list[dict[str, Any]]:
-        """Switches turned on within `WINDOW` whose confirmation is unsent,
-        for accounts with Discord connected."""
+        """Confirmations asked for within `WINDOW` and unsent, for accounts
+        with Discord connected."""
         with self.database.pool.connection() as connection:
             rows = connection.execute(
                 """
                 SELECT alert.account_id, identity.provider_subject, alert.player_id,
-                       player.normalized_tag, profile.name, alert.enabled_at
+                       player.normalized_tag, profile.name, alert.confirm_requested_at
                 FROM discord_attack_alerts AS alert
                 JOIN verified_player_links AS link
                     ON link.player_id = alert.player_id AND link.account_id = alert.account_id
@@ -110,51 +172,57 @@ class AlertStore:
                 JOIN players AS player ON player.id = alert.player_id
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
-                WHERE alert.enabled_at >= clock_timestamp() - %s
+                WHERE alert.confirm_requested_at >= clock_timestamp() - %s
                   AND NOT EXISTS (
                       SELECT 1 FROM discord_attack_alert_deliveries AS sent
                       WHERE sent.account_id = alert.account_id
                         AND sent.player_id = alert.player_id
-                        AND sent.confirms = alert.enabled_at
+                        AND sent.confirms = alert.confirm_requested_at
                   )
-                ORDER BY alert.enabled_at
+                ORDER BY alert.confirm_requested_at
                 """,
                 (WINDOW,),
             ).fetchall()
         return [dict(zip(_CONFIRM_COLUMNS, row, strict=True)) for row in rows]
 
     def hit_rate(self, tag: str, now: datetime) -> str:
-        """The player's hit rate this Season, read as /stats reads it."""
+        """The player's hit rate this Season, read as /stats reads it, or
+        "not tracked yet" when Clash Lens has published none of their days."""
         page = self.store.player_page(tag, now)
         days = (
             None
             if page is None or "screen_ready" not in page
             else replies.season_days(page)
         )
-        return "Unavailable" if days is None else replies.hit_rate(days)
+        return "not tracked yet" if days is None or not any(days) else replies.hit_rate(days)
 
-    def claim(
-        self,
-        account_id: int,
-        player_id: int,
-        *,
-        battle_id: int | None = None,
-        confirms: datetime | None = None,
-    ) -> int | None:
-        """Log a DM, for a battle or confirming a switch, as being sent;
-        returns its log id, or None when it was logged already."""
+    def claim(self, delivery: Delivery) -> int | None:
+        """Log a DM as being sent while it is still due; returns its log id,
+        or None when it is not due or was logged already."""
         with self.database.pool.connection() as connection:
             row = connection.execute(
                 """
                 INSERT INTO discord_attack_alert_deliveries
                     (account_id, player_id, battle_id, confirms, state)
-                VALUES (%s, %s, %s, %s, 'sending')
+                SELECT alert.account_id, alert.player_id, %(battle_id)s::bigint,
+                       CASE WHEN %(battle_id)s::bigint IS NULL THEN %(since)s END,
+                       'sending'
+                """
+                + _STILL_DUE
+                + """
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
-                (account_id, player_id, battle_id, confirms),
+                delivery.params(),
             ).fetchone()
         return None if row is None else int(row[0])
+
+    def still_due(self, delivery: Delivery) -> bool:
+        with self.database.pool.connection() as connection:
+            row = connection.execute(
+                "SELECT EXISTS (SELECT 1" + _STILL_DUE + ")", delivery.params()
+            ).fetchone()
+        return bool(row and row[0])
 
     def finish(self, delivery_id: int, state: str, reason: str | None) -> None:
         with self.database.pool.connection() as connection:
@@ -191,6 +259,8 @@ class AlertLoop:
         # Which Season the attacker's hit rate covers.
         self.now = now
         self._pruned_at: float | None = None
+        # Claimed DMs Discord could not take yet, waiting for their next try.
+        self._waiting: list[Delivery] = []
 
     async def run(self) -> None:
         """Look for new battles until cancelled; a failed round is logged and
@@ -203,51 +273,81 @@ class AlertLoop:
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def tick(self) -> int:
-        """Send every confirmation, then every alert, due now, one at a time;
-        returns how many were sent."""
+        """Try again each waiting DM whose time has come, then send every
+        confirmation, then every alert, due now, one at a time; returns how
+        many were sent."""
         now = self.now()
         clock = asyncio.get_running_loop().time()
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
             await asyncio.to_thread(self.alerts.prune)
             self._pruned_at = clock
         sent = 0
+        waiting, self._waiting = self._waiting, []
+        for delivery in waiting:
+            if delivery.retry_at > clock:
+                self._waiting.append(delivery)
+            elif await asyncio.to_thread(self.alerts.still_due, delivery):
+                sent += await self._send(delivery)
+            else:
+                await self._finish(delivery, "failed", None)
         for switch in await asyncio.to_thread(self.alerts.confirmations_due):
-            delivery = await asyncio.to_thread(
-                self.alerts.claim,
-                switch["account_id"],
-                switch["player_id"],
-                confirms=switch["enabled_at"],
+            sent += await self._claim(
+                Delivery(
+                    switch["account_id"],
+                    switch["player_id"],
+                    switch["discord_user_id"],
+                    None,
+                    switch["confirm_requested_at"],
+                    replies.alerts_on(self.site, switch),
+                )
             )
-            if delivery is not None:
-                reply = replies.alerts_on(self.site, switch)
-                sent += await self._send(delivery, switch["discord_user_id"], reply)
         for alert in await asyncio.to_thread(self.alerts.due):
             rate = await asyncio.to_thread(
                 self.alerts.hit_rate, alert["attacker_tag"], now
             )
-            reply = replies.attack_alert(self.site, alert, rate)
-            delivery = await asyncio.to_thread(
-                self.alerts.claim,
-                alert["account_id"],
-                alert["defender_player_id"],
-                battle_id=alert["battle_id"],
+            sent += await self._claim(
+                Delivery(
+                    alert["account_id"],
+                    alert["defender_player_id"],
+                    alert["discord_user_id"],
+                    alert["battle_id"],
+                    alert["saved_at"],
+                    replies.attack_alert(self.site, alert, rate),
+                )
             )
-            if delivery is not None:
-                sent += await self._send(delivery, alert["discord_user_id"], reply)
         return sent
 
-    async def _send(self, delivery: int, discord_user_id: str, reply: Reply) -> int:
-        """Send one logged DM and log how it went; 1 when it was delivered."""
+    async def _claim(self, delivery: Delivery) -> int:
+        claimed = await asyncio.to_thread(self.alerts.claim, delivery)
+        if claimed is None:
+            return 0
+        delivery.id = claimed
+        return await self._send(delivery)
+
+    async def _send(self, delivery: Delivery) -> int:
+        """Try one logged DM, and log how it went or wait to try again; 1
+        when it was delivered."""
         state, reason = "sent", None
         try:
-            await self.messenger.send_dm(discord_user_id, reply)
+            await self.messenger.send_dm(
+                delivery.discord_user_id, delivery.reply, delivery.id
+            )
         except Refused as refusal:
             state, reason = "refused", refusal.reason
-        except Unreachable:
-            state = "failed"
+        except Unreachable as outage:
+            delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
+            delivery.retry_at = asyncio.get_running_loop().time() + max(
+                delivery.wait, outage.retry_after
+            )
+            self._waiting.append(delivery)
+            log.info("attack alert delivery=%s waiting to try again", delivery.id)
+            return 0
         except Exception:
-            log.exception("attack alert delivery %s failed", delivery)
+            log.exception("attack alert delivery %s failed", delivery.id)
             state = "failed"
-        await asyncio.to_thread(self.alerts.finish, delivery, state, reason)
-        log.info("attack alert delivery=%s outcome=%s", delivery, reason or state)
+        await self._finish(delivery, state, reason)
         return int(state == "sent")
+
+    async def _finish(self, delivery: Delivery, state: str, reason: str | None) -> None:
+        await asyncio.to_thread(self.alerts.finish, delivery.id, state, reason)
+        log.info("attack alert delivery=%s outcome=%s", delivery.id, reason or state)

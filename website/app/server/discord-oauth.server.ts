@@ -1,9 +1,10 @@
 /**
  * Server-only Discord OAuth2 service (Authorization Code + PKCE S256).
  *
- * Discord login asks for `identify` plus `applications.commands` as a user
- * install, so the same consent adds the Clash Lens bot to the user's own
- * Discord, which lets its alert DMs through. The access token is used once
+ * Discord login and linking ask for `identify` plus `applications.commands`
+ * as a user install, so the same consent adds the Clash Lens bot to the
+ * user's own Discord, which lets its alert DMs through; unlinking asks for
+ * `identify` only. The access token is used once
  * in memory to read `/users/@me` and is then dropped: it is never persisted,
  * logged, or placed in a cookie. Only the immutable numeric Discord user ID
  * survives validation. Errors are safe, typed OAuthCallbackError values that
@@ -17,7 +18,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import type { WebsiteConfig } from "./config.server";
-import { OAuthCallbackError } from "./google-oidc.server";
+import { OAuthCallbackError, type OAuthIntent } from "./google-oidc.server";
 import { isProviderSubject } from "./google-oidc.server";
 
 export const DISCORD_CALLBACK_PATH = "/auth/discord/callback";
@@ -45,7 +46,11 @@ export interface DiscordServiceDeps {
 }
 
 export interface DiscordOidcService {
-  authorizationUrl(transaction: { state: string; codeChallenge: string }): URL;
+  authorizationUrl(transaction: {
+    state: string;
+    codeChallenge: string;
+    intent: OAuthIntent;
+  }): URL;
   validateCallback(
     callbackParams: Record<string, string>,
     transaction: { state: string; codeVerifier: string },
@@ -93,8 +98,12 @@ export async function createDiscordOAuthService(
       url.searchParams.set("client_id", clientId);
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("response_type", "code");
-      url.searchParams.set("scope", "identify applications.commands");
-      url.searchParams.set("integration_type", "1");
+      if (transaction.intent === "unlink") {
+        url.searchParams.set("scope", "identify");
+      } else {
+        url.searchParams.set("scope", "identify applications.commands");
+        url.searchParams.set("integration_type", "1");
+      }
       url.searchParams.set("state", transaction.state);
       url.searchParams.set("code_challenge", transaction.codeChallenge);
       url.searchParams.set("code_challenge_method", "S256");
