@@ -3,8 +3,8 @@
  * Nothing loads, and nothing is sent, unless the server hands over a project
  * token and the visitor has accepted in this browser. Accepting loads PostHog
  * with a random ID kept in this browser, so a returning browser can be
- * recognised. Declining, then or later, loads nothing and deletes that ID;
- * the choice is remembered here.
+ * recognised. Declining loads nothing; declining later stops all sending and
+ * deletes that ID. The choice is remembered here.
  *
  * Only the events and labels below ever leave the browser: page addresses
  * lose player tags, usernames, group and crew IDs, query strings and titles,

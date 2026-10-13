@@ -493,9 +493,9 @@ send events) is set in `app.env`. Counts go only to PostHog's EU cloud,
 the token to the website in production only, so turning counting on or off
 takes `./ops up`; the website hands it to the browser and sends nothing to
 PostHog itself, and the private API never receives it. Never put a personal
-API key (`phx_`) here. Even then, PostHog runs only in a visitor's browser and
-only after they accept the analytics question shown at the bottom of the page;
-declining loads nothing and sends nothing. The `/privacy` page explains the
+API key (`phx_`) here. With the token set, PostHog still runs only in a
+visitor's browser and only after they accept the analytics question shown at
+the bottom of the page; declining loads nothing and sends nothing. The `/privacy` page explains the
 counting, and both it and the site footer's Analytics choices button reopen
 the question.
 
