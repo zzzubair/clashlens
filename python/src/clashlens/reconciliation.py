@@ -455,9 +455,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
-        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
-            verdict = None
         zero_defense_loss = _zero_defense_loss(data, defense_count)
+        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
+            if data.boundary_kind == "weekly" and zero_defense_loss and verdict.outcome == "verified" and verdict.loss == zero_defense_loss:
+                automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
+                net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
+            verdict = None
         if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
             verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
             and final_trophies - zero_defense_loss <= 5000):
@@ -792,13 +795,10 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     previous = data.previous_day
     start, loss, correction = data.start_trophies, 0, 0
     if not (
-        data.start_trophies is None
+        data.start_trophies is None or previous is None or not previous.complete
         or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
-        or previous is None
-        or not previous.complete
         or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
-        or previous.end_baseline_id is None
-        or previous.end_baseline_id != data.start_baseline_id
+        or previous.end_baseline_id is None or previous.end_baseline_id != data.start_baseline_id
     ):
         loss, correction = previous.unsettled_automatic_loss, previous.reset_reading_correction
         start = data.start_trophies - loss + correction

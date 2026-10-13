@@ -360,8 +360,12 @@ def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
     now proves its board total; a Sunday ending at 4,980 read at 5,020 with
     a Monday attack for 40 was saved Inconsistent. On 12 October 2026
     every Reset reading came before the raise. A player with no Reset
-    reading there is not chosen. Each chosen player's later days are
-    recalculated with them."""
+    reading there is not chosen. The choice is deliberately a safe
+    superset, missing no affected player: a Monday defense loss before the
+    reading, or an attack reported before it whose gain it does not show
+    yet, can also put an unaffected player's reading under 5,000, and
+    recalculating them saves nothing new. Each chosen player's later days
+    are recalculated with them."""
     return [
         int(row[0]) for row in connection.execute(
             """

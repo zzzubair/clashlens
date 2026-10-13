@@ -205,18 +205,19 @@ def domain_database(
 
 
 def repair_season(
-    connection_info: str, season: str, *, max_jobs: int = 100
+    connection_info: str, season: str, *, max_jobs: int = 100, scope: str | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The Season repair's preview, then its queue run past the evidence
-    repairs it does first: (preview, the first report queueing days)."""
+    repairs it does first: (preview, the first report queueing days), for
+    every player or the ``scope``'s."""
     from clashlens.db import Database
     from clashlens.domain_repair import season_repair
 
     database = Database(connection_info)
     try:
-        preview = season_repair(database, season, "preview", max_jobs=max_jobs)
+        preview = season_repair(database, season, "preview", max_jobs=max_jobs, scope=scope)
         for _ in range(10):
-            queued = season_repair(database, season, "queue", max_jobs=max_jobs)
+            queued = season_repair(database, season, "queue", max_jobs=max_jobs, scope=scope)
             if queued.get("phase") != "inputs":
                 return preview, queued
         raise AssertionError("the evidence repairs did not finish")

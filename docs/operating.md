@@ -815,7 +815,11 @@ reading proves, such as one ending at 5,100 before its 200 automatic loss
 and read at 4,900, and a Sunday ending at 4,980 whose reading of 5,020
 already showed a Monday attack for 40. On 12 October 2026 every Reset
 reading came before the raise. A player with no Reset reading at that
-Reset is not taken. Each one's job recalculates every saved day of the
+Reset is not taken. The choice is deliberately a safe superset, missing no
+affected player: a Monday defense loss before the reading, or an attack
+reported before it whose gain it does not show yet, can also put an
+unaffected player's reading under 5,000, and recalculating them saves
+nothing new. Each one's job recalculates every saved day of the
 Season, so their later days start where the repaired days now end:
 
 ```sh

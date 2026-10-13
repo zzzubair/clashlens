@@ -128,3 +128,32 @@ def test_only_a_weekly_reset_reading_before_the_raise_proves_the_end(
         "read_at": (DAY.end + timedelta(minutes=4)).isoformat(), "trophies": 4800,
         "outcome": "verified", "exact": False, "new_day_change": 0, "clean": True,
     } if proven else None)
+
+
+@pytest.mark.parametrize(("reset_reading", "later", "charged"), [
+    (4660, (), True), (4900, (4660,), True), (5000, (), False)])
+def test_a_reading_before_the_raise_shows_a_quiet_sunday_charged(
+    reset_reading: int, later: tuple[int, ...], charged: bool,
+) -> None:
+    # Saturday's 8 defenses lost 240, so Sunday, at 4,900 with no battle,
+    # can be charged 240 for its 8 empty defense slots. The Reset reading at
+    # 05:04, or one at 05:10 after a Reset reading taken before the charge,
+    # shows 4,660 before the raise: the charge landed. A reading at 5,000
+    # shows only the raise, which fits a charge or none alike.
+    result = reconcile_ranked_day(_input(
+        start_trophies=4900,
+        next_start_trophies=reset_reading,
+        boundary_kind="weekly",
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        contributions=(),
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
+        readings=(*(Reading(DAY.end + timedelta(minutes=10), trophies) for trophies in later),
+                  Reading(DAY.end + timedelta(minutes=20), 5000)),
+    ))
+
+    assert result.state == "Complete"
+    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (
+        (4660, 240) if charged else (4900, None))
+    assert result.automatic_defense_evidence_state == ("calculated" if charged else "not_applicable")
+    assert (result.next_start_trophies, result.expected_next_start_trophies) == (5000, 5000)
+    assert result.boundary_adjustment == 5000 - result.final_trophies_before_reset
