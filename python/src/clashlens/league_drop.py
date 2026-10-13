@@ -15,9 +15,10 @@ change. Real demotions are proven by their next saved answer: at latest the
 next Reset reading, which is always saved, and that Reset's Daily board
 leaves out the day they left by (``boundary_manifest``). Tracking
 (``judge``), the day results' weekly drop
-(``reconciliation_db._dropped_from_legend_i``) and a Reset reading's league
-(``reset_baselines._load_reset_baseline``) all follow this; a saved battle
-log re-checks them (``recheck_battle_players``).
+(``reconciliation_db._dropped_from_legend_i``), a Reset reading's league
+(``reset_baselines._load_reset_baseline``) and a day with no Reset reading
+(``in_legend_i``) all follow this; a saved battle log re-checks them
+(``recheck_battle_players``).
 """
 
 from __future__ import annotations
@@ -217,9 +218,29 @@ def dropped_between(
     )
 
 
-def judge(connection: Any, player_id: int) -> None:
+def in_legend_i(connection: Any, player_id: int, at: datetime) -> bool:
+    """Whether the player's answers read before ``at`` leave them a Legend I
+    player, as ``judge`` tracks them: the newest is Legend I, or is a
+    lower-league answer that proves nothing, judged with the answers next to
+    it, after a Legend I one."""
+    answers = readings(connection, player_id, until=at, newest_first=True,
+                       limit=_NEWEST)[::-1]
+    if not answers or answers[-1].eligible:
+        return bool(answers)
+    return any(answer.eligible for answer in answers) and not left_legend_i(
+        connection, player_id,
+        answers + readings(connection, player_id, since=at, limit=_NEIGHBOURS),
+        len(answers) - 1,
+    )
+
+
+def judge(
+    connection: Any, player_id: int, *, observed_at: datetime | None = None
+) -> None:
     """Track or stop tracking the player by their newest answers, whatever
-    order those were saved or processed in. The caller holds the player's row.
+    order those were saved or processed in; ``observed_at`` is when the
+    battle log that prompts this was read, if one does. The caller holds the
+    player's row.
 
     The newest answer decides, unless the current profile was confirmed by a
     later unchanged check. A lower-league answer that proves nothing yet
@@ -297,14 +318,17 @@ def judge(connection: Any, player_id: int) -> None:
         # later saved day of their Season, once for each newest answer that
         # tracks them again. The last answer's day too, saved or not: a
         # player untracked at its Reset gets no Reset reading to save it;
-        # and when none of them proves the player left, every day between.
+        # and when none of them proves the player left, every day between,
+        # through the day tracking them again, which they never left.
         day = domain.ranked_day_for(stretch[0].read_at).start - timedelta(days=1)
         day_text = day.strftime("%Y-%m-%dT%H:%M:%SZ")
+        every_day = not any(left_legend_i(connection, player_id, answers, index)
+                            for index in range(start, end))
+        last = max(newest.read_at, observed_at or newest.read_at) if every_day \
+            else stretch[-1].read_at
         first_battle_log._queue(
             connection, player_id, day, None,
-            last_day=domain.ranked_day_for(stretch[-1].read_at).start,
-            every_day=not any(left_legend_i(connection, player_id, answers, index)
-                              for index in range(start, end)),
+            last_day=domain.ranked_day_for(last).start, every_day=every_day,
             key=(f"reconcile:league-return:{player_id}:{day_text}:"
                  f"{newest.read_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
                  f"{RECONCILIATION_RULE_VERSION}"),
@@ -333,7 +357,7 @@ def recheck_battle_players(
         """,
         (players,),
     ).fetchall():
-        judge(connection, int(player_id))
+        judge(connection, int(player_id), observed_at=observed_at)
     for player_id, day_start, version_id in connection.execute(
         """
         SELECT day.player_id, day.ranked_day_start, day.id
