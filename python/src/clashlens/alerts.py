@@ -169,16 +169,6 @@ UNTRACKED_BATTLER_LIMIT = 10
 # battles (11 Oct 2026) for conditions at least an hour old, so they run once
 # a quarter hour (:00, :15, :30, :45 UTC) and other checks reuse that reading.
 SLOW_PROBE_INTERVAL = 900
-# Time limits in seconds, so a run ends inside the alert service's 240 even
-# when every call runs out: collector metrics 5 + 9 health checks x (3
-# container reads x 2 + up to 2 Discord messages x 2) + database volume read
-# 2 + restart history 5 + backup 25 + 4 probes x 10 + 2 slow probes x 20 +
-# website page 10 = 217, leaving 23 for the final Discord messages; any not
-# sent by then go out on the next run.
-READ_TIMEOUT = 2
-DISCORD_TIMEOUT = 2
-PROBE_TIMEOUT = 10
-SLOW_PROBE_TIMEOUT = 20
 # The early warning. Podman kills a container after six failed health checks
 # in a row, about three minutes, so two failures leave time to act. Overdue
 # work normally reaches 35 minutes after a Reset (6 Oct 2026), hence the
@@ -214,7 +204,7 @@ class CheckError(Exception):
     """A fixed, secret-free diagnostic safe for the journal."""
 
 
-def command(args: list[str], timeout: int = READ_TIMEOUT) -> subprocess.CompletedProcess:
+def command(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
     with subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
@@ -238,7 +228,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request(
-    url: str, *, payload: dict | None = None, headers: dict | None = None, timeout: int = 10
+    url: str, *, payload: dict | None = None, headers: dict | None = None
 ) -> bytes:
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers=headers or {})
@@ -249,10 +239,16 @@ def request(
         req.add_header("Content-Type", "application/json")
     # Do not send a secret URL or signed request through ambient proxies/redirects.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    with opener.open(req, timeout=timeout) as response:
-        if not 200 <= response.status < 300:
-            raise CheckError("HTTP check failed")
-        return response.read(1024 * 1024)
+    # Each connect and read has its own 10 seconds, not the whole request, and a
+    # run has no overall limit but the alert service's. Any broken answer is a
+    # CheckError, so a failing check never stops the others.
+    try:
+        with opener.open(req, timeout=10) as response:
+            if not 200 <= response.status < 300:
+                raise CheckError("HTTP check failed")
+            return response.read(1024 * 1024)
+    except http.client.HTTPException:
+        raise CheckError("HTTP check failed") from None
 
 
 def private_read_probe(origin: str = "http://127.0.0.1:8000") -> None:
@@ -666,7 +662,6 @@ def deliver(
                 request(
                     webhook,
                     payload={"content": content, "allowed_mentions": {"parse": []}},
-                    timeout=DISCORD_TIMEOUT,
                 )
             except (OSError, ValueError, CheckError):
                 print(
@@ -693,7 +688,7 @@ def observe(
     metrics_read = False
     try:
         body = request(
-            f"http://127.0.0.1:{int(config['health_port'])}/metrics", timeout=5
+            f"http://127.0.0.1:{int(config['health_port'])}/metrics"
         ).decode()
         for line in body.splitlines():
             parts = line.split()
@@ -714,7 +709,7 @@ def observe(
         elif "clashlens_collector_active_players" not in metrics:
             raise ValueError
         metrics_read = "clashlens_collector_pending_processing" in metrics
-    except (OSError, ValueError, CheckError, http.client.HTTPException):
+    except (OSError, ValueError, CheckError):
         errors.append(
             "Collector metrics unavailable; fetch-gap clock continues and spool usage is unknown"
         )
@@ -835,8 +830,7 @@ def observe(
                 "--output=json",
                 "--output-fields=USER_UNIT",
                 f"MESSAGE_ID={RESTART_MESSAGE}",
-            ],
-            5,
+            ]
         )
         if result.returncode:
             raise ValueError
@@ -882,17 +876,15 @@ def observe(
         "--probe",
     ]
     try:
-        findings["reads"] = command(probe, PROBE_TIMEOUT).returncode != 0
+        findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
     check_health()
 
-    def run_probe(
-        service: str, arguments: list[str], count: int, unavailable: str, timeout=PROBE_TIMEOUT
-    ):
+    def run_probe(service: str, arguments: list[str], count: int, unavailable: str):
         try:
             container = f"clashlens-python-{service}"
-            result = command([podman, "exec", container, *probe[3:-1], *arguments], timeout)
+            result = command([podman, "exec", container, *probe[3:-1], *arguments], 25)
             values = [int(value) for value in result.stdout.split()]
             # A newer probe may print more values than this check reads.
             if result.returncode or len(values) < count:
@@ -950,7 +942,7 @@ def observe(
         last = state.setdefault("slow_probes", {}).get(argument)
         if last and last["at"] // SLOW_PROBE_INTERVAL == now // SLOW_PROBE_INTERVAL:
             return last["values"]
-        values = run_probe("worker", [argument], 1, unavailable, SLOW_PROBE_TIMEOUT)
+        values = run_probe("worker", [argument], 1, unavailable)
         if values is not None:
             state["slow_probes"][argument] = {"at": now, "values": values}
         return values
@@ -1154,7 +1146,7 @@ def observe_site(
     try:
         for url in config["urls"]:
             request(url)
-    except (OSError, ValueError, CheckError, http.client.HTTPException):
+    except (OSError, ValueError, CheckError):
         since = state.setdefault("site_failing_since", now)
         return {"site": True if now - since >= 120 else None}, [
             "Website or health check did not answer"

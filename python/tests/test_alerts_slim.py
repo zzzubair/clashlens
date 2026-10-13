@@ -528,32 +528,23 @@ def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
 
 
 
-def metrics_cut_off(_rt, monkeypatch):
-    inner = alerts.request
 
-    def request(url, **kwargs):
-        if url.endswith("/metrics"):
-            raise http.client.IncompleteRead(b"")
-        return inner(url, **kwargs)
-
-    monkeypatch.setattr(alerts, "request", request)
-
-
-@pytest.mark.parametrize(
-    "fail",
-    [
-        break_command(error=subprocess.TimeoutExpired("podman", 10), match="--leaderboard"),
-        metrics_cut_off,
-    ],
-)
-def test_a_check_that_times_out_or_raises_leaves_the_rest_running(
-    runtime, monkeypatch, fail
-):
-    # Every check is caught and time-limited, so the later checks still run
-    # and the final delivery still sends what they found.
+@pytest.mark.parametrize("path", ["/discord", "/leaderboards/tracked", "/metrics"])
+def test_an_interrupted_answer_leaves_the_rest_running(runtime, monkeypatch, path):
+    # An answer cut off partway through, from Discord, the website page or the
+    # collector, fails only its own part; the later checks and deliveries go on.
     rt = runtime
     rt.battle_day = "1"
-    fail(rt, monkeypatch)
+    rt.health_streaks["clashlens-python-worker"] = 2
+    read = http.client.HTTPResponse.read
+
+    def cut_off(self, amt=None):
+        if path in self.url:
+            raise http.client.IncompleteRead(b"")
+        return read(self, amt)
+
+    monkeypatch.setattr(http.client.HTTPResponse, "read", cut_off)
     assert rt.run() == 1
     assert any("--battle-day" in call for call in rt.calls)
-    assert [p for p in rt.posts if "no-attack window" in p["content"]]
+    for text in ("failed its last 2 health checks", "no-attack window"):
+        assert [a for a in rt.attempts if text in a["content"]]

@@ -318,17 +318,12 @@ publication check has two: the website page and the private API) first failed, a
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
-Each part of the check has its own time limit, and one that fails or runs
-out leaves only its own reading unknown, so the rest still run. Even if every
-part runs out, a run takes at most 217 seconds: collector metrics 5, nine
-health checks of three container reads at 2 seconds each and up to two
-Discord messages at 2 seconds each (90 in all), the database volume read 2,
-restart history 5, backup 25, four container probes at 10, the two slow
-probes at 20 and the website page 10. That leaves 23 of the alert service's
-240 seconds (four minutes) for the final Discord messages, 11 at 2 seconds
-each; any not sent by then go out on the next run. Until 13 Oct 2026 the
-limits added up to 810 seconds, so a slow run could be stopped before
-sending anything.
+Each command and each network connect or read has its own time limit, and a
+part of the check that fails, runs out or gets a broken answer leaves only its
+own reading unknown, so the rest still run and the final delivery still
+happens. There is no limit on the whole run: one stopped at the alert
+service's four-minute limit sends nothing more, and its warnings go out on the
+next run about a minute later.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.
