@@ -85,7 +85,8 @@ export interface PlayerLoaderData {
   lookupError: WebsiteErrorResponse | null;
   // Streams in after the page; null when the history response is unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
-  crews?: Promise<PlayerCrew[] | null>;
+  // Null when the crews response is unavailable.
+  crews?: PlayerCrew[] | null;
   // The site's public address, for absolute links in link previews.
   origin?: string;
 }
@@ -235,7 +236,7 @@ export async function loader({
     lookup,
     lookupError,
     pastSeasons,
-    crews,
+    crews: await crews,
     origin: await origin,
   };
 }
@@ -604,7 +605,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </div>
           </header>
         ) : (
-          <h1>{data.requestedTag}</h1>
+          <>
+            <h1>{data.requestedTag}</h1>
+            <PlayerCrews crews={data.crews} name={data.requestedTag} />
+          </>
         )}
         <PlayerActions tag={data.requestedTag} />
         {lookup ? (

@@ -47,8 +47,8 @@ import {
   type GoogleAccountIdentity,
 } from "./python.server";
 
-// Under the player page's five-second streaming limit; a timeout hides only the list.
-const PLAYER_CREWS_TIMEOUT_MS = 4_000;
+// The player page waits for this list; a timeout hides only the list.
+const PLAYER_CREWS_TIMEOUT_MS = 1_000;
 
 /** The signed-in account's crews. */
 export async function listCrews(identity: GoogleAccountIdentity): Promise<CrewList> {

@@ -10,11 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  getPlayerLookup: vi.fn(),
   requestJson: vi.fn(),
 }));
 
 vi.mock("../../app/services/player-lookup.server", () => ({
-  getPlayerLookup: vi.fn().mockResolvedValue({ tag: "#2PP", state: "tracking" }),
+  getPlayerLookup: mocks.getPlayerLookup,
   startPlayerLookup: vi.fn(),
 }));
 
@@ -69,6 +70,7 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
+// Only the first HTML sent, which is all a browser without JavaScript shows.
 async function renderPlayer(): Promise<string> {
   const data = await playerLoader({
     request: new Request("https://clashlens.example/players/%232PP"),
@@ -87,9 +89,16 @@ async function renderPlayer(): Promise<string> {
     let html = "";
     sink.on("data", (chunk) => (html += chunk));
     sink.on("end", () => resolve(html.replaceAll("<!-- -->", "")));
-    const { pipe } = renderToPipeableStream(
+    const { pipe, abort } = renderToPipeableStream(
       createElement(StaticRouterProvider, { router, context }),
-      { onAllReady: () => pipe(sink), onShellError: reject },
+      {
+        onShellReady: () => {
+          pipe(sink);
+          abort();
+        },
+        onShellError: reject,
+        onError: () => {},
+      },
     );
   });
 }
@@ -101,6 +110,7 @@ describe("crews on the player page", () => {
       getPlayer: vi.fn().mockResolvedValue(PLAYER),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
     });
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
     mocks.requestJson.mockReset();
   });
 
@@ -127,25 +137,45 @@ describe("crews on the player page", () => {
     );
   });
 
+  it("links them on a page that only knows the tag", async () => {
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "profile_rejected",
+    });
+    mocks.requestJson.mockResolvedValue({
+      kind: "player-crews",
+      tag: TAG,
+      crews: [{ crew_id: CREW_ID, name: "Red Dawn" }],
+    });
+    const html = await renderPlayer();
+    expect(html).toContain(`<h1>${TAG}</h1>`);
+    expect(html).toMatch(
+      new RegExp(
+        `Crew: <span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>`,
+      ),
+    );
+  });
+
   it("shows nothing for a player in no crew, or when the list is unavailable", async () => {
     mocks.requestJson.mockResolvedValueOnce({
       kind: "player-crews",
       tag: TAG,
       crews: [],
     });
-    expect(await renderPlayer()).not.toContain("player-crews");
+    expect(await renderPlayer()).not.toContain('class="player-crews"');
     mocks.requestJson.mockRejectedValueOnce(
       new PythonApiError(503, { error: "timeout" }),
     );
     const html = await renderPlayer();
     expect(html).toContain("Nova");
-    expect(html).not.toContain("player-crews");
+    expect(html).not.toContain('class="player-crews"');
   });
 
   it("asks for nothing while crews are switched off", async () => {
     vi.stubEnv("CLASHLENS_CREWS_ENABLED", "");
     const html = await renderPlayer();
     expect(mocks.requestJson).not.toHaveBeenCalled();
-    expect(html).not.toContain("player-crews");
+    expect(html).not.toContain('class="player-crews"');
   });
 });
