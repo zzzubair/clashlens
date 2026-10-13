@@ -53,12 +53,13 @@ The API keeps each fingerprint for 31 days, one day past the cookie's own
 lifetime. Removing a sign-in connection records when it was removed, also for
 31 days, and the check then refuses every login signed in through that
 connection at or before that millisecond, however recently its cookie was
-renewed, on every browser. A login cookie records when it was issued to the millisecond, taken
-after the provider confirms the sign-in, so a fresh login is accepted even in
-the same second as the removal; cookies from before that field count from the
-start of their second. The backend sends the login's sign-in time, the first
-cookie's issue time, with each check for this, so the website and the API must be deployed together. The browser talks only
-to that backend, apart from optional anonymous visitor counts sent to PostHog
+renewed, on every browser. A login cookie records when it was issued to the
+millisecond, taken after the provider confirms the sign-in, so a fresh login is
+accepted even in the same second as the removal; cookies from before that field
+count from the start of their second. The backend sends the login's sign-in
+time, the first cookie's issue time, with each check for this, so the website
+and the API must be deployed together. The browser talks only to that backend,
+apart from optional anonymous visitor counts sent to PostHog
 ([deployment](deployment.md#production-configuration)). Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.

@@ -45,7 +45,7 @@ def login_session_revoked(
     database, session_hash: str, provider: str, provider_subject: str, issued_at_ms: int
 ) -> bool:
     """True when this exact login logged out, or when its provider identity
-    was removed at or after the millisecond the login cookie was issued."""
+    was removed at or after the millisecond the login signed in."""
     with database.pool.connection() as connection:
         row = connection.execute(
             """

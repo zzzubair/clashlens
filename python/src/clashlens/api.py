@@ -128,13 +128,15 @@ class ProviderLinkBody(StrictBody):
 
 
 class LoginSessionBody(StrictBody):
-    # SHA-256 of one signed login cookie value, unpadded base64url.
+    # SHA-256 of the signed login cookie that started the login, which renewed
+    # cookies carry, unpadded base64url.
     session: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class LoginSessionCheckBody(LoginSessionBody):
-    # When the login cookie was issued, in Unix milliseconds, so a login made
-    # before its sign-in connection was removed is refused on every browser.
+    # When the login signed in, its first cookie's issue time, in Unix
+    # milliseconds, so a login made before its sign-in connection was removed
+    # is refused on every browser, however recently its cookie was renewed.
     issued_at_ms: int = Field(ge=0, le=253_402_300_799_999)
 
 
