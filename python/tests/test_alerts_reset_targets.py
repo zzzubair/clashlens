@@ -125,16 +125,16 @@ def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
     assert "recovered at 2026-10-08T06:26:00+00:00" in posts(rt, "not readable")[-1]
 
 
-def test_a_late_board_alert_goes_out_before_the_slow_checks(rt, monkeypatch) -> None:
-    # Until 13 Oct 2026 the 05:30 alert waited for the untracked battler
-    # check, so a crash there, or a run stopped at four minutes, lost it.
+def test_a_late_board_alert_goes_out_before_any_later_check(rt, monkeypatch) -> None:
+    # Until 13 Oct 2026 the 05:30 alert waited for later health and slow
+    # checks, so a crash there, or a run stopped at four minutes, lost it.
     reset = at(rt, 5, 30)
     rt.served = reset - 86400
     rt.reset = f"{reset} 13251 13251 {reset + 1500} 0"
     fake = alerts.command
 
     def command(args, timeout=15):
-        if "--completeness" in args:
+        if any("--reset" in call for call in rt.calls):
             raise RuntimeError("stopped")
         return fake(args, timeout)
 

@@ -768,18 +768,15 @@ def observe(
 
     sent = {"health"}
 
-    def send_found() -> None:
-        # Every other warning found by now goes once, so a slow or failing
+    def check_health() -> None:
+        # Sent before and between the slow checks below: Podman kills about
+        # three minutes in, and each slow check may take 25 seconds. Every
+        # other warning found by now goes first, once, so a slow or failing
         # later check never holds it back; recoveries wait for the end.
         found = {name for name, active in findings.items() if active is True} - sent
         sent.update(found)
         if found:
             send(dict.fromkeys(found, True))
-
-    def check_health() -> None:
-        # Sent before and between the slow checks below: Podman kills about
-        # three minutes in, and each slow check may take 25 seconds.
-        send_found()
         findings["health"] = health_warning(podman, state)
         send({"health": findings["health"]})
 
@@ -897,7 +894,6 @@ def observe(
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
             values = None
-        check_health()
         return values
 
     board = run_probe("api", ["--leaderboard"], 3, "Live Leaderboard freshness")
@@ -919,6 +915,7 @@ def observe(
     else:
         state.pop("leaderboard_stale_since", None)
         findings["leaderboard"] = False
+    check_health()
     # The board counts as readable only once the website's public Daily
     # leaderboard page shows it at the address visitors use.
     try:
@@ -941,7 +938,7 @@ def observe(
         findings["publication"] = publication[0] > 0 or late
     elif late:
         findings["publication"] = True
-    send_found()
+    check_health()
 
     def slow_probe(argument: str, unavailable: str):
         # A failed reading is not kept, so the next check retries it.
@@ -956,9 +953,11 @@ def observe(
     completeness = slow_probe("--completeness", "Untracked Legend I battler count")
     if completeness is not None:
         findings["completeness"] = completeness[0] > UNTRACKED_BATTLER_LIMIT
+    check_health()
     battle_day = slow_probe("--battle-day", "Battle-day check")
     if battle_day is not None:
         findings["battle_day"] = battle_day[0] > 0
+    check_health()
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})
