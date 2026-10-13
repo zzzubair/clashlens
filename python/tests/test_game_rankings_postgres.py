@@ -74,8 +74,8 @@ FRANCE = _list([
     ("#2CC", 5000, 0, 5, LEGEND_I),  # never played this Season, not tracked
 ])
 UNITED_STATES = _list([
-    ("#2GG", 5300, 40, 1, LEGEND_I),
-    ("#2UU", 5100, 40, 2, LEGEND_I),
+    ("#2GG", 5300, 40, 2, LEGEND_I),
+    ("#2UU", 5100, 40, 1, LEGEND_I),  # the game ranks uncertain #2UU above: a break
     ("#2VV", 5000, 0, 3, LEGEND_I),  # stuck too, though back at 5,000 on the board
     ("#2JJ", 4900, 30, 4, LEGEND_II),
 ])
@@ -213,6 +213,49 @@ def _seed(info: str) -> None:
         )
 
 
+def _readings(info: str, readings: list[tuple[str, timedelta, int]]) -> None:
+    """Our saved profile readings: (tag, response completed after the Reset, trophies)."""
+    with psycopg.connect(info) as connection:
+        for index, (tag, after, trophies) in enumerate(readings):
+            connection.execute(
+                """
+                WITH observation AS (
+                    INSERT INTO collector_observations (
+                        occurrence_key, scope, player_id, normalized_tag, endpoint,
+                        request_started_at, response_completed_at, http_status,
+                        response_hash, collector_version, key_label, evidence_headers,
+                        request_method, request_path, request_query,
+                        paging_envelope_state, source_adapter_version
+                    )
+                    SELECT 'reading-' || %(index)s, 'player', id, normalized_tag, 'profile',
+                           %(at)s, %(at)s, 200, repeat('b', 64), 'test', 'normal-test',
+                           '{}'::jsonb, 'GET', '/v1/players/test', '', 'not_applicable',
+                           'supercell-profile-parser-v3'
+                    FROM players WHERE normalized_tag = %(tag)s
+                    RETURNING id, player_id, normalized_tag
+                ), version AS (
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag, endpoint_version,
+                        schema_version, parser_version, observed_at, source_http_status,
+                        name, trophies, league_tier_id, league_tier_name,
+                        eligibility_state, profile_json
+                    )
+                    SELECT player_id, id, normalized_tag, 'test', 'test', 'test', %(at)s, 200,
+                           'Player', %(trophies)s, 105000036, 'Legend I', 'eligible', '{}'
+                    FROM observation
+                    RETURNING id, observation_id
+                )
+                INSERT INTO player_profile_effects (
+                    profile_version_id, observation_id, effect_kind, observed_at,
+                    source_http_status, endpoint_version, schema_version, parser_version
+                )
+                SELECT id, observation_id, 'current_profile', %(at)s, 200, 'test', 'test', 'test'
+                FROM version
+                """,
+                {"index": index, "tag": tag, "at": RESET + after, "trophies": trophies},
+            )
+
+
 def _database(info: str) -> CollectorDatabase:
     options = conninfo_to_dict(info)["options"] + " -c role=clashlens_collector"
     return CollectorDatabase(make_conninfo(info, options=options))
@@ -276,6 +319,16 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     }
     with domain_database(database_url) as info, _game(answers) as origin:
         _seed(info)
+        # Our readings around the country pulls, sent at 05:07:02.
+        _readings(info, [
+            ("#2PP", timedelta(minutes=5), 5390),  # matches France's 5,390
+            ("#2QQ", timedelta(minutes=4), 5300),  # France says 5,310: a miss
+            ("#2QQ", timedelta(minutes=8), 5310),  # after the pull, so not compared
+            ("#2GG", timedelta(minutes=1), 5250),
+            ("#2GG", timedelta(minutes=6), 5300),  # the newest by the pull matches
+            ("#2UU", timedelta(minutes=3), 5100),  # matches
+            ("#2LL", timedelta(minutes=2), 5200),  # a stuck row, left out
+        ])
         # 05:00:40 early pull; 05:03 poll still shows yesterday's ranks.
         early, still_yesterday = _day(
             info, origin, tmp_path, [timedelta(seconds=40), timedelta(minutes=3)]
@@ -293,6 +346,17 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
 
         # First scored 28 days later, the last day its lists are kept.
         printed = _printed_score(info, capsys, timedelta(days=28, hours=2, minutes=1))
+        options = conninfo_to_dict(info)["options"] + " -c role=clashlens_collector"
+        with psycopg.connect(make_conninfo(info, options=options)) as connection:
+            # The newest reading at or before each time; none for an unknown
+            # tag or a time before any reading.
+            asked = [("#2QQ", 7), ("#2QQ", 9), ("#2GG", 0), ("#2ZZ", 9)]
+            readings = connection.execute(
+                "SELECT * FROM clashlens_game_ranking_readings(%s, %s)",
+                ([tag for tag, _ in asked],
+                 [RESET + timedelta(minutes=minute) for _, minute in asked]),
+            ).fetchall()
+        assert sorted(readings) == [("#2QQ", 5300), ("#2QQ", 5310)]
         with psycopg.connect(info) as connection:
             due = connection.execute(
                 "SELECT normalized_tag FROM players"
@@ -317,15 +381,18 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     assert printed["global_reset_at"] == (RESET + timedelta(minutes=7) + SENT_AFTER).isoformat()
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 2)
     # The stuck rows #2LL and #2VV are left out of every number.
-    # France: one pair, and it breaks. US: one pair.
-    assert (printed["country_pairs"], printed["country_order_breaks"]) == (2, 1)
-    assert printed["s1_country_order_breaks_per_100k"] == 50000.0
+    # France: one pair, and it breaks. US: one pair, and it breaks too.
+    assert (printed["country_pairs"], printed["country_order_breaks"]) == (2, 2)
+    assert printed["s1_country_order_breaks_per_100k"] == 100000.0
     assert (printed["global_ranked"], printed["s2_global_inside_trophy_group"]) == (4, 4)
     assert printed["global_exact_rank"] == 2
-    # Both confirmed entries in France's break.
+    # Both confirmed entries in France's break; the US break has uncertain
+    # #2UU, which may be the wrong one, so confirmed #2GG is not counted.
     assert printed["s3_confirmed_entries_contradicted"] == 2
     assert printed["s4_active_legend_i_missing"] == 1 and printed["s4_tags"] == ["#2RR"]
-    assert printed["s5_legend_i_on_board_percent"] == 66.67
+    # #2PP, #2GG and #2UU match their list's trophies; #2QQ doesn't.
+    assert (printed["live_trophies_compared"], printed["live_trophies_matched"]) == (4, 3)
+    assert printed["s5_live_trophies_match_percent"] == 75.0
     # One uncertain entry among the four left once the faults are out.
     assert (printed["s6_uncertain_percent"], printed["board_entries"]) == (25.0, 4)
     assert printed["board_measured_coverage"] == 0.6
