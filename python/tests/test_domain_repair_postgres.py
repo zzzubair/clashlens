@@ -1161,13 +1161,15 @@ def test_season_repair_judges_a_failed_reset_repair_by_the_days_it_names(
         assert [blocker["job_id"] for blocker in report["failed_blockers"]] == [failed_id]
 
 
-@pytest.mark.parametrize("group", ["day_1_inconsistent", "unplayed_at_5000"])
+@pytest.mark.parametrize("group", [
+    "day_1_inconsistent", "unplayed_at_5000", "weekly_raise_sunday", "weekly_raise_monday"])
 def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affects(
     database_url: str, archive_server, monkeypatch, group: str
 ) -> None:
     """One player whose Day 1 was saved Inconsistent, or who sits at 5,000 in
-    Legend I with no Legend battle this Season, and one ordinary player each
-    have two saved days. The scoped repair previews one player, queues one
+    Legend I with no Legend battle this Season, or whose Sunday ending at the
+    weekly raise was not saved Complete, or whose Monday started below 5,000,
+    and one ordinary player each have two saved days. The scoped repair previews one player, queues one
     job, and running it recalculates that player's days oldest first while
     the ordinary player's saved days stay as they were. The full repair of
     the same rules still has both players to recalculate."""
@@ -1176,8 +1178,10 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
 
     from clashlens import reconciliation_db
 
-    scope = "day-1-or-unplayed"
-    days = [START, START + DAY]
+    weekly = group.startswith("weekly")
+    scope = "weekly-raise" if weekly else "day-1-or-unplayed"
+    # Day 1 and 2, or Sunday and Monday, Days 7 and 8.
+    days = [START + 6 * DAY, START + 7 * DAY] if weekly else [START, START + DAY]
     calculated: list[tuple[int, datetime]] = []
     recalculate = reconciliation_db.recalculate_ranked_day
     monkeypatch.setattr(
@@ -1190,9 +1194,11 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
         with _owner(connection_info) as connection:
             affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
             for player in (affected, ordinary):
-                for number, start in enumerate(days, start=1):
+                for number, start in enumerate(days, start=7 if weekly else 1):
                     version_id = _ranked(
-                        connection, player, number, start, start + DAY, season=SEASON
+                        connection, player, number, start, start + DAY, season=SEASON,
+                        trophies=(4940, 4950) if group == "weekly_raise_monday"
+                        and player == affected and number == 8 else None,
                     )
                     _log(connection, player, number, version_id, start, season=SEASON)
                 if group == "unplayed_at_5000":
@@ -1210,14 +1216,21 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
                         """,
                         (START + DAY + timedelta(hours=1), player),
                     )
-            if group == "day_1_inconsistent":
+            if group == "weekly_raise_sunday":
+                connection.execute(
+                    "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                    " confidence = 'uncertain', boundary_adjustment_type = 'weekly_reset'"
+                    " WHERE player_id = %s AND ranked_day_start = %s",
+                    (affected, days[0]),
+                )
+            elif group == "day_1_inconsistent":
                 connection.execute(
                     "UPDATE ranked_day_versions SET state = 'Inconsistent',"
                     " confidence = 'uncertain'"
                     " WHERE player_id = %s AND ranked_day_start = %s",
                     (affected, START),
                 )
-            else:
+            elif group == "unplayed_at_5000":
                 # Also at 5,000, but with a Legend battle this Season.
                 _report(connection, ordinary, _player(connection, "#2RR"), START)
             untouched = connection.execute(
@@ -1255,7 +1268,7 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
     assert (preview["scope"], preview["players"], preview["left_to_queue"]) == (scope, 1, 1)
     assert (queued["phase"], queued["queued"]) == ("days", 1)
     assert [int(player) for _job, player in jobs] == [affected]
-    assert calculated[:2] == [(affected, START), (affected, START + DAY)]
+    assert calculated[:2] == [(affected, days[0]), (affected, days[1])]
     assert {player for player, _day in calculated} == {affected}
     assert after == untouched
     assert (full["scope"], full["players"], full["left_to_queue"]) == (None, 2, 2)

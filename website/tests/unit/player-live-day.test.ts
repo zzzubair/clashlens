@@ -264,6 +264,22 @@ describe("today's Legend day wording", () => {
     );
   });
 
+  it("names the battles' total and the weekly raise's in a gap", async () => {
+    const html = await page(WAITING, undefined, [
+      // The next day started from a reading taken before the raise landed.
+      ended(7, { startTrophies: 4968, trophyChange: 0 }),
+      // 4,887 + 81, raised 32 by the weekly reset to 5,000.
+      ended(6, {
+        startTrophies: 4887,
+        trophyChange: 81,
+        resetAdjustment: { kind: "weekly", amount: 32 },
+      }),
+    ]);
+    expect(cell(html, "2026-10-06", "End of day")).toContain(
+      "Battles add up to 4,968, which the weekly reset takes to 5,000; next day started at 4,968.",
+    );
+  });
+
   it("leaves an older day's end Unavailable when the next day is missing", async () => {
     const html = await page(WAITING, undefined, [
       ended(7, { startTrophies: 5992, trophyChange: 8 }),

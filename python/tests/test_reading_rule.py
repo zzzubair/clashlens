@@ -638,6 +638,18 @@ def test_the_weekly_raise_once_shown_never_goes_back() -> None:
     assert (sunday.outcome, sunday.reading.trophies) == ("contradicted", 4900)
 
 
+def test_the_weekly_raise_can_land_after_the_reset_reading() -> None:
+    # Sunday ends at 4,940 with no loss. On 12 October 2026 the game raised
+    # such totals from about 05:20, after the 05:04 Reset reading: 4,940
+    # then 5,000 both fit. Unraised again at 05:40, it disagrees.
+    readings = (Reading(at(4), 4940, reset_reading=True), Reading(at(20), 5000))
+    raised = verdict(*readings, loss=(), end=4940, day=(), floor=5000)
+    undone = verdict(*readings, Reading(at(40), 4940), loss=(), end=4940, day=(), floor=5000)
+
+    assert raised.outcome == "verified"
+    assert (undone.outcome, undone.reading.trophies) == ("contradicted", 4940)
+
+
 def test_a_reading_no_single_way_of_the_earlier_ones_leads_to_disagrees() -> None:
     # Sunday starts at 4,980 and gains 40, 30, 30, 40 and 40 with no defense
     # slot used, so it ends at 5,160 before a possible 80 charge. Monday's

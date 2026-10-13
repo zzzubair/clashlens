@@ -27,7 +27,7 @@ how a saved day or board comes out, then run it once:
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
 rule change can affect, chosen when its first queue runs
-(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
+(``_scoped_players``, ``_weekly_raise_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -95,9 +95,9 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
-DAY_RULES_REVISION = "2026-10-11-unplayed-5000"
+DAY_RULES_REVISION = "2026-10-13-weekly-raise-late"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
-REPAIR_SCOPES = ("day-1-or-unplayed",)
+REPAIR_SCOPES = ("day-1-or-unplayed", "weekly-raise")
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
@@ -133,7 +133,8 @@ def season_repair(
         if scope and receipt is not None:
             players = [int(player) for player in receipt[5]]
         elif scope:
-            players = _scoped_players(connection, start)
+            players = (_weekly_raise_players if scope == "weekly-raise"
+                       else _scoped_players)(connection, start)
         else:
             players = [
                 int(row[0]) for row in connection.execute(
@@ -346,6 +347,38 @@ def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
     Season's closure checks them."""
     stored, stale = _stale_players(connection, season_id)
     return {"stored": stored, "stale": len(stale), "stale_players": stale[:50]}
+
+
+def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
+    """The players with saved days of the Season whose results the 13
+    October 2026 rule, that the weekly raise can land after the Monday Reset
+    reading, can change: a day ending at a weekly raise not saved Complete,
+    and a Monday after the Season's first day, the player still in Legend I,
+    started below 5,000. On 12 October 2026, 4,136 such Sundays were saved
+    Inconsistent and 4,140 Mondays started below 5,000. Each chosen
+    player's later days are recalculated with them."""
+    return [
+        int(row[0]) for row in connection.execute(
+            """
+            SELECT DISTINCT day.player_id FROM (
+                SELECT DISTINCT ON (player_id, ranked_day_start)
+                       player_id, ranked_day_start, state, boundary_adjustment_type,
+                       start_trophies, failure_reasons
+                FROM ranked_day_versions
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                ORDER BY player_id, ranked_day_start, version DESC, id DESC
+            ) AS day
+            WHERE day.boundary_adjustment_type = 'weekly_reset' AND day.state <> 'Complete'
+               OR extract(isodow FROM day.ranked_day_start AT TIME ZONE 'UTC') = 1
+                  AND day.ranked_day_start > %(start)s
+                  AND day.start_trophies < %(trophies)s
+                  AND NOT day.failure_reasons ? 'player_not_eligible'
+            ORDER BY day.player_id
+            """,
+            {"start": start, "end": start + SEASON_DURATION,
+             "trophies": SEASON_START_TROPHIES},
+        ).fetchall()
+    ]
 
 
 def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:

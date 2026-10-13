@@ -634,8 +634,9 @@ def test_last_season_day_ends_at_the_official_total(
     ("final", "before_reset", "Complete", "final", False),
     # Kept in Legend I: raised to 5,000 as before.
     (5000, None, "Complete", 5000, True),
-    # Legend II only after the next Reset is not a drop at this one.
-    ("final", "next_day", "Inconsistent", "final", True),
+    # Legend II only after the next Reset is not a drop at this one: the
+    # Reset reading came before the raise landed (12 October 2026).
+    ("final", "next_day", "Complete", 5000, True),
 ])
 def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
     database_url: str, archive_server, reading: object, drop_at: str | None,
@@ -749,7 +750,8 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
             WHERE ranked_day_start = '{last_day.isoformat()}'
             ORDER BY ranked_day_start, version DESC""")
 
-    assert stale == [("Inconsistent",)]
+    # Read as a Reset reading taken before the raise landed.
+    assert stale == [("Complete",)]
     # Due once the Reset's own calculations have long saved.
     assert len(due) == 1
     assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY

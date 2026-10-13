@@ -441,6 +441,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             if judged is not None and judged.matched:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
+                end_reading_evidence = reading_rule.unraised_end(judged)
         # Every reading from the end Reset on judges a clean, ended day
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
@@ -785,10 +786,12 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     it landed. On 2 October 2026 that explained 728 of 733 next days whose
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
-    A start taken from the day before's calculated end already has both.
+    A start taken from the day before's calculated end already has both. A
+    Monday reading taken before the weekly raise landed starts at its 5,000.
     """
     previous = data.previous_day
-    if (
+    start, loss, correction = data.start_trophies, 0, 0
+    if not (
         data.start_trophies is None
         or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
         or previous is None
@@ -797,10 +800,12 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
         or previous.end_baseline_id is None
         or previous.end_baseline_id != data.start_baseline_id
     ):
-        return data.start_trophies, 0, 0
-    loss = previous.unsettled_automatic_loss
-    correction = previous.reset_reading_correction
-    return data.start_trophies - loss + correction, loss, correction
+        loss, correction = previous.unsettled_automatic_loss, previous.reset_reading_correction
+        start = data.start_trophies - loss + correction
+    if start is not None and start < 5000 and previous and previous.expected_next_start == 5000 and (
+            data.ranked_day.start.weekday() == 0 and not data.season_first_day):
+        start, correction = 5000, correction + 5000 - start
+    return start, loss, correction
 
 
 def _deduplicate_contributions(

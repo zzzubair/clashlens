@@ -29,6 +29,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from itertools import combinations
+from typing import Any
 
 # The game shows a battle in the profile after its report: an attacker's own
 # attack about 4 minutes after the report, a defense about 2 minutes after it
@@ -182,11 +183,12 @@ def judge(
     def fits(ended: int, new: int, loss: int) -> list[bool]:
         """Whether the reading shows the value unraised, raised, or both: a
         raise applied to a total above it changes nothing."""
-        # The weekly raise follows the total at the Reset: a value below 5,000
-        # stays unraised only when the automatic loss landing after the Reset
-        # took it there. A Season's reset can land later (5 October 2026).
-        values = [(ended, False)] if (
-            floor is None or reset or ended + loss >= floor) else []
+        # A Season's reset can land after the first readings (5 October
+        # 2026), and so can the weekly raise: on 12 October 2026 the game
+        # raised totals below 5,000 from about 05:20, after every Reset
+        # reading was taken by 05:13. Until a reading shows it, any value can
+        # still be read unraised (``_following``).
+        values = [(ended, False)]
         values += [(floor if reset else max(ended, floor), True)] if floor is not None else []
         return [raised for value, raised in values if reading.trophies == value + new]
 
@@ -245,6 +247,19 @@ def judge(
     expected = base + new_day_change - (
         max(loss_candidates) if loss_certain and loss_candidates else 0)
     return _Judged(reading, False, bool(maybes), residual=reading.trophies - expected)
+
+
+def unraised_end(judged: _Judged) -> dict[str, Any] | None:
+    """What a Reset reading taken before the weekly raise landed proves when
+    it fits one way only, unraised, every battle landed and none in flight:
+    the day's end before its automatic loss, the Daily board's total. A
+    reading showing the raise proves nothing, nor the loss."""
+    if judged.ambiguous or judged.missed or len(judged.losses) != 1 or any(
+            raised for _, raised, _ in judged.ways):
+        return None
+    return {"read_at": judged.reading.read_at.isoformat(), "trophies": judged.reading.trophies,
+            "outcome": "verified", "exact": False, "new_day_change": judged.new_day_change,
+            "clean": True}
 
 
 def decide(

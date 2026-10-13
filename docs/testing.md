@@ -177,6 +177,7 @@ story was checked on 12 October 2026:
 | `test_monday_reset_with_sundays_ending_around_5000` | PRs 460 then 447 (`1258ae09`, `e00964df`) | IN_FLIGHT ranked at 4,940, counting an attack that ended after 05:00, instead of 4,900. With PR 460 alone reversed the story passes: that case is PR 447's |
 | `test_season_end_reset_and_its_first_day` | PR 441 (`18495dd4`), `reconciliation.py` and `reconciliation_db.py` | DISAGREES's Day 1 saved Inconsistent instead of Complete |
 | `test_wednesday_reset_with_days_that_once_could_not_save` | PR 414's migration `0092_shield_runs_any_length.sql` (`a104bbc0`) | SHIELD_RUN's third shielded day refused by the database, as on 9 October |
+| `test_weekly_raise_postgres.py` | The late weekly raise fix (13 October 2026), `python/src` | LATE_RAISE's Sunday saved Inconsistent with next start 4,940 instead of Complete at 5,000, as 4,136 Sundays were on 12 October |
 | `test_reset_at_full_size` | PR 467 (`2ec9b97b`) | The Monday Reset read the whole battles table about 734 times (about 100 million rows) instead of under 20; the story took 119 seconds instead of about 90 |
 
 ## Reset cases and their tests
@@ -193,7 +194,7 @@ Every boundary case in section 8 of the three reliability reports of
 | Day ends below 5,000 and is raised to 5,000 | O1, F1, S Monday | Monday story RAISED | `test_reconciliation.py` |
 | Day ends at exactly 5,000 | F2, S Monday | Monday story EXACT | |
 | Below 5,000 only after the automatic loss; the Reset reading fits and a later one contradicts (12 October) | O1, O7, F3, F4, S early Monday | 12 October story, both real players | `test_monday_reset_reading.py` (4 real players, calculation only); `test_reset_reading_before_loss_postgres.py::test_monday_day_contradicted_after_a_fitting_reset_reading_is_saved` |
-| Reset reading taken before the raise landed | F5 | Monday story UNRAISED: saves and ranks; its state is not pinned, as `docs/domain.md` does not say whether the game does this | |
+| Reset reading taken before the raise landed (12 October 2026) | F5 | Monday story UNRAISED; `test_weekly_raise_postgres.py`: Sunday Complete and proven on the board, Monday starts at 5,000, a reading unraised again after the raise still contradicts | `test_reading_rule.py::test_the_weekly_raise_can_land_after_the_reset_reading`; `test_monday_reset_reading.py` |
 | No defense on a Monday; the raise hides the charge | O6, F10, S no defenses | Monday story ZERO | `test_reset_reading_before_loss_postgres.py::test_monday_charge_hidden_by_the_raise_starts_no_next_day` |
 | Reset reading taken before the automatic loss, on a Monday | O5 | Monday story UNSETTLED | |
 | Attack ending after 05:00, with the Monday raise | O8, F19, S battle at 05:00 | Monday story IN_FLIGHT | `test_board_battle_end_postgres.py` |

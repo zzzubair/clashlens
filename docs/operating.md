@@ -803,6 +803,24 @@ summaries are stored again only for the chosen players before the check of
 every summary. It keeps its own receipt, so a full repair of the same
 revision afterwards still recalculates every player.
 
+`--players weekly-raise` takes instead the players with a saved day of the
+Season ending at a weekly raise to 5,000 that is not Complete, or a Monday
+after Day 1 that started below 5,000 while they stayed in Legend I: the days
+the rule that the raise can land after the Monday Reset reading (13 October
+2026) can change. On 12 October 2026 that covers the 4,136 Sundays (Day 7)
+saved Inconsistent and the 4,140 Mondays (Day 8) that started from the
+unraised reading. Each one's job recalculates every saved day of the
+Season, so their later days start where the repaired days now end:
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair preview --players weekly-raise --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair queue --players weekly-raise --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair receipt --players weekly-raise --season 1791176400
+```
+
 **Known limits of refresh triggers:** these cases queue no recalculation of
 their own. A battle report is compared with that side's report before it, in
 time, length, stars, destruction and trophies, so one repeating it exactly
