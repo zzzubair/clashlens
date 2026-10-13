@@ -112,8 +112,8 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   // lasts 30 days from that visit.
   const copied = await useLoginIssuedAgo(context, identity, 2 * 3_600_000);
   const visitedAt = Date.now();
-  await page.goto("/");
-  await expect(accountMenu).toBeVisible();
+  await page.goto("/account");
+  await expect(page).not.toHaveURL(/\/login/);
   const renewed = await loginCookie(context);
   expect(renewed?.value).not.toBe(copied);
   expect(renewed?.httpOnly).toBe(true);
@@ -131,6 +131,8 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   await accountMenu.click();
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL("/");
+  // Wait for the signed-out header so the logout itself has finished.
+  await expect(accountMenu).toBeHidden();
   await useLoginIssuedAgo(context, identity, 0, copied);
   await page.goto("/account");
   await expect(page).toHaveURL(/\/login\?returnPath=%2Faccount$/);
