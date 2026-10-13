@@ -109,28 +109,24 @@ describe("what leaves the browser", () => {
     }
   });
 
-  it("passes the browser name and version only to count without an ID, never to keep", () => {
-    const sent = (properties: Record<string, unknown>) =>
-      sanitizeEvent({
-        uuid: "u3",
-        event: "ui_error",
-        properties: { $raw_user_agent: "Mozilla/5.0", ...properties },
-        $set: { $raw_user_agent: "Mozilla/5.0" },
-        $set_once: { $initial_raw_user_agent: "Mozilla/5.0" },
-      });
-    const cookieless = { distinct_id: "$posthog_cookieless", $cookieless_mode: true };
-    expect(sent(cookieless)).toEqual({
+  it("never sends the browser name and version", () => {
+    const sent = sanitizeEvent({
       uuid: "u3",
       event: "ui_error",
-      properties: { ...cookieless, $raw_user_agent: "Mozilla/5.0", $geoip_disable: true },
+      properties: {
+        distinct_id: "$posthog_cookieless",
+        $cookieless_mode: true,
+        $raw_user_agent: "Mozilla/5.0",
+      },
+      $set: { $raw_user_agent: "Mozilla/5.0" },
+      $set_once: { $initial_raw_user_agent: "Mozilla/5.0" },
+    });
+    expect(sent).toEqual({
+      uuid: "u3",
+      event: "ui_error",
+      properties: { distinct_id: "$posthog_cookieless", $geoip_disable: true },
       timestamp: undefined,
     });
-    for (const withId of [
-      { distinct_id: "browser-1" },
-      { distinct_id: "browser-1", $cookieless_mode: true },
-    ]) {
-      expect(sent(withId)?.properties).not.toHaveProperty("$raw_user_agent");
-    }
   });
 
   it("keeps a same-site referrer as a page label, never its IDs", () => {

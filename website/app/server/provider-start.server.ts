@@ -1,6 +1,5 @@
 import type { WebsiteConfig } from "./config.server";
 import type { OAuthIntent } from "./google-oidc.server";
-import { countSignInStep } from "./usage-events.server";
 
 /** Start one provider transaction after the route has authorized its intent. */
 export async function startProviderAuthorization(
@@ -25,14 +24,11 @@ export async function startProviderAuthorization(
     provider === "google"
       ? await oidc.createGoogleOidcService(config)
       : await (await import("./discord-oauth.server")).createDiscordOAuthService(config);
-  const location = service.authorizationUrl(transaction).toString();
-  // Linking or removing a connection is not a sign-in.
-  if (intent === "login") countSignInStep(provider, "started");
 
   return new Response(null, {
     status: 302,
     headers: {
-      Location: location,
+      Location: service.authorizationUrl(transaction).toString(),
       "Set-Cookie": cookies.buildSetCookieHeader(
         cookies.OAUTH_COOKIE_NAME,
         cookies.createOAuthTransactionCookieValue(transaction, config.loginSecret),

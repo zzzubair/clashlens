@@ -1,6 +1,6 @@
 import { useRouteLoaderData } from "react-router";
 
-import { ReturnVisitsSwitch } from "../components/Analytics";
+import { AnalyticsChoicesButton, useAnalyticsChoice } from "../components/Analytics";
 import { DISCORD_INVITE_URL } from "../lib/discord";
 import type { RootLoaderData } from "../root";
 
@@ -9,20 +9,28 @@ export function meta() {
     { title: "Privacy · Clash Lens" },
     {
       name: "description",
-      content: "What Clash Lens counts about visits, and how to turn return visits off.",
+      content:
+        "What Clash Lens counts about visits if you accept, and how to change your choice.",
     },
   ];
 }
 
-/** GET /privacy — plain-words notice of who runs Clash Lens, visitor counting and its off switch. */
+const CHOICE_TEXT = {
+  accepted: "You accepted visitor counting in this browser.",
+  declined: "You declined visitor counting in this browser.",
+};
+
+/** GET /privacy — plain-words notice of who runs Clash Lens, visitor counting and the choice about it. */
 export default function Privacy() {
   const counting = Boolean(useRouteLoaderData<RootLoaderData>("root")?.analytics);
+  const choice = useAnalyticsChoice();
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="privacy-title">
         <h1 id="privacy-title">Privacy</h1>
         <p className="hero-copy">
-          What Clash Lens counts about visits, and how to turn part of it off.
+          What Clash Lens counts about visits if you accept, and how to change your
+          choice.
         </p>
       </section>
 
@@ -40,9 +48,14 @@ export default function Privacy() {
           <p role="status">Visitor counting is not switched on at the moment.</p>
         )}
         <p>
-          We use PostHog, a product analytics service, to count which pages and features
-          get used so we can improve Clash Lens. PostHog keeps the data in its EU cloud in
-          Frankfurt and handles it only for us.
+          We ask before counting anything. Until you accept, PostHog, a product analytics
+          service, does not load and nothing about your visit is sent to it. If you
+          decline, it never loads.
+        </p>
+        <p>
+          If you accept, we use PostHog to count which pages and features get used so we
+          can improve Clash Lens. PostHog keeps the data in its EU cloud in Frankfurt and
+          handles it only for us.
         </p>
         <p>
           Each count says which page you opened, with player tags, usernames and other IDs
@@ -52,41 +65,37 @@ export default function Privacy() {
           address.
         </p>
         <p>
-          Everyone is counted without cookies. PostHog receives your IP address with each
-          count, as every website you visit does. Its server mixes it with your browser
-          details and a secret that changes every day into a code that tells one
-          day&apos;s visitors apart; it cannot link visits on different days. We tell
-          PostHog not to work out your location.
+          To see whether people come back, PostHog keeps a random ID in this
+          browser&apos;s local storage. The ID is not linked to your Clash Lens, Google or
+          Discord account. PostHog receives your IP address with each count, as every
+          website you visit does. We tell PostHog not to work out your location.
         </p>
       </section>
 
-      <section aria-labelledby="privacy-return-visits">
-        <h2 id="privacy-return-visits">Return visits</h2>
+      <section aria-labelledby="privacy-choice">
+        <h2 id="privacy-choice">Your choice</h2>
         <p>
-          To see whether people come back, this browser also keeps a random ID in its
-          local storage. It is on unless you turn it off. The ID is not linked to your
-          Clash Lens, Google or Discord account.
+          This browser remembers whether you accepted or declined, so we don&apos;t ask on
+          every visit. Change it at any time with the button below or with Analytics
+          choices at the bottom of every page. Changing to Decline deletes PostHog&apos;s
+          ID from this browser and stops counting straight away. Clearing this site&apos;s
+          data in your browser means we ask again.
         </p>
-        <p>
-          Turn it off with this switch or the one at the bottom of every page. That
-          deletes the ID from this browser straight away and this browser remembers your
-          choice. Your visits are then still counted without cookies, as above. Clearing
-          this site&apos;s data in your browser turns the switch back on.
-        </p>
-        <p>
-          <ReturnVisitsSwitch />
-        </p>
+        {counting ? (
+          <p>
+            {choice ? CHOICE_TEXT[choice] : "You have not chosen yet."}{" "}
+            <AnalyticsChoicesButton>Change your analytics choice</AnalyticsChoicesButton>
+          </p>
+        ) : null}
       </section>
 
       <section aria-labelledby="privacy-server">
-        <h2 id="privacy-server">Accounts and groups</h2>
+        <h2 id="privacy-server">Our server</h2>
         <p>
-          When someone signs in, creates an account or a group, or adds or removes a group
-          player, our server sends PostHog a count with no account, name or group details,
-          only which page it happened on and whether a sign-in used Google or Discord and
-          how far it got. If you sign in with Google or Discord, we keep that
-          service&apos;s ID for your account, never your email address, so you can sign
-          back in. Visitor counts never use it.
+          Our server sends nothing to PostHog; only your browser does, and only after you
+          accept. If you sign in with Google or Discord, we keep that service&apos;s ID
+          for your account, never your email address, so you can sign back in. Visitor
+          counts never use it.
         </p>
       </section>
 
@@ -101,9 +110,9 @@ export default function Privacy() {
       <section aria-labelledby="privacy-rights">
         <h2 id="privacy-rights">How long, and your rights</h2>
         <p>
-          We count visits because we have a legitimate interest in improving Clash Lens.
-          Our PostHog plan keeps events for one year. Under UK data protection law you can
-          ask to see or delete data about you, or object to its use: email{" "}
+          We count visits only with your consent, which you can withdraw at any time as
+          above. Our PostHog plan keeps events for one year. Under UK data protection law
+          you can ask to see or delete data about you, or object to its use: email{" "}
           <a href="mailto:privacy@clashlens.net">privacy@clashlens.net</a>, or ask us on{" "}
           <a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
             our Discord server

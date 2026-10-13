@@ -1,19 +1,22 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { useLocation, useMatches, useRouteLoaderData } from "react-router";
+import { Link, useLocation, useMatches, useRouteLoaderData } from "react-router";
 
 import type { PlayerLookup, PlayerPage } from "../lib/contracts";
 import {
+  analyticsChoice,
+  analyticsWithdrawals,
   armySort,
+  askingForChoice,
   loadedPageEvents,
   lookupOutcome,
-  onReturnVisitsChange,
+  onAnalyticsChoiceChange,
   pagePerformance,
-  returnVisitsOn,
+  reopenAnalyticsChoice,
   routeOf,
   searchInput,
   selectionEvents,
   selectionOf,
-  setReturnVisits,
+  setAnalyticsChoice,
   startAnalytics,
   track,
   type Selection,
@@ -81,10 +84,19 @@ function countedOn(path: string): Set<string> {
   return counted.keys;
 }
 
-/** Starts visitor counting when the server configured it, and sends page events. */
+/** The visitor's choice, or null before one and while the page is drawn on the server. */
+export function useAnalyticsChoice() {
+  return useSyncExternalStore(onAnalyticsChoiceChange, analyticsChoice, () => null);
+}
+
+/**
+ * Starts visitor counting once the server configured it and the visitor
+ * accepted, and sends page events.
+ */
 export function Analytics() {
   const root = useRouteLoaderData<RootLoaderData>("root");
-  const token = root?.analytics?.token;
+  const accepted = useAnalyticsChoice() === "accepted";
+  const token = accepted ? root?.analytics?.token : undefined;
   const location = useLocation();
   const matches = useMatches();
   const page = matches[matches.length - 1];
@@ -92,6 +104,16 @@ export function Analytics() {
   const data = page?.loaderData;
   // What the open page shows.
   const shown = useRef<{ path: string; selection: Selection } | null>(null);
+  const withdrawals = useSyncExternalStore(
+    onAnalyticsChoiceChange,
+    analyticsWithdrawals,
+    () => 0,
+  );
+
+  useEffect(() => {
+    counted = { path: "", keys: new Set() };
+    shown.current = null;
+  }, [withdrawals]);
 
   useEffect(() => {
     if (!token) return;
@@ -166,36 +188,104 @@ export function usePlayerLookupEvent(
   lookup: PlayerLookup | null,
 ) {
   const { pathname } = useLocation();
+  const accepted = useAnalyticsChoice() === "accepted";
   const state = lookupOutcome(requestedTag, trackedPlayer, lookup);
   useEffect(() => {
+    if (!accepted) return;
     const keys = countedOn(pathname);
     if (keys.has(`lookup ${state}`)) return;
     keys.add(`lookup ${state}`);
     track("player_lookup_result", { state });
-  }, [pathname, state]);
+  }, [accepted, pathname, state]);
 }
 
 /** Counts an error page once it shows. */
 export function useErrorEvent(notFound: boolean) {
+  const accepted = useAnalyticsChoice() === "accepted";
   useEffect(() => {
-    track("ui_error", { kind: notFound ? "not_found" : "error" });
-  }, [notFound]);
+    if (accepted) track("ui_error", { kind: notFound ? "not_found" : "error" });
+  }, [accepted, notFound]);
 }
 
-/** The return-visits switch; hidden while visitor counting is not configured. */
-export function ReturnVisitsSwitch() {
+/** The Accept or Decline question; hidden while visitor counting is not configured. */
+export function AnalyticsChoiceBanner() {
+  const configured = Boolean(useRouteLoaderData<RootLoaderData>("root")?.analytics);
+  const asking = useSyncExternalStore(
+    onAnalyticsChoiceChange,
+    askingForChoice,
+    () => false,
+  );
+  const banner = useRef<HTMLElement>(null);
+  // Where the visitor was when they reopened the question.
+  const opener = useRef<HTMLElement | null>(null);
+  const shown = configured && asking;
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!shown || !banner.current) return;
+    // Room below the page, so the banner never covers its last controls.
+    const observer = new ResizeObserver(([entry]) =>
+      root.style.setProperty(
+        "--analytics-choice-space",
+        `${entry.borderBoxSize[0].blockSize}px`,
+      ),
+    );
+    observer.observe(banner.current);
+    if (analyticsChoice() !== null) {
+      opener.current = document.activeElement as HTMLElement | null;
+      banner.current.focus();
+    }
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--analytics-choice-space");
+      opener.current?.focus();
+      opener.current = null;
+    };
+  }, [shown]);
+
+  if (!shown) return null;
+  return (
+    <section
+      ref={banner}
+      className="analytics-choice"
+      aria-labelledby="analytics-choice-text"
+      tabIndex={-1}
+    >
+      <p id="analytics-choice-text">
+        May we use PostHog to see how this site is used? It keeps a random ID in your
+        browser, and loads only if you accept. <Link to="/privacy">Privacy Policy</Link>
+      </p>
+      <div className="analytics-choice-buttons">
+        <button
+          type="button"
+          className="button"
+          onClick={() => setAnalyticsChoice("accepted")}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className="button"
+          onClick={() => setAnalyticsChoice("declined")}
+        >
+          Decline
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** Reopens the Accept or Decline question; hidden while visitor counting is not configured. */
+export function AnalyticsChoicesButton({ children }: { children: string }) {
   const root = useRouteLoaderData<RootLoaderData>("root");
-  const on = useSyncExternalStore(onReturnVisitsChange, returnVisitsOn, () => true);
   if (!root?.analytics) return null;
   return (
     <button
       type="button"
-      role="switch"
-      aria-checked={on}
-      className="return-visits-switch"
-      onClick={() => setReturnVisits(!on)}
+      className="analytics-choices-button"
+      onClick={reopenAnalyticsChoice}
     >
-      Count return visits<span aria-hidden="true">: {on ? "On" : "Off"}</span>
+      {children}
     </button>
   );
 }

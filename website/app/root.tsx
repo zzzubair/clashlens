@@ -16,7 +16,12 @@ import {
 
 import type { Route } from "./+types/root";
 import { AccountMenu } from "./components/AccountMenu";
-import { Analytics, ReturnVisitsSwitch, useErrorEvent } from "./components/Analytics";
+import {
+  Analytics,
+  AnalyticsChoiceBanner,
+  AnalyticsChoicesButton,
+  useErrorEvent,
+} from "./components/Analytics";
 import { BackLink } from "./components/BackLink";
 import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
@@ -131,9 +136,10 @@ export function Layout({ children }: { children: ReactNode }) {
           <nav aria-label="Site information">
             <a href="/blog">Blog</a>
             <a href="/privacy">Privacy</a>
-            <ReturnVisitsSwitch />
+            <AnalyticsChoicesButton>Analytics choices</AnalyticsChoicesButton>
           </nav>
         </footer>
+        <AnalyticsChoiceBanner />
         <Analytics />
         <ScrollRestoration />
         <Scripts />
