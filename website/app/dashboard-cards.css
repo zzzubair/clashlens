@@ -607,7 +607,7 @@
 }
 
 .rival-table :is(th, td):first-child {
-  width: 5.2rem;
+  width: 8.6rem;
 }
 
 .rival-table :is(th, td):nth-child(2),
@@ -990,7 +990,13 @@
   }
 
   .rival-table :is(th, td):first-child {
-    width: 3.6rem;
+    width: 4.4rem;
+  }
+
+  /* The rank change sits under the rank so it never runs into the name. */
+  .rival-moved {
+    display: block;
+    margin-left: 0;
   }
 
   .rival-table :is(th, td):nth-child(2),
