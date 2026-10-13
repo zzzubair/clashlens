@@ -226,7 +226,7 @@ on the private API, for the selected account only. Its board of every
 tracked player's trophies and today's attack and defense counts is read in the
 background at most once a minute and shared by every dashboard, so loading
 the page never waits for it. Until today's first read finishes, or once the
-newest is 10 minutes old, the Next Reset range and Held % comparisons are left
+newest is 10 minutes old, the Next Reset range and base comparisons are left
 out and the page asks again up to 3 times, each waiting up to 4 seconds for
 that read ([`api_dashboard.py`](../python/src/clashlens/api_dashboard.py)).
 Legend day's projected place is asked for the same way while it is worked

@@ -77,7 +77,7 @@ export function OpponentsCard({
   timeZone: string;
   mode?: BasesMode;
   nowMs?: number | null;
-  /** When Held % mode's comparisons were read. */
+  /** When the comparisons with Legends at similar trophies were read. */
   comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();

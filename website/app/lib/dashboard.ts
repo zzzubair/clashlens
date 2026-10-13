@@ -350,7 +350,7 @@ export interface OpponentRow {
   defenses: { stars: number; trophyChange: number; yours: boolean }[];
   /** When the opponent's newest battle log was read, Unix milliseconds. */
   observedAtMs: number | null;
-  /** Today's held share among Legend players at similar trophies; null without enough of them. */
+  /** Today's held share and trophies lost among Legend players at similar trophies; null without enough of them. */
   legends: LegendsHeld | null;
 }
 
