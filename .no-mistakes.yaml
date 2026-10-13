@@ -154,3 +154,6 @@ test:
     Preserve useful logs as test evidence, then stop your own database and
     remove only the scratch directory created by this run. Never stop another
     task's services or remove its files. Leave no database running on exit.
+pr:
+  publish_intent: false
+  template: .github/pull_request_template.md
