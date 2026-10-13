@@ -136,22 +136,14 @@ function boardsPayload(period = "season") {
 }
 
 const crewPayload = {
-  kind: "crew",
+  kind: "crew-view",
   crew_id: CREW_ID,
   name: "Red Dawn",
   size: 50,
   used: 9,
   my_role: "owner",
-  members: [
-    {
-      username: "zara",
-      display_name: "Zara",
-      role: "owner",
-      you: true,
-      players: [{ tag: TAGS[1], name: "Player 2", trophies: 5390, status: "tracking" }],
-    },
-  ],
-  invites: [],
+  clashers: 3,
+  players: [{ tag: TAGS[1], name: "Player 2", trophies: 5390, status: "tracking" }],
 };
 
 function answerCrew(period = "season") {
@@ -237,6 +229,7 @@ describe("crews switch", () => {
       expect(unwrap(await thrown(run)).status).toBe(404);
     }
     expect(mocks.requireLogin).not.toHaveBeenCalled();
+    expect(mocks.readLoginIdentity).not.toHaveBeenCalled();
     expect(mocks.requestJson).not.toHaveBeenCalled();
     expect(await renderNavigation()).not.toContain('href="/crews"');
   });
@@ -294,11 +287,37 @@ describe("crew page", () => {
     expect(html).toContain("No Reset reading yet");
   });
 
+  it("shows a signed-out visitor the boards and accounts, but nothing to manage", async () => {
+    mocks.requestJson.mockImplementation(async (target: string) =>
+      target.includes("/boards")
+        ? boardsPayload()
+        : { ...crewPayload, my_role: null, clashers: null },
+    );
+    const html = await render(`/crews/${CREW_ID}`, crewRoute);
+    expect(mocks.requireLogin).not.toHaveBeenCalled();
+    expect(mocks.requestJson).toHaveBeenCalledWith(
+      `/v1/crews/${CREW_ID}`,
+      "GET",
+      undefined,
+      "crew-view",
+      undefined,
+      undefined,
+    );
+    expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
+    expect(html).toContain("Joining is by invite only.");
+    expect(html).toContain("Accounts (1)");
+    expect(html).toMatch(/Player 2<\/a><span>#2QQ · [^]*?5,390/);
+    for (const hidden of ["Invite", "Members", "Edit", "clasher", "Owner"]) {
+      expect(html).not.toContain(hidden);
+    }
+  });
+
   it("asks for the chosen period and shows today's totals whole", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
     answerCrew("today");
     const html = await render(`/crews/${CREW_ID}?period=today`, crewRoute);
     expect(mocks.requestJson).toHaveBeenCalledWith(
-      `/v1/account/crews/${CREW_ID}/boards?period=today`,
+      `/v1/crews/${CREW_ID}/boards?period=today`,
       "GET",
       undefined,
       "crew-boards",
@@ -321,7 +340,7 @@ describe("crew page", () => {
     expect(html).not.toContain("No battles");
   });
 
-  it("reads a crew the account is not in as a missing page", async () => {
+  it("reads a missing crew as a missing page", async () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(404, { error: "crew_not_found" }),
     );

@@ -251,7 +251,11 @@ number of places and which linked accounts join. A crew's page at
 Best defenders, Worst defenders and Highest streaks, the last four switched
 between Today, Last 7 days and Season (the default). Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
-who is not on it and why. Invite on a crew's page makes or reuses the clasher's
+who is not on it and why. Anyone, signed in or not, can open a crew's page and
+its boards; below the boards it lists every account in the crew by name and
+tag. Visitors never see which Clash Lens accounts are in it, its invite links,
+or Invite, Members and Edit, and a player's page names the crews that player
+is in, linking to each. Invite on a crew's page makes or reuses the clasher's
 48-hour link and shows it with Copy and Share; a new crew opens with it. The
 link, `/crews/join/<code>`, shows the crew and which of the clasher's linked
 accounts can join, and "Link another account" goes through

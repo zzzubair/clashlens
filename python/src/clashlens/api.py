@@ -62,6 +62,7 @@ _DEFAULT_FRESHNESS_SECONDS = 900
 _PUBLIC_OPERATIONS = frozenset(
     {
         "analytics.read",
+        "crews.view",
         "leaderboards.read",
         "player.read",
         "refresh.status",

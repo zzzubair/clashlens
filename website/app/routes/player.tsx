@@ -15,6 +15,7 @@ import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PlayerActions } from "../components/PlayerActions";
+import { PlayerCrews } from "../components/PlayerCrews";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
@@ -60,6 +61,7 @@ import type {
   SummarizedSeasonRef,
   WebsiteErrorResponse,
 } from "../lib/contracts";
+import type { PlayerCrew } from "../lib/crew-contracts";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
 import detailsStyles from "../details.css?url";
 
@@ -83,6 +85,8 @@ export interface PlayerLoaderData {
   lookupError: WebsiteErrorResponse | null;
   // Streams in after the page; null when the history response is unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
+  // Null when the crews answer is unavailable or arrives after the other reads.
+  crews?: PlayerCrew[] | null;
   // The site's public address, for absolute links in link previews.
   origin?: string;
 }
@@ -136,6 +140,9 @@ export async function loader({
   const lookupClient = import("../services/player-lookup.server");
   const pastSeasons = import("../services/past-seasons.server")
     .then((api) => api.getPastSeasons(normalizedTag))
+    .catch(() => null);
+  const crews = import("../services/crews.server")
+    .then((api) => api.getPlayerCrews(normalizedTag))
     .catch(() => null);
   const origin = import("../server/blog.server").then(({ blogOrigin }) =>
     blogOrigin(request),
@@ -229,6 +236,7 @@ export async function loader({
     lookup,
     lookupError,
     pastSeasons,
+    crews: await Promise.race([crews, null]),
     origin: await origin,
   };
 }
@@ -582,6 +590,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                   </span>
                 ) : null}
               </p>
+              <PlayerCrews crews={data.crews} name={lookup.profile.name} />
             </div>
             <div className="player-summary">
               <div className="player-trophy-card">
@@ -596,7 +605,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </div>
           </header>
         ) : (
-          <h1>{data.requestedTag}</h1>
+          <>
+            <h1>{data.requestedTag}</h1>
+            <PlayerCrews crews={data.crews} name={data.requestedTag} />
+          </>
         )}
         <PlayerActions tag={data.requestedTag} />
         {lookup ? (
@@ -670,6 +682,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               </span>
             ) : null}
           </p>
+          <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
         </div>
         <div className="player-summary">
           <div className="player-trophy-card">

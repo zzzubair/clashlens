@@ -2,8 +2,10 @@
 
 A crew's members are Clash Lens accounts (``crew_accounts``, which holds the
 role); its places are Clash of Clans accounts (``crew_players``), each one
-linked to the member holding it. A crew another account is not in reads
-exactly like a missing one.
+linked to the member holding it. Anyone can view a crew and its boards
+(``view_crew``), which name its places but never its member accounts;
+everything else about a crew another account is not in reads exactly like a
+missing one.
 
 Every write takes its locks in one order so two writes never wait on each
 other: the crew row, then the caller's account row (only create and accept,
@@ -393,6 +395,94 @@ def get_crew(
             }
             for row in invites
         ],
+    }
+
+
+def _crew_and_role(
+    connection: Any, crew_id: str, account_id: int | None
+) -> tuple[int, str | None] | None:
+    """The crew's row id and the caller's role in it, None for a caller
+    signed out or not in the crew; None alone for a missing crew."""
+    crew = connection.execute(
+        "SELECT id FROM crews WHERE public_id = %s", (crew_id,)
+    ).fetchone()
+    if crew is None:
+        return None
+    member = None
+    if account_id is not None:
+        member = connection.execute(
+            "SELECT role FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
+            (crew[0], account_id),
+        ).fetchone()
+    return int(crew[0]), None if member is None else _text(member[0])
+
+
+def view_crew(
+    database: ApiDatabase, account_id: int | None, crew_id: str, *, now: datetime
+) -> dict[str, Any] | None:
+    """What anyone, signed in or not, sees of a crew: its name, places and
+    the Clash of Clans accounts in them. Never which Clash Lens accounts
+    hold them, nor its invite links."""
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        found = _crew_and_role(connection, crew_id, account_id)
+        if found is None:
+            return None
+        crew_row, my_role = found
+        header = _header(connection, crew_row)
+        players = []
+        for _owner, player in _players(
+            connection,
+            f"crew_players AS member {_MEMBER_JOINS} WHERE member.crew_id = %s",
+            (crew_row,),
+            now,
+        ):
+            del player["lookup"]
+            players.append(player)
+        clashers = (
+            None
+            if my_role is None
+            else int(
+                connection.execute(
+                    "SELECT count(*) FROM crew_accounts WHERE crew_id = %s", (crew_row,)
+                ).fetchone()[0]
+            )
+        )
+    players.sort(
+        key=lambda player: (
+            player["trophies"] is None,
+            -(player["trophies"] or 0),
+            (player["name"] or "").casefold(),
+            player["tag"],
+        )
+    )
+    return {
+        "kind": "crew-view",
+        **header,
+        "my_role": my_role,
+        "clashers": clashers,
+        "players": players,
+    }
+
+
+def player_crews(database: ApiDatabase, tag: str) -> dict[str, Any]:
+    """The crews a Clash of Clans account has a place in."""
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT crew.public_id, crew.name
+            FROM crew_players AS place
+            JOIN players AS player ON player.id = place.player_id
+            JOIN crews AS crew ON crew.id = place.crew_id
+            WHERE player.normalized_tag = %s
+            ORDER BY lower(crew.name), crew.created_at, crew.id
+            """,
+            (tag,),
+        ).fetchall()
+    return {
+        "kind": "player-crews",
+        "tag": tag,
+        "crews": [{"crew_id": str(row[0]), "name": _text(row[1])} for row in rows],
     }
 
 

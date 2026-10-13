@@ -108,10 +108,16 @@ def _streak(attacks: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def get_crew_boards(
-    database: ApiDatabase, account_id: int, crew_id: str, *, period: str, now: datetime
+    database: ApiDatabase,
+    account_id: int | None,
+    crew_id: str,
+    *,
+    period: str,
+    now: datetime,
 ) -> dict[str, Any] | None:
     """The crew's six boards for ``period`` (today, week or season), or None
-    when the caller is not in the crew."""
+    for a missing crew. Anyone can read them; ``you`` marks the signed-in
+    caller's own accounts."""
     now = now.astimezone(UTC)
     day = ranked_day_for(now)
     today = day.start
@@ -121,12 +127,10 @@ def get_crew_boards(
     first = streak_window[0] if streak_window else today
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        try:
-            crew_row, _size, _role = api_crews._membership(
-                connection, crew_id, account_id, lock=False
-            )
-        except api_crews._Refused:
+        found = api_crews._crew_and_role(connection, crew_id, account_id)
+        if found is None:
             return None
+        crew_row, _role = found
         places = api_crews._players(
             connection,
             f"crew_players AS member {_MEMBER_JOINS} WHERE member.crew_id = %s",

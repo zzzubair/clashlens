@@ -1,6 +1,6 @@
 import { data, Link, useActionData, useLoaderData } from "react-router";
 
-import { type BackHandle } from "../components/BackLink";
+import { type BackHandle, useBackState } from "../components/BackLink";
 import {
   BoardRows,
   emptyBoardText,
@@ -9,6 +9,7 @@ import {
 } from "../components/CrewBoards";
 import { CrewInvite } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { TrophyMark } from "../components/LeaderboardShared";
 import {
   BOARD_KEYS,
   BOARDS,
@@ -16,11 +17,12 @@ import {
   crewPeriod,
   NOW_BOARDS,
   type BoardKey,
-  type Crew,
   type CrewBoards,
   type CrewPeriod,
+  type CrewView,
   type InviteLink,
 } from "../lib/crew-contracts";
+import { canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/crews.$crewId";
 import "../crews.css";
 
@@ -28,9 +30,18 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /** Each card shows the top of its board; the board's own page shows the rest. */
 const CARD_ROWS = 5;
 
-export const handle: BackHandle = { back: { to: "/crews", label: "Crews" } };
+/** Back leads members to their crews; anyone else back where they came from. */
+export const handle: BackHandle = {
+  back: (match) =>
+    (match.loaderData as { crew?: CrewView | null } | undefined)?.crew?.myRole
+      ? { to: "/crews", label: "Crews" }
+      : null,
+};
 
-/** GET /crews/:crewId — one crew's boards, for its members only. */
+/**
+ * GET /crews/:crewId — one crew's boards and accounts, for anyone. Only its
+ * members see Invite, Members and Edit.
+ */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const period = crewPeriod(new URL(request.url).searchParams.get("period"));
   const { loadCrewPage } = await import("../services/crews.server");
@@ -82,15 +93,17 @@ export default function CrewRoute() {
     );
   }
   const open = Math.max(0, crew.size - crew.used);
-  const clashers = crew.members.length;
+  const { clashers, myRole } = crew;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
       <section className="crew-panel crew-head" aria-labelledby="crew-title">
         <h1 id="crew-title">{crew.name}</h1>
-        <p className="crew-meta">
-          {clashers} {clashers === 1 ? "clasher" : "clashers"}
-          <RoleChip role={crew.myRole} />
-        </p>
+        {clashers === null || myRole === null ? null : (
+          <p className="crew-meta">
+            {clashers} {clashers === 1 ? "clasher" : "clashers"}
+            <RoleChip role={myRole} />
+          </p>
+        )}
         <div className="crew-bar" aria-hidden="true">
           <i style={{ width: `${Math.min(100, (crew.used / crew.size) * 100)}%` }} />
         </div>
@@ -100,23 +113,27 @@ export default function CrewRoute() {
           </span>
           {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
         </p>
-        <div className="crew-actions">
-          {open > 0 ? (
-            <CrewInvite
-              crewName={crew.name}
-              idempotencyKey={idempotencyKey}
-              answer={answer ?? null}
-            />
-          ) : null}
-          <Link className="button secondary" to={`/crews/${crew.crewId}/members`}>
-            Members
-          </Link>
-          {crew.myRole === "member" ? null : (
-            <Link className="button secondary" to={`/crews/${crew.crewId}/settings`}>
-              Edit
+        {myRole === null ? (
+          <p className="crew-lede">Joining is by invite only.</p>
+        ) : (
+          <div className="crew-actions">
+            {open > 0 ? (
+              <CrewInvite
+                crewName={crew.name}
+                idempotencyKey={idempotencyKey}
+                answer={answer ?? null}
+              />
+            ) : null}
+            <Link className="button secondary" to={`/crews/${crew.crewId}/members`}>
+              Members
             </Link>
-          )}
-        </div>
+            {myRole === "member" ? null : (
+              <Link className="button secondary" to={`/crews/${crew.crewId}/settings`}>
+                Edit
+              </Link>
+            )}
+          </div>
+        )}
       </section>
 
       <h2 className="crew-section-title">Right now</h2>
@@ -133,7 +150,39 @@ export default function CrewRoute() {
           <BoardCard key={key} board={key} crew={crew} boards={boards} period={period} />
         ))}
       </div>
+
+      <CrewAccounts crew={crew} />
     </main>
+  );
+}
+
+/** Every Clash of Clans account in the crew, most trophies first. */
+function CrewAccounts({ crew }: { crew: CrewView }) {
+  const backState = useBackState(crew.name);
+  if (crew.players.length === 0) return null;
+  return (
+    <section className="crew-panel crew-missing" aria-labelledby="crew-accounts-title">
+      <h2 id="crew-accounts-title">Accounts ({crew.players.length})</h2>
+      <ul>
+        {crew.players.map((player) => (
+          <li key={player.tag}>
+            <Link to={canonicalPlayerPath(player.tag)} state={backState}>
+              {player.name ?? player.tag}
+            </Link>
+            <span>
+              {player.tag}
+              {player.trophies === null ? null : (
+                <>
+                  {" · "}
+                  <TrophyMark />
+                  {player.trophies.toLocaleString("en-GB")}
+                </>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -149,7 +198,7 @@ function BoardCard({
   period,
 }: {
   board: BoardKey;
-  crew: Crew;
+  crew: CrewView;
   boards: CrewBoards;
   period: CrewPeriod;
 }) {

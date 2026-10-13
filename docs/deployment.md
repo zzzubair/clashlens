@@ -479,9 +479,10 @@ Crews on the website have their own setting, `CLASHLENS_CREWS_ENABLED=true` in
 `app.env` (default `false`), which `./ops` passes to the website only; the
 private API's crew routes still follow the dashboard setting. While the
 website setting is off, every `/crews` page shows the normal page-not-found
-page and the navigation bar has no Crews link. While the dashboard setting is
-off, every private API crew route
-(`/v1/account/crews…` and `/v1/account/crew-invites/…`) answers 404
+page, player pages list no crews, and the navigation bar has no Crews link.
+While the dashboard setting is off, every private API crew route
+(`/v1/account/crews…`, `/v1/account/crew-invites/…`, `/v1/crews/…` and
+`/v1/players/{tag}/crews`) answers 404
 `crews_disabled` before reading anything. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.
 

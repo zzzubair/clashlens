@@ -48,8 +48,8 @@ export default function CrewsRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
       <h1>Crews</h1>
       <p className="lede">
-        Crews are like clans for Legend League: invite-only, with up to 100 accounts each.
-        Start a crew and compete with your friends!
+        Crews are like clans for Legend League: anyone can look inside, but joining is by
+        invite only. Up to 100 accounts each. Start a crew and compete with your friends!
       </p>
       {error ? (
         <ErrorNotice error={error} />
