@@ -279,7 +279,7 @@ describe("login loader", () => {
       return true;
     });
     expect(mocks.isLoginRevoked).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAtMs },
+      { ...IDENTITY, issuedAtMs, signedInAtMs: issuedAtMs },
       cookie,
       250,
     );
@@ -401,8 +401,9 @@ describe("logout route", () => {
       }),
     } as never);
     expect((response as Response).status).toBe(302);
+    const loginStartedAtMs = (nowSeconds - 60) * 1000;
     expect(mocks.revokeLogin).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAtMs: (nowSeconds - 60) * 1000 },
+      { ...IDENTITY, issuedAtMs: loginStartedAtMs, signedInAtMs: loginStartedAtMs },
       login,
     );
 
@@ -843,7 +844,7 @@ describe("auth.google.callback loader", () => {
     expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
   });
 
-  it("clears the transaction, sets a 24-hour login cookie, and redirects to the safe path for an existing account", async () => {
+  it("clears the transaction, sets a 30-day login cookie, and redirects to the safe path for an existing account", async () => {
     let validatedAtMs = 0;
     service.validateCallback.mockImplementationOnce(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -879,7 +880,11 @@ describe("auth.google.callback loader", () => {
     // The login is dated after the provider confirmed it, not when the
     // callback arrived.
     const login = parseLoginCookieValue(loginValue, config.loginSecret, now());
-    expect(login).toEqual({ ...IDENTITY, issuedAtMs: expect.any(Number) });
+    expect(login).toEqual({
+      ...IDENTITY,
+      issuedAtMs: expect.any(Number),
+      signedInAtMs: expect.any(Number),
+    });
     expect(login!.issuedAtMs).toBeGreaterThanOrEqual(validatedAtMs);
   });
 
@@ -909,7 +914,11 @@ describe("auth.google.callback loader", () => {
           config.loginSecret,
           now(),
         ),
-      ).toEqual({ ...IDENTITY, issuedAtMs: expect.any(Number) });
+      ).toEqual({
+        ...IDENTITY,
+        issuedAtMs: expect.any(Number),
+        signedInAtMs: expect.any(Number),
+      });
     }
   });
 

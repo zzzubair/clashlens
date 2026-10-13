@@ -15,6 +15,7 @@ vi.mock("../../app/server/config.server", async (importOriginal) => {
 });
 
 import {
+  LOGIN_COOKIE_LIFETIME_SECONDS,
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
 } from "../../app/server/auth-cookies.server";
@@ -116,7 +117,7 @@ describe("requireLogin auth guard", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      (NOW_SECONDS - 86_401) * 1000,
+      (NOW_SECONDS - LOGIN_COOKIE_LIFETIME_SECONDS - 1) * 1000,
     );
     await expect(
       requireLogin(
@@ -167,7 +168,7 @@ describe("requireLogin auth guard", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      (NOW_SECONDS - 86_401) * 1000,
+      (NOW_SECONDS - LOGIN_COOKIE_LIFETIME_SECONDS - 1) * 1000,
     );
     for (const value of [forged, expired, "junk"]) {
       await expect(

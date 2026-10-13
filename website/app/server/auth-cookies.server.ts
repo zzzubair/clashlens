@@ -6,10 +6,15 @@
  * exactly-32-byte login secret, so any tamper is detected by a constant-time
  * comparison and the value is rejected as null. Login cookies carry only the
  * immutable provider and provider subject, a random value that makes every
- * login's cookie unique, and a fixed non-sliding 24-hour lifetime. OAuth transaction cookies carry only the provider they belong
- * to, the state, nonce, PKCE verifier and challenge, and same-origin return
- * path with a ten-minute lifetime. No Google tokens, email, or other personal data ever appears in a
- * cookie value, and every value stays far below the 4 KB cookie limit.
+ * login's cookie unique, and a 30-day lifetime that the website renews as the
+ * browser keeps using it. A renewed cookie also carries the fingerprint and
+ * sign-in time of the login it continues, so logout, or removing the sign-in
+ * connection it came through, ends every copy of that login. Cookies from
+ * before the 30-day lifetime keep their 24 hours. OAuth transaction cookies
+ * carry only the provider they belong to, the state, nonce, PKCE verifier and
+ * challenge, and same-origin return path with a ten-minute lifetime. No Google
+ * tokens, email, or other personal data ever appears in a cookie value, and
+ * every value stays far below the 4 KB cookie limit.
  *
  * The route layer composes Set-Cookie headers from these values; this module
  * stays pure (no request, response, or storage access) so tests can call it
@@ -30,7 +35,11 @@ import type { OAuthIntent, OAuthTransaction } from "./google-oidc.server";
 
 export const LOGIN_COOKIE_NAME = "clashlens_login";
 export const OAUTH_COOKIE_NAME = "clashlens_oauth";
-export const LOGIN_COOKIE_LIFETIME_SECONDS = 24 * 60 * 60;
+export const LOGIN_COOKIE_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
+/** A signed-in request renews a login cookie once it is this old. */
+export const LOGIN_COOKIE_RENEW_AFTER_SECONDS = 60 * 60;
+const LEGACY_LOGIN_COOKIE_LIFETIME_SECONDS = 24 * 60 * 60;
+const SESSION_BINDING = /^[A-Za-z0-9_-]{43}$/;
 
 const COOKIE_VERSION = 1;
 /** Hard cap for any cookie value; real values are a few hundred bytes. */
@@ -47,7 +56,16 @@ export interface LoginIdentity {
 
 /** A verified login cookie: who signed in and when, in Unix milliseconds. */
 export interface LoginSession extends LoginIdentity {
+  /** When this cookie was issued; its 30 days and renewal count from here. */
   issuedAtMs: number;
+  /** When its login signed in: the first cookie's issue time, kept by renewals. */
+  signedInAtMs: number;
+}
+
+/** The login a renewed cookie continues. */
+interface ContinuedLogin {
+  sessionBinding: string;
+  signedInAtMs: number;
 }
 
 function isBoundedIntent(value: unknown): value is OAuthIntent {
@@ -133,6 +151,7 @@ function canonicalLoginPayload(
   issuedAt: number,
   issuedMillisecond: number,
   expiresAt: number,
+  login: ContinuedLogin | undefined,
 ): Buffer {
   const payload = Buffer.from(
     JSON.stringify({
@@ -143,6 +162,7 @@ function canonicalLoginPayload(
       m: issuedMillisecond,
       e: expiresAt,
       n: randomBytes(16).toString("base64url"),
+      ...(login === undefined ? {} : { l: login.sessionBinding, o: login.signedInAtMs }),
     }),
     "utf8",
   );
@@ -154,12 +174,15 @@ function canonicalLoginPayload(
 
 /**
  * Build a signed login cookie value. `nowMs` is the current epoch time in
- * milliseconds; the cookie never slides and expires exactly 24 hours later.
+ * milliseconds; the cookie expires exactly 30 days later. A renewal passes the
+ * fingerprint and sign-in time of the login it continues, so both cookies
+ * belong to one login.
  */
 export function createLoginCookieValue(
   identity: LoginIdentity,
   key: Buffer,
   nowMs: number,
+  login?: ContinuedLogin,
 ): string {
   assertKey(key);
   if (
@@ -171,6 +194,17 @@ export function createLoginCookieValue(
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
     throw new Error("login cookie timestamps must be safe integers");
   }
+  if (
+    login !== undefined &&
+    (!SESSION_BINDING.test(login.sessionBinding) ||
+      !Number.isSafeInteger(login.signedInAtMs) ||
+      login.signedInAtMs < 0 ||
+      login.signedInAtMs > nowMs)
+  ) {
+    throw new Error(
+      "a renewed login needs a SHA-256 fingerprint and a sign-in time before now",
+    );
+  }
   const issuedAt = Math.floor(nowMs / 1000);
   return encodeValue(
     canonicalLoginPayload(
@@ -178,15 +212,16 @@ export function createLoginCookieValue(
       issuedAt,
       nowMs % 1000,
       issuedAt + LOGIN_COOKIE_LIFETIME_SECONDS,
+      login,
     ),
     key,
   );
 }
 
 /**
- * Parse and verify a login cookie value. Returns the identity and issue time
- * or null for any missing, malformed, tampered, or expired value. Never
- * throws for input.
+ * Parse and verify a login cookie value. Returns the identity, issue time,
+ * and sign-in time, or null for any missing, malformed, tampered, or expired
+ * value. Never throws for input.
  */
 export function parseLoginCookieValue(
   value: string | undefined | null,
@@ -195,7 +230,7 @@ export function parseLoginCookieValue(
 ): LoginSession | null {
   assertKey(key);
   if (!Number.isSafeInteger(nowSeconds)) return null;
-  const parsed = parseValue(value, key, 256);
+  const parsed = parseValue(value, key, 320);
   if (!isRecord(parsed)) return null;
   if (
     parsed.v !== COOKIE_VERSION ||
@@ -203,7 +238,9 @@ export function parseLoginCookieValue(
     !LOGIN_PROVIDERS.has(parsed.p) ||
     !isProviderSubject(parsed.s) ||
     !isSafeInteger(parsed.i) ||
-    !isSafeInteger(parsed.e)
+    !isSafeInteger(parsed.e) ||
+    (parsed.l !== undefined &&
+      (typeof parsed.l !== "string" || !SESSION_BINDING.test(parsed.l)))
   ) {
     return null;
   }
@@ -219,17 +256,25 @@ export function parseLoginCookieValue(
   }
   const issuedAt = parsed.i;
   const expiresAt = parsed.e;
+  const issuedAtMs = issuedAt * 1000 + issuedMillisecond;
+  // A cookie that was never renewed is its login's first cookie.
+  const signedInAtMs = parsed.o === undefined ? issuedAtMs : parsed.o;
   if (
-    expiresAt - issuedAt !== LOGIN_COOKIE_LIFETIME_SECONDS ||
+    (expiresAt - issuedAt !== LOGIN_COOKIE_LIFETIME_SECONDS &&
+      expiresAt - issuedAt !== LEGACY_LOGIN_COOKIE_LIFETIME_SECONDS) ||
     issuedAt > nowSeconds ||
-    expiresAt <= nowSeconds
+    expiresAt <= nowSeconds ||
+    !isSafeInteger(signedInAtMs) ||
+    signedInAtMs < 0 ||
+    signedInAtMs > issuedAtMs
   ) {
     return null;
   }
   return {
     provider: parsed.p as LoginIdentity["provider"],
     providerSubject: parsed.s,
-    issuedAtMs: issuedAt * 1000 + issuedMillisecond,
+    issuedAtMs,
+    signedInAtMs,
   };
 }
 
@@ -326,8 +371,26 @@ export function parseOAuthTransactionCookieValue(
   return transaction;
 }
 
-/** Bind a privileged OAuth transaction to the exact signed login session. */
+/**
+ * The fingerprint of the login a verified cookie value belongs to: the
+ * SHA-256 of the cookie that started the login, which renewed cookies carry.
+ * Logout records it, and privileged OAuth transactions are bound to it.
+ */
 export function createLoginSessionBinding(loginCookieValue: string): string {
+  const payload = decodePart(loginCookieValue.split(".", 1)[0] ?? "", 320);
+  try {
+    const parsed: unknown =
+      payload === null ? null : JSON.parse(payload.toString("utf8"));
+    if (
+      isRecord(parsed) &&
+      typeof parsed.l === "string" &&
+      SESSION_BINDING.test(parsed.l)
+    ) {
+      return parsed.l;
+    }
+  } catch {
+    // Not a renewed cookie; fall through to its own fingerprint.
+  }
   return createHash("sha256").update(loginCookieValue, "utf8").digest("base64url");
 }
 

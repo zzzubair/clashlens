@@ -45,7 +45,7 @@ def login_session_revoked(
     database, session_hash: str, provider: str, provider_subject: str, issued_at_ms: int
 ) -> bool:
     """True when this exact login logged out, or when its provider identity
-    was removed at or after the millisecond the login cookie was issued."""
+    was removed at or after the millisecond the login signed in."""
     with database.pool.connection() as connection:
         row = connection.execute(
             """
@@ -74,10 +74,11 @@ def revoke_login_session(database, session_hash: str) -> None:
 
 
 def _record_logout(connection: Any, session_hash: str) -> None:
-    # A login cookie lives 24 hours, so an older logout guards nothing.
+    # A login cookie lives 30 days and is renewed only while its login has not
+    # logged out, so an older logout guards nothing.
     connection.execute(
         "DELETE FROM login_session_revocations"
-        " WHERE revoked_at < now() - interval '25 hours'"
+        " WHERE revoked_at < now() - interval '31 days'"
     )
     connection.execute(
         "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
@@ -91,10 +92,10 @@ def _record_identity_removal(
 ) -> None:
     # Every login cookie issued through this identity up to now stops working,
     # on every browser. Relinking never clears the row, and a login cookie
-    # lives 24 hours, so an older removal guards nothing.
+    # lives 30 days, so an older removal guards nothing.
     connection.execute(
         "DELETE FROM provider_identity_removals"
-        " WHERE removed_at < now() - interval '25 hours'"
+        " WHERE removed_at < now() - interval '31 days'"
     )
     connection.execute(
         """

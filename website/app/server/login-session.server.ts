@@ -1,10 +1,12 @@
 /**
  * Server-side end of a browser login. The signed login cookie says who signed
- * in and when; logout stores the SHA-256 of that exact cookie value with the
- * private API, and every request that relies on the cookie asks the API first,
- * so a copied cookie stops working once its login has logged out. Other logins
+ * in and when; logout stores the login's fingerprint, the SHA-256 of the
+ * cookie that started it, which renewed cookies carry, with the private API,
+ * and every request that relies on the cookie asks the API first, so a copied
+ * or renewed cookie stops working once its login has logged out. Other logins
  * of the same user, on other browsers, are not affected by logout. Removing a
- * sign-in connection ends every login issued through it before the removal.
+ * sign-in connection ends every login signed in through it before the removal,
+ * including every later renewal of that login's cookie.
  */
 
 import { createLoginSessionBinding } from "./auth-cookies.server";
@@ -13,7 +15,7 @@ import { PythonApiError, requestJson } from "../services/python.server";
 
 /**
  * True when this login has logged out or its sign-in connection was removed
- * after it was issued. Throws PythonApiError when the API cannot answer, so
+ * after it signed in. Throws PythonApiError when the API cannot answer, so
  * no caller treats an unchecked cookie as signed in.
  */
 export async function isLoginRevoked(
@@ -24,7 +26,7 @@ export async function isLoginRevoked(
   const payload = await requestJson<{ revoked?: unknown }>(
     "/v1/account/session/check",
     "POST",
-    sessionBody(loginCookieValue, session.issuedAtMs),
+    sessionBody(loginCookieValue, session.signedInAtMs),
     undefined,
     undefined,
     session,
