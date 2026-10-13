@@ -59,7 +59,8 @@ def test_a_finished_day_reads_as_its_page_shows_it() -> None:
 def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
     """40 players' days do not fit one Discord message: each goes in exactly
     one DM, in order, each DM under Discord's 4,096 characters, numbered,
-    and the settings button ends the last. Names are escaped."""
+    and the settings button ends the last; each DM carries the tags of the
+    players it names. Names are escaped."""
     yesterday = RESET - timedelta(days=1)
     days = [
         replies.summary_day(
@@ -70,7 +71,8 @@ def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
         for n in range(40)
     ]
     days.append({"tag": "#WAIT", "name": "Slow", "finished": False})
-    parts = replies.day_summary(SITE, RESET, days)
+    summary = replies.day_summary(SITE, RESET, days)
+    parts = [part for part, _ in summary]
     assert len(parts) > 1
     assert [part.title for part in parts] == [
         f"Legend day summary · Tue 6 Oct ({n} of {len(parts)})"
@@ -83,20 +85,58 @@ def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
     assert text.index("#0000**") < text.index("#0039**")
     assert "@everyone" not in text and "\\*\\*0\\*\\*" in text
     assert "Not finished yet: Slow #WAIT." in text
+    assert [tags for _, tags in summary] == [
+        tuple(day["tag"] for day in days if day["tag"] in part.body) for part in parts
+    ]
     assert replies.day_summary(SITE, RESET, days[-1:]) == []
 
 
+def test_a_long_not_finished_list_is_split_between_dms() -> None:
+    """150 players whose day is not finished, with long names, are named at
+    most 40 a line, so no DM goes over Discord's 4,096 characters."""
+    yesterday = RESET - timedelta(days=1)
+    waiting = [
+        {"tag": f"#{n:07d}", "name": f"Still playing {n:06d}", "finished": False}
+        for n in range(150)
+    ]
+    days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET), *waiting]
+    summary = replies.day_summary(SITE, RESET, days)
+    assert all(len(part.body) <= 4096 for part, _ in summary)
+    text = "\n\n".join(part.body for part, _ in summary)
+    assert text.count("Not finished yet: ") == 4
+    assert [text.count(day["tag"]) for day in waiting] == [1] * 150
+    assert [tags for _, tags in summary] == [
+        tuple(day["tag"] for day in days if day["tag"] in part.body) for part, _ in summary
+    ]
+
+
+class _NoAlerts:
+    def prune(self) -> None:
+        pass
+
+    def confirmations_due(self) -> list:
+        return []
+
+    def due(self) -> list:
+        return []
+
+
 class _SummaryLog:
+    """Each DM is due unless it names `gone`, a player since turned off."""
+
     NONCE_PREFIX = "summary-"
 
-    def __init__(self) -> None:
+    def __init__(self, gone: str | None) -> None:
+        self.gone = gone
+        self.checked: list[tuple[str, ...]] = []
         self.finished: list[tuple[int, str]] = []
 
     def claim(self, _delivery: Delivery) -> int:
         return 7
 
-    def still_due(self, _delivery: Delivery) -> bool:
-        return True
+    def still_due(self, delivery: Delivery) -> bool:
+        self.checked.append(delivery.tags)
+        return self.gone not in delivery.tags
 
     def finish(self, delivery_id: int, state: str, _reason: str | None) -> None:
         self.finished.append((delivery_id, state))
@@ -114,26 +154,45 @@ class _Discord:
             raise Unreachable
 
 
-def test_a_split_summary_sends_its_dms_in_order_each_with_its_own_nonce(monkeypatch) -> None:
-    """Each DM of a summary has its own nonce, which never repeats an attack
-    alert's; one Discord did not take is tried again with the same nonce
-    before the next is sent, and the summary is logged sent once all went."""
-    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
-    log, discord = _SummaryLog(), _Discord()
-    loop = AlertLoop(None, discord, SITE)  # type: ignore[arg-type]
+def _send_summary(gone: str | None) -> tuple[list[int], _Discord, _SummaryLog]:
+    """A summary of three DMs naming #A, #B and #C, sent by the alert loop
+    round by round until none waits."""
+    log, discord = _SummaryLog(gone), _Discord()
+    loop = AlertLoop(_NoAlerts(), discord, SITE)  # type: ignore[arg-type]
     delivery = Delivery(1, 0, "1", None, RESET, Reply("one"), log=log,  # type: ignore[arg-type]
-                        more=[Reply("two"), Reply("three")])
+                        tags=("#A",), more=[(Reply("two"), ("#B",)), (Reply("three"), ("#C",))])
 
     async def scenario() -> list[int]:
         sent = [await loop._claim(delivery)]
         while loop._waiting:
-            waiting = loop._waiting.pop()
-            sent.append(await loop._send(waiting))
+            sent.append(await loop.tick())
         return sent
 
-    assert asyncio.run(scenario()) == [1, 2]
+    return asyncio.run(scenario()), discord, log
+
+
+def test_a_split_summary_sends_its_dms_in_order_each_with_its_own_nonce(monkeypatch) -> None:
+    """Each DM of a summary has its own nonce, which never repeats an attack
+    alert's; one Discord did not take is tried again with the same nonce
+    before the next is sent, each is checked as still due for the players it
+    names before it is tried, and the summary is logged sent once all went."""
+    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    sent, discord, log = _send_summary(None)
+    assert sent == [1, 0, 1, 1]
     assert discord.tries == [
         ("summary-7-0", "one"), ("summary-7-1", "two"),
         ("summary-7-1", "two"), ("summary-7-2", "three"),
     ]
+    assert log.checked == [("#B",), ("#B",), ("#C",)]
     assert log.finished == [(7, "sent")]
+
+
+def test_a_summary_dm_naming_a_player_turned_off_is_not_sent(monkeypatch) -> None:
+    """#B's summary goes off after the first DM is delivered: the DM naming
+    #B, and the one after it, are not sent, and the summary is logged as
+    not delivered."""
+    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    sent, discord, log = _send_summary("#B")
+    assert sent == [1, 0]
+    assert discord.tries == [("summary-7-0", "one")]
+    assert log.finished == [(7, "failed")]

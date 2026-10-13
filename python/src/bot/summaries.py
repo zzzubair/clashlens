@@ -3,8 +3,8 @@ Discord connected, summing up the day just ended for each of their verified
 players.
 
 A player's summary is on unless the Clasher turned it off on the website's
-Discord alerts page, separately from its attack alerts; the players turned
-off are kept in the account's preferences (api_discord_alerts.SUMMARY_OFF).
+Discord alerts page, separately from its attack alerts; each player turned
+off has a discord_day_summary_off row (migration 0111).
 Nothing is read for a Reset until its Daily board is published, so the
 summaries never compete with the Reset's own work, and a late board only
 makes them late.
@@ -20,7 +20,10 @@ day is left out, and a Clasher with no finished day gets no DM.
 Each summary is logged before its first DM and sent by the attack alert
 loop, with the same tries again; so no Clasher is sent the same day's
 summary twice, across restarts too. A summary too long for one DM goes as
-several, each with its own nonce.
+several, each with its own nonce. It is logged only while every player it
+names is still verified to the account with its summary on, else it is
+read again next round; each DM is tried, and tried again, only while every
+player that DM names still is, else it and the DMs after it are dropped.
 """
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from clashlens.api_db import ApiDatabase
-from clashlens.api_discord_alerts import SUMMARY_OFF
 from clashlens.domain import ranked_day_for
 
 from . import replies
@@ -44,19 +46,25 @@ log = logging.getLogger("clashlens.bot.summaries")
 # Accounts read in one round, so attack alerts never wait long behind them.
 BATCH = 10
 
-# Where an account's summary for the Reset %(reset)s is still due: Discord
-# still connected as the same user and at least one verified player's
-# summary still on.
+# Where an account's summary, or one of its DMs, is still due: Discord still
+# connected as the same user, and every player in %(tags)s still verified to
+# the account with its summary on.
 _STILL_ON = """
     FROM clash_lens_accounts AS account
     JOIN account_provider_identities AS identity
         ON identity.account_id = account.id AND identity.provider = 'discord'
     WHERE account.id = %(account_id)s AND identity.provider_subject = %(discord_user_id)s
-      AND EXISTS (
-          SELECT 1 FROM verified_player_links AS link
-          JOIN players AS player ON player.id = link.player_id
-          WHERE link.account_id = account.id
-            AND NOT COALESCE(account.preferences -> %(off)s, '[]') ? player.normalized_tag
+      AND NOT EXISTS (
+          SELECT 1 FROM unnest(%(tags)s::text[]) AS named (tag)
+          WHERE NOT EXISTS (
+              SELECT 1 FROM verified_player_links AS link
+              JOIN players AS player ON player.id = link.player_id
+              WHERE link.account_id = account.id AND player.normalized_tag = named.tag
+                AND NOT EXISTS (
+                    SELECT 1 FROM discord_day_summary_off AS off
+                    WHERE off.account_id = link.account_id AND off.player_id = link.player_id
+                )
+          )
       )
 """
 
@@ -95,8 +103,10 @@ class Summaries:
                     ON identity.account_id = account.id AND identity.provider = 'discord'
                 JOIN verified_player_links AS link ON link.account_id = account.id
                 JOIN players AS player ON player.id = link.player_id
-                WHERE NOT COALESCE(account.preferences -> %(off)s, '[]')
-                          ? player.normalized_tag
+                WHERE NOT EXISTS (
+                      SELECT 1 FROM discord_day_summary_off AS off
+                      WHERE off.account_id = link.account_id AND off.player_id = link.player_id
+                  )
                   AND NOT EXISTS (
                       SELECT 1 FROM discord_day_summary_deliveries AS logged
                       WHERE logged.account_id = account.id AND logged.reset_at = %(reset)s
@@ -117,7 +127,7 @@ class Summaries:
                 ORDER BY account.id
                 LIMIT %(batch)s
                 """,
-                {"reset": reset, "batch": BATCH, "off": SUMMARY_OFF},
+                {"reset": reset, "batch": BATCH},
             ).fetchall()
         due = []
         for account_id, discord_user_id, tags in accounts:
@@ -133,10 +143,11 @@ class Summaries:
                 log.exception("Legend day summary for account %s could not be read", account_id)
                 continue
             parts = replies.day_summary(self.site, reset, days)
-            # A summary is for no one player, so it names none.
+            reply, named = parts[0] if parts else (replies.Reply(""), ())
+            # A summary is for no one player, so it has no player id.
             delivery = Delivery(
-                int(account_id), 0, str(discord_user_id), None, reset,
-                parts[0] if parts else replies.Reply(""), log=self, more=parts[1:],
+                int(account_id), 0, str(discord_user_id), None, reset, reply,
+                log=self, tags=named, more=parts[1:],
             )
             if parts:
                 due.append(delivery)
@@ -145,8 +156,10 @@ class Summaries:
         return due
 
     def claim(self, delivery: Delivery) -> int | None:
-        """Log the account's summary as being sent while it is still due;
-        its log id, or None when it is not due or was logged already."""
+        """Log the account's summary as being sent while it is still due for
+        every player it names; its log id, or None when it is not due or was
+        logged already."""
+        named = delivery.tags + tuple(tag for _, tags in delivery.more for tag in tags)
         with self.database.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -158,14 +171,16 @@ class Summaries:
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
-                self._params(delivery),
+                self._params(delivery, named),
             ).fetchone()
         return None if row is None else int(row[0])
 
     def still_due(self, delivery: Delivery) -> bool:
+        """Whether its DM now is still due for every player that DM names."""
         with self.database.pool.connection() as connection:
             row = connection.execute(
-                "SELECT EXISTS (SELECT 1" + _STILL_ON + ")", self._params(delivery)
+                "SELECT EXISTS (SELECT 1" + _STILL_ON + ")",
+                self._params(delivery, delivery.tags),
             ).fetchone()
         return bool(row and row[0])
 
@@ -189,10 +204,10 @@ class Summaries:
             )
 
     @staticmethod
-    def _params(delivery: Delivery) -> dict[str, Any]:
+    def _params(delivery: Delivery, tags: tuple[str, ...]) -> dict[str, Any]:
         return {
             "account_id": delivery.account_id,
             "discord_user_id": delivery.discord_user_id,
             "reset": delivery.since,
-            "off": SUMMARY_OFF,
+            "tags": list(tags),
         }

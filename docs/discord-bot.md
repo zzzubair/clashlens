@@ -56,15 +56,19 @@ a player with no Legend day that day is left out, and an account with no
 finished day gets no DM. A summary too long for one message goes as several.
 
 - Each player's summary is on until turned off on the website's Discord
-  alerts page, separately from its attack alerts. The players turned off are
-  listed in the account's preferences under `discord_day_summary_off`.
+  alerts page, separately from its attack alerts. Each player turned off is
+  one row in `discord_day_summary_off` (migration 0111), deleted when the
+  player is unverified or moved to another account, so it is on again if it
+  comes back.
 - Nothing is read for a Reset until its board is published, so a late board
   makes the summaries late and they never compete with the Reset's own work.
   A day's summaries go out only until the next Reset, at most 10 accounts a
   minute.
 - Each summary is logged before its first DM and never sent twice, across
   restarts too. A DM Discord did not take is tried again exactly as an attack
-  alert is.
+  alert is. Before each DM, and each try again, the bot checks that every
+  player that DM names is still verified to the account with its summary on;
+  if one is not, that DM and the ones after it are not sent.
 
 ## Go-live checklist
 

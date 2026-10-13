@@ -23,7 +23,9 @@ added, DMs closed, unknown user) is logged with the reason, which the
 website shows with what the Clasher can do. That DM is not tried again.
 
 The same loop sends each Legend day's summary DMs (summaries.py) once a
-minute, with the same tries again, logged in their own delivery log.
+minute, with the same tries again, logged in their own delivery log. A
+summary's next DM waits as a DM to try again does, so each is checked as
+still due before it is sent.
 """
 
 from __future__ import annotations
@@ -153,10 +155,12 @@ class Delivery:
     # summary log, whose DMs' nonces start with its `NONCE_PREFIX` so they
     # never repeat an attack alert's.
     log: DeliveryLog | None = None
-    # DMs sent after `reply`, in order, each once the one before is
-    # delivered: a Legend day summary too long for one. `part` counts the
-    # DMs delivered so far.
-    more: list[Reply] = field(default_factory=list)
+    # The tags of the players a Legend day summary's `reply` names.
+    tags: tuple[str, ...] = ()
+    # DMs sent after `reply`, in order, each with the tags it names, each
+    # once the one before is delivered: a Legend day summary too long for
+    # one. `part` counts the DMs delivered so far.
+    more: list[tuple[Reply, tuple[str, ...]]] = field(default_factory=list)
     part: int = 0
 
     def params(self) -> dict[str, Any]:
@@ -317,7 +321,8 @@ class AlertLoop:
         self.now = now
         self._pruned_at: float | None = None
         self._summarised_at: float | None = None
-        # Claimed DMs Discord could not take yet, waiting for their next try.
+        # Claimed DMs Discord could not take yet, and the next DMs of
+        # summaries, waiting for their next try.
         self._waiting: list[Delivery] = []
 
     async def run(self) -> None:
@@ -331,8 +336,8 @@ class AlertLoop:
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def tick(self) -> int:
-        """Log as not delivered each waiting DM past its last try, and try
-        again each other one whose time has come, then send every
+        """Log as not delivered each waiting DM past its last try or no
+        longer due, and try each other one whose time has come, then send every
         confirmation, then every alert, due now, then, once a minute, the
         Legend day summaries due, one at a time; returns how many DMs were
         sent."""
@@ -397,8 +402,9 @@ class AlertLoop:
 
     async def _send(self, delivery: Delivery) -> int:
         """Try one logged DM, cut off at its last moment, and log how it went
-        or wait to try again if there is time; the DMs delivered. A delivered
-        DM with more to follow starts the next one, with its own 2 minutes."""
+        or wait to try again if there is time; 1 when it was delivered. A
+        delivered DM with more to follow leaves the next one waiting, to be
+        tried in the next round with its own 2 minutes."""
         left = delivery.time_left()
         if left <= 0:
             await self._finish(delivery, "failed", None)
@@ -428,11 +434,12 @@ class AlertLoop:
             log.exception("dm delivery %s failed", delivery.nonce())
             state = "failed"
         if state == "sent" and delivery.more:
-            delivery.reply = delivery.more.pop(0)
+            delivery.reply, delivery.tags = delivery.more.pop(0)
             delivery.part += 1
-            delivery.claimed_at = asyncio.get_running_loop().time()
+            delivery.claimed_at = delivery.retry_at = asyncio.get_running_loop().time()
             delivery.wait = 0.0
-            return 1 + await self._send(delivery)
+            self._waiting.append(delivery)
+            return 1
         await self._finish(delivery, state, reason)
         return int(state == "sent")
 

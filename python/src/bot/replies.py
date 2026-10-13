@@ -471,6 +471,8 @@ _GAP_CODES = frozenset({
 })
 # Discord shows at most 4,096 characters in a message's description.
 _SUMMARY_LENGTH = 3_900
+# Players named in one "Not finished yet" line, so no line outgrows a DM.
+_WAITING_NAMES = 40
 
 
 def _day_status(day: Mapping[str, Any]) -> str:
@@ -578,11 +580,14 @@ def _summary_block(site: Site, day: Mapping[str, Any], key: str) -> str:
     return "\n".join(lines)
 
 
-def day_summary(site: Site, reset: datetime, days: Sequence[Mapping[str, Any]]) -> list[Reply]:
-    """The Legend day summary DMs for the day that ended at `reset`: one block
-    per finished day from `summary_day`, most trophies first, then the players
-    whose day is not finished yet; several DMs when too long for one, and
-    none when no day is finished."""
+def day_summary(
+    site: Site, reset: datetime, days: Sequence[Mapping[str, Any]]
+) -> list[tuple[Reply, tuple[str, ...]]]:
+    """The Legend day summary DMs for the day that ended at `reset`, each with
+    the tags of the players it names: one block per finished day from
+    `summary_day`, most trophies first, then the players whose day is not
+    finished yet, at most `_WAITING_NAMES` a line; several DMs when too long
+    for one, and none when no day is finished."""
     finished = sorted(
         (day for day in days if day["finished"]),
         key=lambda day: (day["end"] is None, -(day["end"] or 0), day["tag"]),
@@ -591,28 +596,35 @@ def day_summary(site: Site, reset: datetime, days: Sequence[Mapping[str, Any]]) 
         return []
     start = reset - timedelta(days=1)
     key = start.date().isoformat()
-    blocks = [_summary_block(site, day, key) for day in finished]
+    blocks = [(_summary_block(site, day, key), (day["tag"],)) for day in finished]
     waiting = [day for day in days if not day["finished"]]
-    if waiting:
-        blocks.append(
+    for first in range(0, len(waiting), _WAITING_NAMES):
+        line = waiting[first:first + _WAITING_NAMES]
+        blocks.append((
             "Not finished yet: "
-            + ", ".join(f"{safe(day['name'])} {day['tag']}" for day in waiting)
-            + ". Their day shows on Clash Lens once it is saved."
-        )
-    blocks.append("Places are from the Daily board at the 05:00 UTC Reset.")
-    parts: list[list[str]] = [[]]
-    for block in blocks:
-        if parts[-1] and len("\n\n".join([*parts[-1], block])) > _SUMMARY_LENGTH:
+            + ", ".join(f"{safe(day['name'])} {day['tag']}" for day in line)
+            + ". Their day shows on Clash Lens once it is saved.",
+            tuple(day["tag"] for day in line),
+        ))
+    blocks.append(("Places are from the Daily board at the 05:00 UTC Reset.", ()))
+    parts: list[list[tuple[str, tuple[str, ...]]]] = [[]]
+    for text, tags in blocks:
+        if parts[-1] and len(
+            "\n\n".join([*(block for block, _ in parts[-1]), text])
+        ) > _SUMMARY_LENGTH:
             parts.append([])
-        parts[-1].append(block)
+        parts[-1].append((text, tags))
     title = f"Legend day summary · {start:%a} {start.day} {start:%b}"
     return [
-        Reply(
-            "\n\n".join(part),
-            title=title if len(parts) == 1 else f"{title} ({index} of {len(parts)})",
-            updated=reset,
-            links=(Link("Summary settings", site.url(DISCORD_ALERTS)),)
-            if index == len(parts) else (),
+        (
+            Reply(
+                "\n\n".join(text for text, _ in part),
+                title=title if len(parts) == 1 else f"{title} ({index} of {len(parts)})",
+                updated=reset,
+                links=(Link("Summary settings", site.url(DISCORD_ALERTS)),)
+                if index == len(parts) else (),
+            ),
+            tuple(tag for _, tags in part for tag in tags),
         )
         for index, part in enumerate(parts, 1)
     ]

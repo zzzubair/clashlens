@@ -2,9 +2,13 @@
 -- Legend day summary: once the Daily board for a Reset is published, the
 -- Discord bot sends each Discord-connected account one DM summing up the
 -- Legend day that Reset ended, for every verified player whose summary is
--- on. Players are on unless turned off on the website's Discord alerts page;
--- the players turned off are kept in the account's existing preferences
--- (preferences.discord_day_summary_off), so this migration adds no switch.
+-- on. Players are on unless turned off on the website's Discord alerts page.
+--
+-- discord_day_summary_off holds one row per verified player whose summary is
+-- off, so it is never larger than the verified player list. Turning the
+-- summary on again deletes the row. Unverifying the player or moving it to
+-- another account deletes it in the same transaction, so moving it away and
+-- back turns its summary on again.
 --
 -- discord_day_summary_deliveries is the bot's log of every summary it
 -- decided on: one row per account and Reset, written before the first DM is
@@ -16,6 +20,12 @@
 -- bot deletes rows older than 7 days, so at most 7 rows are kept per
 -- Discord-connected account.
 BEGIN;
+
+CREATE TABLE IF NOT EXISTS discord_day_summary_off (
+    account_id bigint NOT NULL REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
+    player_id bigint NOT NULL REFERENCES players (id) ON DELETE CASCADE,
+    PRIMARY KEY (account_id, player_id)
+);
 
 CREATE TABLE IF NOT EXISTS discord_day_summary_deliveries (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -32,10 +42,36 @@ CREATE TABLE IF NOT EXISTS discord_day_summary_deliveries (
     UNIQUE (account_id, reset_at)
 );
 
-REVOKE ALL PRIVILEGES ON TABLE discord_day_summary_deliveries FROM PUBLIC;
--- The bot runs with the API's database login.
+REVOKE ALL PRIVILEGES ON TABLE discord_day_summary_off, discord_day_summary_deliveries
+    FROM PUBLIC;
+-- The website saves the switches through the private API, and the bot runs
+-- with the API's database login.
+GRANT SELECT, INSERT, DELETE ON TABLE discord_day_summary_off TO clashlens_python_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE discord_day_summary_deliveries
     TO clashlens_python_api;
+
+CREATE OR REPLACE FUNCTION clashlens_forget_day_summary_off()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' OR OLD.account_id IS DISTINCT FROM NEW.account_id THEN
+        DELETE FROM discord_day_summary_off
+        WHERE account_id = OLD.account_id AND player_id = OLD.player_id;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS verified_player_links_forget_day_summary_off ON verified_player_links;
+CREATE TRIGGER verified_player_links_forget_day_summary_off
+AFTER DELETE OR UPDATE OF account_id ON verified_player_links
+FOR EACH ROW EXECUTE FUNCTION clashlens_forget_day_summary_off();
+
+DO $$
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_forget_day_summary_off() SET search_path TO pg_catalog, %I, pg_temp',
+        current_schema(), current_schema()
+    );
+END $$;
+REVOKE ALL ON FUNCTION clashlens_forget_day_summary_off() FROM PUBLIC;
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (111)
 ON CONFLICT (version) DO NOTHING;
