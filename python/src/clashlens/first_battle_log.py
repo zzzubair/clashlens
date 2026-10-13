@@ -145,15 +145,20 @@ def _queue(
     connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
     *, key: str | None = None, trigger: str = "first_battle_log",
     later_days: bool = True, priority: int | None = None,
-    due_at: datetime | None = None,
+    due_at: datetime | None = None, last_day: datetime | None = None,
+    every_day: bool = False,
 ) -> int | None:
     """Queue the recalculation of one day and, with ``later_days``, every
-    saved later day of its Season, by default from the player's earliest
-    saved battle log, ``observation_id``; ``None`` when it was already
-    queued. Without ``priority``, the day's own: Reset priority while its
-    Reset is the latest, else live. Due now, or at ``due_at`` if later."""
+    saved later day of its Season and ``last_day``, saved or not, with
+    ``every_day`` each day up to it too, by default
+    from the player's earliest saved battle log, ``observation_id``; ``None``
+    when it was already queued. Without ``priority``, the day's own: Reset
+    priority while its Reset is the latest, else live. Due now, or at
+    ``due_at`` if later."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    last_text = (day.start if last_day is None else last_day).astimezone(UTC).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (
@@ -173,8 +178,9 @@ def _queue(
                 "player_id": int(player_id),
                 "ranked_day_start": day_text,
                 **({
-                    "last_ranked_day_start": day_text,
+                    "last_ranked_day_start": last_text,
                     "recalculate_season": day.official_season_id,
+                    **({"every_day": True} if every_day else {}),
                 } if later_days else {}),
                 "trigger": trigger,
             }),
@@ -305,9 +311,10 @@ def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) ->
     below Legend I, recalculate the day before that Reset and each saved day
     after it, which then show the drop (see
     ``reconciliation_db._dropped_after_reading``), for a player with a Reset
-    reading there. Runs once per player and Monday, when no other work
-    waits, no earlier than ``DAY_END_RECALCULATION_DELAY`` after that Reset,
-    once any calculation running when the profile arrived has saved."""
+    reading there. Runs once per player and profile read at ``observed_at``,
+    when no other work waits, no earlier than ``DAY_END_RECALCULATION_DELAY``
+    after that Reset, once any calculation running when the profile arrived
+    has saved."""
     from .reconciliation_db import DAY_END_RECALCULATION_DELAY
 
     day = domain.ranked_day_for(observed_at)
@@ -322,8 +329,9 @@ def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) ->
         return
     _queue(
         connection, player_id, ended, None,
-        key=(f"reconcile:weekly-drop:{player_id}:"
-             f"{ended:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+        key=(f"reconcile:weekly-drop:{player_id}:{ended:%Y-%m-%dT%H:%M:%SZ}:"
+             f"{observed_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
+             f"{RECONCILIATION_RULE_VERSION}"),
         trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
         due_at=day.start + DAY_END_RECALCULATION_DELAY,
     )

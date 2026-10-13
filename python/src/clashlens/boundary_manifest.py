@@ -536,13 +536,14 @@ def _snapshot_rows(
             (boundary_at, boundary_at, unprofiled),
         ).fetchall()
     } if unprofiled else {}
-    ranked_states = {
-        (int(row[0]), int(row[1])): _text_value(row[2])
-        for row in connection.execute(
-            "SELECT id, player_id, state FROM ranked_day_versions WHERE id = ANY(%s::bigint[])",
-            ([row[1] for row in members if row[1] is not None],),
-        ).fetchall()
-    }
+    ranked_rows = connection.execute(
+        """SELECT id, player_id, state, failure_reasons ? 'player_not_eligible'
+        FROM ranked_day_versions WHERE id = ANY(%s::bigint[])""",
+        ([row[1] for row in members if row[1] is not None],),
+    ).fetchall()
+    ranked_states = {(int(row[0]), int(row[1])): _text_value(row[2]) for row in ranked_rows}
+    # A day the player left Legend I by (league_drop) ranks on no Legend I board.
+    left_legend_i = {(int(row[0]), int(row[1])) for row in ranked_rows if row[3]}
     manifest_rows: list[dict[str, Any]] = []
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
@@ -600,7 +601,7 @@ def _snapshot_rows(
                 "eligibility_state": _text_value(profile[7]),
                 "profile_json": profile[3],
             }
-            if _text_value(profile[7]) != "eligible":
+            if _text_value(profile[7]) != "eligible" or (version_id, player_id) in left_legend_i:
                 identity["snapshot_quality"] = "invalid"
             elif player_id not in unplayed and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION

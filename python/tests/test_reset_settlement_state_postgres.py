@@ -663,10 +663,12 @@ def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
         reset_jobs = _reset_work(connection_info, archive_server, boundary,
                                  profile=_profile(reading_trophies),
                                  log=_log(*battles))
+        # The next saved profile shows Legend II again: one alone, which the
+        # parser marks conflict, proves nothing (test_conflict_eligibility_postgres).
         login = [] if drop_at is None else [_store_dropped_login(
-            connection_info, archive_server, "dropped-login",
-            login_at[drop_at], final,
-        )]
+            connection_info, archive_server, key,
+            login_at[drop_at] + timedelta(hours=hours), final,
+        ) for hours, key in enumerate(("dropped-login", "dropped-again"))]
         if drop_at == "before_reset":
             jobs, login = jobs + login, []
         _process(connection_info, archive_server, jobs + reset_jobs)
@@ -714,10 +716,10 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
                            profile=_profile(4900), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
                             profile=_profile(final), log=_log(*battles))
-        jobs.append(_store_dropped_login(
-            connection_info, archive_server, "dropped-login",
-            boundary + timedelta(minutes=13), final,
-        ))
+        jobs += [_store_dropped_login(
+            connection_info, archive_server, key,
+            boundary + timedelta(minutes=minutes), final,
+        ) for minutes, key in ((13, "dropped-login"), (73, "dropped-again"))]
         database, processor = _processor(connection_info, archive_server)
         try:
             # The Legend II profile is processed before any calculation saves
@@ -777,10 +779,10 @@ def test_weekly_drop_without_a_reset_reading_gives_no_legend_i_monday(
                            profile=_profile(4900), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
                             log=_log(*battles))
-        jobs.append(_store_dropped_login(
-            connection_info, archive_server, "dropped-login",
-            boundary + timedelta(minutes=13), final,
-        ))
+        jobs += [_store_dropped_login(
+            connection_info, archive_server, key,
+            boundary + timedelta(minutes=minutes), final,
+        ) for minutes, key in ((13, "dropped-login"), (73, "dropped-again"))]
         _process(connection_info, archive_server, jobs)
         database, processor = _processor(connection_info, archive_server)
         try:

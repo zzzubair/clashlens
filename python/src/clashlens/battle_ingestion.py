@@ -11,6 +11,7 @@ from . import (
     army_ingestion,
     first_battle_log,
     job_outcomes,
+    league_drop,
     queue_refresh,
     reconciliation_db,
     reset_baselines,
@@ -552,6 +553,11 @@ def complete_battle_log(
             queue_refresh.queue_for_battles(
                 connection, observation_id, shared_state_changed_battle_ids,
                 battle_log.observed_at,
+            )
+            # A Legend battle can show a player stopped by lower-league
+            # answers never left Legend I (see league_drop).
+            league_drop.recheck_battle_players(
+                connection, list(player_ids.values()), battle_log.observed_at
             )
             if discoveries:
                 enqueue_discovered_players(

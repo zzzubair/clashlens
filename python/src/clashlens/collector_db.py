@@ -1115,9 +1115,8 @@ class CollectorDatabase:
         self, connection: Any, handoff: ResponseHandoff,
         state: tuple[Any, ...] | None, work_kind: str | None, saved: bool,
     ) -> bool:
-        # Reset and settlement checks need their own proof even when the
-        # used fields match the previous poll. Ordinary unchanged responses compact
-        # to state: no observation, job, or upload row is created.
+        # Reset and settlement checks need their own proof even when the used fields match the
+        # previous poll. Ordinary unchanged responses compact to state: no observation, job, or upload.
         # state[4] is the field fingerprint; rows upgraded before the
         # column existed hold the old byte hash there, so matching the
         # response hash also counts as unchanged. state[2] must name a
@@ -1130,9 +1129,10 @@ class CollectorDatabase:
             or work_kind in {"reset_baseline", "reset_settlement"}
         ):
             return False
-        # Discovery checks reprocess a saved profile whose league went unrecognized.
-        if work_kind == "discovery_profile" and handoff.endpoint == "profile" and connection.execute(
-            "SELECT clashlens_profile_observation_unrecognized(%s)", (state[2],)
+        # Discovery reprocesses an unrecognized league; a Refresh re-judges an untracked player's (league_drop).
+        if work_kind in {"discovery_profile", "live_refresh"} and handoff.endpoint == "profile" and connection.execute(
+            "SELECT CASE WHEN %s THEN clashlens_profile_observation_unrecognized(%s) ELSE (SELECT NOT active AND eligibility_state = 'ineligible' FROM players WHERE id = %s) END",
+            (work_kind == "discovery_profile", state[2], handoff.player_id),
         ).fetchone()[0]:
             return False
         # Unsaved, skip a row another transaction holds (a body players share,

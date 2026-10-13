@@ -6,7 +6,13 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, queue_refresh, reset_baselines
+from . import (
+    first_battle_log,
+    job_outcomes,
+    league_drop,
+    queue_refresh,
+    reset_baselines,
+)
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -223,10 +229,6 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             queue_refresh.queue_for_reading(
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
-            if profile.eligibility_state == "ineligible":
-                first_battle_log.queue_weekly_drop(
-                    connection, player[0], profile.observed_at
-                )
             if (
                 created_profile
                 and profile.eligibility_state == "eligible"
@@ -240,25 +242,6 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 WITH candidate AS (
                     SELECT effect.profile_version_id, effect.observed_at,
                            %s::text AS content_fingerprint,
-                           version.eligibility_state,
-                           version.eligibility_state IN ('eligible', 'ineligible')
-                           AND effect.observed_at >= COALESCE(p.current_profile_confirmed_at, effect.observed_at)
-                           AND NOT EXISTS (
-                               SELECT 1
-                               FROM player_profile_effects AS newer_effect
-                               JOIN player_profile_versions AS newer
-                                 ON newer.id = newer_effect.profile_version_id
-                               WHERE newer.player_id = version.player_id
-                                 AND newer.eligibility_state IN ('eligible', 'ineligible')
-                                 AND (newer_effect.observed_at, newer_effect.id)
-                                     > (effect.observed_at, effect.id)
-                           )
-                           AND (
-                               p.eligibility_state IS DISTINCT FROM version.eligibility_state
-                               OR p.active IS DISTINCT FROM (version.eligibility_state = 'eligible')
-                               OR (version.eligibility_state = 'eligible' AND p.next_due_at IS NULL)
-                               OR (version.eligibility_state = 'ineligible' AND p.next_due_at IS NOT NULL)
-                           ) AS update_eligibility,
                            version.source_contract_state = 'accepted'
                            AND (
                                p.current_observed_at IS NULL
@@ -279,30 +262,23 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     WHERE p.id = %s AND effect.observation_id = %s
                 )
                 UPDATE players AS p
-                SET active = CASE
-                        WHEN candidate.update_eligibility AND candidate.eligibility_state = 'eligible' THEN true
-                        WHEN candidate.update_eligibility AND candidate.eligibility_state = 'ineligible' THEN false
-                        ELSE p.active END,
-                    next_due_at = CASE
-                        WHEN candidate.update_eligibility AND candidate.eligibility_state = 'eligible' THEN COALESCE(p.next_due_at, clock_timestamp())
-                        WHEN candidate.update_eligibility AND candidate.eligibility_state = 'ineligible' THEN NULL
-                        ELSE p.next_due_at END,
-                    eligibility_state = CASE WHEN candidate.update_eligibility THEN candidate.eligibility_state ELSE p.eligibility_state END,
-                    current_profile_version_id = CASE WHEN candidate.update_profile THEN candidate.profile_version_id ELSE p.current_profile_version_id END,
-                    current_observed_at = CASE WHEN candidate.update_profile THEN candidate.observed_at ELSE p.current_observed_at END,
-                    current_profile_fingerprint = CASE WHEN candidate.update_profile THEN candidate.content_fingerprint ELSE p.current_profile_fingerprint END,
+                SET current_profile_version_id = candidate.profile_version_id,
+                    current_observed_at = candidate.observed_at,
+                    current_profile_fingerprint = candidate.content_fingerprint,
                     updated_at = CASE
-                        WHEN candidate.update_eligibility
-                          OR (candidate.update_profile
-                              AND p.current_profile_version_id IS DISTINCT FROM candidate.profile_version_id)
+                        WHEN p.current_profile_version_id IS DISTINCT FROM candidate.profile_version_id
                         THEN clock_timestamp()
                         ELSE p.updated_at
                     END
                 FROM candidate
-                WHERE p.id = %s AND (candidate.update_eligibility OR candidate.update_profile)
+                WHERE p.id = %s AND candidate.update_profile
                 """,
                 (fingerprint, player[0], observation_id, player[0]),
             )
+            # Track or stop tracking by the player's newest answers, whatever
+            # order they arrive in (see league_drop).
+            if profile.eligibility_state in {"eligible", "ineligible"}:
+                league_drop.judge(connection, player[0])
             # A newly discovered player starts inactive while its first profile
             # is still unknown. Cancel ordinary discovery only after a trusted
             # profile has classified the player as ineligible; explicit Refresh

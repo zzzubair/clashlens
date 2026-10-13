@@ -12,6 +12,7 @@ from . import (
     boundary,
     domain,
     first_battle_log,
+    league_drop,
     ranked_day_inputs,
     reading_rule,
     reset_baselines,
@@ -72,11 +73,17 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
             day_starts = {day_start}
             if "recalculate_season" in claim.input_json:
-                day_starts.add(
-                    datetime.fromisoformat(
-                        str(claim.input_json["last_ranked_day_start"])
-                    )
+                last_day = datetime.fromisoformat(
+                    str(claim.input_json["last_ranked_day_start"])
                 )
+                day_starts.add(last_day)
+                # Days a player was wrongly left untracked, saved or not
+                # (``league_drop.judge``).
+                if claim.input_json.get("every_day"):
+                    day_starts.update(
+                        day_start + timedelta(days=offset)
+                        for offset in range(1, (last_day - day_start).days)
+                    )
                 saved_days = connection.execute(
                     """
                     SELECT DISTINCT ranked_day_start
@@ -390,8 +397,12 @@ def recalculate_ranked_day(
         )
         if value is not None
     )
-    player_eligible = bool(baseline_eligibility) and all(
+    # An ended day with no Reset reading at either end is a Legend I day only
+    # for a player wrongly left untracked (``league_drop.in_legend_i``).
+    player_eligible = all(
         value == "eligible" for value in baseline_eligibility
+    ) if baseline_eligibility else now >= ranked_day.end and league_drop.in_legend_i(
+        connection, player_id, ranked_day
     )
     malformed_evidence = any(
         observation.malformed_row_count > 0 for observation in coverage
@@ -810,41 +821,9 @@ def _dropped_from_legend_i(
     connection: Any, player_id: int, since: datetime, until: datetime
 ) -> bool:
     """Whether a profile of the player read from ``since`` and before
-    ``until`` shows a league below Legend I. Each reading counts at its own
-    time; a saved profile can be read again."""
-    return bool(
-        connection.execute(
-            """
-            WITH version AS (
-                SELECT version.id, version.observed_at, version.eligibility_state
-                FROM players AS player
-                JOIN player_profile_versions AS version
-                  ON version.normalized_tag = player.normalized_tag
-                WHERE player.id = %(player)s
-            ), reading AS (
-                SELECT version.*, seen.observed_at AS read_at
-                FROM version
-                JOIN player_profile_effects AS seen
-                  ON seen.profile_version_id = version.id
-                 AND seen.observed_at >= %(since)s
-                UNION ALL
-                SELECT version.*, version.observed_at
-                FROM version
-                WHERE version.observed_at >= %(since)s
-                  AND NOT EXISTS (
-                      SELECT 1 FROM player_profile_effects AS seen
-                      WHERE seen.profile_version_id = version.id
-                  )
-            )
-            SELECT EXISTS (
-                SELECT 1 FROM reading AS dropped
-                WHERE dropped.eligibility_state = 'ineligible'
-                  AND dropped.read_at < %(until)s
-            )
-            """,
-            {"player": player_id, "since": since, "until": until},
-        ).fetchone()[0]
-    )
+    ``until`` proves they left Legend I, by the rule in ``league_drop``.
+    Each reading counts at its own time; a saved profile can be read again."""
+    return league_drop.dropped_between(connection, player_id, since, until)
 
 
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
