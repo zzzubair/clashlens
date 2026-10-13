@@ -863,9 +863,9 @@ class ObservationProcessor:
     ) -> list[Claim]:
         """One batch of claims, taking turns like a lane's single claims do.
 
-        Every other batch takes Reset-priority work first, and three batches
-        of responses in four start from the newest-first plan; see
-        ``_claim_next``.
+        Every other batch takes Reset-priority work first, every derived one
+        in the Reset-first window, and three batches of responses in four
+        start from the newest-first plan; see ``_claim_next``.
         """
         turn = self._batch_turns[work_types]
         self._batch_turns[work_types] = turn + 1
