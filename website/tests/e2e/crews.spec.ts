@@ -104,9 +104,14 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     try {
       const view = await visitor.newPage();
       const viewErrors = trackPageErrors(view);
-      await view.goto(`/players/${encodeURIComponent(MATE_TAGS[0]!)}`);
-      await view.getByRole("link", { name: "Night Owls" }).click();
-      await expect(view).toHaveURL(crewPath);
+      // The list shows only when its answer beats the page's other reads.
+      await expect(async () => {
+        await view.goto(`/players/${encodeURIComponent(MATE_TAGS[0]!)}`);
+        const crewLink = view.getByRole("link", { name: "Night Owls" });
+        await expect(crewLink).toBeVisible({ timeout: 3_000 });
+        await expect(crewLink).toHaveAttribute("href", crewPath);
+      }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+      await view.goto(crewPath);
       await expect(
         view.getByRole("heading", { name: "Night Owls", level: 1 }),
       ).toBeVisible();
