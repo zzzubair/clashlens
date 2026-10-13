@@ -419,8 +419,7 @@ def _nearest(open_slots: dict[int, list[int]], situation: int) -> int | None:
 
 class ProjectedPlaces:
     """Every board player's place in 200 imagined days, kept as each
-    player's ranking key per imagined day with a sorted copy, so one
-    player's projected place takes 200 binary searches."""
+    player's ranking key per imagined day."""
 
     def __init__(
         self,
@@ -511,7 +510,6 @@ class ProjectedPlaces:
         draw = rng.random
         self.size = size
         self.keys: list[array] = []
-        self.sorted: list[array] = []
         for _ in range(DRAWS):
             ranked: list[int] = []
             for still, pool in day_pools[rng.randrange(len(day_pools))]:
@@ -528,23 +526,11 @@ class ProjectedPlaces:
                     for stays in still
                 ])
             self.keys.append(array("q", ranked))
-            ranked.sort()
-            self.sorted.append(array("q", ranked))
-
-    def projected(self, player: int, best: int, worst: int) -> int:
-        """``player``'s projected place, inside ``best``-``worst``."""
-        n = self.size
-        player = self.position[player]
-        places = sorted(
-            n + 1 - bisect_right(ordered, keys[player])
-            for keys, ordered in zip(self.keys, self.sorted, strict=True)
-        )
-        return min(worst, max(best, _middle(places)))
 
     def middles(self) -> list[int]:
         """Every player's projected place before it is kept inside their
-        outer range, in the order given: each imagined day is sorted once
-        instead of searched once for each player."""
+        outer range, in the order given: the middle of their places on the
+        imagined days, each day sorted once."""
         n = self.size
         columns = []
         for keys in self.keys:

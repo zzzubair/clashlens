@@ -827,12 +827,16 @@ describe("dashboard route", () => {
 
   it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
     const boardAt = "2026-10-07T09:05:00+00:00";
-    // Today's read answers before the board is read; asked again, it waits for it.
+    // Today's read answers before the board is read; asked again, it waits
+    // for it, and the time after for the projected place worked out after it.
+    let waits = 0;
     mocks.requestJson.mockImplementation(async (path: string) => {
       const waited = path.endsWith("?wait_for_board=true");
+      if (waited) waits += 1;
       return {
         tag: MAIN,
         rank_range: waited ? { best: 95, worst: 760 } : null,
+        projected_rank: waits > 1 ? 240 : null,
         open_defenses: 7,
         automatic_defense_each: 21,
         opponents: [],
@@ -854,6 +858,7 @@ describe("dashboard route", () => {
     const again = await load(
       `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
     );
+    // Legend day has its range but not yet its projected place, so asks again.
     expect(again.cards).toEqual({
       "legend-day": {
         player: linked(MAIN),
@@ -861,12 +866,26 @@ describe("dashboard route", () => {
         range: { best: 95, worst: 760 },
         rangeAtMs: Date.parse(boardAt),
         projected: null,
+        boardPending: true,
       },
       bases: { rows: [], comparedAtMs: Date.parse(boardAt) },
+    });
+    const last = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+    );
+    expect(last.cards).toEqual({
+      "legend-day": {
+        player: linked(MAIN),
+        day: null,
+        range: { best: 95, worst: 760 },
+        rangeAtMs: Date.parse(boardAt),
+        projected: 240,
+      },
     });
     // One read of today's numbers serves both cards each time.
     expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
+      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
       `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
     ]);
   });

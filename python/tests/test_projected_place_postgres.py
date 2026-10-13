@@ -39,14 +39,16 @@ def _days_battles(start, *, late: bool) -> dict[str, list[Battle]]:
 
 
 def _cards(connection_info: str, *tags: str) -> dict[str, dict]:
-    """Each player's Legend day card read at 20:00 today, from a new board
-    read at once, its projection worked out in the separate process
-    production uses."""
+    """Each player's Legend day card read at 20:00 today as the dashboard's
+    follow-up reads it: a new board read in the background, waited for with
+    its projection, worked out in the separate process production uses."""
     api = ApiDatabase(as_api_role(connection_info))
     try:
-        board = api_dashboard.DashboardBoard(run=lambda read: read())
+        board = api_dashboard.DashboardBoard()
         return {
-            tag: api_dashboard.get_player_today(api, board, tag, now=NOW)
+            tag: api_dashboard.get_player_today(
+                api, board, tag, now=NOW, board_wait=api_dashboard.BOARD_WAIT_SECONDS
+            )
             for tag in tags
         }
     finally:

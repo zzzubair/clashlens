@@ -29,9 +29,10 @@ battle that moved their trophies ended by the Daily board's rule
 (analytics.latest_trophy_changes, here from each player's newest published
 log of today, each read once as published logs never change) and the saved
 examples of the last 7 days. It takes seconds of calculation, so it runs in
-a separate Python process, one at a time, and requests only look it up:
-until the first one of a Legend day finishes, and once the newest is 10
-minutes old, it is left out.
+a separate Python process, one at a time, and requests look it up: until
+the first one of a Legend day finishes, and once the newest is 10 minutes
+old, it is left out. The dashboard asks again while the range shows without
+it, each follow-up waiting for the one under way within its 4 seconds.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -529,19 +530,29 @@ class DashboardBoard:
                 self._projection = _Projection(board.day_start, places)
                 self._projected_at = self._clock()
             self._projecting = False
+            self._read_done.notify_all()
 
-    def projection(self, now: datetime) -> _Projection | None:
+    def projection(self, now: datetime, *, wait: float = 0) -> _Projection | None:
         """Today's newest projected places, or None before the first of the
-        Legend day or once the newest is too old."""
-        with self._lock:
+        Legend day or once the newest is too old, after waiting up to
+        ``wait`` seconds for the one being worked out."""
+        day_start = ranked_day_for(now).start
+
+        def shown() -> _Projection | None:
             projection = self._projection
             if (
                 projection is None
-                or projection.day_start != ranked_day_for(now).start
+                or projection.day_start != day_start
                 or self._clock() >= self._projected_at + BOARD_MAX_AGE_SECONDS
             ):
                 return None
             return projection
+
+        with self._lock:
+            self._read_done.wait_for(
+                lambda: shown() is not None or not self._projecting, max(0.0, wait)
+            )
+            return shown()
 
 
 def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
@@ -661,10 +672,15 @@ def get_player_today(
     """One player's dashboard numbers for today, or None for an unknown tag.
     ``opponents`` is None until the player's log for today is published; the
     range and comparisons are None while the shared board is unavailable,
-    after waiting up to ``board_wait`` seconds for it, and
-    ``board_computed_at`` says when it was read."""
+    after waiting up to ``board_wait`` seconds for it, the projected place
+    also while its projection is worked out, within the same wait, and
+    ``board_computed_at`` says when the board was read."""
     day = ranked_day_for(now)
+    until = time.monotonic() + board_wait
     board = board_cache.current(database, now, wait=board_wait)
+    projection = None if board is None else board_cache.projection(
+        now, wait=until - time.monotonic()
+    )
     with database.pool.connection() as connection:
         if connection.execute(
             "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
@@ -754,9 +770,7 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": None if board is None else _iso(board.computed_at),
         "rank_range": None if board is None else rank_range(board, tag),
-        "projected_rank": None
-        if board is None
-        else projected_rank(board, board_cache.projection(now), tag),
+        "projected_rank": None if board is None else projected_rank(board, projection, tag),
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}

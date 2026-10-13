@@ -762,12 +762,13 @@ export function readCards(
     return page === null ? null : seasonData(page);
   };
   // Legend day and Bases you attacked share one read of today's numbers.
-  // Read before the shared board, each says so and the page asks again.
+  // Read before the shared board, or Legend day before its projected place,
+  // each says so and the page asks again.
   let todayRead: Promise<PlayerToday | null> | undefined;
   const today = () =>
     (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard).catch(() => null));
-  const waiting = (read: PlayerToday | null) =>
-    read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
+  const waiting = (read: PlayerToday | null, projecting = false) =>
+    projecting || read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
   const armies = async (lens: ArmyLens) => ({
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
@@ -786,7 +787,7 @@ export function readCards(
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
         rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
-        ...waiting(read),
+        ...waiting(read, Boolean(read?.rankRange && read.projectedRank === null)),
         projected: read?.projectedRank ?? null,
       };
     },

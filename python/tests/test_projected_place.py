@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from bisect import bisect_right
 from datetime import UTC, datetime
 
 from clashlens import projected_place
@@ -59,21 +58,20 @@ def _places(trophies, open_attacks, open_defenses, days, latest=None, seed=1):
     )
 
 
+def _place(keys, key) -> int:
+    """The place ``key`` takes on an imagined day: 1 plus those above it."""
+    return 1 + sum(other > key for other in keys)
+
+
 def test_a_finished_player_is_passed_by_a_rival_who_usually_climbs() -> None:
     # Yesterday at this time 50 players with 2 attacks left won 80 more and
     # 50 who had finished stayed put.
     day = _day([5000] * 100, [2] * 50 + [0] * 50, [0] * 100, [80] * 50 + [0] * 50)
-    places = _places([5460, 5410], [0, 2], [0, 0], [day])
-    assert places.projected(0, 1, 2) == 2
-    assert places.projected(1, 1, 2) == 1
-    # Never outside the outer range.
-    assert places.projected(0, 1, 1) == 1
+    assert _places([5460, 5410], [0, 2], [0, 0], [day]).middles() == [2, 1]
 
 
 def test_unseen_situations_stay_where_they_are() -> None:
-    places = _places([5100, 5000], [8, 8], [8, 8], [([], [], [])])
-    assert places.projected(0, 1, 2) == 1
-    assert places.projected(1, 1, 2) == 2
+    assert _places([5100, 5000], [8, 8], [8, 8], [([], [], [])]).middles() == [1, 2]
 
 
 def test_equal_trophies_follow_the_daily_boards_order() -> None:
@@ -85,7 +83,7 @@ def test_equal_trophies_follow_the_daily_boards_order() -> None:
         [5000, 5000, 5000, 4960], [0, 0, 0, 1], [0, 0, 0, 0], [day],
         latest=[MORNING, None, NOON, MORNING],
     )
-    assert [places.projected(player, 1, 4) for player in range(4)] == [3, 4, 2, 1]
+    assert places.middles() == [3, 4, 2, 1]
 
 
 def test_a_balanced_finish_still_changes_trophies_last() -> None:
@@ -97,8 +95,7 @@ def test_a_balanced_finish_still_changes_trophies_last() -> None:
     day = _day([5000] * 100, [1] * 50 + [0] * 50, [1] * 50 + [0] * 50, [0] * 100,
                moved=[True] * 50 + [False] * 50)
     places = _places([5000, 5000], [0, 1], [0, 1], [day], latest=[NOON, MORNING])
-    assert places.projected(0, 1, 2) == 2
-    assert places.projected(1, 1, 2) == 1
+    assert places.middles() == [2, 1]
 
 
 def test_every_imagined_day_gives_each_player_their_own_place() -> None:
@@ -106,10 +103,8 @@ def test_every_imagined_day_gives_each_player_their_own_place() -> None:
     # all end on 5,000 in a random order: never two on the same place.
     day = _day([5000] * 100, [1] * 100, [0] * 100, [40] * 100)
     places = _places([4960] * 100, [1] * 100, [0] * 100, [day])
-    for keys, ordered in zip(places.keys, places.sorted, strict=True):
-        assert sorted(
-            1 + places.size - bisect_right(ordered, key) for key in keys
-        ) == list(range(1, 101))
+    for keys in places.keys:
+        assert sorted(_place(keys, key) for key in keys) == list(range(1, 101))
 
 
 def test_a_situation_without_examples_copies_the_nearest_within_its_own_slots() -> None:
@@ -119,7 +114,7 @@ def test_a_situation_without_examples_copies_the_nearest_within_its_own_slots() 
     # can win, takes them past 5,100 but not 5,290.
     day = _day([5000] * 100, [8] * 100, [8] * 100, [320] * 100)
     places = _places([5290, 5100, 5000], [0, 0, 7], [0, 0, 8], [day])
-    assert places.projected(2, 1, 3) == 2
+    assert places.middles()[2] == 2
 
 
 def test_each_imagined_day_copies_one_whole_day() -> None:
@@ -133,17 +128,14 @@ def test_each_imagined_day_copies_one_whole_day() -> None:
     places = _places([5000] * rivals + [4980], [0] * (rivals + 1),
                      [1] * rivals + [0], [busy, quiet], seed=3)
     finished = places.position[rivals]
-    ranks = {
-        1 + places.size - bisect_right(ordered, keys[finished])
-        for keys, ordered in zip(places.keys, places.sorted, strict=True)
-    }
+    ranks = {_place(keys, keys[finished]) for keys in places.keys}
     assert ranks == {1, rivals + 1}
     assert len(places.keys) == projected_place.DRAWS
 
 
-def test_everyones_place_at_once_is_each_players_own() -> None:
-    # The dashboard works out every player's place at once; each is the
-    # same as working out that player's alone, before the outer range.
+def test_each_players_place_is_the_middle_of_their_imagined_places() -> None:
+    # The dashboard works out every player's place at once: for each, the
+    # middle of their 200 places on the imagined days, before the outer range.
     day = _day([5000] * 60, [2] * 20 + [1] * 20 + [0] * 20, [1] * 60,
                [80, 40, -40] * 20)
     trophies = [4960, 5000, 5040, 5000, 4920] * 6
@@ -151,12 +143,17 @@ def test_everyones_place_at_once_is_each_players_own() -> None:
     open_defenses = [1, 1, 1, 0, 1] * 6
     places = _places(trophies, open_attacks, open_defenses, [day], seed=7)
     count = len(trophies)
-    assert places.middles() == [
-        places.projected(player, 1, count) for player in range(count)
-    ]
+    middles = []
+    for player in range(count):
+        own = sorted(
+            _place(keys, keys[places.position[player]]) for keys in places.keys
+        )
+        middles.append((own[99] + own[100] + 1) // 2)
+    assert places.middles() == middles
+    assert len(set(middles)) > 1
     inputs = (
         trophies, open_attacks, open_defenses, [3] * count, [None] * count,
         [f"#PP{TAG[index // len(TAG)]}{TAG[index % len(TAG)]}" for index in range(count)],
         [day],
     )
-    assert middle_places(*inputs, seed=7) == places.middles()
+    assert middle_places(*inputs, seed=7) == middles
