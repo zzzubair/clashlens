@@ -58,12 +58,14 @@ class _OffDuringOutage(FakeDiscord):
         await super().send_dm(discord_user_id, reply, nonce, time_left)  # type: ignore[arg-type]
 
 
-def test_one_summary_a_day_from_the_published_board_for_each_player_left_on(
+def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """The Season that started on 5 October 2026. FULL was tracked from Day 1;
     Clash Lens first saw LATE at the Day 3 Reset, so LATE's Day 2 has no
-    start reading and is Uncertain. Nothing is sent for the Day 3 Reset until
+    start reading and is Uncertain. Both are verified with Discord connected
+    and FULL's attack alerts on, but no summary is sent, nor logged, until
+    their summaries are turned on. Nothing is sent for the Day 3 Reset until
     its Daily board is published; then one DM covers both players' Day 2,
     with their places on that board, and a restarted bot sends it again to
     no one. LATE's summary then goes off: the Day 4 summary covers FULL alone,
@@ -116,6 +118,9 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_left_on(
             story.run_worker()
             story.wait(timedelta(hours=1))
             board = story.served_board(day_3)
+            unasked = asyncio.run(_loop(api, discord, after_reset).tick())
+            for tag in (FULL, LATE):
+                assert _summary_switch(api, mine, tag, True) == 200
             first = _loop(api, discord, after_reset)
             sent = [asyncio.run(first.tick()) for _ in range(2)]
             # A restarted bot looks again at once and finds it logged.
@@ -150,7 +155,7 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_left_on(
             owner.close()
 
     places = {entry["tag"]: entry["position"] for entry in board["entries"]}
-    assert (before_board, sent, restarted) == (0, [1, 0], 0)
+    assert (before_board, unasked, sent, restarted) == (0, 0, [1, 0], 0)
     assert [(user, reply.title) for user, reply in day_3_dms] == [
         (DISCORD_ID, "Legend day summary · Tue 6 Oct"),
     ]
@@ -292,6 +297,7 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             for tag in (WAITING, RAISED, KNOWN_START):
                 _verify(owner, mine, tag)
+                assert _summary_switch(api, mine, tag, True) == 200
             at = monday + timedelta(hours=2)
             sent = asyncio.run(
                 _loop(api, discord, at, _CorrectedAfterFirstRead(api, correct)).tick())

@@ -506,12 +506,12 @@ def test_the_page_lists_every_verified_player(database_url: str) -> None:
         players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
 
     assert len(players) == 501
-    assert players[-1] == {"tag": "#2PP", "name": None, "on": True, "summary_on": True}
+    assert players[-1] == {"tag": "#2PP", "name": None, "on": True, "summary_on": False}
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
-    """Moving the player to another account and back does not turn alerts
-    on, nor leave its Legend day summary off."""
+    """Moving the player to another account and back does not turn its
+    attack alerts or its Legend day summary on again."""
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
@@ -523,11 +523,11 @@ def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
             theirs = _account(owner, "google", "google-subject", "other")
             _verify(owner, mine, "#2PP")
             assert _switch(api, mine, "#2PP", True) == 200
-            assert _summary_switch(api, mine, "#2PP", False) == 200
+            assert _summary_switch(api, mine, "#2PP", True) == 200
             _verify(owner, theirs, "#2PP")
             _verify(owner, mine, "#2PP")
             players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
         finally:
             api.close()
             owner.close()
-    assert players == [{"tag": "#2PP", "name": None, "on": False, "summary_on": True}]
+    assert players == [{"tag": "#2PP", "name": None, "on": False, "summary_on": False}]

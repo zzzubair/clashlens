@@ -45,26 +45,26 @@ on purpose.
 ## Legend day summary
 
 Once a minute the bot checks whether the Daily board for the latest Reset is
-published. Once it is, each Clash Lens account with Discord connected gets
-one DM summing up the Legend day that Reset ended, for each verified player
-whose summary is on: starting and end-of-day trophies, the trophy change,
-attacks and defenses with their trophies, the day's label (Verified,
-Calculated, Uncertain) and its place on that Daily board, with a link to the
-day on the player page. The numbers come from the player page's own read, so
-they match it. The end of day is the one the worker saved with that version
-of the day, as the Season page shows it, before any weekly or Season reset at
-that Reset, which is shown beside the change; it shows as Unavailable when the
-worker saved none. Every place in one round of summaries comes from the same
-version of that Daily board. A player whose day is not saved yet, or whom that
-board went without, is named as not finished; a player with no Legend day that
-day is left out, and an account with no finished day gets no DM. A summary too
-long for one message goes as several, in order, each sent as soon as the one
-before is delivered.
+published. Once it is, each Clash Lens account with Discord connected and a
+player's summary turned on gets one DM summing up the Legend day that Reset
+ended, for each verified player whose summary is on: starting and end-of-day
+trophies, the trophy change, attacks and defenses with their trophies, the
+day's label (Verified, Calculated, Uncertain) and its place on that Daily
+board, with a link to the day on the player page. The numbers come from the
+player page's own read, so they match it. The end of day is the one the worker
+saved with that version of the day, as the Season page shows it, before any
+weekly or Season reset at that Reset, which is shown beside the change; it
+shows as Unavailable when the worker saved none. Every place in one round of
+summaries comes from the same version of that Daily board. A player whose day
+is not saved yet, or whom that board went without, is named as not finished; a
+player with no Legend day that day is left out, and an account with no
+finished day gets no DM. A summary too long for one message goes as several,
+in order, each sent as soon as the one before is delivered.
 
-- Each player's summary is on until turned off on the website's Discord
-  alerts page, separately from its attack alerts. Each player turned off is
-  one row in `discord_day_summary_off` (migration 0111), deleted when the
-  player is unverified or moved to another account, so it is on again if it
+- Each player's summary is off until turned on on the website's Discord
+  alerts page, separately from its attack alerts. Each player turned on is
+  one row in `discord_day_summary_on` (migration 0112), deleted when the
+  player is unverified or moved to another account, so it is off again if it
   comes back.
 - Nothing is read for a Reset until its board is published, so a late board
   makes the summaries late and they never compete with the Reset's own work.
@@ -127,8 +127,9 @@ Nothing below has been done yet. Do the steps in order.
    a test player on the website's Discord alerts page. A DM saying "Attack
    alerts are on for …" should arrive; then, after that player's next real
    defense, the attack alert DM should arrive too.
-9. **Test the Legend day summary.** With a test player verified and
-   Discord connected, a DM titled "Legend day summary" should arrive
+9. **Test the Legend day summary.** With a test player verified, Discord
+   connected and the player's summary turned on on the website's Discord
+   alerts page, a DM titled "Legend day summary" should arrive
    shortly after the next Reset's Daily board is published.
 10. **Launch.** Turn "Public Bot" on when ready, and share the install link.
 

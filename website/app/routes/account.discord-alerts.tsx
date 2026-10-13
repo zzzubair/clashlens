@@ -364,7 +364,7 @@ function AttackAlertSwitches({
   );
 }
 
-/** Per-player switches for the Legend day summary, on until turned off and
+/** Per-player switches for the Legend day summary, off until turned on and
  * separate from attack alerts. */
 function DaySummarySwitches({
   alerts,
@@ -382,10 +382,10 @@ function DaySummarySwitches({
       <h2 id="summary-title">Legend day summary</h2>
       <p id="day-summary-help" className="form-help">
         After each Reset&apos;s Daily board is published, the bot sends you one message
-        summing up the Legend day just ended for every player with the summary on:
-        starting and end-of-day trophies, attacks, defenses and the player&apos;s place on
-        the Daily board. Each player&apos;s summary is on or off on its own, separately
-        from its attack alerts.
+        summing up the Legend day just ended for every player you switched on: starting
+        and end-of-day trophies, attacks, defenses and the player&apos;s place on the
+        Daily board. The summary is off until you turn it on for a player, and each
+        player&apos;s summary is on or off on its own, separately from its attack alerts.
       </p>
       <ul className="player-link-list" aria-describedby="day-summary-help">
         {alerts.players.map((player) => (
