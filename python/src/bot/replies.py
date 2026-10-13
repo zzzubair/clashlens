@@ -149,8 +149,9 @@ def not_your_menu() -> Reply:
     return Reply("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher chooses the bot's default player.
-DISCORD_SETTINGS = "/account/providers"
+# The account page, which opens the Clasher's profile, where Make default
+# chooses the bot's default player; a signed-out visitor signs in first.
+DISCORD_SETTINGS = "/account"
 # Where a Clasher connects Discord and turns attack alerts on or off; /link
 # opens it, and a signed-out visitor signs in first and lands there.
 DISCORD_ALERTS = "/account/discord-alerts"
