@@ -15,7 +15,7 @@ import discord
 import pytest
 from aiohttp import web
 
-from bot.alerts import AlertStore, Refused, Unreachable
+from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
 from bot.replies import Reply, Site, attack_alert
@@ -278,6 +278,77 @@ def test_an_alert_rates_the_attacker_over_the_attacks_season() -> None:
     assert alerts.hit_rate("#8QQ", last_day, season + timedelta(minutes=2)) == "75%"
     assert alerts.hit_rate("#8QQ", season, season - timedelta(seconds=1)) == "100%"
     assert alerts.hit_rate("#8QQ", season, season + timedelta(hours=1)) == "100%"
+
+
+class ResetRound(AlertStore):
+    """The alert reads with no database: a confirmation, then an attack on
+    the Legend day starting at `reset`, the Season's second, are due. The
+    attacker made 3 three-stars in 4 attacks the day before and none in 1
+    attack that day."""
+
+    def __init__(self, reset: datetime) -> None:
+        super().__init__(None, self)  # type: ignore[arg-type]
+        self.reset = reset
+
+    def prune(self) -> None:
+        pass
+
+    def confirmations_due(self) -> list[dict]:
+        return [{"account_id": 1, "discord_user_id": "1", "player_id": 2, "tag": "#2PP",
+                 "name": "Wanderer", "confirm_requested_at": self.reset}]
+
+    def due(self) -> list[dict]:
+        return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
+                 "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
+                 "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
+                 "destruction_percentage": 87, "trophies_lost": 24, "saved_at": self.reset,
+                 "ranked_day_start": self.reset}]
+
+    def claim(self, delivery: object) -> int:
+        return 3 if delivery.battle_id else 2  # type: ignore[attr-defined]
+
+    def finish(self, *_outcome: object) -> None:
+        pass
+
+    def player_page(self, _tag: str, now: datetime) -> dict:
+        day = ranked_day_for(now)
+        results = {self.reset - timedelta(days=1): (3, 4), self.reset: (0, 1)}
+        starts = [day.season_start + timedelta(days=offset) for offset in range(day.day_number)]
+        return {
+            "screen_ready": {
+                "season": {
+                    "start": day.season_start.isoformat(),
+                    "current_day_number": day.day_number,
+                },
+                "season_day_starts": [start.isoformat() for start in starts],
+                "days": [
+                    {"ranked_day_start": start.isoformat(),
+                     "attack_three_star_count": results[start][0],
+                     "attack_count": results[start][1]}
+                    for start in starts
+                ],
+            }
+        }
+
+
+def test_an_alert_rates_the_attacker_as_of_when_it_is_written() -> None:
+    """A round begins 30 seconds before a Reset, and the confirmation before
+    the alert takes 90 seconds to send. The alert written after it counts
+    the attacker's Legend day that Reset began: 3 three-stars in 5 attacks,
+    not 3 in 4 as at the start of the round."""
+    reset = ranked_day_for(datetime(2026, 10, 13, 12, tzinfo=UTC)).season_start + timedelta(
+        days=1)
+    moment = [reset - timedelta(seconds=30)]
+    sent: list[Reply] = []
+
+    class SlowDiscord:
+        async def send_dm(self, _user: str, reply: Reply, _nonce: int, _left: float) -> None:
+            sent.append(reply)
+            moment[0] += timedelta(seconds=90)
+
+    loop = AlertLoop(ResetRound(reset), SlowDiscord(), SITE, now=lambda: moment[0])
+    assert asyncio.run(loop.tick()) == 2
+    assert sent[1].body.splitlines()[1] == "Drift's hit rate in this attack's Season: 60%"
 
 
 def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:

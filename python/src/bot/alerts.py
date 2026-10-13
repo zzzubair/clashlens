@@ -299,7 +299,6 @@ class AlertLoop:
         again each other one whose time has come, then send every
         confirmation, then every alert, due now, one at a time; returns how
         many were sent."""
-        now = self.now()
         clock = asyncio.get_running_loop().time()
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
             await asyncio.to_thread(self.alerts.prune)
@@ -328,7 +327,7 @@ class AlertLoop:
             )
         for alert in await asyncio.to_thread(self.alerts.due):
             rate = await asyncio.to_thread(
-                self.alerts.hit_rate, alert["attacker_tag"], alert["ranked_day_start"], now
+                self.alerts.hit_rate, alert["attacker_tag"], alert["ranked_day_start"], self.now()
             )
             sent += await self._claim(
                 Delivery(
