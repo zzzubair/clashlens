@@ -252,11 +252,15 @@ def test_today_with_a_battle_that_may_be_missing_counts_none_left(store) -> None
     ]
 
 
-def test_season_history_shows_after_the_player_leaves_legend(store) -> None:
+@pytest.mark.parametrize("state", ["not_in_legend", "uncertain"])
+def test_season_history_shows_after_the_player_leaves_legend(store, state) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5040)])
-    store.pages["#2PP"] = {**season_page(), "state": "not_in_legend"}
+    store.pages["#2PP"] = {**season_page(), "state": state}
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
     assert "Attack hit rate: 50%" in text
+    # Today's recorded battles still show, but none are said to be left to play.
+    assert "`Attacks ` –\n`Defenses` 🟥\n" in text
+    assert "left" not in text and "⬛" not in text
 
 
 def test_season_not_available_yet_still_shows_today(store) -> None:

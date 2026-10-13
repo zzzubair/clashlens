@@ -518,8 +518,9 @@ _UNPLAYED = "⬛"
 
 def _today(page: Mapping[str, Any], now: datetime) -> str:
     """The Legend day so far: trophies gained (attacks) and lost (defenses),
-    then a square for each recorded battle and, only while every battle so
-    far is recorded, a dark one for each still to play of the game's 8 a day."""
+    then a square for each recorded battle and, only while the player is
+    tracked in Legend I and every battle so far is recorded, a dark one for
+    each still to play of the game's 8 a day."""
     start = ranked_day_for(now).start
     day = next(
         (
@@ -534,7 +535,8 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
     attacks = day["offense_events"]
     defenses = day["defense_events"]
     complete = day["battles_complete"]
-    if complete and not (attacks or defenses):
+    to_play = complete and page["state"] == "tracking"
+    if to_play and not (attacks or defenses):
         lines = ["No battles yet today"]
     else:
         loss = day["defense_loss"]
@@ -549,7 +551,7 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
         ("Defenses", defenses, _DEFENSE_SQUARES, MAX_DAILY_DEFENSES),
     ):
         shown = "".join(squares.get(battle["stars"], _UNPLAYED) for battle in battles)
-        if complete:
+        if to_play:
             left = max(0, most - len(battles))
             shown += _UNPLAYED * left + f"  {left} left"
         lines.append(f"`{label}` {shown or '–'}")

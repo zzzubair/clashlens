@@ -53,11 +53,12 @@ account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account
 keeps its colour everywhere. Everything else uses Clash Lens yellow. `/stats`
 ends with when the player's profile was last read ("Updated N min ago"); no
-other message has that line. `/stats` shows today's battles as squares, and
-how many are left, only while every battle so far is recorded, as the player
-page checks it; with today not saved yet it says so, and with a battle that
-may be missing it shows the recorded ones and points to the day on Clash
-Lens. A `/stats` reply that shows a status word
+other message has that line. `/stats` shows a square for each of today's
+recorded battles, and dark squares with how many are left only while the
+player is tracked in Legend I and every battle so far is recorded, as the
+player page checks it; with today not saved yet it says so, and with a battle
+that may be missing it points to the day on Clash Lens. A `/stats` reply that
+shows a status word
 instead of numbers also shows the next Reset as a Discord timestamp, which
 each viewer sees in their own local time.
 
