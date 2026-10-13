@@ -5,6 +5,8 @@ import {
   Link,
   redirect,
   useLoaderData,
+  useLocation,
+  useNavigate,
   useNavigation,
   type LoaderFunctionArgs,
 } from "react-router";
@@ -108,12 +110,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
       selector,
       focusTag ?? undefined,
     );
-    if (viewValue === "daily" && !selector && leaderboard.daily)
-      throw redirect(leaderboardUrl("daily", page, leaderboard.daily));
     return {
       leaderboard,
       error: null,
       pageUnavailableUrl: null,
+      // The newest Daily board, read without a Season and day: the page shows
+      // it at once and then names its Season and day in the address.
+      latestDailyUrl:
+        viewValue === "daily" && !selector && leaderboard.daily
+          ? leaderboardUrl("daily", page, leaderboard.daily)
+          : null,
       view: viewValue,
       query,
       search,
@@ -134,6 +140,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         leaderboard: await createPythonClient().getTrackedLeaderboard(PAGE_SIZE, "live"),
         error: missing,
         pageUnavailableUrl: null,
+        latestDailyUrl: null,
         view: viewValue,
         query,
         search: null,
@@ -146,6 +153,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           leaderboard: null,
           error: null,
           pageUnavailableUrl: leaderboardUrl(viewValue, 1, selector),
+          latestDailyUrl: null,
           view: viewValue,
           query,
           search: null,
@@ -161,6 +169,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       leaderboard: null,
       error: safeWebsiteError(cause),
       pageUnavailableUrl: null,
+      latestDailyUrl: null,
       view: viewValue,
       query,
       search: null,
@@ -178,11 +187,24 @@ export default function TrackedLeaderboardRoute() {
     leaderboard: savedLeaderboard,
     error,
     pageUnavailableUrl,
+    latestDailyUrl,
     view,
     query,
     search: savedSearch,
     focusTag,
   } = useLoaderData<typeof loader>();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const shownWithoutDay = !new URLSearchParams(location.search).has("season");
+  useEffect(() => {
+    // Give the shown board its shareable address without reading it again.
+    if (latestDailyUrl && shownWithoutDay)
+      void navigate(latestDailyUrl, {
+        replace: true,
+        preventScrollReset: true,
+        defaultShouldRevalidate: false,
+      });
+  }, [latestDailyUrl, shownWithoutDay, location.key, navigate]);
   const seasonExpired = useSeasonReread(
     savedLeaderboard?.generatedAt,
     !!savedLeaderboard?.seasonResetPending,

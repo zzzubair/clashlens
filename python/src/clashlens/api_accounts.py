@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_groups, api_player_lookup, api_players
+from . import api_db, api_groups, api_leaderboard, api_player_lookup, api_players
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -1078,8 +1078,15 @@ def search_public_users(
 
 
 def get_public_user(
-    database: ApiDatabase, normalized_username: str, *, now: datetime
+    database: ApiDatabase,
+    normalized_username: str,
+    *,
+    now: datetime,
+    live_board: api_leaderboard.LiveBoardCache | None = None,
 ) -> dict[str, Any] | None:
+    # Ranks from the shared Live Leaderboard, read before taking a connection
+    # so a board read never waits for a second one.
+    board = None if live_board is None else live_board.current(database, now)
     with database.pool.connection() as connection:
         account = connection.execute(
             """
@@ -1096,7 +1103,10 @@ def get_public_user(
             "username": _text(account[1]),
             "display_name": _text(account[2]),
             "verified_players": api_players.player_cards(
-                connection, _linked_players(connection, int(account[0])), now=now
+                connection,
+                _linked_players(connection, int(account[0])),
+                now=now,
+                live_board=board,
             ),
         }
 

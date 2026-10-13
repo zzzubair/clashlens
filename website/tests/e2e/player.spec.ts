@@ -533,6 +533,48 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   }
 });
 
+test("an opponent's Legend day opens in the page at the battle, and Back returns", async ({
+  page,
+}) => {
+  await refuseRefreshes(page);
+  await openWorstCasePlayer(page);
+  await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
+  const link = page.locator(".battle-profile-link").first();
+  const href = (await link.getAttribute("href"))!;
+  const target = new URL(href, page.url());
+  const opponent = decodeURIComponent(target.pathname.split("/").pop()!);
+  // The opponent's page data: the same worst-case days, so the battle is there.
+  const saved = await page.request.get("/players/%232PP.data");
+  const decoded = decodePageData(await saved.text());
+  const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
+  Object.assign(data, {
+    player: worstCasePlayer(opponent, Date.parse("2026-10-10T12:00:00Z")),
+    seasons: WORST_SEASONS,
+  });
+  const opponentData = encodePageData(decoded);
+  await page.route(`**${target.pathname}.data*`, (route) =>
+    route.fulfill({ contentType: saved.headers()["content-type"], body: opponentData }),
+  );
+  const documents: string[] = [];
+  page.on("request", (request) => {
+    if (request.resourceType() === "document") documents.push(request.url());
+  });
+
+  await link.click();
+  await expect(page).toHaveURL(target.href);
+  const battle = page.locator(`[id="${decodeURIComponent(target.hash.slice(1))}"]`);
+  await expect(battle).toHaveClass(/battle-arrival/);
+  await expect(battle).toBeInViewport();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await expect(page.locator(".battle-profile-link").first()).toHaveAttribute(
+    "href",
+    href,
+  );
+  // Both moves stayed in the open page: no page was downloaded again.
+  expect(documents).toEqual([]);
+});
+
 for (const status of [400, 429]) {
   test(`a Season switch shows that Season when the automatic refresh gets ${status}`, async ({
     page,

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
   StaticRouterProvider,
@@ -440,3 +441,70 @@ it.each([
     } else expect(html).not.toContain('aria-label="Other days"');
   },
 );
+
+it("shows the newest Daily board from one read, then names its Season and day without reading it again", async () => {
+  const fixture = structuredClone(board);
+  fixture.view = "daily";
+  fixture.daily = {
+    officialSeasonId: "1791176400",
+    dayNumber: 7,
+    resetAt: "2026-10-12T05:00:00Z",
+    seasonStartAt: "2026-10-05T05:00:00Z",
+    seasonEndAt: "2026-11-02T05:00:00Z",
+    previousSnapshot: null,
+    nextSnapshot: null,
+  };
+  fixture.provenance.observedAt = "2026-10-12T04:59:00Z";
+  mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+  const explicit = "/leaderboards/tracked?view=daily&season=1791176400&day=7&page=2";
+
+  // The board renders at once, as it does without JavaScript, not after a redirect.
+  const { html, status } = await render("view=daily&page=2");
+  expect(status).toBe(200);
+  expect(html).toContain('<p class="rankings-kicker">Day 7</p>');
+  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledTimes(1);
+  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
+    100,
+    "daily",
+    100,
+    undefined,
+    undefined,
+  );
+
+  // In the browser the address then names the board's day, with no new read.
+  const rootLoader = vi.fn(() => null);
+  const router = createMemoryRouter(
+    [
+      {
+        id: "root",
+        path: "/",
+        loader: rootLoader,
+        children: [{ path: "leaderboards/tracked", loader }],
+      },
+    ],
+    { initialEntries: ["/leaderboards/tracked?view=daily&page=2"] },
+  );
+  await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+  const data = router.state.loaderData["0-0"] as { latestDailyUrl: string | null };
+  expect(data.latestDailyUrl).toBe(explicit);
+  await router.navigate(data.latestDailyUrl, {
+    replace: true,
+    preventScrollReset: true,
+    defaultShouldRevalidate: false,
+  });
+  expect(router.state.location.pathname + router.state.location.search).toBe(explicit);
+  expect(router.state.historyAction).toBe("REPLACE");
+  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledTimes(2);
+  expect(rootLoader).toHaveBeenCalledTimes(1);
+  router.dispose();
+
+  // An address that already names the day needs nothing more.
+  const named = createMemoryRouter([{ path: "/leaderboards/tracked", loader }], {
+    initialEntries: [explicit],
+  });
+  await vi.waitFor(() => expect(named.state.initialized).toBe(true));
+  expect(
+    (named.state.loaderData["0"] as { latestDailyUrl: string | null }).latestDailyUrl,
+  ).toBeNull();
+  named.dispose();
+});

@@ -183,6 +183,11 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
             assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
+            # The website's profile takes them from the shared Live board.
+            assert api_accounts.get_public_user(
+                database, "groupowner", now=NOW,
+                live_board=api_leaderboard.LiveBoardCache(),
+            )["verified_players"] == cards
             # A newer uncertain profile names no league, rather than the
             # older Electro League 33 staying shown.
             with database.pool.connection() as connection:

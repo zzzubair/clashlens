@@ -5,15 +5,16 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Lock
 from typing import Any
 
 from .analytics import LIVE_TALLY_SECONDS, tie_order_sql, unplayed_sql
 from .api_db import (
     ApiDatabase,
+    SharedCopy,
     _public_confidence,
     _public_snapshot_confidence,
     _season_reset_waiting_sql,
+    _start_thread,
     _text,
 )
 from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
@@ -375,7 +376,6 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
 
 @dataclass(frozen=True)
 class _LiveBoard:
-    season: tuple[Any, ...]
     tracked_population: int
     season_reset_pending: int
     # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
@@ -389,9 +389,17 @@ class _LiveBoard:
             for other in (index - 1, index + 1)
         )
 
+    def positions(self, tags: list[str]) -> dict[str, int]:
+        """Each tag's position on this board; a tag off it is left out."""
+        wanted = set(tags)
+        return {
+            _text(row[0]): position
+            for position, row in enumerate(self.rows, start=1)
+            if _text(row[0]) in wanted
+        }
+
 
 def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
-    season = _season_params(now)
     rows = connection.execute(
         f"""
         WITH candidates AS MATERIALIZED (
@@ -410,42 +418,42 @@ def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
         ) AS live ON true
         ORDER BY {_LIVE_ORDER_SQL}
         """,
-        season,
+        _season_params(now),
     ).fetchall()
     return _LiveBoard(
-        season=tuple(season.values()),
         tracked_population=int(rows[0][0]),
         season_reset_pending=int(rows[0][1]),
         rows=[tuple(row[2:]) for row in rows if row[2] is not None],
     )
 
 
-class LiveBoardCache:
-    """The ranked Live Leaderboard, read at most once per ``seconds`` and
-    shared by every page of it, the home page's top players included."""
+def _read_live_board_from(database: ApiDatabase, now: datetime) -> _LiveBoard:
+    with database.pool.connection() as connection:
+        return _read_live_board(connection, now)
+
+
+class LiveBoardCache(SharedCopy[_LiveBoard]):
+    """The ranked Live Leaderboard shared by every page of it, the home page's
+    top players and public profiles' ranks: read again in the background
+    after ``seconds``, never served past twice that, and read anew for each
+    Legend day, so never across a Reset or into a new Season."""
 
     def __init__(
-        self, seconds: float = 30, *, clock: Callable[[], float] = time.monotonic
+        self,
+        seconds: float = 30,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        start: Callable[[Callable[[], None]], None] = _start_thread,
     ) -> None:
-        self._seconds = seconds
-        self._clock = clock
-        self._lock = Lock()
-        self._board: _LiveBoard | None = None
-        self._refresh_after = 0.0
-
-    def current(self, database: ApiDatabase, now: datetime) -> _LiveBoard:
-        with self._lock:
-            board = self._board
-            if (
-                board is None
-                or self._clock() >= self._refresh_after
-                or board.season != tuple(_season_params(now).values())
-            ):
-                with database.pool.connection() as connection:
-                    board = _read_live_board(connection, now)
-                self._board = board
-                self._refresh_after = self._clock() + self._seconds
-            return board
+        super().__init__(
+            _read_live_board_from,
+            key=lambda now: ranked_day_for(now).start,
+            seconds=seconds,
+            longest=2 * seconds,
+            name="live_board_copy",
+            clock=clock,
+            start=start,
+        )
 
 
 def _live_board(
@@ -453,8 +461,7 @@ def _live_board(
 ) -> _LiveBoard:
     if cache is not None:
         return cache.current(database, now)
-    with database.pool.connection() as connection:
-        return _read_live_board(connection, now)
+    return _read_live_board_from(database, now)
 
 
 def get_live_leaderboard(

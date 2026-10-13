@@ -217,6 +217,7 @@ def create_app(
     dashboard_board = api_dashboard.DashboardBoard()
     dashboard_army_days = api_dashboard.ArmyDays()
     live_board = api_leaderboard.LiveBoardCache()
+    known_players = api_players.KnownPlayerNames()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
 
@@ -402,6 +403,7 @@ def create_app(
                     now=current_time(),
                     freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
                     limit=limit,
+                    names=known_players,
                 ),
             },
         )
@@ -720,7 +722,10 @@ def create_app(
         except ValueError as error:
             raise ApiError(404, "user_not_found") from error
         result = api_accounts.get_public_user(
-            production_database, normalized_username, now=current_time()
+            production_database,
+            normalized_username,
+            now=current_time(),
+            live_board=live_board,
         )
         if result is None:
             raise ApiError(404, "user_not_found")

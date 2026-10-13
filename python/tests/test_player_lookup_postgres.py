@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
@@ -269,6 +269,10 @@ def test_name_results_only_include_active_or_historical_players(database_url):
                 database, "Player", now=NOW, freshness_seconds=900
             )
             assert {result["tag"] for result in results} == {"#2PP", "#8PY"}
+            assert api_players.search_known_players(
+                database, "Player", now=NOW, freshness_seconds=900,
+                names=api_players.KnownPlayerNames(),
+            ) == results
             assert (
                 api_player_lookup.get_lookup(database, "#2PY")["state"]
                 == "not_in_legend"
@@ -355,6 +359,7 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
                 )
             )
             try:
+                names = api_players.KnownPlayerNames()
                 for limit in (1, 3, 50):
                     results = api_players.search_known_players(
                         reader, "iRoY", now=NOW, freshness_seconds=900, limit=limit
@@ -366,8 +371,71 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
                         "#2PV",
                         "#2PY",
                     ][:limit]
+                    # The header search's held copy finds and orders the same.
+                    assert api_players.search_known_players(
+                        reader, "iRoY", now=NOW, freshness_seconds=900, limit=limit,
+                        names=names,
+                    ) == results
             finally:
                 reader.close()
+        finally:
+            database.close()
+
+
+def test_header_search_holds_names_and_refreshes_them_in_the_background(
+    database_url, monkeypatch
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            reads = []
+            read = api_players._read_known_players
+            monkeypatch.setattr(
+                api_players,
+                "_read_known_players",
+                lambda *args: reads.append(args[1]) or read(*args),
+            )
+            clock = [0.0]
+            refreshes = []
+            names = api_players.KnownPlayerNames(
+                60, clock=lambda: clock[0], start=refreshes.append
+            )
+
+            def found(query, now=NOW):
+                return [
+                    (row["tag"], row["trophies"])
+                    for row in api_players.search_known_players(
+                        database, query, now=now, freshness_seconds=900, names=names
+                    )
+                ]
+
+            assert found("Player") == [("#2PP", 6000)]
+            seed_profile(database, "#8PY", 6100)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET trophies = 6200"
+                    " WHERE normalized_tag = '#2PP'"
+                )
+            # Every search in the next minute uses the held names.
+            clock[0] = 59.9
+            assert found("Player") == found("2PP") == [("#2PP", 6000)]
+            assert found("8PY") == []
+            assert reads == [NOW]
+            # After it, searches still answer at once while one read runs behind.
+            clock[0] = 60.0
+            assert found("Player") == [("#2PP", 6000)]
+            assert found("Player") == [("#2PP", 6000)]
+            assert len(refreshes) == 1 and reads == [NOW]
+            refreshes.pop()()
+            assert found("Player") == [("#2PP", 6200), ("#8PY", 6100)]
+            assert reads == [NOW, NOW]
+            # A new Legend day is read at once, not served from the old one.
+            tomorrow = NOW + timedelta(days=1)
+            assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
+            assert reads == [NOW, NOW, tomorrow] and refreshes == []
         finally:
             database.close()
 
@@ -412,6 +480,10 @@ def test_name_search_matches_literal_substrings_and_ignores_old_names(
             )
             assert [row["tag"] for row in results] == ["#2PP"]
             assert results[0]["name"] == f"Before {query} After"
+            assert api_players.search_known_players(
+                database, query, now=NOW, freshness_seconds=900,
+                names=api_players.KnownPlayerNames(),
+            ) == results
         finally:
             database.close()
 

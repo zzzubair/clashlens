@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import heapq
+import math
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -7,6 +11,7 @@ from . import api_leaderboard, api_player_lookup
 from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
+    SharedCopy,
     _daily_log,
     _frozen_trophies_sql,
     _historical_season_summary,
@@ -15,6 +20,7 @@ from .api_db import (
     _public_confidence,
     _screen_daily_log_with_events,
     _season_reset_waiting_sql,
+    _start_thread,
     _text,
     _withhold_unsupported_entries,
 )
@@ -462,13 +468,15 @@ def player_cards(
     players: list[tuple[int, str, str | None, str | None, str | None]],
     *,
     now: datetime,
+    live_board: api_leaderboard._LiveBoard | None = None,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
     battles so far, read for every player at once.
 
     ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
-    Leaderboard position whenever it is on the board, and the league its newest
+    Leaderboard position whenever it is on the board (``live_board`` when
+    given, the shared copy the public board shows), and the league its newest
     saved profile names. For a player outside Legend I, trophies come from its
     newest saved profile. Otherwise trophies and today come only from an
     accepted current profile. While a newer profile goes unaccepted they stay
@@ -549,8 +557,11 @@ def player_cards(
                     "defenses": day["defense_count"],
                 }
         cards.append(card)
-    positions = api_leaderboard.live_positions(
-        connection, [card["tag"] for card in cards], now=now
+    tags = [card["tag"] for card in cards]
+    positions = (
+        api_leaderboard.live_positions(connection, tags, now=now)
+        if live_board is None
+        else live_board.positions(tags)
     )
     for card in cards:
         card["rank"] = positions.get(card["tag"])
@@ -720,6 +731,106 @@ def get_player_season_summary(
         }
 
 
+def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
+    """Every known player a name search can find, matched by ``name_filter``,
+    each with its lower-case name and its place in name order."""
+    # Off a Season's first Legend day no profile awaits its Season reset for
+    # its trophies alone, so those per-player reads are left out.
+    opening = (
+        f"""{_frozen_trophies_sql("player.id", "%(opening_reset)s")}
+                   AS frozen_trophies,
+               {_opening_day_battles_sql("player.id", "%(opening_reset)s")}
+                   AS day_battles,
+               {_season_reset_waiting_sql(
+                   "player.id", "profile.trophies", "%(opening_reset)s"
+               )} AS opening_day_waiting"""
+        if opening_reset is not None
+        else """NULL::integer AS frozen_trophies, NULL::integer[] AS day_battles,
+               false AS opening_day_waiting"""
+    )
+    return f"""
+        -- Match current names before checking history. Without this boundary,
+        -- PostgreSQL can scan and decode every player's daily battle JSON.
+        WITH matches AS MATERIALIZED (
+            SELECT player.id, player.normalized_tag, profile.name,
+                   profile.trophies, player.current_observed_at,
+                   player.eligibility_state, player.active,
+                   profile.profile_json -> 'clan' ->> 'name' AS clan,
+                   profile.current_league_season_id, {opening}
+            FROM players AS player
+            JOIN LATERAL (
+                SELECT name, trophies, source_contract_state, profile_json,
+                       current_league_season_id
+                FROM player_profile_versions
+                WHERE id = player.current_profile_version_id
+                -- Keep indexed current-profile reads as old versions grow.
+                OFFSET 0
+            ) AS profile ON true
+            WHERE player.current_profile_version_id IS NOT NULL{name_filter}
+              AND profile.source_contract_state = 'accepted'
+        )
+        SELECT player.normalized_tag, player.name, player.trophies,
+               player.current_observed_at, player.eligibility_state, player.clan,
+               player.current_league_season_id, player.frozen_trophies,
+               player.day_battles, player.opening_day_waiting, lower(player.name),
+               row_number() OVER (ORDER BY lower(player.name), player.normalized_tag)
+        FROM matches AS player
+        -- Scalar subqueries stop after one row and cannot become a hashed
+        -- EXISTS subplan that reads the entire history table.
+        WHERE (player.active
+               OR (SELECT true FROM api_player_daily_logs AS history
+                   WHERE history.player_id = player.id
+                     AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
+                          OR jsonb_array_length(history.battles) > 0)
+                   LIMIT 1)
+               OR (SELECT true FROM player_season_summaries AS history
+                   WHERE history.player_id = player.id LIMIT 1)
+               OR (SELECT true FROM player_league_history_entries AS history
+                   WHERE history.player_id = player.id LIMIT 1))
+    """
+
+
+def _read_known_players(
+    database: ApiDatabase, now: datetime, query: str | None = None
+) -> list[tuple[Any, ...]]:
+    """The players a name search can find, those whose current name contains
+    ``query`` when given, else every one."""
+    opening_reset = season_opening_reset(now)
+    name_filter = ""
+    parameters: dict[str, Any] = {"opening_reset": opening_reset}
+    if query is not None:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        name_filter = "\n              AND profile.name ILIKE %(pattern)s ESCAPE '\\'"
+        parameters["pattern"] = f"%{escaped}%"
+    with database.pool.connection() as connection:
+        return connection.execute(
+            _known_players_sql(opening_reset, name_filter), parameters
+        ).fetchall()
+
+
+class KnownPlayerNames(SharedCopy[list[tuple[Any, ...]]]):
+    """Every player the header search can find, held so a search reads no
+    database: read again in the background after a minute, never served past
+    two, and read anew for each Legend day."""
+
+    def __init__(
+        self,
+        seconds: float = 60,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        start: Callable[[Callable[[], None]], None] = _start_thread,
+    ) -> None:
+        super().__init__(
+            _read_known_players,
+            key=lambda now: ranked_day_for(now).start,
+            seconds=seconds,
+            longest=2 * seconds,
+            name="known_player_names_copy",
+            clock=clock,
+            start=start,
+        )
+
+
 def search_known_players(
     database: ApiDatabase,
     query: str,
@@ -727,96 +838,42 @@ def search_known_players(
     now: datetime,
     freshness_seconds: int,
     limit: int = 50,
+    names: KnownPlayerNames | None = None,
 ) -> list[dict[str, Any]]:
     if not 1 <= limit <= 50:
         raise ValueError("known player search limit is outside the supported range")
-    escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            -- Match current names before checking history. Without this boundary,
-            -- PostgreSQL can scan and decode every player's daily battle JSON.
-            WITH matches AS MATERIALIZED (
-                SELECT player.id, player.normalized_tag, profile.name,
-                       profile.trophies, player.current_observed_at,
-                       player.eligibility_state, player.active,
-                       profile.profile_json -> 'clan' ->> 'name' AS clan,
-                       profile.current_league_season_id,
-                       {_frozen_trophies_sql("player.id", "%(opening_reset)s")}
-                           AS frozen_trophies,
-                       {_opening_day_battles_sql("player.id", "%(opening_reset)s")}
-                           AS day_battles,
-                       {_season_reset_waiting_sql(
-                           "player.id", "profile.trophies", "%(opening_reset)s"
-                       )} AS opening_day_waiting
-                FROM players AS player
-                JOIN LATERAL (
-                    SELECT name, trophies, source_contract_state, profile_json,
-                           current_league_season_id
-                    FROM player_profile_versions
-                    WHERE id = player.current_profile_version_id
-                    -- Keep indexed current-profile reads as old versions grow.
-                    OFFSET 0
-                ) AS profile ON true
-                WHERE player.current_profile_version_id IS NOT NULL
-                  AND profile.name ILIKE %(pattern)s ESCAPE '\\'
-                  AND profile.source_contract_state = 'accepted'
-            )
-            SELECT player.normalized_tag, player.name, player.trophies,
-                   player.current_observed_at, player.eligibility_state, player.clan,
-                   player.current_league_season_id, player.frozen_trophies,
-                   player.day_battles
-            FROM matches AS player
-            -- Scalar subqueries stop after one row and cannot become a hashed
-            -- EXISTS subplan that reads the entire history table.
-            WHERE (player.active
-                   OR (SELECT true FROM api_player_daily_logs AS history
-                       WHERE history.player_id = player.id
-                         AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
-                              OR jsonb_array_length(history.battles) > 0)
-                       LIMIT 1)
-                   OR (SELECT true FROM player_season_summaries AS history
-                       WHERE history.player_id = player.id LIMIT 1)
-                   OR (SELECT true FROM player_league_history_entries AS history
-                       WHERE history.player_id = player.id LIMIT 1))
-            -- An exact name match first, then the strongest players.
-            ORDER BY lower(player.name) = lower(%(query)s) DESC,
-                     CASE WHEN player.current_league_season_id = %(season_id)s
-                               AND NOT player.opening_day_waiting
-                          THEN player.trophies END DESC NULLS LAST,
-                     lower(player.name), player.normalized_tag
-            LIMIT %(limit)s
-            """,
+    players = (
+        _read_known_players(database, now, query)
+        if names is None
+        else names.current(database, now)
+    )
+    season_id = ranked_day_for(now).official_season_id
+    needle = query.lower()
+
+    def order(row: tuple[Any, ...]) -> tuple[Any, ...]:
+        # An exact name match first, then the strongest players, then by name.
+        ranked = _text(row[6]) == season_id and not row[9] and row[2] is not None
+        return (row[10] != needle, -row[2] if ranked else math.inf, row[11])
+
+    rows = heapq.nsmallest(
+        limit, (row for row in players if needle in row[10]), key=order
+    )
+    results = []
+    for row in rows:
+        observed_at = row[3].astimezone(UTC)
+        age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
+        pending = awaits_season_reset(_text(row[6]), int(row[2]), row[7], row[8], now)
+        results.append(
             {
-                "pattern": f"%{escaped_query}%",
-                "query": query,
-                "season_id": ranked_day_for(now).official_season_id,
-                "opening_reset": season_opening_reset(now),
-                "limit": limit,
-            },
-        ).fetchall()
-        results = []
-        for row in rows:
-            observed_at = row[3].astimezone(UTC)
-            age_seconds = max(
-                0, int((now.astimezone(UTC) - observed_at).total_seconds())
-            )
-            pending = awaits_season_reset(
-                _text(row[6]), int(row[2]), row[7], row[8], now
-            )
-            results.append(
-                {
-                    "tag": _text(row[0]),
-                    "name": _text(row[1]),
-                    "clan": None if row[5] is None else _text(row[5]),
-                    "trophies": None if pending else int(row[2]),
-                    "season_reset_pending": pending,
-                    "freshness": (
-                        "fresh" if age_seconds <= freshness_seconds else "stale"
-                    ),
-                    "age_seconds": age_seconds,
-                    "observed_at": observed_at.isoformat(),
-                    "public_confidence": _public_confidence(True, _text(row[4])),
-                }
-            )
-        return results
+                "tag": _text(row[0]),
+                "name": _text(row[1]),
+                "clan": None if row[5] is None else _text(row[5]),
+                "trophies": None if pending else int(row[2]),
+                "season_reset_pending": pending,
+                "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
+                "age_seconds": age_seconds,
+                "observed_at": observed_at.isoformat(),
+                "public_confidence": _public_confidence(True, _text(row[4])),
+            }
+        )
+    return results
