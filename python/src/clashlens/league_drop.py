@@ -9,8 +9,8 @@ cannot tell them apart.
 A lower-league answer proves the player left Legend I when the parser
 accepted it, or when the player's next or previous answer, from another API
 response, is a lower league too, no profile response between the two went
-unsaved, and the player has no Legend battle after the earlier of the two
-before the next Monday Reset, the first time a league can change. Real
+unsaved, and the player has no Legend battle after the earlier of the two and
+before their next Legend I answer that could show a promotion back. Real
 demotions are proven by their next saved answer: at latest the next Reset
 reading, which is always saved, and that Reset's Daily board leaves out the
 day they left by (``boundary_manifest``). Tracking (``judge``), the day
@@ -33,8 +33,8 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 # answer from another API response: one response can be saved under more
 # than one parser version.
 _NEIGHBOURS = 5
-# Enough of a player's newest answers to reach back past a run of lower-league
-# ones to the Legend I answer before them.
+# Enough of a player's answers to pass a run of lower-league ones and reach
+# the Legend I answer before or after them.
 _NEWEST = 50
 
 
@@ -97,19 +97,27 @@ def readings(
     ]
 
 
-def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
+def battle_after(
+    connection: Any, player_id: int, after: datetime, later: datetime
+) -> bool:
     """Whether the player has a saved Legend battle, attack or defense, fought
-    after ``after`` in a Legend day before the next Monday Reset, the first
-    time a player can change league: a later one can follow a promotion back.
+    after ``after`` and before their first Legend I answer read from the
+    Monday Reset after ``later``, or now without one. Leagues change only at
+    a Monday Reset, so a Legend I answer before then shows no promotion back,
+    and a battle after one that does may follow it.
     The battle index holds each day's battles by attacker, then defender, so
     each day is its own lookup: one lookup over every day reads the whole
     table (500 ms a call at the 12 October 2026 Reset)."""
-    day = domain.ranked_day_for(after).start
+    day = domain.ranked_day_for(later).start
+    back = next((answer.read_at for answer in readings(
+        connection, player_id, since=day + timedelta(days=7 - day.weekday()), limit=_NEWEST,
+    ) if answer.eligible), None)
     return bool(connection.execute(
         """
         SELECT EXISTS (
             SELECT 1
-            FROM generate_series(%(day)s::timestamptz, %(last)s::timestamptz,
+            FROM generate_series(%(day)s::timestamptz,
+                                 COALESCE(%(back)s::timestamptz, clock_timestamp()),
                                  interval '24 hours') AS day (start)
             CROSS JOIN LATERAL (
                 (SELECT 1 FROM legend_battles AS battle
@@ -117,6 +125,7 @@ def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
                  WHERE battle.ranked_day_start = day.start
                    AND battle.attacker_player_id = %(player)s
                    AND evidence.battle_timestamp > %(after)s
+                   AND evidence.battle_timestamp < COALESCE(%(back)s::timestamptz, 'infinity')
                  LIMIT 1)
                 UNION ALL
                 (SELECT 1 FROM legend_battles AS battle
@@ -124,11 +133,12 @@ def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
                  WHERE battle.ranked_day_start = day.start
                    AND battle.defender_player_id = %(player)s
                    AND evidence.battle_timestamp > %(after)s
+                   AND evidence.battle_timestamp < COALESCE(%(back)s::timestamptz, 'infinity')
                  LIMIT 1)
             ) AS battle
         )
         """,
-        {"day": day - timedelta(days=1), "last": day + timedelta(days=6 - day.weekday()),
+        {"day": domain.ranked_day_for(after).start - timedelta(days=1), "back": back,
          "player": player_id, "after": after},
     ).fetchone()[0])
 
@@ -182,7 +192,7 @@ def left_legend_i(
     before, after = _pair(answers, index)
     return any(
         not first.eligible and not second.eligible
-        and not battle_after(connection, player_id, first.read_at)
+        and not battle_after(connection, player_id, first.read_at, second.read_at)
         and not _unsaved_between(connection, player_id, first.read_at, second.read_at)
         for first, second in ((before, answer), (answer, after))
         if first is not None and second is not None
@@ -299,28 +309,25 @@ def judge(connection: Any, player_id: int) -> None:
 
 
 def recheck_battle_players(
-    connection: Any, player_ids: list[int], reporter_id: int, observed_at: datetime
+    connection: Any, player_ids: list[int], observed_at: datetime
 ) -> None:
     """Judge again each untracked player a saved battle log names who was
     stopped by lower-league answers: a Legend battle after them may now show
-    they never left. Then, for them and the log's own player, tracked or not,
-    recalculate from the day before each saved day since the previous week's
-    Monday Reset that lower-league answers made no Legend I day, once those
-    answers no longer prove it; a tracked player another log names is
-    re-checked by their own. The caller holds no player row; rows are taken
-    in order."""
-    untracked = [int(row[0]) for row in connection.execute(
+    they never left. Then, for every player it names, tracked or not,
+    recalculate from the day before each saved day of the log's Season that
+    lower-league answers made no Legend I day, once those answers no longer
+    prove it. The caller holds no player row; rows are taken in order."""
+    players = sorted(set(player_ids))
+    for (player_id,) in connection.execute(
         """
         SELECT id FROM players
         WHERE id = ANY(%s::bigint[]) AND NOT active AND eligibility_state = 'ineligible'
         ORDER BY id
         FOR NO KEY UPDATE
         """,
-        (sorted(set(player_ids)),),
-    ).fetchall()]
-    for player_id in untracked:
-        judge(connection, player_id)
-    week = domain.ranked_day_for(observed_at).start
+        (players,),
+    ).fetchall():
+        judge(connection, int(player_id))
     for player_id, day_start, version_id in connection.execute(
         """
         SELECT day.player_id, day.ranked_day_start, day.id
@@ -338,8 +345,7 @@ def recheck_battle_players(
           )
         ORDER BY day.player_id, day.ranked_day_start
         """,
-        {"players": sorted({reporter_id, *untracked}),
-         "since": week - timedelta(days=week.weekday() + 7),
+        {"players": players, "since": domain.ranked_day_for(observed_at).season_start,
          "rule": RECONCILIATION_RULE_VERSION},
     ).fetchall():
         day = domain.ranked_day_for(day_start)

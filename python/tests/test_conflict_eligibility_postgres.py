@@ -14,9 +14,10 @@ import json
 from datetime import timedelta
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, repair_season, store_observation, text
 from test_reset_scenarios_postgres import (
     PREVIOUS_SEASON,
+    SEASON,
     Battle,
     Story,
     _ranked,
@@ -29,8 +30,8 @@ from test_reset_scenarios_postgres import (
 
 from clashlens import first_battle_log, reconciliation_db
 
-ONCE, PLAYING, ACCEPTED, REPEATED, STOPPED, RESET, SKIPPED, FLAPS, RETURNS = (
-    "#2PP", "#8PP", "#9PP", "#PPP", "#YPP", "#LPP", "#QPP", "#GPP", "#RPP")
+ONCE, PLAYING, ACCEPTED, REPEATED, STOPPED, RESET, SKIPPED, FLAPS, RETURNS, EARLY = (
+    "#2PP", "#8PP", "#9PP", "#PPP", "#YPP", "#LPP", "#QPP", "#GPP", "#RPP", "#CPP")
 
 
 def _legend_ii(story: Story, tag: str, at, trophies: int, *, accepted: bool) -> None:
@@ -101,21 +102,25 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
     pair, a Legend battle, a Legend I answer and another pair, so tracking
     stops twice, then a Legend battle on Tuesday tracks them again. RETURNS
     gets a pair that stops tracking, then a Legend I answer that tracks them
-    again while the pair still makes Monday no Legend I day, until their own
-    log shows a Legend battle on Tuesday. Tuesday's sweep reads the players still tracked, as the collector does,
-    and Monday's Daily board is published from it."""
+    again while the pair still makes Monday no Legend I day, until ONCE's
+    Wednesday log shows ONCE attacking them. EARLY gets a conflict answer on
+    Sunday at 17:00 and another as its Monday Reset reading, then defends at
+    05:30. Tuesday's sweep reads the players still tracked, as the collector
+    does, and Monday's Daily board is published from it. REPEATED is
+    promoted back on 12 October, plays, and the Season is repaired."""
     season = PREVIOUS_SEASON
     saturday, sunday = day(20, season), day(21, season)
-    monday, tuesday = day(22, season), day(23, season)
-    stays = (ONCE, PLAYING, STOPPED, RESET, SKIPPED, FLAPS, RETURNS)
+    monday, tuesday, wednesday = day(22, season), day(23, season), day(24, season)
+    stays = (ONCE, PLAYING, STOPPED, RESET, SKIPPED, FLAPS, RETURNS, EARLY)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        ONCE, PLAYING, ACCEPTED, REPEATED, STOPPED, RESET, SKIPPED, FLAPS,
-                       RETURNS)
+                       RETURNS, EARLY)
         # From 5,300 Saturday ends at 5,140, and Sunday at 4,940: 1 attack
         # of 40 and 8 defenses of 30. Those staying play Monday from 5,000
         # to 4,840; PLAYING attacks again at 18:00 and FLAPS at 17:45, for
-        # 4,880, and FLAPS and RETURNS once more at 05:30 on Tuesday.
+        # 4,880, FLAPS once more at 05:30 on Tuesday, and ONCE attacks
+        # RETURNS at 06:00 on Wednesday.
         for player in story.players.values():
             player.battles = _saturday(saturday) + attacks(sunday, 40) + defenses(
                 sunday, *[30] * 8)
@@ -126,15 +131,24 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
             Battle(monday + timedelta(hours=13), 40, True))
         story.players[FLAPS].battles += [Battle(monday + timedelta(hours=12, minutes=45), 40, True),
                                          Battle(tuesday + timedelta(minutes=30), 40, True)]
-        story.players[RETURNS].battles.append(Battle(tuesday + timedelta(minutes=30), 40, True))
+        story.players[ONCE].battles.append(Battle(wednesday + timedelta(hours=1), 40, True))
+        story.players[RETURNS].battles.append(Battle(wednesday + timedelta(hours=1), -40, False))
         story.reset(saturday, dict.fromkeys(story.players, (5300, season)))
         story.reset(sunday, dict.fromkeys(story.players, (5140, season)))
-        story.reads(monday - timedelta(minutes=10), dict.fromkeys(story.players, 4940), season)
-        story.players[RESET].dropped = True
+        _legend_ii(story, EARLY, sunday + timedelta(hours=12), 4940, accepted=False)
+        story.reads(monday - timedelta(minutes=10), {
+            tag: 4940 for tag in story.players if tag != EARLY}, season)
+        for tag in (RESET, EARLY):
+            story.players[tag].dropped = True
         story.reset(monday, {tag: (5000 if tag in stays else 4940, season)
                              for tag in story.players})
-        story.players[RESET].dropped = False
-        story.reads(monday + timedelta(minutes=20), dict.fromkeys(stays, 5000), season)
+        for tag in (RESET, EARLY):
+            story.players[tag].dropped = False
+        story.reads(monday + timedelta(minutes=20), {
+            tag: 5000 for tag in stays if tag != EARLY}, season)
+        story.run_worker()
+        # EARLY's own log shows its 05:30 defense.
+        story.read(EARLY, monday + timedelta(minutes=45))
         story.run_worker()
 
         evening = monday + timedelta(hours=12)
@@ -192,7 +206,7 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         # The last checks before Tuesday's Reset, then its sweep of every
         # tracked player: REPEATED still shows Legend II there.
         totals = {ONCE: 4840, PLAYING: 4880, STOPPED: 4840, RESET: 4840, SKIPPED: 4840,
-                  RETURNS: 4840, REPEATED: 4940}
+                  RETURNS: 4840, EARLY: 4840, REPEATED: 4940}
         story.reads(tuesday - timedelta(minutes=10), {
             tag: totals[tag] for tag in stays if tag != FLAPS}, season)
         sweep = sorted(tag for tag, (active, _) in _tracked(story).items() if active)
@@ -200,15 +214,33 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         story.reset(tuesday, {
             tag: (totals[tag], None if tag == REPEATED else season) for tag in sweep})
         story.run_worker()
-        # FLAPS's and RETURNS's own battle logs from Tuesday's 05:30 battle.
-        for tag in (FLAPS, RETURNS):
-            story.read(tag, tuesday + timedelta(hours=1))
+        # FLAPS's own battle log from Tuesday's 05:30 battle, then ONCE's
+        # Wednesday log naming RETURNS.
+        story.read(FLAPS, tuesday + timedelta(hours=1))
+        at = wednesday + timedelta(hours=2)
+        log = json.loads(story.players[ONCE].log(at))
+        log["items"][0]["opponentPlayerTag"] = RETURNS
+        store_observation(
+            connection_info, archive_server, occurrence_key=f"{ONCE}-battle_log-{at.isoformat()}",
+            endpoint="battle_log", body=json.dumps(log).encode(), observed_at=at,
+            normalized_tag=ONCE,
+        )
         story.wait(timedelta(hours=1))
         after_tuesday = _tracked(story)
         days = _days(story, sunday, monday)
-        unfinished = story.unfinished_jobs()
         board = story.served_board(tuesday)
         sunday_board = story.served_board(monday)
+        # REPEATED, promoted back two weeks later, reads Legend I, then attacks.
+        promoted = day(8)
+        story.read(REPEATED, promoted + timedelta(minutes=30), 5000, SEASON)
+        story.run_worker()
+        story.players[REPEATED].battles.append(Battle(promoted + timedelta(hours=1), 40, True))
+        story.read(REPEATED, promoted + timedelta(hours=2))
+        story.run_worker()
+        repair_season(connection_info, str(int(season.timestamp())))
+        story.run_worker()
+        repaired = _days(story, sunday, monday)[REPEATED]
+        unfinished = story.unfinished_jobs()
 
     assert unfinished == []
     # The old rule stopped tracking ONCE, PLAYING and REPEATED at 17:00.
@@ -217,9 +249,9 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         REPEATED: (True, "eligible"), ACCEPTED: (False, "ineligible"),
         STOPPED: (False, "ineligible"), RESET: (True, "eligible"),
         SKIPPED: (True, "eligible"), FLAPS: (True, "eligible"),
-        RETURNS: (True, "eligible"),
+        RETURNS: (True, "eligible"), EARLY: (True, "eligible"),
     }
-    assert sweep == sorted([ONCE, PLAYING, REPEATED, STOPPED, RESET, SKIPPED, RETURNS])
+    assert sweep == sorted([ONCE, PLAYING, REPEATED, STOPPED, RESET, SKIPPED, RETURNS, EARLY])
     # A second Legend II answer with no Legend battle since the first stops
     # tracking; one after a newer Legend battle never does, whichever is
     # processed first, nor one whose answer before it went unsaved. A Legend I
@@ -229,18 +261,20 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
         REPEATED: (False, "ineligible"), ACCEPTED: (False, "ineligible"),
         STOPPED: (True, "eligible"), RESET: (True, "eligible"),
         SKIPPED: (True, "eligible"), FLAPS: (True, "eligible"),
-        RETURNS: (True, "eligible"),
+        RETURNS: (True, "eligible"), EARLY: (True, "eligible"),
     }
     # Those staying keep Sunday's raise to 5,000 and a Legend I Monday;
     # those demoted end Sunday at 4,940 and have no Legend I Monday (ACCEPTED,
     # untracked before Tuesday's Reset, has none saved). FLAPS's second
-    # return recalculates Sunday again, as RETURNS's Tuesday battle does.
+    # return recalculates Sunday again, as ONCE's log of its Wednesday
+    # attack does for RETURNS, tracked by then.
     raised = {"state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,
               "automatic_loss": None, "raise": 60, "attacks": 1, "defenses": 8,
               "residual": 0}
     dropped = {**raised, "next_start": 4940, "raise": 0}
     assert stopped_days != (raised, True)
     reset_sunday, reset_monday = days.pop(RESET)
+    early_sunday, early_monday = days.pop(EARLY)
     assert days == {
         ONCE: (raised, True), PLAYING: (raised, True), STOPPED: (raised, True),
         SKIPPED: (raised, True), FLAPS: (raised, True), RETURNS: (raised, True),
@@ -249,8 +283,14 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
     # RESET's Reset reading gives no total, so Sunday's end is calculated;
     # the raise and a Legend I Monday stay.
     assert (reset_sunday["end"], reset_sunday["raise"], reset_monday) == (4940, 60, True)
+    # EARLY's Monday defense, after the Reset reading, shows it never left:
+    # it keeps tracking, the raise and a Legend I Monday.
+    assert (early_sunday["end"], early_sunday["raise"], early_monday) == (4940, 60, True)
     # FLAPS, untracked at Tuesday's Reset, is not on Monday's Daily board.
     assert _ranked(board) == {
         ONCE: 4840, PLAYING: 4880, STOPPED: 4840, RESET: 4840, SKIPPED: 4840,
-        RETURNS: 4840}
+        RETURNS: 4840, EARLY: 4840}
     assert _ranked(sunday_board)[RESET] == 4940
+    # REPEATED's Legend battle after its promotion back shows nothing about
+    # the week it left: the repaired Season keeps its drop.
+    assert repaired == (dropped, False)

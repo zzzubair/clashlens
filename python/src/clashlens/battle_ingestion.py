@@ -557,7 +557,7 @@ def complete_battle_log(
             # A Legend battle can show a player stopped by lower-league
             # answers never left Legend I (see league_drop).
             league_drop.recheck_battle_players(
-                connection, list(player_ids.values()), reporter_id, battle_log.observed_at
+                connection, list(player_ids.values()), battle_log.observed_at
             )
             if discoveries:
                 enqueue_discovered_players(

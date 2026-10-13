@@ -813,8 +813,8 @@ def _dropped_from_legend_i(
     """Whether a profile of the player read from ``since`` and before
     ``until`` proves they left Legend I (``league_drop``): one the parser
     accepted, or one with another lower-league answer next to it and no
-    Legend battle after the earlier of the two. Each reading counts at its
-    own time; a saved profile can be read again."""
+    Legend battle after the earlier of the two that shows they stayed. Each
+    reading counts at its own time; a saved profile can be read again."""
     return league_drop.dropped_between(connection, player_id, since, until)
 
 
