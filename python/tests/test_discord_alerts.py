@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -113,54 +115,105 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
     ]
 
 
-def test_a_dm_asks_discord_to_check_its_nonce(monkeypatch) -> None:
-    """The bot's real client against a local stand-in for Discord that cannot
-    take messages just then. The DM's request carries its nonce, which
-    Discord is asked to check for repeats, and the failure is one to try
-    again."""
+def _json(payload: dict, status: int = 200, **headers: str) -> web.Response:
+    return web.Response(
+        body=json.dumps(payload).encode(),
+        status=status,
+        headers={"Content-Type": "application/json", **headers},
+    )
 
-    def answer(payload: dict, status: int = 200) -> web.Response:
-        return web.Response(
-            body=json.dumps(payload).encode(),
-            status=status,
-            headers={"Content-Type": "application/json"},
-        )
+
+def _rate_limited(seconds: float, *, everything: bool = False) -> web.Response:
+    """Discord's 429, for one route or, when `everything`, for the whole bot."""
+    return _json(
+        {"message": "You are being rate limited.", "retry_after": seconds, "global": everything},
+        429,
+        Via="1.1 google",
+    )
+
+
+def _unavailable(_n: int) -> web.Response:
+    return _json({"message": "Service unavailable", "code": 0}, 503)
+
+
+@asynccontextmanager
+async def stand_in_discord(
+    monkeypatch, answer: Callable[[int], web.Response]
+) -> AsyncIterator[tuple[discord.Client, list[dict]]]:
+    """The bot's real client, logged in to a local stand-in for Discord that
+    answers the nth message with `answer(n)`; yields it and each message
+    sent."""
+    sends: list[dict] = []
+
+    async def me(_request: web.Request) -> web.Response:
+        return _json({"id": "1", "username": "bot", "discriminator": "0", "avatar": None})
+
+    async def open_dm(_request: web.Request) -> web.Response:
+        user = {"id": "100000000000000001", "username": "u", "discriminator": "0", "avatar": None}
+        return _json({"id": "10", "type": 1, "recipients": [user]})
+
+    async def send(request: web.Request) -> web.Response:
+        sends.append(await request.json())
+        return answer(len(sends))
+
+    app = web.Application()
+    app.router.add_get("/api/v10/users/@me", me)
+    app.router.add_post("/api/v10/users/@me/channels", open_dm)
+    app.router.add_post("/api/v10/channels/10/messages", send)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    monkeypatch.setattr(
+        discord.http.Route, "BASE", f"http://127.0.0.1:{runner.addresses[0][1]}/api/v10"
+    )
+    client, _tree = build_client(Commands(store=None, site=SITE))  # type: ignore[arg-type]
+    await client.http.static_login("token")
+    try:
+        yield client, sends
+    finally:
+        await client.http.close()
+        await runner.cleanup()
+
+
+def test_a_dm_asks_discord_to_check_its_nonce(monkeypatch) -> None:
+    """Against a stand-in for Discord that cannot take messages just then,
+    the DM's request carries its nonce, which Discord is asked to check for
+    repeats, and the failure is one to try again."""
 
     async def scenario() -> list[dict]:
-        sends: list[dict] = []
-
-        async def me(_request: web.Request) -> web.Response:
-            return answer({"id": "1", "username": "bot", "discriminator": "0", "avatar": None})
-
-        async def open_dm(_request: web.Request) -> web.Response:
-            user = {"id": "100000000000000001", "username": "u", "discriminator": "0", "avatar": None}
-            return answer({"id": "10", "type": 1, "recipients": [user]})
-
-        async def send(request: web.Request) -> web.Response:
-            sends.append(await request.json())
-            return answer({"message": "Service unavailable", "code": 0}, 503)
-
-        app = web.Application()
-        app.router.add_get("/api/v10/users/@me", me)
-        app.router.add_post("/api/v10/users/@me/channels", open_dm)
-        app.router.add_post("/api/v10/channels/10/messages", send)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        await web.TCPSite(runner, "127.0.0.1", 0).start()
-        monkeypatch.setattr(
-            discord.http.Route, "BASE", f"http://127.0.0.1:{runner.addresses[0][1]}/api/v10"
-        )
-        client, _tree = build_client(Commands(store=None, site=SITE))  # type: ignore[arg-type]
-        await client.http.static_login("token")
-        try:
+        async with stand_in_discord(monkeypatch, _unavailable) as (client, sends):
             with pytest.raises(Unreachable):
                 await DiscordMessenger(client).send_dm(
                     "100000000000000001", Reply("hi", title="t"), 7
                 )
-        finally:
-            await client.http.close()
-            await runner.cleanup()
         return sends
 
     sends = asyncio.run(scenario())
     assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == [("7", True)]
+
+
+def test_a_dm_cut_off_in_a_wait_for_all_of_discord_holds_up_no_later_one(
+    monkeypatch,
+) -> None:
+    """Discord answers the first DM by asking the bot to wait 5 seconds
+    before any request. That DM is cut off first, as the alert loop cuts
+    one off at the end of its 2 minutes, and the next DM still goes out at
+    once."""
+
+    def answer(n: int) -> web.Response:
+        return _rate_limited(5.0, everything=True) if n == 1 else _unavailable(n)
+
+    async def scenario() -> list[dict]:
+        async with stand_in_discord(monkeypatch, answer) as (client, sends):
+            messenger = DiscordMessenger(client)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(
+                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 7), 0.3
+                )
+            with pytest.raises(Unreachable):
+                await asyncio.wait_for(
+                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 8), 2.0
+                )
+        return sends
+
+    assert [body["nonce"] for body in asyncio.run(scenario())] == ["7", "8"]

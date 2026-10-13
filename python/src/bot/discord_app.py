@@ -22,7 +22,7 @@ import psycopg
 from discord import app_commands
 
 from . import replies
-from .alerts import Refused, Unreachable
+from .alerts import NONCE_SECONDS, Refused, Unreachable
 from .commands import Commands
 from .replies import Reply
 
@@ -401,8 +401,10 @@ class DiscordMessenger:
     """Sends attack alerts as normal DMs from the bot. discord.py waits out
     Discord's rate limits before each request, tries a request again itself
     after a rate limit or a server error, and gives up on one after aiohttp's
-    5 minutes. A request is never cancelled here: cancelling one in a global
-    rate limit wait leaves that wait shut for every later request."""
+    5 minutes, or at once on a rate limit longer than a DM's 2 minutes. The
+    alert loop cancels a DM still going at the end of its 2 minutes; one
+    cancelled in a global rate limit wait would leave that wait shut for
+    every later request, so it is opened again then."""
 
     def __init__(self, client: discord.Client) -> None:
         self.client = client
@@ -415,6 +417,11 @@ class DiscordMessenger:
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
             await channel.send(embed=embed, view=view, nonce=nonce)
+        except asyncio.CancelledError:
+            self.client.http._global_over.set()
+            raise
+        except discord.RateLimited as error:
+            raise Unreachable(error.retry_after) from error
         except discord.DiscordServerError as error:
             raise Unreachable from error
         except discord.HTTPException as error:
@@ -437,7 +444,11 @@ def build_client(commands: Commands) -> tuple[discord.Client, app_commands.Comma
     # Not privileged; it only keeps the servers the bot is in, which avoids
     # discord.py's warning about missing server state.
     intents.guilds = True
-    client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMentions.none())
+    client = discord.Client(
+        intents=intents,
+        allowed_mentions=discord.AllowedMentions.none(),
+        max_ratelimit_timeout=NONCE_SECONDS,
+    )
     tree = app_commands.CommandTree(
         client,
         allowed_contexts=app_commands.AppCommandContext(

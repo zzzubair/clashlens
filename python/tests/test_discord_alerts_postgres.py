@@ -14,6 +14,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database, seed_battles
+from test_discord_alerts import _rate_limited, stand_in_discord
 from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 from test_reset_scenarios_postgres import (
     RESULTS,
@@ -29,6 +30,7 @@ from test_reset_scenarios_postgres import (
 
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
+from bot.discord_app import DiscordMessenger
 from bot.replies import Reply, Site
 from bot.store import Store
 from clashlens import api_accounts, api_discord_alerts
@@ -391,6 +393,41 @@ def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(
     assert [(state, discord.tries.count(id)) for id, state in log] == [
         ("failed", 2), ("failed", 1)]
     assert len(discord.tries) == 3 and not discord.sent
+    assert gave_up is not None and gave_up["reason"] == "unreachable"
+
+
+def test_a_dm_discord_asks_to_wait_past_its_last_moment_is_cut_off_then(
+    database_url: str, monkeypatch
+) -> None:
+    """The bot's real client against a local stand-in for Discord that rate
+    limits every message for 2 seconds. discord.py would wait that out and
+    send the DM again, but its 2 minutes, here 1 second, end first: the DM
+    is cut off then, logged and shown as not delivered, and nothing more is
+    sent, however long the bot keeps going."""
+    monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 1.0)
+    with _alerts_on(database_url) as (connection_info, api, mine, player):
+
+        async def scenario() -> tuple[int, int, int]:
+            async with stand_in_discord(monkeypatch, lambda _n: _rate_limited(2.0)) as (
+                client,
+                sends,
+            ):
+                loop = AlertLoop(AlertStore(api, Store(api)), DiscordMessenger(client), SITE)
+                await asyncio.to_thread(_defend, connection_info, player)
+                cut_off = await loop.tick()
+                await asyncio.sleep(2.5)
+                later = await loop.tick()
+                return cut_off, later, len(sends)
+
+        cut_off, later, sends = asyncio.run(scenario())
+        gave_up = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            log = connection.execute(
+                "SELECT state FROM discord_attack_alert_deliveries"
+            ).fetchall()
+
+    assert (cut_off, later, sends) == (0, 0, 1)
+    assert log == [("failed",)]
     assert gave_up is not None and gave_up["reason"] == "unreachable"
 
 

@@ -16,9 +16,10 @@
 -- nonce, which Discord checks for repeats for a few minutes. A DM Discord did
 -- not take, whatever the cause (a 5xx or 429 answer, a network error, a
 -- timeout, an answer cut off), is tried again only within 2 minutes of its
--- first try, when this row was written, inside Discord's nonce check. That
--- limit is checked with a fresh clock before each try; past it the DM is
--- logged as not delivered. A refusal is never tried again, and a crash leaves
+-- first try, when this row was written, inside Discord's nonce check. Each
+-- try, with any wait for Discord, is cut off at that limit, and a try that
+-- could only start after it is not made; the DM is then logged as not
+-- delivered. A refusal is never tried again, and a crash leaves
 -- the row unfinished, never tried again, so no DM Discord took is sent twice.
 -- It is the only table the bot writes; the bot deletes rows older than 7
 -- days, so at most 7 days of alerts are kept: about 8 rows a day per player

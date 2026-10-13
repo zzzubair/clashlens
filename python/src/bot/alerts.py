@@ -15,11 +15,12 @@ Discord did not take, whatever the cause (a 5xx or 429 answer, a network
 error, a timeout, an answer cut off), is tried again, waiting longer each
 time and at least as long as Discord asks, while those still hold, within
 the 15 minutes, and only within 2 minutes of its first try, when it was
-logged. That limit is checked with a fresh clock before each try; past it
-the DM is logged as not delivered, never sent again. A crash can lose an
-alert but never send it twice. Discord refusing a DM (bot not added, DMs
-closed, unknown user) is logged with the reason, which the website shows
-with what the Clasher can do. That DM is not tried again.
+logged. Each try, with discord.py's own waits and tries again, is cut off at
+that limit, by a fresh clock, and a try that could only start after it is
+not made; the DM is then logged as not delivered, never sent again. A crash
+can lose an alert but never send it twice. Discord refusing a DM (bot not
+added, DMs closed, unknown user) is logged with the reason, which the
+website shows with what the Clasher can do. That DM is not tried again.
 """
 
 from __future__ import annotations
@@ -145,10 +146,10 @@ class Delivery:
             "window": WINDOW,
         }
 
-    def expired(self) -> bool:
-        """Past its last try, `NONCE_SECONDS` after its first, by the loop's
-        clock now."""
-        return asyncio.get_running_loop().time() >= self.claimed_at + NONCE_SECONDS
+    def time_left(self) -> float:
+        """Seconds until its last moment, `NONCE_SECONDS` after its first try,
+        by the loop's clock now."""
+        return self.claimed_at + NONCE_SECONDS - asyncio.get_running_loop().time()
 
 
 class AlertStore:
@@ -296,7 +297,7 @@ class AlertLoop:
             self._pruned_at = clock
         sent = 0
         for delivery in list(self._waiting):
-            expired = delivery.expired()
+            expired = delivery.time_left() <= 0
             if not expired and delivery.retry_at > asyncio.get_running_loop().time():
                 continue
             if expired or not await asyncio.to_thread(self.alerts.still_due, delivery):
@@ -341,24 +342,31 @@ class AlertLoop:
         return await self._send(delivery)
 
     async def _send(self, delivery: Delivery) -> int:
-        """Try one logged DM unless past its last try, and log how it went or
-        wait to try again; 1 when it was delivered."""
-        if delivery.expired():
+        """Try one logged DM, cut off at its last moment, and log how it went
+        or wait to try again if there is time; 1 when it was delivered."""
+        left = delivery.time_left()
+        if left <= 0:
             await self._finish(delivery, "failed", None)
             return 0
         state, reason = "sent", None
         try:
-            await self.messenger.send_dm(delivery.discord_user_id, delivery.reply, delivery.id)
+            await asyncio.wait_for(
+                self.messenger.send_dm(delivery.discord_user_id, delivery.reply, delivery.id),
+                left,
+            )
         except Refused as refusal:
             state, reason = "refused", refusal.reason
         except Unreachable as outage:
             delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
-            delivery.retry_at = asyncio.get_running_loop().time() + max(
-                delivery.wait, outage.retry_after
-            )
-            self._waiting.append(delivery)
-            log.info("attack alert delivery=%s waiting to try again", delivery.id)
-            return 0
+            wait = max(delivery.wait, outage.retry_after)
+            if wait < delivery.time_left():
+                delivery.retry_at = asyncio.get_running_loop().time() + wait
+                self._waiting.append(delivery)
+                log.info("attack alert delivery=%s waiting to try again", delivery.id)
+                return 0
+            state = "failed"
+        except TimeoutError:
+            state = "failed"
         except Exception:
             log.exception("attack alert delivery %s failed", delivery.id)
             state = "failed"

@@ -76,9 +76,9 @@ which records each alert DM, and the confirmation DM sent when alerts go on,
 before it is first sent. Every try sends the same Discord nonce, which Discord
 checks for repeats for a few minutes. A DM Discord did not take, whatever the
 cause (a 5xx or 429 answer, a network error, a timeout, an answer cut off), is
-tried again only within 2 minutes of its first try, when it was recorded. That
-limit is checked with a fresh clock before each try; past it the DM is
-recorded as not delivered. Refusals are never tried again. So no DM Discord
+tried again only within 2 minutes of its first try, when it was recorded. Each
+try, with any wait for Discord, is cut off at that limit, and a try that could
+only start after it is not made; the DM is then recorded as not delivered. Refusals are never tried again. So no DM Discord
 took is sent twice. The bot reads
 new defenses only through that migration's `clashlens_discord_attack_alerts_due`
 function, never the battle tables. Attack alerts run whenever the bot runs.
