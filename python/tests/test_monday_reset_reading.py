@@ -82,26 +82,33 @@ def test_monday_day_contradicted_after_a_fitting_reset_reading_still_adds_up(
 
 
 def test_monday_read_before_the_raise_starts_at_5000_after_a_partial_sunday() -> None:
-    # Sunday's battles are all known and end at 4,940, but no reading proved
-    # it, so it is Partial; the raise takes it to 5,000. Monday's Reset
-    # reading of 4,940 came before the raise landed: Monday starts at 5,000.
-    # A player dropped to Legend II at the Reset gets no raise.
+    # Sunday's eight attacks for 320 and eight defenses losing 280 take it
+    # from 4,900 to 4,940, all known, but its Reset battle log failed, so it
+    # is Partial; the raise takes it to 5,000. Monday's 05:13 Reset reading
+    # came before the raise landed: 4,940, or 5,020 once it shows two Monday
+    # attacks of 40. Monday starts at 5,000 either way. A player dropped to
+    # Legend II at the Reset gets no raise.
     monday = ranked_day_for(DAY.start - timedelta(hours=12))
     assert monday.start.weekday() == 0
 
-    def start(expected_next_start: int) -> int | None:
+    def start(expected_next_start: int, attacks: int = 0) -> int | None:
         return reconcile_ranked_day(_input(
             ranked_day=monday, now=monday.end + timedelta(minutes=1),
             coverage_observations=tuple(
                 replace(item, observed_at=item.observed_at - timedelta(days=1))
                 for item in _coverage()),
-            start_trophies=4940, next_start_trophies=5000, contributions=(),
+            start_trophies=4940 + 40 * attacks, next_start_trophies=5000 + 40 * attacks,
+            contributions=tuple(
+                BattleContribution(f"monday-{n}", "offense", 40,
+                                   battle_timestamp=monday.start + timedelta(minutes=5 + n))
+                for n in range(attacks)),
             previous_day=PreviousRankedDay(
-                False, 8, 240, 0, state="Partial", final_trophies=4940,
+                False, 8, 280, 0, state="Partial", final_trophies=4940,
                 expected_next_start=expected_next_start, battles_known=True),
         )).start_trophies
 
     assert start(5000) == 5000
+    assert start(5000, attacks=2) == 5000
     assert start(4940) == 4940
 
 

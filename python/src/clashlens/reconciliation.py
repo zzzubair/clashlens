@@ -784,7 +784,8 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
     A start taken from the day before's calculated end already has both. A
-    Monday reading taken before the weekly raise landed starts at its 5,000.
+    Monday after a day the weekly raise takes to 5,000 starts there,
+    whatever its Reset reading shows.
     """
     previous = data.previous_day
     start, loss, correction = data.start_trophies, 0, 0
@@ -796,7 +797,7 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     ):
         loss, correction = previous.unsettled_automatic_loss, previous.reset_reading_correction
         start = data.start_trophies - loss + correction
-    if start is not None and start < 5000 and previous and previous.expected_next_start == 5000 and (
+    if start is not None and previous and previous.expected_next_start == 5000 and (
             data.ranked_day.start.weekday() == 0 and not data.season_first_day):
         start, correction = 5000, correction + 5000 - start
     return start, loss, correction
