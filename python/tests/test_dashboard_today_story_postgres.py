@@ -7,7 +7,9 @@ background: a request without a board answers at once without the range,
 and the page asks again, each time waiting up to 4 seconds for today's
 read, until the range comes. Neither that board nor the Live Leaderboard
 read it is built on ever serves the next Legend day, even when a read from
-before the Reset finishes after it. See docs/testing.md.
+before the Reset finishes after it. Busy mornings took the read 9 to 12
+seconds, so it runs under a 30 second limit, and the connection it used goes
+back to page requests with their 10 seconds. See docs/testing.md.
 
 The worker saves a day's live numbers only while the database's clock is in
 that day, so the story is today's Legend day, whatever the date.
@@ -60,11 +62,13 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
         story.run_worker()
 
         # Each read of the shared board waits until the test lets it go.
-        go, reads = Event(), []
+        go, reads, limits, used = Event(), [], [], []
         read_board = api_dashboard._read_board
 
         def held_read(*args: Any) -> Any:
             reads.append(args[1])
+            limits.append(args[0].execute("SHOW statement_timeout").fetchone()[0])
+            used.append(args[0])
             go.wait(10)
             return read_board(*args)
 
@@ -124,6 +128,12 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
                 go.set()
                 newcomer = pending.result(timeout=10)
             climber = api_dashboard.get_player_today(api, board, CLIMBER, now=next_day)
+            # What the next page request would get on the connections the
+            # board reads used, back in the pool.
+            request_limits = {
+                connection.execute("SHOW statement_timeout").fetchone()[0]
+                for connection in used
+            }
         finally:
             api.close()
 
@@ -155,3 +165,5 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
     assert climber["board_computed_at"] == next_day.isoformat()
     # One read for today's requests, one due before the Reset, one for the next day.
     assert reads == [now, before_reset, next_day]
+    assert limits == ["30s"] * 3
+    assert request_limits == {"10s"}

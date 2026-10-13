@@ -82,6 +82,9 @@ BOARD_MAX_AGE_SECONDS = 600
 # A follow-up request waits this long for the board read under way, inside
 # the website's 5 second limit.
 BOARD_WAIT_SECONDS = 4
+# No request waits on the background board read past BOARD_WAIT_SECONDS, so
+# it gets longer than a request's 10 seconds: busy mornings took it 9 to 12.
+BOARD_STATEMENT_TIMEOUT = "30s"
 # Bases you attacked: compare with players whose day started this near the
 # base's Reset trophies, widened until the comparison holds enough defenses
 # but never past the most; with fewer than the fewest there, no comparison.
@@ -472,6 +475,11 @@ class DashboardBoard:
         try:
             live = self._live_board.current(database, now).rows
             with database.pool.connection() as connection:
+                # Only until the block's commit: the pool's requests keep 10 s.
+                connection.execute(
+                    "SELECT set_config('statement_timeout', %s, true)",
+                    (BOARD_STATEMENT_TIMEOUT,),
+                )
                 board, slots = _read_board(connection, now, live, self._slots)
         except Exception as error:  # noqa: BLE001 - read again at the next turn
             print(
