@@ -440,6 +440,33 @@ def test_header_search_holds_names_and_refreshes_them_in_the_background(
             database.close()
 
 
+def test_name_search_lower_cases_greek_capitals_as_the_database_does(database_url):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            seed_profile(database, "#2PY", 6100)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET name = CASE normalized_tag"
+                    " WHEN '#2PP' THEN 'ΝΙΚΟΣ' ELSE 'ΝΙΚΟΣ ΠΑΠΑΣ' END"
+                )
+            # Its final capital sigma matches the name's, exactly and as the
+            # start of a longer name, in the header's held copy and without it.
+            for names in (None, api_players.KnownPlayerNames()):
+                results = api_players.search_known_players(
+                    database, "ΝΙΚΟΣ", now=NOW, freshness_seconds=900, names=names
+                )
+                assert [(row["tag"], row["name"]) for row in results] == [
+                    ("#2PP", "ΝΙΚΟΣ"),
+                    ("#2PY", "ΝΙΚΟΣ ΠΑΠΑΣ"),
+                ]
+        finally:
+            database.close()
+
+
 @pytest.mark.parametrize("query", ["%", "_", "\\", "東京"])
 def test_name_search_matches_literal_substrings_and_ignores_old_names(
     database_url, query

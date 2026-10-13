@@ -3,8 +3,9 @@
 Saved game data goes through the real worker, which publishes the Reset's
 Daily board; the Live Leaderboard, its search and public profiles' ranks then
 read one shared copy of the board. A copy is never served for a Legend day it
-was not read for, and an expired one is replaced in the background instead of
-making a visitor wait. See docs/testing.md.
+was not read for, one 20 seconds old is replaced in the background instead of
+making a visitor wait, and one 30 seconds old is never served. See
+docs/testing.md.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def test_live_board_copy_follows_the_reset_and_refreshes_in_the_background(
         clock = [0.0]
         refreshes = []
         cache = api_leaderboard.LiveBoardCache(
-            30, clock=lambda: clock[0], start=refreshes.append)
+            clock=lambda: clock[0], start=refreshes.append)
 
         def live(now):
             board = api_leaderboard.get_live_leaderboard(
@@ -90,15 +91,19 @@ def test_live_board_copy_follows_the_reset_and_refreshes_in_the_background(
                 ranked_now = api_leaderboard.live_positions(
                     connection, [FIRST, SECOND, THIRD], now=day_4 + timedelta(minutes=50))
 
-            # FIRST's next reading lands; the copy has expired, so the next
-            # visitor still gets it at once and one background read follows.
+            # FIRST's next reading lands; the copy is 25 seconds old, so the
+            # next visitor still gets it at once and one background read follows.
             story.players[FIRST].battles.append(
                 Battle(day_4 + timedelta(hours=2, minutes=30), 40, True))
             story.reads(day_4 + timedelta(hours=3), {FIRST: 5380})
             story.run_worker()
-            clock[0] = 41
+            clock[0] = 35
             expired = live(day_4 + timedelta(hours=3, minutes=5))
             queued = len(refreshes)
+            # At 30 seconds old it is never served, though its background
+            # read has not run yet: the visitor waits for a new one.
+            clock[0] = 40
+            too_old = live(day_4 + timedelta(hours=3, minutes=5))
             for refresh in refreshes:
                 refresh()
             refreshed = live(day_4 + timedelta(hours=3, minutes=5))
@@ -120,4 +125,4 @@ def test_live_board_copy_follows_the_reset_and_refreshes_in_the_background(
         (FIRST, ranked_now[FIRST]), (THIRD, ranked_now[THIRD])]
     assert expired == after_reset
     assert queued == 1
-    assert refreshed == {FIRST: 5380, THIRD: 5340, SECOND: 5140}
+    assert too_old == refreshed == {FIRST: 5380, THIRD: 5340, SECOND: 5140}

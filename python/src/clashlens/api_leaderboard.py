@@ -435,12 +435,11 @@ def _read_live_board_from(database: ApiDatabase, now: datetime) -> _LiveBoard:
 class LiveBoardCache(SharedCopy[_LiveBoard]):
     """The ranked Live Leaderboard shared by every page of it, the home page's
     top players and public profiles' ranks: read again in the background
-    after ``seconds``, never served past twice that, and read anew for each
-    Legend day, so never across a Reset or into a new Season."""
+    once 20 seconds old, never served once 30 seconds old, and read anew for
+    each Legend day, so never across a Reset or into a new Season."""
 
     def __init__(
         self,
-        seconds: float = 30,
         *,
         clock: Callable[[], float] = time.monotonic,
         start: Callable[[Callable[[], None]], None] = _start_thread,
@@ -448,8 +447,8 @@ class LiveBoardCache(SharedCopy[_LiveBoard]):
         super().__init__(
             _read_live_board_from,
             key=lambda now: ranked_day_for(now).start,
-            seconds=seconds,
-            longest=2 * seconds,
+            seconds=20,
+            longest=30,
             name="live_board_copy",
             clock=clock,
             start=start,

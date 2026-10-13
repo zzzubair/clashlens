@@ -127,7 +127,7 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
     clock = [0.0]
     refreshes = []
     cache = api_leaderboard.LiveBoardCache(
-        30, clock=lambda: clock[0], start=refreshes.append
+        clock=lambda: clock[0], start=refreshes.append
     )
     home = api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
     target = home["entries"][24]["tag"]
@@ -136,14 +136,14 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
             "UPDATE player_profile_versions SET trophies = 7000 WHERE normalized_tag = %s",
             (target,),
         )
-    clock[0] = 29.9
+    clock[0] = 19.9
     rankings = api_leaderboard.get_live_leaderboard(
         database, limit=100, now=NOW, cache=cache
     )
     assert rankings["entries"][:25] == home["entries"]
     assert refreshes == []
-    # Expired, it is still served at once while one background read runs.
-    clock[0] = 30.0
+    # At 20 seconds old it is still served at once while one background read runs.
+    clock[0] = 20.0
     expired = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
     api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
     assert expired["entries"][:25] == home["entries"]
@@ -165,7 +165,7 @@ def test_search_then_focus_read_the_same_cached_board(board_database):
     database = board_database
     clock = [0.0]
     cache = api_leaderboard.LiveBoardCache(
-        30, clock=lambda: clock[0], start=lambda refresh: None
+        clock=lambda: clock[0], start=lambda refresh: None
     )
     api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
     seed_profile(database, "#PQQ", 7000)
@@ -195,8 +195,8 @@ def test_search_then_focus_read_the_same_cached_board(board_database):
     }
     assert search_then_focus("#P22")["results"][0]["trophies"] == 6000
     assert len(search_then_focus("Player")["results"]) == 20
-    # Past twice its 30 seconds with no background read done, it is read again.
-    clock[0] = 60.0
+    # At 30 seconds old with no background read done, it is read again.
+    clock[0] = 30.0
     found = search_then_focus("#PQQ")
     assert found["exact_tag"] == "#PQQ"
     assert [(r["rank"], r["trophies"]) for r in found["results"]] == [(1, 7000)]

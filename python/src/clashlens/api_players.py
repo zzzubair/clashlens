@@ -733,7 +733,7 @@ def get_player_season_summary(
 
 def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
     """Every known player a name search can find, matched by ``name_filter``,
-    each with its lower-case name and its place in name order."""
+    each with its place in name order."""
     # Off a Season's first Legend day no profile awaits its Season reset for
     # its trophies alone, so those per-player reads are left out.
     opening = (
@@ -772,7 +772,7 @@ def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
         SELECT player.normalized_tag, player.name, player.trophies,
                player.current_observed_at, player.eligibility_state, player.clan,
                player.current_league_season_id, player.frozen_trophies,
-               player.day_battles, player.opening_day_waiting, lower(player.name),
+               player.day_battles, player.opening_day_waiting,
                row_number() OVER (ORDER BY lower(player.name), player.normalized_tag)
         FROM matches AS player
         -- Scalar subqueries stop after one row and cannot become a hashed
@@ -790,22 +790,20 @@ def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
     """
 
 
-def _read_known_players(
-    database: ApiDatabase, now: datetime, query: str | None = None
-) -> list[tuple[Any, ...]]:
-    """The players a name search can find, those whose current name contains
-    ``query`` when given, else every one."""
+def _lower(name: str) -> str:
+    """``name`` lower-cased one character at a time, as PostgreSQL's lower()
+    and ILIKE do: a capital sigma always becomes σ, never ς, and İ becomes i."""
+    return "".join(character.lower()[0] for character in name)
+
+
+def _read_known_players(database: ApiDatabase, now: datetime) -> list[tuple[Any, ...]]:
+    """Every player a name search can find, each with its name lower-cased."""
     opening_reset = season_opening_reset(now)
-    name_filter = ""
-    parameters: dict[str, Any] = {"opening_reset": opening_reset}
-    if query is not None:
-        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        name_filter = "\n              AND profile.name ILIKE %(pattern)s ESCAPE '\\'"
-        parameters["pattern"] = f"%{escaped}%"
     with database.pool.connection() as connection:
-        return connection.execute(
-            _known_players_sql(opening_reset, name_filter), parameters
+        rows = connection.execute(
+            _known_players_sql(opening_reset, ""), {"opening_reset": opening_reset}
         ).fetchall()
+    return [(*row, _lower(_text(row[1]))) for row in rows]
 
 
 class KnownPlayerNames(SharedCopy[list[tuple[Any, ...]]]):
@@ -842,22 +840,43 @@ def search_known_players(
 ) -> list[dict[str, Any]]:
     if not 1 <= limit <= 50:
         raise ValueError("known player search limit is outside the supported range")
-    players = (
-        _read_known_players(database, now, query)
-        if names is None
-        else names.current(database, now)
-    )
     season_id = ranked_day_for(now).official_season_id
-    needle = query.lower()
+    if names is None:
+        opening_reset = season_opening_reset(now)
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        name_filter = "\n              AND profile.name ILIKE %(pattern)s ESCAPE '\\'"
+        with database.pool.connection() as connection:
+            rows = connection.execute(
+                f"""{_known_players_sql(opening_reset, name_filter)}
+                -- An exact name match first, then the strongest players.
+                ORDER BY lower(player.name) = lower(%(query)s) DESC,
+                         CASE WHEN player.current_league_season_id = %(season_id)s
+                                   AND NOT player.opening_day_waiting
+                              THEN player.trophies END DESC NULLS LAST,
+                         lower(player.name), player.normalized_tag
+                LIMIT %(limit)s
+                """,
+                {
+                    "pattern": f"%{escaped}%",
+                    "query": query,
+                    "season_id": season_id,
+                    "opening_reset": opening_reset,
+                    "limit": limit,
+                },
+            ).fetchall()
+    else:
+        needle = _lower(query)
 
-    def order(row: tuple[Any, ...]) -> tuple[Any, ...]:
-        # An exact name match first, then the strongest players, then by name.
-        ranked = _text(row[6]) == season_id and not row[9] and row[2] is not None
-        return (row[10] != needle, -row[2] if ranked else math.inf, row[11])
+        def order(row: tuple[Any, ...]) -> tuple[Any, ...]:
+            # An exact name match first, then the strongest players, then by name.
+            ranked = _text(row[6]) == season_id and not row[9] and row[2] is not None
+            return (row[11] != needle, -row[2] if ranked else math.inf, row[10])
 
-    rows = heapq.nsmallest(
-        limit, (row for row in players if needle in row[10]), key=order
-    )
+        rows = heapq.nsmallest(
+            limit,
+            (row for row in names.current(database, now) if needle in row[11]),
+            key=order,
+        )
     results = []
     for row in rows:
         observed_at = row[3].astimezone(UTC)
