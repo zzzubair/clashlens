@@ -10,8 +10,8 @@ Settings come from the environment:
     CLASHLENS_DATABASE_URL_FILE       file holding the database address
     CLASHLENS_PUBLIC_ORIGIN           the website, for links in replies
 
-While it runs it also sends the attack alert DMs Clashers turned on, and
-each Legend day's summary DM.
+While it runs it also sends the attack alert and Legend day summary DMs
+Clashers turned on.
 """
 
 from __future__ import annotations
