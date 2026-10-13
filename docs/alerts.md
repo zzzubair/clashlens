@@ -117,7 +117,8 @@ use the [operating notes](operating.md#respond-to-alerts).
   - ordinary processing work waiting too long: daily result calculations
     waiting at least **15 minutes**, from the collector's
     `oldest_job_reconcile_ranked_day_age_seconds`, or any ordinary work
-    (saved responses, daily calculations and army re-decoding) waiting at
+    (saved responses, daily calculations, army re-decoding and nightly
+    re-check steps) waiting at
     least **30 minutes**, from `oldest_pending_processing_age_seconds`. Both
     share one alert, so daily work reaching 30 minutes sends no second
     message, and it recovers only when both are below their limits. A missing
@@ -314,8 +315,10 @@ replaced with mode 600 and contains one record per condition with at most one
 pending transition, one first-clear time and one last alert delivery time
 each, plus when backup check timeouts or errors and Live Leaderboard staleness
 began, when each of at most seven currently unreadable check parts (the Reset
-publication check has two: the website page and the private API) first failed, and
-at most ten minutes of Reset work left, one sample a minute.
+publication check has two: the website page and the private API) first failed,
+at most ten minutes of Reset work left, one sample a minute, and the day the
+once-a-day [nightly re-check line](operating.md#nightly-re-check-line) was
+last posted.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
 Each command and each network connect or read has its own time limit, and a

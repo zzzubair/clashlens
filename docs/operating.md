@@ -819,8 +819,10 @@ after it, which judges its readings against that loss. The 07:00 day-end recheck
 and the twice-daily recheck of each player's last two ended days judge those
 days again within a day; an older day waits for the 05:30 late-battle check,
 which looks back 7 days, or a Season repair; a correction more than 7 days
-old within the current Season escapes these checks until the planned nightly
-recalculation pass.
+old within the current Season escapes these checks unless the
+[nightly re-check](#nightly-re-check-line) finds the day no longer matches
+its saved battles counted again and queues its recalculation; other such
+corrections wait for its planned check of stale days.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
@@ -1086,10 +1088,10 @@ at backfill priority: each job judges 500 player-days and queues the next,
 over every finished day of the Season, in the room live work leaves. The
 pass starts no work from 03:50 to 07:00 UTC and is always finished before
 04:00: each job's reads may take 6 minutes and saving what they found 2,
-and a job not saved by 03:58 keeps nothing and queues nothing more. The players judged for a day are every
-player with a saved day for it, including days rebuilt from a player's
-first battle log, and the ones the Reset sweeps starting and ending it
-tracked. Each count is a problem first found in those 24 hours:
+and a job not saved by 03:58 keeps nothing and queues nothing more. The
+players judged for a day are every player with a saved day for it,
+including days rebuilt from a player's first battle log, and the ones the
+Reset sweeps starting and ending it tracked. Each count is a problem first found in those 24 hours:
 
 - **recount:** a saved day whose attacks, defenses, gain or loss differ
   from its saved battles counted again;
