@@ -17,7 +17,7 @@ import {
   type OverlayAccount,
   type OverlaySettings,
 } from "../lib/obs-overlay";
-import type { OverlaySize } from "../lib/obs-overlay-view";
+import { arrangementFor, type OverlaySize } from "../lib/obs-overlay-view";
 import type { Route } from "./+types/account.obs-overlay";
 import "../obs-overlay.css";
 
@@ -60,7 +60,7 @@ export function headers() {
   return { "Cache-Control": "no-store" };
 }
 
-type Shape = "card" | "wide" | "strip" | "column";
+type Shape = OverlaySize["layout"];
 type Fit = "screen" | "overlay";
 type Part = (typeof OVERLAY_PARTS)[number];
 type Corner = "tl" | "tc" | "tr" | "bl" | "bc" | "br";
@@ -124,16 +124,6 @@ const HELP: Record<Fit, string> = {
     "OBS gets just the overlay, and you move it around in OBS yourself. A new layout or size also needs the new width and height typed into OBS.",
 };
 
-const shapeFor = (w: number, h: number): Shape => {
-  const ratio = w / h;
-  return ratio >= 4.5
-    ? "strip"
-    : ratio >= 2.1
-      ? "wide"
-      : ratio <= 0.8
-        ? "column"
-        : "card";
-};
 const margin = (cw: number) => Math.round((40 * cw) / 1920);
 
 interface Form {
@@ -183,7 +173,7 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
       demo: st.demo === "1",
       fit: st.fit === "overlay" ? "overlay" : "screen",
     },
-    place: {
+    place: clamp({
       w: Number(st.w) || PRESETS.card[0],
       h: Number(st.h) || PRESETS.card[1],
       cw,
@@ -193,7 +183,7 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
       anchor:
         (CORNERS.find(([corner]) => corner === st.snap)?.[0] as Corner | undefined) ??
         null,
-    },
+    }),
   };
 }
 
@@ -229,10 +219,14 @@ function savedSettings(form: Form, place: Place): OverlaySettings {
 }
 
 function clamp(place: Place): Place {
+  const w = Math.min(place.w, place.cw);
+  const h = Math.min(place.h, place.ch);
   return {
     ...place,
-    x: Math.min(Math.max(0, place.x), Math.max(0, place.cw - place.w)),
-    y: Math.min(Math.max(0, place.y), Math.max(0, place.ch - place.h)),
+    w,
+    h,
+    x: Math.min(Math.max(0, place.x), place.cw - w),
+    y: Math.min(Math.max(0, place.y), place.ch - h),
   };
 }
 
@@ -544,7 +538,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   }
 
   const box = { left: place.x, top: place.y, width: place.w, height: place.h };
-  const shape = shapeFor(place.w, place.h);
+  const shape = arrangementFor(place.w, place.h);
   return (
     <div className="obs-layout">
       <form onSubmit={(event) => event.preventDefault()}>

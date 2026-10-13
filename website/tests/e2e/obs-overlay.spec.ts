@@ -96,6 +96,15 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
   await expect(source.locator(".obs-overlay")).toHaveClass(/ov-strip/);
   await expect(source.locator(".ov-name")).toBeVisible();
 
+  // A smaller stream keeps the overlay inside it.
+  await page.getByLabel("Width").fill("1800");
+  await page.getByLabel("Height").fill("800");
+  await page.getByLabel("Height").press("Enter");
+  await expect(page.getByLabel("Width")).toHaveValue("1800");
+  await page.getByLabel("Stream size").selectOption("1280x720");
+  await expect(page.getByLabel("Width")).toHaveValue("1280");
+  await expect(page.getByLabel("Height")).toHaveValue("720");
+
   await obs.close();
   expectNoPageErrors(errors);
 });

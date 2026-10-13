@@ -24,8 +24,6 @@ type Arrangement = "card" | "wide" | "strip" | "column";
 /** What the overlay tells the page around it after each layout. */
 export interface OverlaySize {
   type: "cl-overlay-size";
-  w: number;
-  h: number;
   layout: Arrangement;
   scale: number;
   hidden: Part[];
@@ -33,8 +31,6 @@ export interface OverlaySize {
 
 interface Config {
   tag: string;
-  layout: Arrangement;
-  scale: number;
   show: Set<Part>;
   text: "light" | "dark";
   bg: "card" | "tint" | "none";
@@ -116,8 +112,6 @@ export function readConfig(search: string): Config {
     : new Set<Part>(OVERLAY_PARTS);
   return {
     tag: (q.get("p") ?? "").replace(/^#/, "").toUpperCase(),
-    layout: pick(q.get("layout"), ["card", "wide", "strip", "column"], "card"),
-    scale: Math.min(250, Math.max(40, Number(q.get("scale")) || 100)) / 100,
     show,
     text: q.get("text") === "dark" ? "dark" : "light",
     bg: pick(q.get("bg"), ["card", "tint", "none"], "card"),
@@ -404,39 +398,38 @@ export function mountOverlay(
 
   function render() {
     if (stopped) return;
+    if (!cfg.w || !cfg.h) {
+      stage.innerHTML = "";
+      return;
+    }
     const m = model();
-    const free = cfg.w > 0 && cfg.h > 0;
-    const layout = free ? arrangementFor(cfg.w, cfg.h) : cfg.layout;
+    const layout = arrangementFor(cfg.w, cfg.h);
     root.className = `obs-overlay ov-${layout === "wide" ? "card ov-wide" : layout} ov-${cfg.text}-text ov-bg-${cfg.bg} ov-font-${cfg.font}`;
     stage.style.left = `${cfg.screen ? cfg.x : 0}px`;
     stage.style.top = `${cfg.screen ? cfg.y : 0}px`;
     const shadow = cfg.bg === "card" ? 6 : 0;
-    let scale = cfg.scale;
+    // Lay it out at its natural size, then scale it to fit the box; if it
+    // would get too small to read, leave out the least important parts.
+    const shown = new Set(cfg.show);
+    let scale: number;
     hidden = [];
-    if (free) {
-      // Lay it out at its natural size, then scale it to fit the box; if it
-      // would get too small to read, leave out the least important parts.
-      const shown = new Set(cfg.show);
-      stage.style.transform = "none";
-      for (;;) {
-        stage.innerHTML = draw(layout, m, shown);
-        const natural = stage.firstElementChild as HTMLElement;
-        scale = Math.min(
-          cfg.w / natural.offsetWidth,
-          cfg.h / (natural.offsetHeight + shadow),
-          MAX_SCALE,
-        );
-        const next = DROP_ORDER.find((part) => shown.has(part));
-        if (scale >= MIN_SCALE || !next) break;
-        shown.delete(next);
-        hidden.push(next);
-      }
-      const box = stage.firstElementChild as HTMLElement;
-      box.style.width = `${cfg.w / scale}px`;
-      box.style.height = `${cfg.h / scale - shadow}px`;
-    } else {
-      stage.innerHTML = draw(layout, m, cfg.show);
+    stage.style.transform = "none";
+    for (;;) {
+      stage.innerHTML = draw(layout, m, shown);
+      const natural = stage.firstElementChild as HTMLElement;
+      scale = Math.min(
+        cfg.w / natural.offsetWidth,
+        cfg.h / (natural.offsetHeight + shadow),
+        MAX_SCALE,
+      );
+      const next = DROP_ORDER.find((part) => shown.has(part));
+      if (scale >= MIN_SCALE || !next) break;
+      shown.delete(next);
+      hidden.push(next);
     }
+    const box = stage.firstElementChild as HTMLElement;
+    box.style.width = `${cfg.w / scale}px`;
+    box.style.height = `${cfg.h / scale - shadow}px`;
     stage.style.transform = `scale(${scale})`;
     freshIds = new Set();
     if (activeToast) {
@@ -448,17 +441,9 @@ export function mountOverlay(
       void el.offsetWidth;
       el.style.transition = "";
     }
-    const box = stage.firstElementChild as HTMLElement;
-    const size = free
-      ? { w: cfg.w, h: cfg.h }
-      : {
-          w: Math.ceil(box.offsetWidth * scale),
-          h: Math.ceil((box.offsetHeight + shadow) * scale),
-        };
     if (window.parent !== window) {
       const message: OverlaySize = {
         type: "cl-overlay-size",
-        ...size,
         layout,
         scale,
         hidden,
