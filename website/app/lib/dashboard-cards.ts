@@ -5,13 +5,7 @@
  */
 
 import type { LinkedPlayerCard } from "./account-contracts";
-import type {
-  BasesMode,
-  ClockBattle,
-  OpponentRow,
-  PlayerDay,
-  RankRange,
-} from "./dashboard";
+import type { ClockBattle, OpponentRow, PlayerDay, RankRange } from "./dashboard";
 import type { PlayerArmies } from "./dashboard-armies";
 
 /** Every Legend I player starts a Season here (domain.py SEASON_START_TROPHIES). */
@@ -436,12 +430,19 @@ export interface LegendDayData {
   /** Null when the player page could not be read. */
   day: PlayerDay | null;
   range: RankRange | null;
+  /** When the board behind `range` was read; null without a range. */
+  rangeAtMs: number | null;
+  /** Read before the shared board: the page asks again for the range. */
+  boardPending?: true;
 }
 
 export interface BasesData {
   /** Null until the player's battles for today are saved. */
   rows: OpponentRow[] | null;
-  mode: BasesMode;
+  /** When the comparisons with Legends at similar trophies were read; null without them. */
+  comparedAtMs: number | null;
+  /** Read before the shared board: the page asks again for the comparisons. */
+  boardPending?: true;
 }
 
 /** The army cards' first read: the last 7 finished days. */
@@ -468,3 +469,9 @@ export interface CardDataMap {
 
 /** Null when the card's data could not be read this time. */
 export type CardDataSet = { [Card in keyof CardDataMap]?: CardDataMap[Card] | null };
+
+/** Each card's data, or its read still on the way. */
+export type CardReads = {
+  [Card in keyof CardDataMap]?:
+    CardDataMap[Card] | null | Promise<CardDataMap[Card] | null>;
+};

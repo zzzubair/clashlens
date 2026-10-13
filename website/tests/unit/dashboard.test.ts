@@ -1,8 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
+  data as dataWithStatus,
   StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +65,7 @@ import {
   serializeSettings,
   shownCards,
 } from "../../app/lib/dashboard";
+import type { CardDataSet, CardReads } from "../../app/lib/dashboard-cards";
 import DashboardRoute, {
   action,
   loader,
@@ -97,6 +100,15 @@ function linked(
     today: { net: 46, attacks: 5, defenses: 6 },
     ...overrides,
   };
+}
+
+/** Each card's data once its read finishes: the page answers before its cards. */
+async function settled(reads: CardReads): Promise<CardDataSet> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(reads).map(async ([card, read]) => [card, await read]),
+    ),
+  ) as CardDataSet;
 }
 
 function unwrap<T>(result: unknown): { data: T; status: number } {
@@ -380,6 +392,26 @@ describe("Legend clock", () => {
 });
 
 describe("Legend day card", () => {
+  it("says how old its range is, even without the player page", () => {
+    const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
+    const updated = (day: PlayerDay | null) =>
+      text(
+        renderToStaticMarkup(
+          createElement(LegendDayCard, {
+            player: linked(MAIN),
+            day,
+            range: { best: 95, worst: 760 },
+            rangeAtMs: at(9),
+            nowMs: at(0),
+          }),
+        ),
+      );
+    expect(updated(null)).toContain("updated 9 min ago");
+    // The older of the day's reads and the range's shows.
+    expect(updated(emptyDay({ observedAtMs: at(2) }))).toContain("updated 9 min ago");
+    expect(updated(emptyDay({ observedAtMs: at(12) }))).toContain("updated 12 min ago");
+  });
+
   const render = (day: PlayerDay | null, range = { best: 95, worst: 760 }) =>
     text(
       renderToStaticMarkup(
@@ -520,6 +552,25 @@ describe("Bases you attacked", () => {
     expect(await render([])).toContain("· today · 0 of 8 No attacks yet today.");
   });
 
+  it("shows the older of the opponents' reads and Held % mode's comparison", async () => {
+    const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
+    const updated = async (mode: "held" | "trophies") =>
+      text(
+        await renderInRouter(
+          createElement(OpponentsCard, {
+            rows: [{ ...row("Easy one", held(1, 4)), observedAtMs: at(2) }],
+            timeZone: "UTC",
+            mode,
+            nowMs: at(0),
+            comparedAtMs: at(9),
+          }),
+        ),
+      );
+    expect(await updated("held")).toContain("updated 9 min ago");
+    // Trophies mode compares with a fixed number, so only the opponent's read counts.
+    expect(await updated("trophies")).toContain("updated 2 min ago");
+  });
+
   it("rates bases by trophies given up a defense in Trophies mode", async () => {
     const plain = text(
       await renderInRouter(
@@ -550,6 +601,7 @@ describe("today read for the Legend day and Bases cards", () => {
       rank_range: { best: 95, worst: 760 },
       open_defenses: 7,
       automatic_defense_each: 21,
+      board_computed_at: "2026-10-07T09:05:00+00:00",
       opponents: [
         {
           tag: "#8PY",
@@ -587,6 +639,7 @@ describe("today read for the Legend day and Bases cards", () => {
           legends: { held: 41, defenses: 100 },
         },
       ],
+      boardComputedAtMs: Date.UTC(2026, 9, 7, 9, 5),
     });
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
@@ -603,10 +656,12 @@ describe("today read for the Legend day and Bases cards", () => {
       open_defenses: null,
       automatic_defense_each: null,
       opponents: null,
+      board_computed_at: null,
     });
     expect(await getPlayerToday(MAIN)).toMatchObject({
       rankRange: { best: 95, worst: 760 },
       opponents: null,
+      boardComputedAtMs: null,
     });
   });
 
@@ -617,6 +672,7 @@ describe("today read for the Legend day and Bases cards", () => {
       open_defenses: null,
       automatic_defense_each: null,
       opponents: [],
+      board_computed_at: null,
     });
     await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
   });
@@ -688,7 +744,7 @@ describe("dashboard route", () => {
   const load = async (url = `${ORIGIN}/dashboard`) => {
     const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(url)));
     if (data.kind !== "signed-in") throw new Error("expected signed in");
-    return data;
+    return { ...data, cards: await settled(data.cards) };
   };
 
   it("shows the signed-out preview without a login", async () => {
@@ -707,7 +763,7 @@ describe("dashboard route", () => {
     // A first visit reads the default cards that sit behind the pop-up.
     // Legend day still has the account's live trophies and rank.
     expect(data.cards).toEqual({
-      "legend-day": { player: linked(MAIN), day: null, range: null },
+      "legend-day": { player: linked(MAIN), day: null, range: null, rangeAtMs: null },
       "legend-clock": null,
       bases: null,
       goal: null,
@@ -716,6 +772,51 @@ describe("dashboard route", () => {
       "heat-map": null,
     });
     expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
+  });
+
+  it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
+    const boardAt = "2026-10-07T09:05:00+00:00";
+    // Today's read answers before the board is read; asked again, it waits for it.
+    mocks.requestJson.mockImplementation(async (path: string) => {
+      const waited = path.endsWith("?wait_for_board=true");
+      return {
+        tag: MAIN,
+        rank_range: waited ? { best: 95, worst: 760 } : null,
+        open_defenses: 7,
+        automatic_defense_each: 21,
+        opponents: [],
+        board_computed_at: waited ? boardAt : null,
+      };
+    });
+    account.preferences = { dashboard: { v: 3, layout: ["legend-day", "bases"] } };
+    const first = await load();
+    expect(first.cards["legend-day"]).toMatchObject({
+      range: null,
+      rangeAtMs: null,
+      boardPending: true,
+    });
+    expect(first.cards.bases).toMatchObject({
+      rows: [],
+      comparedAtMs: null,
+      boardPending: true,
+    });
+    const again = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
+    );
+    expect(again.cards).toEqual({
+      "legend-day": {
+        player: linked(MAIN),
+        day: null,
+        range: { best: 95, worst: 760 },
+        rangeAtMs: Date.parse(boardAt),
+      },
+      bases: { rows: [], comparedAtMs: Date.parse(boardAt) },
+    });
+    // One read of today's numbers serves both cards each time.
+    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/players/${encodeURIComponent(MAIN)}/today`,
+      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+    ]);
   });
 
   it("follows the switcher's player and reads no cards outside Legend I", async () => {
@@ -764,6 +865,8 @@ describe("dashboard route", () => {
     );
     expect(status).toBe(200);
     expect(data.saved).toBe(true);
+    // The page shows the answer's settings without reading itself again.
+    expect(data.settings).toEqual(readSettings(settings));
     expect(client.updateAccount).toHaveBeenCalledWith(
       {
         username: "nova88",
@@ -830,20 +933,81 @@ describe("dashboard route", () => {
     expect(data).toMatchObject({ saved: false, error: expect.any(String) });
   });
 
-  it("reloads the cards after a save or for another player, never otherwise", () => {
-    const check = (from: string, to: string, formMethod?: string) =>
+  it("reloads the cards for another player, never after its own save", () => {
+    const check = (from: string, to: string, formMethod?: string, formAction?: string) =>
       shouldRevalidate({
         currentUrl: new URL(`${ORIGIN}${from}`),
         nextUrl: new URL(`${ORIGIN}${to}`),
         formMethod,
+        formAction,
         defaultShouldRevalidate: true,
       } as Parameters<typeof shouldRevalidate>[0]);
-    expect(check("/dashboard", "/dashboard", "POST")).toBe(true);
+    // A save answers with the settings as saved; the page reads nothing else.
+    expect(check("/dashboard", "/dashboard", "POST", "/dashboard?player=%232PP")).toBe(
+      false,
+    );
+    expect(check("/dashboard", "/dashboard", "POST", "/logout")).toBe(true);
     expect(check("/dashboard", "/dashboard?player=%232PP8QLY0")).toBe(true);
     expect(check("/dashboard?player=%232PP8QLY0", "/dashboard?player=%232PP8QLY0")).toBe(
       false,
     );
   });
+
+  it.each([
+    ["saved", 50],
+    ["failed", 100],
+  ])(
+    "reads the new player when a save that %s lands during a switch",
+    async (how, kept) => {
+      // The account's Goal, which a save changes once the test lets it land.
+      let goal = 100;
+      let land: (() => void) | null = null;
+      let reads = 0;
+      let release = () => {};
+      const router = createMemoryRouter(
+        [
+          {
+            id: "dashboard",
+            path: "/dashboard",
+            shouldRevalidate,
+            loader: async ({ request }) => {
+              const read = {
+                player: new URL(request.url).searchParams.get("player"),
+                goal,
+              };
+              // The switch's own read starts before the save lands, and is slow.
+              if (read.player === "B" && ++reads === 1)
+                await new Promise<void>((resolve) => (release = resolve));
+              return read;
+            },
+            action: () =>
+              new Promise((resolve) => {
+                land = () => {
+                  if (how === "failed")
+                    return resolve(dataWithStatus({ saved: false }, { status: 503 }));
+                  goal = 50;
+                  resolve({ saved: true });
+                };
+              }),
+          },
+        ],
+        { initialEntries: ["/dashboard?player=A"] },
+      );
+      await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+      void router.fetch("save", "dashboard", "/dashboard?player=A", {
+        formMethod: "post",
+        formData: new FormData(),
+      });
+      const switched = router.navigate("/dashboard?player=B");
+      await vi.waitFor(() => expect(reads > 0 && land !== null).toBe(true));
+      land!();
+      await vi.waitFor(() => expect(router.state.navigation.state).toBe("idle"));
+      release();
+      await switched;
+      expect(router.state.location.search).toBe("?player=B");
+      expect(router.state.loaderData.dashboard).toEqual({ player: "B", goal: kept });
+    },
+  );
 });
 
 describe("dashboard switch", () => {
@@ -930,6 +1094,28 @@ describe("dashboard page", () => {
     [...html.matchAll(/class="dash-card dash-card-(\w)"[^>]*data-card="([^"]+)"/g)].map(
       (match) => `${match[2]}:${match[1]}`,
     );
+
+  it("shows Legend day and Bases read before the shared board at once, without waiting for it", async () => {
+    const html = text(
+      await renderDashboard({
+        settings: { ...defaultSettings(), layout: ["legend-day", "bases"] },
+        cards: {
+          "legend-day": {
+            player: linked(MAIN),
+            day: null,
+            range: null,
+            rangeAtMs: null,
+            boardPending: true,
+          },
+          bases: { rows: [], comparedAtMs: null, boardPending: true },
+        },
+      }),
+    );
+    expect(html).toContain("Trophies 5,696");
+    expect(html).toContain("Next Reset –");
+    expect(html).not.toContain("Loading");
+    expect(html).not.toContain("could not be loaded");
+  });
 
   it("shows each linked account as a tab with its trophies, rank and net today", async () => {
     const html = await renderDashboard({

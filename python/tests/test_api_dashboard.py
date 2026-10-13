@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from datetime import timedelta
+from threading import Event
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +19,7 @@ from test_api_security import NOW as SIGNED_AT
 from clashlens import api_dashboard
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 
 def battle(
@@ -105,13 +112,19 @@ def publish_yesterday(
         connection.commit()
 
 
+def read_board() -> api_dashboard.DashboardBoard:
+    """A board read at once rather than in the background, so a test's first
+    request sees it."""
+    return api_dashboard.DashboardBoard(run=lambda read: read())
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7"])
 def test_dashboard_reads_refuse_while_the_dashboard_is_off(
     monkeypatch, enabled: bool, read: str
 ) -> None:
     monkeypatch.setattr(
-        api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
+        api_dashboard, "get_player_today", lambda _db, _board, tag, **_: {"tag": tag}
     )
     monkeypatch.setattr(
         api_dashboard, "get_player_armies", lambda _db, _days, tag, **_: {"tag": tag}
@@ -132,6 +145,30 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
             404,
             "dashboard_disabled",
         )
+
+
+def test_only_a_today_read_that_asks_waits_for_the_board(monkeypatch) -> None:
+    waits: list[float] = []
+
+    def today(_db: Any, _board: Any, tag: str, **kwargs: Any) -> dict[str, str]:
+        waits.append(kwargs["board_wait"])
+        return {"tag": tag}
+
+    monkeypatch.setattr(api_dashboard, "get_player_today", today)
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=True,
+    )
+    with TestClient(app) as client:
+        for target in (
+            "/v1/players/%232PP/today",
+            "/v1/players/%232PP/today?wait_for_board=true",
+        ):
+            response = client.get(target, headers=_signed_headers(target))
+            assert response.status_code == 200
+    assert waits == [0, api_dashboard.BOARD_WAIT_SECONDS]
 
 
 def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
@@ -210,7 +247,7 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                 partial_reasons=[],
             )
 
-            board = api_dashboard.DashboardBoard()
+            board = read_board()
             today = api_dashboard.get_player_today(database, board, "#2PP", now=NOW)
 
             assert today is not None
@@ -280,7 +317,7 @@ def test_dashboard_today_leaves_the_loss_unknown_without_yesterday(
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -312,7 +349,7 @@ def test_dashboard_range_counts_battles_with_their_trophies(database_url: str) -
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             # Your best is 5,040 + 7 x 40 = 5,320, so you can still pass #8PY.
@@ -347,7 +384,7 @@ def test_dashboard_range_counts_no_opponent_slots_as_used(database_url: str) -> 
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -376,7 +413,7 @@ def test_dashboard_today_skips_a_yesterday_the_worker_rejects(
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -398,7 +435,12 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
             return self.rows
 
     def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
-        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0)
+        return (tag, start, 0, 0, defended, 0, tripled, None)
+
+    def board_of(rows: list[tuple[Any, ...]]) -> Any:
+        # Every player is on the Live Leaderboard at 5,000.
+        live = [(row[0], None, 5000) for row in rows]
+        return api_dashboard._read_board(Rows(rows), NOW, live, {})[0]
 
     # 24 defenses at 5,400 (6 held) and 196 at 5,000 (168 held), 400 away.
     rows = (
@@ -406,7 +448,7 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
         + [player(f"#B{n}", 5000, 4, 1) for n in range(28)]
         + [player(f"#C{n}", 5000, 4, 0) for n in range(21)]
     )
-    board = api_dashboard._read_board(Rows(rows), NOW)
+    board = board_of(rows)
 
     # 5,400: 24 within 300, under 50, so no comparison rather than the 174
     # of 220 (79%) that widening to the 5,000 players would give.
@@ -418,5 +460,86 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
 
     # With 8 more defenses at 5,520, 5,250 has none within 100 and 24 within
     # 150, then 220 within 250, so it stops short of 5,520 at 270.
-    wider = api_dashboard._read_board(Rows(rows + [player("#D", 5520, 8, 8)]), NOW)
+    wider = board_of(rows + [player("#D", 5520, 8, 8)])
     assert api_dashboard.similar_held(wider, 5250) == {"held": 174, "defenses": 220}
+
+
+def test_a_failed_board_read_waits_its_turn() -> None:
+    class Down:
+        """A live board whose read always fails, counting the tries."""
+
+        tries = 0
+
+        def current(self, _database: Any, _now: Any) -> Any:
+            self.tries += 1
+            raise TimeoutError
+
+    live, clock = Down(), [0.0]
+    board = api_dashboard.DashboardBoard(
+        live, run=lambda read: read(), clock=lambda: clock[0]
+    )
+    # Every request on the first day finds no board; only the first reads.
+    for _ in range(5):
+        assert board.current(None, NOW) is None  # type: ignore[arg-type]
+    assert live.tries == 1
+    # Its turn comes again a minute later.
+    clock[0] = api_dashboard.BOARD_SECONDS
+    assert board.current(None, NOW) is None  # type: ignore[arg-type]
+    assert live.tries == 2
+
+
+def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None:
+    go = Event()
+
+    class Live:
+        """A Live Leaderboard read that finishes when the test lets it go,
+        with one player at 5,000."""
+
+        def current(self, _database: Any, _now: Any) -> Any:
+            go.wait(10)
+            return SimpleNamespace(rows=[("#2PP", None, 5000)])
+
+    class NoLogs:
+        """A connection with no log saved today."""
+
+        def execute(self, _sql: str, _params: Any) -> NoLogs:
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return []
+
+    database = SimpleNamespace(
+        pool=SimpleNamespace(connection=lambda: nullcontext(NoLogs()))
+    )
+    board = api_dashboard.DashboardBoard(Live())  # type: ignore[arg-type]
+    # The first request answers at once, without the board.
+    asked = time.monotonic()
+    assert board.current(database, NOW) is None  # type: ignore[arg-type]
+    assert time.monotonic() - asked < 0.2
+    # A follow-up waits for the read, but no longer than it may.
+    asked = time.monotonic()
+    assert board.current(database, NOW, wait=0.3) is None  # type: ignore[arg-type]
+    assert 0.3 <= time.monotonic() - asked < 2
+    # A follow-up waiting when the read finishes gets the board at once.
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(board.current, database, NOW, wait=5)
+        time.sleep(0.1)
+        go.set()
+        found = waiting.result(timeout=5)
+    assert found is not None
+    assert api_dashboard.rank_range(found, "#2PP") == {"best": 1, "worst": 1}
+
+    # A read due seconds before the Reset finishes after it: a follow-up
+    # waiting on the new Legend day gets that day's board, not nothing.
+    go.clear()
+    reset = ranked_day_for(NOW).end
+    late = api_dashboard.DashboardBoard(Live())  # type: ignore[arg-type]
+    assert late.current(database, reset - timedelta(seconds=10)) is None  # type: ignore[arg-type]
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(
+            late.current, database, reset + timedelta(seconds=5), wait=5
+        )
+        time.sleep(0.1)
+        go.set()
+        found = waiting.result(timeout=5)
+    assert found is not None and found.day_start == reset

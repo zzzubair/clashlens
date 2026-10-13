@@ -31,6 +31,8 @@ import {
   isShieldDay,
   offenseConsistency,
   recentForm,
+  type CardDataSet,
+  type CardReads,
   type GoalData,
   type SeasonData,
 } from "../../app/lib/dashboard-cards";
@@ -539,6 +541,7 @@ const TODAY = {
   rank_range: { best: 95, worst: 760 },
   open_defenses: 7,
   automatic_defense_each: 21,
+  board_computed_at: iso(NOW - 15 * 60_000),
   opponents: [
     {
       tag: BO,
@@ -718,12 +721,21 @@ const loaderArgs = (url: string) =>
     typeof loader
   >[0];
 
+/** Each card's data once its read finishes: the page answers before its cards. */
+async function settled(reads: CardReads): Promise<CardDataSet> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(reads).map(async ([card, read]) => [card, await read]),
+    ),
+  ) as CardDataSet;
+}
+
 async function load() {
   const result = (await loader(loaderArgs(`${ORIGIN}/dashboard`))) as unknown as {
     data: DashboardLoaderData;
   };
   if (result.data.kind !== "signed-in") throw new Error("expected signed in");
-  return result.data;
+  return { ...result.data, cards: await settled(result.data.cards) };
 }
 
 async function render(loaderData: DashboardLoaderData): Promise<string> {
@@ -1137,7 +1149,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
   });
 
   it("shows today's read on Legend day and Bases you attacked, and the army reads", async () => {
-    const cards = cardsIn(await render(await load()));
+    const data = await load();
+    const cards = cardsIn(await render(data));
+    // Both cards are as old as the board behind the range and the comparisons.
+    expect(data.cards["legend-day"]?.rangeAtMs).toBe(NOW - 15 * 60_000);
+    expect(data.cards.bases?.comparedAtMs).toBe(NOW - 15 * 60_000);
 
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);

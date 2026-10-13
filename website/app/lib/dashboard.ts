@@ -184,6 +184,18 @@ export function shownCards(layout: DashboardSettings["layout"]): CardId[] {
   );
 }
 
+/** Whether a form went to the dashboard's save, which no page reloads after. */
+export function isDashboardSave(
+  formMethod: string | undefined,
+  formAction: string | undefined,
+): boolean {
+  return (
+    formMethod?.toUpperCase() === "POST" &&
+    formAction !== undefined &&
+    new URL(formAction, "http://dashboard.invalid").pathname === "/dashboard"
+  );
+}
+
 /** Cards "+ Add a card" offers: every built card not already shown. */
 export function addableCards(shown: readonly CardId[]): CardId[] {
   return CARD_IDS.filter((id) => CARDS[id].built && !shown.includes(id));

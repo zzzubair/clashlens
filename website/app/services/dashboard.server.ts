@@ -20,7 +20,7 @@ import {
   SEASON_START_TROPHIES,
   rate,
   type CardDataMap,
-  type CardDataSet,
+  type CardReads,
   type ClockData,
   type CutoffsData,
   type GoalData,
@@ -60,6 +60,8 @@ export interface PlayerToday {
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
   opponents: OpponentRow[] | null;
+  /** When the board behind the range and the bases' comparisons was read; null without one. */
+  boardComputedAtMs: number | null;
 }
 
 function malformed(): never {
@@ -127,10 +129,14 @@ function legendsHeld(value: unknown): LegendsHeld {
   return { held: count(value.held, defenses), defenses };
 }
 
-export async function getPlayerToday(tag: string): Promise<PlayerToday> {
+/** `waitForBoard` asks Python to wait a few seconds for the shared board's read under way. */
+export async function getPlayerToday(
+  tag: string,
+  waitForBoard = false,
+): Promise<PlayerToday> {
   if (!isCanonicalPlayerTag(tag)) throw new PythonApiError(422, { error: "invalid_tag" });
   const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}/today`,
+    `/v1/players/${encodeURIComponent(tag)}/today${waitForBoard ? "?wait_for_board=true" : ""}`,
     "GET",
     undefined,
     undefined,
@@ -151,6 +157,7 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
       if (!Array.isArray(items)) malformed();
       return items.slice(0, 8).map(opponent);
     }),
+    boardComputedAtMs: nullable(payload.board_computed_at, time),
   };
 }
 
@@ -160,6 +167,8 @@ export interface CardContext {
   /** The account the cards follow; always in Legend I. */
   selected: LinkedPlayerCard;
   settings: DashboardSettings;
+  /** Wait a few seconds for the shared board's read under way. */
+  waitForBoard?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -725,15 +734,16 @@ async function lastSeasonFinish(ctx: CardContext, page: PlayerPage) {
 }
 
 /**
- * Read the data for each built card on the page. Cards share one read of
- * each player page; a card whose reads fail gets null and says so, without
- * taking the other cards down.
+ * Start the reads for each built card on the page, without waiting for
+ * them: each card shows as soon as its own data arrives. Cards share one
+ * read of each player page; a card whose reads fail gets null and says so,
+ * without taking the other cards down.
  */
-export async function loadCardData(
+export function readCards(
   cards: readonly CardId[],
   ctx: CardContext,
   identity: GoogleAccountIdentity,
-): Promise<CardDataSet> {
+): CardReads {
   const read = new Map<string, Promise<PlayerPage | null>>();
   const pages: PageReader = (tag) => {
     if (!read.has(tag)) read.set(tag, unlessMissing(ctx.client.getPlayer(tag)));
@@ -744,8 +754,12 @@ export async function loadCardData(
     return page === null ? null : seasonData(page);
   };
   // Legend day and Bases you attacked share one read of today's numbers.
+  // Read before the shared board, each says so and the page asks again.
   let todayRead: Promise<PlayerToday | null> | undefined;
-  const today = () => (todayRead ??= getPlayerToday(ctx.selected.tag).catch(() => null));
+  const today = () =>
+    (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard).catch(() => null));
+  const waiting = (read: PlayerToday | null) =>
+    read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
   const armies = async (lens: ArmyLens) => ({
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
@@ -763,16 +777,18 @@ export async function loadCardData(
         player: ctx.selected,
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
+        rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
+        ...waiting(read),
       };
     },
     bases: async () => {
       const read = await today();
-      return read === null
-        ? null
-        : {
-            rows: read.opponents,
-            mode: ctx.settings.basesMode,
-          };
+      if (read === null) return null;
+      return {
+        rows: read.opponents,
+        comparedAtMs: read.boardComputedAtMs,
+        ...waiting(read),
+      };
     },
     "armies-defense": () => armies("defense"),
     "armies-offense": () => armies("offense"),
@@ -794,12 +810,35 @@ export async function loadCardData(
     "offense-consistency": season,
     "group-watch": () => groupWatchData(ctx, pages, identity),
   };
-  const loaded = await Promise.all(
+  return Object.fromEntries(
     cards
       .filter((card): card is keyof CardDataMap => Object.hasOwn(readers, card))
-      .map(async (card) => [card, await readers[card]().catch(() => null)] as const),
-  );
-  return Object.fromEntries(loaded) as CardDataSet;
+      .map((card) => [card, readers[card]().catch(() => null)]),
+  ) as CardReads;
+}
+
+/**
+ * Wait up to `ms` for the card reads. Those done by then go out with the
+ * page; the rest stream in later. React holds a streamed card back for
+ * 300 ms after it showed "Loading…", so a quick card is faster this way.
+ */
+export async function settleWithin(reads: CardReads, ms: number): Promise<CardReads> {
+  const settled: Record<string, unknown> = {};
+  const done = Object.entries(reads).map(async ([card, read]) => {
+    settled[card] = await read;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(done),
+    new Promise((resolve) => (timer = setTimeout(resolve, ms))),
+  ]);
+  clearTimeout(timer);
+  return Object.fromEntries(
+    Object.entries(reads).map(([card, read]) => [
+      card,
+      Object.hasOwn(settled, card) ? settled[card] : read,
+    ]),
+  ) as CardReads;
 }
 
 function hits(value: unknown): ArmyHits {

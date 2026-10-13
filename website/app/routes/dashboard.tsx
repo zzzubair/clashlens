@@ -1,5 +1,13 @@
-import { useEffect, useState } from "react";
-import { Link, data, redirect, useLoaderData, useSearchParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import {
+  Link,
+  data,
+  redirect,
+  useFetcher,
+  useLoaderData,
+  useNavigation,
+  useSearchParams,
+} from "react-router";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 
 import { Dashboard } from "../components/DashboardGrid";
@@ -10,14 +18,16 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   CARDS,
+  CARD_IDS,
   DEFAULT_LAYOUT,
+  isDashboardSave,
   nextResetMs,
   parsePostedSettings,
   readSettings,
   serializeSettings,
   shownCards,
 } from "../lib/dashboard";
-import type { CardDataSet } from "../lib/dashboard-cards";
+import type { CardReads } from "../lib/dashboard-cards";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/dashboard";
@@ -27,6 +37,8 @@ import "../dashboard-cards.css";
 import "../dashboard-armies.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+// Cards read within this go out with the page; slower ones stream in.
+const CARD_WAIT_MS = 250;
 
 export type DashboardLoaderData =
   | { kind: "signed-out"; loginAvailable: boolean }
@@ -37,7 +49,8 @@ export type DashboardLoaderData =
       playersUnavailable: boolean;
       selectedTag: string | null;
       settings: DashboardSettings;
-      cards: CardDataSet;
+      /** Each card's read, sent on as it finishes. */
+      cards: CardReads;
       /** The Reset that ends the Legend day the cards were read for. */
       dayEndsMs: number;
       idempotencyKey: string;
@@ -47,6 +60,8 @@ export interface DashboardActionData {
   saved: boolean;
   error: string | null;
   idempotencyKey: string;
+  /** The settings as saved, which the page shows without reading itself again. */
+  settings: DashboardSettings | null;
 }
 
 export function meta() {
@@ -56,7 +71,11 @@ export function meta() {
 /**
  * GET /dashboard — the signed-in user's Legend dashboard. A visitor who is
  * not signed in sees a preview of what an account adds instead. While
- * CLASHLENS_DASHBOARD_ENABLED is off the page does not exist.
+ * CLASHLENS_DASHBOARD_ENABLED is off the page does not exist. The page
+ * answers once the account and its linked players are read; each card's
+ * data follows as it arrives. `?cards=goal,cutoffs` reads only those cards,
+ * for a card whose settings were just saved; `&board=wait` waits a few
+ * seconds for the shared board, for Legend day or Bases read before it.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const { getWebsiteConfig, isDashboardEnabled } =
@@ -108,22 +127,27 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const settings = readSettings(account.preferences.dashboard);
-  const requested = normalizePlayerTag(
-    new URL(request.url).searchParams.get("player") ?? "",
-  );
+  const query = new URL(request.url).searchParams;
+  const requested = normalizePlayerTag(query.get("player") ?? "");
+  const only = query.get("cards")?.split(",");
   const selected =
     players.find((player) => player.tag === requested) ??
     players.find((player) => player.state === "tracking") ??
     players[0] ??
     null;
 
-  let cards: CardDataSet = {};
+  let cards: CardReads = {};
   if (selected?.state === "tracking") {
-    const { loadCardData } = await import("../services/dashboard.server");
-    cards = await loadCardData(
-      shownCards(settings.layout),
-      { client, selected, settings },
-      identity,
+    const { readCards, settleWithin } = await import("../services/dashboard.server");
+    cards = await settleWithin(
+      readCards(
+        only
+          ? CARD_IDS.filter((card) => only.includes(card))
+          : shownCards(settings.layout),
+        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
+        identity,
+      ),
+      CARD_WAIT_MS,
     );
   }
 
@@ -155,7 +179,12 @@ export async function action({ request }: Route.ActionArgs) {
   const { getWebsiteConfig } = await import("../server/config.server");
   const fail = (status: number, error: string) =>
     data<DashboardActionData>(
-      { saved: false, error, idempotencyKey: actions.freshIdempotencyKey() },
+      {
+        saved: false,
+        error,
+        idempotencyKey: actions.freshIdempotencyKey(),
+        settings: null,
+      },
       { status, headers: NO_STORE },
     );
 
@@ -176,14 +205,12 @@ export async function action({ request }: Route.ActionArgs) {
   const settings = parsePostedSettings(posted);
   if (settings === null) return fail(400, "Your dashboard could not be read.");
 
+  const stored = serializeSettings(settings);
   try {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const account = await client.getAccount();
-    const preferences = {
-      ...account.preferences,
-      dashboard: serializeSettings(settings),
-    };
+    const preferences = { ...account.preferences, dashboard: stored };
     if (new TextEncoder().encode(JSON.stringify(preferences)).byteLength > 4096) {
       return fail(413, "Your settings are too large to save.");
     }
@@ -196,7 +223,13 @@ export async function action({ request }: Route.ActionArgs) {
     return fail(503, "Your dashboard could not be saved. Try again.");
   }
   return data<DashboardActionData>(
-    { saved: true, error: null, idempotencyKey: actions.freshIdempotencyKey() },
+    {
+      saved: true,
+      error: null,
+      idempotencyKey: actions.freshIdempotencyKey(),
+      // As the next load reads them back.
+      settings: readSettings(stored),
+    },
     { headers: NO_STORE },
   );
 }
@@ -205,17 +238,36 @@ export function headers() {
   return NO_STORE;
 }
 
-/** Reload the cards for another account or after a save, never for anything else. */
+/**
+ * Reload the cards for another account, whatever else happened, such as a
+ * save landing during the switch, failed or not. A save's answer carries
+ * the settings as saved, and the page reads only the cards they change.
+ */
 export function shouldRevalidate({
   currentUrl,
   nextUrl,
   formMethod,
+  formAction,
   defaultShouldRevalidate,
 }: ShouldRevalidateFunctionArgs) {
+  if (currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player"))
+    return true;
+  if (isDashboardSave(formMethod, formAction)) return false;
   if (formMethod || currentUrl.pathname !== nextUrl.pathname) {
     return defaultShouldRevalidate;
   }
-  return currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player");
+  return false;
+}
+
+/** The linked player a switch is loading, before its answer arrives. */
+function switchingTo(
+  navigation: ReturnType<typeof useNavigation>,
+  players: LinkedPlayerCard[],
+) {
+  const next = navigation.location;
+  if (navigation.state !== "loading" || next?.pathname !== "/dashboard") return null;
+  const tag = normalizePlayerTag(new URLSearchParams(next.search).get("player") ?? "");
+  return players.find((player) => player.tag === tag) ?? null;
 }
 
 function accountLine(player: LinkedPlayerCard): string {
@@ -384,15 +436,48 @@ export default function DashboardRoute() {
       </main>
     );
   }
+  return <SignedInDashboard loaderData={loaderData} dayOver={dayOver} />;
+}
+
+function SignedInDashboard({
+  loaderData,
+  dayOver,
+}: {
+  loaderData: Extract<DashboardLoaderData, { kind: "signed-in" }>;
+  dayOver: boolean;
+}) {
+  // A switch shows the new player's tab and empty cards at once, never the
+  // last player's numbers under the new name.
+  const switching = switchingTo(useNavigation(), loaderData.players);
+  // Saves live above each player's cards, so one still lands after a switch.
+  const fetcher = useFetcher<DashboardActionData>();
+  // Settings saved since this load; the next load reads them back.
+  const [saved, setSaved] = useState<{
+    from: DashboardSettings;
+    settings: DashboardSettings;
+  } | null>(null);
+  // Each save's answer shows as soon as it is back, over the load it lands on.
+  const answer = fetcher.data;
+  const applied = useRef(answer);
+  useEffect(() => {
+    if (!answer?.settings || applied.current === answer) return;
+    applied.current = answer;
+    setSaved({ from: loaderData.settings, settings: answer.settings });
+  }, [answer, loaderData.settings]);
+  const settings =
+    saved?.from === loaderData.settings ? saved.settings : loaderData.settings;
+  const selectedTag = switching?.tag ?? loaderData.selectedTag;
   const selected =
-    loaderData.players.find((player) => player.tag === loaderData.selectedTag) ?? null;
+    switching ??
+    loaderData.players.find((player) => player.tag === loaderData.selectedTag) ??
+    null;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
       {loaderData.players.length > 0 ? (
         <AccountTabs
           players={loaderData.players}
-          selectedTag={loaderData.selectedTag}
+          selectedTag={selectedTag}
           dayOver={dayOver}
         />
       ) : null}
@@ -420,10 +505,12 @@ export default function DashboardRoute() {
           {dayOver ? <NewDayNotice /> : null}
           <Dashboard
             key={selected.tag}
-            settings={loaderData.settings}
-            data={loaderData.cards}
+            tag={selected.tag}
+            settings={settings}
+            data={switching ? null : loaderData.cards}
             dayOver={dayOver}
             idempotencyKey={loaderData.idempotencyKey}
+            fetcher={fetcher}
           />
         </>
       )}

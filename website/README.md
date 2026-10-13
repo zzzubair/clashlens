@@ -191,7 +191,10 @@ dialogs open as bottom sheets.
 All 13 cards are built. Each card reads saved player pages, tracked
 leaderboards and groups through the private API; a player page is read once
 per load however many cards use it, and a card whose reads fail says it could
-not be loaded without taking the other cards down. A page left open past the
+not be loaded without taking the other cards down. Switching account shows its
+tab at once and each card fills in as its data arrives; a save keeps the cards
+shown and reads again only those it changes or adds
+([`dashboard.tsx`](app/routes/dashboard.tsx)). A page left open past the
 Reset hides the day's numbers behind a new-day notice until it reloads.
 
 Bases you attacked rates each base Hard / Average / Easy in the mode its
@@ -216,8 +219,12 @@ zone.
 
 Legend day and Bases you attacked share one read of `GET /v1/players/{tag}/today`
 on the private API, for the selected account only. Its board of every
-tracked player's trophies and today's attack and defense counts is read in one
-query and kept for a minute, so all dashboards share one read per minute.
+tracked player's trophies and today's attack and defense counts is read in the
+background at most once a minute and shared by every dashboard, so loading
+the page never waits for it. Until today's first read finishes, or once the
+newest is 10 minutes old, the Next Reset range and Held % comparisons are left
+out and the page asks again up to 3 times, each waiting up to 4 seconds for
+that read ([`api_dashboard.py`](../python/src/clashlens/api_dashboard.py)).
 Opponents' defenses come from their own published daily logs, so an untracked
 opponent shows only your hit. Until the account's own log for today is saved,
 Bases you attacked says so and Legend day shows – for its attack and defense

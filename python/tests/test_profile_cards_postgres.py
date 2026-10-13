@@ -183,11 +183,29 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
             assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
-            # The website's profile takes them from the shared Live board.
+            # The data service reads ranks from the Live Leaderboard's shared
+            # read, with the same answer.
+            live = api_leaderboard.LiveBoardCache(clock=lambda: 0.0)
             assert api_accounts.get_public_user(
-                database, "groupowner", now=NOW,
-                live_board=api_leaderboard.LiveBoardCache(),
+                database, "groupowner", now=NOW, live_board=live
             )["verified_players"] == cards
+            # A player who leaves Legend I loses its rank at once, while the
+            # shared read still has it on the board; the others keep theirs.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE players SET active = false, eligibility_state = 'ineligible'
+                    WHERE normalized_tag = '#8PY'
+                    """
+                )
+            left = api_accounts.get_public_user(
+                database, "groupowner", now=NOW, live_board=live
+            )["verified_players"]
+            assert [
+                (card["tag"], card["state"], card["rank"])
+                for card in left
+                if card["tag"] in ("#2PP", "#8PY")
+            ] == [("#2PP", "tracking", board["#2PP"]), ("#8PY", "not_in_legend", None)]
             # A newer uncertain profile names no league, rather than the
             # older Electro League 33 staying shown.
             with database.pool.connection() as connection:
@@ -214,6 +232,45 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                 "verified_players"
             ]
             assert [card["league"] for card in cards if card["tag"] == "#YQ2"] == [None]
+
+            # With no linked player tracked in Legend I, no rank is looked up,
+            # whether each left it or Clash Lens is unsure where it is.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM player_profile_versions"
+                    " WHERE parser_version = 'unranked-test'"
+                )
+                connection.execute(
+                    """
+                    UPDATE players SET active = false, eligibility_state = 'uncertain'
+                    WHERE normalized_tag = '#9PY'
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM verified_player_links
+                    WHERE player_id IN (
+                        SELECT id FROM players
+                        WHERE normalized_tag NOT IN ('#8PY', '#9PY', '#YQ2')
+                    )
+                    """
+                )
+            asked: list[object] = []
+
+            class Board(api_leaderboard.LiveBoardCache):
+                def current(self, database, now):  # type: ignore[override]
+                    asked.append(now)
+                    return super().current(database, now)
+
+            cards = api_accounts.get_public_user(
+                database, "groupowner", now=NOW, live_board=Board()
+            )["verified_players"]
+            assert [(card["tag"], card["state"], card["rank"]) for card in cards] == [
+                ("#8PY", "not_in_legend", None),
+                ("#9PY", "uncertain", None),
+                ("#YQ2", "not_in_legend", None),
+            ]
+            assert asked == []
         finally:
             database.close()
 
