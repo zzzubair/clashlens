@@ -1,10 +1,10 @@
 """Legend day summaries: one Discord DM a Legend day for each Clasher with
 Discord connected, summing up the day just ended for each of their verified
-players.
+players with the summary turned on.
 
-A player's summary is on unless the Clasher turned it off on the website's
+A player's summary is off until the Clasher turns it on on the website's
 Discord alerts page, separately from its attack alerts; each player turned
-off has a discord_day_summary_off row (migration 0111).
+on has a discord_day_summary_on row (migration 0112).
 Nothing is read for a Reset until its Daily board is published, so the
 summaries never compete with the Reset's own work, and a late board only
 makes them late.
@@ -81,11 +81,10 @@ _STILL_ON = """
           WHERE NOT EXISTS (
               SELECT 1 FROM verified_player_links AS link
               JOIN players AS player ON player.id = link.player_id
+              JOIN discord_day_summary_on AS summary_on
+                  ON summary_on.account_id = link.account_id
+                 AND summary_on.player_id = link.player_id
               WHERE link.account_id = account.id AND player.normalized_tag = named.tag
-                AND NOT EXISTS (
-                    SELECT 1 FROM discord_day_summary_off AS off
-                    WHERE off.account_id = link.account_id AND off.player_id = link.player_id
-                )
           )
       )
 """
@@ -159,12 +158,11 @@ class Summaries:
                 JOIN account_provider_identities AS identity
                     ON identity.account_id = account.id AND identity.provider = 'discord'
                 JOIN verified_player_links AS link ON link.account_id = account.id
+                JOIN discord_day_summary_on AS summary_on
+                    ON summary_on.account_id = link.account_id
+                   AND summary_on.player_id = link.player_id
                 JOIN players AS player ON player.id = link.player_id
                 WHERE NOT EXISTS (
-                      SELECT 1 FROM discord_day_summary_off AS off
-                      WHERE off.account_id = link.account_id AND off.player_id = link.player_id
-                  )
-                  AND NOT EXISTS (
                       SELECT 1 FROM discord_day_summary_deliveries AS logged
                       WHERE logged.account_id = account.id AND logged.reset_at = %(reset)s
                   )
