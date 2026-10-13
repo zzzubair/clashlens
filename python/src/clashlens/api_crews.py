@@ -423,7 +423,8 @@ def view_crew(
     """What anyone, signed in or not, sees of a crew: its name, places and
     the Clash of Clans accounts in them. Never which Clash Lens accounts
     hold them, nor its invite links."""
-    with database.pool.connection() as connection:
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         found = _crew_and_role(connection, crew_id, account_id)
         if found is None:
             return None

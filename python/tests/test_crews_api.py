@@ -9,6 +9,7 @@ from test_api_security import FakeDatabase
 from test_crews_postgres import Site
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
 
+from clashlens import api_crews
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
@@ -217,3 +218,34 @@ def test_anyone_can_view_a_crew_but_not_who_runs_it(served) -> None:
         "kind": "player-crews", "tag": "#8PY", "crews": [{"crew_id": crew_id, "name": "Owls"}],
     }
     assert crews_of("#9QQ") == {"kind": "player-crews", "tag": "#9QQ", "crews": []}
+
+
+def test_a_crew_view_reads_the_crew_at_one_moment(served, monkeypatch) -> None:
+    site, client = served
+    for name, tag in (("akira", "#2PP"), ("bea", "#8PY")):
+        site.account(name)
+        site.link(name, tag)
+    crew_id = call(
+        client, "akira", "POST", "/v1/account/crews", {"name": "Owls", "tags": ["#2PP"]}
+    ).json()["crew_id"]
+    code = call(client, "akira", "POST", f"/v1/account/crews/{crew_id}/invites", {}).json()[
+        "code"
+    ]
+    call(client, "bea", "POST", f"/v1/account/crew-invites/{code}/accept", {"tags": ["#8PY"]})
+    players = api_crews._players
+
+    def kicked_mid_read(connection, *rest):
+        site.sql(
+            "DELETE FROM crew_players WHERE player_id = "
+            "(SELECT id FROM players WHERE normalized_tag = '#8PY')"
+        )
+        return players(connection, *rest)
+
+    monkeypatch.setattr(api_crews, "_players", kicked_mid_read)
+    crew = call(client, None, "GET", f"/v1/crews/{crew_id}").json()
+    assert (crew["used"], sorted(player["tag"] for player in crew["players"])) == (
+        2, ["#2PP", "#8PY"],
+    )
+    monkeypatch.setattr(api_crews, "_players", players)
+    crew = call(client, None, "GET", f"/v1/crews/{crew_id}").json()
+    assert (crew["used"], [player["tag"] for player in crew["players"]]) == (1, ["#2PP"])
