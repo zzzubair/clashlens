@@ -104,6 +104,33 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
   await page.getByLabel("Stream size").selectOption("1280x720");
   await expect(page.getByLabel("Width")).toHaveValue("1280");
   await expect(page.getByLabel("Height")).toHaveValue("720");
+  const settingsOf = async () =>
+    (await (await source.request.get(`${new URL(secondLink).pathname}/settings`)).json())
+      .settings as Record<string, string>;
+  await expect.poll(settingsOf).toMatchObject({ cw: "1280", w: "1280", h: "720" });
+
+  // An overlay saved bigger than its stream is brought inside it on reopening,
+  // and OBS gets the corrected size too.
+  const tag = await page.getByRole("radio", { name: new RegExp(TAG) }).inputValue();
+  const oversized = await page.request.post("/account/obs-overlay/save", {
+    headers: { Origin: new URL(page.url()).origin },
+    form: {
+      intent: "save",
+      tag,
+      settings: JSON.stringify({
+        w: "1800",
+        h: "800",
+        x: "0",
+        y: "0",
+        cw: "1280",
+        ch: "720",
+      }),
+    },
+  });
+  expect(oversized.ok()).toBeTruthy();
+  await page.reload();
+  await expect(page.getByLabel("Width")).toHaveValue("1280");
+  await expect.poll(settingsOf).toMatchObject({ w: "1280", h: "720" });
 
   await obs.close();
   expectNoPageErrors(errors);

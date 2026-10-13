@@ -173,7 +173,7 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
       demo: st.demo === "1",
       fit: st.fit === "overlay" ? "overlay" : "screen",
     },
-    place: clamp({
+    place: {
       w: Number(st.w) || PRESETS.card[0],
       h: Number(st.h) || PRESETS.card[1],
       cw,
@@ -183,7 +183,7 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
       anchor:
         (CORNERS.find(([corner]) => corner === st.snap)?.[0] as Corner | undefined) ??
         null,
-    }),
+    },
   };
 }
 
@@ -282,7 +282,7 @@ export default function ObsOverlayRoute() {
 function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: string }) {
   const initial = useRef(fromSaved(overlay));
   const [form, setForm] = useState<Form>(initial.current.form);
-  const [place, setPlace] = useState<Place>(initial.current.place);
+  const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
   const [link, setLink] = useState(overlay.link);
   const [saved, setSaved] = useState<{ text: string; ok: boolean }>({
     text: "Changes save by themselves.",
