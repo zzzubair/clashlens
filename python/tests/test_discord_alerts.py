@@ -7,7 +7,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import aiohttp
@@ -15,10 +15,11 @@ import discord
 import pytest
 from aiohttp import web
 
-from bot.alerts import Refused, Unreachable
+from bot.alerts import AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
 from bot.replies import Reply, Site, attack_alert
+from clashlens.domain import ranked_day_for
 
 SITE = Site("https://clashlens.test")
 
@@ -31,6 +32,7 @@ class FakeClient:
         self.error = error
         self.opening = opening
         self.sent: list[dict] = []
+        self.http = SimpleNamespace(max_ratelimit_timeout=None)
 
     async def create_dm(self, user: discord.abc.Snowflake) -> SimpleNamespace:
         if self.opening is not None:
@@ -65,7 +67,7 @@ def _answer(status: int, code: int, headers: dict[str, str] | None = None) -> di
 def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -> None:
     messenger = DiscordMessenger(FakeClient(_answer(status, code)))  # type: ignore[arg-type]
     with pytest.raises(Refused) as refused:
-        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
+        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, 60.0))
     assert refused.value.reason == reason
 
 
@@ -82,7 +84,9 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
     ):
         messenger = DiscordMessenger(client)  # type: ignore[arg-type]
         with pytest.raises(Unreachable) as outage:
-            asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
+            asyncio.run(
+                messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, 60.0)
+            )
         assert outage.value.retry_after == wait
 
 
@@ -102,12 +106,12 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
         },
         "Unavailable",
     )
-    asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1))  # type: ignore[arg-type]
+    asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
     embed = client.sent[0]["embed"]
     assert embed.title == "Wanderer #2PP was attacked"
     assert embed.description.splitlines() == [
         "@\u200beveryone \\*Drift\\* #8QQ: 3★ · 100% · 0 trophies",
-        "@\u200beveryone \\*Drift\\*'s hit rate this Season: Unavailable",
+        "@\u200beveryone \\*Drift\\*'s hit rate in this attack's Season: Unavailable",
     ]
     assert [item.url for item in client.sent[0]["view"].children] == [
         "https://clashlens.test/players/%232PP",
@@ -132,8 +136,15 @@ def _rate_limited(seconds: float, *, everything: bool = False) -> web.Response:
     )
 
 
-def _unavailable(_n: int) -> web.Response:
-    return _json({"message": "Service unavailable", "code": 0}, 503)
+def delivered(n: int) -> web.Response:
+    """Discord's answer to the nth message it took."""
+    return _json({
+        "id": str(100 + n), "channel_id": "10", "type": 0, "content": "",
+        "author": {"id": "1", "username": "bot", "discriminator": "0", "avatar": None},
+        "timestamp": "2026-10-13T05:00:00+00:00", "edited_timestamp": None, "tts": False,
+        "mention_everyone": False, "mentions": [], "mention_roles": [], "attachments": [],
+        "embeds": [], "pinned": False,
+    })
 
 
 @asynccontextmanager
@@ -175,45 +186,95 @@ async def stand_in_discord(
         await runner.cleanup()
 
 
-def test_a_dm_asks_discord_to_check_its_nonce(monkeypatch) -> None:
-    """Against a stand-in for Discord that cannot take messages just then,
-    the DM's request carries its nonce, which Discord is asked to check for
-    repeats, and the failure is one to try again."""
+def test_a_rate_limit_longer_than_a_dms_time_left_fails_it_at_once(monkeypatch) -> None:
+    """100 seconds into a DM's 2 minutes, Discord rate limits it for 60
+    seconds. The DM's one request carried its nonce, which Discord is asked
+    to check for repeats, and it fails at once, asking for that wait, instead
+    of waiting out the 20 seconds left."""
 
-    async def scenario() -> list[dict]:
-        async with stand_in_discord(monkeypatch, _unavailable) as (client, sends):
-            with pytest.raises(Unreachable):
-                await DiscordMessenger(client).send_dm(
-                    "100000000000000001", Reply("hi", title="t"), 7
+    async def scenario() -> tuple[list[dict], Unreachable]:
+        async with stand_in_discord(monkeypatch, lambda _n: _rate_limited(60.0)) as (
+            client,
+            sends,
+        ):
+            with pytest.raises(Unreachable) as outage:
+                await asyncio.wait_for(
+                    DiscordMessenger(client).send_dm(
+                        "100000000000000001", Reply("hi", title="t"), 7, 20.0
+                    ),
+                    5.0,
                 )
-        return sends
+        return sends, outage.value
 
-    sends = asyncio.run(scenario())
+    sends, outage = asyncio.run(scenario())
     assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == [("7", True)]
+    assert outage.retry_after == 60.0
 
 
 def test_a_dm_cut_off_in_a_wait_for_all_of_discord_holds_up_no_later_one(
     monkeypatch,
 ) -> None:
     """Discord answers the first DM by asking the bot to wait 5 seconds
-    before any request. That DM is cut off first, as the alert loop cuts
-    one off at the end of its 2 minutes, and the next DM still goes out at
-    once."""
+    before any request. That DM runs out of time first, as one does when its
+    2 minutes end during the wait, and the next DM still goes out at once."""
 
     def answer(n: int) -> web.Response:
-        return _rate_limited(5.0, everything=True) if n == 1 else _unavailable(n)
+        return _rate_limited(5.0, everything=True) if n == 1 else delivered(n)
 
     async def scenario() -> list[dict]:
         async with stand_in_discord(monkeypatch, answer) as (client, sends):
             messenger = DiscordMessenger(client)
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(
-                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 7), 0.3
+                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 7, 10.0),
+                    0.3,
                 )
-            with pytest.raises(Unreachable):
-                await asyncio.wait_for(
-                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 8), 2.0
-                )
+            await asyncio.wait_for(
+                messenger.send_dm("100000000000000001", Reply("hi", title="t"), 8, 10.0), 2.0
+            )
         return sends
 
     assert [body["nonce"] for body in asyncio.run(scenario())] == ["7", "8"]
+
+
+class SeasonPages:
+    """Player pages as Clash Lens reads them at a moment: every Legend day of
+    that moment's Season so far, 3 three-stars in 4 attacks a day in the
+    Season before `season_start`, 1 in 1 from it."""
+
+    def __init__(self, season_start: datetime) -> None:
+        self.season_start = season_start
+
+    def player_page(self, _tag: str, now: datetime) -> dict:
+        day = ranked_day_for(now)
+        stars, attacks = (1, 1) if day.season_start == self.season_start else (3, 4)
+        starts = [
+            (day.season_start + timedelta(days=offset)).isoformat()
+            for offset in range(day.day_number)
+        ]
+        return {
+            "screen_ready": {
+                "season": {
+                    "start": day.season_start.isoformat(),
+                    "current_day_number": day.day_number,
+                },
+                "season_day_starts": starts,
+                "days": [
+                    {"ranked_day_start": start, "attack_count": attacks,
+                     "attack_three_star_count": stars}
+                    for start in starts
+                ],
+            }
+        }
+
+
+def test_an_alert_rates_the_attacker_over_the_attacks_season() -> None:
+    """The attacker's hit rate is the one for the Season of the attack,
+    whether the bot reads it after the Reset that ended that Season or in a
+    round that began before the Reset that started it."""
+    season = ranked_day_for(datetime(2026, 10, 13, 12, tzinfo=UTC)).season_start
+    alerts = AlertStore(None, SeasonPages(season))  # type: ignore[arg-type]
+    last_day = season - timedelta(days=1)
+    assert alerts.hit_rate("#8QQ", last_day, season + timedelta(minutes=2)) == "75%"
+    assert alerts.hit_rate("#8QQ", season, season - timedelta(seconds=1)) == "100%"
+    assert alerts.hit_rate("#8QQ", season, season + timedelta(hours=1)) == "100%"

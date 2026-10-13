@@ -352,8 +352,8 @@ def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | Non
 
 
 def hit_rate(days: Sequence[Mapping[str, Any] | None]) -> str:
-    """This Season's three-star share of attacks, as /stats and attack alerts
-    show it."""
+    """The Season's three-star share of attacks so far, as /stats and attack
+    alerts show it."""
     return _rate(_total(days, "attack_three_star_count"), _total(days, "attack_count"))
 
 
@@ -422,7 +422,7 @@ def attack_alert(site: Site, alert: Mapping[str, Any], attacker_hit_rate: str) -
             f"{attacker} {alert['attacker_tag']}: {alert['stars']}★ · "
             f"{alert['destruction_percentage']}% · "
             f"{f'−{number(lost)}' if lost else '0'} trophies\n"
-            f"{attacker}'s hit rate this Season: {attacker_hit_rate}"
+            f"{attacker}'s hit rate in this attack's Season: {attacker_hit_rate}"
         ),
         title=f"{safe(alert['defender_name'])} {alert['defender_tag']} was attacked",
         updated=alert["saved_at"],

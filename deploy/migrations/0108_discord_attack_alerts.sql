@@ -84,7 +84,8 @@ FOR EACH ROW EXECUTE FUNCTION clashlens_forget_attack_alerts();
 -- The alerts due now: each defense saved since `since` against a player
 -- whose alerts are on, saved after they went on, for the owning account's
 -- Discord user, and not yet in the delivery log. The battle's numbers come
--- from the defender's report when saved, else the attacker's. An attacker
+-- from the defender's report when saved, else the attacker's, and its Legend
+-- day picks the Season the attacker's hit rate covers. An attacker
 -- with no saved profile is named as the defender's report names them. The
 -- bot cannot read battles itself; this shows it only these. Battle ids grow
 -- as battles are saved, so only battles above the newest one saved 5 minutes
@@ -103,7 +104,8 @@ RETURNS TABLE (
     stars integer,
     destruction_percentage integer,
     trophies_lost integer,
-    saved_at timestamptz
+    saved_at timestamptz,
+    ranked_day_start timestamptz
 )
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
@@ -111,7 +113,7 @@ AS $$
            defender.normalized_tag, defender_profile.name,
            attacker.normalized_tag, COALESCE(attacker_profile.name, evidence.opponent_name),
            evidence.stars, evidence.destruction_percentage, evidence.defender_loss,
-           battle.created_at
+           battle.created_at, battle.ranked_day_start
     FROM discord_attack_alerts AS alert
     JOIN verified_player_links AS link
         ON link.player_id = alert.player_id AND link.account_id = alert.account_id

@@ -33,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 from . import replies
 from .replies import Reply, Site
@@ -68,6 +69,7 @@ _DUE_COLUMNS = (
     "destruction_percentage",
     "trophies_lost",
     "saved_at",
+    "ranked_day_start",
 )
 _CONFIRM_COLUMNS = (
     "account_id",
@@ -113,8 +115,12 @@ class Unreachable(Exception):
 
 
 class Messenger(Protocol):
-    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
-        """Send the DM with `nonce`, which Discord checks for repeats."""
+    async def send_dm(
+        self, discord_user_id: str, reply: Reply, nonce: int, time_left: float
+    ) -> None:
+        """Send the DM with `nonce`, which Discord checks for repeats, raising
+        Unreachable at once rather than wait out a rate limit longer than
+        `time_left` seconds."""
 
 
 @dataclass
@@ -198,10 +204,14 @@ class AlertStore:
             ).fetchall()
         return [dict(zip(_CONFIRM_COLUMNS, row, strict=True)) for row in rows]
 
-    def hit_rate(self, tag: str, now: datetime) -> str:
-        """The player's hit rate this Season, read as /stats reads it, or
-        "not tracked yet" when Clash Lens has published none of their days."""
-        page = self.store.player_page(tag, now)
+    def hit_rate(self, tag: str, battle_day: datetime, now: datetime) -> str:
+        """The player's hit rate in the Season of a battle on the Legend day
+        starting `battle_day`, so far at `now`, or at that Season's end once
+        it is over, read as /stats reads it; "not tracked yet" when Clash Lens
+        has published none of their days."""
+        season = ranked_day_for(battle_day)
+        at = min(max(now, season.season_start), season.season_end - timedelta(microseconds=1))
+        page = self.store.player_page(tag, at)
         days = (
             None
             if page is None or "screen_ready" not in page
@@ -269,7 +279,7 @@ class AlertLoop:
         self.alerts = alerts
         self.messenger = messenger
         self.site = site
-        # Which Season the attacker's hit rate covers.
+        # How far into the battle's Season the attacker's hit rate goes.
         self.now = now
         self._pruned_at: float | None = None
         # Claimed DMs Discord could not take yet, waiting for their next try.
@@ -319,7 +329,7 @@ class AlertLoop:
             )
         for alert in await asyncio.to_thread(self.alerts.due):
             rate = await asyncio.to_thread(
-                self.alerts.hit_rate, alert["attacker_tag"], now
+                self.alerts.hit_rate, alert["attacker_tag"], alert["ranked_day_start"], now
             )
             sent += await self._claim(
                 Delivery(
@@ -351,7 +361,9 @@ class AlertLoop:
         state, reason = "sent", None
         try:
             await asyncio.wait_for(
-                self.messenger.send_dm(delivery.discord_user_id, delivery.reply, delivery.id),
+                self.messenger.send_dm(
+                    delivery.discord_user_id, delivery.reply, delivery.id, left
+                ),
                 left,
             )
         except Refused as refusal:

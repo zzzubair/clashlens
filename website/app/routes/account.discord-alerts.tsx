@@ -328,7 +328,7 @@ function AttackAlertSwitches({
             <div className="attack-alert-message">
               <strong>{example ? label(example) : "Wanderer #2PP"} was attacked</strong>
               <span>Drift #9RR: 2★ · 87% · −24 trophies</span>
-              <span>Drift&apos;s hit rate this Season: 62%</span>
+              <span>Drift&apos;s hit rate in this attack&apos;s Season: 62%</span>
             </div>
           </figure>
         </>
