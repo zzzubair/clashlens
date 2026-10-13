@@ -14,7 +14,7 @@ export function meta() {
   ];
 }
 
-/** GET /privacy — plain-words notice for visitor counting and its off switch. */
+/** GET /privacy — plain-words notice of who runs Clash Lens, visitor counting and its off switch. */
 export default function Privacy() {
   const counting = Boolean(useRouteLoaderData<RootLoaderData>("root")?.analytics);
   return (
