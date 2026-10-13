@@ -47,7 +47,7 @@ function trophiesLine(row: OpponentRow): string {
   const early = count < BASE_STRENGTH_MIN_DEFENSES;
   return [
     `lost ${signed(-trophiesGivenUp(row.defenses))}`,
-    ...(!early && average !== null ? [`avg ${signed(-Math.round(average))}`] : []),
+    ...(average !== null ? [`avg ${signed(-Math.round(average))}`] : []),
     `in ${count} defense${count === 1 ? "" : "s"}`,
     ...(early
       ? [`needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`]

@@ -634,9 +634,14 @@ describe("Bases you attacked", () => {
       "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 · avg −144 · in 4 defenses",
     );
     expect(plain).toContain("– lost −145 · in 4 defenses · no comparison yet");
-    // Under 3 defenses the rating waits, but the day's total so far shows.
-    expect(plain).toContain("Too early lost −65 · in 2 defenses · needs 3+ defenses");
-    expect(plain).toContain("Too early lost −40 · in 1 defense · needs 3+ defenses");
+    // Under 3 defenses the rating waits, but the day's total so far shows
+    // beside the average.
+    expect(plain).toContain(
+      "Too early lost −65 · avg −64 · in 2 defenses · needs 3+ defenses",
+    );
+    expect(plain).toContain(
+      "Too early lost −40 · avg −32 · in 1 defense · needs 3+ defenses",
+    );
     expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });

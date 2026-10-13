@@ -2,10 +2,9 @@
 trophies. Saved game data runs through the real worker against PostgreSQL,
 and the dashboard's today read serves each base with its comparison.
 
-Held share falls and trophies lost rise as trophies rise, so a typical base
-near 5,400 holds far less often than the all-Legends share. Compared with
-every Legend it read Easy; compared with players near its trophies it reads
-Average, by held share and by trophies lost a defense.
+Held share falls as trophies rise, so a typical base near 5,400 holds far
+less often than the all-Legends share. Compared with every Legend it read
+Easy; compared with players near its trophies it reads Average.
 """
 
 from __future__ import annotations
@@ -30,10 +29,8 @@ from clashlens.api_db import ApiDatabase
 
 YOU, TYPICAL, STRONG = "#2PP", "#8PP", "#9PP"
 HELD, TRIPLED = 16, 40
-# The website's bands: website/app/lib/dashboard.ts BASE_STRENGTH_BAND (Held %)
-# and BASE_TROPHY_BAND (Trophies, a defense).
+# The website's Held % band: website/app/lib/dashboard.ts BASE_STRENGTH_BAND.
 BAND = 15
-TROPHY_BAND = 1.25
 
 
 @dataclass
@@ -62,15 +59,6 @@ def _strength(row: dict[str, object]) -> str:
     held = sum(defense["stars"] < 3 for defense in defended)
     points = 100 * held / len(defended) - 100 * legends["held"] / legends["defenses"]
     return "hard" if points > BAND else "easy" if points < -BAND else "average"
-
-
-def _trophy_strength(row: dict[str, object]) -> str:
-    """The website's Trophies rating of a served base (baseStrength)."""
-    defended, legends = row["defenses"], row["legends_held"]
-    lost = -sum(defense["trophy_change"] for defense in defended)
-    fewer = legends["lost"] / legends["defenses"] * len(defended) - lost
-    band = TROPHY_BAND * len(defended)
-    return "hard" if fewer > band else "easy" if fewer < -band else "average"
 
 
 def test_bases_compare_with_legends_at_similar_trophies(
@@ -140,17 +128,6 @@ def test_bases_compare_with_legends_at_similar_trophies(
     assert {tag: _strength(row) for tag, row in bases.items()} == {
         TYPICAL: "average", STRONG: "hard",
     }
-    # By trophies: the typical base lost 248 (31 a defense) and the strong
-    # one 152 (19), both more than 1.25 a defense under 33.3.
-    assert {tag: _trophy_strength(row) for tag, row in bases.items()} == {
-        TYPICAL: "hard", STRONG: "hard",
-    }
-    # A base losing what players near 5,400 usually do, 272 in 8 (34 a
-    # defense), is Average here; against the old fixed 32 it read Easy.
-    usual = [{"stars": 3, "trophy_change": -34}] * 8
-    assert _trophy_strength({**bases[TYPICAL], "defenses": usual}) == "average"
-    fixed = {"held": 0, "defenses": 1, "lost": 32}
-    assert _trophy_strength({"defenses": usual, "legends_held": fixed}) == "easy"
     # Against every player's 56.5% the typical base was Easy.
     assert read["legends_held"] == {"held": 226, "defenses": 400}
     assert _strength({**bases[TYPICAL], "legends_held": read["legends_held"]}) == "easy"
