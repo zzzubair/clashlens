@@ -495,9 +495,9 @@ takes `./ops up`; the website hands it to the browser and sends nothing to
 PostHog itself, and the private API never receives it. Never put a personal
 API key (`phx_`) here. With the token set, PostHog still runs only in a
 visitor's browser and only after they accept the analytics question shown at
-the bottom of the page; declining loads nothing and sends nothing. The `/privacy` page explains the
-counting, and both it and the site footer's Analytics choices button reopen
-the question.
+the bottom of the page; declining loads nothing and sends nothing. The
+`/privacy` page explains the counting, and both it and the site footer's
+Analytics choices button reopen the question.
 
 Before setting the token, confirm in the PostHog project's settings that
 discarding client IP data is switched on. Without it PostHog stores each
