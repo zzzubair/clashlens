@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +19,7 @@ from test_api_security import NOW as SIGNED_AT
 from clashlens import api_dashboard
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 
 def battle(
@@ -486,7 +488,7 @@ def test_a_failed_board_read_waits_its_turn() -> None:
     assert live.tries == 2
 
 
-def test_only_a_follow_up_waits_for_the_board_under_way_and_not_past_its_wait() -> None:
+def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None:
     go = Event()
 
     class Live:
@@ -526,3 +528,18 @@ def test_only_a_follow_up_waits_for_the_board_under_way_and_not_past_its_wait() 
         found = waiting.result(timeout=5)
     assert found is not None
     assert api_dashboard.rank_range(found, "#2PP") == {"best": 1, "worst": 1}
+
+    # A read due seconds before the Reset finishes after it: a follow-up
+    # waiting on the new Legend day gets that day's board, not nothing.
+    go.clear()
+    reset = ranked_day_for(NOW).end
+    late = api_dashboard.DashboardBoard(Live())  # type: ignore[arg-type]
+    assert late.current(database, reset - timedelta(seconds=10)) is None  # type: ignore[arg-type]
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(
+            late.current, database, reset + timedelta(seconds=5), wait=5
+        )
+        time.sleep(0.1)
+        go.set()
+        found = waiting.result(timeout=5)
+    assert found is not None and found.day_start == reset

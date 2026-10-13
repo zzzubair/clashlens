@@ -167,6 +167,8 @@ export interface CardContext {
   /** The account the cards follow; always in Legend I. */
   selected: LinkedPlayerCard;
   settings: DashboardSettings;
+  /** Wait a few seconds for the shared board's read under way. */
+  waitForBoard?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -751,14 +753,13 @@ export function readCards(
     const page = await pages(ctx.selected.tag);
     return page === null ? null : seasonData(page);
   };
-  // Legend day and Bases you attacked share one read of today's numbers, which
-  // answers at once. Without the shared board, one more read waits for it,
-  // and both cards fill in its range and comparisons when it comes.
+  // Legend day and Bases you attacked share one read of today's numbers.
+  // Read before the shared board, each says so and the page asks again.
   let todayRead: Promise<PlayerToday | null> | undefined;
-  let boardRead: Promise<PlayerToday> | undefined;
-  const today = () => (todayRead ??= getPlayerToday(ctx.selected.tag).catch(() => null));
-  const withBoard = (read: PlayerToday) =>
-    (boardRead ??= getPlayerToday(ctx.selected.tag, true).catch(() => read));
+  const today = () =>
+    (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard).catch(() => null));
+  const waiting = (read: PlayerToday | null) =>
+    read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
   const armies = async (lens: ArmyLens) => ({
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
@@ -772,26 +773,22 @@ export function readCards(
         pages(ctx.selected.tag).catch(() => null),
         today(),
       ]);
-      const data = (read: PlayerToday | null): CardDataMap["legend-day"] => ({
+      return {
         player: ctx.selected,
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
         rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
-      });
-      return read?.boardComputedAtMs === null
-        ? { ...data(read), later: withBoard(read).then(data) }
-        : data(read);
+        ...waiting(read),
+      };
     },
     bases: async () => {
       const read = await today();
       if (read === null) return null;
-      const data = (read: PlayerToday): CardDataMap["bases"] => ({
+      return {
         rows: read.opponents,
         comparedAtMs: read.boardComputedAtMs,
-      });
-      return read.boardComputedAtMs === null
-        ? { ...data(read), later: withBoard(read).then(data) }
-        : data(read);
+        ...waiting(read),
+      };
     },
     "armies-defense": () => armies("defense"),
     "armies-offense": () => armies("offense"),

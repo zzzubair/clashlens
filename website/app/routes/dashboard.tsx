@@ -74,7 +74,8 @@ export function meta() {
  * CLASHLENS_DASHBOARD_ENABLED is off the page does not exist. The page
  * answers once the account and its linked players are read; each card's
  * data follows as it arrives. `?cards=goal,cutoffs` reads only those cards,
- * for a card whose settings were just saved.
+ * for a card whose settings were just saved; `&board=wait` waits a few
+ * seconds for the shared board, for Legend day or Bases read before it.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const { getWebsiteConfig, isDashboardEnabled } =
@@ -143,7 +144,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         only
           ? CARD_IDS.filter((card) => only.includes(card))
           : shownCards(settings.layout),
-        { client, selected, settings },
+        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
         identity,
       ),
       CARD_WAIT_MS,

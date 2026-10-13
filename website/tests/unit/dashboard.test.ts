@@ -1,6 +1,5 @@
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
-import { prerenderToNodeStream } from "react-dom/static";
 import {
   createMemoryRouter,
   createStaticHandler,
@@ -75,8 +74,8 @@ import DashboardRoute, {
   type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { getPlayerToday, readCards } from "../../app/services/dashboard.server";
-import { PythonApiError, type PythonClient } from "../../app/services/python.server";
+import { getPlayerToday } from "../../app/services/dashboard.server";
+import { PythonApiError } from "../../app/services/python.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -666,48 +665,6 @@ describe("today read for the Legend day and Bases cards", () => {
     });
   });
 
-  it("fills in the range and comparisons when the shared board's slower read comes", async () => {
-    const boardAt = "2026-10-07T09:05:00+00:00";
-    // Today's read answers before the board is read; the follow-up waits for it.
-    mocks.requestJson.mockImplementation(async (path: string) => {
-      const waited = path.endsWith("?wait_for_board=true");
-      return {
-        tag: MAIN,
-        rank_range: waited ? { best: 95, worst: 760 } : null,
-        open_defenses: 7,
-        automatic_defense_each: 21,
-        opponents: [],
-        board_computed_at: waited ? boardAt : null,
-      };
-    });
-    const client = { getPlayer: () => Promise.reject(new Error("unavailable")) };
-    const reads = readCards(
-      ["legend-day", "bases"],
-      {
-        client: client as unknown as PythonClient,
-        selected: linked(MAIN),
-        settings: defaultSettings(),
-      },
-      IDENTITY,
-    );
-    const day = await reads["legend-day"];
-    const bases = await reads.bases;
-    // Both come at once, without the range or the comparisons...
-    expect(day).toMatchObject({ day: null, range: null, rangeAtMs: null });
-    expect(bases).toMatchObject({ rows: [], comparedAtMs: null });
-    // ...which fill in with when the board was read, the page or not.
-    expect(await day?.later).toMatchObject({
-      range: { best: 95, worst: 760 },
-      rangeAtMs: Date.parse(boardAt),
-    });
-    expect((await bases?.later)?.comparedAtMs).toBe(Date.parse(boardAt));
-    // One follow-up serves both cards.
-    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
-      `/v1/players/${encodeURIComponent(MAIN)}/today`,
-      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
-    ]);
-  });
-
   it("refuses a today read whose range is impossible", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
@@ -815,6 +772,51 @@ describe("dashboard route", () => {
       "heat-map": null,
     });
     expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
+  });
+
+  it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
+    const boardAt = "2026-10-07T09:05:00+00:00";
+    // Today's read answers before the board is read; asked again, it waits for it.
+    mocks.requestJson.mockImplementation(async (path: string) => {
+      const waited = path.endsWith("?wait_for_board=true");
+      return {
+        tag: MAIN,
+        rank_range: waited ? { best: 95, worst: 760 } : null,
+        open_defenses: 7,
+        automatic_defense_each: 21,
+        opponents: [],
+        board_computed_at: waited ? boardAt : null,
+      };
+    });
+    account.preferences = { dashboard: { v: 3, layout: ["legend-day", "bases"] } };
+    const first = await load();
+    expect(first.cards["legend-day"]).toMatchObject({
+      range: null,
+      rangeAtMs: null,
+      boardPending: true,
+    });
+    expect(first.cards.bases).toMatchObject({
+      rows: [],
+      comparedAtMs: null,
+      boardPending: true,
+    });
+    const again = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
+    );
+    expect(again.cards).toEqual({
+      "legend-day": {
+        player: linked(MAIN),
+        day: null,
+        range: { best: 95, worst: 760 },
+        rangeAtMs: Date.parse(boardAt),
+      },
+      bases: { rows: [], comparedAtMs: Date.parse(boardAt) },
+    });
+    // One read of today's numbers serves both cards each time.
+    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/players/${encodeURIComponent(MAIN)}/today`,
+      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+    ]);
   });
 
   it("follows the switcher's player and reads no cards outside Legend I", async () => {
@@ -1058,77 +1060,61 @@ describe("dashboard switch", () => {
 describe("dashboard page", () => {
   const CHECKING = "#9YJ2C0QL";
 
-  /** The page as first shown, or once every read on the way has come. */
-  async function renderPage(loaderData: DashboardLoaderData, settled = false) {
+  async function renderPage(loaderData: DashboardLoaderData) {
     const handler = createStaticHandler([
       { path: "/dashboard", Component: DashboardRoute, loader: () => loaderData },
     ]);
     const context = await handler.query(new Request(`${ORIGIN}/dashboard`));
     if (context instanceof Response) throw new Error("unexpected response");
-    const page = createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    });
-    let html = "";
-    if (settled)
-      for await (const chunk of (await prerenderToNodeStream(page)).prelude)
-        html += chunk;
-    else html = renderToString(page);
-    return html.replaceAll("<!-- -->", "");
+    return renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+    ).replaceAll("<!-- -->", "");
   }
 
   const renderDashboard = (
     loaderData: Partial<Extract<DashboardLoaderData, { kind: "signed-in" }>>,
-    settled = false,
   ) =>
-    renderPage(
-      {
-        kind: "signed-in",
-        players: [linked(MAIN)],
-        playersUnavailable: false,
-        selectedTag: MAIN,
-        settings: { ...defaultSettings(), layout: "default" },
-        cards: {},
-        dayEndsMs: Date.UTC(2099, 0, 1, 5),
-        idempotencyKey: IDEMPOTENCY_KEY,
-        ...loaderData,
-      },
-      settled,
-    );
+    renderPage({
+      kind: "signed-in",
+      players: [linked(MAIN)],
+      playersUnavailable: false,
+      selectedTag: MAIN,
+      settings: { ...defaultSettings(), layout: "default" },
+      cards: {},
+      dayEndsMs: Date.UTC(2099, 0, 1, 5),
+      idempotencyKey: IDEMPOTENCY_KEY,
+      ...loaderData,
+    });
 
   const cardOrder = (html: string) =>
     [...html.matchAll(/class="dash-card dash-card-(\w)"[^>]*data-card="([^"]+)"/g)].map(
       (match) => `${match[2]}:${match[1]}`,
     );
 
-  it("shows the Legend day card at once and fills in its range when the board comes", async () => {
-    const card = {
-      player: linked(MAIN),
-      day: null,
-      range: null,
-      rangeAtMs: null,
-    };
-    const loaderData = {
-      settings: { ...defaultSettings(), layout: ["legend-day" as const] },
-      cards: {
-        "legend-day": {
-          ...card,
-          later: Promise.resolve({
-            ...card,
-            range: { best: 95, worst: 760 },
-            rangeAtMs: Date.UTC(2026, 9, 7, 9),
-          }),
+  it("shows Legend day and Bases read before the shared board at once, without waiting for it", async () => {
+    const html = text(
+      await renderDashboard({
+        settings: { ...defaultSettings(), layout: ["legend-day", "bases"] },
+        cards: {
+          "legend-day": {
+            player: linked(MAIN),
+            day: null,
+            range: null,
+            rangeAtMs: null,
+            boardPending: true,
+          },
+          bases: { rows: [], comparedAtMs: null, boardPending: true },
         },
-      },
-    };
-    const first = text(await renderDashboard(loaderData));
-    expect(first).toContain("Trophies 5,696");
-    expect(first).toContain("Next Reset –");
-    expect(first).not.toContain("Loading");
-    const filled = text(await renderDashboard(loaderData, true));
-    expect(filled).toContain("Trophies 5,696");
-    expect(filled).toContain("Next Reset #95 – #760");
+      }),
+    );
+    expect(html).toContain("Trophies 5,696");
+    expect(html).toContain("Next Reset –");
+    expect(html).not.toContain("Loading");
+    expect(html).not.toContain("could not be loaded");
   });
 
   it("shows each linked account as a tab with its trophies, rank and net today", async () => {

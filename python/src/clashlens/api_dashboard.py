@@ -15,11 +15,11 @@ The board for that comparison, and today's held share across it, are read
 in the background at most once a minute and shared by every dashboard, so a
 request never waits for them: until the first read of a Legend day finishes,
 and once the newest read is 10 minutes old, the range and the comparisons are
-left out. A follow-up request may wait up to 4 seconds for the read under
-way, so the dashboard fills them in when it finishes. The board's players
-and trophies are the Live Leaderboard's shared read, never one from before
-the Reset; each log's "no opponent, no battle" slots sit in a large saved
-record, so each saved day's are read once, not every minute.
+left out. The dashboard asks again a few times, each waiting up to 4
+seconds for today's read, so it fills them in when that finishes. The
+board's players and trophies are the Live Leaderboard's shared read, never
+one from before the Reset; each log's "no opponent, no battle" slots sit in
+a large saved record, so each saved day's are read once, not every minute.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -257,17 +257,9 @@ class DashboardBoard:
     ) -> _Board | None:
         """Today's newest board, or None while today's first read runs or
         once the newest is too old, after waiting up to ``wait`` seconds for
-        the read under way. A due read starts in the background."""
+        today's read. A due read starts in the background."""
         day_start = ranked_day_for(now).start
-        with self._lock:
-            # A new Legend day reads at once; a failed read waits its turn.
-            start = not self._reading and (
-                self._clock() >= self._next_read or self._tried_day != day_start
-            )
-            if start:
-                self._reading, self._tried_day = True, day_start
-        if start:
-            self._run(lambda: self._read(database, now))
+        until = time.monotonic() + wait
 
         def shown() -> _Board | None:
             board = self._board
@@ -279,11 +271,28 @@ class DashboardBoard:
                 return None
             return board
 
-        with self._lock:
-            self._read_done.wait_for(
-                lambda: shown() is not None or not self._reading, wait
-            )
-            return shown()
+        while True:
+            with self._lock:
+                # A new Legend day reads at once; a failed read waits its turn.
+                start = not self._reading and (
+                    self._clock() >= self._next_read or self._tried_day != day_start
+                )
+                if start:
+                    self._reading, self._tried_day = True, day_start
+            if start:
+                self._run(lambda: self._read(database, now))
+            with self._lock:
+                self._read_done.wait_for(
+                    lambda: shown() is not None or not self._reading,
+                    max(0.0, until - time.monotonic()),
+                )
+                # A read from before the Reset hands the wait to today's.
+                if (
+                    shown() is not None
+                    or self._tried_day == day_start
+                    or time.monotonic() >= until
+                ):
+                    return shown()
 
     def _read(self, database: ApiDatabase, now: datetime) -> None:
         # A failed read waits a turn instead of starting again at once.

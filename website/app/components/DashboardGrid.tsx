@@ -35,6 +35,8 @@ import {
 } from "./SeasonCards";
 
 interface ViewContext {
+  /** The player the cards follow. */
+  tag: string;
   /** The Legend day the cards were read for has ended. */
   dayOver: boolean;
   nowMs: number | null;
@@ -82,6 +84,44 @@ function hasView(card: CardId): card is keyof CardDataMap {
   return Object.hasOwn(CARD_VIEWS, card);
 }
 
+// A card read before the shared board asks again at most this many times,
+// the server waiting up to 4 seconds for the board each time.
+const BOARD_TRIES = 3;
+
+/**
+ * Reads `card` again with the shared board, showing `shown` until the read
+ * comes back.
+ */
+function ReadAgain<Data>({
+  card,
+  tag,
+  shown,
+  children,
+}: {
+  card: keyof CardReads;
+  tag: string;
+  shown: ReactNode;
+  children: (data: Data) => ReactNode;
+}) {
+  const { load, data } = useFetcher<DashboardLoaderData>();
+  useEffect(() => {
+    void load(
+      `/dashboard?${new URLSearchParams({ player: tag, cards: card, board: "wait" })}`,
+    );
+  }, [load, tag, card]);
+  const read = (
+    data?.kind === "signed-in" && data.selectedTag === tag ? data.cards[card] : null
+  ) as Data | null | Promise<Data | null> | undefined;
+  if (!read) return shown;
+  return (
+    <Suspense fallback={shown}>
+      <Await resolve={read} errorElement={shown}>
+        {(next: Data | null) => (next === null ? shown : children(next))}
+      </Await>
+    </Suspense>
+  );
+}
+
 /**
  * A card's body: its data, or a note while it loads, before Done reads it,
  * or when it could not be read. `reads` is null while another player loads.
@@ -113,18 +153,15 @@ function cardBody(
     value: NonNullable<Awaited<typeof read>>,
     context: ViewContext,
   ) => ReactNode;
-  // A card waiting on a slower read shows what it has until that fills it in.
-  const show = (loaded: NonNullable<Awaited<typeof read>>) => {
-    const later = (loaded as { later?: Promise<typeof loaded> }).later;
-    if (!later) return view(loaded, context);
-    return (
-      <Suspense fallback={view(loaded, context)}>
-        <Await resolve={later} errorElement={view(loaded, context)}>
-          {(full: typeof loaded) => view(full, context)}
-        </Await>
-      </Suspense>
+  // A card read before the shared board shows what it has and asks again.
+  const show = (loaded: NonNullable<Awaited<typeof read>>, tries = 0): ReactNode =>
+    "boardPending" in loaded && tries < BOARD_TRIES ? (
+      <ReadAgain card={card} tag={context.tag} shown={view(loaded, context)}>
+        {(next: typeof loaded) => show(next, tries + 1)}
+      </ReadAgain>
+    ) : (
+      view(loaded, context)
     );
-  };
   if (!(read instanceof Promise)) return read === null ? failed : show(read);
   return (
     <Suspense fallback={loading}>
@@ -656,6 +693,7 @@ export function Dashboard({
   }, [dragging]);
 
   const context: ViewContext = {
+    tag,
     dayOver,
     nowMs,
     timeZone,
