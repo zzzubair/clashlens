@@ -278,3 +278,24 @@ def test_an_alert_rates_the_attacker_over_the_attacks_season() -> None:
     assert alerts.hit_rate("#8QQ", last_day, season + timedelta(minutes=2)) == "75%"
     assert alerts.hit_rate("#8QQ", season, season - timedelta(seconds=1)) == "100%"
     assert alerts.hit_rate("#8QQ", season, season + timedelta(hours=1)) == "100%"
+
+
+def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:
+    """An attacker Clash Lens never read, or read with no days saved, is not
+    tracked yet. One with days saved whose rate cannot be worked out now, as
+    while today's result awaits publishing with no earlier Season on record,
+    is unavailable."""
+    day = datetime(2026, 10, 13, 5, tzinfo=UTC)
+
+    def rate(page: dict | None) -> str:
+        store = SimpleNamespace(player_page=lambda _tag, _now: page)
+        return AlertStore(None, store).hit_rate("#8QQ", day, day)  # type: ignore[arg-type]
+
+    saved = {"ranked_day_start": day.isoformat(), "attack_count": 4,
+             "attack_three_star_count": 3}
+    assert rate(None) == "not tracked yet"
+    assert rate({"tag": "#8QQ", "state": "known"}) == "not tracked yet"
+    assert rate({"screen_ready": {"season": None, "season_day_starts": [], "days": []}}) == (
+        "not tracked yet")
+    assert rate({"screen_ready": {"season": None, "season_day_starts": [day.isoformat()],
+                                  "days": [saved]}}) == "Unavailable"

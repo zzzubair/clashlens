@@ -208,16 +208,15 @@ class AlertStore:
         """The player's hit rate in the Season of a battle on the Legend day
         starting `battle_day`, so far at `now`, or at that Season's end once
         it is over, read as /stats reads it; "not tracked yet" when Clash Lens
-        has published none of their days."""
+        has saved none of their days, "Unavailable" when those it has saved
+        cannot give it."""
         season = ranked_day_for(battle_day)
         at = min(max(now, season.season_start), season.season_end - timedelta(microseconds=1))
         page = self.store.player_page(tag, at)
-        days = (
-            None
-            if page is None or "screen_ready" not in page
-            else replies.season_days(page)
-        )
-        return "not tracked yet" if days is None or not any(days) else replies.hit_rate(days)
+        if page is None or not page.get("screen_ready", {}).get("days"):
+            return "not tracked yet"
+        days = replies.season_days(page)
+        return "Unavailable" if days is None else replies.hit_rate(days)
 
     def claim(self, delivery: Delivery) -> int | None:
         """Log a DM as being sent while it is still due; returns its log id,
