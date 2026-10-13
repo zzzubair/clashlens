@@ -13,19 +13,16 @@
 -- discord_attack_alert_deliveries is the bot's log of every DM it tried: one
 -- row per battle and account, and one per confirmation asked for. The bot
 -- writes the row before it first sends, and every try sends the same Discord
--- nonce, which Discord checks for repeats for a few minutes. A DM that
--- clearly did not reach Discord (a 5xx or 429 answer, or a connection that
--- failed before the request went out) is tried again within 15 minutes of the
--- battle being saved or the confirmation asked for. Once a try may have
--- reached Discord with no answer back (a timeout, or a connection lost after
--- sending), the DM is tried again only within 2 minutes of its first try, when
--- this row was written, inside Discord's nonce check. Both limits are checked
--- with a fresh clock just before each request goes out to Discord, after any
--- wait; past them the DM is logged as not delivered. A refusal is never tried
--- again, and a crash leaves the row unfinished, never tried again, so no DM
--- Discord took is sent twice. It is the only table the bot writes; the bot
--- deletes rows older than 7 days, so at most 7 days of alerts are kept: about
--- 8 rows a day per player with alerts on.
+-- nonce, which Discord checks for repeats for a few minutes. A DM Discord did
+-- not take, whatever the cause (a 5xx or 429 answer, a network error, a
+-- timeout, an answer cut off), is tried again only within 2 minutes of its
+-- first try, when this row was written, inside Discord's nonce check. That
+-- limit is checked with a fresh clock before each try; past it the DM is
+-- logged as not delivered. A refusal is never tried again, and a crash leaves
+-- the row unfinished, never tried again, so no DM Discord took is sent twice.
+-- It is the only table the bot writes; the bot deletes rows older than 7
+-- days, so at most 7 days of alerts are kept: about 8 rows a day per player
+-- with alerts on.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS discord_attack_alerts (
@@ -50,9 +47,7 @@ CREATE TABLE IF NOT EXISTS discord_attack_alert_deliveries (
     -- sending: claimed and not finished; the bot tries it again while Discord
     -- cannot be reached, and a crash leaves it here, never tried again.
     -- refused: Discord would not deliver it, for `reason`; failed: Discord did
-    -- not take it in time: within 15 minutes of the battle being saved or the
-    -- confirmation asked for, or 2 minutes of its first try once a try may
-    -- have reached it.
+    -- not take it within 2 minutes of its first try.
     state text NOT NULL CHECK (state IN ('sending', 'sent', 'refused', 'failed')),
     reason text CHECK (reason IN ('no_shared_server', 'dms_closed', 'unknown_user', 'other')),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),

@@ -27,7 +27,7 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
-from bot.alerts import WINDOW, AlertLoop, AlertStore, Refused, Unreachable
+from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.replies import Reply, Site
 from bot.store import Store
@@ -41,30 +41,20 @@ NAME = "Synthetic Legend I"
 
 class FakeDiscord:
     """Records each try by its nonce and each DM delivered; refuses users in
-    `refusing` as Discord would, gives no answer back to the next `unanswered`
-    tries, which may have reached it, and cannot be reached for the next
-    `outages` tries, asking to wait `retry_after`. Like the bot's messenger,
-    it makes no try at or after the DM's `send_by`."""
+    `refusing` as Discord would, and cannot be reached for the next `outages`
+    tries, asking to wait `retry_after`."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Reply]] = []
         self.tries: list[int] = []
         self.refusing: dict[str, str] = {}
-        self.unanswered = 0
         self.outages = 0
         self.retry_after = 0.0
 
-    async def send_dm(
-        self, discord_user_id: str, reply: Reply, nonce: int, send_by: float
-    ) -> None:
-        if asyncio.get_running_loop().time() >= send_by:
-            raise Unreachable
+    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
         self.tries.append(nonce)
         if discord_user_id in self.refusing:
             raise Refused(self.refusing[discord_user_id])
-        if self.unanswered:
-            self.unanswered -= 1
-            raise Unreachable(maybe_sent=True)
         if self.outages:
             self.outages -= 1
             raise Unreachable(self.retry_after)
@@ -228,9 +218,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     went on and players whose switch is off send nothing. A DM Discord refuses
     is tried once, logged, and shown on the website with its reason. A DM
     Discord can't take just then is tried again with the same nonce and
-    delivered once; one still undelivered 15 minutes after its battle was
-    saved is logged and shown as not delivered then, even while Discord asked
-    to wait longer."""
+    delivered once."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
@@ -280,16 +268,6 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
             defend("#2PP")
             retried = [asyncio.run(loop.tick()) for _ in range(3)]
 
-            # Saved 2 seconds before its 15 minutes run out, with Discord down
-            # and asking to wait a minute.
-            discord.outages, discord.retry_after = 100, 60.0
-            defend("#2PP", saved_ago=WINDOW - timedelta(seconds=2))
-            expiring = asyncio.run(loop.tick())
-            time.sleep(2)
-            expired = asyncio.run(loop.tick())
-            gave_up = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
-            discord.outages = 0
-
             assert _switch(api, mine, "#2PP", False) == 200
             defend("#2PP")
             off = asyncio.run(loop.tick())
@@ -302,16 +280,13 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
             api.close()
             owner.close()
 
-    assert (quiet, refused, delivered, retried, [expiring, expired], off) == (
-        0, [0, 0], 1, [0, 1, 0], [0, 0], 0)
+    assert (quiet, refused, delivered, retried, off) == (0, [0, 0], 1, [0, 1, 0], 0)
     assert [(state, reason, discord.tries.count(id)) for id, state, reason in log] == [
         ("refused", "no_shared_server", 1),
         ("sent", None, 1),
         ("sent", None, 2),
-        ("failed", None, 1),
     ]
     assert len(discord.sent) == 2
-    assert gave_up is not None and gave_up["reason"] == "unreachable"
     assert shown["undelivered"]["tag"] == "#2PP"
     assert shown["undelivered"]["reason"] == "no_shared_server"
     assert [(player["tag"], player["on"]) for player in shown["players"]] == [
@@ -382,46 +357,40 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
     ]
 
 
-def test_a_dm_that_may_have_reached_discord_is_tried_again_only_within_two_minutes(
+def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(
     database_url: str, monkeypatch
 ) -> None:
-    """A try with no answer back may have reached Discord, so the DM is tried
-    again with the same nonce only while Discord's nonce check still stops a
-    repeat: 2 minutes from its first try, here shortened to 1 second. After
-    that it is logged and shown as not delivered, without another try, even
-    when the try with no answer back came after a first one Discord clearly
-    did not take."""
+    """A DM Discord did not take is tried again with the same nonce only while
+    Discord's nonce check still stops a repeat: 2 minutes from its first try,
+    here shortened to 1 second. After that it is logged and shown as not
+    delivered, without another try, even while Discord asked to wait
+    longer."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 1.0)
     with _alerts_on(database_url) as (connection_info, api, mine, player):
         discord = FakeDiscord()
         loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE)
-        discord.unanswered = 1
-        _defend(connection_info, player)
-        answered = [asyncio.run(loop.tick()) for _ in range(3)]
-
-        discord.unanswered = 100
+        discord.outages = 100
         _defend(connection_info, player)
         within = [asyncio.run(loop.tick()) for _ in range(2)]
         time.sleep(1.1)
         after = [asyncio.run(loop.tick()) for _ in range(2)]
 
-        discord.unanswered, discord.outages = 0, 1
+        discord.retry_after = 60.0
         _defend(connection_info, player)
-        clear = asyncio.run(loop.tick())
+        waiting = asyncio.run(loop.tick())
         time.sleep(1.1)
-        discord.unanswered = 1
-        late = [asyncio.run(loop.tick()) for _ in range(2)]
+        waited = asyncio.run(loop.tick())
         gave_up = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
         with psycopg.connect(connection_info, autocommit=True) as connection:
             log = connection.execute(
                 "SELECT id, state FROM discord_attack_alert_deliveries ORDER BY battle_id"
             ).fetchall()
 
-    assert (answered, within, after, clear, late) == ([0, 1, 0], [0, 0], [0, 0], 0, [0, 0])
+    assert (within, after, waiting, waited) == ([0, 0], [0, 0], 0, 0)
     assert [(state, discord.tries.count(id)) for id, state in log] == [
-        ("sent", 2), ("failed", 2), ("failed", 2)]
-    assert len(discord.tries) == 6 and len(discord.sent) == 1
+        ("failed", 2), ("failed", 1)]
+    assert len(discord.tries) == 3 and not discord.sent
     assert gave_up is not None and gave_up["reason"] == "unreachable"
 
 

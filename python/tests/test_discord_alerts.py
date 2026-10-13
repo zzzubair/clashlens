@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -64,31 +63,25 @@ def _answer(status: int, code: int, headers: dict[str, str] | None = None) -> di
 def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -> None:
     messenger = DiscordMessenger(FakeClient(_answer(status, code)))  # type: ignore[arg-type]
     with pytest.raises(Refused) as refused:
-        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, math.inf))
+        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
     assert refused.value.reason == reason
 
 
 def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
-    """Only a send that may have reached Discord with no answer back counts as
-    maybe sent: not an answer from Discord, a connection that never opened or
-    timed out opening, or a DM channel that could not be opened."""
-    never_connected = aiohttp.ClientConnectorError(
-        SimpleNamespace(host="discord.com", port=443, ssl=True),
-        OSError(111, "Connection refused"),
-    )
-    for client, wait, maybe_sent in (
-        (FakeClient(_answer(503, 0)), 0.0, False),
-        (FakeClient(_answer(429, 0, {"Retry-After": "7.5"})), 7.5, False),
-        (FakeClient(never_connected), 0.0, False),
-        (FakeClient(aiohttp.ConnectionTimeoutError("Connection timeout")), 0.0, False),
-        (FakeClient(None, opening=TimeoutError()), 0.0, False),
-        (FakeClient(TimeoutError()), 0.0, True),
-        (FakeClient(aiohttp.ServerDisconnectedError()), 0.0, True),
+    """Any failure but a refusal is tried again, whatever the cause: an
+    outage, a rate limit, a timeout, an answer cut off, or a DM channel that
+    could not be opened."""
+    for client, wait in (
+        (FakeClient(_answer(503, 0)), 0.0),
+        (FakeClient(_answer(429, 0, {"Retry-After": "7.5"})), 7.5),
+        (FakeClient(None, opening=TimeoutError()), 0.0),
+        (FakeClient(TimeoutError()), 0.0),
+        (FakeClient(aiohttp.ServerDisconnectedError()), 0.0),
     ):
         messenger = DiscordMessenger(client)  # type: ignore[arg-type]
         with pytest.raises(Unreachable) as outage:
-            asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, math.inf))
-        assert (outage.value.retry_after, outage.value.maybe_sent) == (wait, maybe_sent)
+            asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
+        assert outage.value.retry_after == wait
 
 
 def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
@@ -107,7 +100,7 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
         },
         "Unavailable",
     )
-    asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, math.inf))  # type: ignore[arg-type]
+    asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1))  # type: ignore[arg-type]
     embed = client.sent[0]["embed"]
     assert embed.title == "Wanderer #2PP was attacked"
     assert embed.description.splitlines() == [
@@ -120,52 +113,32 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
     ]
 
 
-@pytest.mark.parametrize(
-    ("slow_connection", "messages_sent"), [(False, [("7", True)]), (True, [])]
-)
-def test_no_request_for_a_dm_goes_out_after_its_last_moment(
-    monkeypatch, slow_connection, messages_sent
-) -> None:
-    """The bot's real client against a local stand-in for Discord that rate
-    limits every message for 0.3 seconds and closes every connection. The
-    DM's first message request carries its nonce, checked by Discord;
-    discord.py waits out the rate limit to try again by itself, but the DM's
-    last moment, 0.2 seconds in, has passed by then, so that try never goes
-    out. When opening the message request's connection takes 0.5 seconds,
-    the first one never goes out either. No DM is delivered either way."""
+def test_a_dm_asks_discord_to_check_its_nonce(monkeypatch) -> None:
+    """The bot's real client against a local stand-in for Discord that cannot
+    take messages just then. The DM's request carries its nonce, which
+    Discord is asked to check for repeats, and the failure is one to try
+    again."""
 
-    def answer(payload: dict, status: int = 200, **headers: str) -> web.Response:
-        response = web.Response(
+    def answer(payload: dict, status: int = 200) -> web.Response:
+        return web.Response(
             body=json.dumps(payload).encode(),
             status=status,
-            headers={"Content-Type": "application/json", **headers},
+            headers={"Content-Type": "application/json"},
         )
-        response.force_close()
-        return response
 
-    async def scenario() -> tuple[list[dict], Unreachable]:
+    async def scenario() -> list[dict]:
         sends: list[dict] = []
-        opened = asyncio.Event()
-
-        async def open_connection(*_trace: object) -> None:
-            if slow_connection and opened.is_set():
-                await asyncio.sleep(0.5)
 
         async def me(_request: web.Request) -> web.Response:
             return answer({"id": "1", "username": "bot", "discriminator": "0", "avatar": None})
 
         async def open_dm(_request: web.Request) -> web.Response:
             user = {"id": "100000000000000001", "username": "u", "discriminator": "0", "avatar": None}
-            opened.set()
             return answer({"id": "10", "type": 1, "recipients": [user]})
 
         async def send(request: web.Request) -> web.Response:
             sends.append(await request.json())
-            return answer(
-                {"message": "You are being rate limited.", "retry_after": 0.3, "global": False},
-                429,
-                Via="1.1 google",
-            )
+            return answer({"message": "Service unavailable", "code": 0}, 503)
 
         app = web.Application()
         app.router.add_get("/api/v10/users/@me", me)
@@ -178,21 +151,16 @@ def test_no_request_for_a_dm_goes_out_after_its_last_moment(
             discord.http.Route, "BASE", f"http://127.0.0.1:{runner.addresses[0][1]}/api/v10"
         )
         client, _tree = build_client(Commands(store=None, site=SITE))  # type: ignore[arg-type]
-        client.http.http_trace.on_connection_create_start.append(open_connection)
         await client.http.static_login("token")
         try:
-            with pytest.raises(Unreachable) as outage:
+            with pytest.raises(Unreachable):
                 await DiscordMessenger(client).send_dm(
-                    "100000000000000001",
-                    Reply("hi", title="t"),
-                    7,
-                    asyncio.get_running_loop().time() + 0.2,
+                    "100000000000000001", Reply("hi", title="t"), 7
                 )
         finally:
             await client.http.close()
             await runner.cleanup()
-        return sends, outage.value
+        return sends
 
-    sends, outage = asyncio.run(scenario())
-    assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == messages_sent
-    assert not outage.maybe_sent
+    sends = asyncio.run(scenario())
+    assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == [("7", True)]
