@@ -472,8 +472,8 @@ The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
 `app.env` (`true` or `false`, default `false`). While it is off, `/dashboard`
 shows the normal page-not-found page, the navigation bar has no Dashboard
 link, saving a dashboard layout is refused, and the private API refuses the
-dashboard's own player reads (`/v1/players/{tag}/today` and
-`/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
+dashboard's own player reads (`/v1/players/{tag}/today`,
+`/v1/players/{tag}/bases` and `/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
 API, so turning it on or off takes `./ops up`.
 
 Crews on the website have their own setting, `CLASHLENS_CREWS_ENABLED=true` in

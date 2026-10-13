@@ -119,7 +119,7 @@ def read_board() -> api_dashboard.DashboardBoard:
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-@pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7"])
+@pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7", "bases?day=3"])
 def test_dashboard_reads_refuse_while_the_dashboard_is_off(
     monkeypatch, enabled: bool, read: str
 ) -> None:
@@ -128,6 +128,9 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
     )
     monkeypatch.setattr(
         api_dashboard, "get_player_armies", lambda _db, _days, tag, **_: {"tag": tag}
+    )
+    monkeypatch.setattr(
+        api_dashboard, "get_player_bases", lambda _db, _board, tag, **_: {"tag": tag}
     )
     app = create_app(
         FakeDatabase(),
@@ -169,6 +172,51 @@ def test_only_a_today_read_that_asks_waits_for_the_board(monkeypatch) -> None:
             response = client.get(target, headers=_signed_headers(target))
             assert response.status_code == 200
     assert waits == [0, api_dashboard.BOARD_WAIT_SECONDS]
+
+
+def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -> None:
+    """Bases you attacked's day button: Day 1 up to the day before today,
+    each day's defenses read once an hour at most and a Season's kept."""
+    today = ranked_day_for(NOW)
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=True,
+    )
+    with TestClient(app) as client:
+        for day in (0, 29):
+            target = f"/v1/players/%232PP/bases?day={day}"
+            assert client.get(target, headers=_signed_headers(target)).status_code == 422
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        clock = [0.0]
+        board = api_dashboard.DashboardBoard(clock=lambda: clock[0])
+        reads: list[object] = []
+        try:
+            for day in (today.day_number, today.day_number + 1, 0):
+                with pytest.raises(ValueError):
+                    api_dashboard.get_player_bases(
+                        database, board, "#2PP", day_number=day, now=NOW
+                    )
+            with database.pool.connection() as connection:
+                counted = SimpleNamespace(
+                    execute=lambda sql, params: reads.append(params)
+                    or connection.execute(sql, params)
+                )
+                first = board.past_day(counted, today.start - timedelta(days=1))
+                assert board.past_day(counted, today.start - timedelta(days=1)) is first
+                clock[0] = api_dashboard.PAST_DAY_SECONDS
+                board.past_day(counted, today.start - timedelta(days=1))
+                for back in range(2, 31):
+                    board.past_day(counted, today.start - timedelta(days=back))
+        finally:
+            database.close()
+    assert len(reads) == 31
+    assert len(board._past) == 28
+    assert min(board._past) == today.start - timedelta(days=28)
 
 
 def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
@@ -442,7 +490,7 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
     def board_of(rows: list[tuple[Any, ...]]) -> Any:
         # Every player is on the Live Leaderboard at 5,000.
         live = [(row[0], None, 5000) for row in rows]
-        return api_dashboard._read_board(Rows(rows), NOW, live, {})[0]
+        return api_dashboard._read_board(Rows(rows), NOW, live, {})[0].similar
 
     # 24 defenses at 5,400 (6 held) and 196 at 5,000 (168 held), 400 away.
     rows = (

@@ -210,7 +210,12 @@ up a defense today with what the same Legends at similar trophies lost a
 defense (Average is within `BASE_TROPHY_BAND` trophies a defense) and shows the
 total it lost today beside theirs over as many defenses, such as "lost −185 ·
 avg −201 · in 6 defenses". Under 3 defenses the rating is too early, but
-Trophies still shows the total so far beside theirs.
+Trophies still shows the total so far beside theirs. Its ‹ Day 9 · today ›
+button reads an earlier Legend day of this Season through
+`/resources/players/{tag}/bases?day=N`
+(`GET /v1/players/{tag}/bases?day=N` on the private API, signed-in users only,
+behind the same switch), compared with every player's saved defenses that day,
+and keeps each day it read while the page is open.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;

@@ -56,6 +56,10 @@ const CARD_VIEWS: {
   "legend-day": (data, context) => <LegendDayCard {...data} nowMs={context.nowMs} />,
   bases: (data, context) => (
     <OpponentsCard
+      // Another account's card starts again on today.
+      key={data.tag}
+      tag={data.tag}
+      dayNumber={data.dayNumber}
       rows={data.rows}
       mode={context.basesMode}
       timeZone={context.timeZone}

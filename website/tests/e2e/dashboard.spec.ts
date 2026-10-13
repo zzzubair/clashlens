@@ -155,6 +155,20 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     ]);
   errors.splice(logged);
 
+  // Bases you attacked's day button reads the day before and comes back to
+  // today, without leaving the page. On Day 1 there is no earlier day.
+  const bases = page.getByRole("region", { name: "Bases you attacked", exact: true });
+  const earlier = bases.getByRole("button", { name: "Earlier Legend day" });
+  await expect(bases).toContainText("· today");
+  if (await earlier.isEnabled()) {
+    await earlier.click();
+    await expect(bases).not.toContainText("· today");
+    await expect(bases).not.toContainText("Loading Day");
+    await expect(bases).not.toContainText("couldn't be read");
+    await bases.getByRole("button", { name: "Later Legend day" }).click();
+    await expect(bases).toContainText("· today");
+  }
+
   // A card setting saves at once: the Goal becomes Top 50.
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await page.getByRole("button", { name: "Goal settings" }).click();

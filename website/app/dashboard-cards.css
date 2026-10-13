@@ -308,6 +308,43 @@
 
 /* ---------- Card 3: Bases you attacked ---------- */
 
+/* Bases you attacked's day button: ‹ Day 9 · today ›. */
+.bases-day-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem 0.6rem;
+}
+
+.bases-day {
+  align-items: center;
+}
+
+.bases-day button {
+  min-width: 2.4rem;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.bases-day button:disabled {
+  color: var(--cl-muted);
+  cursor: default;
+  opacity: 0.45;
+}
+
+.bases-day-label {
+  min-width: 4.5rem;
+  padding: 0 0.55rem;
+  color: var(--cl-ink);
+  border-inline: 2px solid var(--cl-card-line);
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1.8rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
 .opponents-head,
 .opponents-row {
   display: grid;

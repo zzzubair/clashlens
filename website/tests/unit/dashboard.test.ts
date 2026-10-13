@@ -526,6 +526,8 @@ describe("Bases you attacked", () => {
   it("lists hard bases first and colours them for the attacker", async () => {
     const html = await renderInRouter(
       createElement(OpponentsCard, {
+        tag: "#8PP",
+        dayNumber: null,
         rows: [
           row("Easy one", held(1, 4)),
           row("Early", held(0, 2)),
@@ -551,6 +553,8 @@ describe("Bases you attacked", () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
+          tag: "#8PP",
+          dayNumber: null,
           rows: [
             { ...row("Early", held(0, 2)), legends: null },
             { ...row("No comparison", held(3, 4)), legends: null },
@@ -570,7 +574,14 @@ describe("Bases you attacked", () => {
   it("says today's battles aren't saved yet rather than no attacks", async () => {
     const render = async (rows: OpponentRow[] | null) =>
       text(
-        await renderInRouter(createElement(OpponentsCard, { rows, timeZone: "UTC" })),
+        await renderInRouter(
+          createElement(OpponentsCard, {
+            tag: "#8PP",
+            dayNumber: null,
+            rows,
+            timeZone: "UTC",
+          }),
+        ),
       ).replace(/&#x27;/g, "'");
     const unsaved = await render(null);
     expect(unsaved).toContain(
@@ -587,6 +598,8 @@ describe("Bases you attacked", () => {
       text(
         await renderInRouter(
           createElement(OpponentsCard, {
+            tag: "#8PP",
+            dayNumber: null,
             rows: [{ ...row("Easy one", held(1, 4)), observedAtMs: at(2) }],
             timeZone: "UTC",
             mode,
@@ -604,6 +617,8 @@ describe("Bases you attacked", () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
+          tag: "#8PP",
+          dayNumber: null,
           rows: [
             row("Easy one", held(1, 4)),
             row("Hard one", held(5, 6)),
@@ -655,6 +670,7 @@ describe("today read for the Legend day and Bases cards", () => {
   it("reads the Next Reset range and the bases attacked with their Legends held", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
+      season_day_number: 9,
       rank_range: { best: 95, worst: 760 },
       open_defenses: 7,
       automatic_defense_each: 21,
@@ -677,6 +693,7 @@ describe("today read for the Legend day and Bases cards", () => {
       ],
     });
     expect(await getPlayerToday(MAIN)).toEqual({
+      dayNumber: 9,
       rankRange: { best: 95, worst: 760 },
       projectedRank: null,
       projectedRankPending: false,
@@ -917,7 +934,7 @@ describe("dashboard route", () => {
         projected: null,
         boardPending: true,
       },
-      bases: { rows: [], comparedAtMs: Date.parse(boardAt) },
+      bases: { tag: MAIN, dayNumber: null, rows: [], comparedAtMs: Date.parse(boardAt) },
     });
     const last = await load(
       `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
@@ -1234,7 +1251,13 @@ describe("dashboard page", () => {
             projected: null,
             boardPending: true,
           },
-          bases: { rows: [], comparedAtMs: null, boardPending: true },
+          bases: {
+            tag: MAIN,
+            dayNumber: null,
+            rows: [],
+            comparedAtMs: null,
+            boardPending: true,
+          },
         },
       }),
     );

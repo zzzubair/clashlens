@@ -1,6 +1,7 @@
 """End-to-end: Bases you attacked compares each base with Legends at similar
 trophies. Saved game data runs through the real worker against PostgreSQL,
-and the dashboard's today read serves each base with its comparison.
+and the dashboard's today read serves each base with its comparison; the
+next day, the card's day button reads that day back the same.
 
 Held share falls as trophies rise, so a typical base near 5,400 holds far
 less often than the all-Legends share. Compared with every Legend it read
@@ -13,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+import pytest
 from domain_test_support import as_api_role, domain_database
 from test_reset_scenarios_postgres import (
     SEASON,
@@ -106,6 +108,14 @@ def test_bases_compare_with_legends_at_similar_trophies(
             read = api_dashboard.get_player_today(
                 api, board, YOU, now=today + timedelta(hours=12)
             )
+            # The next day, the day button goes back to Day 3.
+            tomorrow = day(4) + timedelta(hours=12)
+            past = api_dashboard.get_player_bases(
+                api, board, YOU, day_number=3, now=tomorrow
+            )
+            later = api_dashboard.get_player_today(api, board, YOU, now=tomorrow)
+            with pytest.raises(ValueError):
+                api_dashboard.get_player_bases(api, board, YOU, day_number=4, now=tomorrow)
         finally:
             api.close()
 
@@ -131,3 +141,11 @@ def test_bases_compare_with_legends_at_similar_trophies(
     # Against every player's 56.5% the typical base was Easy.
     assert read["legends_held"] == {"held": 226, "defenses": 400}
     assert _strength({**bases[TYPICAL], "legends_held": read["legends_held"]}) == "easy"
+
+    # On Day 4 today's card has no bases yet; Day 3's read shows the same
+    # bases, defenses and comparisons as on the day, from every player's
+    # saved Day 3 rather than the Live Leaderboard.
+    assert later is not None and later["season_day_number"] == 4
+    assert later["opponents"] is None
+    assert past is not None and past["season_day_number"] == 3
+    assert past["opponents"] == read["opponents"]
