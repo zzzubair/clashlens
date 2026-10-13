@@ -225,6 +225,8 @@ the page never waits for it. Until today's first read finishes, or once the
 newest is 10 minutes old, the Next Reset range and Held % comparisons are left
 out and the page asks again up to 3 times, each waiting up to 4 seconds for
 that read ([`api_dashboard.py`](../python/src/clashlens/api_dashboard.py)).
+Legend day's projected place is asked for the same way while it is worked
+out ([dashboard data](../docs/dashboard-data.md)).
 Opponents' defenses come from their own published daily logs, so an untracked
 opponent shows only your hit. Until the account's own log for today is saved,
 Bases you attacked says so and Legend day shows – for its attack and defense
