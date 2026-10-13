@@ -224,6 +224,18 @@ def test_changed_database_input_restarts_all_four(stack, name, reason):
     assert_restarted(deploy(stack), reason)
 
 
+def test_changed_migrations_restart_all_four(stack):
+    # The digest comes from the repository's deploy/migrations, so a record
+    # from an older release stands in for a release that adds a migration.
+    record = stack["tmp_path"] / "state" / "clashlens" / "kept-services.env"
+    text = record.read_text()
+    recorded = next(line for line in text.splitlines() if line.startswith("MIGRATIONS="))
+    record.write_text(text.replace(recorded, "MIGRATIONS=" + "0" * 64))
+    result = deploy(stack)
+    assert_restarted(result, "changed database migrations")
+    assert "--user disable --now clashlens.target" in Path(result.calls).read_text()
+
+
 def test_changed_secret_restarts_without_printing_it(stack):
     secret = stack["tmp_path"] / "secrets" / "clashlens-normal-api-keys"
     secret.write_text("normal-1=new-key-value")
