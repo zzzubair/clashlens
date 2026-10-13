@@ -25,20 +25,29 @@ export interface UserLoaderData {
   user: PublicUser | null;
   notFound: boolean;
   error: WebsiteErrorResponse | null;
+  /** Only for the signed-in owner of this profile, null for everyone else. */
+  owner: OwnerControls | null;
+}
+
+export interface OwnerControls {
+  /** The default account: the player the Discord bot's /stats uses when none is named. */
+  defaultPlayer: string | null;
+  idempotencyKey: string;
 }
 
 /**
  * GET /users/:username — the public user page from the anonymous Python
  * client. Only the canonical username, display name, and verified player
  * links are shown; Google identity, groups, preferences, and
- * internal IDs never appear.
+ * internal IDs never appear. The signed-in owner also gets their default
+ * account and the key to change it.
  */
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
   const rawUsername = params.username ?? "";
   const username = normalizeUsername(rawUsername);
   if (username === null) {
     return data<UserLoaderData>(
-      { user: null, notFound: true, error: null },
+      { user: null, notFound: true, error: null, owner: null },
       { status: 404, headers: NO_STORE },
     );
   }
@@ -47,9 +56,12 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const user = await createPythonClient().getPublicUser(username);
+    const [user, owner] = await Promise.all([
+      createPythonClient().getPublicUser(username),
+      ownerControls(request, username),
+    ]);
     return data<UserLoaderData>(
-      { user, notFound: false, error: null },
+      { user, notFound: false, error: null, owner },
       { headers: NO_STORE },
     );
   } catch (cause) {
@@ -57,15 +69,80 @@ export async function loader({ params }: Route.LoaderArgs) {
     const error = safeWebsiteError(cause);
     if (error.error.code === "missing") {
       return data<UserLoaderData>(
-        { user: null, notFound: true, error: null },
+        { user: null, notFound: true, error: null, owner: null },
         { status: 404, headers: NO_STORE },
       );
     }
     return data<UserLoaderData>(
-      { user: null, notFound: false, error },
+      { user: null, notFound: false, error, owner: null },
       { status: 422, headers: NO_STORE },
     );
   }
+}
+
+/** The owner's default account, or null when the visitor is anyone else. */
+async function ownerControls(
+  request: Request,
+  username: string,
+): Promise<OwnerControls | null> {
+  try {
+    const { getWebsiteConfig } = await import("../server/config.server");
+    const actions = await import("../server/actions.server");
+    const identity = await actions.readLoginIdentity(request, getWebsiteConfig());
+    if (identity === null) return null;
+    const { createPythonClient } = await import("../services/python.server");
+    const summary = await createPythonClient(identity).getAccountSummary();
+    if (summary.username !== username) return null;
+    return {
+      defaultPlayer: summary.defaultPlayer,
+      idempotencyKey: actions.freshIdempotencyKey(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST /users/:username — the signed-in Clasher makes one of their own
+ * linked accounts the default account.
+ */
+export async function action({ params, request }: Route.ActionArgs): Promise<Response> {
+  if (request.method !== "POST") {
+    return new Response(null, { status: 405, headers: NO_STORE });
+  }
+  const { requireLogin } = await import("../server/auth-guard.server");
+  const identity = await requireLogin(request);
+  const actions = await import("../server/actions.server");
+  const { getWebsiteConfig } = await import("../server/config.server");
+  let config;
+  try {
+    config = getWebsiteConfig();
+  } catch {
+    throw redirect("/login");
+  }
+  if (!actions.isSameOrigin(request, config.publicOrigin)) {
+    return new Response(null, { status: 403, headers: NO_STORE });
+  }
+  const form = await actions.parseBoundedFormData(request);
+  const idempotencyKey = form?.["idempotencyKey"] ?? "";
+  if (
+    form === null ||
+    !actions.isIdempotencyKey(idempotencyKey) ||
+    form["intent"] !== "default-player"
+  ) {
+    return new Response(null, { status: 400, headers: NO_STORE });
+  }
+  const back = `/users/${encodeURIComponent(normalizeUsername(params.username ?? "") ?? "")}`;
+  try {
+    const { createPythonClient } = await import("../services/python.server");
+    await createPythonClient(identity).setDefaultPlayer(
+      form["tag"] ?? "",
+      idempotencyKey,
+    );
+  } catch {
+    return redirect(`${back}?default=failed`, { headers: NO_STORE });
+  }
+  return redirect(`${back}?default=saved`, { headers: NO_STORE });
 }
 
 export function headers() {
@@ -85,6 +162,8 @@ export default function UserRoute() {
   const justLinked = data.user?.verifiedPlayers.find(
     (player) => player.tag === linkedTag,
   );
+  const defaultSaved = searchParams.get("default");
+  const owner = data.owner;
   if (data.notFound) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -131,6 +210,15 @@ export default function UserRoute() {
           Linked {justLinked.tag}
         </div>
       ) : null}
+      {owner && defaultSaved === "saved" ? (
+        <div className="status-banner status-banner-success" role="status">
+          Default account saved.
+        </div>
+      ) : owner && defaultSaved === "failed" ? (
+        <div className="status-banner status-banner-warning" role="alert">
+          The default account could not be saved. Try again.
+        </div>
+      ) : null}
 
       <section className="data-section" aria-labelledby="user-players-title">
         <div className="section-heading">
@@ -141,14 +229,27 @@ export default function UserRoute() {
             </Link>
           ) : null}
         </div>
+        {owner && data.user && data.user.verifiedPlayers.length > 0 ? (
+          <p className="form-help linked-player-hint">
+            The Discord bot&apos;s /stats shows your default account when you don&apos;t
+            name a player.
+          </p>
+        ) : null}
         {data.user && data.user.verifiedPlayers.length > 0 ? (
           <ul className="linked-player-cards">
             {data.user.verifiedPlayers.map((player) => (
-              <li key={player.tag}>
+              <li key={player.tag} className={owner ? "linked-player-owned" : undefined}>
                 <LinkedPlayer
                   player={player}
                   backLabel={isOwnProfile ? "Your account" : data.user!.displayName}
                 />
+                {owner ? (
+                  <DefaultAccount
+                    tag={player.tag}
+                    isDefault={owner.defaultPlayer === player.tag}
+                    idempotencyKey={owner.idempotencyKey}
+                  />
+                ) : null}
               </li>
             ))}
           </ul>
@@ -160,6 +261,40 @@ export default function UserRoute() {
         )}
       </section>
     </main>
+  );
+}
+
+/** The top-right corner of an owner's card: a Default badge, or the button to make it so. */
+function DefaultAccount({
+  tag,
+  isDefault,
+  idempotencyKey,
+}: {
+  tag: string;
+  isDefault: boolean;
+  idempotencyKey: string;
+}) {
+  const id = `linked-player-${tag.slice(1)}`;
+  if (isDefault) {
+    return (
+      <span className="linked-player-default">
+        <span aria-hidden="true">✓</span> Default
+      </span>
+    );
+  }
+  return (
+    <form method="post" className="linked-player-make-default">
+      <input type="hidden" name="intent" value="default-player" />
+      <input type="hidden" name="tag" value={tag} />
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <button
+        type="submit"
+        className="button button-secondary"
+        aria-describedby={`${id}-name ${id}-tag`}
+      >
+        Make default
+      </button>
+    </form>
   );
 }
 

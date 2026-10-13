@@ -11,7 +11,7 @@ from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import NOW, seed_profile
 
 from bot.commands import Commands
-from bot.replies import Site
+from bot.replies import Site, which_player
 from bot.store import Store
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase, RequestBinding
@@ -147,40 +147,54 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
             assert [card["tag"] for card in cards] == ["#2PP", "#8QQ"]
             assert all(card["observed_at"] is not None for card in cards)
 
-            assert store.default_tag(account) is None
+            # With none chosen, the first verified player is the default.
+            assert store.default_tag(account) == "#2PP"
             assert _set_default(bot, account, "#9RR") is False
-            assert store.default_tag(account) is None
+            assert store.default_tag(account) == "#2PP"
             assert _set_default(bot, account, "#8QQ") is True
             assert store.default_tag(account) == "#8QQ"
             assert _set_default(bot, account, "#2PP") is True
             assert store.default_tag(account) == "#2PP"
 
-            # Unverifying the player forgets the default.
+            # Unverifying the default forgets it: the first player left is the default.
             with owner.pool.connection() as connection:
                 connection.execute(
                     "DELETE FROM verified_player_links WHERE account_id = %s"
                     " AND player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')",
                     (mine,),
                 )
-            assert store.default_tag(account) is None
+            assert store.default_tag(account) == "#8QQ"
+            # The website reads the same default.
+            summary = api_accounts.get_multi_account_summary(bot, mine)
+            assert summary is not None and summary["default_player"] == "#8QQ"
+            # Verified again, it comes after #8QQ.
+            _verify(owner, mine, "#2PP")
+            assert store.default_tag(account) == "#8QQ"
 
             # Verifying the default again on the same account keeps it.
-            assert _set_default(bot, account, "#8QQ") is True
-            _verify(owner, mine, "#8QQ")
-            assert store.default_tag(account) == "#8QQ"
+            assert _set_default(bot, account, "#2PP") is True
+            _verify(owner, mine, "#2PP")
+            assert store.default_tag(account) == "#2PP"
             # A default moved to another account and back is forgotten.
-            _verify(owner, theirs, "#8QQ")
-            _verify(owner, mine, "#8QQ")
-            assert store.default_tag(account) is None
+            _verify(owner, theirs, "#2PP")
+            _verify(owner, mine, "#2PP")
+            assert store.default_tag(account) == "#8QQ"
             # So is one unverified and verified again.
-            assert _set_default(bot, account, "#8QQ") is True
+            assert _set_default(bot, account, "#2PP") is True
             with owner.pool.connection() as connection:
                 connection.execute(
                     "DELETE FROM verified_player_links"
-                    " WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#8QQ')"
+                    " WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')"
                 )
-            _verify(owner, mine, "#8QQ")
-            assert store.default_tag(account) is None
+            _verify(owner, mine, "#2PP")
+            assert store.default_tag(account) == "#8QQ"
+            # An account with no verified player has no default.
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM verified_player_links WHERE account_id = %s", (theirs,)
+                )
+            summary = api_accounts.get_multi_account_summary(bot, theirs)
+            assert summary is not None and summary["default_player"] is None
             # The API role may run the player page and live board reads too.
             page = store.player_page("#8QQ", NOW)
             (card,) = [card for card in store.players(account, NOW) if card["tag"] == "#8QQ"]
@@ -247,9 +261,11 @@ def test_a_default_saved_during_a_transfer_is_not_kept(database_url: str) -> Non
         owner = ApiDatabase(connection_info)
         bot = ApiDatabase(as_api_role(connection_info))
         try:
+            seed_profile(owner, "#2PP", 5100)
             seed_profile(owner, "#8QQ", 5100)
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             theirs = _account(owner, "google", "google-subject", "other")
+            _verify(owner, mine, "#2PP")
             _verify(owner, mine, "#8QQ")
             store = Store(bot)
             account = store.account(DISCORD_ID)
@@ -269,7 +285,8 @@ def test_a_default_saved_during_a_transfer_is_not_kept(database_url: str) -> Non
                             saving.result(timeout=1)
                 assert saving.result(timeout=10) is False
             _verify(owner, mine, "#8QQ")
-            assert store.default_tag(account) is None
+            # Still the first verified player, not the save made during the transfer.
+            assert store.default_tag(account) == "#2PP"
         finally:
             bot.close()
             owner.close()
@@ -365,7 +382,7 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
             seed_profile(owner, "#2PP", 5100)
             _verify(owner, account_id, "#8QQ")
             _verify(owner, account_id, "#2PP")
-            menu = commands.stats(account)
+            menu = which_player(Site("https://clashlens.test"), store.players(account, NOW), "stats")
             assert menu.choices and menu.updated == NOW
         finally:
             bot.close()

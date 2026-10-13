@@ -3,12 +3,14 @@
 The Clash Lens Discord bot complements the website with three slash commands:
 `/help`, `/link` (a pointer to the website's Discord alerts page, where Discord
 is connected and attack alerts are turned on) and `/stats` (this Season so far
-for any tracked player, or the person's default player). Its code is in
+for any tracked player, or the person's default account). Its code is in
 [`python/src/bot`](../python/src/bot). People use it mostly in a direct
 message (DM) with the bot, and also in servers. `/stats` needs the person's
 Discord account connected to their Clash Lens account on the website.
-Connecting Discord and choosing the default player happen on the
-website, never in the bot. Every reply is a normal message anyone can forward;
+Connecting Discord and choosing the default account happen on the
+website, never in the bot. The default account is the one marked Default on
+the Clasher's account page; until they choose, it is their first linked
+account. Every reply is a normal message anyone can forward;
 only the not-connected pointer and plain errors are private to the person.
 
 ## How it runs
@@ -117,8 +119,8 @@ Nothing below has been done yet. Do the steps in order.
    - `/help` before connecting: says "not connected yet".
    - `/link`: shows the website buttons. Connect Discord on the website, run
      `/link` again: says you are connected and points to the website.
-   - With two or more players, choose a default player on the website's
-     sign-in connections page, then run `/stats` with no player.
+   - With two or more players, press Make default on one of them on the
+     website's account page, then run `/stats` with no player.
    - `/stats` with a tag and with a name: a normal message you can forward.
 7. **Test in a test server.** Install the app to a private test server ("Add to
    Server"). Run `/stats`: everyone in the channel sees it. Have a second,

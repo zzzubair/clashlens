@@ -5,9 +5,43 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
-import UserRoute from "../../app/routes/users.$username";
+const mocks = vi.hoisted(() => ({
+  requireLogin: vi.fn(),
+  readLoginIdentity: vi.fn(),
+  createPythonClient: vi.fn(),
+}));
+
+vi.mock("../../app/server/config.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../app/server/config.server")>();
+  return {
+    ...actual,
+    getWebsiteConfig: () =>
+      actual.loadWebsiteConfig({
+        NODE_ENV: "test",
+        CLASHLENS_PUBLIC_ORIGIN: "https://clashlens.example",
+      }),
+  };
+});
+
+vi.mock("../../app/server/auth-guard.server", () => ({
+  requireLogin: mocks.requireLogin,
+}));
+
+vi.mock("../../app/server/actions.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../app/server/actions.server")>();
+  return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
+});
+
+vi.mock("../../app/services/python.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/python.server")>();
+  return { ...actual, createPythonClient: mocks.createPythonClient };
+});
+
+import UserRoute, { action, loader } from "../../app/routes/users.$username";
+import { PythonApiError } from "../../app/services/python.server";
 import { worstPublicUser } from "../fixtures/worst-case-accounts";
 
 const data = {
@@ -67,7 +101,32 @@ const data = {
   },
   notFound: false,
   error: null,
+  owner: null,
 };
+
+const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" };
+const IDEMPOTENCY_KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
+
+const client = {
+  getPublicUser: vi.fn(),
+  getAccountSummary: vi.fn(),
+  setDefaultPlayer: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.requireLogin.mockResolvedValue(IDENTITY);
+  mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
+  client.getPublicUser.mockResolvedValue(data.user);
+  client.getAccountSummary.mockResolvedValue({
+    username: "nova88",
+    displayName: "Nova",
+    verifiedPlayers: [],
+    defaultPlayer: "#8PY",
+  });
+  client.setDefaultPlayer.mockResolvedValue(undefined);
+  mocks.createPythonClient.mockReturnValue(client);
+});
 
 async function renderProfile(search: string, loaderData: object = data) {
   const handler = createStaticHandler([
@@ -157,4 +216,125 @@ it("shows worst-case linked players with separators and every missing value name
     "Electro League 33",
   ])
     expect(html).toContain(text);
+});
+
+async function loadProfile() {
+  const result = (await loader({
+    params: { username: "nova88" },
+    request: new Request("https://clashlens.example/users/nova88"),
+  } as never)) as unknown as { data: { owner: unknown; user: unknown } };
+  return result.data;
+}
+
+it("gives the default account controls only to the profile's signed-in owner", async () => {
+  const own = await loadProfile();
+  expect(own.user).toEqual(data.user);
+  expect(own.owner).toEqual({
+    defaultPlayer: "#8PY",
+    idempotencyKey: expect.any(String),
+  });
+  expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
+
+  client.getAccountSummary.mockResolvedValue({
+    username: "other",
+    displayName: "Other",
+    verifiedPlayers: [],
+    defaultPlayer: "#9PY",
+  });
+  expect((await loadProfile()).owner).toBeNull();
+
+  mocks.readLoginIdentity.mockResolvedValue(null);
+  expect((await loadProfile()).owner).toBeNull();
+
+  // A failed owner read still shows the public profile, without the controls.
+  mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
+  client.getAccountSummary.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  const failed = await loadProfile();
+  expect(failed.user).toEqual(data.user);
+  expect(failed.owner).toBeNull();
+});
+
+it("marks the owner's default account and offers Make default on the others", async () => {
+  const html = await renderProfile("", {
+    ...data,
+    owner: { defaultPlayer: "#8PY", idempotencyKey: IDEMPOTENCY_KEY },
+  });
+  const items = html.match(/<li class="linked-player-owned">[\s\S]*?<\/li>/g) ?? [];
+  expect(items).toHaveLength(4);
+  const [nova, second, ...rest] = items;
+  expect(second).toContain("✓</span> Default");
+  expect(second).not.toContain("Make default");
+  for (const item of [nova, ...rest]) {
+    expect(item).toContain(">Make default</button>");
+    expect(item).not.toContain("linked-player-default");
+  }
+  // The button sits beside the card link, never inside it.
+  for (const card of html.match(/<a class="linked-player-card"[\s\S]*?<\/a>/g) ?? [])
+    expect(card).not.toContain("<form");
+  expect(nova).toContain('name="tag" value="#2PP"');
+  expect(nova).toContain(`value="${IDEMPOTENCY_KEY}"`);
+  expect(
+    await renderProfile("?default=saved", {
+      ...data,
+      owner: { defaultPlayer: "#8PY", idempotencyKey: IDEMPOTENCY_KEY },
+    }),
+  ).toContain("Default account saved.");
+});
+
+it("shows other visitors neither the Default badge nor Make default", async () => {
+  const html = await renderProfile("?default=saved");
+  for (const text of ["Make default", "linked-player-default", "Default account saved."])
+    expect(html).not.toContain(text);
+});
+
+function defaultRequest(
+  fields: Record<string, string>,
+  origin = "https://clashlens.example",
+) {
+  return new Request("https://clashlens.example/users/nova88", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
+    body: new URLSearchParams(fields).toString(),
+  });
+}
+
+it.each([
+  { failure: false, outcome: "saved" },
+  { failure: true, outcome: "failed" },
+])("saves the default account and says it was $outcome", async ({ failure, outcome }) => {
+  if (failure)
+    client.setDefaultPlayer.mockRejectedValue(
+      new PythonApiError(404, { error: "player_not_verified" }),
+    );
+  const response = await action({
+    params: { username: "nova88" },
+    request: defaultRequest({
+      intent: "default-player",
+      tag: "#2PP",
+      idempotencyKey: IDEMPOTENCY_KEY,
+    }),
+  } as never);
+  expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
+  expect(client.setDefaultPlayer).toHaveBeenCalledWith("#2PP", IDEMPOTENCY_KEY);
+  expect(response.status).toBe(302);
+  expect(response.headers.get("Location")).toBe(`/users/nova88?default=${outcome}`);
+});
+
+it("refuses a default account change from another site or without a key", async () => {
+  const fields = {
+    intent: "default-player",
+    tag: "#2PP",
+    idempotencyKey: IDEMPOTENCY_KEY,
+  };
+  const crossSite = await action({
+    params: { username: "nova88" },
+    request: defaultRequest(fields, "https://evil.example"),
+  } as never);
+  expect(crossSite.status).toBe(403);
+  const noKey = await action({
+    params: { username: "nova88" },
+    request: defaultRequest({ ...fields, idempotencyKey: "" }),
+  } as never);
+  expect(noKey.status).toBe(400);
+  expect(client.setDefaultPlayer).not.toHaveBeenCalled();
 });
