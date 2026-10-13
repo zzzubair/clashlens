@@ -289,6 +289,9 @@ describe("dashboard settings", () => {
     expect(posted({ goal: 1 })?.goal).toBe(1);
     expect(posted({ goal: 10_000 })?.goal).toBe(10_000);
     expect(posted({ layout: [] })?.layout).toEqual([]);
+    expect(posted({ bases: "held" })?.basesMode).toBe("held");
+    // A page left open from before Trophies was the default still saves.
+    expect(posted({ bases: "trophies" })?.basesMode).toBe("trophies");
     for (const bad of [
       { v: 2 },
       { layout: null },
@@ -303,7 +306,6 @@ describe("dashboard settings", () => {
       { cutoffs: [10, 50, 100, 200, 500, 1000, 7000] },
       { group: "not-a-group" },
       { window: "7" },
-      { bases: "trophies" },
       { bases: "rank" },
       { extra: true },
     ]) {
@@ -591,7 +593,12 @@ describe("Bases you attacked", () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
-          rows: [row("Easy one", held(1, 4)), row("Hard one", held(5, 6))],
+          rows: [
+            row("Easy one", held(1, 4)),
+            row("Hard one", held(5, 6)),
+            row("Early", held(1, 2)),
+            row("First", held(0, 1)),
+          ],
           timeZone: "UTC",
           mode: "trophies",
         }),
@@ -602,6 +609,10 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Hard lost −165 in 6 defenses");
     // One held and three tripled: 145 over 4 is −36 a defense.
     expect(plain).toContain("Easy lost −145 in 4 defenses");
+    // Under 3 defenses the rating waits, but the day's total so far shows.
+    expect(plain).toContain("Too early lost −65 in 2 defenses · needs 3+ defenses");
+    expect(plain).toContain("Too early lost −40 in 1 defense · needs 3+ defenses");
+    expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });
 });

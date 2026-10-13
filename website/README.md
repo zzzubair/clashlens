@@ -209,7 +209,8 @@ and "no comparison yet". The similar-trophies comparison is Held % only:
 Trophies, the default, compares the trophies it gave up a defense today with
 the fixed Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average
 is within `BASE_TROPHY_BAND` trophies) and shows the total it lost today, such
-as "lost −250 in 8 defenses". Under 3 defenses is too early.
+as "lost −250 in 8 defenses". Under 3 defenses the rating is too early, but
+Trophies still shows the total so far.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;

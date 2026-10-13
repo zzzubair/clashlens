@@ -161,15 +161,19 @@ export function OpponentsCard({
                   {STRENGTH_LABELS[strength]}
                 </span>
                 <span className="dash-muted">
-                  {row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
-                    ? `held ${held} of ${row.defenses.length} · needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
-                    : mode === "held"
-                      ? `held ${held} of ${row.defenses.length} · ${
-                          row.legends?.defenses
+                  {mode === "held"
+                    ? `held ${held} of ${row.defenses.length} · ${
+                        row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
+                          ? `needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
+                          : row.legends?.defenses
                             ? `${Math.round(heldShare(row.defenses) * 100)}% vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
                             : "no comparison yet"
-                        }`
-                      : `lost ${signed(-trophiesGivenUp(row.defenses))} in ${row.defenses.length} defenses`}
+                      }`
+                    : `lost ${signed(-trophiesGivenUp(row.defenses))} in ${row.defenses.length} defense${row.defenses.length === 1 ? "" : "s"}${
+                        row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
+                          ? ` · needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
+                          : ""
+                      }`}
                 </span>
               </div>
               <div className="opponents-action">

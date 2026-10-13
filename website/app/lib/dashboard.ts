@@ -290,7 +290,8 @@ export function parsePostedSettings(value: unknown): DashboardSettings | null {
   )
     return null;
   if (value.window !== undefined && value.window !== "season") return null;
-  if (value.bases !== undefined && value.bases !== "held") return null;
+  if (value.bases !== undefined && value.bases !== "held" && value.bases !== "trophies")
+    return null;
   return readSettings(value);
 }
 
