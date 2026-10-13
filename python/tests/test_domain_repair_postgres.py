@@ -1161,15 +1161,14 @@ def test_season_repair_judges_a_failed_reset_repair_by_the_days_it_names(
         assert [blocker["job_id"] for blocker in report["failed_blockers"]] == [failed_id]
 
 
-@pytest.mark.parametrize("group", [
-    "day_1_inconsistent", "unplayed_at_5000", "weekly_raise_sunday", "weekly_raise_monday"])
+@pytest.mark.parametrize("group", ["day_1_inconsistent", "unplayed_at_5000", "weekly_raise"])
 def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affects(
     database_url: str, archive_server, monkeypatch, group: str
 ) -> None:
     """One player whose Day 1 was saved Inconsistent, or who sits at 5,000 in
-    Legend I with no Legend battle this Season, or whose Sunday ending at the
-    weekly raise was not saved Complete, or whose Monday started below 5,000,
-    and one ordinary player each have two saved days. The scoped repair previews one player, queues one
+    Legend I with no Legend battle this Season, or whose Monday Reset reading
+    showed Legend I below 5,000, and one ordinary player each have two saved
+    days. The scoped repair previews one player, queues one
     job, and running it recalculates that player's days oldest first while
     the ordinary player's saved days stay as they were. The full repair of
     the same rules still has both players to recalculate."""
@@ -1178,7 +1177,7 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
 
     from clashlens import reconciliation_db
 
-    weekly = group.startswith("weekly")
+    weekly = group == "weekly_raise"
     scope = "weekly-raise" if weekly else "day-1-or-unplayed"
     # Day 1 and 2, or Sunday and Monday, Days 7 and 8.
     days = [START + 6 * DAY, START + 7 * DAY] if weekly else [START, START + DAY]
@@ -1195,10 +1194,11 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
             affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
             for player in (affected, ordinary):
                 for number, start in enumerate(days, start=7 if weekly else 1):
+                    # Each Sunday ends at 4,900 and was saved Complete, its
+                    # Monday starting at 5,000.
                     version_id = _ranked(
                         connection, player, number, start, start + DAY, season=SEASON,
-                        trophies=(4940, 4950) if group == "weekly_raise_monday"
-                        and player == affected and number == 8 else None,
+                        trophies={7: (4890, 4900), 8: (5000, 5010)}[number] if weekly else None,
                     )
                     _log(connection, player, number, version_id, start, season=SEASON)
                 if group == "unplayed_at_5000":
@@ -1216,13 +1216,44 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
                         """,
                         (START + DAY + timedelta(hours=1), player),
                     )
-            if group == "weekly_raise_sunday":
-                connection.execute(
-                    "UPDATE ranked_day_versions SET state = 'Inconsistent',"
-                    " confidence = 'uncertain', boundary_adjustment_type = 'weekly_reset'"
-                    " WHERE player_id = %s AND ranked_day_start = %s",
-                    (affected, days[0]),
-                )
+            if weekly:
+                # The affected player's Sunday ended at 5,100 before its 200
+                # automatic loss, and the Monday Reset reading of 4,900 came
+                # before the raise. The ordinary player's came after it, and
+                # their reading below 5,000 at the Season's first Reset is no
+                # weekly one.
+                for observation, (player, boundary_at, trophies) in enumerate([
+                    (affected, days[1], 4900), (ordinary, days[1], 5000), (ordinary, START, 4900),
+                ], start=1000):
+                    profile_version = connection.execute(
+                        """
+                        INSERT INTO player_profile_versions (
+                            player_id, observation_id, normalized_tag, endpoint_version,
+                            schema_version, parser_version, observed_at,
+                            source_http_status, name, trophies, league_tier_id,
+                            league_tier_name, eligibility_state, profile_json
+                        ) SELECT id, %s, normalized_tag, 'profile-v1', 'profile-schema-v1',
+                                 'profile-parser-v1', %s, 200, 'Player', %s, 105000036,
+                                 'Legend I', 'eligible', '{}'::jsonb
+                        FROM players WHERE id = %s RETURNING id
+                        """,
+                        (observation, boundary_at + timedelta(minutes=4), trophies, player),
+                    ).fetchone()[0]
+                    connection.execute(
+                        """
+                        INSERT INTO player_profile_effects (
+                            profile_version_id, observation_id, effect_kind, observed_at,
+                            source_http_status, endpoint_version, schema_version, parser_version
+                        ) VALUES (%s, %s, 'current_profile', %s, 200, 'profile-v1',
+                                  'profile-schema-v1', 'profile-parser-v1')
+                        """,
+                        (profile_version, observation, boundary_at + timedelta(minutes=4)),
+                    )
+                    connection.execute(
+                        "INSERT INTO reset_baseline_evidence (player_id, boundary_at,"
+                        " profile_observation_id, evidence_key) VALUES (%s, %s, %s, %s)",
+                        (player, boundary_at, observation, f"reset-reading-{observation}"),
+                    )
             elif group == "day_1_inconsistent":
                 connection.execute(
                     "UPDATE ranked_day_versions SET state = 'Inconsistent',"

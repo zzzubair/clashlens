@@ -441,7 +441,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             if judged is not None and judged.matched:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
-                end_reading_evidence = reading_rule.unraised_end(judged)
+                end_reading_evidence = reading_rule.unraised_end(judged) if data.boundary_kind == "weekly" else None
         # Every reading from the end Reset on judges a clean, ended day
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (

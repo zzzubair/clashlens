@@ -103,3 +103,28 @@ def test_monday_read_before_the_raise_starts_at_5000_after_a_partial_sunday() ->
 
     assert start(5000) == 5000
     assert start(4940) == 4940
+
+
+@pytest.mark.parametrize(("boundary", "proven"), [("weekly", True), ("season", False)])
+def test_only_a_weekly_reset_reading_before_the_raise_proves_the_end(
+    boundary: str, proven: bool,
+) -> None:
+    # An attack of 40 and 8 defenses of 30 end the day at 4,800, with no
+    # automatic loss, and the Reset reading at 05:04 shows 4,800. Before a
+    # weekly raise it proves that end, the Daily board's total. Before a
+    # Season's reset it proves nothing until the official Season total.
+    result = reconcile_ranked_day(_input(
+        start_trophies=5000,
+        next_start_trophies=4800,
+        boundary_kind=boundary,
+        previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
+        contributions=_battles("offense", (40,)) + _battles("defense", (30,) * 8),
+        start_baseline_evidence={"start_trophies_source": "season_rule"},
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
+    ))
+
+    assert (result.final_trophies_before_reset, result.next_start_trophies) == (4800, 5000)
+    assert result.input_evidence.get("end_reading") == ({
+        "read_at": (DAY.end + timedelta(minutes=4)).isoformat(), "trophies": 4800,
+        "outcome": "verified", "exact": False, "new_day_change": 0, "clean": True,
+    } if proven else None)

@@ -352,28 +352,32 @@ def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
 def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
     """The players with saved days of the Season whose results the 13
     October 2026 rule, that the weekly raise can land after the Monday Reset
-    reading, can change: a day ending at a weekly raise not saved Complete,
-    and a Monday after the Season's first day, the player still in Legend I,
-    started below 5,000. On 12 October 2026, 4,136 such Sundays were saved
-    Inconsistent and 4,140 Mondays started below 5,000. Each chosen
-    player's later days are recalculated with them."""
+    reading, can change: those whose Reset reading at a weekly Monday Reset
+    of the Season, not its first, showed Legend I below 5,000, whatever
+    their days were saved as. A Sunday ending at 5,100 before its 200
+    automatic loss, read at 4,900, was saved Complete with Monday at 5,000,
+    but only that reading now proves its board total. On 12 October 2026
+    every Reset reading came before the raise. A player with no Reset
+    reading there is not chosen. Each chosen player's later days are
+    recalculated with them."""
     return [
         int(row[0]) for row in connection.execute(
             """
-            SELECT DISTINCT day.player_id FROM (
-                SELECT DISTINCT ON (player_id, ranked_day_start)
-                       player_id, ranked_day_start, state, boundary_adjustment_type,
-                       start_trophies, failure_reasons
-                FROM ranked_day_versions
-                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
-                ORDER BY player_id, ranked_day_start, version DESC, id DESC
-            ) AS day
-            WHERE day.boundary_adjustment_type = 'weekly_reset' AND day.state <> 'Complete'
-               OR extract(isodow FROM day.ranked_day_start AT TIME ZONE 'UTC') = 1
-                  AND day.ranked_day_start > %(start)s
-                  AND day.start_trophies < %(trophies)s
-                  AND NOT day.failure_reasons ? 'player_not_eligible'
-            ORDER BY day.player_id
+            SELECT DISTINCT evidence.player_id
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at > %(start)s AND evidence.boundary_at < %(end)s
+              AND extract(isodow FROM evidence.boundary_at AT TIME ZONE 'UTC') = 1
+              AND profile.eligibility_state = 'eligible'
+              AND profile.trophies < %(trophies)s
+              AND EXISTS (
+                  SELECT 1 FROM ranked_day_versions AS day
+                  WHERE day.player_id = evidence.player_id
+                    AND day.ranked_day_start >= %(start)s AND day.ranked_day_start < %(end)s
+              )
+            ORDER BY evidence.player_id
             """,
             {"start": start, "end": start + SEASON_DURATION,
              "trophies": SEASON_START_TROPHIES},

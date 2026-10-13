@@ -803,14 +803,18 @@ summaries are stored again only for the chosen players before the check of
 every summary. It keeps its own receipt, so a full repair of the same
 revision afterwards still recalculates every player.
 
-`--players weekly-raise` takes instead the players with a saved day of the
-Season ending at a weekly raise to 5,000 that is not Complete, or a Monday
-after Day 1 that started below 5,000 while they stayed in Legend I: the days
-the rule that the raise can land after the Monday Reset reading (13 October
-2026) can change. On 12 October 2026 that covers the 4,136 Sundays (Day 7)
-saved Inconsistent and the 4,140 Mondays (Day 8) that started from the
-unraised reading. Each one's job recalculates every saved day of the
-Season, so their later days start where the repaired days now end:
+`--players weekly-raise` takes instead the players with saved days of the
+Season whose Reset reading at a weekly Monday Reset of the Season, not its
+first, showed Legend I below 5,000: the days the rule that the raise can
+land after the Monday Reset reading (13 October 2026) can change, whatever
+they were saved as. That includes the 4,136 Sundays (Day 7) of 12 October
+2026 saved Inconsistent, the Mondays (Day 8) that started from the unraised
+reading, and a Sunday saved Complete whose board total only the unraised
+reading proves, such as one ending at 5,100 before its 200 automatic loss
+and read at 4,900. On 12 October 2026 every Reset reading came before the
+raise. A player with no Reset reading at that Reset is not taken. Each
+one's job recalculates every saved day of the Season, so their later days
+start where the repaired days now end:
 
 ```sh
 podman exec clashlens-python-worker \
