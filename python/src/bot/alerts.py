@@ -21,14 +21,6 @@ not made; the DM is then logged as not delivered, never sent again. A crash
 can lose an alert but never send it twice. Discord refusing a DM (bot not
 added, DMs closed, unknown user) is logged with the reason, which the
 website shows with what the Clasher can do. That DM is not tried again.
-
-The same loop sends each Legend day's summary DMs (summaries.py) once a
-minute, after that round's alerts, with the same tries again, logged in their
-own delivery log. A summary's next DM is sent as soon as the one before is
-delivered, if still due, with its own 2 minutes from its own first try, cut
-off at the next Reset. Once a round has spent 30 seconds sending summaries,
-it starts no more and the rest wait for a later round, so the next round's
-alerts wait for at most those 30 seconds and the one summary then sending.
 """
 
 from __future__ import annotations
@@ -36,9 +28,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
@@ -46,9 +38,6 @@ from clashlens.domain import ranked_day_for
 from . import replies
 from .replies import Reply, Site
 from .store import Store
-
-if TYPE_CHECKING:
-    from .summaries import Summaries
 
 log = logging.getLogger("clashlens.bot.alerts")
 
@@ -66,10 +55,6 @@ RETRY_LONGEST_SECONDS = 120.0
 NONCE_SECONDS = 120.0
 # Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
-# How often the loop looks for Legend day summaries due.
-SUMMARY_SECONDS = 60.0
-# A round starts no more summaries once it has spent this long sending them.
-SUMMARY_BUDGET_SECONDS = 30.0
 
 _DUE_COLUMNS = (
     "account_id",
@@ -156,20 +141,6 @@ class Delivery:
     # The loop's clock time of the next try, and the wait before it.
     retry_at: float = 0.0
     wait: float = 0.0
-    # The log it is in: None for the attack alert log, else the Legend day
-    # summary log, whose DMs' nonces start with its `NONCE_PREFIX` so they
-    # never repeat an attack alert's.
-    log: DeliveryLog | None = None
-    # The tags of the players a Legend day summary's `reply` names.
-    tags: tuple[str, ...] = ()
-    # DMs sent after `reply`, in order, each with the tags it names, each
-    # once the one before is delivered: a Legend day summary too long for
-    # one. `part` counts the DMs delivered so far.
-    more: list[tuple[Reply, tuple[str, ...]]] = field(default_factory=list)
-    part: int = 0
-    # When it stops being due whatever else holds: a Legend day summary's
-    # next Reset.
-    until: datetime | None = None
 
     def params(self) -> dict[str, Any]:
         return {
@@ -181,30 +152,14 @@ class Delivery:
             "window": WINDOW,
         }
 
-    def nonce(self) -> int | str:
-        if self.log is None:
-            return self.id
-        return f"{self.log.NONCE_PREFIX}{self.id}-{self.part}"
-
-    def time_left(self, now: datetime) -> float:
-        """Seconds until its last moment, `NONCE_SECONDS` after its first try
-        by the loop's clock, or `until` if sooner, at `now`."""
-        left = self.claimed_at + NONCE_SECONDS - asyncio.get_running_loop().time()
-        return left if self.until is None else min(left, (self.until - now).total_seconds())
-
-
-class DeliveryLog(Protocol):
-    NONCE_PREFIX: str
-
-    def claim(self, delivery: Delivery) -> int | None: ...
-
-    def still_due(self, delivery: Delivery) -> bool: ...
-
-    def finish(self, delivery_id: int, state: str, reason: str | None) -> None: ...
+    def time_left(self) -> float:
+        """Seconds until its last moment, `NONCE_SECONDS` after its first try,
+        by the loop's clock now."""
+        return self.claimed_at + NONCE_SECONDS - asyncio.get_running_loop().time()
 
 
 class AlertStore:
-    """The alert reads and the attack alert delivery log."""
+    """The alert reads and the delivery log, the only table the bot writes."""
 
     def __init__(self, database: ApiDatabase, store: Store) -> None:
         self.database = database
@@ -318,19 +273,14 @@ class AlertLoop:
         messenger: Messenger,
         site: Site,
         *,
-        summaries: Summaries | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.alerts = alerts
         self.messenger = messenger
         self.site = site
-        # Legend day summaries, sent between alerts when given.
-        self.summaries = summaries
-        # How far into the battle's Season the attacker's hit rate goes, and
-        # how long a summary DM has left before its next Reset.
+        # How far into the battle's Season the attacker's hit rate goes.
         self.now = now
         self._pruned_at: float | None = None
-        self._summarised_at: float | None = None
         # Claimed DMs Discord could not take yet, waiting for their next try.
         self._waiting: list[Delivery] = []
 
@@ -345,24 +295,20 @@ class AlertLoop:
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def tick(self) -> int:
-        """Log as not delivered each waiting DM past its last try or no
-        longer due, and try again each other one whose time has come, then send every
-        confirmation, then every alert, due now, then, once a minute, the
-        Legend day summaries due, one at a time, until `SUMMARY_BUDGET_SECONDS`
-        have gone on them; returns how many DMs were sent."""
+        """Log as not delivered each waiting DM past its last try, and try
+        again each other one whose time has come, then send every
+        confirmation, then every alert, due now, one at a time; returns how
+        many were sent."""
         clock = asyncio.get_running_loop().time()
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
             await asyncio.to_thread(self.alerts.prune)
-            if self.summaries is not None:
-                await asyncio.to_thread(self.summaries.prune)
             self._pruned_at = clock
         sent = 0
         for delivery in list(self._waiting):
-            expired = delivery.time_left(self.now()) <= 0
+            expired = delivery.time_left() <= 0
             if not expired and delivery.retry_at > asyncio.get_running_loop().time():
                 continue
-            still_due = (delivery.log or self.alerts).still_due
-            if expired or not await asyncio.to_thread(still_due, delivery):
+            if expired or not await asyncio.to_thread(self.alerts.still_due, delivery):
                 await self._finish(delivery, "failed", None)
                 self._waiting.remove(delivery)
             else:
@@ -393,20 +339,10 @@ class AlertLoop:
                     replies.attack_alert(self.site, alert, rate),
                 )
             )
-        if self.summaries is not None and (
-            self._summarised_at is None or clock - self._summarised_at >= SUMMARY_SECONDS
-        ):
-            self._summarised_at = clock
-            due = await asyncio.to_thread(self.summaries.due)
-            started = asyncio.get_running_loop().time()
-            for delivery in due:
-                if asyncio.get_running_loop().time() - started >= SUMMARY_BUDGET_SECONDS:
-                    break
-                sent += await self._claim(delivery)
         return sent
 
     async def _claim(self, delivery: Delivery) -> int:
-        claimed = await asyncio.to_thread((delivery.log or self.alerts).claim, delivery)
+        claimed = await asyncio.to_thread(self.alerts.claim, delivery)
         if claimed is None:
             return 0
         delivery.id = claimed
@@ -415,10 +351,8 @@ class AlertLoop:
 
     async def _send(self, delivery: Delivery) -> int:
         """Try one logged DM, cut off at its last moment, and log how it went
-        or wait to try again if there is time; the DMs delivered. A delivered
-        DM with more to follow starts the next one while it is still due,
-        with its own 2 minutes; one no longer due is logged as not delivered."""
-        left = delivery.time_left(self.now())
+        or wait to try again if there is time; 1 when it was delivered."""
+        left = delivery.time_left()
         if left <= 0:
             await self._finish(delivery, "failed", None)
             return 0
@@ -426,7 +360,7 @@ class AlertLoop:
         try:
             await asyncio.wait_for(
                 self.messenger.send_dm(
-                    delivery.discord_user_id, delivery.reply, delivery.nonce(), left
+                    delivery.discord_user_id, delivery.reply, delivery.id, left
                 ),
                 left,
             )
@@ -435,29 +369,20 @@ class AlertLoop:
         except Unreachable as outage:
             delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
             wait = max(delivery.wait, outage.retry_after)
-            if wait < delivery.time_left(self.now()):
+            if wait < delivery.time_left():
                 delivery.retry_at = asyncio.get_running_loop().time() + wait
                 self._waiting.append(delivery)
-                log.info("dm delivery=%s waiting to try again", delivery.nonce())
+                log.info("attack alert delivery=%s waiting to try again", delivery.id)
                 return 0
             state = "failed"
         except TimeoutError:
             state = "failed"
         except Exception:
-            log.exception("dm delivery %s failed", delivery.nonce())
+            log.exception("attack alert delivery %s failed", delivery.id)
             state = "failed"
-        if state == "sent" and delivery.more:
-            delivery.reply, delivery.tags = delivery.more.pop(0)
-            delivery.part += 1
-            delivery.wait = 0.0
-            if not await asyncio.to_thread((delivery.log or self.alerts).still_due, delivery):
-                await self._finish(delivery, "failed", None)
-                return 1
-            delivery.claimed_at = asyncio.get_running_loop().time()
-            return 1 + await self._send(delivery)
         await self._finish(delivery, state, reason)
         return int(state == "sent")
 
     async def _finish(self, delivery: Delivery, state: str, reason: str | None) -> None:
-        await asyncio.to_thread((delivery.log or self.alerts).finish, delivery.id, state, reason)
-        log.info("dm delivery=%s outcome=%s", delivery.nonce(), reason or state)
+        await asyncio.to_thread(self.alerts.finish, delivery.id, state, reason)
+        log.info("attack alert delivery=%s outcome=%s", delivery.id, reason or state)

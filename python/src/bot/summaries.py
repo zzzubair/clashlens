@@ -22,19 +22,25 @@ board. A player whose day is not saved yet, or whom that board went without,
 is named as not finished; one with no Legend day that day is left out, and a
 Clasher with no finished day gets no DM.
 
-Each summary is logged before its first DM and sent by the attack alert
-loop, with the same tries again; so no Clasher is sent the same day's
-summary twice, across restarts too. A summary too long for one DM goes as
-several, each with its own nonce. It is logged only while every player it
-names is still verified to the account with its summary on, else it is
-read again next round; each DM is tried, and tried again, only while every
-player that DM names still is, else it and the DMs after it are dropped.
+Summaries are sent by their own loop, beside the attack alert loop and
+through the same Discord messenger, so a slow summary never holds up an
+attack alert. Each summary is logged before its first DM, so no Clasher is
+sent the same day's summary twice, across restarts too. A summary too long
+for one DM goes as several, in order, each sent as soon as the one before is
+delivered, with its own nonce. Each DM Discord did not take is tried again
+as an attack alert DM is, within 2 minutes of its own first try. A summary
+is logged only while every player it names is still verified to the account
+with its summary on, else it is read again next round; each later DM, and
+each try again, goes only while every player that DM names still is, else
+it and the DMs after it are dropped.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -42,14 +48,24 @@ from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 
 from . import replies
-from .alerts import KEEP, Delivery
-from .replies import Site
+from .alerts import (
+    KEEP,
+    NONCE_SECONDS,
+    RETRY_LONGEST_SECONDS,
+    RETRY_SECONDS,
+    Messenger,
+    Refused,
+    Unreachable,
+)
+from .replies import Reply, Site
 from .store import Store
 
 log = logging.getLogger("clashlens.bot.summaries")
 
-# Accounts read in one round, so attack alerts never wait long behind them.
+# Accounts read in one round.
 BATCH = 10
+# How often the loop looks for summaries due.
+SUMMARY_SECONDS = 60.0
 
 # Where an account's summary, or one of its DMs, is still due: before the
 # Reset closing its Legend day, Discord still connected as the same user, and
@@ -75,10 +91,26 @@ _STILL_ON = """
 """
 
 
+@dataclass
+class Summary:
+    """One account's summary of the Legend day that ended at `reset`: its DMs
+    in order, each with the tags of the players it names."""
+
+    account_id: int
+    discord_user_id: str
+    reset: datetime
+    parts: list[tuple[Reply, tuple[str, ...]]]
+    # Its delivery log id once claimed.
+    id: int = 0
+
+    @property
+    def until(self) -> datetime:
+        """The next Reset, from which it is no longer due."""
+        return self.reset + timedelta(days=1)
+
+
 class Summaries:
     """The summary reads and the summary delivery log."""
-
-    NONCE_PREFIX = "summary-"
 
     def __init__(
         self,
@@ -93,7 +125,7 @@ class Summaries:
         self.site = site
         self.now = now
 
-    def due(self) -> list[Delivery]:
+    def due(self) -> list[Summary]:
         """Summaries of the Legend day the latest Reset ended, for up to
         `BATCH` accounts not yet logged for it, once its Daily board is
         published. An account with no finished day is logged as skipped."""
@@ -177,16 +209,13 @@ class Summaries:
                 # Unlogged, so the next round reads this account again.
                 log.exception("Legend day summary for account %s could not be read", account_id)
                 continue
-            parts = replies.day_summary(self.site, reset, days)
-            reply, named = parts[0] if parts else (replies.Reply(""), ())
-            # A summary is for no one player, so it has no player id.
-            delivery = Delivery(
-                int(account_id), 0, str(discord_user_id), None, reset, reply,
-                log=self, tags=named, more=parts[1:], until=reset + timedelta(days=1),
+            summary = Summary(
+                int(account_id), str(discord_user_id), reset,
+                replies.day_summary(self.site, reset, days),
             )
-            if parts:
-                due.append(delivery)
-            elif (skipped := self.claim(delivery)) is not None:
+            if summary.parts:
+                due.append(summary)
+            elif (skipped := self.claim(summary)) is not None:
                 self.finish(skipped, "skipped", None)
         return due
 
@@ -211,11 +240,11 @@ class Summaries:
             if (day := finished.get((tag, version))) is not None:
                 day["end"] = end
 
-    def claim(self, delivery: Delivery) -> int | None:
+    def claim(self, summary: Summary) -> int | None:
         """Log the account's summary as being sent while it is still due for
         every player it names; its log id, or None when it is not due or was
         logged already."""
-        named = delivery.tags + tuple(tag for _, tags in delivery.more for tag in tags)
+        named = tuple(tag for _, tags in summary.parts for tag in tags)
         with self.database.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -227,16 +256,15 @@ class Summaries:
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
-                self._params(delivery, named),
+                self._params(summary, named),
             ).fetchone()
         return None if row is None else int(row[0])
 
-    def still_due(self, delivery: Delivery) -> bool:
-        """Whether its DM now is still due for every player that DM names."""
+    def still_due(self, summary: Summary, tags: tuple[str, ...]) -> bool:
+        """Whether a DM of the summary naming `tags` is still due now."""
         with self.database.pool.connection() as connection:
             row = connection.execute(
-                "SELECT EXISTS (SELECT 1" + _STILL_ON + ")",
-                self._params(delivery, delivery.tags),
+                "SELECT EXISTS (SELECT 1" + _STILL_ON + ")", self._params(summary, tags)
             ).fetchone()
         return bool(row and row[0])
 
@@ -259,12 +287,104 @@ class Summaries:
                 (KEEP,),
             )
 
-    def _params(self, delivery: Delivery, tags: tuple[str, ...]) -> dict[str, Any]:
+    def _params(self, summary: Summary, tags: tuple[str, ...]) -> dict[str, Any]:
         return {
-            "account_id": delivery.account_id,
-            "discord_user_id": delivery.discord_user_id,
-            "reset": delivery.since,
+            "account_id": summary.account_id,
+            "discord_user_id": summary.discord_user_id,
+            "reset": summary.reset,
             "now": self.now(),
-            "until": delivery.until,
+            "until": summary.until,
             "tags": list(tags),
         }
+
+
+class SummaryLoop:
+    """Sends the summaries due, apart from the attack alert loop."""
+
+    def __init__(self, summaries: Summaries, messenger: Messenger) -> None:
+        self.summaries = summaries
+        self.messenger = messenger
+        self._pruned_at: float | None = None
+
+    async def run(self) -> None:
+        """Look for summaries due until cancelled; a failed round is logged
+        and the next round tries again."""
+        while True:
+            try:
+                await self.tick()
+            except Exception:
+                log.exception("Legend day summary round failed")
+            await asyncio.sleep(SUMMARY_SECONDS)
+
+    async def tick(self) -> int:
+        """Send each summary due now, one at a time; the DMs delivered."""
+        clock = asyncio.get_running_loop().time()
+        if self._pruned_at is None or clock - self._pruned_at >= 3600:
+            await asyncio.to_thread(self.summaries.prune)
+            self._pruned_at = clock
+        sent = 0
+        for summary in await asyncio.to_thread(self.summaries.due):
+            sent += await self.send(summary)
+        return sent
+
+    async def send(self, summary: Summary) -> int:
+        """Log the summary, then send its DMs in order, each later one only
+        while still due for the players it names, and log how it went; the
+        DMs delivered."""
+        claimed = await asyncio.to_thread(self.summaries.claim, summary)
+        if claimed is None:
+            return 0
+        summary.id = claimed
+        sent, state = 0, "sent"
+        reason: str | None = None
+        for part, (reply, tags) in enumerate(summary.parts):
+            if part and not await asyncio.to_thread(self.summaries.still_due, summary, tags):
+                state = "failed"
+                break
+            state, reason = await self._deliver(summary, part, reply, tags)
+            if state != "sent":
+                break
+            sent += 1
+        await asyncio.to_thread(self.summaries.finish, summary.id, state, reason)
+        log.info("summary delivery=%s outcome=%s", summary.id, reason or state)
+        return sent
+
+    async def _deliver(
+        self, summary: Summary, part: int, reply: Reply, tags: tuple[str, ...]
+    ) -> tuple[str, str | None]:
+        """Try one DM until Discord takes it, cut off within `NONCE_SECONDS`
+        of its first try and at the next Reset, trying again after a wait
+        while it is still due; how it went."""
+        clock = asyncio.get_running_loop()
+        last = clock.time() + NONCE_SECONDS
+
+        def left() -> float:
+            return min(last - clock.time(), (summary.until - self.summaries.now()).total_seconds())
+
+        wait = 0.0
+        while (time_left := left()) > 0:
+            try:
+                await asyncio.wait_for(
+                    self.messenger.send_dm(
+                        summary.discord_user_id, reply, f"summary-{summary.id}-{part}", time_left
+                    ),
+                    time_left,
+                )
+                return "sent", None
+            except Refused as refusal:
+                return "refused", refusal.reason
+            except Unreachable as outage:
+                wait = min(max(2 * wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
+                pause = max(wait, outage.retry_after)
+                if pause >= left():
+                    return "failed", None
+                log.info("summary delivery=%s part=%s waiting to try again", summary.id, part)
+                await asyncio.sleep(pause)
+                if not await asyncio.to_thread(self.summaries.still_due, summary, tags):
+                    return "failed", None
+            except TimeoutError:
+                return "failed", None
+            except Exception:
+                log.exception("summary delivery %s part %s failed", summary.id, part)
+                return "failed", None
+        return "failed", None

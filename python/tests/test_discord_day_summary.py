@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from bot import replies
-from bot.alerts import AlertLoop, Delivery, Unreachable
+from bot.alerts import AlertLoop, Unreachable
+from bot.discord_app import DiscordMessenger
 from bot.replies import Reply, Site
+from bot.summaries import Summary, SummaryLoop
 
 SITE = Site("https://clashlens.test")
 RESET = datetime(2026, 10, 7, 5, tzinfo=UTC)
@@ -139,36 +141,32 @@ def test_a_long_not_finished_list_is_split_between_dms() -> None:
     ]
 
 
-class _NoAlerts:
-    def prune(self) -> None:
-        pass
-
-    def confirmations_due(self) -> list:
-        return []
-
-    def due(self) -> list:
-        return []
-
-
 class _SummaryLog:
-    """Each DM is due unless it names `gone`, a player since turned off."""
+    """Summaries with no database, read at `now`: each logged as 7, and each
+    DM due unless it names `gone`, a player since turned off."""
 
-    NONCE_PREFIX = "summary-"
-
-    def __init__(self, gone: str | None) -> None:
+    def __init__(self, gone: str | None = None, now: datetime = RESET) -> None:
         self.gone = gone
+        self.now = lambda: now
         self.checked: list[tuple[str, ...]] = []
         self.finished: list[tuple[int, str]] = []
 
-    def claim(self, _delivery: Delivery) -> int:
+    def claim(self, _summary: Summary) -> int | None:
         return 7
 
-    def still_due(self, delivery: Delivery) -> bool:
-        self.checked.append(delivery.tags)
-        return self.gone not in delivery.tags
+    def still_due(self, _summary: Summary, tags: tuple[str, ...]) -> bool:
+        self.checked.append(tags)
+        return self.gone not in tags
 
-    def finish(self, delivery_id: int, state: str, _reason: str | None) -> None:
-        self.finished.append((delivery_id, state))
+    def finish(self, summary_id: int, state: str, _reason: str | None) -> None:
+        self.finished.append((summary_id, state))
+
+
+def _three_dms() -> Summary:
+    """A summary of three DMs naming #A, #B and #C."""
+    return Summary(1, "1", RESET, [
+        (Reply("one"), ("#A",)), (Reply("two"), ("#B",)), (Reply("three"), ("#C",)),
+    ])
 
 
 class _Discord:
@@ -183,31 +181,21 @@ class _Discord:
             raise Unreachable
 
 
-def _send_summary(gone: str | None) -> tuple[list[int], _Discord, _SummaryLog]:
-    """A summary of three DMs naming #A, #B and #C, sent by the alert loop,
-    then round by round until none waits."""
+def _send_summary(gone: str | None) -> tuple[int, _Discord, _SummaryLog]:
     log, discord = _SummaryLog(gone), _Discord()
-    loop = AlertLoop(_NoAlerts(), discord, SITE)  # type: ignore[arg-type]
-    delivery = Delivery(1, 0, "1", None, RESET, Reply("one"), log=log,  # type: ignore[arg-type]
-                        tags=("#A",), more=[(Reply("two"), ("#B",)), (Reply("three"), ("#C",))])
-
-    async def scenario() -> list[int]:
-        sent = [await loop._claim(delivery)]
-        while loop._waiting:
-            sent.append(await loop.tick())
-        return sent
-
-    return asyncio.run(scenario()), discord, log
+    sent = asyncio.run(SummaryLoop(log, discord).send(_three_dms()))  # type: ignore[arg-type]
+    return sent, discord, log
 
 
 def test_a_split_summary_sends_its_dms_in_order_each_with_its_own_nonce(monkeypatch) -> None:
     """Each DM of a summary has its own nonce, which never repeats an attack
     alert's; one Discord did not take is tried again with the same nonce
-    before the next is sent, each is checked as still due for the players it
-    names before it is tried, and the summary is logged sent once all went."""
-    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    before the next is sent, each DM after the first is checked as still due
+    for the players it names before it is tried and tried again, and the
+    summary is logged sent once all went."""
+    monkeypatch.setattr("bot.summaries.RETRY_SECONDS", 0.0)
     sent, discord, log = _send_summary(None)
-    assert sent == [1, 2]
+    assert sent == 3
     assert discord.tries == [
         ("summary-7-0", "one"), ("summary-7-1", "two"),
         ("summary-7-1", "two"), ("summary-7-2", "three"),
@@ -220,96 +208,76 @@ def test_a_summary_dm_naming_a_player_turned_off_is_not_sent(monkeypatch) -> Non
     """#B's summary goes off after the first DM is delivered: the DM naming
     #B, and the one after it, are not sent, and the summary is logged as
     not delivered."""
-    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    monkeypatch.setattr("bot.summaries.RETRY_SECONDS", 0.0)
     sent, discord, log = _send_summary("#B")
-    assert sent == [1]
+    assert sent == 1
     assert discord.tries == [("summary-7-0", "one")]
     assert log.finished == [(7, "failed")]
 
 
-class _TwoSummaries:
-    """Two Clashers' summaries due: the first's in two DMs, then the
-    second's, each due while the loop asks."""
-
-    NONCE_PREFIX = "summary-"
+class _TwoSummaries(_SummaryLog):
+    """Two Clashers' summaries due: the first's one DM, then the second's
+    two."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.ids = iter((7, 8))
-        self.finished: dict[int, str] = {}
 
-    def due(self) -> list[Delivery]:
+    def due(self) -> list[Summary]:
         return [
-            Delivery(1, 0, "1", None, RESET, Reply("first, one"), log=self, tags=("#A",),
-                     more=[(Reply("first, two"), ("#A",))]),
-            Delivery(2, 0, "2", None, RESET, Reply("second"), log=self, tags=("#B",)),
+            Summary(2, "2", RESET, [(Reply("first"), ("#B",))]),
+            Summary(1, "1", RESET, [
+                (Reply("second, one"), ("#A",)), (Reply("second, two"), ("#A",)),
+            ]),
         ]
 
     def prune(self) -> None:
         pass
 
-    def claim(self, _delivery: Delivery) -> int:
+    def claim(self, _summary: Summary) -> int | None:
         return next(self.ids)
-
-    def still_due(self, _delivery: Delivery) -> bool:
-        return True
-
-    def finish(self, delivery_id: int, state: str, _reason: str | None) -> None:
-        self.finished[delivery_id] = state
 
 
 class _SlowDiscord:
-    """Answers the second Clasher only after their DM's last moment."""
+    """Takes a second over Clasher 2's DMs and 0.2 seconds over any other."""
 
     def __init__(self) -> None:
         self.sent: list[str] = []
 
     async def send_dm(self, user: str, reply: Reply, _nonce: int | str, _left: float) -> None:
-        if user == "2":
-            await asyncio.sleep(1)
+        await asyncio.sleep(1 if user == "2" else 0.2)
         self.sent.append(reply.body)
 
 
-def test_a_slow_dm_to_one_clasher_does_not_cost_another_their_next_dm(monkeypatch) -> None:
-    """The first Clasher's first DM is delivered, then Discord takes longer
-    than the second Clasher's DM may wait: the first Clasher's second DM went
-    as soon as their first did, so only the second Clasher's is logged as not
-    delivered."""
-    monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 0.2)
-    summaries, discord = _TwoSummaries(), _SlowDiscord()
-    loop = AlertLoop(_NoAlerts(), discord, SITE, summaries=summaries)  # type: ignore[arg-type]
-
-    async def rounds() -> list[int]:
-        return [await loop.tick(), await loop.tick()]
-
-    assert asyncio.run(rounds()) == [2, 0]
-    assert discord.sent == ["first, one", "first, two"]
-    assert summaries.finished == {7: "sent", 8: "failed"}
+def test_each_summary_dm_has_its_own_time_from_its_own_first_try(monkeypatch) -> None:
+    """Each DM may wait 0.3 seconds. Discord takes longer than that over the
+    first Clasher's, which is logged as not delivered; it takes 0.2 seconds
+    over each of the second Clasher's two, 0.4 together, and both are
+    delivered in order, as each has its own time from its own first try."""
+    monkeypatch.setattr("bot.summaries.NONCE_SECONDS", 0.3)
+    log, discord = _TwoSummaries(), _SlowDiscord()
+    assert asyncio.run(SummaryLoop(log, discord).tick()) == 2  # type: ignore[arg-type]
+    assert discord.sent == ["second, one", "second, two"]
+    assert log.finished == [(7, "failed"), (8, "sent")]
 
 
 def test_a_summary_dm_is_cut_off_at_the_next_reset() -> None:
     """A summary DM first tried 0.2 seconds before the next Reset has those
     0.2 seconds, not 2 minutes: Discord taking a second is too late, and
     the summary is logged as not delivered."""
-    log, discord = _SummaryLog(None), _SlowDiscord()
-    until = RESET + timedelta(days=1)
-    loop = AlertLoop(_NoAlerts(), discord, SITE,  # type: ignore[arg-type]
-                     now=lambda: until - timedelta(seconds=0.2))
-    delivery = Delivery(2, 0, "2", None, RESET, Reply("late"), log=log,  # type: ignore[arg-type]
-                        tags=("#A",), until=until)
-    assert asyncio.run(loop._claim(delivery)) == 0
+    log = _SummaryLog(now=RESET + timedelta(days=1) - timedelta(seconds=0.2))
+    discord = _SlowDiscord()
+    summary = Summary(2, "2", RESET, [(Reply("late"), ("#A",))])
+    assert asyncio.run(SummaryLoop(log, discord).send(summary)) == 0  # type: ignore[arg-type]
     assert discord.sent == []
     assert log.finished == [(7, "failed")]
 
 
-class _DefenseSavedDuringSummaries:
-    """Attack alerts with no database: one defense, saved as the summaries
-    are read, its alert due for `window` seconds, as alerts are for 15
-    minutes."""
+class _OneAttack:
+    """Attack alerts with no database: one attack alert due until logged."""
 
-    def __init__(self, window: float) -> None:
-        self.window = window
-        self.saved_at: float | None = None
-        self.claimed = False
+    def __init__(self) -> None:
+        self.logged = False
 
     def prune(self) -> None:
         pass
@@ -318,7 +286,7 @@ class _DefenseSavedDuringSummaries:
         return []
 
     def due(self) -> list[dict]:
-        if self.saved_at is None or self.claimed:
+        if self.logged:
             return []
         return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
@@ -329,76 +297,86 @@ class _DefenseSavedDuringSummaries:
     def hit_rate(self, *_read: object) -> str:
         return "Unavailable"
 
-    def claim(self, _delivery: Delivery) -> int | None:
-        assert self.saved_at is not None
-        self.claimed = time.monotonic() < self.saved_at + self.window
-        return 3 if self.claimed else None
+    def claim(self, _delivery: object) -> int:
+        self.logged = True
+        return 3
 
     def finish(self, *_outcome: object) -> None:
         pass
 
 
-class _TenSummaries:
-    """Ten Clashers' summaries, each due until it is logged."""
-
-    NONCE_PREFIX = "summary-"
-
-    def __init__(self, alerts: _DefenseSavedDuringSummaries) -> None:
-        self.alerts = alerts
-        self.unsent = list(range(10, 20))
-
-    def due(self) -> list[Delivery]:
-        if self.alerts.saved_at is None:
-            self.alerts.saved_at = time.monotonic()
-        return [Delivery(account, 0, str(account), None, RESET, Reply(f"summary {account}"),
-                         log=self, tags=(f"#{account}",)) for account in self.unsent]
-
-    def prune(self) -> None:
-        pass
-
-    def claim(self, delivery: Delivery) -> int:
-        self.unsent.remove(delivery.account_id)
-        return delivery.account_id
-
-    def still_due(self, _delivery: Delivery) -> bool:
-        return True
-
-    def finish(self, *_outcome: object) -> None:
-        pass
-
-
-class _SlowSummaryDiscord:
-    """Takes 0.1 seconds over each summary DM."""
+class _HeldDiscord:
+    """Holds each summary DM until `release` is set, as if Discord took 100
+    seconds over each; an attack alert DM goes at once."""
 
     def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.holding = 0
         self.sent: list[str] = []
 
     async def send_dm(self, _user: str, reply: Reply, nonce: int | str, _left: float) -> None:
         if isinstance(nonce, str):
-            await asyncio.sleep(0.1)
+            self.holding += 1
+            await self.release.wait()
         self.sent.append(reply.title or reply.body)
 
 
-def test_slow_summaries_do_not_hold_an_attack_alert_past_its_window(monkeypatch) -> None:
-    """A defense is saved as 10 Clashers' summaries are read, each taking
-    Discord 0.1 seconds, and its alert is due for 0.6 seconds, as alerts are
-    for 15 minutes; sending all 10 first would take a second. The round
-    starts no summary once 0.25 seconds have gone on them, so the next
-    round sends the alert in time, and the rest of the summaries go in the
-    rounds after it, each once."""
-    monkeypatch.setattr("bot.alerts.SUMMARY_SECONDS", 0.0)
-    monkeypatch.setattr("bot.alerts.SUMMARY_BUDGET_SECONDS", 0.25)
-    alerts = _DefenseSavedDuringSummaries(window=0.6)
-    summaries, discord = _TenSummaries(alerts), _SlowSummaryDiscord()
-    loop = AlertLoop(alerts, discord, SITE, summaries=summaries)  # type: ignore[arg-type]
+def test_slow_summary_dms_do_not_delay_an_attack_alert() -> None:
+    """While a summary's first DM of three waits on Discord, the attack alert
+    loop sends an alert due at once through the same messenger; the
+    summary's DMs then arrive in order."""
+    log, discord = _SummaryLog(), _HeldDiscord()
+    alerts = AlertLoop(_OneAttack(), discord, SITE)  # type: ignore[arg-type]
+    summaries = SummaryLoop(log, discord)  # type: ignore[arg-type]
 
-    async def rounds() -> None:
-        while summaries.unsent:
-            await loop.tick()
+    async def scenario() -> tuple[int, list[str], int]:
+        sending = asyncio.create_task(summaries.send(_three_dms()))
+        while not discord.holding:
+            await asyncio.sleep(0)
+        alert_sent = await asyncio.wait_for(alerts.tick(), 1)
+        during = list(discord.sent)
+        discord.release.set()
+        return alert_sent, during, await sending
 
-    asyncio.run(rounds())
     alert = "Wanderer #2PP was attacked"
-    assert discord.sent.count(alert) == 1
-    assert sorted(title for title in discord.sent if title != alert) == [
-        f"summary {account}" for account in range(10, 20)
-    ]
+    assert asyncio.run(scenario()) == (1, [alert], 3)
+    assert discord.sent == [alert, "one", "two", "three"]
+    assert log.finished == [(7, "sent")]
+
+
+class _HeldClient:
+    """A Discord client whose DMs each wait for their own release."""
+
+    def __init__(self) -> None:
+        self.http = SimpleNamespace(max_ratelimit_timeout=None)
+        self.releases: dict[int, asyncio.Event] = {}
+
+    async def create_dm(self, user: SimpleNamespace) -> SimpleNamespace:
+        release = self.releases[user.id] = asyncio.Event()
+
+        async def send(**_message: object) -> None:
+            await release.wait()
+
+        return SimpleNamespace(send=send)
+
+
+def test_dms_sent_at_once_leave_the_clients_rate_limit_wait_as_it_was() -> None:
+    """An attack alert DM and a summary DM in flight together, each finishing
+    in the order it started, leave the client's own rate limit wait as it
+    was, not at either DM's time left, so command replies keep it."""
+    client = _HeldClient()
+    messenger = DiscordMessenger(client)  # type: ignore[arg-type]
+
+    async def scenario() -> None:
+        alert = asyncio.create_task(messenger.send_dm("1", Reply("alert"), 3, 60.0))
+        summary = asyncio.create_task(
+            messenger.send_dm("2", Reply("summary"), "summary-7-0", 120.0))
+        while len(client.releases) < 2:
+            await asyncio.sleep(0)
+        client.releases[1].set()
+        await alert
+        client.releases[2].set()
+        await summary
+
+    asyncio.run(scenario())
+    assert client.http.max_ratelimit_timeout is None

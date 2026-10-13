@@ -54,12 +54,12 @@ day on the player page. The numbers come from the player page's own read, so
 they match it. The end of day is the one the worker saved with that version
 of the day, as the Season page shows it, before any weekly or Season reset at
 that Reset, which is shown beside the change; it shows as Unavailable when the
-worker saved none. Every place in one
-round of summaries comes from the same version of that Daily board. A player
-whose day is not saved yet, or whom that board went without, is named as not
-finished; a player with no Legend day that day is left out, and an account
-with no finished day gets no DM. A summary too long for one message goes as
-several, each sent as soon as the one before is delivered.
+worker saved none. Every place in one round of summaries comes from the same
+version of that Daily board. A player whose day is not saved yet, or whom that
+board went without, is named as not finished; a player with no Legend day that
+day is left out, and an account with no finished day gets no DM. A summary too
+long for one message goes as several, in order, each sent as soon as the one
+before is delivered.
 
 - Each player's summary is on until turned off on the website's Discord
   alerts page, separately from its attack alerts. Each player turned off is
@@ -70,15 +70,15 @@ several, each sent as soon as the one before is delivered.
   makes the summaries late and they never compete with the Reset's own work.
   A day's summaries go out only until the next Reset, at most 10 accounts a
   minute: none is logged, and no DM tried, from the next Reset on.
-- Summaries are sent after each round's attack alerts. Once a round has spent
-  30 seconds sending summaries it starts no more; the rest wait for a later
-  round, so an attack alert waits for at most those 30 seconds and the one
-  summary then being sent.
+- Summaries have their own loop beside the attack alert loop, sending through
+  the same Discord connection, and their own database connection, so a slow
+  summary never holds up an attack alert.
 - Each summary is logged before its first DM and never sent twice, across
-  restarts too. A DM Discord did not take is tried again exactly as an attack
-  alert is. Before each DM, and each try again, the bot checks that every
-  player that DM names is still verified to the account with its summary on;
-  if one is not, that DM and the ones after it are not sent.
+  restarts too. A DM Discord did not take is tried again as an attack alert
+  is, within 2 minutes of that DM's own first try. Before each DM after the
+  first, and each try again, the bot checks that every player that DM names
+  is still verified to the account with its summary on; if one is not, that
+  DM and the ones after it are not sent.
 
 ## Go-live checklist
 

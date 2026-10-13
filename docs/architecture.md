@@ -85,8 +85,9 @@ after it is not made; the DM is then recorded as not delivered. Refusals are
 never tried again. So no DM Discord took is sent twice. The bot reads new
 defenses only through that migration's `clashlens_discord_attack_alerts_due`
 function, never the battle tables. Summaries read each player's day with the
-player page's own read, and only after the Reset's Daily board is published.
-Attack alerts and summaries run whenever the bot runs.
+player page's own read, and only after the Reset's Daily board is published;
+their own loop sends them beside the attack alert loop, so a slow summary
+never holds up an alert. Attack alerts and summaries run whenever the bot runs.
 The agreed Discord setup also uses a private incoming webhook for operator
 alerts and an existing ticket bot for support; neither needs the product
 database or archive. Isolate future integrations only where availability or
@@ -249,11 +250,12 @@ all. Their database connections are budgeted: each process's
 `--database-pool-size` is at most 16, and processes times (pool size plus the
 two maintenance connections and the maintenance lock's one) may not exceed
 38. With the collector's 32, the uploads process's 4, the API's 8, the
-Discord bot's 5 (its own pool under the API's database login: 4 for commands,
-1 for attack alerts) and two for operators, the application budget is 89 of
-PostgreSQL's 100 (checked on 8 October 2026); with the bot off it is 84. With
-the bot on, the 11 outside the budget, 8 ordinary plus the 3 reserved for
-superusers, stay free for maintenance and inspection.
+Discord bot's 6 (its own pool under the API's database login: 4 for commands,
+1 for attack alerts, 1 for Legend day summaries) and two for operators, the
+application budget is 90 of PostgreSQL's 100 (checked on 8 October 2026);
+with the bot off it is 84. With the bot on, the 10 outside the budget, 7
+ordinary plus the 3 reserved for superusers, stay free for maintenance and
+inspection.
 
 All threads in a process share its one `--database-pool-size` pool, which has
 at least one connection a thread: the worker refuses fewer, and the pool

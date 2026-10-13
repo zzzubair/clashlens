@@ -398,16 +398,20 @@ class ReplyView(_OwnedView):
 
 
 class DiscordMessenger:
-    """Sends attack alerts and Legend day summaries as normal DMs from the bot. discord.py waits out
-    Discord's rate limits before each request, tries a request again itself
-    after a rate limit or a server error, and gives up on one after aiohttp's
-    5 minutes, or at once on a rate limit longer than the DM's time left. The
-    alert loop cancels a DM still going at the end of its 2 minutes; one
-    cancelled in a global rate limit wait would leave that wait shut for
-    every later request, so it is opened again then."""
+    """Sends attack alerts and Legend day summaries as normal DMs from the
+    bot. discord.py waits out Discord's rate limits before each request, tries
+    a request again itself after a rate limit or a server error, and gives up
+    on one after aiohttp's 5 minutes, or at once on a rate limit longer than
+    the DM's time left. The alert and summary loops cancel a DM still going at
+    the end of its 2 minutes; one cancelled in a global rate limit wait would
+    leave that wait shut for every later request, so it is opened again then.
+    The two loops can send at once, so the client's own rate limit wait is
+    put back only once neither is sending."""
 
     def __init__(self, client: discord.Client) -> None:
         self.client = client
+        self._limit = client.http.max_ratelimit_timeout
+        self._sending = 0
 
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
@@ -417,7 +421,8 @@ class DiscordMessenger:
         for link in reply.links:
             view.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
         http = self.client.http
-        limit, http.max_ratelimit_timeout = http.max_ratelimit_timeout, time_left
+        http.max_ratelimit_timeout = time_left
+        self._sending += 1
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
             await channel.send(embed=embed, view=view, nonce=nonce)
@@ -438,7 +443,9 @@ class DiscordMessenger:
             log.warning("a DM could not reach Discord", exc_info=True)
             raise Unreachable from error
         finally:
-            http.max_ratelimit_timeout = limit
+            self._sending -= 1
+            if not self._sending:
+                http.max_ratelimit_timeout = self._limit
 
 
 def build_client(commands: Commands) -> tuple[discord.Client, app_commands.CommandTree]:

@@ -182,12 +182,13 @@ class Story:
 
     def reset(self, boundary: datetime,
               readings: dict[str, tuple[int | None, datetime | None]],
-              *, run: bool = True) -> None:
+              *, run: bool = True, no_log: tuple[str, ...] = ()) -> None:
         """The Reset sweep at ``boundary``: its members are the players in
         ``readings``, and it reads each one's profile, showing (trophies,
         Season or None for Season 0), and battle log 4 minutes after it. A
-        profile of None trophies was never answered: the collector gave it
-        up. Then, unless ``run`` is false, the worker runs until idle."""
+        profile of None trophies, or the battle log of a player in
+        ``no_log``, was never answered: the collector gave it up. Then,
+        unless ``run`` is false, the worker runs until idle."""
         at = boundary + READ_AFTER
         observations = {}
         with psycopg.connect(self.connection_info) as connection:
@@ -195,7 +196,7 @@ class Story:
                 player = self.players[tag]
                 for endpoint, body in (
                     ("profile", None if trophies is None else player.profile(trophies, season)),
-                    ("battle_log", player.log(at)),
+                    ("battle_log", None if tag in no_log else player.log(at)),
                 ):
                     # The worker claims each saved response's job in its own order.
                     observations[tag, endpoint] = None if body is None else store_observation(
@@ -218,7 +219,7 @@ class Story:
                 (boundary, list(members.values()), boundary),
             ).fetchone()[0]
             for tag, player_id in members.items():
-                profile = observations[tag, "profile"]
+                profile, log = observations[tag, "profile"], observations[tag, "battle_log"]
                 connection.execute(
                     """
                     INSERT INTO collector_work (
@@ -226,12 +227,12 @@ class Story:
                         coalescing_key, status, profile_status, battle_log_status,
                         profile_observation_id, battle_log_observation_id, completed_at
                     ) VALUES ('reset_baseline', 'reset', 'player', %s, %s, %s, %s,
-                              %s, %s, %s, 'observed', %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (player_id, tag, sweep, boundary, f"reset-{tag}-{boundary}",
-                     "complete" if profile else "failed",
-                     "observed" if profile else "failed", profile,
-                     observations[tag, "battle_log"], at if profile else None),
+                     "complete" if profile and log else "failed",
+                     "observed" if profile else "failed", "observed" if log else "failed",
+                     profile, log, at if profile and log else None),
                 )
         if run:
             self.run_worker()
