@@ -609,12 +609,13 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
         ]
     )
 
-    assert [event["battle_id"] for event in offense] == ["102", "99", "101", "100"]
+    # Oldest first, so the first battle of the Legend day is row 1.
+    assert [event["battle_id"] for event in offense] == ["100", "101", "99", "102"]
     # A disagreement battle stays visible on its row instead of being dropped.
-    assert offense[0]["perspective_disagreement"] is True
-    assert offense[1]["opponent"] == {"tag": "#2PP", "name": None}
-    assert offense[1]["perspective_disagreement"] is False
-    assert offense[2]["trophy_change"] == 40
+    assert offense[3]["perspective_disagreement"] is True
+    assert offense[2]["opponent"] == {"tag": "#2PP", "name": None}
+    assert offense[2]["perspective_disagreement"] is False
+    assert offense[1]["trophy_change"] == 40
     assert [event["battle_id"] for event in defense] == ["200"]
     assert defense[0]["trophy_change"] == -30
     assert defense[0]["perspective_disagreement"] is False
@@ -828,21 +829,21 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             assert season_days[0] is current_day
             assert current_day["offense_events"] == [
                 {
-                    "battle_id": "2",
-                    "battle_timestamp": "2026-08-06T11:00:00Z",
-                    "opponent": {"tag": "#8PY", "name": "Latest attack"},
-                    "destruction_percentage": 100,
-                    "stars": 3,
-                    "trophy_change": 40,
-                    "perspective_disagreement": False,
-                },
-                {
                     "battle_id": "1",
                     "battle_timestamp": "2026-08-06T10:00:00Z",
                     "opponent": {"tag": "#9Q2", "name": "Earlier attack"},
                     "destruction_percentage": 80,
                     "stars": 2,
                     "trophy_change": 30,
+                    "perspective_disagreement": False,
+                },
+                {
+                    "battle_id": "2",
+                    "battle_timestamp": "2026-08-06T11:00:00Z",
+                    "opponent": {"tag": "#8PY", "name": "Latest attack"},
+                    "destruction_percentage": 100,
+                    "stars": 3,
+                    "trophy_change": 40,
                     "perspective_disagreement": False,
                 },
             ]
