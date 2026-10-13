@@ -684,7 +684,9 @@ def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state,
                    next_start_trophies, failure_reasons
             FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
-        # Off the live board and its count, and on the promotion list.
+        # On the promotion list. One Legend II profile naming Season 0, which
+        # the parser marks conflict, does not stop tracking on its own: the
+        # next saved one does (test_conflict_eligibility_postgres).
         tracked = _rows(connection_info, f"""
             SELECT player.active, candidate.league_tier_id
             FROM players AS player LEFT JOIN promotion_candidates AS candidate
@@ -694,7 +696,7 @@ def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
         ended, final if next_start == "final" else next_start
     )
     assert ("player_not_eligible" not in days[boundary][2]) == monday_eligible
-    assert tracked == [(False, 105000035) if drop_at else (True, None)]
+    assert tracked == [(True, 105000035) if drop_at else (True, None)]
 
 
 def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(

@@ -253,6 +253,55 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                                  AND (newer_effect.observed_at, newer_effect.id)
                                      > (effect.observed_at, effect.id)
                            )
+                           -- A lower league the parser marked conflict, such
+                           -- as Legend II with Season ID 0, stops tracking only
+                           -- when an earlier lower-league answer was saved
+                           -- with no Legend I answer since it and no Legend
+                           -- battle after it. On 12 October 2026 one such
+                           -- answer hours after the Reset dropped 86 players,
+                           -- 15 of whom had played Legend battles that day.
+                           -- Real demotions answer Season ID 0 too, so the
+                           -- next saved answer, at latest the next Reset
+                           -- reading, drops them.
+                           AND CASE
+                               WHEN version.eligibility_state = 'eligible'
+                                 OR version.source_contract_state = 'accepted'
+                               THEN true
+                               ELSE EXISTS (
+                                   SELECT 1
+                                   FROM player_profile_effects AS earlier_effect
+                                   JOIN player_profile_versions AS earlier
+                                     ON earlier.id = earlier_effect.profile_version_id
+                                   WHERE earlier.player_id = version.player_id
+                                     AND earlier.eligibility_state = 'ineligible'
+                                     AND (earlier_effect.observed_at, earlier_effect.id)
+                                         < (effect.observed_at, effect.id)
+                                     AND NOT EXISTS (
+                                         SELECT 1
+                                         FROM player_profile_effects AS between_effect
+                                         JOIN player_profile_versions AS between_version
+                                           ON between_version.id = between_effect.profile_version_id
+                                         WHERE between_version.player_id = version.player_id
+                                           AND between_version.eligibility_state = 'eligible'
+                                           AND (between_effect.observed_at, between_effect.id)
+                                               > (earlier_effect.observed_at, earlier_effect.id)
+                                     )
+                                     AND NOT EXISTS (
+                                         SELECT 1
+                                         FROM legend_battles AS battle
+                                         JOIN battle_perspectives AS seen
+                                           ON seen.battle_id = battle.id
+                                         JOIN battle_evidence AS evidence
+                                           ON evidence.id = seen.evidence_id
+                                         -- Bounds the Reset-ordered key's scan.
+                                         WHERE battle.ranked_day_start
+                                               > earlier_effect.observed_at - interval '2 days'
+                                           AND version.player_id
+                                               IN (battle.attacker_player_id, battle.defender_player_id)
+                                           AND evidence.battle_timestamp > earlier_effect.observed_at
+                                     )
+                               )
+                           END
                            AND (
                                p.eligibility_state IS DISTINCT FROM version.eligibility_state
                                OR p.active IS DISTINCT FROM (version.eligibility_state = 'eligible')

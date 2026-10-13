@@ -41,7 +41,7 @@ def _player(info, tag="#2PP"):
         ).fetchone()[0]
 
 
-def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None):
+def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None, parser_version=None):
     payload = json.loads(PROFILE.read_bytes())
     payload["tag"] = tag
     payload["currentLeagueSeasonId"] = int(datetime(2026, 10, 5, 5, tzinfo=UTC).timestamp())
@@ -50,7 +50,7 @@ def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None):
     observation, job = store_observation(
         info, archive, occurrence_key=f"weekly:{tag}:{at.isoformat()}",
         endpoint="profile", body=json.dumps(payload).encode(), observed_at=at,
-        normalized_tag=tag,
+        normalized_tag=tag, parser_version=parser_version,
     )
     database, processor = _processor(info, archive)
     try:
@@ -456,7 +456,10 @@ def test_lower_tier_ends_tracking_but_an_unlisted_tier_never_does(
         database = _collector(info)
         try:
             database.begin_reset(MONDAY, local_regular_inflight=0)
-            _profile(info, archive_server, at=MONDAY + timedelta(seconds=5), tier=tier)
+            # The collector's own parser accepts this profile; one the parser
+            # marks conflict waits for a second (test_conflict_eligibility_postgres).
+            _profile(info, archive_server, at=MONDAY + timedelta(seconds=5), tier=tier,
+                     parser_version=PROFILE_PARSER_VERSION)
             with psycopg.connect(info) as connection:
                 row = connection.execute("SELECT active, eligibility_state FROM players").fetchone()
             assert (row[0], text(row[1])) == ((True, "eligible") if tracked else (False, "ineligible"))
