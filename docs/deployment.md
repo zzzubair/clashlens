@@ -1235,7 +1235,19 @@ backfill still last. So while both wait, the board's Reset work and live work,
 such as new responses and the new day's results, each get at least half of the
 jobs every thread claims, however recently the live work arrived. On
 2026-10-08 the rest still went by waiting time, so live responses that arrived
-after 05:09 waited 21 minutes behind the Reset backlog. Build claims always
+after 05:09 waited 21 minutes behind the Reset backlog. From each swept Reset
+until its Daily board first publishes, and never past 05:45 UTC
+(`RESET_FIRST_CAP` in
+[`background_pacing.py`](../python/src/clashlens/background_pacing.py)),
+threads that process no saved responses take Reset-priority work first on
+every claim, and no backfill or day recheck (priority 25 or 26) starts on any
+thread; response threads keep alternating. On 2026-10-13 the Reset's day
+results got 52% of those threads' jobs, the new day's live results 41% and
+background work 7%, and the board published at 05:46. The cap means a board
+that never publishes holds the new day's live results and background work back
+for at most 45 minutes. Each worker process logs a `reset_first_window` line
+when it sees the window start, and when it ends, with `reason` `published` or
+`cap`. Build claims always
 take Reset-priority work first, so the board's build and checks never wait
 behind an army build. Among live work, a claim looks at the 32 jobs that
 became due first and, separately, the 32 oldest jobs that already failed once,

@@ -54,13 +54,25 @@ live or Reset daily result runs. From
 none of about 50,000 background jobs had run, among them the day-end
 results of the day the Reset ended and the 23:00 recheck pass. Army
 re-decodes stay paused, as their battle locks are what held live work up.
+
+From each swept Reset until its Daily board publishes, and never past
+``RESET_FIRST_CAP`` after it, no background job starts, and lanes that
+claim no responses take Reset work first on every claim; response lanes
+keep taking it first on every other claim (``reset_first_claim``, owner
+decision, 13 Oct 2026). On 13 Oct the Reset's day results got 52% of those
+lanes, live day results 41% and background work 7%, and the board published
+at 05:46. The cap means a board that never publishes holds live day results
+and background work back for at most 45 minutes.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 
 from psycopg import ClientCursor
@@ -88,6 +100,57 @@ LIVE_LAG_SHARE = 0.05
 LIVE_COUNT_CAP = 200
 LOCK_STRAIN_SECONDS = 1
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
+# The Reset-first window ends at the latest this long after the Reset, 05:45 UTC.
+RESET_FIRST_CAP = timedelta(minutes=45)
+# The Reset whose window this process last saw open, to log when it ends.
+_open_window: list[datetime] = []
+_window_lock = Lock()
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def reset_first_claim(
+    connection: Any, work_types: Collection[str] | None, reset_first: bool | None,
+) -> tuple[bool, bool | None]:
+    """Whether this claim holds background work back, and its ``reset_first``:
+    in the Reset-first window, True for a lane that claims no responses."""
+    from .db import RESPONSE_WORK_TYPES
+
+    if not reset_first_window(connection):
+        return False, reset_first
+    return True, reset_first or not set(work_types or RESPONSE_WORK_TYPES) & set(RESPONSE_WORK_TYPES)
+
+
+def reset_first_window(connection: Any) -> bool:
+    """Whether the newest 05:00 UTC Reset was swept, has never published its
+    Daily board and is under ``RESET_FIRST_CAP`` old. Logs once a process
+    when it sees a window start and end."""
+    now = _now()
+    boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+    boundary -= timedelta(days=1) if boundary > now else timedelta(0)
+    # A correction can replace a published board, so its event counts too.
+    is_open = now < boundary + RESET_FIRST_CAP and connection.execute(
+        """
+        SELECT EXISTS (SELECT FROM collector_reset_sweeps WHERE boundary_at = %(at)s)
+           AND NOT EXISTS (SELECT FROM boundary_publication_generations
+                           WHERE boundary_at = %(at)s AND snapshot_state = 'published')
+           AND NOT EXISTS (SELECT FROM boundary_publication_events WHERE boundary_at = %(at)s)
+        """,
+        {"at": boundary},
+    ).fetchone()[0]
+    with _window_lock:
+        seen = _open_window[0] if _open_window else None
+        if is_open == (seen == boundary):
+            return is_open
+        _open_window[:] = [boundary] if is_open else []
+    event = {"event": "reset_first_window", "status": "started", "boundary_at": boundary.isoformat()}
+    if not is_open:
+        event.update(status="ended", boundary_at=seen.isoformat(),
+                     reason="cap" if now >= seen + RESET_FIRST_CAP else "published")
+    print(json.dumps(event), flush=True)
+    return is_open
 
 
 def background_floor(

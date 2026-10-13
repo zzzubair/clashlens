@@ -975,8 +975,7 @@ class Database:
         """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
         claims = self.claim_jobs(
             owner=owner, lease_seconds=lease_seconds, work_types=work_types,
-            job_ids=None if job_id is None else [job_id], planned=planned,
-            reset_first=reset_first,
+            job_ids=None if job_id is None else [job_id], planned=planned, reset_first=reset_first,
         )
         return claims[0] if claims else None
 
@@ -1010,6 +1009,7 @@ class Database:
                               if kind not in builds]
                 if not work_types:
                     return []
+            hold, reset_first = background_pacing.reset_first_claim(connection, work_types, reset_first)
             options = {
                 "supports_dependency": self._supports_dependency_deferral,
                 "denormalized_contract": self._supports_denormalized_contract,
@@ -1029,8 +1029,8 @@ class Database:
             if job_ids is None or (not rows and planned):
                 rows = claim(limit, planned=planned, backfill=())
                 floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
-                # Backfill fills only what live work leaves; see background_pacing.
-                lanes = [] if planned or (len(rows) >= limit and not floor) else background_lanes(
+                # Backfill fills only what live work leaves, none in the Reset-first window; see background_pacing.
+                lanes = [] if planned or hold or (len(rows) >= limit and not floor) else background_lanes(
                     connection, self._jobs_relation, self._supports_denormalized_contract,
                     supports_coordinator, self._supports_dependency_deferral, wait=not rows)
                 for priority, room in lanes or ():

@@ -173,11 +173,12 @@ confirmation. Players with no observation or confirmation time go first.
 Every fourth claim keeps the existing oldest-first order so daily results and
 other derived work keep moving; on a response-only thread, described below,
 that order covers responses only. If all planned claims are rejected, that call
-falls back to the existing order without refreshing the plan again. Every
-other job each thread claims takes Reset-priority work first, so on that turn
-its planned claim yields to Reset work it could take; on the other turn the
-planned claim goes ahead, so live pages keep moving during a Reset backlog;
-see [`deployment.md`](deployment.md).
+falls back to the existing order without refreshing the plan again. On a
+thread that processes responses, every other job it claims takes Reset-priority
+work first, so on that turn its planned claim yields to Reset work it could take;
+on the other turn the planned claim goes ahead, so live pages keep moving
+during a Reset backlog; see [`deployment.md`](deployment.md) for this and the
+other threads' turns.
 
 Worker threads share the newest-job plan. With `--run-forever` and more than
 one thread, response threads also share claims: one database transaction
@@ -190,7 +191,7 @@ within its lease. Derived threads share their own batches
 of daily results and redecodes the same way; a build is always claimed alone.
 One thread at a time claims each kind's next batch, so a process holds at most
 one unstarted batch of each kind, and each batch takes turns as a thread's
-single claims do: every other batch takes Reset-priority work first, and three
+single claims do, including which take Reset-priority work first, and three
 response batches in four start from the newest-job plan. A claim that waited
 half its lease in a batch, behind slow jobs such as army redecodes, has its
 lease renewed before it starts. When the worker stops, claims no thread
