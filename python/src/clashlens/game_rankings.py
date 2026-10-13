@@ -147,12 +147,14 @@ def score(
     reset: list[Row] | None,
     countries: dict[int, list[Row]],
     stuck: set[str],
+    readings: dict[str, int],
 ) -> dict[str, Any]:
     """Score one board, ``{tag: (position, trophies, confidence)}``, against the pulls.
 
     ``stuck`` are the game's stuck 5,000 rows; they and tags in two country
     lists are left out of every number and listed instead. Rank comparisons
     still use the published positions and trophies of the whole board.
+    ``readings`` are our newest saved trophies when each country list was pulled.
     """
     value = {tag: entry[1] for tag, entry in board.items()}
     position = {tag: entry[0] for tag, entry in board.items()}
@@ -176,11 +178,16 @@ def score(
                 pairs += 1
                 if value[higher.tag] < value[lower.tag]:
                     breaks += 1
-                    contradicted |= {higher.tag, lower.tag} & confirmed
+                    # An uncertain partner may be the wrong one, so only a
+                    # pair of confirmed entries contradicts either.
+                    if {higher.tag, lower.tag} <= confirmed:
+                        contradicted |= {higher.tag, lower.tag}
                 elif value[higher.tag] == value[lower.tag]:
                     tied += 1
                     tie_agree += position[higher.tag] < position[lower.tag]
-    legend_i = {row.tag for rows in countries.values() for row in rows if row.legend_i}
+    live = [row for rows in countries.values() for row in rows
+            if row.legend_i and row.tag in readings]
+    live_match = sum(row.trophies == readings[row.tag] for row in live)
     missing_active = sorted({
         row.tag
         for rows in countries.values()
@@ -210,8 +217,9 @@ def score(
         "s3_confirmed_entries_contradicted": len(contradicted),
         "s4_active_legend_i_missing": len(missing_active),
         "s4_tags": missing_active,
-        "s5_legend_i_on_board_percent": _percent(len(legend_i & board.keys()), len(legend_i)),
-        "legend_i_in_country_lists": len(legend_i),
+        "s5_live_trophies_match_percent": _percent(live_match, len(live)),
+        "live_trophies_compared": len(live),
+        "live_trophies_matched": live_match,
         "s6_uncertain_percent": _percent(uncertain, len(counted)),
         "uncertain_entries": uncertain,
         "board_entries": len(counted),
@@ -366,11 +374,12 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     expected = [] if locations is None else read_countries(locations.body)
     if locations is None:
         reasons.append("locations_missing")
-    countries = {}
+    countries, pulled_at = {}, {}
     for location_id, _code in expected:
         pull = _latest(pulls, "country", location_id)
         if pull is not None:
             countries[location_id] = read_rows(pull.body)
+            pulled_at[location_id] = pull.requested_at
     if len(countries) < len(expected):
         reasons.append(f"countries_missing:{len(expected) - len(countries)}")
     board = {str(row[2]): (int(row[3]), int(row[4]), str(row[5]))
@@ -379,10 +388,17 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
                       if row.legend_i and row.trophies == 5000 and row.attack_wins == 0})
+    # Our newest saved trophies when each board player's country list was pulled.
+    live = [(row.tag, pulled_at[location]) for location, rows in countries.items()
+            for row in rows if row.legend_i and row.tag in board]
     with database._connection() as connection:
         stuck = {str(tag) for (tag,) in connection.execute(
             "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s)",
             (at_5000, ranked_day_for(boundary).season_start, boundary),
+        )}
+        readings = {str(tag): int(trophies) for tag, trophies in connection.execute(
+            "SELECT * FROM clashlens_game_ranking_readings(%s, %s)",
+            ([tag for tag, _at in live], [at for _tag, at in live]),
         )}
     country_times = [pull.requested_at for pull in pulls if pull.purpose == "country"]
     result = {
@@ -400,6 +416,7 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             None if reset is None else read_rows(reset.body),
             countries,
             stuck,
+            readings,
         ),
     }
     with database._connection() as connection, connection.transaction():

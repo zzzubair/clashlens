@@ -200,16 +200,27 @@ their attack and defense counts, so the stored battles are the evidence.
 Order comparisons still use every published board position. A
 `previousRank` of 0 or less counts as unknown. Each score also saves the
 board's own measured coverage, the share of our eligible players it holds,
-as `board_measured_coverage`, separate from S5's coverage of the game's lists.
+as `board_measured_coverage`, separate from S4's players in the game's lists
+missing from our board. S5 compares each board player's trophies in a country list with
+our newest saved profile reading at the moment that list was pulled, through
+one read-only lookup the collector's login may call (migration 0109); a
+player with no saved reading by then is not compared.
 
 | score | meaning | 11 Oct 2026 board |
 |---|---|---:|
 | S1 | same-country order breaks per 100,000 pairs of Legend I players on the board | 116.8 |
 | S2 | global top 200 whose Reset rank falls inside the board positions of their trophy count | 164 |
-| S3 | confirmed board entries in at least one same-country pair the game orders the other way, each counted once | not measured |
+| S3 | confirmed board entries in at least one same-country pair of two confirmed entries the game orders the other way, each counted once; a pair with an uncertain entry is not counted, since that entry may be the wrong one | not measured |
 | S4 | Legend I players in country lists not on the board, not at 5,000 with 0 attack wins | 9 at the 14:07 pull |
-| S5 | percent of Legend I players in country lists who are on the board | 91.46 |
+| S5 | percent of board players in country lists whose list trophies equal our newest saved reading at the pull; the bar is at least 95% | not measured |
 | S6 | percent of board entries, faults left out, marked uncertain | not measured |
+
+Scores saved before migration 0109 deployed used the old S3, which also
+counted confirmed entries whose breaks were all with uncertain ones, and the
+old S5, the percent of the lists' Legend I players on the board, saved as
+`s5_legend_i_on_board_percent`. They are kept as they were, not recalculated.
+Every score saved after it deploys, starting with the first Reset scored then,
+uses the definitions above and saves `s5_live_trophies_match_percent`.
 
 The score also counts exact global ranks, tied pairs and how often the
 board's order inside a tie matches the game's, and how many 05:00:30 global
@@ -219,9 +230,11 @@ that day's board against the lists pulled at 13:56-14:07 UTC: 342,472 pairs,
 3 tags in two countries, matching the 11 October blind review. S3 and S6 need
 the board's confidence labels, which that export did not have; S4 counts 8
 players who signed up after that Reset, which a pull at about 05:20 mostly
-avoids. S4 and S5 there are from before S4 stopped requiring a known Reset
-rank and before the stuck rows left S5; they have not been re-run, nor has
-the stuck-row count under the stored-battle rule.
+avoids. S4 there is from before S4 stopped requiring a known Reset rank; it
+has not been re-run, nor has the stuck-row count under the stored-battle rule.
+That export also had no saved readings at each pull time, so S5 isn't measured
+there; the 11 October investigation's own comparison of live trophies matched
+5,855 of 6,057 players (96.7%).
 
 `podman exec clashlens-collector python -m clashlens.cli game-ranking-score
 --database-url-file /run/secrets/database-url [--days 14]` prints one JSON
