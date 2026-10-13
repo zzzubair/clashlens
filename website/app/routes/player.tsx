@@ -12,6 +12,7 @@ import {
 } from "react-router";
 
 import { usePlayerLookupEvent } from "../components/Analytics";
+import { ArmyPortraits } from "../components/ArmyPortraits";
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -27,6 +28,7 @@ import {
   useCurrentTime,
   useServerTime,
 } from "../components/Provenance";
+import type { ArmyUnitNames } from "../lib/army";
 import { pageMeta } from "../lib/blog";
 import {
   dayEnd,
@@ -1269,12 +1271,14 @@ function LegendDay({
           events={day.offenseEvents}
           day={dayKey}
           dayLabel={dayLabel}
+          units={player.armyUnits ?? {}}
         />
         <BattleColumn
           title="Defenses"
           events={day.defenseEvents}
           day={dayKey}
           dayLabel={dayLabel}
+          units={player.armyUnits ?? {}}
         />
       </div>
     </details>
@@ -1295,12 +1299,22 @@ function BattleColumn({
   events,
   day,
   dayLabel,
+  units,
 }: {
   title: "Attacks" | "Defenses";
   events: RankedBattleEvent[];
   day: string;
   dayLabel: string;
+  units: ArmyUnitNames;
 }) {
+  // Each army stays one tap away, so the battle's result leads the card.
+  const [shownArmies, setShownArmies] = useState<ReadonlySet<string>>(new Set());
+  const toggleArmy = (battleId: string) =>
+    setShownArmies((shown) => {
+      const next = new Set(shown);
+      if (!next.delete(battleId)) next.add(battleId);
+      return next;
+    });
   return (
     <section className="battle-column" aria-label={title}>
       <h3>{title}</h3>
@@ -1347,15 +1361,33 @@ function BattleColumn({
                 <span className="battle-disagreement">Result awaiting confirmation</span>
               ) : null}
               {event.armyShareCode ? (
-                <a
-                  className="battle-army"
-                  href={`https://link.clashofclans.com/en?action=CopyArmy&army=${encodeURIComponent(event.armyShareCode)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={`Copy army from the battle against ${event.opponent.name ?? event.opponent.tag}, opens in a new tab`}
-                >
-                  Copy army
-                </a>
+                <span className="battle-actions">
+                  <button
+                    type="button"
+                    className="battle-army"
+                    aria-expanded={shownArmies.has(event.battleId)}
+                    aria-controls={`army-${event.battleId}`}
+                    onClick={() => toggleArmy(event.battleId)}
+                  >
+                    {shownArmies.has(event.battleId) ? "Hide army" : "Show army"}
+                  </button>
+                  <a
+                    className="battle-army"
+                    href={`https://link.clashofclans.com/en?action=CopyArmy&army=${encodeURIComponent(event.armyShareCode)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Copy army from the battle against ${event.opponent.name ?? event.opponent.tag}, opens in a new tab`}
+                  >
+                    Copy army
+                  </a>
+                </span>
+              ) : null}
+              {event.armyShareCode && shownArmies.has(event.battleId) ? (
+                <ArmyPortraits
+                  id={`army-${event.battleId}`}
+                  code={event.armyShareCode}
+                  names={units}
+                />
               ) : null}
             </li>
           ) : (

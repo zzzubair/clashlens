@@ -1174,6 +1174,13 @@ HEAVY_ARMY = {
 }
 
 
+# A Legend attack's Copy army code as the battle log saved it on 13 Oct 2026.
+REAL_ARMY_CODE = (
+    "h0p9e14_32-1p3e17_48-2p16e5_24-7p4e52_53i1x5-2x58-1x64d1x70-1x98"
+    "u5x55-9x132-5x7-2x5-1x58-3x109-1x135-4x1-2x28s1x9-3x10-4x120-1x17-1x5-1x35"
+)
+
+
 # A full Season is the worst case.
 @pytest.mark.parametrize("days", [5, 28])
 def test_busiest_player_page_stays_well_under_the_response_limit(
@@ -1208,7 +1215,7 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
                             "destruction_percentage": 100,
                             "stars": 3,
                             "trophy_change": 40 if lens == "offense" else -40,
-                            "army_share_code": "u" + "1x2" * 20,
+                            "army_share_code": REAL_ARMY_CODE,
                         }
                         for slot in range(16)
                         for lens in ["offense" if slot < 8 else "defense"]
@@ -1266,7 +1273,13 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
             ]
             assert screen["current_day_start"] == screen["days"][0]["ranked_day_start"]
             # Every battle still reaches the page with its Copy army code, but
-            # not the decoded army the page never shows.
+            # not a decoded army: the page draws it from the code, with each
+            # unit named once per page.
+            assert screen["army_units"]["troop:132"] == {"name": "Thrower", "siege": False}
+            assert screen["army_units"]["troop:135"] == {
+                "name": "Troop Launcher", "siege": True}
+            assert screen["army_units"]["equipment:53"]["name"] == "Rocket Backpack"
+            assert len(screen["army_units"]) == 34
             assert all(
                 len(day["offense_events"]) == len(day["defense_events"]) == 8
                 and all(event["army_share_code"] and "army" not in event for event in

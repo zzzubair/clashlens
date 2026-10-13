@@ -324,7 +324,9 @@
 }
 .player-page .battle-slots {
   gap: 0;
-  grid-auto-rows: 1fr;
+  /* An opened army grows only its own card. */
+  grid-auto-rows: auto;
+  align-content: start;
 }
 .player-page .battle-slot {
   display: grid;
@@ -389,10 +391,13 @@
 .player-page .battle-score strong {
   font-size: 1rem;
 }
-.player-page .battle-army {
+.player-page .battle-actions {
+  display: flex;
   grid-column: 3;
   grid-row: 2;
   justify-self: end;
+}
+.player-page .battle-army {
   min-height: 2.75rem;
   margin: 0;
   padding: 0 0.45rem;
@@ -400,6 +405,82 @@
   border: 0;
   text-decoration: underline;
   text-underline-offset: 0.18em;
+}
+/* The army a battle used, below its result: troops, siege machines and
+   spells, then Clan Castle units; heroes with equipment and pet below. */
+.player-page .army-portraits {
+  display: grid;
+  grid-column: 2 / -1;
+  grid-row: 4;
+  gap: 0.3rem;
+  padding-bottom: 0.6rem;
+}
+.player-page :is(.army-row, .army-castle, .army-hero) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem;
+}
+.player-page .army-unit {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  background: var(--cl-panel);
+  border-radius: 0.3rem;
+}
+.player-page .army-unit img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+.player-page .army-unit-small {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+.player-page .army-unit-name {
+  width: auto;
+  max-width: 6rem;
+  padding: 0 0.3rem;
+  color: var(--cl-muted);
+  font-size: 0.625rem;
+  line-height: 1.1;
+}
+.player-page .army-unit-name > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-page .army-count {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 0.9rem;
+  padding: 0 0.15rem;
+  color: #fff;
+  background: rgb(0 0 0 / 78%);
+  border-radius: 0.3rem 0 0.3rem 0;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 0.9rem;
+  text-align: center;
+}
+.player-page .army-castle {
+  padding-left: 0.35rem;
+  border-left: 1px solid var(--cl-border);
+}
+.player-page .army-castle-label {
+  color: var(--cl-muted);
+  font-size: 0.625rem;
+  font-weight: 700;
+}
+.player-page .army-hero {
+  gap: 0.1rem;
+  padding: 0.1rem 0.25rem 0.1rem 0.1rem;
+  background: color-mix(in srgb, var(--cl-panel) 60%, transparent);
+  border-radius: 0.4rem;
 }
 .player-page .legend-day > .section-note {
   margin: 0;
@@ -742,9 +823,17 @@
   .player-page .battle-score > * {
     padding-left: 0;
   }
-  .player-page .battle-army {
+  .player-page .battle-actions {
     grid-column: 3;
     grid-row: 2;
+  }
+  .player-page .army-unit:not(.army-unit-name) {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+  .player-page .army-unit-small:not(.army-unit-name) {
+    width: 1.3rem;
+    height: 1.3rem;
   }
   .analytics-page .analytics-table tr > th:first-child {
     position: sticky;

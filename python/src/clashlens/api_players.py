@@ -24,6 +24,8 @@ from .api_db import (
     _text,
     _withhold_unsupported_entries,
 )
+from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
+from .catalog import unit_label
 from .domain import (
     SEASON_DURATION,
     DomainRuleError,
@@ -229,8 +231,8 @@ def get_player_page(
             (day[20].astimezone(UTC) for day in daily_rows), default=None
         )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
-        # The page never shows decoded armies; Copy army uses each event's
-        # army_share_code, and the army routes read the saved decodes.
+        # Events keep only the army_share_code: the page draws each army
+        # from it, with army_units naming every unit once per page.
         screen_days = [
             _screen_daily_log_with_events(day, public_confidence, now)
             for day in map(_daily_log, daily_rows)
@@ -443,6 +445,7 @@ def get_player_page(
                     ].isoformat(),
                 },
                 "data_quality": data_quality,
+                "army_units": _army_units(days.values()),
                 "provenance": {
                     "source": "api_player_daily_logs",
                     "observed_at": observed_at.isoformat(),
@@ -461,6 +464,27 @@ def get_player_page(
                 },
             },
         }
+
+
+def _army_units(days: Any) -> dict[str, dict[str, Any]]:
+    """Each unit in the listed battles' armies, by its saved id: its name and
+    whether the army shows it as a siege machine, as the decoder sorts them."""
+    ids: set[str] = set()
+    for day in days:
+        for event in (*day["offense_events"], *day["defense_events"]):
+            army = decode_army_share_code(event.get("army_share_code"))
+            if not isinstance(army, DecodedArmy):
+                continue
+            for fact in (*army.home_troops, *army.cc_troops, *army.spells, *army.siege):
+                ids.add(fact.typed_id)
+            for hero in army.heroes:
+                ids.update((hero.hero_typed_id, *hero.equipment_typed_ids))
+                if hero.pet_typed_id is not None:
+                    ids.add(hero.pet_typed_id)
+    return {
+        typed_id: {"name": unit_label(typed_id), "siege": typed_id in SIEGE_TROOP_IDS}
+        for typed_id in sorted(ids)
+    }
 
 
 def player_cards(
