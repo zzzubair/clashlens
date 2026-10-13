@@ -32,7 +32,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, domain
+from . import db, domain, reconcile_pass
 from .background_pacing import (
     DAY_RECHECK_PRIORITY,
     LIVE_LAG_MIN_JOBS,
@@ -312,13 +312,18 @@ def due_recheck_slot(
 
 
 class DailyRecheck:
-    """Run the twice-daily recheck from the worker loop, logging its count."""
+    """Run the twice-daily recheck from the worker loop, logging its count,
+    and after each the reconcile pass (``reconcile_pass``), a batch a call."""
 
     def __init__(self, database: db.Database) -> None:
         self.database, self.next_check_at, self.done = database, float("-inf"), set()
+        self.reconcile_pass = reconcile_pass.ReconcilePass(database)
 
     def run_when_due(self, now: datetime | None = None) -> None:
-        if not isinstance(self.database, db.Database) or monotonic() < self.next_check_at:
+        if not isinstance(self.database, db.Database):
+            return
+        self.reconcile_pass.run_when_due(self.done, now)
+        if monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
         with self.database.pool.connection() as connection:
