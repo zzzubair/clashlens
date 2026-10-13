@@ -2,7 +2,7 @@ import type { ListedGroup, GroupPlayer } from "../lib/account-contracts";
 import { MAX_GROUP_TAGS } from "../lib/account-validation";
 import type { PlayerLookup } from "../lib/contracts";
 import { addGroupPlayer, checkPlayerTag } from "./group-players.server";
-import type { GoogleAccountIdentity, GroupPage } from "./python.server";
+import type { GoogleAccountIdentity } from "./python.server";
 
 // Adding one player to a group, shared by Your groups and Add to group.
 
@@ -62,7 +62,6 @@ export async function addToGroup(
   group: ListedGroup,
   tag: string,
   idempotencyKey: string,
-  page: GroupPage,
 ): Promise<AddToGroupResult> {
   const member = group.players.find((player) => player.tag === tag);
   if (member !== undefined) {
@@ -75,7 +74,7 @@ export async function addToGroup(
   try {
     return {
       status: 200,
-      player: await addGroupPlayer(identity, group.groupId, tag, idempotencyKey, page),
+      player: await addGroupPlayer(identity, group.groupId, tag, idempotencyKey),
     };
   } catch (cause) {
     const { status, payload } = cause as { status?: number; payload?: unknown };

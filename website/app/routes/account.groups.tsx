@@ -199,7 +199,6 @@ export async function action({ request, context }: Route.ActionArgs) {
       const created = await client.createGroup(
         { name: normalizedName as string },
         idempotencyKey,
-        "groups",
       );
       throw redirect(`/account/groups#group-${created.groupId}`);
     } else if (actionMode === "update") {
@@ -227,7 +226,6 @@ export async function action({ request, context }: Route.ActionArgs) {
         group,
         tag as string,
         idempotencyKey,
-        "groups",
       );
       return "player" in added
         ? reply(200, { notice: addedNotice(added.player) })

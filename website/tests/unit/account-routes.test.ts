@@ -925,7 +925,6 @@ describe("account routes", () => {
       expect(client.createGroup).toHaveBeenCalledWith(
         { name: "Clanmates" },
         IDEMPOTENCY_KEY,
-        "groups",
       );
 
       const renamed = await groupsAction({

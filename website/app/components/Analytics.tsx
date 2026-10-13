@@ -177,20 +177,23 @@ export function usePlayerLookupEvent(
   lookup: PlayerLookup | null,
 ) {
   const { pathname } = useLocation();
+  const accepted = useAnalyticsChoice() === "accepted";
   const state = lookupOutcome(requestedTag, trackedPlayer, lookup);
   useEffect(() => {
+    if (!accepted) return;
     const keys = countedOn(pathname);
     if (keys.has(`lookup ${state}`)) return;
     keys.add(`lookup ${state}`);
     track("player_lookup_result", { state });
-  }, [pathname, state]);
+  }, [accepted, pathname, state]);
 }
 
 /** Counts an error page once it shows. */
 export function useErrorEvent(notFound: boolean) {
+  const accepted = useAnalyticsChoice() === "accepted";
   useEffect(() => {
-    track("ui_error", { kind: notFound ? "not_found" : "error" });
-  }, [notFound]);
+    if (accepted) track("ui_error", { kind: notFound ? "not_found" : "error" });
+  }, [accepted, notFound]);
 }
 
 /** The Accept or Decline question; hidden while visitor counting is not configured. */

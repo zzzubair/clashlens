@@ -122,10 +122,14 @@ test("asks first, counts only after Accept without player tags, and remembers th
   expect(requests.filter((url) => /posthog|module\.slim/i.test(url))).toEqual([]);
   expect(await storedKeys(page)).toEqual([]);
 
-  // Accepting counts the page it was made on, with a browser ID kept here.
+  // Accepting counts the page it was made on, and the lookup it already showed,
+  // with a browser ID kept here.
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await expect(banner(page)).toHaveCount(0);
   await expect.poll(() => sent("$pageview").length).toBe(1);
+  await expect
+    .poll(() => sent("player_lookup_result").map(({ properties }) => properties.route))
+    .toEqual(["player"]);
   const [player] = sent("$pageview");
   expect(player.properties).toMatchObject({
     route: "player",

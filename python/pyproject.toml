@@ -8,7 +8,6 @@ dependencies = [
   "discord.py==2.7.1",
   "fastapi==0.141.1",
   "minio==7.2.20",
-  "posthog==7.60.1",
   "psycopg[binary,pool]==3.3.4",
   "pydantic==2.13.4",
   "urllib3==2.8.0",

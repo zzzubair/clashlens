@@ -1123,7 +1123,7 @@ def test_blog_folder_is_mounted_read_only_only_when_configured(
 
 
 @pytest.mark.parametrize("configured", [False, True])
-def test_visitor_counting_settings_reach_website_and_api_only_when_set(
+def test_visitor_counting_token_reaches_only_the_website_and_only_when_set(
     tmp_path, mode_config, configured
 ):
     settings = ["CLASHLENS_POSTHOG_TOKEN=phc_projecttokenprojecttoken"]
@@ -1139,7 +1139,7 @@ def test_visitor_counting_settings_reach_website_and_api_only_when_set(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    for name in ("website.env", "api.env"):
+    expected = {"website.env": settings if configured else [], "api.env": []}
+    for name, lines in expected.items():
         environment = (tmp_path / "state" / "clashlens" / "env" / name).read_text()
-        lines = [line for line in environment.splitlines() if "POSTHOG" in line]
-        assert lines == (settings if configured else [])
+        assert [line for line in environment.splitlines() if "POSTHOG" in line] == lines

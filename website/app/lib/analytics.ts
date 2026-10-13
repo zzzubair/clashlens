@@ -26,7 +26,7 @@ import type {
 import { normalizePlayerTag } from "./player-tag";
 
 /** PostHog Cloud EU, in Frankfurt; the only place counts are sent. */
-export const POSTHOG_HOST = "https://eu.i.posthog.com";
+const POSTHOG_HOST = "https://eu.i.posthog.com";
 
 export interface AnalyticsSettings {
   token: string;
@@ -430,8 +430,9 @@ export function askingForChoice(): boolean {
 // Deletes everything PostHog keeps in this browser: its ID and its own record
 // of the choice.
 function forgetPostHog(): void {
-  for (const storage of [window.localStorage, window.sessionStorage]) {
+  for (const name of ["localStorage", "sessionStorage"] as const) {
     try {
+      const storage = window[name];
       for (const key of Object.keys(storage)) {
         if (key.startsWith("ph_") || key.startsWith("__ph_")) storage.removeItem(key);
       }

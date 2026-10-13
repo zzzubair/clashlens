@@ -38,7 +38,6 @@ import type { WebsiteConfig } from "./config.server";
 import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
 import type { OAuthTransaction } from "./google-oidc.server";
 import type { LoginProviderIdentity } from "../services/python.server";
-import { countSignInStep } from "./usage-events.server";
 import type { UNSAFE_DataWithResponseInit as DataWithResponseInit } from "react-router";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -77,36 +76,15 @@ export type CallbackOutcome = CallbackErrorView | SuccessRedirect;
  * handling, intents, account dispatch) is shared. The signed transaction is
  * bound to this route's provider: a transaction minted by the other
  * authorize route is rejected, and every outcome clears the transaction
- * cookie. A callback whose signed transaction is a sign-in counts as a
- * returned sign-in, then as succeeded or failed; linking and removing
- * connections are not counted.
+ * cookie.
  */
 export async function completeProviderCallback(
   request: Request,
   provider: "google" | "discord",
-  validate: Validate,
-): Promise<CallbackOutcome> {
-  let signingIn = false;
-  const outcome = await completeCallback(request, provider, validate, () => {
-    signingIn = true;
-    countSignInStep(provider, "returned");
-  });
-  if (signingIn) {
-    countSignInStep(provider, outcome.kind === "redirect" ? "succeeded" : "failed");
-  }
-  return outcome;
-}
-
-type Validate = (
-  params: Record<string, string>,
-  transaction: OAuthTransaction,
-) => Promise<LoginProviderIdentity>;
-
-async function completeCallback(
-  request: Request,
-  provider: "google" | "discord",
-  validate: Validate,
-  signInReturned: () => void,
+  validate: (
+    params: Record<string, string>,
+    transaction: OAuthTransaction,
+  ) => Promise<LoginProviderIdentity>,
 ): Promise<CallbackOutcome> {
   let config: WebsiteConfig;
   try {
@@ -136,7 +114,6 @@ async function completeCallback(
   if (transaction === null || transaction.provider !== provider) {
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
-  if (transaction.intent === "login") signInReturned();
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   let session: LoginSession | null = null;

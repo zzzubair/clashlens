@@ -59,8 +59,9 @@ accepted even in the same second as the removal; cookies from before that field
 count from the start of their second. The backend sends the login's sign-in
 time, the first cookie's issue time, with each check for this, so the website
 and the API must be deployed together. The browser talks only to that backend,
-apart from optional anonymous visitor counts sent to PostHog
-([deployment](deployment.md#production-configuration)). Neither the browser nor TypeScript may access PostgreSQL or
+apart from optional visitor counts sent to PostHog only after the visitor
+accepts ([deployment](deployment.md#production-configuration)); no server sends
+anything to PostHog. Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.
 

@@ -175,7 +175,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       );
       if (refusal !== null)
         return reply(refusal.status, { fieldErrors: { tag: refusal.tagError } });
-      const created = await client.createGroup({ name }, createKey, "group_add");
+      const created = await client.createGroup({ name }, createKey);
       group = { ...created, players: [] };
     } else {
       group = groups.find((row) => row.groupId === values.groupId);
@@ -188,14 +188,7 @@ export async function action({ request, context }: Route.ActionArgs) {
         });
       }
     }
-    const added = await adding.addToGroup(
-      identity,
-      clientAddress,
-      group,
-      tag,
-      addKey,
-      "group_add",
-    );
+    const added = await adding.addToGroup(identity, clientAddress, group, tag, addKey);
     if (!("player" in added)) {
       const tagError = creating
         ? `Created ${group.name}, but: ${added.tagError}`

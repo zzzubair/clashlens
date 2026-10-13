@@ -490,12 +490,14 @@ Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only
 send events) is set in `app.env`. Counts go only to PostHog's EU cloud,
 `https://eu.i.posthog.com`; the address is fixed in the code. `./ops` passes
-the token to the website and the private API in production only, so turning
-counting on or off takes `./ops up`. Never put a personal API key (`phx_`)
-here. Even then, a visitor's browser loads PostHog only after they accept the
-analytics question shown at the bottom of the page; declining loads nothing.
-The `/privacy` page explains the counting, and both it and the site footer's
-Analytics choices button reopen the question.
+the token to the website in production only, so turning counting on or off
+takes `./ops up`; the website hands it to the browser and sends nothing to
+PostHog itself, and the private API never receives it. Never put a personal
+API key (`phx_`) here. Even then, PostHog runs only in a visitor's browser and
+only after they accept the analytics question shown at the bottom of the page;
+declining loads nothing and sends nothing. The `/privacy` page explains the
+counting, and both it and the site footer's Analytics choices button reopen
+the question.
 
 Before setting the token, confirm in the PostHog project's settings that
 discarding client IP data is switched on. Without it PostHog stores each

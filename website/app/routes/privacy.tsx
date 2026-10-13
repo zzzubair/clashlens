@@ -90,14 +90,12 @@ export default function Privacy() {
       </section>
 
       <section aria-labelledby="privacy-server">
-        <h2 id="privacy-server">Accounts and groups</h2>
+        <h2 id="privacy-server">Our server</h2>
         <p>
-          When someone signs in, creates an account or a group, or adds or removes a group
-          player, our server sends PostHog a count with no account, name or group details,
-          only which page it happened on and whether a sign-in used Google or Discord and
-          how far it got. If you sign in with Google or Discord, we keep that
-          service&apos;s ID for your account, never your email address, so you can sign
-          back in. Visitor counts never use it.
+          Our server sends nothing to PostHog; only your browser does, and only after you
+          accept. If you sign in with Google or Discord, we keep that service&apos;s ID
+          for your account, never your email address, so you can sign back in. Visitor
+          counts never use it.
         </p>
       </section>
 
@@ -112,11 +110,9 @@ export default function Privacy() {
       <section aria-labelledby="privacy-rights">
         <h2 id="privacy-rights">How long, and your rights</h2>
         <p>
-          We count visits in your browser only with your consent, which you can withdraw
-          at any time as above. The server&apos;s account and group counts rely on our
-          legitimate interest in improving Clash Lens. Our PostHog plan keeps events for
-          one year. Under UK data protection law you can ask to see or delete data about
-          you, or object to its use: email{" "}
+          We count visits only with your consent, which you can withdraw at any time as
+          above. Our PostHog plan keeps events for one year. Under UK data protection law
+          you can ask to see or delete data about you, or object to its use: email{" "}
           <a href="mailto:privacy@clashlens.net">privacy@clashlens.net</a>, or ask us on{" "}
           <a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
             our Discord server
