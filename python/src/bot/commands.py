@@ -132,7 +132,7 @@ class Commands:
         else:
             cards = self.store.players(account, now)
             if not cards:
-                return replies.no_players(self.site, account.username)
+                return replies.name_a_player()
             tag = self._default(account, cards)
             if tag is None:
                 return replies.which_player(self.site, account.username, cards, "stats")

@@ -386,12 +386,15 @@ def test_help_link_and_alerts_show_a_connected_accounts_settings(store) -> None:
     assert links(alerts) == {"Change settings": "https://clashlens.test/account/discord-alerts"}
 
 
-def test_connected_account_without_players_is_pointed_to_the_website(store) -> None:
+def test_connected_account_without_players_is_asked_for_a_player_on_stats(store) -> None:
     store.connect(ME, [])
     message = run_command(store, "stats", FakeInteraction(), player=None)
-    assert "Link a Clash of Clans account on Clash Lens" in message["text"]
-    assert "API token" not in message["text"]
-    assert links(message) == {
+    # /stats never asks to link or use Clash Lens, connected or not.
+    assert message["text"].startswith("Type a player tag or name after /stats")
+    assert links(message) == {}
+    linked = run_command(store, "link", FakeInteraction())
+    assert "Link a Clash of Clans account on Clash Lens" in linked["text"]
+    assert links(linked) == {
         "Link an account on Clash Lens": "https://clashlens.test/account/verify-player"
     }
 

@@ -241,8 +241,8 @@ def not_linked(
 
 
 def name_a_player() -> Reply:
-    """/stats with no player from someone whose Discord is not connected:
-    which player to look up, never a sign-up."""
+    """/stats with no player from someone with no linked account to show:
+    which player to look up, never a sign-up or a link."""
     return say(
         "Type a player tag or name after /stats to look them up, like "
         "`/stats #2PP22` or `/stats Wanderer`.",
@@ -518,7 +518,8 @@ _UNPLAYED = "⬛"
 
 def _today(page: Mapping[str, Any], now: datetime) -> str:
     """The Legend day so far: trophies gained (attacks) and lost (defenses),
-    then a square for each of the day's 8 attacks and 8 defenses."""
+    then a square for each recorded battle and, only while every battle so
+    far is recorded, a dark one for each still to play of the game's 8 a day."""
     start = ranked_day_for(now).start
     day = next(
         (
@@ -528,11 +529,12 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
         ),
         None,
     )
-    attacks = [] if day is None else day["offense_events"]
-    defenses = [] if day is None else day["defense_events"]
-    if not (attacks or defenses) and (
-        day is None or not (day["attack_count"] or day["defense_count"])
-    ):
+    if day is None:
+        return "Today's battles are not available yet"
+    attacks = day["offense_events"]
+    defenses = day["defense_events"]
+    complete = day["battles_complete"]
+    if complete and not (attacks or defenses):
         lines = ["No battles yet today"]
     else:
         loss = day["defense_loss"]
@@ -546,13 +548,13 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
         ("Attacks ", attacks, _ATTACK_SQUARES, MAX_DAILY_ATTACKS),
         ("Defenses", defenses, _DEFENSE_SQUARES, MAX_DAILY_DEFENSES),
     ):
-        left = max(0, most - len(battles))
-        lines.append(
-            f"`{label}` "
-            + "".join(squares.get(battle["stars"], _UNPLAYED) for battle in battles)
-            + _UNPLAYED * left
-            + f"  {left} left"
-        )
+        shown = "".join(squares.get(battle["stars"], _UNPLAYED) for battle in battles)
+        if complete:
+            left = max(0, most - len(battles))
+            shown += _UNPLAYED * left + f"  {left} left"
+        lines.append(f"`{label}` {shown or '–'}")
+    if not complete:
+        lines.append("-# Some of today's battles may be missing. The day on Clash Lens says why.")
     return "\n".join(lines)
 
 

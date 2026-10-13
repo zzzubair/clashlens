@@ -99,7 +99,10 @@ _STILL_DUE = """
 
 def _coloured(connection: Any, rows: list[dict[str, Any]], tag: str) -> list[dict[str, Any]]:
     """`rows` with the colour of each one's player, named by its `tag` column."""
-    accounts = {row["account_id"]: link_colours(connection, row["account_id"]) for row in rows}
+    accounts = {
+        account_id: link_colours(connection, account_id)
+        for account_id in {row["account_id"] for row in rows}
+    }
     return [
         {**row, "colour": accounts[row["account_id"]].get(row[tag], replies.GOLD)}
         for row in rows

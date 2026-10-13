@@ -233,6 +233,23 @@ def test_season_without_any_recorded_day_shows_unavailable_not_zero(store) -> No
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
     assert "Attack hit rate: Unavailable\nDefenses held: Unavailable" in text
     assert " 0 " not in text and "0%" not in text
+    # No day saved for today yet: no claim that none were played or are left.
+    assert text.startswith("### Drift #2PP\nToday's battles are not available yet\n\n")
+    assert "left" not in text and "⬛" not in text
+
+
+def test_today_with_a_battle_that_may_be_missing_counts_none_left(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    attacks = [battle("offense", minute, 3, 40, "A") for minute in range(7)]
+    store.pages["#2PP"] = page("#2PP", "Drift", attacks, reasons=["battle_log_row_gap"])
+    text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
+    assert text.splitlines()[1:6] == [
+        "## +280 (7)  −0 (0)",
+        "-# Today so far",
+        "`Attacks ` " + "🟩" * 7,
+        "`Defenses` –",
+        "-# Some of today's battles may be missing. The day on Clash Lens says why.",
+    ]
 
 
 def test_season_history_shows_after_the_player_leaves_legend(store) -> None:

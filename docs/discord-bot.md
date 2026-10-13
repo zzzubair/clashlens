@@ -7,11 +7,14 @@ and `/stats` (today and this Season so far for any tracked player, or the
 person's default account). Its code is in
 [`python/src/bot`](../python/src/bot). People use it mostly in a direct
 message (DM) with the bot, and also in servers. `/stats` with a player tag or
-name works for anyone; `/stats` with no player, `/link` and `/alerts` need the
-person's Discord account connected to their Clash Lens account on the website,
-and otherwise offer "Sign up with Discord" (or, for an existing account,
-"Connect Discord"). Signing up, connecting Discord, linking accounts, choosing
-the default account and turning alerts on or off happen on the website, never
+name works for anyone. `/stats` with no player shows the person's default
+account when their Discord account is connected to Clash Lens and has a linked
+account; otherwise it asks for a player tag or name, never offering sign-up or
+linking. `/link` and `/alerts` need the person's Discord account connected to
+their Clash Lens account on the website, and otherwise offer "Sign up with
+Discord" (or, for an existing account, "Connect Discord"). Signing up,
+connecting Discord, linking accounts, choosing the default account and
+turning alerts on or off happen on the website, never
 in the bot. The default account is the one marked Default on
 the Clasher's account page; until they choose, it is their first linked
 account. Every reply is a normal message anyone can forward;
@@ -50,7 +53,11 @@ account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account
 keeps its colour everywhere. Everything else uses Clash Lens yellow. `/stats`
 ends with when the player's profile was last read ("Updated N min ago"); no
-other message has that line. A `/stats` reply that shows a status word
+other message has that line. `/stats` shows today's battles as squares, and
+how many are left, only while every battle so far is recorded, as the player
+page checks it; with today not saved yet it says so, and with a battle that
+may be missing it shows the recorded ones and points to the day on Clash
+Lens. A `/stats` reply that shows a status word
 instead of numbers also shows the next Reset as a Discord timestamp, which
 each viewer sees in their own local time.
 
