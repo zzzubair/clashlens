@@ -51,7 +51,7 @@ export interface OAuthTransaction {
   codeChallenge: string;
   returnPath: string;
   intent: OAuthIntent;
-  /** SHA-256 binding to the initiating login cookie for link/unlink only. */
+  /** Fingerprint of the initiating login (createLoginSessionBinding), for link/unlink only. */
   sessionBinding?: string;
   issuedAt: number;
   expiresAt: number;
