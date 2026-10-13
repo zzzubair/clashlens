@@ -37,6 +37,29 @@
   color: var(--cl-accent);
 }
 
+.legend-day-projected {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1.5px dashed var(--cl-card-line);
+}
+
+.legend-day-projected strong {
+  color: var(--cl-accent);
+  font-family: var(--cl-font-heading);
+  font-size: 1.1rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-projected .dash-muted {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+}
+
 .legend-day-arrow {
   color: var(--cl-action);
   font-size: 1.4rem;

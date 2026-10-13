@@ -56,6 +56,8 @@ import {
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
   rankRange: RankRange | null;
+  /** The place the player is projected to finish on; null before it can be worked out. */
+  projectedRank: number | null;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
@@ -150,6 +152,12 @@ export async function getPlayerToday(
       const worst = count(item.worst);
       if (best < 1 || worst < best) malformed();
       return { best, worst };
+    }),
+    // A data service older than the projected place leaves it out.
+    projectedRank: nullable(payload.projected_rank ?? null, (item) => {
+      const rank = count(item);
+      if (rank < 1) malformed();
+      return rank;
     }),
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
@@ -779,6 +787,7 @@ export function readCards(
         range: read?.rankRange ?? null,
         rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
         ...waiting(read),
+        projected: read?.projectedRank ?? null,
       };
     },
     bases: async () => {

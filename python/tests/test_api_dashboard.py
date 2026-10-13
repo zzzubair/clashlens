@@ -543,3 +543,70 @@ def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None
         go.set()
         found = waiting.result(timeout=5)
     assert found is not None and found.day_start == reset
+
+
+def test_requests_never_wait_for_the_projection(monkeypatch) -> None:
+    """The projection is worked out after the board read, so a request
+    gets the range at once and the projected place once it is ready; one
+    10 minutes old, or from the Legend day before, is not shown."""
+    go = Event()
+
+    class Live:
+        """Two players on 5,000 with every battle left."""
+
+        def current(self, _database: Any, _now: Any) -> Any:
+            return SimpleNamespace(rows=[("#2PP", None, 5000), ("#8PP", None, 5000)])
+
+    class NoLogs:
+        def execute(self, _sql: str, _params: Any) -> NoLogs:
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return []
+
+    def compute(_function: Any, *_args: Any, **_kwargs: Any) -> list[int]:
+        go.wait(10)
+        # The second player is projected first.
+        return [2, 1]
+
+    # Examples are saved; what the calculation is given is the method's own test.
+    monkeypatch.setattr(
+        api_dashboard, "_projection_inputs",
+        lambda _connection, _now, _board, reports: ((), reports),
+    )
+    database = SimpleNamespace(
+        pool=SimpleNamespace(connection=lambda: nullcontext(NoLogs()))
+    )
+    clock = [0.0]
+    board = api_dashboard.DashboardBoard(
+        Live(), clock=lambda: clock[0], compute=compute  # type: ignore[arg-type]
+    )
+
+    def ranks() -> dict[str, Any]:
+        found = board.current(database, NOW, wait=2)  # type: ignore[arg-type]
+        assert found is not None
+        return {
+            tag: (api_dashboard.rank_range(found, tag),
+                  api_dashboard.projected_rank(found, board.projection(NOW), tag))
+            for tag in ("#2PP", "#8PP")
+        }
+
+    asked = time.monotonic()
+    waiting = ranks()
+    assert time.monotonic() - asked < 1
+    assert waiting == {
+        "#2PP": ({"best": 1, "worst": 2}, None),
+        "#8PP": ({"best": 1, "worst": 2}, None),
+    }
+    go.set()
+    deadline = time.monotonic() + 5
+    while board.projection(NOW) is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ranks() == {
+        "#2PP": ({"best": 1, "worst": 2}, 2),
+        "#8PP": ({"best": 1, "worst": 2}, 1),
+    }
+    # Not on the next Legend day, nor once 10 minutes old.
+    assert board.projection(ranked_day_for(NOW).end) is None
+    clock[0] = api_dashboard.BOARD_MAX_AGE_SECONDS
+    assert board.projection(NOW) is None

@@ -434,6 +434,8 @@ export interface LegendDayData {
   rangeAtMs: number | null;
   /** Read before the shared board: the page asks again for the range. */
   boardPending?: true;
+  /** The projected place at the next Reset, inside `range`; null until it can be worked out. */
+  projected: number | null;
 }
 
 export interface BasesData {
