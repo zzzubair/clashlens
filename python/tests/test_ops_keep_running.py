@@ -287,3 +287,50 @@ def test_failed_status_write_stops_nothing(stack):
 
 def test_interrupted_planning_stops_nothing(stack):
     assert failed_up(stack, INTERRUPT="1").returncode == 143
+
+
+FAKE_HOST = f"""#!{sys.executable}
+import os, sys
+args = sys.argv[1:]
+with open(os.environ["CALLS"], "a") as calls:
+    calls.write(" ".join(args) + "\\n")
+if args[:1] == ["info"]:
+    print("true")
+elif args[1:2] == ["exists"]:
+    sys.exit(1)
+elif args[:3] == ["--user", "show", "clashlens-discord-bot.service"]:
+    print(os.environ[args[3].removeprefix("--property=")])
+"""
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_down_stops_the_bot_service_only_when_ops_generated_it(tmp_path, managed):
+    host = tmp_path / "host"
+    host.write_text(FAKE_HOST)
+    host.chmod(0o700)
+    config = tmp_path / "config"
+    generated = config / "containers" / "systemd" / "clashlens-discord-bot.container"
+    calls = tmp_path / "calls"
+    result = subprocess.run(
+        ["bash", str(OPS), "down"],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "PODMAN_BIN": str(host),
+            "SYSTEMCTL_BIN": str(host),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_CONFIG_HOME": str(config),
+            "CALLS": str(calls),
+            # A hand-written user service with the bot's name has no Quadlet source.
+            "FragmentPath": str(config / "systemd" / "user" / "clashlens-discord-bot.service"),
+            "SourcePath": str(generated) if managed else "",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    stopped = "--user stop clashlens-discord-bot.service" in calls.read_text()
+    assert (result.returncode == 0) is managed, result.stderr
+    assert stopped is managed
+    if not managed:
+        assert "refusing unmanaged systemd unit clashlens-discord-bot.service" in result.stderr

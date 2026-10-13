@@ -14,7 +14,7 @@ import psycopg_pool
 import pytest
 
 from bot import discord_app
-from bot.__main__ import ConfigError, command_payload, read_token
+from bot.__main__ import ConfigError, command_payload, main, read_token
 from bot.commands import Commands
 from bot.discord_app import DiscordApp
 from bot.replies import Site
@@ -463,3 +463,12 @@ def test_token_file_problems_never_show_the_token(tmp_path) -> None:
     assert "abc" not in str(error.value)
     secret.write_text("MTIz.abc.def\n")
     assert read_token(str(secret)) == "MTIz.abc.def"
+
+
+def test_run_stops_at_startup_without_a_website_address(tmp_path, monkeypatch, capsys) -> None:
+    # The service passes the setting through even when app.env leaves it empty.
+    monkeypatch.setenv("CLASHLENS_PUBLIC_ORIGIN", "")
+    monkeypatch.setenv("CLASHLENS_DISCORD_BOT_TOKEN_FILE", str(tmp_path / "token"))
+    monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(tmp_path / "database-url"))
+    assert main(["run"]) == 2
+    assert capsys.readouterr().err == "bot: missing settings: CLASHLENS_PUBLIC_ORIGIN\n"
