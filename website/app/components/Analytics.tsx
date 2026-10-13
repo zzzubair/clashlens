@@ -4,6 +4,7 @@ import { Link, useLocation, useMatches, useRouteLoaderData } from "react-router"
 import type { PlayerLookup, PlayerPage } from "../lib/contracts";
 import {
   analyticsChoice,
+  analyticsWithdrawals,
   armySort,
   askingForChoice,
   loadedPageEvents,
@@ -103,12 +104,16 @@ export function Analytics() {
   const data = page?.loaderData;
   // What the open page shows.
   const shown = useRef<{ path: string; selection: Selection } | null>(null);
+  const withdrawals = useSyncExternalStore(
+    onAnalyticsChoiceChange,
+    analyticsWithdrawals,
+    () => 0,
+  );
 
   useEffect(() => {
-    if (accepted) return;
     counted = { path: "", keys: new Set() };
     shown.current = null;
-  }, [accepted]);
+  }, [withdrawals]);
 
   useEffect(() => {
     if (!token) return;

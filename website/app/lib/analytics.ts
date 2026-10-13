@@ -409,6 +409,8 @@ let unsavedChoice: AnalyticsChoice | undefined;
 // Whether the choice was reopened after one was made.
 let reopened = false;
 let watchingTabs = false;
+// Rises each time acceptance is withdrawn, here or in another tab.
+let withdrawals = 0;
 const choiceListeners = new Set<() => void>();
 
 /** The visitor's choice in this browser, or null before they make one. */
@@ -420,6 +422,11 @@ export function analyticsChoice(): AnalyticsChoice {
   } catch {
     return null;
   }
+}
+
+/** Changes each time acceptance is withdrawn, here or in another tab. */
+export function analyticsWithdrawals(): number {
+  return withdrawals;
 }
 
 /** Whether to show the Accept or Decline question. */
@@ -445,8 +452,10 @@ function forgetPostHog(): void {
 // Brings PostHog in line with the latest choice, including one made in
 // another tab, so nothing is sent once a visitor declines. True when it may
 // count.
-function applyChoice(posthog: PostHog): boolean {
-  const accepted = analyticsChoice() === "accepted";
+function applyChoice(
+  posthog: PostHog,
+  accepted = analyticsChoice() === "accepted",
+): boolean {
   if (accepted && !clientCounting) {
     posthog.opt_in_capturing({ captureEventName: false });
   } else if (!accepted && clientCounting) {
@@ -459,9 +468,14 @@ function applyChoice(posthog: PostHog): boolean {
   return accepted;
 }
 
-function notifyChoice(): void {
-  if (client) applyChoice(client);
-  else if (analyticsChoice() !== "accepted") forgetPostHog();
+// `withdrawn` is a Decline from another tab, applied even if it was accepted
+// again before this tab heard of it.
+function notifyChoice(withdrawn = false): void {
+  if (withdrawn || analyticsChoice() !== "accepted") withdrawals++;
+  if (client) {
+    if (withdrawn) applyChoice(client, false);
+    applyChoice(client);
+  } else if (analyticsChoice() !== "accepted") forgetPostHog();
   for (const listener of choiceListeners) listener();
 }
 
@@ -488,7 +502,9 @@ export function onAnalyticsChoiceChange(listener: () => void): () => void {
     watchingTabs = true;
     // Another tab made a choice.
     window.addEventListener("storage", (event) => {
-      if (event.key === ANALYTICS_CHOICE_KEY || event.key === null) notifyChoice();
+      if (event.key === ANALYTICS_CHOICE_KEY || event.key === null) {
+        notifyChoice(event.newValue !== "accepted");
+      }
     });
   }
   choiceListeners.add(listener);

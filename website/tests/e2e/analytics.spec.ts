@@ -381,6 +381,28 @@ test("declining in one tab stops counting and deletes the ID in every tab", asyn
   expect(await storedKeys(second)).toEqual([choiceKey]);
 });
 
+test("a Decline another tab made is applied even if it accepted again before this tab heard", async ({
+  page,
+}) => {
+  const posthog = await fakePostHog(page);
+  const ids = () =>
+    posthog.events
+      .filter(({ event }) => event === "$pageview")
+      .map(({ properties }) => properties.distinct_id);
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect.poll(() => ids().length).toBe(1);
+
+  await page.evaluate((key) => {
+    for (const newValue of ["declined", "accepted"]) {
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue }));
+    }
+  }, choiceKey);
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect.poll(() => ids().length).toBe(2);
+  expect(ids()[1]).not.toBe(ids()[0]);
+});
+
 test("a choice applies to the page even when the browser cannot save it", async ({
   page,
 }) => {
