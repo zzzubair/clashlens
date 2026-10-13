@@ -172,7 +172,7 @@ def test_every_job_pulls_docker_hub_images_from_a_public_copy(
     mirrored_jobs = set()
     for name, job in workflow["jobs"].items():
         for service in job.get("services", {}).values():
-            assert service["image"].startswith("public.ecr.aws/docker/library/")
+            assert service["image"].startswith("mirror.gcr.io/library/")
         (workspace / "calls.jsonl").unlink(missing_ok=True)
         for step in job["steps"]:
             if "run" in step:
@@ -199,7 +199,7 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
-        "image": "public.ecr.aws/docker/library/postgres:18",
+        "image": "mirror.gcr.io/library/postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336",
         "env": {
             "POSTGRES_DB": "clashlens",
             "POSTGRES_PASSWORD": "postgres",
@@ -535,7 +535,7 @@ def test_packaged_python_groups_run_the_full_packaged_suite_once(
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     # The development stack's database image, user and test database.
     assert job["services"]["postgres"] == {
-        "image": "public.ecr.aws/docker/library/postgres:18-alpine",
+        "image": "mirror.gcr.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873",
         "env": {
             "POSTGRES_DB": "clashlens_test",
             "POSTGRES_PASSWORD": "clashlens-dev",
