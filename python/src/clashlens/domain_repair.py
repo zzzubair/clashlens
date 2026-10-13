@@ -27,7 +27,7 @@ how a saved day or board comes out, then run it once:
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
 rule change can affect, chosen when its first queue runs
-(``_scoped_players``, ``_weekly_raise_players``) and kept on its own receipt, so the full repair of the same revision still
+(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -97,7 +97,7 @@ from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 # The rules saved days and Daily boards come out by; see season_repair.
 DAY_RULES_REVISION = "2026-10-13-weekly-raise-late"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
-REPAIR_SCOPES = ("day-1-or-unplayed", "weekly-raise")
+REPAIR_SCOPES = ("day-1-or-unplayed",)
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
@@ -133,8 +133,7 @@ def season_repair(
         if scope and receipt is not None:
             players = [int(player) for player in receipt[5]]
         elif scope:
-            players = (_weekly_raise_players if scope == "weekly-raise"
-                       else _scoped_players)(connection, start)
+            players = _scoped_players(connection, start)
         else:
             players = [
                 int(row[0]) for row in connection.execute(
@@ -347,57 +346,6 @@ def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
     Season's closure checks them."""
     stored, stale = _stale_players(connection, season_id)
     return {"stored": stored, "stale": len(stale), "stale_players": stale[:50]}
-
-
-def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
-    """The players with saved days of the Season whose results the 13
-    October 2026 rule, that the weekly raise can land after the Monday Reset
-    reading, can change: those whose Reset reading at a weekly Monday Reset
-    of the Season, not its first, showed Legend I, below 5,000 once the
-    gains of Monday attacks reported before it are taken off, whatever their
-    days were saved as. A Sunday ending at 5,100 before its 200 automatic loss, read at
-    4,900, was saved Complete with Monday at 5,000, but only that reading
-    now proves its board total; a Sunday ending at 4,980 read at 5,020 with
-    a Monday attack for 40 was saved Inconsistent. On 12 October 2026
-    every Reset reading came before the raise. A player with no Reset
-    reading there is not chosen. The choice is deliberately a safe
-    superset, missing no affected player: a Monday defense loss before the
-    reading, or an attack reported before it whose gain it does not show
-    yet, can also put an unaffected player's reading under 5,000, and
-    recalculating them saves nothing new. Each chosen player's later days
-    are recalculated with them."""
-    return [
-        int(row[0]) for row in connection.execute(
-            """
-            SELECT DISTINCT evidence.player_id
-            FROM reset_baseline_evidence AS evidence
-            JOIN player_profile_effects AS effect
-              ON effect.observation_id = evidence.profile_observation_id
-            JOIN player_profile_versions AS profile ON profile.id = effect.profile_version_id
-            WHERE evidence.boundary_at > %(start)s AND evidence.boundary_at < %(end)s
-              AND extract(isodow FROM evidence.boundary_at AT TIME ZONE 'UTC') = 1
-              AND profile.eligibility_state = 'eligible'
-              AND profile.trophies - (
-                  SELECT COALESCE(sum(report.attacker_gain), 0)
-                  FROM legend_battles AS battle
-                  JOIN battle_perspectives AS side
-                    ON side.battle_id = battle.id AND side.perspective = 'attacker'
-                  JOIN battle_evidence AS report ON report.id = side.evidence_id
-                  WHERE battle.ranked_day_start = evidence.boundary_at
-                    AND battle.attacker_player_id = evidence.player_id
-                    AND report.battle_timestamp < effect.observed_at
-              ) < %(trophies)s
-              AND EXISTS (
-                  SELECT 1 FROM ranked_day_versions AS day
-                  WHERE day.player_id = evidence.player_id
-                    AND day.ranked_day_start >= %(start)s AND day.ranked_day_start < %(end)s
-              )
-            ORDER BY evidence.player_id
-            """,
-            {"start": start, "end": start + SEASON_DURATION,
-             "trophies": SEASON_START_TROPHIES},
-        ).fetchall()
-    ]
 
 
 def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:

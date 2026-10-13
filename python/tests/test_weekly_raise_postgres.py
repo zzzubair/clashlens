@@ -10,11 +10,12 @@ raise still cannot be followed by an unraised one. See docs/testing.md.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import psycopg
 import test_reset_scenarios_postgres as scenarios
-from domain_test_support import domain_database, repair_season, text
+from domain_test_support import domain_database, text
 from test_reset_scenarios_postgres import (
     PREVIOUS_SEASON,
     _ranked,
@@ -24,6 +25,10 @@ from test_reset_scenarios_postgres import (
     day,
     defenses,
 )
+
+from clashlens import reading_rule, reconciliation
+from clashlens.db import Database
+from clashlens.domain_repair import season_repair
 
 LATE_RAISE, LOSS_TOO, RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED = (
     "#2PP", "#8PP", "#9PP", "#PPP", "#LPP", "#YPP")
@@ -58,11 +63,9 @@ def test_monday_reset_reading_before_the_weekly_raise(
     the Reset still lacked a late attack's gain, and Monday starts at 5,000.
     A Sunday with no battle that the reading shows charged for its empty
     defense slots ends after the charge. A player read unraised again at
-    05:40, after the raise showed, stays Inconsistent. The weekly-raise
-    repair then also takes a player whose Sunday ended above 5,000 and whose
-    Reset reading a Monday defense took below it, and changes nothing of
-    theirs.
-    The days must have ended by the real clock, so this is the previous
+    05:40, after the raise showed, stays Inconsistent. A Sunday ending above
+    5,000 whose Reset reading a Monday defense took below it ends where its
+    battles do. The days must have ended by the real clock, so this is the previous
     Season's Monday, 28 September 2026."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
@@ -124,21 +127,6 @@ def test_monday_reset_reading_before_the_weekly_raise(
         tuesday_members = story.board_members(tuesday)
         tuesday_board = story.served_board(tuesday)
 
-        def versions(tag: str) -> list[tuple]:
-            with psycopg.connect(connection_info) as connection:
-                return connection.execute(
-                    "SELECT day.id, day.version FROM ranked_day_versions AS day"
-                    " JOIN players AS player ON player.id = day.player_id"
-                    " WHERE player.normalized_tag = %s ORDER BY day.id", (tag,),
-                ).fetchall()
-
-        defended = versions(DEFENDED)
-        preview, queued = repair_season(
-            connection_info, str(int(season.timestamp())), scope="weekly-raise")
-        story.wait(timedelta(hours=1))
-        repaired = versions(DEFENDED)
-        repaired_board = story.served_board(monday)
-
     assert unfinished == []
     sunday_day = {
         "state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,
@@ -173,11 +161,102 @@ def test_monday_reset_reading_before_the_weekly_raise(
         LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", RAISE_UNDONE: "uncertain",
         LATE_CREDIT: "confirmed", QUIET: "confirmed", DEFENDED: "confirmed"}
     assert _ranked(tuesday_board) == {LATE_RAISE: 4800, LOSS_TOO: 4800}
-    # Every Reset reading here is below 5,000, DEFENDED's only by its Monday
-    # defense: the repair takes all six, and recalculating DEFENDED saves
-    # nothing new and leaves its board entry as it was.
-    assert (preview["players"], queued["phase"], queued["queued"]) == (6, "days", 6)
-    assert repaired == defended
-    assert _ranked(repaired_board)[DEFENDED] == 5020
-    assert {entry["tag"]: entry["confidence"]
-            for entry in repaired_board["entries"]}[DEFENDED] == labels[DEFENDED]
+
+
+def _instant_raise(judge):
+    """``judge`` as before 13 October 2026, which took the weekly raise as
+    landed at the Reset: a value below 5,000 read unraised fit only when the
+    automatic loss had taken it there."""
+    def judged(reading, **rule):
+        result = judge(reading, **rule)
+        if result is None or rule.get("floor") is None or rule.get("reset"):
+            return result
+        ways = frozenset(
+            (loss, up, shown) for loss, up, shown in result.ways
+            if up or reading.trophies - result.new_day_change + loss >= rule["floor"])
+        return replace(result, matched=bool(ways), ways=ways)
+    return judged
+
+
+def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """LATE_RAISE's and LOSS_TOO's Sunday and Monday as above, but saved as
+    on 12 October 2026, before the fix: Sunday Inconsistent, Monday from the
+    unraised Reset reading, and the Monday board uncertain. The full Season
+    repair, run as docs/operating.md says (preview, queue until done, then
+    receipt), saves Sunday Complete, Monday from 5,000 and the Monday
+    board's totals at 05:00:00 confirmed. LOSS_TOO's automatic loss stays
+    calculated: the 5,000 readings cannot confirm it."""
+    season = PREVIOUS_SEASON
+    saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
+    players = (LATE_RAISE, LOSS_TOO)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *players)
+        monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
+        # Before the fix the raise counted as landed at the Reset, and Monday
+        # started from its Reset reading: the rule starting it at 5,000
+        # leaves a Season's first day alone.
+        judge, settled_start = reading_rule.judge, reconciliation._settled_start
+        monkeypatch.setattr(reading_rule, "judge", _instant_raise(judge))
+        monkeypatch.setattr(reconciliation, "_settled_start",
+                            lambda data: settled_start(replace(data, season_first_day=True)))
+        for tag, sunday_defenses in ((LATE_RAISE, 8), (LOSS_TOO, 7)):
+            story.players[tag].battles = (
+                _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[30] * sunday_defenses)
+                + attacks(monday, 40) + defenses(monday, *[30] * 8))
+        story.reset(saturday, dict.fromkeys(players, (5300, season)))
+        story.reset(sunday, dict.fromkeys(players, (5140, season)))
+        story.reads(monday - timedelta(minutes=10), {LATE_RAISE: 4940, LOSS_TOO: 4970}, season)
+        story.reset(monday, {LATE_RAISE: (4940, season), LOSS_TOO: (4970, season)})
+        story.reads(monday + timedelta(minutes=20), dict.fromkeys(players, 5000), season)
+        story.wait(timedelta(hours=1))
+        story.reads(tuesday - timedelta(minutes=10), dict.fromkeys(players, 4800), season)
+        story.reset(tuesday, dict.fromkeys(players, (4800, season)))
+        before = {tag: (story.saved_day(tag, sunday)["state"], story.saved_day(tag, monday)["start"])
+                  for tag in players}
+        before_labels = {entry["tag"]: entry["confidence"]
+                         for entry in story.served_board(monday)["entries"]}
+
+        monkeypatch.setattr(reading_rule, "judge", judge)
+        monkeypatch.setattr(reconciliation, "_settled_start", settled_start)
+        database = Database(connection_info)
+        try:
+            def repair(action: str) -> dict:
+                return season_repair(database, str(int(season.timestamp())), action, max_jobs=100)
+
+            preview, phases = repair("preview"), []
+            for _ in range(10):
+                phases.append(repair("queue")["phase"])
+                if phases[-1] == "done":
+                    break
+                story.wait(timedelta(hours=1))
+            receipt = repair("receipt")
+        finally:
+            database.close()
+        sundays = {tag: story.saved_day(tag, sunday) for tag in players}
+        mondays = {tag: story.saved_day(tag, monday) for tag in players}
+        loss_states = _loss_states(connection_info, sunday)
+        board = story.served_board(monday)
+        unfinished = story.unfinished_jobs()
+
+    assert before == {LATE_RAISE: ("Inconsistent", 4940), LOSS_TOO: ("Inconsistent", 4970)}
+    assert before_labels == {LATE_RAISE: "uncertain", LOSS_TOO: "uncertain"}
+    assert (preview["players"], phases[-1]) == (2, "done")
+    assert unfinished == []
+    sunday_day = {
+        "state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,
+        "automatic_loss": None, "raise": 60, "attacks": 1, "defenses": 8, "residual": 0,
+    }
+    assert sundays == {
+        LATE_RAISE: sunday_day, LOSS_TOO: {**sunday_day, "automatic_loss": 30, "defenses": 7}}
+    assert loss_states[LOSS_TOO] == "calculated"
+    monday_day = {
+        "state": "Complete", "start": 5000, "end": 4800, "next_start": 4800,
+        "automatic_loss": None, "raise": 0, "attacks": 1, "defenses": 8, "residual": 0,
+    }
+    assert mondays == {LATE_RAISE: monday_day, LOSS_TOO: monday_day}
+    assert _ranked(board) == {LATE_RAISE: 4940, LOSS_TOO: 4970}
+    assert {entry["tag"]: entry["confidence"] for entry in board["entries"]} == {
+        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed"}
+    assert receipt["boards_disagreeing"] == []

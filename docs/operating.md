@@ -803,34 +803,6 @@ summaries are stored again only for the chosen players before the check of
 every summary. It keeps its own receipt, so a full repair of the same
 revision afterwards still recalculates every player.
 
-`--players weekly-raise` takes instead the players with saved days of the
-Season whose Reset reading at a weekly Monday Reset of the Season, not its
-first, showed Legend I, below 5,000 once the gains of Monday attacks
-reported before it are taken off: the days the rule that the raise can
-land after the Monday Reset reading (13 October 2026) can change, whatever
-they were saved as. That includes the 4,136 Sundays (Day 7) of 12 October
-2026 saved Inconsistent, the Mondays (Day 8) that started from the unraised
-reading, a Sunday saved Complete whose board total only the unraised
-reading proves, such as one ending at 5,100 before its 200 automatic loss
-and read at 4,900, and a Sunday ending at 4,980 whose reading of 5,020
-already showed a Monday attack for 40. On 12 October 2026 every Reset
-reading came before the raise. A player with no Reset reading at that
-Reset is not taken. The choice is deliberately a safe superset, missing no
-affected player: a Monday defense loss before the reading, or an attack
-reported before it whose gain it does not show yet, can also put an
-unaffected player's reading under 5,000, and recalculating them saves
-nothing new. Each one's job recalculates every saved day of the
-Season, so their later days start where the repaired days now end:
-
-```sh
-podman exec clashlens-python-worker \
-  python -m clashlens.cli republish-current-season --repair preview --players weekly-raise --season 1791176400
-podman exec clashlens-python-worker \
-  python -m clashlens.cli republish-current-season --repair queue --players weekly-raise --season 1791176400
-podman exec clashlens-python-worker \
-  python -m clashlens.cli republish-current-season --repair receipt --players weekly-raise --season 1791176400
-```
-
 **Known limits of refresh triggers:** these cases queue no recalculation of
 their own. A battle report is compared with that side's report before it, in
 time, length, stars, destruction and trophies, so one repeating it exactly

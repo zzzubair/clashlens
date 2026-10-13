@@ -449,13 +449,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
                 verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
                 and final_trophies - zero_defense_loss <= 5000):
-            if verdict.unraised:
-                automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
-                net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
-                expected_next, end_hidden_by_reset = 5000, True
-            else:
-                # The weekly raise to 5,000 hides whether the charge landed.
-                verdict = replace(verdict, outcome="unverified", loss=0, exact=False, clean=False)
+            automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
+            net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
+            expected_next, end_hidden_by_reset = 5000, True
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             reset = next((item for item in _readings(data) if item.reset_reading), None)

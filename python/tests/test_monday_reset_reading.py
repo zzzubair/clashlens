@@ -215,18 +215,24 @@ def test_a_later_reading_before_the_raise_proves_the_end(boundary: str, proven: 
     } if proven else None)
 
 
-def test_a_5000_reading_before_the_raise_takes_no_charge_even_after_new_day_battles() -> None:
-    # Sunday, at 5,190 with no battle, can be charged 240 for its 8 empty
-    # defense slots; its Reset reading at 05:02 shows 5,190. Monday's two
-    # attacks of 40 and a defense of 30 have landed by 05:30, when a reading
-    # shows 5,000: 4,950 plus Monday's 50. A 5,000 reading never proves the
-    # charge, so Sunday stays uncertain and uncharged.
+@pytest.mark.parametrize(("sunday", "monday_battles"), [
+    (5190, (("offense", 40), ("offense", 40), ("defense", 30))),
+    (5340, (("defense", 40), ("defense", 30), ("defense", 30))),
+])
+def test_a_5000_reading_before_the_raise_takes_no_charge_even_after_new_day_battles(
+    sunday: int, monday_battles: tuple[tuple[str, int], ...],
+) -> None:
+    # Sunday, at 5,190 or 5,340 with no battle, can be charged 240 for its 8
+    # empty defense slots; its Reset reading at 05:02 shows that total.
+    # Monday's battles have landed by 05:30, when a reading shows 5,000:
+    # 4,950 plus Monday's 50, or 5,100 less Monday's 100. A 5,000 reading
+    # never proves the charge, so Sunday stays uncertain and uncharged.
     monday = tuple(
         BattleContribution(f"monday-{n}", lens, amount, battle_timestamp=DAY.end + timedelta(minutes=6 + n))
-        for n, (lens, amount) in enumerate((("offense", 40), ("offense", 40), ("defense", 30))))
+        for n, (lens, amount) in enumerate(monday_battles))
     result = reconcile_ranked_day(_input(
-        start_trophies=5190,
-        next_start_trophies=5190,
+        start_trophies=sunday,
+        next_start_trophies=sunday,
         boundary_kind="weekly",
         previous_day=PreviousRankedDay(True, 8, 240, 0),
         contributions=(),
@@ -236,7 +242,8 @@ def test_a_5000_reading_before_the_raise_takes_no_charge_even_after_new_day_batt
     ))
 
     assert (result.state, result.failure_reasons) == ("Partial", ("end_reading_unverified",))
-    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (5190, None)
+    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (sunday, None)
+    assert result.automatic_defense_evidence_state == "not_applicable"
     assert result.input_evidence["end_reading"]["clean"] is False
 
 
