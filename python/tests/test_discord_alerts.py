@@ -70,8 +70,8 @@ def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -
 
 def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
     """Only a send that may have reached Discord with no answer back counts as
-    maybe sent: not an answer from Discord, a connection that never opened,
-    or a DM channel that could not be opened."""
+    maybe sent: not an answer from Discord, a connection that never opened or
+    timed out opening, or a DM channel that could not be opened."""
     never_connected = aiohttp.ClientConnectorError(
         SimpleNamespace(host="discord.com", port=443, ssl=True),
         OSError(111, "Connection refused"),
@@ -80,6 +80,7 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
         (FakeClient(_answer(503, 0)), 0.0, False),
         (FakeClient(_answer(429, 0, {"Retry-After": "7.5"})), 7.5, False),
         (FakeClient(never_connected), 0.0, False),
+        (FakeClient(aiohttp.ConnectionTimeoutError("Connection timeout")), 0.0, False),
         (FakeClient(None, opening=TimeoutError()), 0.0, False),
         (FakeClient(TimeoutError()), 0.0, True),
         (FakeClient(aiohttp.ServerDisconnectedError()), 0.0, True),
@@ -119,28 +120,43 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
     ]
 
 
-def test_no_request_for_a_dm_starts_after_its_last_moment(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("slow_connection", "messages_sent"), [(False, [("7", True)]), (True, [])]
+)
+def test_no_request_for_a_dm_goes_out_after_its_last_moment(
+    monkeypatch, slow_connection, messages_sent
+) -> None:
     """The bot's real client against a local stand-in for Discord that rate
-    limits every message for 0.3 seconds. The DM's one request carries its
-    nonce, checked by Discord; discord.py waits out the rate limit to try
-    again by itself, but the DM's last moment, 0.2 seconds in, has passed by
-    then, so that request never starts and nothing was sent."""
+    limits every message for 0.3 seconds and closes every connection. The
+    DM's first message request carries its nonce, checked by Discord;
+    discord.py waits out the rate limit to try again by itself, but the DM's
+    last moment, 0.2 seconds in, has passed by then, so that try never goes
+    out. When opening the message request's connection takes 0.5 seconds,
+    the first one never goes out either. No DM is delivered either way."""
 
     def answer(payload: dict, status: int = 200, **headers: str) -> web.Response:
-        return web.Response(
+        response = web.Response(
             body=json.dumps(payload).encode(),
             status=status,
             headers={"Content-Type": "application/json", **headers},
         )
+        response.force_close()
+        return response
 
     async def scenario() -> tuple[list[dict], Unreachable]:
         sends: list[dict] = []
+        opened = asyncio.Event()
+
+        async def open_connection(*_trace: object) -> None:
+            if slow_connection and opened.is_set():
+                await asyncio.sleep(0.5)
 
         async def me(_request: web.Request) -> web.Response:
             return answer({"id": "1", "username": "bot", "discriminator": "0", "avatar": None})
 
         async def open_dm(_request: web.Request) -> web.Response:
             user = {"id": "100000000000000001", "username": "u", "discriminator": "0", "avatar": None}
+            opened.set()
             return answer({"id": "10", "type": 1, "recipients": [user]})
 
         async def send(request: web.Request) -> web.Response:
@@ -162,6 +178,7 @@ def test_no_request_for_a_dm_starts_after_its_last_moment(monkeypatch) -> None:
             discord.http.Route, "BASE", f"http://127.0.0.1:{runner.addresses[0][1]}/api/v10"
         )
         client, _tree = build_client(Commands(store=None, site=SITE))  # type: ignore[arg-type]
+        client.http.http_trace.on_connection_create_start.append(open_connection)
         await client.http.static_login("token")
         try:
             with pytest.raises(Unreachable) as outage:
@@ -177,5 +194,5 @@ def test_no_request_for_a_dm_starts_after_its_last_moment(monkeypatch) -> None:
         return sends, outage.value
 
     sends, outage = asyncio.run(scenario())
-    assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == [("7", True)]
+    assert [(body["nonce"], body["enforce_nonce"]) for body in sends] == messages_sent
     assert not outage.maybe_sent

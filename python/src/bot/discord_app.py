@@ -401,12 +401,12 @@ class ReplyView(_OwnedView):
 
 
 # The loop's clock time by which each request for the attack alert DM being
-# sent must start; none does by default.
+# sent must go out; none has one by default.
 _SEND_BY: contextvars.ContextVar[float] = contextvars.ContextVar("send_by", default=math.inf)
 
 
 class _TooLate(Exception):
-    """A request for an attack alert DM would start after its `send_by`."""
+    """A request for an attack alert DM would go out after its `send_by`."""
 
 
 async def _before_request(_session: Any, _context: Any, _params: Any) -> None:
@@ -419,9 +419,10 @@ class DiscordMessenger:
     Discord's rate limits before each request, tries a request again itself
     after a rate limit or a server error, and gives up on one after aiohttp's
     5 minutes. Each request, its own tries again included, is checked against
-    the DM's `send_by` with a fresh clock just as it starts, and not made
-    after it. A request is never cancelled here: cancelling one in a global
-    rate limit wait leaves that wait shut for every later request."""
+    the DM's `send_by` with a fresh clock once its connection is open, just
+    before it goes out, and not sent after it. A request is never cancelled
+    here: cancelling one in a global rate limit wait leaves that wait shut
+    for every later request."""
 
     def __init__(self, client: discord.Client) -> None:
         self.client = client
@@ -453,7 +454,10 @@ class DiscordMessenger:
             # may not have gone, unless the connection never opened.
             log.warning("an attack alert could not reach Discord", exc_info=True)
             raise Unreachable(
-                maybe_sent=sending and not isinstance(error, aiohttp.ClientConnectorError)
+                maybe_sent=sending
+                and not isinstance(
+                    error, (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError)
+                )
             ) from error
         finally:
             _SEND_BY.reset(late)
@@ -469,7 +473,7 @@ def build_client(commands: Commands) -> tuple[discord.Client, app_commands.Comma
     # discord.py's warning about missing server state.
     intents.guilds = True
     trace = aiohttp.TraceConfig()
-    trace.on_request_start.append(_before_request)
+    trace.on_request_headers_sent.append(_before_request)
     client = discord.Client(
         intents=intents, allowed_mentions=discord.AllowedMentions.none(), http_trace=trace
     )
