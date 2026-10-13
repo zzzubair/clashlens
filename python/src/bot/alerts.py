@@ -7,24 +7,27 @@ saved in the last 15 minutes against those players, after their alerts went
 on, and sends each one once. Older ones are skipped, so a bot that was down
 does not send a flood of stale alerts when it starts again.
 
-Each DM is written to the delivery log just before it is sent, and only
-while the switch is still on, the player still verified to the account and
-Discord still connected as the same user. When Discord cannot be reached
-(a 5xx answer, a 429 rate limit, a network error or a timeout) the DM is
-tried again, waiting longer each time and at least as long as Discord asks,
-for as long as those still hold and within 15 minutes of the battle being
-saved or the confirmation asked for; after that it is logged as not
-delivered. Every try sends the same Discord nonce, which Discord keeps for a
-few minutes, so a try soon after one Discord took does not post it again. A
-crash can lose an alert but never send it twice. Discord refusing a DM (bot
-not added, DMs closed, unknown user) is logged with the reason, which the
-website shows with what the Clasher can do. That DM is not tried again.
+Each DM is written to the delivery log just before it is first sent, and
+only while the switch is still on, the player still verified to the account
+and Discord still connected as the same user; every try sends the same
+Discord nonce, which Discord checks for repeats for a few minutes. A DM that
+clearly did not reach Discord (a 5xx or 429 answer, or a connection that
+failed before the request went out) is tried again, waiting longer each time
+and at least as long as Discord asks, while those still hold and within 15
+minutes of the battle being saved or the confirmation asked for. A DM whose
+try may have reached Discord with no answer back (a timeout, or a connection
+lost after sending) is tried again only within 2 minutes of that try, inside
+Discord's nonce check. After that it is logged as not delivered, never sent
+again. A crash can lose an alert but never send it twice. Discord refusing a
+DM (bot not added, DMs closed, unknown user) is logged with the reason, which
+the website shows with what the Clasher can do. That DM is not tried again.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -47,6 +50,9 @@ INTERVAL_SECONDS = 10.0
 # each try up to the longest.
 RETRY_SECONDS = 10.0
 RETRY_LONGEST_SECONDS = 120.0
+# A DM whose try may have reached Discord is tried again only this long after
+# that try, while Discord's nonce check still stops a repeat.
+NONCE_SECONDS = 120.0
 # Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
 
@@ -99,12 +105,14 @@ class Refused(Exception):
 
 
 class Unreachable(Exception):
-    """Discord could not be reached in time; the DM may or may not have gone.
-    `retry_after` is how many seconds Discord asked to wait, if it did."""
+    """Discord did not take the DM. `retry_after` is how many seconds Discord
+    asked to wait, if it did; `maybe_sent` when the try may have reached
+    Discord with no answer back."""
 
-    def __init__(self, retry_after: float = 0.0) -> None:
+    def __init__(self, retry_after: float = 0.0, *, maybe_sent: bool = False) -> None:
         super().__init__(retry_after)
         self.retry_after = retry_after
+        self.maybe_sent = maybe_sent
 
 
 class Messenger(Protocol):
@@ -127,6 +135,9 @@ class Delivery:
     # The loop's clock time of the next try, and the wait before it.
     retry_at: float = 0.0
     wait: float = 0.0
+    # The loop's clock time after which it is never tried again: the end of
+    # its `WINDOW`, or sooner once a try may have reached Discord.
+    last_try_by: float = math.inf
 
     def params(self) -> dict[str, Any]:
         return {
@@ -273,7 +284,8 @@ class AlertLoop:
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def tick(self) -> int:
-        """Try again each waiting DM whose time has come, then send every
+        """Log as not delivered each waiting DM past its last try, and try
+        again each other one whose time has come, then send every
         confirmation, then every alert, due now, one at a time; returns how
         many were sent."""
         now = self.now()
@@ -282,14 +294,16 @@ class AlertLoop:
             await asyncio.to_thread(self.alerts.prune)
             self._pruned_at = clock
         sent = 0
-        waiting, self._waiting = self._waiting, []
-        for delivery in waiting:
-            if delivery.retry_at > clock:
-                self._waiting.append(delivery)
-            elif await asyncio.to_thread(self.alerts.still_due, delivery):
-                sent += await self._send(delivery)
-            else:
+        for delivery in list(self._waiting):
+            expired = clock >= delivery.last_try_by
+            if not expired and delivery.retry_at > clock:
+                continue
+            if expired or not await asyncio.to_thread(self.alerts.still_due, delivery):
                 await self._finish(delivery, "failed", None)
+                self._waiting.remove(delivery)
+            else:
+                self._waiting.remove(delivery)
+                sent += await self._send(delivery)
         for switch in await asyncio.to_thread(self.alerts.confirmations_due):
             sent += await self._claim(
                 Delivery(
@@ -322,12 +336,16 @@ class AlertLoop:
         if claimed is None:
             return 0
         delivery.id = claimed
+        delivery.last_try_by = asyncio.get_running_loop().time() + (
+            delivery.since + WINDOW - datetime.now(UTC)
+        ).total_seconds()
         return await self._send(delivery)
 
     async def _send(self, delivery: Delivery) -> int:
         """Try one logged DM, and log how it went or wait to try again; 1
         when it was delivered."""
         state, reason = "sent", None
+        started = asyncio.get_running_loop().time()
         try:
             await self.messenger.send_dm(
                 delivery.discord_user_id, delivery.reply, delivery.id
@@ -335,6 +353,8 @@ class AlertLoop:
         except Refused as refusal:
             state, reason = "refused", refusal.reason
         except Unreachable as outage:
+            if outage.maybe_sent:
+                delivery.last_try_by = min(delivery.last_try_by, started + NONCE_SECONDS)
             delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
             delivery.retry_at = asyncio.get_running_loop().time() + max(
                 delivery.wait, outage.retry_after

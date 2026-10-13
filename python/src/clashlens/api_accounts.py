@@ -1318,17 +1318,20 @@ def _group_player(connection: Any, row: Any, now: datetime) -> dict[str, Any]:
     }
 
 
-def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
+def _verified_players(
+    connection: Any, account_id: int, limit: int | None = 500
+) -> list[dict[str, Any]]:
     return [
         {"tag": tag, "name": name}
-        for _id, tag, name, _clan, _league in _linked_players(connection, account_id)
+        for _id, tag, name, _clan, _league in _linked_players(connection, account_id, limit)
     ]
 
 
 def _linked_players(
-    connection: Any, account_id: int
+    connection: Any, account_id: int, limit: int | None = 500
 ) -> list[tuple[int, str, str | None, str | None, str | None]]:
-    """Each verified player's id, tag, and newest saved name, clan and league."""
+    """Each verified player's id, tag, and newest saved name, clan and league,
+    the first `limit` by tag, or all of them when it is None."""
     # Profile parsing validates the player tag and name separately from Legend
     # season/tier evidence. Linking a non-Legend account still exposes its name;
     # an uncertain newest profile names no league.
@@ -1355,9 +1358,9 @@ def _linked_players(
         ) AS profile ON profile.player_id = player.id
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag
-        LIMIT 500
+        LIMIT %s
         """,
-        (account_id,),
+        (account_id, limit),
     ).fetchall()
     return [
         (

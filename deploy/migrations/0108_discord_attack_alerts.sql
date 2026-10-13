@@ -12,8 +12,16 @@
 --
 -- discord_attack_alert_deliveries is the bot's log of every DM it tried: one
 -- row per battle and account, and one per confirmation asked for. The bot
--- writes the row before it sends, so nothing is ever sent twice, even after a
--- crash. It is the only table the bot writes; the bot deletes rows
+-- writes the row before it first sends, and every try sends the same Discord
+-- nonce, which Discord checks for repeats for a few minutes. A DM that
+-- clearly did not reach Discord (a 5xx or 429 answer, or a connection that
+-- failed before the request went out) is tried again within 15 minutes of the
+-- battle being saved or the confirmation asked for. A DM whose try may have
+-- reached Discord with no answer back (a timeout, or a connection lost after
+-- sending) is tried again only within 2 minutes of that try, inside Discord's
+-- nonce check, then logged as not delivered. A refusal is never tried again,
+-- and a crash leaves the row unfinished, never tried again, so no DM Discord
+-- took is sent twice. It is the only table the bot writes; the bot deletes rows
 -- older than 7 days, so at most 7 days of alerts are kept: about 8 rows a day
 -- per player with alerts on.
 BEGIN;
@@ -39,9 +47,9 @@ CREATE TABLE IF NOT EXISTS discord_attack_alert_deliveries (
     confirms timestamptz,
     -- sending: claimed and not finished; the bot tries it again while Discord
     -- cannot be reached, and a crash leaves it here, never tried again.
-    -- refused: Discord would not deliver it, for `reason`; failed: Discord
-    -- could not be reached within 15 minutes of the battle being saved or
-    -- the confirmation asked for.
+    -- refused: Discord would not deliver it, for `reason`; failed: Discord did
+    -- not take it in time: within 15 minutes of the battle being saved or the
+    -- confirmation asked for, or 2 minutes of a try that may have reached it.
     state text NOT NULL CHECK (state IN ('sending', 'sent', 'refused', 'failed')),
     reason text CHECK (reason IN ('no_shared_server', 'dms_closed', 'unknown_user', 'other')),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),

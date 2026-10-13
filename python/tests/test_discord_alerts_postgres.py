@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from uuid import uuid4
 
 import psycopg
+import pytest
 from domain_test_support import as_api_role, domain_database, seed_battles
 from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 from test_reset_scenarios_postgres import (
@@ -38,22 +41,28 @@ NAME = "Synthetic Legend I"
 
 class FakeDiscord:
     """Records each try by its nonce and each DM delivered; refuses users in
-    `refusing` as Discord would, and cannot be reached for the next `outages`
-    tries."""
+    `refusing` as Discord would, gives no answer back to the next `unanswered`
+    tries, which may have reached it, and cannot be reached for the next
+    `outages` tries, asking to wait `retry_after`."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Reply]] = []
         self.tries: list[int] = []
         self.refusing: dict[str, str] = {}
+        self.unanswered = 0
         self.outages = 0
+        self.retry_after = 0.0
 
     async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
         self.tries.append(nonce)
         if discord_user_id in self.refusing:
             raise Refused(self.refusing[discord_user_id])
+        if self.unanswered:
+            self.unanswered -= 1
+            raise Unreachable(maybe_sent=True)
         if self.outages:
             self.outages -= 1
-            raise Unreachable
+            raise Unreachable(self.retry_after)
         self.sent.append((discord_user_id, reply))
 
 
@@ -86,6 +95,33 @@ def _defend(connection_info: str, player_id: int, *, saved_ago: timedelta = time
             " WHERE id = (SELECT max(id) FROM legend_battles)",
             (saved_ago,),
         )
+
+
+@contextmanager
+def _alerts_on(database_url: str) -> Iterator[tuple[str, ApiDatabase, int, int]]:
+    """The account's one verified player, #2PP, with alerts on for an hour and
+    no confirmation due: (connection info, API database, account, player id)."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                player = connection.execute(
+                    "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true)"
+                    " RETURNING id"
+                ).fetchone()[0]
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            _verify(owner, mine, "#2PP")
+            assert _switch(api, mine, "#2PP", True) == 200
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute(
+                    "UPDATE discord_attack_alerts SET enabled_at = enabled_at - interval '1 hour',"
+                    " confirm_requested_at = confirm_requested_at - interval '1 hour'"
+                )
+            yield connection_info, api, mine, player
+        finally:
+            api.close()
+            owner.close()
 
 
 def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
@@ -188,7 +224,8 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     is tried once, logged, and shown on the website with its reason. A DM
     Discord can't take just then is tried again with the same nonce and
     delivered once; one still undelivered 15 minutes after its battle was
-    saved is logged and shown as not delivered."""
+    saved is logged and shown as not delivered then, even while Discord asked
+    to wait longer."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
@@ -238,8 +275,9 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
             defend("#2PP")
             retried = [asyncio.run(loop.tick()) for _ in range(3)]
 
-            # Saved 2 seconds before its 15 minutes run out, with Discord down.
-            discord.outages = 100
+            # Saved 2 seconds before its 15 minutes run out, with Discord down
+            # and asking to wait a minute.
+            discord.outages, discord.retry_after = 100, 60.0
             defend("#2PP", saved_ago=WINDOW - timedelta(seconds=2))
             expiring = asyncio.run(loop.tick())
             time.sleep(2)
@@ -337,6 +375,94 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
         "Attack alerts are on for Unnamed #2PP",
         "Unnamed #2PP was attacked",
     ]
+
+
+def test_a_dm_that_may_have_reached_discord_is_tried_again_only_within_two_minutes(
+    database_url: str, monkeypatch
+) -> None:
+    """A try with no answer back may have reached Discord, so the DM is tried
+    again with the same nonce only while Discord's nonce check still stops a
+    repeat, 2 minutes, here shortened to 1 second; after that it is logged and
+    shown as not delivered, without another try."""
+    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 1.0)
+    with _alerts_on(database_url) as (connection_info, api, mine, player):
+        discord = FakeDiscord()
+        loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE)
+        discord.unanswered = 1
+        _defend(connection_info, player)
+        answered = [asyncio.run(loop.tick()) for _ in range(3)]
+
+        discord.unanswered = 100
+        _defend(connection_info, player)
+        within = [asyncio.run(loop.tick()) for _ in range(2)]
+        time.sleep(1.1)
+        after = [asyncio.run(loop.tick()) for _ in range(2)]
+        gave_up = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            log = connection.execute(
+                "SELECT id, state FROM discord_attack_alert_deliveries ORDER BY battle_id"
+            ).fetchall()
+
+    assert (answered, within, after) == ([0, 1, 0], [0, 0], [0, 0])
+    assert [(state, discord.tries.count(id)) for id, state in log] == [
+        ("sent", 2), ("failed", 2)]
+    assert len(discord.tries) == 4 and len(discord.sent) == 1
+    assert gave_up is not None and gave_up["reason"] == "unreachable"
+
+
+def test_dms_waiting_for_discord_outlast_a_failed_round(
+    database_url: str, monkeypatch
+) -> None:
+    """Two DMs wait for Discord when a database error ends the round that
+    would try them again; the next round still tries and delivers both."""
+    monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
+    with _alerts_on(database_url) as (connection_info, api, _mine, player):
+        discord = FakeDiscord()
+        alerts = AlertStore(api, Store(api))
+        loop = AlertLoop(alerts, discord, SITE)
+        discord.outages = 2
+        _defend(connection_info, player)
+        _defend(connection_info, player)
+        waiting = asyncio.run(loop.tick())
+
+        def database_restarting(_delivery: object) -> bool:
+            raise psycopg.OperationalError("the database is restarting")
+
+        alerts.still_due = database_restarting  # type: ignore[method-assign]
+        with pytest.raises(psycopg.OperationalError):
+            asyncio.run(loop.tick())
+        del alerts.still_due
+        delivered = asyncio.run(loop.tick())
+
+    assert (waiting, delivered) == (0, 2)
+    assert len(discord.sent) == 2
+
+
+def test_the_page_lists_every_verified_player(database_url: str) -> None:
+    """A player with alerts on stays on the page, to be turned off, however
+    many players sort before it."""
+    with _alerts_on(database_url) as (connection_info, api, mine, _player):
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            tags = [
+                row[0]
+                for row in connection.execute(
+                    "INSERT INTO players (normalized_tag, active)"
+                    " SELECT '#0' || translate(lpad(n::text, 4, '0'), '0123456789',"
+                    " '0289PYLQGR'), true FROM generate_series(1, 500) AS n"
+                    " RETURNING normalized_tag"
+                ).fetchall()
+            ]
+        owner = ApiDatabase(connection_info)
+        try:
+            for tag in tags:
+                _verify(owner, mine, tag)
+        finally:
+            owner.close()
+        players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
+
+    assert len(players) == 501
+    assert players[-1] == {"tag": "#2PP", "name": None, "on": True}
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:

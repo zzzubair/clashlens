@@ -7,6 +7,7 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import aiohttp
 import discord
 import pytest
 
@@ -18,13 +19,18 @@ SITE = Site("https://clashlens.test")
 
 
 class FakeClient:
-    """Opens a DM channel whose send fails as Discord answered."""
+    """Opens a DM channel whose send fails as Discord answered, or fails to
+    open it when `opening` fails."""
 
-    def __init__(self, error: Exception | None) -> None:
+    def __init__(self, error: Exception | None, opening: Exception | None = None) -> None:
         self.error = error
+        self.opening = opening
         self.sent: list[dict] = []
 
     async def create_dm(self, user: discord.abc.Snowflake) -> SimpleNamespace:
+        if self.opening is not None:
+            raise self.opening
+
         async def send(**message) -> None:
             if self.error is not None:
                 raise self.error
@@ -59,15 +65,25 @@ def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -
 
 
 def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
-    for error, wait in (
-        (_answer(503, 0), 0.0),
-        (TimeoutError(), 0.0),
-        (_answer(429, 0, {"Retry-After": "7.5"}), 7.5),
+    """Only a send that may have reached Discord with no answer back counts as
+    maybe sent: not an answer from Discord, a connection that never opened,
+    or a DM channel that could not be opened."""
+    never_connected = aiohttp.ClientConnectorError(
+        SimpleNamespace(host="discord.com", port=443, ssl=True),
+        OSError(111, "Connection refused"),
+    )
+    for client, wait, maybe_sent in (
+        (FakeClient(_answer(503, 0)), 0.0, False),
+        (FakeClient(_answer(429, 0, {"Retry-After": "7.5"})), 7.5, False),
+        (FakeClient(never_connected), 0.0, False),
+        (FakeClient(None, opening=TimeoutError()), 0.0, False),
+        (FakeClient(TimeoutError()), 0.0, True),
+        (FakeClient(aiohttp.ServerDisconnectedError()), 0.0, True),
     ):
-        messenger = DiscordMessenger(FakeClient(error))  # type: ignore[arg-type]
+        messenger = DiscordMessenger(client)  # type: ignore[arg-type]
         with pytest.raises(Unreachable) as outage:
             asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1))
-        assert outage.value.retry_after == wait
+        assert (outage.value.retry_after, outage.value.maybe_sent) == (wait, maybe_sent)
 
 
 def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:

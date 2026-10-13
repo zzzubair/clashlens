@@ -19,7 +19,7 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     be delivered when nothing has been delivered since and no confirmation
     has been asked for since: a switch going on or Discord connected again."""
     with database.pool.connection() as connection:
-        players = _verified_players(connection, account_id)
+        players = _verified_players(connection, account_id, limit=None)
         on = {
             _text(row[0])
             for row in connection.execute(

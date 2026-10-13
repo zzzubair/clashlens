@@ -148,7 +148,7 @@ const UNDELIVERED_HELP: Record<UndeliveredReason, string> = {
     "Discord couldn't find the connected Discord account. Unlink Discord in Sign-in connections and link it again.",
   other: "Discord refused the message. Reconnect Discord to try again.",
   unreachable:
-    "Clash Lens kept trying for 15 minutes but couldn't reach Discord. The next attack sends a new message.",
+    "Clash Lens couldn't get it to Discord in time and stopped trying. The next attack sends a new message.",
 };
 
 export default function DiscordAlertsRoute() {
