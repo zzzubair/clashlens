@@ -47,7 +47,7 @@ import {
   type GoogleAccountIdentity,
 } from "./python.server";
 
-// The player page waits for this list; a timeout hides only the list.
+// The player page never waits for this list; a late answer hides only the list.
 const PLAYER_CREWS_TIMEOUT_MS = 1_000;
 
 /** The signed-in account's crews. */

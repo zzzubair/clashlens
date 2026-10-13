@@ -35,6 +35,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import type { PlayerPage } from "../../app/lib/contracts";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import "../../app/services/crews.server";
 import { PythonApiError } from "../../app/services/python.server";
 
 const TAG = "#2PP";
@@ -106,9 +107,12 @@ async function renderPlayer(): Promise<string> {
 describe("crews on the player page", () => {
   beforeEach(() => {
     vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
+    // The page's other reads take a moment, so a quick crews answer comes first.
     mocks.createPythonClient.mockReset().mockReturnValue({
       getPlayer: vi.fn().mockResolvedValue(PLAYER),
-      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      getPlayerSeasons: vi.fn(
+        () => new Promise((resolve) => setTimeout(() => resolve([]), 20)),
+      ),
     });
     mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
     mocks.requestJson.mockReset();
@@ -167,6 +171,13 @@ describe("crews on the player page", () => {
     mocks.requestJson.mockRejectedValueOnce(
       new PythonApiError(503, { error: "timeout" }),
     );
+    const html = await renderPlayer();
+    expect(html).toContain("Nova");
+    expect(html).not.toContain('class="player-crews"');
+  });
+
+  it("leaves the list out rather than wait for a late answer", async () => {
+    mocks.requestJson.mockReturnValue(new Promise(() => {}));
     const html = await renderPlayer();
     expect(html).toContain("Nova");
     expect(html).not.toContain('class="player-crews"');

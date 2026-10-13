@@ -85,7 +85,7 @@ export interface PlayerLoaderData {
   lookupError: WebsiteErrorResponse | null;
   // Streams in after the page; null when the history response is unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
-  // Null when the crews response is unavailable.
+  // Null when the crews answer is unavailable or arrives after the other reads.
   crews?: PlayerCrew[] | null;
   // The site's public address, for absolute links in link previews.
   origin?: string;
@@ -236,7 +236,7 @@ export async function loader({
     lookup,
     lookupError,
     pastSeasons,
-    crews: await crews,
+    crews: await Promise.race([crews, null]),
     origin: await origin,
   };
 }
