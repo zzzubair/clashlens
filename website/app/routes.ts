@@ -24,6 +24,7 @@ export default [
   route("account/setup", "routes/account.setup.tsx"),
   route("account/profile", "routes/account.profile.tsx"),
   route("account/providers", "routes/account.providers.tsx"),
+  route("account/discord-alerts", "routes/account.discord-alerts.tsx"),
   route("account/saved-players", "routes/account.saved-players.ts"),
   route("account/verify-player", "routes/account.verify-player.tsx"),
   route("account/groups", "routes/account.groups.tsx"),

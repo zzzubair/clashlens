@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import psycopg
 from test_api_migration import migrated_production_database
-from test_private_api_providers import migrate_login_tables
 
 from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, OperationResult, RequestBinding
@@ -54,7 +53,9 @@ def _create_account(
 def test_link_adds_second_provider_and_resolves_through_both(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -88,7 +89,9 @@ def test_link_adds_second_provider_and_resolves_through_both(
 
 
 def test_link_refuses_identity_owned_by_another_account(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             first = _create_account(
@@ -117,7 +120,9 @@ def test_link_refuses_identity_owned_by_another_account(database_url: str) -> No
 def test_concurrent_links_of_one_subject_return_a_safe_conflict(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_ids = [
@@ -164,7 +169,9 @@ def test_concurrent_links_of_one_subject_return_a_safe_conflict(
 
 
 def test_link_refuses_second_subject_for_held_provider(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -185,8 +192,9 @@ def test_link_refuses_second_subject_for_held_provider(database_url: str) -> Non
 def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -232,7 +240,9 @@ def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
 
 
 def test_unlink_refuses_the_final_linked_identity(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -256,8 +266,9 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
 ) -> None:
     """Two simultaneous unlinks race on separate connections; the per-account
     row lock serializes them, so exactly one removal can ever succeed."""
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -328,7 +339,9 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
 def test_concurrent_recovery_collision_retains_refusal_audit(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_ids = [
@@ -413,8 +426,9 @@ def test_concurrent_recovery_collision_retains_refusal_audit(
 def test_provider_events_leave_audits_without_duplicating_subjects(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
-        migrate_login_tables(connection_info)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(

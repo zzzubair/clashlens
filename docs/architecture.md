@@ -67,13 +67,25 @@ confidence rules, rankings, or cohort membership.
 
 Integrations needing Clash Lens data use the private API rather than reading
 the database or archive. The one exception is the Clash Lens Discord bot
-([`python/src/bot`](../python/src/bot)): it reads the database directly,
-read-only, by running the private API's own read code with the API's database
-login, so its numbers match the website. It writes nothing; settings such as
-the default player are saved through the website. The agreed Discord setup
-also uses a private incoming webhook for operator alerts and an existing ticket
-bot for support; neither needs the product database or archive. Isolate future
-integrations only where availability or measured resource use requires it.
+([`python/src/bot`](../python/src/bot)): it reads the database directly by
+running the private API's own read code with the API's database login, so its
+numbers match the website. Settings such as the default player and attack
+alerts are saved through the website. The bot's one write is its attack alert
+delivery log (`discord_attack_alert_deliveries`, migration 0108), which records
+each alert DM, and the confirmation DM sent when alerts go on, before it is
+first sent. Every try sends the same Discord nonce, which Discord checks for
+repeats for a few minutes. A DM Discord did not take, whatever the cause (a 5xx
+or 429 answer, a network error, a timeout, an answer cut off), is tried again
+only within 2 minutes of its first try, when it was recorded. Each try, with
+any wait for Discord, is cut off at that limit, and a try that could only start
+after it is not made; the DM is then recorded as not delivered. Refusals are
+never tried again. So no DM Discord took is sent twice. The bot reads new
+defenses only through that migration's `clashlens_discord_attack_alerts_due`
+function, never the battle tables. Attack alerts run whenever the bot runs.
+The agreed Discord setup also uses a private incoming webhook for operator
+alerts and an existing ticket bot for support; neither needs the product
+database or archive. Isolate future integrations only where availability or
+measured resource use requires it.
 
 ## Durable seams
 
@@ -231,12 +243,12 @@ any process exits the others are stopped and the container restarts them
 all. Their database connections are budgeted: each process's
 `--database-pool-size` is at most 16, and processes times (pool size plus the
 two maintenance connections and the maintenance lock's one) may not exceed
-38. With the collector's 32, the uploads process's 4, the API's 8 and the
-Discord bot's 4 (its own pool under the API's database login) that leaves two
-for operators within an application budget of 88 of PostgreSQL's 100 (checked
-on 8 October 2026); with the bot off the budget stays 84. The 12 outside the
-budget, 9 ordinary plus the 3 reserved for superusers, stay free for
-maintenance and inspection.
+38. With the collector's 32, the uploads process's 4, the API's 8, the
+Discord bot's 5 (its own pool under the API's database login: 4 for commands,
+1 for attack alerts) and two for operators, the application budget is 89 of
+PostgreSQL's 100 (checked on 8 October 2026); with the bot off it is 84. With
+the bot on, the 11 outside the budget, 8 ordinary plus the 3 reserved for
+superusers, stay free for maintenance and inspection.
 
 All threads in a process share its one `--database-pool-size` pool, which has
 at least one connection a thread: the worker refuses fewer, and the pool

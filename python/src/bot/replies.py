@@ -26,7 +26,7 @@ WAITING_FOR_RESET = "Waiting for Season reset"
 # One line per command for /help, also used as each command's description.
 COMMANDS = (
     ("help", "What the bot does, its commands and your connection"),
-    ("link", "Connect Discord and choose your default player on the Clash Lens website"),
+    ("link", "Connect Discord and turn on attack alerts on the Clash Lens website"),
     ("stats", "This Season so far for any tracked player, or your default player"),
 )
 
@@ -149,8 +149,11 @@ def not_your_menu() -> Reply:
     return Reply("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher connects Discord and chooses the bot's default player.
+# Where a Clasher chooses the bot's default player.
 DISCORD_SETTINGS = "/account/providers"
+# Where a Clasher connects Discord and turns attack alerts on or off; /link
+# opens it, and a signed-out visitor signs in first and lands there.
+DISCORD_ALERTS = "/account/discord-alerts"
 
 
 def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
@@ -163,7 +166,7 @@ def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
         updated=now,
         private=True,
         links=(
-            Link("Connect Discord on Clash Lens", site.url(DISCORD_SETTINGS)),
+            Link("Connect Discord on Clash Lens", site.url(DISCORD_ALERTS)),
             Link(
                 "New here: create an account with Discord",
                 site.url("/auth/discord?returnPath=%2Faccount"),
@@ -208,13 +211,13 @@ def help_reply(site: Site, username: str | None, player_count: int, now: datetim
 
 
 def link_reply(site: Site, username: str, now: datetime) -> Reply:
-    """A connected account's pointer: players and the default player are
-    managed on the website, never in the bot."""
+    """A connected account's pointer: attack alerts are managed on the
+    website, never in the bot."""
     return Reply(
-        f"Connected as @{safe(username)}. Manage the connection and choose your "
-        "default player on Clash Lens.",
+        f"Connected as @{safe(username)}. Turn attack alerts on or off for your "
+        "players on Clash Lens.",
         updated=now,
-        links=(Link("Manage on Clash Lens", site.url(DISCORD_SETTINGS)),),
+        links=(Link("Discord alerts on Clash Lens", site.url(DISCORD_ALERTS)),),
     )
 
 
@@ -328,19 +331,13 @@ def _total(days: Sequence[Mapping[str, Any] | None], key: str) -> int | None:
     return None if None in values else sum(values)
 
 
-def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
-    """This Season so far for one player, from the player page read: one
-    compact message anyone in the conversation can forward."""
+def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | None:
+    """Every Legend day of the Season so far from the player page read, None
+    where none is published; None when the Season's days are not available."""
     ready = page["screen_ready"]
     season = ready.get("season")
-    title = _player_title(page)
     if season is None:
-        return Reply(
-            f"This Season's days are not available yet.\n\n{reset_time(now)}",
-            title=title,
-            updated=page["observed_at"],
-            links=(Link("Open on Clash Lens", site.player(page["tag"])),),
-        )
+        return None
     published = {datetime.fromisoformat(start) for start in ready["season_day_starts"]}
     by_start = {
         moment: day
@@ -348,11 +345,32 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         if (moment := datetime.fromisoformat(day["ranked_day_start"])) in published
     }
     season_start = datetime.fromisoformat(season["start"])
-    # Every Legend day of the Season so far, None where none is published.
-    days = [
+    return [
         by_start.get(season_start + timedelta(days=offset))
         for offset in range(season["current_day_number"])
     ]
+
+
+def hit_rate(days: Sequence[Mapping[str, Any] | None]) -> str:
+    """The Season's three-star share of attacks so far, as /stats and attack
+    alerts show it."""
+    return _rate(_total(days, "attack_three_star_count"), _total(days, "attack_count"))
+
+
+def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
+    """This Season so far for one player, from the player page read: one
+    compact message anyone in the conversation can forward."""
+    season = page["screen_ready"].get("season")
+    title = _player_title(page)
+    days = season_days(page)
+    if season is None or days is None:
+        return Reply(
+            f"This Season's days are not available yet.\n\n{reset_time(now)}",
+            title=title,
+            updated=page["observed_at"],
+            links=(Link("Open on Clash Lens", site.player(page["tag"])),),
+        )
+    season_start = datetime.fromisoformat(season["start"])
     start = None if days[0] is None else days[0].get("start_trophies")
     now_trophies = None if page["season_reset_pending"] else page["trophies"]
     change = _known(start, number) + " → " + _known(now_trophies, number)
@@ -374,7 +392,7 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         "",
         (
             f"**Attacks** {_known(attack_count, number)} · hit rate "
-            f"{_rate(three_stars, attack_count)} ({_known(three_stars, number)} three-stars) · "
+            f"{hit_rate(days)} ({_known(three_stars, number)} three-stars) · "
             f"{_per(gain, attack_count)} per attack"
         ),
         (
@@ -391,4 +409,38 @@ def stats_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         footer="Totals count the battles Clash Lens recorded this Season.",
         updated=page["observed_at"],
         links=(Link("Season on Clash Lens", site.player(page["tag"])),),
+    )
+
+
+def attack_alert(site: Site, alert: Mapping[str, Any], attacker_hit_rate: str) -> Reply:
+    """The DM sent when one of the person's players is attacked, named by the
+    defending player since an account can have several."""
+    attacker = safe(alert["attacker_name"])
+    lost = alert["trophies_lost"]
+    return Reply(
+        (
+            f"{attacker} {alert['attacker_tag']}: {alert['stars']}★ · "
+            f"{alert['destruction_percentage']}% · "
+            f"{f'−{number(lost)}' if lost else '0'} trophies\n"
+            f"{attacker}'s hit rate in this attack's Season: {attacker_hit_rate}"
+        ),
+        title=f"{safe(alert['defender_name'])} {alert['defender_tag']} was attacked",
+        updated=alert["saved_at"],
+        links=(
+            Link("Open on Clash Lens", site.player(alert["defender_tag"])),
+            Link("Alert settings", site.url(DISCORD_ALERTS)),
+        ),
+    )
+
+
+def alerts_on(site: Site, switch: Mapping[str, Any]) -> Reply:
+    """The DM sent when attack alerts go on for a player, and again when
+    Discord is connected again, which also proves the bot can reach the
+    person."""
+    player = safe(switch["name"])
+    return Reply(
+        f"You'll get a message here as soon as {player} is attacked.",
+        title=f"Attack alerts are on for {player} {switch['tag']}",
+        updated=switch["confirm_requested_at"],
+        links=(Link("Alert settings", site.url(DISCORD_ALERTS)),),
     )

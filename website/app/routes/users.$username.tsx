@@ -119,6 +119,9 @@ export default function UserRoute() {
             <Link className="button button-secondary" to="/account/providers">
               Sign-in connections
             </Link>
+            <Link className="button button-secondary" to="/account/discord-alerts">
+              Discord alerts
+            </Link>
           </p>
         ) : null}
       </section>
