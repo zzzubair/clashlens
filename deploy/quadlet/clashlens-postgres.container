@@ -25,9 +25,11 @@ HealthTimeout=5s
 HealthRetries=12
 HealthOnFailure=kill
 # Crash recovery replays the change log since the last finished checkpoint.
-# From 30 Sep to 8 Oct 2026 the most written between two checkpoints was
-# 1.1 GB (3,008 checkpoints), so a crash just before one finishes replays up to
-# about 2.2 GB: four minutes at the 9.4 MB/s rogue replayed (845 MB in 90 s).
+# A checkpoint starts every 15 minutes, or sooner after about 4.2 GB of change
+# log (max_wal_size 8 GB over 1.9), so a crash just before one finishes replays
+# up to two of those. At the 1.56 MB/s day average of 10-11 Oct 2026 that is
+# about 2.8 GB, five minutes at the 9.4 MB/s rogue replayed (845 MB in 90 s);
+# while writing stays over 4.7 MB/s it is about 8 GB, about 15 minutes.
 # Stopping a replay only starts it again from the beginning, so no fixed limit
 # stops one: the regular check above starts only once this startup check finds
 # the database ready, and the start may take as long as it needs. While not
@@ -49,8 +51,10 @@ Notify=healthy
 # over 5 s, lock waits over 1 s (deadlock_timeout) and every automatic vacuum
 # and statistics refresh, so a slowdown like 7 Oct 2026's is in the log. Query
 # values are left out: they can hold emails or session data, and ./ops turns
-# the slow-statement log off for its password changes.
-Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c checkpoint_timeout=10min -c max_wal_size=2GB -c log_min_duration_statement=5s -c log_lock_waits=on -c log_autovacuum_min_duration=0 -c log_parameter_max_length=0 @@POSTGRES_ARCHIVE_ARGS@@
+# the slow-statement log off for its password changes. Query compilation
+# (JIT) is off: on 11 Oct 2026 it took up to 22 CPU-hours a day, up to 75% of
+# the run time of daily result recalculations that run in under 0.1 s.
+Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c jit=off -c checkpoint_timeout=15min -c max_wal_size=8GB -c log_min_duration_statement=5s -c log_lock_waits=on -c log_autovacuum_min_duration=0 -c log_parameter_max_length=0 @@POSTGRES_ARCHIVE_ARGS@@
 
 [Service]
 Restart=always

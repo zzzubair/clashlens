@@ -75,10 +75,19 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             WHERE status = 'complete' AND updated_at > statement_timestamp() - interval '2 minutes'
             GROUP BY work_type
         ), uploads AS (
-            SELECT count(*) AS pending_count, min(created_at) AS oldest_at
-            FROM collector_response_uploads
-            WHERE state IN ('pending', 'leased')
-               OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)
+            -- Two counts, so each reads its small index of uploads in flight
+            -- (claim order, lease expiry): one count with OR read the whole
+            -- 1.6 GB table every minute on 11 Oct 2026.
+            SELECT sum(pending_count)::bigint AS pending_count, min(oldest_at) AS oldest_at
+            FROM (
+                SELECT count(*) AS pending_count, min(created_at) AS oldest_at
+                FROM collector_response_uploads
+                WHERE state IN ('pending', 'failed')
+                  AND (state = 'pending' OR next_attempt_at < 'infinity'::timestamptz)
+                UNION ALL
+                SELECT count(*), min(created_at) FROM collector_response_uploads
+                WHERE state = 'leased'
+            ) AS waiting
         ), failed_uploads AS (
             SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
             FROM collector_response_uploads
