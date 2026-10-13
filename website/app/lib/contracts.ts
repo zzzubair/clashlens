@@ -1,3 +1,5 @@
+import type { ArmyUnitNames } from "./army";
+
 export type FreshnessState = "fresh" | "stale" | "unknown";
 export type ConfidenceState = "high" | "partial" | "uncertain";
 export type CoverageState = "complete" | "partial" | "missing" | "unknown";
@@ -313,6 +315,8 @@ export interface PlayerPage {
   currentDayPublishedAt?: string | null;
   recentDays: RankedDaySummary[];
   seasonDays: RankedDaySummary[];
+  /** Python's name for each unit in these days' armies, by saved id. */
+  armyUnits?: ArmyUnitNames;
   dataQuality: Array<{
     code:
       | "stale"

@@ -595,6 +595,16 @@ API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
 in a profile response on October 2, 2026), resized to 160 pixels high. It is used under the Supercell Fan Content Policy,
 which the site footer links to.
 
+`app/units/` holds official unit art from the Supercell Fan Kit
+(fankit.supercell.com, checked on October 13, 2026), also used under the Fan
+Content Policy: 159 images, 64 × 64 pixels, 348 KB in all, each named after the
+unit's saved id (`troop:23` is `troop-23.webp`). The build gives them
+fingerprinted names under `/assets/`, cached for a year. Every attack and defense
+on a player page has a Show army button beside Copy army. It draws that battle's
+army from its Copy army code, using the unit names the player response sends once
+per page. Units the Fan Kit has no art for, such as Noble Iron, show their name
+instead.
+
 The footer uses the exact notice in the policy's "Insert disclaimers" section,
 checked on October 2, 2026. The URL is visible and linked. The root README uses
 the same notice. Its browser test checks the complete rendered text, link, and
