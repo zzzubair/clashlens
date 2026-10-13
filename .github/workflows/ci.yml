@@ -15,11 +15,12 @@ concurrency:
 permissions:
   contents: read
 
-# Docker Hub rate-limits and times out unauthenticated pulls from shared
-# runners. The PostgreSQL services cannot fall back to another registry, so
-# they pull from AWS's full public copy of Docker's official images. Podman
-# jobs install this file to try Google's public copy of Docker Hub first and
-# fall back to Docker Hub only if it fails.
+# Docker Hub rate-limits unauthenticated pulls from shared runners, and AWS's
+# public copy refuses them once its anonymous data quota runs out. The
+# PostgreSQL services cannot fall back to another registry, so they pull
+# Google's public copy of Docker Hub, pinned to the Docker Hub digest. Podman
+# jobs install this file to try Google's copy first and fall back to Docker
+# Hub only if it fails.
 env:
   DOCKER_HUB_MIRROR: |
     [[registry]]
@@ -42,7 +43,7 @@ jobs:
       UV_PROJECT_ENVIRONMENT: /tmp/clashlens-ci-venv
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:18
+        image: mirror.gcr.io/library/postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
         env:
           POSTGRES_DB: clashlens
           POSTGRES_PASSWORD: postgres
@@ -170,7 +171,7 @@ jobs:
     # server per group and no collector load beside the tests.
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:18-alpine
+        image: mirror.gcr.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
         env:
           POSTGRES_DB: clashlens_test
           POSTGRES_PASSWORD: clashlens-dev
