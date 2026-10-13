@@ -380,28 +380,12 @@ describe("Legend clock", () => {
 });
 
 describe("Legend day card", () => {
-  const render = (
-    day: PlayerDay | null,
-    range = { best: 95, worst: 760 },
-    projected: number | null = null,
-  ) =>
+  const render = (day: PlayerDay | null, range = { best: 95, worst: 760 }) =>
     text(
       renderToStaticMarkup(
-        createElement(LegendDayCard, { player: linked(MAIN), day, range, projected }),
+        createElement(LegendDayCard, { player: linked(MAIN), day, range }),
       ),
     );
-
-  it("shows the projected place beside the outer range, labelled an estimate", () => {
-    const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain(
-      "Next Reset #1 – #12,270 estimate · narrows as the day goes on Projected #3,000 at Reset",
-    );
-    expect(html).toContain(
-      "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
-    );
-    // Before any day's examples are saved, only the outer range shows.
-    expect(render(emptyDay({}))).not.toContain("Projected");
-  });
 
   it("shows trophies, net, the ranks and the next Reset range as an estimate", () => {
     const html = render(
@@ -585,7 +569,6 @@ describe("today read for the Legend day and Bases cards", () => {
     });
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
-      projectedRank: null,
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [
@@ -611,32 +594,6 @@ describe("today read for the Legend day and Bases cards", () => {
       undefined,
       undefined,
     );
-  });
-
-  it("reads the projected place inside the Next Reset range", async () => {
-    mocks.requestJson.mockResolvedValue({
-      tag: MAIN,
-      rank_range: { best: 95, worst: 760 },
-      projected_rank: 240,
-      legends_held: null,
-      open_defenses: null,
-      automatic_defense_each: null,
-      opponents: null,
-    });
-    expect(await getPlayerToday(MAIN)).toMatchObject({
-      rankRange: { best: 95, worst: 760 },
-      projectedRank: 240,
-    });
-    mocks.requestJson.mockResolvedValue({
-      tag: MAIN,
-      rank_range: { best: 95, worst: 760 },
-      projected_rank: 0,
-      legends_held: null,
-      open_defenses: null,
-      automatic_defense_each: null,
-      opponents: null,
-    });
-    await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
   });
 
   it("keeps a today read without saved battles apart from one with no attacks", async () => {
@@ -750,7 +707,7 @@ describe("dashboard route", () => {
     // A first visit reads the default cards that sit behind the pop-up.
     // Legend day still has the account's live trophies and rank.
     expect(data.cards).toEqual({
-      "legend-day": { player: linked(MAIN), day: null, range: null, projected: null },
+      "legend-day": { player: linked(MAIN), day: null, range: null },
       "legend-clock": null,
       bases: null,
       goal: null,

@@ -386,10 +386,7 @@ def test_dashboard_today_skips_a_yesterday_the_worker_rejects(
             database.close()
 
 
-def test_bases_compare_only_with_players_at_similar_trophies(monkeypatch) -> None:
-    # No day's projected-place examples are saved.
-    monkeypatch.setattr(api_dashboard.projected_place, "read_examples", lambda *_: None)
-
+def test_bases_compare_only_with_players_at_similar_trophies() -> None:
     class Rows:
         def __init__(self, rows: list[tuple[Any, ...]]) -> None:
             self.rows = rows
@@ -401,7 +398,7 @@ def test_bases_compare_only_with_players_at_similar_trophies(monkeypatch) -> Non
             return self.rows
 
     def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
-        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0, 0, 0, None)
+        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0)
 
     # 24 defenses at 5,400 (6 held) and 196 at 5,000 (168 held), 400 away.
     rows = (

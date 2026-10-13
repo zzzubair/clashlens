@@ -41,7 +41,6 @@ from . import (
     ingestion,
     job_outcomes,
     late_battle_sweep,
-    projected_place,
     queue_refresh,
     reconciliation_db,
     snapshots,
@@ -334,8 +333,7 @@ class TimedMaintenance:
     """Reset publication checks and queue maintenance, each every 10 seconds.
 
     The publication checks also count the newest leaderboard's army rank-band
-    totals, army types and the dashboard's projected-place examples once
-    missing or stale, and every five minutes recount the
+    totals and army types once missing or stale, and every five minutes recount the
     Season's attacks the Live Leaderboard orders equal trophies by. They run
     only in the worker process holding the maintenance permit.
 
@@ -383,7 +381,6 @@ class TimedMaintenance:
                 if isinstance(self.database, Database):
                     army_rank_bands.refresh_rank_band_totals(self.database)
                     army_types.refresh_army_types(self.database)
-                    projected_place.refresh_remaining_changes(self.database)
                     analytics.refresh_live_attack_tallies(self.database)
                     api_leaderboard.refresh_live_unplayed(self.database)
             finally:
