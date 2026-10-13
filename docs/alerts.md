@@ -324,8 +324,10 @@ reading, except that the disk alert also waits for the restart history read,
 and the 05:30 board alert for the Reset progress read it needs. So a later
 check that is slow, fails or crashes, or a run stopped at the alert service's
 four-minute limit, never holds a found alert back. Recoveries and the
-unreadable-check and failed-deploy alerts are sent when the check ends. Until
-13 Oct 2026 only the health-check early warning went out early.
+unreadable-check and failed-deploy alerts are sent when the check ends, and so
+is an alert whose earlier recovery Discord has not yet accepted, right after
+that recovery. Until 13 Oct 2026 only the health-check early warning went out
+early.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.

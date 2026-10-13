@@ -772,8 +772,15 @@ def observe(
         # Sent before and between the slow checks below: Podman kills about
         # three minutes in, and each slow check may take 25 seconds. Every
         # other warning found by now goes first, once, so a slow or failing
-        # later check never holds it back; recoveries wait for the end.
-        found = {name for name, active in findings.items() if active is True} - sent
+        # later check never holds it back; recoveries, and warnings behind a
+        # saved recovery Discord has not accepted, wait for the end.
+        recovering = {
+            name
+            for name, incident in state.get("incidents", {}).items()
+            if incident.get("pending", {}).get("active") is False
+        }
+        found = {name for name, active in findings.items() if active is True}
+        found -= sent | recovering
         sent.update(found)
         if found:
             send(dict.fromkeys(found, True))

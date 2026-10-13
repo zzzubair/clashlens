@@ -539,3 +539,30 @@ def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
     error = capsys.readouterr().err
     assert "Reset publication status unavailable; run ./ops logs website" in error
     assert "private" not in error
+
+
+def test_a_warning_behind_a_rejected_recovery_waits_for_it_at_the_end(
+    runtime, monkeypatch
+):
+    rt = runtime
+    rt.reads_failed = True
+    assert rt.run() == 0
+    # Discord rejects the recovery, then the read fails again next run.
+    rt.reads_failed, rt.post_status = False, 500
+    assert rt.run() == 1
+    rt.reads_failed, rt.post_status = True, 204
+    commands_before_post = []
+    inner = alerts.request
+
+    def request(url, **kwargs):
+        if "payload" in kwargs:
+            commands_before_post.append(len(rt.calls))
+        return inner(url, **kwargs)
+
+    monkeypatch.setattr(alerts, "request", request)
+    assert rt.run() == 0
+    reads = [p["content"] for p in rt.posts if "private player-data read" in p["content"]]
+    assert len(reads) == 3
+    assert "recovered" in reads[1] and reads[2].startswith("Clash Lens alert:")
+    # Both went out after every check had run.
+    assert commands_before_post == [len(rt.calls)] * 2
