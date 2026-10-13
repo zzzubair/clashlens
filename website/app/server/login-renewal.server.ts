@@ -55,8 +55,6 @@ async function renewedLoginCookie(request: Request): Promise<string | null> {
     if (!config.loginEnabled || config.loginSecret.length !== 32) return null;
     const value = parseCookieHeader(request.headers.get("cookie")).get(LOGIN_COOKIE_NAME);
     if (value === undefined) return null;
-    // Issued before the check, so a sign-in connection removed while it runs
-    // still ends the renewed cookie.
     const nowMs = Date.now();
     const session = parseLoginCookieValue(
       value,
@@ -76,7 +74,10 @@ async function renewedLoginCookie(request: Request): Promise<string | null> {
         { provider: session.provider, providerSubject: session.providerSubject },
         config.loginSecret,
         nowMs,
-        createLoginSessionBinding(value),
+        {
+          sessionBinding: createLoginSessionBinding(value),
+          signedInAtMs: session.signedInAtMs,
+        },
       ),
       LOGIN_COOKIE_LIFETIME_SECONDS,
       config.cookieSecure,

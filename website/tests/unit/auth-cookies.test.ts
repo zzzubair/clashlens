@@ -32,7 +32,7 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const KEY = Buffer.from(TEST_SECRET, "base64url");
 const OTHER_KEY = Buffer.alloc(32, 0x42);
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
-const SESSION = { ...IDENTITY, issuedAtMs: 1_750_000_000 };
+const SESSION = { ...IDENTITY, issuedAtMs: 1_750_000_000, signedInAtMs: 1_750_000_000 };
 
 function oauthTransaction(now = 1_750_000) {
   return createOAuthTransaction("/account", now, (size) => Buffer.alloc(size, 0x2a));
@@ -123,40 +123,59 @@ describe("login cookie values", () => {
     const longest = { provider: "discord", providerSubject: "9".repeat(128) } as const;
     const first = createLoginCookieValue(longest, KEY, 1_750_000_000);
     const login = createLoginSessionBinding(first);
-    const renewed = createLoginCookieValue(longest, KEY, 1_760_000_123, login);
-    const again = createLoginCookieValue(
-      longest,
-      KEY,
-      1_770_000_000,
-      createLoginSessionBinding(renewed),
-    );
-    expect(parseLoginCookieValue(renewed, KEY, 1_760_000)).toEqual({
+    const renewed = createLoginCookieValue(longest, KEY, 1_760_000_123, {
+      sessionBinding: login,
+      signedInAtMs: 1_750_000_000,
+    });
+    const renewedSession = parseLoginCookieValue(renewed, KEY, 1_760_000);
+    const again = createLoginCookieValue(longest, KEY, 1_770_000_000, {
+      sessionBinding: createLoginSessionBinding(renewed),
+      signedInAtMs: renewedSession!.signedInAtMs,
+    });
+    expect(renewedSession).toEqual({
       ...longest,
       issuedAtMs: 1_760_000_123,
+      signedInAtMs: 1_750_000_000,
     });
-    expect(parseLoginCookieValue(again, KEY, 1_770_000 + 30 * 86_400 - 1)).not.toBeNull();
+    expect(parseLoginCookieValue(again, KEY, 1_770_000 + 30 * 86_400 - 1)).toEqual({
+      ...longest,
+      issuedAtMs: 1_770_000_000,
+      signedInAtMs: 1_750_000_000,
+    });
     expect(parseLoginCookieValue(again, KEY, 1_770_000 + 30 * 86_400)).toBeNull();
     // Logout records one fingerprint, which ends every renewal of the login.
     expect(createLoginSessionBinding(renewed)).toBe(login);
     expect(createLoginSessionBinding(again)).toBe(login);
-    expect(() => createLoginCookieValue(longest, KEY, 1_760_000_000, "short")).toThrow();
+    for (const bad of [
+      { sessionBinding: "short", signedInAtMs: 1_750_000_000 },
+      { sessionBinding: login, signedInAtMs: 1_760_000_001 },
+    ]) {
+      expect(() => createLoginCookieValue(longest, KEY, 1_760_000_000, bad)).toThrow();
+    }
   });
 
-  it("rejects a validly signed cookie with a malformed login fingerprint", () => {
-    const payload = Buffer.from(
-      JSON.stringify({
-        v: 1,
-        p: "google",
-        s: IDENTITY.providerSubject,
-        i: 1_750_000,
-        e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
-        l: "not a fingerprint",
-      }),
-    );
-    const value = `${payload.toString("base64url")}.${createHmac("sha256", KEY)
-      .update(payload)
-      .digest("base64url")}`;
-    expect(parseLoginCookieValue(value, KEY, 1_750_100)).toBeNull();
+  it("rejects a validly signed cookie with a malformed login fingerprint or sign-in time", () => {
+    for (const login of [
+      { l: "not a fingerprint" },
+      { o: -1 },
+      { o: "1749999999000" },
+      { o: 1_750_000_001 },
+    ]) {
+      const payload = Buffer.from(
+        JSON.stringify({
+          v: 1,
+          p: "google",
+          s: IDENTITY.providerSubject,
+          i: 1_750_000,
+          e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
+          ...login,
+        }),
+      );
+      const value = `${payload.toString("base64url")}.${createHmac("sha256", KEY)
+        .update(payload)
+        .digest("base64url")}`;
+      expect(parseLoginCookieValue(value, KEY, 1_750_100)).toBeNull();
+    }
   });
 
   it("rejects values with a non-canonical lifetime or future issuance", () => {
@@ -243,6 +262,7 @@ describe("login cookie values", () => {
     expect(parseLoginCookieValue(value, KEY, 1_750_100)).toEqual({
       ...IDENTITY,
       issuedAtMs: 1_750_000_800,
+      signedInAtMs: 1_750_000_800,
     });
     const make = (fields: Record<string, unknown>) => {
       const payload = Buffer.from(
@@ -484,5 +504,30 @@ describe("login session requests", () => {
     expect(JSON.parse(logout[2].toString("utf8"))).toEqual({
       session: createLoginSessionBinding(value),
     });
+  });
+
+  it("refuses a cookie renewed after its sign-in connection was removed when the login began before it", async () => {
+    const removedAtMs = 1_760_000_000_000;
+    // The API refuses a login that signed in at or before the removal.
+    mocks.requestJson.mockImplementation(
+      async (_path: string, _method: string, body: Buffer) => ({
+        revoked: JSON.parse(body.toString("utf8")).issued_at_ms <= removedAtMs,
+      }),
+    );
+    const signedInAtMs = removedAtMs - 3_600_000;
+    const renewed = createLoginCookieValue(IDENTITY, KEY, removedAtMs + 1, {
+      sessionBinding: createLoginSessionBinding(
+        createLoginCookieValue(IDENTITY, KEY, signedInAtMs),
+      ),
+      signedInAtMs,
+    });
+    const fresh = createLoginCookieValue(IDENTITY, KEY, removedAtMs + 1);
+    const later = removedAtMs / 1000 + 60;
+    expect(
+      await isLoginRevoked(parseLoginCookieValue(renewed, KEY, later)!, renewed),
+    ).toBe(true);
+    expect(await isLoginRevoked(parseLoginCookieValue(fresh, KEY, later)!, fresh)).toBe(
+      false,
+    );
   });
 });

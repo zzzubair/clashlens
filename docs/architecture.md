@@ -47,16 +47,17 @@ the API before trusting any login cookie, so a copied cookie stops working once
 its login logs out. A login cookie lasts 30 days, and a signed-in visit at
 least an hour after the cookie was issued replaces it with a fresh 30-day
 cookie for the same login, once the API confirms that login is still valid.
-The fresh cookie carries the fingerprint of the cookie that started the login,
-so logging out ends every copy of that login. The API keeps each fingerprint
-for 31 days, one day past the cookie's own lifetime. Removing a sign-in
-connection records when it was removed, also for 31 days, and the check then
-refuses every login cookie issued through that connection at or before that
-millisecond, on every browser. A login cookie records when it was issued to the millisecond, taken
+The fresh cookie carries the fingerprint of the cookie that started the login
+and when that login signed in, so logging out ends every copy of that login.
+The API keeps each fingerprint for 31 days, one day past the cookie's own
+lifetime. Removing a sign-in connection records when it was removed, also for
+31 days, and the check then refuses every login signed in through that
+connection at or before that millisecond, however recently its cookie was
+renewed, on every browser. A login cookie records when it was issued to the millisecond, taken
 after the provider confirms the sign-in, so a fresh login is accepted even in
 the same second as the removal; cookies from before that field count from the
-start of their second. The backend sends the cookie's issue time with each
-check for this, so the website and the API must be deployed together. The browser talks only
+start of their second. The backend sends the login's sign-in time, the first
+cookie's issue time, with each check for this, so the website and the API must be deployed together. The browser talks only
 to that backend, apart from optional anonymous visitor counts sent to PostHog
 ([deployment](deployment.md#production-configuration)). Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,

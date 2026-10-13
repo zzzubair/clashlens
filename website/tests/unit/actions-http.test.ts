@@ -182,17 +182,14 @@ describe("readLoginIdentity", () => {
     const request = requestWithCookie(`${LOGIN_COOKIE_NAME}=${cookie}`);
     mocks.isLoginRevoked.mockResolvedValueOnce(true);
     expect(await readLoginIdentity(request, config)).toBeNull();
-    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAtMs: NOW_SECONDS * 1000 },
-      cookie,
-      undefined,
-    );
+    const session = {
+      ...IDENTITY,
+      issuedAtMs: NOW_SECONDS * 1000,
+      signedInAtMs: NOW_SECONDS * 1000,
+    };
+    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(session, cookie, undefined);
     await readLoginIdentity(request, config, 250);
-    expect(mocks.isLoginRevoked).toHaveBeenLastCalledWith(
-      { ...IDENTITY, issuedAtMs: NOW_SECONDS * 1000 },
-      cookie,
-      250,
-    );
+    expect(mocks.isLoginRevoked).toHaveBeenLastCalledWith(session, cookie, 250);
     mocks.isLoginRevoked.mockRejectedValueOnce(
       new PythonApiError(503, { error: "unavailable" }),
     );

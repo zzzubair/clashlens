@@ -76,15 +76,28 @@ describe("login cookie renewal", () => {
       ),
     );
     const renewed = header.slice(LOGIN_COOKIE_NAME.length + 1, header.indexOf(";"));
+    const signedInAtMs = NOW_MS - 60 * MINUTE_MS;
     expect(parseLoginCookieValue(renewed, CONFIG.loginSecret, NOW_MS / 1000)).toEqual({
       ...IDENTITY,
       issuedAtMs: NOW_MS,
+      signedInAtMs,
     });
     expect(
       parseLoginCookieValue(renewed, CONFIG.loginSecret, NOW_MS / 1000 + 30 * 86_400),
     ).toBeNull();
     expect(createLoginSessionBinding(renewed)).toBe(createLoginSessionBinding(old));
     expect(mocks.isLoginRevoked).toHaveBeenCalledOnce();
+
+    // Renewing the renewed cookie keeps when the login signed in.
+    vi.setSystemTime(NOW_MS + 60 * MINUTE_MS);
+    const [again] = await visit(renewed);
+    expect(
+      parseLoginCookieValue(
+        again.slice(LOGIN_COOKIE_NAME.length + 1, again.indexOf(";")),
+        CONFIG.loginSecret,
+        NOW_MS / 1000 + 3_600,
+      ),
+    ).toEqual({ ...IDENTITY, issuedAtMs: NOW_MS + 60 * MINUTE_MS, signedInAtMs });
   });
 
   it("leaves a cookie under an hour old alone without asking the API", async () => {
