@@ -403,10 +403,8 @@ test("a Decline another tab made is applied even if it accepted again before thi
   expect(ids()[1]).not.toBe(ids()[0]);
 });
 
-test("a choice applies to the page even when the browser cannot save it", async ({
-  page,
-}) => {
-  const posthog = await fakePostHog(page);
+/** This page can never save the choice itself. */
+async function choiceCannotBeSaved(page: Page) {
   await page.addInitScript((key) => {
     const save = Storage.prototype.setItem;
     Storage.prototype.setItem = function (name: string, value: string) {
@@ -414,6 +412,13 @@ test("a choice applies to the page even when the browser cannot save it", async 
       return save.call(this, name, value);
     };
   }, choiceKey);
+}
+
+test("a choice applies to the page even when the browser cannot save it", async ({
+  page,
+}) => {
+  const posthog = await fakePostHog(page);
+  await choiceCannotBeSaved(page);
   await page.goto(`${analyticsFixtureOrigin}/privacy`);
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await expect.poll(() => posthog.events.length).toBeGreaterThan(0);
@@ -427,4 +432,25 @@ test("a choice applies to the page even when the browser cannot save it", async 
   await page.waitForTimeout(500);
   expect(posthog.events.length).toBe(before);
   expect(await storedKeys(page)).toEqual([]);
+});
+
+test("a Decline saved in another tab wins over an Accept this page could not save", async ({
+  page,
+}) => {
+  const posthog = await fakePostHog(page);
+  await choiceCannotBeSaved(page);
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect.poll(() => posthog.events.length).toBeGreaterThan(0);
+
+  await page.evaluate((key) => {
+    localStorage[key] = "declined";
+    window.dispatchEvent(new StorageEvent("storage", { key, newValue: "declined" }));
+  }, choiceKey);
+  await expect(page.getByText("You declined visitor counting")).toBeVisible();
+  const before = posthog.events.length;
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(posthog.events.length).toBe(before);
 });

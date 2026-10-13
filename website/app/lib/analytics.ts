@@ -503,6 +503,7 @@ export function onAnalyticsChoiceChange(listener: () => void): () => void {
     // Another tab made a choice.
     window.addEventListener("storage", (event) => {
       if (event.key === ANALYTICS_CHOICE_KEY || event.key === null) {
+        unsavedChoice = undefined;
         notifyChoice(event.newValue !== "accepted");
       }
     });
