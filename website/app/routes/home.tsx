@@ -128,11 +128,7 @@ export default function Home() {
               height="162"
             />
           </h1>
-          <p>
-            {leaderboard
-              ? `Legend League results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
-              : "Legend League results, rankings and armies for tracked players."}
-          </p>
+          <p>Legend League results, rankings and armies for all Legend I Players.</p>
         </div>
         <div className="player-search-panel">
           <Form

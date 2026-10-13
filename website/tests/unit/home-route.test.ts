@@ -138,7 +138,7 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
   );
 });
 
-it("formats the tracked total and explains a logout the server could not record", async () => {
+it("shows the tagline and explains a logout the server could not record", async () => {
   const data = {
     leaderboard: { entries: [], totalTracked: 13263 },
     query: "",
@@ -148,8 +148,9 @@ it("formats the tracked total and explains a logout the server could not record"
   expect(await renderHome(data, "")).not.toContain("could not record it");
   const html = await renderHome(data, "?logout=unrecorded");
   expect(html).toContain(
-    "Legend League results, rankings and armies for 13,263 tracked players.",
+    "Legend League results, rankings and armies for all Legend I Players.",
   );
+  expect(html).not.toContain("13,263 tracked players.");
   expect(html).not.toContain("Top 0");
   expect(html).toContain("<h3>No standings available yet</h3>");
   expect(html).not.toContain("<table");
@@ -187,9 +188,7 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
     },
     "",
   );
-  expect(html).toContain(
-    "Legend League results, rankings and armies for 1 tracked player.",
-  );
+  expect(html).toContain("Top 1 of 1 tracked player<");
   expect(html).toContain("Top 1 of 1 tracked player<");
   // Isolated so right-to-left names and clans do not reorder the text around them.
   expect(html).toContain("<bdi>محمد الأسطورة 👑</bdi>");

@@ -357,8 +357,7 @@ export default function GroupsRoute() {
         <h1 id="groups-title">Private groups</h1>
         <p className="lede">
           Groups are visible only to you and hold public player tags for your own
-          organization. Compare up to 20 players side by side over 3, 7 or 14 ended Legend
-          days.
+          organization. Compare up to 20 players side by side.
         </p>
       </section>
 
