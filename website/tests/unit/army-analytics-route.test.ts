@@ -423,6 +423,69 @@ describe("army analytics route historical reads", () => {
     );
   });
 
+  it("shows Avg. trophies after 3-star on Armies only, sortable", async () => {
+    const row = (
+      label: string,
+      threeStars: number,
+      trophies: number,
+      miss: number | null,
+    ) => ({
+      key: `army-type:${label}`,
+      label,
+      usageCount: 4,
+      usageDenominator: 8,
+      usageRate: 0.5,
+      starCounts: [0, 0, 4 - threeStars, threeStars],
+      starRates: [0, 0, (4 - threeStars) / 4, threeStars / 4],
+      threeStarRate: threeStars / 4,
+      averageStars: 2 + threeStars / 4,
+      averageDestruction: 95,
+      averageTrophies: trophies,
+      averageMissTrophies: miss,
+      unknownExcludedAttacks: 0,
+    });
+    // Same use, and Thrower 3-stars less often, yet wins more an attack.
+    const rows = [row("Hydra", 3, 35.5, 22), row("Thrower", 2, 36.04, 32.08)];
+    const view = (category: string, sort: string) => {
+      const analytics = currentAnalytics("top-100", [1], 1);
+      return {
+        ...analytics,
+        selection: { ...analytics.selection, category, sort },
+        rows,
+      };
+    };
+    const getArmyAnalytics = vi
+      .fn()
+      .mockResolvedValue(view("army-types", "average-trophies"));
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const html = await renderArmyRoute("season=current&sort=average-trophies");
+    const text = renderedText(html);
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("sort")).toBe("average-trophies");
+    expect(
+      [...html.matchAll(/role="rowheader">(.*?)<\/th>/g)].map(([, name]) => name),
+    ).toEqual(["Thrower", "Hydra"]);
+    expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
+    expect(text).toContain("3-star ↕ Avg. trophies ↓ Avg. stars");
+    expect(text).toContain("50.0% 2 battles 36.0 misses 32.1 2.50");
+    expect(text).toContain("75.0% 3 battles 35.5 misses 22.0 2.75");
+    expect(text).toContain("a 3-star wins 40 and a miss still wins some");
+
+    getArmyAnalytics.mockResolvedValue({
+      ...view("army-types", "usage-rate"),
+      rows: [{ ...row("Dragons", 4, 40, null) }],
+    });
+    expect(renderedText(await renderArmyRoute("season=current"))).toContain(
+      "100.0% 4 battles 40.0 no misses",
+    );
+
+    // Unit usage has no trophies column.
+    getArmyAnalytics.mockResolvedValue(view("troops", "usage-rate"));
+    const units = await renderArmyRoute("season=current&category=troops");
+    expect(units).not.toContain("average-trophies");
+    expect(units).not.toContain("Avg. trophies");
+  });
+
   it("says Armies are not available for a past Season, staying on Armies", async () => {
     const getArmySeasonSummary = vi.fn();
     mocks.createPythonClient.mockReturnValue({

@@ -3,9 +3,17 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation, text
+from domain_test_support import (
+    apply_migration,
+    as_api_role,
+    domain_database,
+    store_observation,
+    text,
+)
 from test_army_analytics_publication_postgres import (
     DAY_START,
     _army_job,
@@ -26,11 +34,14 @@ OTHER_THROWER_CODE = "u10x132-2x7"
 # 8 Dragons (160) and 6 Dragon Riders (150): Hydra, though neither leads clearly.
 HYDRA_CODE = "u8x8-6x65"
 NOON = datetime(2026, 8, 5, 12, tzinfo=UTC)
+ATTACK_TROPHIES_MIGRATION = (
+    Path(__file__).parents[2] / "deploy" / "migrations" / "0114_army_attack_trophies.sql"
+)
 
 
-def _result(api: ApiDatabase, population: str = "top-10") -> dict:
+def _result(api: ApiDatabase, population: str = "top-10", sort: str = "usage-rate") -> dict:
     result = api_analytics.get_army_analytics(
-        api, _selection(category="army-types", population=population)
+        api, _selection(category="army-types", population=population, sort=sort)
     )
     assert result is not None
     return result
@@ -39,7 +50,8 @@ def _result(api: ApiDatabase, population: str = "top-10") -> dict:
 def _types(api: ApiDatabase, population: str = "top-10") -> dict[str, tuple]:
     return {
         row["label"]: (row["usage_count"], row["usage_denominator"],
-                       row["star_counts"], row["average_destruction"])
+                       row["star_counts"], row["average_destruction"],
+                       row["average_trophies"], row["average_miss_trophies"])
         for row in _result(api, population)["rows"]
     }
 
@@ -128,9 +140,11 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                  for position, tag in enumerate(("#2PP", "#8PP", "#9PP"), start=1)],
             )
             army_rank_bands.refresh_rank_band_totals(database)
+            # Thrower won 40 for its 3-star and 26 for its 2-star at 80%,
+            # Hydra 10 for its 1-star at 50%, by the game's trophy table.
             expected = {
-                "Thrower": (2, 3, [0, 0, 1, 1], 90.0),
-                "Hydra": (1, 3, [0, 1, 0, 0], 50.0),
+                "Thrower": (2, 3, [0, 0, 1, 1], 90.0, 33.0, 26.0),
+                "Hydra": (1, 3, [0, 1, 0, 0], 50.0, 10.0, 10.0),
             }
 
             # Nothing is shown until every saved army has its type under
@@ -152,6 +166,26 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             assert _types(api) == expected
             assert fact_reads == []
             api.pool.connection = untraced
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT sum(attacks), sum(trophies) FROM army_package_day_counts"
+                ).fetchone() == (3, 76)
+            assert [row["label"] for row in _result(api, sort="average-trophies")["rows"]] == [
+                "Thrower", "Hydra",
+            ]
+
+            # Days counted before migration 0114 saved no trophies. The
+            # migration forgets they were counted, so the page adds them up
+            # from their attacks until the worker counts them again.
+            with psycopg.connect(ci, autocommit=True) as connection:
+                connection.execute("UPDATE army_package_day_counts SET trophies = NULL")
+                apply_migration(connection, ATTACK_TROPHIES_MIGRATION.read_text())
+            assert _types(api) == expected
+            army_types.refresh_army_types(database, now=NOON)
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT sum(attacks), sum(trophies) FROM army_package_day_counts"
+                ).fetchone() == (3, 76)
 
             # A rename changes the name only.
             monkeypatch.setitem(army_types.TYPE_NAMES, army_types.THROWER, "Throwers")

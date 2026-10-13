@@ -213,6 +213,7 @@ const ARMY_SORTS = new Set([
   "one-star-rate",
   "two-star-rate",
   "three-star-rate",
+  "average-trophies",
   "average-stars",
   "average-destruction",
 ]);

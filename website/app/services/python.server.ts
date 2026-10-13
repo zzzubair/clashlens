@@ -892,6 +892,9 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
           !isFiniteNumber(row.three_star_rate) ||
           !isFiniteNumber(row.average_stars) ||
           !isFiniteNumber(row.average_destruction) ||
+          (row.average_trophies !== undefined && !isFiniteNumber(row.average_trophies)) ||
+          (row.average_miss_trophies != null &&
+            !isFiniteNumber(row.average_miss_trophies)) ||
           !isInteger(row.unknown_excluded_attacks))
     )
       throw new PythonApiError(502, { error: "malformed" });
@@ -910,6 +913,8 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       threeStarRate: row.three_star_rate as number | undefined,
       averageStars: row.average_stars as number | undefined,
       averageDestruction: row.average_destruction as number | undefined,
+      averageTrophies: row.average_trophies as number | undefined,
+      averageMissTrophies: row.average_miss_trophies as number | null | undefined,
       unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
     };
   });

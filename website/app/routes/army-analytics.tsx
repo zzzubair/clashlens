@@ -320,6 +320,10 @@ const sortColumns = {
   "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
   "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
   "three-star-rate": { label: "3-star", value: (row: ArmyRow) => starRate(row, 3) },
+  "average-trophies": {
+    label: "Avg. trophies",
+    value: (row: ArmyRow) => row.averageTrophies ?? 0,
+  },
   "average-stars": {
     label: "Avg. stars",
     value: (row: ArmyRow) => row.averageStars ?? 0,
@@ -411,9 +415,11 @@ function SortHeading({
 const ArmyResultRow = memo(function ArmyResultRow({
   row,
   isHistorical,
+  trophies,
 }: {
   row: ArmyRow;
   isHistorical: boolean;
+  trophies: boolean;
 }) {
   return (
     <tr role="row">
@@ -447,6 +453,18 @@ const ArmyResultRow = memo(function ArmyResultRow({
           </td>
         );
       })}
+      {trophies ? (
+        <td role="cell" data-column="average-trophies">
+          <strong className="analytics-star-rate">
+            {row.averageTrophies?.toFixed(1) ?? "–"}
+          </strong>
+          <span className="analytics-star-count">
+            {row.averageMissTrophies == null
+              ? "no misses"
+              : `misses ${row.averageMissTrophies.toFixed(1)}`}
+          </span>
+        </td>
+      ) : null}
       {!isHistorical ? (
         <>
           <td role="cell">{row.averageStars!.toFixed(2)}</td>
@@ -539,6 +557,7 @@ export default function ArmyAnalyticsRoute() {
     "one-star-rate",
     "two-star-rate",
     "three-star-rate",
+    ...(armyTypes ? ["average-trophies" as const] : []),
     ...(!isHistorical ? ["average-stars" as const, "average-destruction" as const] : []),
   ];
   const tableSort: TableSort =
@@ -812,6 +831,12 @@ export default function ArmyAnalyticsRoute() {
               {dayList(untrackedDays)}.
             </p>
           ) : null}
+          {armyTypes ? (
+            <p className="section-note analytics-coverage-note">
+              Avg. trophies counts every attack: a 3-star wins 40 and a miss still wins
+              some. Under it is what a miss won on average.
+            </p>
+          ) : null}
           <div
             className="table-wrap analytics-table-wrap"
             tabIndex={0}
@@ -839,13 +864,18 @@ export default function ArmyAnalyticsRoute() {
               <tbody role="rowgroup">
                 {analytics.rows.length === 0 ? (
                   <tr role="row">
-                    <td role="cell" colSpan={isHistorical ? 7 : 8}>
+                    <td role="cell" colSpan={columns.length}>
                       No recognized components in this selection.
                     </td>
                   </tr>
                 ) : null}
                 {rows.map((row) => (
-                  <ArmyResultRow key={row.key} row={row} isHistorical={isHistorical} />
+                  <ArmyResultRow
+                    key={row.key}
+                    row={row}
+                    isHistorical={isHistorical}
+                    trophies={armyTypes}
+                  />
                 ))}
               </tbody>
             </table>
