@@ -355,13 +355,15 @@ export interface OpponentRow {
 }
 
 /**
- * Today's held share among tracked Legend players whose day started near the
- * base's Reset trophies: within 100, widened until 200 defenses but never past
- * 300, and at least 50 defenses.
+ * Today's held share and trophies lost on defense among tracked Legend players
+ * whose day started near the base's Reset trophies: within 100, widened until
+ * 200 defenses but never past 300, and at least 50 defenses.
  */
 export interface LegendsHeld {
   held: number;
   defenses: number;
+  /** Trophies those defenses lost; null from a data service before it was sent. */
+  lost: number | null;
 }
 
 export type BaseStrength = "hard" | "average" | "easy" | "unavailable" | "early";
@@ -374,14 +376,10 @@ export type BasesMode = "held" | "trophies";
  */
 export const BASE_STRENGTH_BAND = 15;
 /**
- * Trophies mode: tracked Legend players lose this many trophies a defense,
- * fixed because it held between 31.94 and 32.31 a day over 29 Sep–11 Oct 2026.
- */
-export const LEGENDS_DEFENSE_LOSS = 32;
-/**
- * Trophies mode: Average is within this many trophies a defense of
- * `LEGENDS_DEFENSE_LOSS`. Over 74,239 bases on 5–11 Oct 2026 it rated 27.3%
- * Average, as the held band then (10 points against all Legends) rated 27.2%.
+ * Trophies mode: Average is within this many trophies a defense of what
+ * Legends at similar trophies lost a defense today. Over 11,584 players with
+ * 3+ defenses on 13 Oct 2026 it rated 27.1% Average, as against the fixed 32
+ * a defense it rated 25.6% that day and 27.3% over 74,239 bases on 5–11 Oct.
  */
 export const BASE_TROPHY_BAND = 1.25;
 /** Under 3 defenses is too early. */
@@ -398,16 +396,18 @@ export function baseStrength(
   mode: BasesMode = "held",
 ): BaseStrength {
   if (defenses.length < BASE_STRENGTH_MIN_DEFENSES) return "early";
+  if (!legends || legends.defenses === 0) return "unavailable";
   if (mode === "trophies") {
+    if (legends.lost === null) return "unavailable";
     // Compared without rounding: trophies fewer than the Legends' over all
-    // the base's defenses.
-    const fewer = LEGENDS_DEFENSE_LOSS * defenses.length - trophiesGivenUp(defenses);
-    const band = BASE_TROPHY_BAND * defenses.length;
+    // the base's defenses, both scaled by the Legends' defense count.
+    const fewer =
+      legends.lost * defenses.length - trophiesGivenUp(defenses) * legends.defenses;
+    const band = BASE_TROPHY_BAND * defenses.length * legends.defenses;
     if (fewer > band) return "hard";
     if (fewer < -band) return "easy";
     return "average";
   }
-  if (!legends || legends.defenses === 0) return "unavailable";
   // Compared without rounding: the base's share against the Legends', both
   // scaled by both defense counts.
   const held = defenses.filter((defense) => defense.stars < 3).length;

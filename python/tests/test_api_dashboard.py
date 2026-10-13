@@ -435,7 +435,9 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
             return self.rows
 
     def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
-        return (tag, start, 0, 0, defended, 0, tripled, None)
+        # A held defense loses 20 trophies and a tripled one 40.
+        lost = 20 * (defended - tripled) + 40 * tripled
+        return (tag, start, 0, 0, defended, lost, tripled, None)
 
     def board_of(rows: list[tuple[Any, ...]]) -> Any:
         # Every player is on the Live Leaderboard at 5,000.
@@ -454,14 +456,18 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
     # of 220 (79%) that widening to the 5,000 players would give.
     assert api_dashboard.similar_held(board, 5400) is None
     # 5,000: 196 within 300, short of 200 but at least 50, so those.
-    assert api_dashboard.similar_held(board, 5000) == {"held": 168, "defenses": 196}
+    assert api_dashboard.similar_held(board, 5000) == {
+        "held": 168, "defenses": 196, "lost": 168 * 20 + 28 * 40,
+    }
     # Unknown Reset trophies: no comparison.
     assert api_dashboard.similar_held(board, None) is None
 
     # With 8 more defenses at 5,520, 5,250 has none within 100 and 24 within
     # 150, then 220 within 250, so it stops short of 5,520 at 270.
     wider = board_of(rows + [player("#D", 5520, 8, 8)])
-    assert api_dashboard.similar_held(wider, 5250) == {"held": 174, "defenses": 220}
+    assert api_dashboard.similar_held(wider, 5250) == {
+        "held": 174, "defenses": 220, "lost": 174 * 20 + 46 * 40,
+    }
 
 
 def test_a_failed_board_read_waits_its_turn() -> None:

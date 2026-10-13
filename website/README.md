@@ -205,11 +205,11 @@ share among tracked Legend players at similar trophies, whose day started
 within 100 trophies of the base's Reset trophies, widened until that holds 200
 defenses but never past 300 either side, and at least 50 defenses (Average is
 within 15 points). Without that comparison a base with 3+ defenses shows "–"
-and "no comparison yet". The similar-trophies comparison is Held % only:
-Trophies, the default, compares the trophies it gave up a defense today with
-the fixed Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average
-is within `BASE_TROPHY_BAND` trophies) and shows the total it lost today, such
-as "lost −250 in 8 defenses". Under 3 defenses the rating is too early, but
+and "no comparison yet". Trophies, the default, compares the trophies it gave
+up a defense today with what the same Legends at similar trophies lost a
+defense (Average is within `BASE_TROPHY_BAND` trophies a defense) and shows the
+total it lost today beside theirs over as many defenses, such as "lost −185 ·
+avg −201 · in 6 defenses". Under 3 defenses the rating is too early, but
 Trophies still shows the total so far.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves

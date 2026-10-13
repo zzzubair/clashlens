@@ -37,10 +37,12 @@ not once today's projection found no day's examples saved, each follow-up
 waiting within its 4 seconds while it is worked out.
 
 Each base you attacked is compared with players at similar trophies: today's
-held share among players whose day started within 100 trophies of the
-base's, widened evenly until it holds 200 defenses but never past 300 either
-side, because held share falls as trophies rise (last Season: about 65% under
-4,900, 30% at 5,400 and up). Under 200 defenses within 300, it uses those if
+held share and trophies lost on defense among players whose day started
+within 100 trophies of the base's, widened evenly until it holds 200 defenses
+but never past 300 either side, because held share falls and trophies lost
+rise as trophies rise (last Season: about 65% held under 4,900, 30% at 5,400
+and up; on 13 October 2026 about 31 lost a defense near 4,900 and 36 at
+5,300 and up). Under 200 defenses within 300, it uses those if
 there are at least 50. A base with fewer, or whose Reset trophies are
 unknown, gets no comparison: it is never compared with every player.
 
@@ -194,11 +196,13 @@ class _Board:
     worst_ends: list[int]
     held: int
     defenses: int
-    # Distinct day start trophies, ascending, and the defenses and held
-    # defenses of players who started below each (one more entry than starts).
+    # Distinct day start trophies, ascending, and the defenses, held defenses
+    # and trophies lost on defense of players who started below each (one
+    # more entry than starts).
     starts: list[int]
     defenses_below: list[int]
     held_below: list[int]
+    lost_below: list[int]
     # tag -> (trophies now, open attacks, open defenses), for the projection.
     slots_left: dict[str, tuple[int, int, int]]
 
@@ -238,7 +242,7 @@ def _read_board(
     ends: dict[str, tuple[int, int]] = {}
     slots_left: dict[str, tuple[int, int, int]] = {}
     held = defenses = 0
-    # Day start trophies -> [defenses, held defenses].
+    # Day start trophies -> [defenses, held defenses, trophies lost].
     by_start: dict[int, list[int]] = {}
     for row in live:
         tag, trophies = _text(row[0]), row[2]
@@ -265,14 +269,16 @@ def _read_board(
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
             if start is not None:
-                tally = by_start.setdefault(int(start), [0, 0])
+                tally = by_start.setdefault(int(start), [0, 0, 0])
                 tally[0] += int(defended)
                 tally[1] += int(defended) - int(tripled or 0)
+                tally[2] += int(lost)
     starts = sorted(by_start)
-    defenses_below, held_below = [0], [0]
+    defenses_below, held_below, lost_below = [0], [0], [0]
     for value in starts:
         defenses_below.append(defenses_below[-1] + by_start[value][0])
         held_below.append(held_below[-1] + by_start[value][1])
+        lost_below.append(lost_below[-1] + by_start[value][2])
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -284,6 +290,7 @@ def _read_board(
         starts=starts,
         defenses_below=defenses_below,
         held_below=held_below,
+        lost_below=lost_below,
         slots_left=slots_left,
     ), slots
 
@@ -600,19 +607,20 @@ def projected_rank(
 
 
 def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
-    """Today's held and all defenses of players whose day started within
-    100 trophies of ``trophies``, widened evenly until there are 200 defenses
-    but never past 300. None under 50 defenses there, or when ``trophies`` is
-    unknown."""
+    """Today's held and all defenses, and the trophies those defenses lost,
+    of players whose day started within 100 trophies of ``trophies``, widened
+    evenly until there are 200 defenses but never past 300. None under 50
+    defenses there, or when ``trophies`` is unknown."""
     if trophies is None:
         return None
 
-    def within(reach: int) -> tuple[int, int]:
+    def within(reach: int) -> tuple[int, int, int]:
         low = bisect_left(board.starts, trophies - reach)
         high = bisect_right(board.starts, trophies + reach)
         return (
             board.held_below[high] - board.held_below[low],
             board.defenses_below[high] - board.defenses_below[low],
+            board.lost_below[high] - board.lost_below[low],
         )
 
     reach = SIMILAR_TROPHIES
@@ -626,9 +634,9 @@ def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
                 narrow = middle
             else:
                 reach = middle
-    held, defenses = within(reach)
+    held, defenses, lost = within(reach)
     return (
-        {"held": held, "defenses": defenses}
+        {"held": held, "defenses": defenses, "lost": lost}
         if defenses >= SIMILAR_FEWEST_DEFENSES
         else None
     )
