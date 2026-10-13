@@ -16,7 +16,7 @@ from test_dashboard_bases_postgres import Facing
 from test_reconciliation_postgres import _processor
 from test_reset_scenarios_postgres import SEASON, Battle, _story, attacks, day, defenses
 
-from clashlens import api_dashboard, projected_place, worker
+from clashlens import api_dashboard, projected_place, queue_refresh, worker
 from clashlens.api_db import ApiDatabase
 
 DONE, CHASER = "#2PP", "#8PP"
@@ -73,6 +73,9 @@ def _save_examples(connection_info: str, archive_server, monkeypatch) -> None:
         )
     monkeypatch.setattr(projected_place, "_now", lambda: NOW)
     monkeypatch.setattr(projected_place, "_next_refresh_at", float("-inf"))
+    # The twice-daily recheck follows the real clock, not 20:00 today: from
+    # 07:00 UTC it would queue the nightly re-check, left waiting here.
+    monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     database, _ = _processor(connection_info, archive_server)
     maintenance = worker.TimedMaintenance(database, worker.StageMetrics())
     try:

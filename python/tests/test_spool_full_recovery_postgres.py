@@ -15,7 +15,7 @@ from test_collector_uploads_postgres import _archive_instance
 from test_domain_processing_postgres import PROFILE_FIXTURE
 from test_worker_lifecycle import _worker_namespace
 
-from clashlens import cli
+from clashlens import cli, queue_refresh
 from clashlens import spool as spool_module
 from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
@@ -33,6 +33,14 @@ from clashlens.spool import Spool, SpoolError
 
 NOW = datetime.now(UTC).replace(microsecond=0)
 TAGS = ("#2PP", "#2PY")
+
+
+@pytest.fixture(autouse=True)
+def _no_daily_recheck(monkeypatch) -> None:
+    # The worker's twice-daily recheck follows the real clock: from 07:00 UTC
+    # it would queue the nightly re-check into these tests' queue
+    # (test_reconcile_pass_postgres), so CI would get one result per hour.
+    monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
 
 
 def _profile(tag: str) -> bytes:
