@@ -629,10 +629,11 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                         "SELECT id, normalized_tag, NULL, NULL, NULL FROM players"
                     ).fetchall()
                     cards = api_players.player_cards(connection, ids, now=now)
-                    assert api_players.player_cards(
-                        connection, ids, now=now,
-                        live_board=api_leaderboard.LiveBoardCache().current(database, now),
-                    ) == cards
+                    shared = api_players.player_cards(connection, ids, now=now, ranks=False)
+                    api_players.rank_cards(
+                        shared, api_leaderboard.LiveBoardCache().current(database, now).positions
+                    )
+                    assert shared == cards
                 assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting
                 average = api_analytics.get_basic_analytics(
                     database, now=now, freshness_seconds=900

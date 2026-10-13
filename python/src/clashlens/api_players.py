@@ -468,15 +468,15 @@ def player_cards(
     players: list[tuple[int, str, str | None, str | None, str | None]],
     *,
     now: datetime,
-    live_board: api_leaderboard._LiveBoard | None = None,
+    ranks: bool = True,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
-    battles so far, read for every player at once.
+    battles so far, read for every player at once. Without ``ranks`` the
+    caller fills the positions with ``rank_cards``.
 
     ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
-    Leaderboard position whenever it is on the board (``live_board`` when
-    given, the shared copy the public board shows), and the league its newest
+    Leaderboard position whenever it is on the board, and the league its newest
     saved profile names. For a player outside Legend I, trophies come from its
     newest saved profile. Otherwise trophies and today come only from an
     accepted current profile. While a newer profile goes unaccepted they stay
@@ -557,15 +557,25 @@ def player_cards(
                     "defenses": day["defense_count"],
                 }
         cards.append(card)
-    tags = [card["tag"] for card in cards]
-    positions = (
-        api_leaderboard.live_positions(connection, tags, now=now)
-        if live_board is None
-        else live_board.positions(tags)
+    if ranks:
+        rank_cards(
+            cards, lambda tags: api_leaderboard.live_positions(connection, tags, now=now)
+        )
+    return cards
+
+
+def rank_cards(
+    cards: list[dict[str, Any]], positions: Callable[[list[str]], dict[str, int]]
+) -> None:
+    """Each card's Live Leaderboard rank from ``positions``, which is not
+    asked when every player is outside Legend I."""
+    found = (
+        {}
+        if all(card["state"] == "not_in_legend" for card in cards)
+        else positions([card["tag"] for card in cards])
     )
     for card in cards:
-        card["rank"] = positions.get(card["tag"])
-    return cards
+        card["rank"] = found.get(card["tag"])
 
 
 def list_player_seasons(

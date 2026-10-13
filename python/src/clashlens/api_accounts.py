@@ -1084,6 +1084,8 @@ def get_public_user(
     now: datetime,
     live_board: api_leaderboard.LiveBoardCache | None = None,
 ) -> dict[str, Any] | None:
+    """The account's public name and linked players' cards; ranks come from
+    ``live_board``'s shared read when one is given."""
     with database.pool.connection() as connection:
         account = connection.execute(
             """
@@ -1095,17 +1097,19 @@ def get_public_user(
         ).fetchone()
         if account is None:
             return None
-        players = _linked_players(connection, int(account[0]))
-    cards: list[dict[str, Any]] = []
-    if players:
+        # One read gives every linked player's card, never one per player.
+        cards = api_players.player_cards(
+            connection,
+            _linked_players(connection, int(account[0])),
+            now=now,
+            ranks=live_board is None,
+        )
+    if live_board is not None:
         # Ranks from the shared Live Leaderboard, read outside a held
         # connection so a board read never waits for a second one.
-        board = None if live_board is None else live_board.current(database, now)
-        # One read gives every linked player's card, never one per player.
-        with database.pool.connection() as connection:
-            cards = api_players.player_cards(
-                connection, players, now=now, live_board=board
-            )
+        api_players.rank_cards(
+            cards, lambda tags: live_board.current(database, now).positions(tags)
+        )
     return {
         "username": _text(account[1]),
         "display_name": _text(account[2]),

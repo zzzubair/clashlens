@@ -105,6 +105,12 @@ def publish_yesterday(
         connection.commit()
 
 
+def read_board() -> api_dashboard.DashboardBoard:
+    """A board read at once rather than in the background, so a test's first
+    request sees it."""
+    return api_dashboard.DashboardBoard(run=lambda read: read())
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("read", ["today", "armies?lens=defense&days=7"])
 def test_dashboard_reads_refuse_while_the_dashboard_is_off(
@@ -210,7 +216,7 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
                 partial_reasons=[],
             )
 
-            board = api_dashboard.DashboardBoard()
+            board = read_board()
             today = api_dashboard.get_player_today(database, board, "#2PP", now=NOW)
 
             assert today is not None
@@ -280,7 +286,7 @@ def test_dashboard_today_leaves_the_loss_unknown_without_yesterday(
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -312,7 +318,7 @@ def test_dashboard_range_counts_battles_with_their_trophies(database_url: str) -
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             # Your best is 5,040 + 7 x 40 = 5,320, so you can still pass #8PY.
@@ -347,7 +353,7 @@ def test_dashboard_range_counts_no_opponent_slots_as_used(database_url: str) -> 
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -376,7 +382,7 @@ def test_dashboard_today_skips_a_yesterday_the_worker_rejects(
             )
 
             today = api_dashboard.get_player_today(
-                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+                database, read_board(), "#2PP", now=NOW
             )
 
             assert today is not None
@@ -398,7 +404,12 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
             return self.rows
 
     def player(tag: str, start: int | None, defended: int, tripled: int) -> tuple[Any, ...]:
-        return (tag, 5000, start, 0, 0, defended, 0, tripled, 0, 0)
+        return (tag, start, 0, 0, defended, 0, tripled, None)
+
+    def board_of(rows: list[tuple[Any, ...]]) -> Any:
+        # Every player is on the Live Leaderboard at 5,000.
+        live = [(row[0], None, 5000) for row in rows]
+        return api_dashboard._read_board(Rows(rows), NOW, live, {})[0]
 
     # 24 defenses at 5,400 (6 held) and 196 at 5,000 (168 held), 400 away.
     rows = (
@@ -406,7 +417,7 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
         + [player(f"#B{n}", 5000, 4, 1) for n in range(28)]
         + [player(f"#C{n}", 5000, 4, 0) for n in range(21)]
     )
-    board = api_dashboard._read_board(Rows(rows), NOW)
+    board = board_of(rows)
 
     # 5,400: 24 within 300, under 50, so no comparison rather than the 174
     # of 220 (79%) that widening to the 5,000 players would give.
@@ -418,5 +429,29 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
 
     # With 8 more defenses at 5,520, 5,250 has none within 100 and 24 within
     # 150, then 220 within 250, so it stops short of 5,520 at 270.
-    wider = api_dashboard._read_board(Rows(rows + [player("#D", 5520, 8, 8)]), NOW)
+    wider = board_of(rows + [player("#D", 5520, 8, 8)])
     assert api_dashboard.similar_held(wider, 5250) == {"held": 174, "defenses": 220}
+
+
+def test_a_failed_board_read_waits_its_turn() -> None:
+    class Down:
+        """A live board whose read always fails, counting the tries."""
+
+        tries = 0
+
+        def current(self, _database: Any, _now: Any) -> Any:
+            self.tries += 1
+            raise TimeoutError
+
+    live, clock = Down(), [0.0]
+    board = api_dashboard.DashboardBoard(
+        live, run=lambda read: read(), clock=lambda: clock[0]
+    )
+    # Every request on the first day finds no board; only the first reads.
+    for _ in range(5):
+        assert board.current(None, NOW) is None  # type: ignore[arg-type]
+    assert live.tries == 1
+    # Its turn comes again a minute later.
+    clock[0] = api_dashboard.BOARD_SECONDS
+    assert board.current(None, NOW) is None  # type: ignore[arg-type]
+    assert live.tries == 2

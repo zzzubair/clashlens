@@ -101,8 +101,10 @@ def test_bases_compare_with_legends_at_similar_trophies(
         unfinished = story.unfinished_jobs()
         api = ApiDatabase(as_api_role(connection_info))
         try:
+            # The board is read at once, not in the background.
+            board = api_dashboard.DashboardBoard(run=lambda read: read())
             read = api_dashboard.get_player_today(
-                api, api_dashboard.DashboardBoard(), YOU, now=today + timedelta(hours=12)
+                api, board, YOU, now=today + timedelta(hours=12)
             )
         finally:
             api.close()

@@ -20,7 +20,7 @@ import {
   SEASON_START_TROPHIES,
   rate,
   type CardDataMap,
-  type CardDataSet,
+  type CardReads,
   type ClockData,
   type CutoffsData,
   type GoalData,
@@ -725,15 +725,16 @@ async function lastSeasonFinish(ctx: CardContext, page: PlayerPage) {
 }
 
 /**
- * Read the data for each built card on the page. Cards share one read of
- * each player page; a card whose reads fail gets null and says so, without
- * taking the other cards down.
+ * Start the reads for each built card on the page, without waiting for
+ * them: each card shows as soon as its own data arrives. Cards share one
+ * read of each player page; a card whose reads fail gets null and says so,
+ * without taking the other cards down.
  */
-export async function loadCardData(
+export function readCards(
   cards: readonly CardId[],
   ctx: CardContext,
   identity: GoogleAccountIdentity,
-): Promise<CardDataSet> {
+): CardReads {
   const read = new Map<string, Promise<PlayerPage | null>>();
   const pages: PageReader = (tag) => {
     if (!read.has(tag)) read.set(tag, unlessMissing(ctx.client.getPlayer(tag)));
@@ -767,12 +768,7 @@ export async function loadCardData(
     },
     bases: async () => {
       const read = await today();
-      return read === null
-        ? null
-        : {
-            rows: read.opponents,
-            mode: ctx.settings.basesMode,
-          };
+      return read === null ? null : { rows: read.opponents };
     },
     "armies-defense": () => armies("defense"),
     "armies-offense": () => armies("offense"),
@@ -794,12 +790,35 @@ export async function loadCardData(
     "offense-consistency": season,
     "group-watch": () => groupWatchData(ctx, pages, identity),
   };
-  const loaded = await Promise.all(
+  return Object.fromEntries(
     cards
       .filter((card): card is keyof CardDataMap => Object.hasOwn(readers, card))
-      .map(async (card) => [card, await readers[card]().catch(() => null)] as const),
-  );
-  return Object.fromEntries(loaded) as CardDataSet;
+      .map((card) => [card, readers[card]().catch(() => null)]),
+  ) as CardReads;
+}
+
+/**
+ * Wait up to `ms` for the card reads. Those done by then go out with the
+ * page; the rest stream in later. React holds a streamed card back for
+ * 300 ms after it showed "Loading…", so a quick card is faster this way.
+ */
+export async function settleWithin(reads: CardReads, ms: number): Promise<CardReads> {
+  const settled: Record<string, unknown> = {};
+  const done = Object.entries(reads).map(async ([card, read]) => {
+    settled[card] = await read;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(done),
+    new Promise((resolve) => (timer = setTimeout(resolve, ms))),
+  ]);
+  clearTimeout(timer);
+  return Object.fromEntries(
+    Object.entries(reads).map(([card, read]) => [
+      card,
+      Object.hasOwn(settled, card) ? settled[card] : read,
+    ]),
+  ) as CardReads;
 }
 
 function hits(value: unknown): ArmyHits {

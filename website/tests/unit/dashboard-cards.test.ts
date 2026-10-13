@@ -31,6 +31,8 @@ import {
   isShieldDay,
   offenseConsistency,
   recentForm,
+  type CardDataSet,
+  type CardReads,
   type GoalData,
   type SeasonData,
 } from "../../app/lib/dashboard-cards";
@@ -718,12 +720,21 @@ const loaderArgs = (url: string) =>
     typeof loader
   >[0];
 
+/** Each card's data once its read finishes: the page answers before its cards. */
+async function settled(reads: CardReads): Promise<CardDataSet> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(reads).map(async ([card, read]) => [card, await read]),
+    ),
+  ) as CardDataSet;
+}
+
 async function load() {
   const result = (await loader(loaderArgs(`${ORIGIN}/dashboard`))) as unknown as {
     data: DashboardLoaderData;
   };
   if (result.data.kind !== "signed-in") throw new Error("expected signed in");
-  return result.data;
+  return { ...result.data, cards: await settled(result.data.cards) };
 }
 
 async function render(loaderData: DashboardLoaderData): Promise<string> {

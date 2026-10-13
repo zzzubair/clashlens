@@ -11,8 +11,13 @@ has not caught up with is never counted without its trophies. A player
 without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
-The board for that comparison, and today's held share across it, are read in
-one query and kept for a minute, so dashboards share one read per minute.
+The board for that comparison, and today's held share across it, are read
+in the background at most once a minute and shared by every dashboard, so a
+request never waits for them: until the first read of a Legend day finishes,
+and once the newest read is 10 minutes old, the range and the comparisons are
+left out. The board's players and trophies are the Live Leaderboard's shared
+read; each log's "no opponent, no battle" slots sit in a large saved record,
+so each saved day's are read once, not every minute.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -31,16 +36,18 @@ battles with each type, from the worker's saved counts for each day.
 
 from __future__ import annotations
 
+import json
 import time
 from bisect import bisect_left, bisect_right
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any
 
 from . import army_types
 from .api_db import ApiDatabase, _screen_events, _text
-from .api_leaderboard import _LIVE_PLAYERS_SQL, _season_params
+from .api_leaderboard import LiveBoardCache
 from .domain import (
     CHAIN_BREAK_REASONS,
     MAX_BATTLE_TROPHIES,
@@ -50,6 +57,8 @@ from .domain import (
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
+# A board read this long ago is no longer shown: its refreshes are failing.
+BOARD_MAX_AGE_SECONDS = 600
 # Bases you attacked: compare with players whose day started this near the
 # base's Reset trophies, widened until the comparison holds enough defenses
 # but never past the most; with fewer than the fewest there, no comparison.
@@ -64,16 +73,15 @@ OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
-_BOARD_SQL = f"""
-WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL})
-SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
+# Each active player's latest log for one Legend day, with its start
+# trophies. Reading every log's saved input record took 4.4 of 4.8 s on
+# 13 October 2026 production data: about 6 KB each, stored apart from the row.
+_BOARD_SQL = """
+SELECT player.normalized_tag, ranked_day.start_trophies,
        day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
-       day.defense_three_star_count,
-       COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0),
-       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
-FROM live
-JOIN players AS player ON player.normalized_tag = live.normalized_tag
-LEFT JOIN LATERAL (
+       day.defense_three_star_count, day.ranked_day_version_id
+FROM players AS player
+JOIN LATERAL (
     SELECT attack_count, attack_gain, defense_count, defense_loss,
            defense_three_star_count, ranked_day_version_id
     FROM api_player_daily_logs AS daily
@@ -84,6 +92,15 @@ LEFT JOIN LATERAL (
 ) AS day ON true
 LEFT JOIN ranked_day_versions AS ranked_day
     ON ranked_day.id = day.ranked_day_version_id
+WHERE player.active
+"""
+# A saved day's "no opponent, no battle" attack and defense slots.
+_ZERO_SLOTS_SQL = """
+SELECT id,
+       COALESCE((input_evidence ->> 'zero_result_attack_slots')::int, 0),
+       COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0)
+FROM ranked_day_versions
+WHERE id = ANY(%s)
 """
 
 # Each player's latest log for one Legend day, with the day's start trophies
@@ -127,30 +144,48 @@ def _open(used: Any, allowed: int) -> int:
     return max(0, allowed - (0 if used is None else int(used)))
 
 
-def _read_board(connection: Any, now: datetime) -> _Board:
+def _read_board(
+    connection: Any,
+    now: datetime,
+    live: list[tuple[Any, ...]],
+    slots: dict[int, tuple[int, int]],
+) -> tuple[_Board, dict[int, tuple[int, int]]]:
+    """The board for ``live``, the Live Leaderboard's rows, and the saved
+    days' slots it used; ``slots`` holds those already read."""
     day_start = ranked_day_for(now).start
-    rows = connection.execute(
-        _BOARD_SQL, {**_season_params(now), "day_start": day_start}
-    ).fetchall()
+    days = {
+        _text(row[0]): row[1:]
+        for row in connection.execute(_BOARD_SQL, {"day_start": day_start}).fetchall()
+    }
+    versions = {int(day[6]) for day in days.values() if day[6] is not None}
+    unread = sorted(versions - slots.keys())
+    if unread:
+        slots = slots | {
+            int(row[0]): (int(row[1]), int(row[2]))
+            for row in connection.execute(_ZERO_SLOTS_SQL, (unread,)).fetchall()
+        }
+    slots = {version: slots[version] for version in versions if version in slots}
     ends: dict[str, tuple[int, int]] = {}
     held = defenses = 0
     # Day start trophies -> [defenses, held defenses].
     by_start: dict[int, list[int]] = {}
-    for (
-        tag, trophies, start, attacks, gained, defended, lost, tripled,
-        zero_attacks, zero_defenses,
-    ) in rows:
+    for row in live:
+        tag, trophies = _text(row[0]), row[2]
+        start, attacks, gained, defended, lost, tripled, version = days.get(
+            tag, (None,) * 7
+        )
+        zero_attacks, zero_defenses = slots.get(
+            -1 if version is None else int(version), (0, 0)
+        )
         if None in (start, attacks, gained, defended, lost):
             basis, open_attacks, open_defenses = (
                 int(trophies), MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
             )
         else:
             basis = int(start) + int(gained) - int(lost)
-            open_attacks = _open(int(attacks) + int(zero_attacks), MAX_DAILY_ATTACKS)
-            open_defenses = _open(
-                int(defended) + int(zero_defenses), MAX_DAILY_DEFENSES
-            )
-        ends[_text(tag)] = (
+            open_attacks = _open(int(attacks) + zero_attacks, MAX_DAILY_ATTACKS)
+            open_defenses = _open(int(defended) + zero_defenses, MAX_DAILY_DEFENSES)
+        ends[tag] = (
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
@@ -177,33 +212,88 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         starts=starts,
         defenses_below=defenses_below,
         held_below=held_below,
-    )
+    ), slots
+
+
+def _in_background(read: Callable[[], None]) -> None:
+    Thread(target=read, name="dashboard-board", daemon=True).start()
 
 
 class DashboardBoard:
-    """The board for rank ranges and held share, read at most once a minute."""
+    """The board for rank ranges and held share, read in the background at
+    most once every ``seconds``, one read at a time, so no request waits for
+    it. ``run`` starts a read; tests pass one that reads at once."""
 
-    def __init__(self, seconds: float = BOARD_SECONDS) -> None:
+    def __init__(
+        self,
+        live_board: LiveBoardCache | None = None,
+        *,
+        seconds: float = BOARD_SECONDS,
+        run: Callable[[Callable[[], None]], None] = _in_background,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._live_board = live_board or LiveBoardCache()
         self._seconds = seconds
+        self._run = run
+        self._clock = clock
         self._lock = Lock()
         self._board: _Board | None = None
-        self._refresh_after = 0.0
+        self._read_at = float("-inf")
+        self._next_read = float("-inf")
+        self._reading = False
+        self._tried_day: datetime | None = None
+        # Saved day -> its (attack, defense) "no opponent, no battle" slots.
+        self._slots: dict[int, tuple[int, int]] = {}
 
-    def current(self, database: ApiDatabase, now: datetime) -> _Board:
+    def current(self, database: ApiDatabase, now: datetime) -> _Board | None:
+        """Today's newest board, or None while today's first read runs or
+        once the newest is too old. A due read starts in the background."""
+        day_start = ranked_day_for(now).start
+        with self._lock:
+            # A new Legend day reads at once; a failed read waits its turn.
+            start = not self._reading and (
+                self._clock() >= self._next_read or self._tried_day != day_start
+            )
+            if start:
+                self._reading, self._tried_day = True, day_start
+        if start:
+            self._run(lambda: self._read(database, now))
         with self._lock:
             board = self._board
-            stale = (
+            if (
                 board is None
-                or time.monotonic() >= self._refresh_after
-                or board.day_start != ranked_day_for(now).start
-            )
-            if stale:
-                with database.pool.connection() as connection:
-                    board = _read_board(connection, now)
-                self._board = board
-                self._refresh_after = time.monotonic() + self._seconds
-            assert board is not None
+                or board.day_start != day_start
+                or self._clock() >= self._read_at + BOARD_MAX_AGE_SECONDS
+            ):
+                return None
             return board
+
+    def _read(self, database: ApiDatabase, now: datetime) -> None:
+        # A failed read waits a turn instead of starting again at once.
+        try:
+            live = self._live_board.current(database, now).rows
+            with database.pool.connection() as connection:
+                board, slots = _read_board(connection, now, live, self._slots)
+        except Exception as error:  # noqa: BLE001 - read again at the next turn
+            print(
+                json.dumps(
+                    {
+                        "event": "dashboard_board",
+                        "status": "failed",
+                        "error": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
+            with self._lock:
+                self._next_read = self._clock() + self._seconds
+                self._reading = False
+            return
+        with self._lock:
+            self._board, self._slots = board, slots
+            self._read_at = self._clock()
+            self._next_read = self._read_at + self._seconds
+            self._reading = False
 
 
 def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
@@ -304,7 +394,9 @@ def get_player_today(
     database: ApiDatabase, board_cache: DashboardBoard, tag: str, *, now: datetime
 ) -> dict[str, Any] | None:
     """One player's dashboard numbers for today, or None for an unknown tag.
-    ``opponents`` is None until the player's log for today is published."""
+    ``opponents`` is None until the player's log for today is published; the
+    range and comparisons are None while the shared board is unavailable,
+    and ``board_computed_at`` says when it was read."""
     day = ranked_day_for(now)
     board = board_cache.current(database, now)
     with database.pool.connection() as connection:
@@ -382,7 +474,9 @@ def get_player_today(
                     for defense in defenses
                 ],
                 "observed_at": None if row is None else _iso(row[6]),
-                "legends_held": similar_held(board, reset_trophies),
+                "legends_held": None
+                if board is None
+                else similar_held(board, reset_trophies),
             }
         )
 
@@ -392,12 +486,12 @@ def get_player_today(
     return {
         "tag": tag,
         "ranked_day_start": _iso(day.start),
-        "board_computed_at": _iso(board.computed_at),
-        "rank_range": rank_range(board, tag),
+        "board_computed_at": None if board is None else _iso(board.computed_at),
+        "rank_range": None if board is None else rank_range(board, tag),
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}
-        if board.defenses
+        if board is not None and board.defenses
         else None,
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,

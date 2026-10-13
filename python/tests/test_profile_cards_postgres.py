@@ -183,7 +183,8 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
             assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
-            # The website's profile takes them from the shared Live board.
+            # The data service reads ranks from the Live Leaderboard's shared
+            # read, with the same answer.
             assert api_accounts.get_public_user(
                 database, "groupowner", now=NOW,
                 live_board=api_leaderboard.LiveBoardCache(),
@@ -214,6 +215,35 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                 "verified_players"
             ]
             assert [card["league"] for card in cards if card["tag"] == "#YQ2"] == [None]
+
+            # With every linked player outside Legend I, no rank is looked up.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM player_profile_versions"
+                    " WHERE parser_version = 'unranked-test'"
+                )
+                connection.execute(
+                    """
+                    DELETE FROM verified_player_links
+                    WHERE player_id IN (
+                        SELECT id FROM players WHERE normalized_tag <> '#YQ2'
+                    )
+                    """
+                )
+            asked: list[object] = []
+
+            class Board(api_leaderboard.LiveBoardCache):
+                def current(self, database, now):  # type: ignore[override]
+                    asked.append(now)
+                    return super().current(database, now)
+
+            cards = api_accounts.get_public_user(
+                database, "groupowner", now=NOW, live_board=Board()
+            )["verified_players"]
+            assert [(card["tag"], card["state"], card["rank"]) for card in cards] == [
+                ("#YQ2", "not_in_legend", None)
+            ]
+            assert asked == []
         finally:
             database.close()
 

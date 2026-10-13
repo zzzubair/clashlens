@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useFetcher } from "react-router";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { Await, useFetcher } from "react-router";
 
 import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
@@ -13,8 +13,8 @@ import {
   serializeSettings,
   shownCards,
 } from "../lib/dashboard";
-import type { CardDataMap, CardDataSet } from "../lib/dashboard-cards";
-import type { DashboardActionData } from "../routes/dashboard";
+import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
+import type { DashboardActionData, DashboardLoaderData } from "../routes/dashboard";
 import {
   ClockCard,
   CutoffsCard,
@@ -39,6 +39,7 @@ interface ViewContext {
   dayOver: boolean;
   nowMs: number | null;
   timeZone: string;
+  basesMode: BasesMode;
   saving: boolean;
   pickGroup: (groupId: string) => void;
 }
@@ -54,7 +55,7 @@ const CARD_VIEWS: {
   bases: (data, context) => (
     <OpponentsCard
       rows={data.rows}
-      mode={data.mode}
+      mode={context.basesMode}
       timeZone={context.timeZone}
       nowMs={context.nowMs}
     />
@@ -80,31 +81,58 @@ function hasView(card: CardId): card is keyof CardDataMap {
   return Object.hasOwn(CARD_VIEWS, card);
 }
 
-function cardBody(card: CardId, data: CardDataSet, context: ViewContext): ReactNode {
+/**
+ * A card's body: its data, or a note while it loads, before Done reads it,
+ * or when it could not be read. `reads` is null while another player loads.
+ */
+function cardBody(
+  card: CardId,
+  reads: CardReads | null,
+  editing: boolean,
+  context: ViewContext,
+): ReactNode {
   const title = CARDS[card].title;
   if (context.dayOver || !hasView(card)) return <CardHead title={title} />;
-  const loaded = data[card];
-  if (loaded === undefined)
-    return (
-      <>
-        <CardHead title={title} />
-        <CardNote>This card loads when you press Done.</CardNote>
-      </>
-    );
-  if (loaded === null)
-    return (
-      <>
-        <CardHead title={title} />
-        <CardNote>
-          This card could not be loaded right now. Reload the page to try again.
-        </CardNote>
-      </>
-    );
+  const note = (text: string) => (
+    <>
+      <CardHead title={title} />
+      <CardNote>{text}</CardNote>
+    </>
+  );
+  const failed = note(
+    "This card could not be loaded right now. Reload the page to try again.",
+  );
+  const loading = <div aria-busy="true">{note("Loading…")}</div>;
+  const read = reads?.[card];
+  if (read === undefined)
+    return editing && reads !== null
+      ? note("This card loads when you press Done.")
+      : loading;
   const view = CARD_VIEWS[card] as (
-    value: typeof loaded,
+    value: NonNullable<Awaited<typeof read>>,
     context: ViewContext,
   ) => ReactNode;
-  return view(loaded, context);
+  if (!(read instanceof Promise)) return read === null ? failed : view(read, context);
+  return (
+    <Suspense fallback={loading}>
+      <Await resolve={read} errorElement={failed}>
+        {(loaded: Awaited<typeof read>) =>
+          loaded === null ? failed : view(loaded, context)
+        }
+      </Await>
+    </Suspense>
+  );
+}
+
+/** The cards a save makes out of date: their numbers follow the changed settings. */
+function changedCards(before: DashboardSettings, after: DashboardSettings): CardId[] {
+  return [
+    ...(before.goal !== after.goal ? (["goal"] as const) : []),
+    ...(before.cutoffs.join() !== after.cutoffs.join() ? (["cutoffs"] as const) : []),
+    ...(before.group !== after.group || before.groupWindow !== after.groupWindow
+      ? (["group-watch"] as const)
+      : []),
+  ];
 }
 
 function deviceTimeZone(): string {
@@ -449,20 +477,33 @@ function FirstVisit({
 /**
  * The divider with "⚙ Customise dashboard", the card grid and Customise.
  * Customise edits a draft of the card order; Done saves it. Card settings
- * and the group picked on Group watch save at once.
+ * and the group picked on Group watch save at once. A save keeps the cards
+ * already shown and reads only those it changes or adds.
  */
 export function Dashboard({
+  tag,
   settings,
   data,
   dayOver,
   idempotencyKey,
+  onSaved,
 }: {
+  tag: string;
   settings: DashboardSettings;
-  data: CardDataSet;
+  /** Null while the player's cards load. */
+  data: CardReads | null;
   dayOver: boolean;
   idempotencyKey: string;
+  onSaved: (settings: DashboardSettings) => void;
 }) {
   const fetcher = useFetcher<DashboardActionData>();
+  const refresher = useFetcher<DashboardLoaderData>();
+  // Cards read again after a save, and cards waiting for that read.
+  const [refreshed, setRefreshed] = useState<CardReads>({});
+  const [stale, setStale] = useState<CardId[]>([]);
+  const applied = useRef<DashboardActionData | undefined>(undefined);
+  const requested = useRef<CardId[]>([]);
+  const merged = useRef<DashboardLoaderData | undefined>(undefined);
   const [draft, setDraft] = useState<DashboardSettings["layout"] | null>(null);
   const [adding, setAdding] = useState(false);
   const [editingSettings, setEditingSettings] = useState<CardId | null>(null);
@@ -484,6 +525,50 @@ export function Dashboard({
 
   const saving = fetcher.state !== "idle";
   const saved = fetcher.state === "idle" && fetcher.data?.saved === true;
+  const reads = data === null ? null : { ...data, ...refreshed };
+  for (const card of stale) if (reads) delete reads[card as keyof CardReads];
+
+  // A save's answer is the settings as saved: show them, and read again only
+  // the cards whose numbers follow them or that have no data yet.
+  useEffect(() => {
+    const answer = fetcher.data;
+    if (fetcher.state !== "idle" || !answer?.settings || applied.current === answer)
+      return;
+    applied.current = answer;
+    const missing = shownCards(answer.settings.layout).filter(
+      (card) => hasView(card) && reads !== null && reads[card] === undefined,
+    );
+    const next = [...changedCards(settings, answer.settings), ...missing];
+    onSaved(answer.settings);
+    if (next.length)
+      setStale((current) => [...new Set([...current, ...next])] as CardId[]);
+  }, [fetcher.state, fetcher.data, settings, reads, onSaved]);
+  // One read for every out-of-date card; a newer one replaces it.
+  const { load } = refresher;
+  const loading = data === null;
+  useEffect(() => {
+    if (stale.length === 0 || loading) return;
+    requested.current = stale;
+    void load(
+      `/dashboard?${new URLSearchParams({ player: tag, cards: stale.join(",") })}`,
+    );
+  }, [stale, tag, loading, load]);
+  useEffect(() => {
+    const answer = refresher.data;
+    if (refresher.state !== "idle" || !answer || merged.current === answer) return;
+    merged.current = answer;
+    // A card the answer leaves out, or a failed answer, says it could not load.
+    const cards = Object.fromEntries(
+      requested.current.map((card) => [
+        card,
+        answer.kind === "signed-in"
+          ? (answer.cards[card as keyof CardReads] ?? null)
+          : null,
+      ]),
+    ) as CardReads;
+    setRefreshed((current) => ({ ...current, ...cards }));
+    setStale((current) => current.filter((card) => !requested.current.includes(card)));
+  }, [refresher.state, refresher.data]);
   useEffect(() => {
     if (
       finishing === null ||
@@ -560,6 +645,7 @@ export function Dashboard({
     dayOver,
     nowMs,
     timeZone,
+    basesMode: settings.basesMode,
     saving,
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
   };
@@ -709,7 +795,7 @@ export function Dashboard({
                 <DashboardIcon name="gear" /> Settings
               </button>
             ) : null}
-            {cardBody(card, data, context)}
+            {cardBody(card, reads, editing, context)}
           </section>
         ))}
       </div>

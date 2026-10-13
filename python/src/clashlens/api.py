@@ -211,9 +211,9 @@ def create_app(
     operating_metrics = api_metrics or ApiMetrics()
     clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
-    dashboard_board = api_dashboard.DashboardBoard()
-    dashboard_army_days = api_dashboard.ArmyDays()
     live_board = api_leaderboard.LiveBoardCache()
+    dashboard_board = api_dashboard.DashboardBoard(live_board)
+    dashboard_army_days = api_dashboard.ArmyDays()
     known_players = api_players.KnownPlayerNames()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}

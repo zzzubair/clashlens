@@ -63,6 +63,7 @@ import {
   serializeSettings,
   shownCards,
 } from "../../app/lib/dashboard";
+import type { CardDataSet, CardReads } from "../../app/lib/dashboard-cards";
 import DashboardRoute, {
   action,
   loader,
@@ -97,6 +98,15 @@ function linked(
     today: { net: 46, attacks: 5, defenses: 6 },
     ...overrides,
   };
+}
+
+/** Each card's data once its read finishes: the page answers before its cards. */
+async function settled(reads: CardReads): Promise<CardDataSet> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(reads).map(async ([card, read]) => [card, await read]),
+    ),
+  ) as CardDataSet;
 }
 
 function unwrap<T>(result: unknown): { data: T; status: number } {
@@ -688,7 +698,7 @@ describe("dashboard route", () => {
   const load = async (url = `${ORIGIN}/dashboard`) => {
     const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(url)));
     if (data.kind !== "signed-in") throw new Error("expected signed in");
-    return data;
+    return { ...data, cards: await settled(data.cards) };
   };
 
   it("shows the signed-out preview without a login", async () => {
@@ -764,6 +774,8 @@ describe("dashboard route", () => {
     );
     expect(status).toBe(200);
     expect(data.saved).toBe(true);
+    // The page shows the answer's settings without reading itself again.
+    expect(data.settings).toEqual(readSettings(settings));
     expect(client.updateAccount).toHaveBeenCalledWith(
       {
         username: "nova88",
@@ -830,15 +842,20 @@ describe("dashboard route", () => {
     expect(data).toMatchObject({ saved: false, error: expect.any(String) });
   });
 
-  it("reloads the cards after a save or for another player, never otherwise", () => {
-    const check = (from: string, to: string, formMethod?: string) =>
+  it("reloads the cards for another player, never after its own save", () => {
+    const check = (from: string, to: string, formMethod?: string, formAction?: string) =>
       shouldRevalidate({
         currentUrl: new URL(`${ORIGIN}${from}`),
         nextUrl: new URL(`${ORIGIN}${to}`),
         formMethod,
+        formAction,
         defaultShouldRevalidate: true,
       } as Parameters<typeof shouldRevalidate>[0]);
-    expect(check("/dashboard", "/dashboard", "POST")).toBe(true);
+    // A save answers with the settings as saved; the page reads nothing else.
+    expect(check("/dashboard", "/dashboard", "POST", "/dashboard?player=%232PP")).toBe(
+      false,
+    );
+    expect(check("/dashboard", "/dashboard", "POST", "/logout")).toBe(true);
     expect(check("/dashboard", "/dashboard?player=%232PP8QLY0")).toBe(true);
     expect(check("/dashboard?player=%232PP8QLY0", "/dashboard?player=%232PP8QLY0")).toBe(
       false,

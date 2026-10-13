@@ -199,3 +199,157 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
 
   expectNoPageErrors(errors);
 });
+
+/** Sign in as the fixture's Google user `subject`, with an account and these players linked. */
+async function signInWithPlayers(
+  page: Page,
+  subject: string,
+  username: string,
+  tags: string[],
+) {
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", subject);
+    await route.continue({ url: url.href });
+  });
+  await signIn(page);
+  await ensureAccount(page, username, "Lens Switch");
+  for (const tag of tags) {
+    await page.goto("/account/verify-player");
+    await expect(async () => {
+      await page.getByLabel("Player tag").fill(tag);
+      await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${tag.slice(1)}`);
+      await page.getByRole("button", { name: "Link player" }).click();
+      await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
+    }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+  }
+}
+
+test("a switch shows the chosen player at once, never the last one's numbers, and a save reads only what it changes", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const errors = trackPageErrors(page);
+  // Two fake Clash API players in Legend League that no other browser test links.
+  const [first, second] = ["#Q00VC", "#Q00VU"] as const;
+  await signInWithPlayers(page, "fixture-google-subject-3202", "lensswitch", [
+    first,
+    second,
+  ]);
+  const welcome = page.getByRole("dialog", { name: "Your dashboard" });
+  await expect(async () => {
+    await page.goto(`/dashboard?player=${encodeURIComponent(first)}`);
+    await expect(welcome).toBeVisible({ timeout: 3_000 });
+  }).toPass({ intervals: [2_000], timeout: 60_000 });
+  await welcome.getByRole("button", { name: /Use our layout/ }).click();
+  await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
+
+  const tab = (tag: string) =>
+    page.locator(`.dash-account[href$="player=${encodeURIComponent(tag)}"]`);
+  const name = async (tag: string) =>
+    (await tab(tag).locator(".dash-name").textContent())!;
+  const legendDay = page.getByRole("region", { name: "Legend day", exact: true });
+  await expect(legendDay).toContainText(await name(first));
+  // Every change on the page: the selected tab's name and the Legend day card.
+  await page.evaluate(() => {
+    const shown: [string | null, string][] = [];
+    const record = () =>
+      shown.push([
+        document.querySelector('.dash-account[aria-current="page"] .dash-name')
+          ?.textContent ?? null,
+        document.querySelector('[data-card="legend-day"]')?.textContent ?? "",
+      ]);
+    new MutationObserver(record).observe(document.querySelector("main")!, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
+    Object.assign(window, { shown });
+  });
+  const shownNames = () =>
+    page.evaluate(() => (window as unknown as { shown: [string, string][] }).shown);
+
+  // A slow answer: the new tab and empty cards show before it arrives.
+  const slow = /\/dashboard\.data/;
+  await page.route(slow, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.fallback();
+  });
+  await tab(second).click();
+  await expect(tab(second)).toHaveAttribute("aria-current", "page", { timeout: 500 });
+  await expect(legendDay).toContainText("Loading…", { timeout: 500 });
+  await expect(legendDay).toContainText(await name(second));
+  // Quick switches back and forth end on the last one picked.
+  await tab(first).click();
+  await tab(second).click();
+  await tab(first).click();
+  await expect(tab(first)).toHaveAttribute("aria-current", "page");
+  await expect(legendDay).toContainText(await name(first));
+  await expect(legendDay).not.toContainText("Loading…");
+  await page.unroute(slow);
+  // The card never showed one player's name under another's tab.
+  for (const [selected, card] of await shownNames())
+    if (card.includes("Synthetic Clasher")) expect(card).toContain(selected);
+
+  // Saves answer with the settings as saved: no reload of the page's data.
+  const reads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith(".data"))
+      reads.push(`${request.method()} ${url.pathname}${url.search}`);
+  });
+  const kept = page.locator('[data-card="legend-clock"] > :last-child');
+  await kept.evaluate((element) => element.setAttribute("data-kept", ""));
+  const bar = page.getByRole("region", { name: "Customise dashboard" });
+
+  // Dragging a card by its grip moves it, as it always has; both cards in view.
+  await page.setViewportSize({ width: 1280, height: 2000 });
+  await page.getByRole("button", { name: "Customise dashboard" }).click();
+  const grip = await page
+    .getByRole("button", { name: "Drag to move Goal" })
+    .boundingBox();
+  const onto = await page.locator('[data-card="legend-day"]').boundingBox();
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(onto!.x + 5, onto!.y + 5, { steps: 10 });
+  await page.mouse.up();
+  await expect(bar.getByRole("status")).toHaveText("Moved Goal");
+  const moved = ["Goal", ...DEFAULT_CARDS.filter((card) => card !== "Goal")];
+  await expect.poll(() => cardOrder(page)).toEqual(moved);
+  await bar.getByRole("button", { name: "Done" }).click();
+  await expect(bar).toBeHidden();
+  await expect.poll(() => cardOrder(page)).toEqual(moved);
+  // Cards already shown stay as they were, without being read again.
+  await expect(kept).toHaveAttribute("data-kept", "");
+  expect(reads.filter((read) => read.startsWith("GET"))).toEqual([]);
+
+  // Rating bases by trophies changes the card in place.
+  await page.getByRole("button", { name: "Customise dashboard" }).click();
+  await page.getByRole("button", { name: "Bases you attacked settings" }).click();
+  const bases = page.getByRole("dialog", { name: "Bases you attacked settings" });
+  await bases.getByRole("button", { name: "Trophies" }).click();
+  await bases.getByRole("button", { name: "Save" }).click();
+  await expect(bases).toBeHidden();
+  expect(reads.filter((read) => read.startsWith("GET"))).toEqual([]);
+
+  // A new Goal reads the Goal card alone.
+  await page.getByRole("button", { name: "Goal settings" }).click();
+  const goal = page.getByRole("dialog", { name: "Goal settings" });
+  await goal.getByRole("spinbutton").fill("50");
+  await goal.getByRole("button", { name: "Save" }).click();
+  await expect(goal).toBeHidden();
+  await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
+  const gets = reads.filter((read) => read.startsWith("GET"));
+  expect(gets).toHaveLength(1);
+  expect(gets[0]).toContain(`player=${encodeURIComponent(first)}`);
+  expect(gets[0]).toContain("cards=goal");
+  await expect(kept).toHaveAttribute("data-kept", "");
+  await bar.getByRole("button", { name: "Done" }).click();
+
+  // Everything saved is still there after a reload.
+  await page.reload();
+  await expect.poll(() => cardOrder(page)).toEqual(moved);
+  await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
+  expectNoPageErrors(errors);
+});

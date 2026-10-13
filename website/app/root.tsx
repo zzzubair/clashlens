@@ -7,6 +7,7 @@ import {
   useRouteLoaderData,
   useLocation,
   type LoaderFunctionArgs,
+  type ShouldRevalidateFunctionArgs,
   Links,
   Meta,
   Outlet,
@@ -28,6 +29,7 @@ import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
 import type { AnalyticsSettings } from "./lib/analytics";
 import type { UpdateStatus } from "./lib/contracts";
+import { isDashboardSave } from "./lib/dashboard";
 import { DISCORD_INVITE_URL } from "./lib/discord";
 import {
   LOGGED_OUT,
@@ -95,6 +97,15 @@ export const middleware: Route.MiddlewareFunction[] = [
     return renewLoginCookie(request, next);
   },
 ];
+
+/** A dashboard save changes nothing the navigation bar shows. */
+export function shouldRevalidate({
+  formMethod,
+  formAction,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  return isDashboardSave(formMethod, formAction) ? false : defaultShouldRevalidate;
+}
 
 export const clientMiddleware: Route.ClientMiddlewareFunction[] = [
   keepPageOnLostConnection,
