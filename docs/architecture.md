@@ -67,25 +67,25 @@ confidence rules, rankings, or cohort membership.
 
 Integrations needing Clash Lens data use the private API rather than reading
 the database or archive. The one exception is the Clash Lens Discord bot
-([`python/src/bot`](../python/src/bot)): it reads the database directly,
-read-only, by running the private API's own read code with the API's database
-login, so its numbers match the website. Settings such as the default player
-and attack alerts are saved through the website. The bot's one write is its
-attack alert delivery log (`discord_attack_alert_deliveries`, migration 0108),
-which records each alert DM, and the confirmation DM sent when alerts go on,
-before it is first sent. Every try sends the same Discord nonce, which Discord
-checks for repeats for a few minutes. A DM Discord did not take, whatever the
-cause (a 5xx or 429 answer, a network error, a timeout, an answer cut off), is
-tried again only within 2 minutes of its first try, when it was recorded. Each
-try, with any wait for Discord, is cut off at that limit, and a try that could
-only start after it is not made; the DM is then recorded as not delivered. Refusals are never tried again. So no DM Discord
-took is sent twice. The bot reads
-new defenses only through that migration's `clashlens_discord_attack_alerts_due`
+([`python/src/bot`](../python/src/bot)): it reads the database directly by
+running the private API's own read code with the API's database login, so its
+numbers match the website. Settings such as the default player and attack
+alerts are saved through the website. The bot's one write is its attack alert
+delivery log (`discord_attack_alert_deliveries`, migration 0108), which records
+each alert DM, and the confirmation DM sent when alerts go on, before it is
+first sent. Every try sends the same Discord nonce, which Discord checks for
+repeats for a few minutes. A DM Discord did not take, whatever the cause (a 5xx
+or 429 answer, a network error, a timeout, an answer cut off), is tried again
+only within 2 minutes of its first try, when it was recorded. Each try, with
+any wait for Discord, is cut off at that limit, and a try that could only start
+after it is not made; the DM is then recorded as not delivered. Refusals are
+never tried again. So no DM Discord took is sent twice. The bot reads new
+defenses only through that migration's `clashlens_discord_attack_alerts_due`
 function, never the battle tables. Attack alerts run whenever the bot runs.
-The agreed Discord setup
-also uses a private incoming webhook for operator alerts and an existing ticket
-bot for support; neither needs the product database or archive. Isolate future
-integrations only where availability or measured resource use requires it.
+The agreed Discord setup also uses a private incoming webhook for operator
+alerts and an existing ticket bot for support; neither needs the product
+database or archive. Isolate future integrations only where availability or
+measured resource use requires it.
 
 ## Durable seams
 
