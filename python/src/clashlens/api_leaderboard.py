@@ -434,7 +434,8 @@ def _read_live_board_from(database: ApiDatabase, now: datetime) -> _LiveBoard:
 
 class LiveBoardCache(SharedCopy[_LiveBoard]):
     """The ranked Live Leaderboard shared by every page of it, the home page's
-    top players and public profiles' ranks: read again in the background
+    top players, public profiles' ranks and the dashboard's board for the
+    Next Reset range and Held %: read again in the background
     once 20 seconds old, never served once 30 seconds old, and read anew for
     each Legend day, so never across a Reset or into a new Season."""
 

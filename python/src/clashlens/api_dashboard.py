@@ -13,13 +13,14 @@ range is an estimate: a battle not yet read leaves a slot looking open.
 
 The board for that comparison, and today's held share across it, are read
 in the background at most once a minute and shared by every dashboard, so a
-request never waits for them: until the first read of a Legend day finishes,
-and once the newest read is 10 minutes old, the range and the comparisons are
-left out. The dashboard asks again a few times, each waiting up to 4
-seconds for today's read, so it fills them in when that finishes. The
-board's players and trophies are the Live Leaderboard's shared read, never
-one from before the Reset; each log's "no opponent, no battle" slots sit in
-a large saved record, so each saved day's are read once, not every minute.
+request waits for them only when it asks to: until the first read of a
+Legend day finishes, and once the newest read is 10 minutes old, the range
+and the comparisons are left out. The dashboard asks again a few times,
+each waiting up to 4 seconds for today's read, so it fills them in when that
+finishes. The board's players and trophies are the Live Leaderboard's shared
+read, never one from before the Reset; each log's "no opponent, no battle"
+slots sit in a large saved record, so each saved day's are read once, not
+every minute.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
