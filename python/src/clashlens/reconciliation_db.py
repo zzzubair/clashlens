@@ -397,13 +397,12 @@ def recalculate_ranked_day(
         )
         if value is not None
     )
-    # An ended day with no Reset reading at either end, such as one a player
-    # was wrongly left untracked for, is a Legend I day when their answers
-    # by its end leave them a Legend I player (``league_drop``).
+    # An ended day with no Reset reading at either end is a Legend I day only
+    # for a player wrongly left untracked (``league_drop.in_legend_i``).
     player_eligible = all(
         value == "eligible" for value in baseline_eligibility
     ) if baseline_eligibility else now >= ranked_day.end and league_drop.in_legend_i(
-        connection, player_id, ranked_day.end
+        connection, player_id, ranked_day
     )
     malformed_evidence = any(
         observation.malformed_row_count > 0 for observation in coverage

@@ -410,3 +410,89 @@ def test_wrongly_stopped_players_tracked_again_get_each_legend_day(
         busy: {monday: (2, 8, True), tuesday: (0, 1, True), wednesday: (0, 0, True)},
         late: {monday: (2, 8, True), tuesday: (1, 1, True), wednesday: (0, 2, True)},
     }
+
+
+def test_wrongly_stopped_player_demoted_while_untracked_is_legend_i_to_the_next_monday_reset(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """GONE and STAYS, still in Legend I, were stopped at 17:00 on Monday 14
+    September by one conflict Legend II answer each under the old rule, and
+    played Legend battles on Tuesday and Wednesday while untracked. GONE is
+    demoted at the Monday 21 September Reset; STAYS defends on Tuesday 22
+    September. A Refresh on Wednesday 23 September reads conflict Legend II
+    for both, and their battle logs track them again. Thursday's Reset
+    reading shows GONE in Legend II again, which stops tracking it, and
+    STAYS in Legend I. Leagues change only at a Monday Reset, so each was a
+    Legend I player to the 21 September Reset; after it only STAYS's
+    Tuesday defense shows it stayed."""
+    season = PREVIOUS_SEASON
+    days = {number: day(number, season) for number in range(6, 19)}
+    saturday, sunday, monday = days[6], days[7], days[8]
+    gone, stays, keep = "#PPP", "#2PP", "#9PP"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, gone, stays, keep)
+        for player in story.players.values():
+            player.battles = _saturday(saturday) + attacks(sunday, 40) + defenses(
+                sunday, *[30] * 8) + attacks(monday + timedelta(hours=4), 40, 40) + defenses(
+                monday, *[30] * 8)
+        for tag in (gone, stays):
+            story.players[tag].battles += attacks(days[9] + timedelta(hours=4), 40) + defenses(
+                days[9], 30) + defenses(days[10], 30, 30)
+        story.players[stays].battles += defenses(days[16], 30)
+        story.reset(saturday, dict.fromkeys(story.players, (5300, season)))
+        story.reset(sunday, dict.fromkeys(story.players, (5140, season)))
+        story.reads(monday - timedelta(minutes=10), dict.fromkeys(story.players, 4940), season)
+        story.reset(monday, dict.fromkeys(story.players, (5000, season)))
+        story.reads(monday + timedelta(minutes=20), dict.fromkeys(story.players, 5000), season)
+        evening = monday + timedelta(hours=12)
+        for tag in (gone, stays):
+            _legend_ii(story, tag, evening, 5000, accepted=False)
+        story.run_worker()
+        # The old rule: tracking stopped, Monday's weekly drop.
+        stopped_rule = reconciliation_db._dropped_from_legend_i
+        stopped: list[int] = []
+        with monkeypatch.context() as patch:
+            patch.setattr(reconciliation_db, "_dropped_from_legend_i",
+                          lambda connection, player_id, since, until: player_id in stopped
+                          or stopped_rule(connection, player_id, since, until))
+            with psycopg.connect(connection_info) as connection:
+                for tag in (gone, stays):
+                    stopped.append(connection.execute(
+                        "UPDATE players SET active = false, next_due_at = NULL,"
+                        " eligibility_state = 'ineligible' WHERE normalized_tag = %s"
+                        " RETURNING id", (tag,),
+                    ).fetchone()[0])
+                    first_battle_log.queue_weekly_drop(connection, stopped[-1], evening)
+            story.wait(timedelta(hours=1))
+        for number in range(9, 18):
+            story.reads(days[number] - timedelta(minutes=10), {keep: 4840}, season)
+            story.reset(days[number], {keep: (4840, season)})
+        refresh = days[17] + timedelta(hours=1)
+        for tag in (gone, stays):
+            _legend_ii(story, tag, refresh, 4790, accepted=False)
+        story.run_worker()
+        for tag in (gone, stays):
+            story.read(tag, refresh + timedelta(minutes=1))
+        story.wait(timedelta(hours=1))
+        returned = _tracked(story)
+        story.reads(days[18] - timedelta(minutes=10), {keep: 4840}, season)
+        story.players[gone].dropped = True
+        story.reset(days[18], {keep: (4840, season), gone: (4790, None), stays: (4760, season)})
+        story.wait(timedelta(hours=1))
+        tracked = _tracked(story)
+        legend_days = {tag: _legend_days(story, tag, *(days[number] for number in range(8, 18)))
+                       for tag in (gone, stays)}
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert returned == dict.fromkeys(story.players, (True, "eligible"))
+    assert tracked == {gone: (False, "ineligible"), stays: (True, "eligible"),
+                       keep: (True, "eligible")}
+    # Monday 14 to Sunday 20 September are Legend I days with their battles.
+    week = {days[8]: (2, 8, True), days[9]: (1, 1, True), days[10]: (0, 2, True),
+            **{days[number]: (0, 0, True) for number in range(11, 15)}}
+    assert legend_days == {
+        gone: {**week, **{days[number]: (0, 0, False) for number in range(15, 18)}},
+        stays: {**week, days[15]: (0, 0, True), days[16]: (0, 1, True),
+                days[17]: (0, 0, True)},
+    }

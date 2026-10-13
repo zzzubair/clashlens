@@ -99,6 +99,12 @@ def readings(
     ]
 
 
+def _monday_reset_after(at: datetime) -> datetime:
+    """The first Monday Reset after ``at``, when a league can next change."""
+    day = domain.ranked_day_for(at).start
+    return day + timedelta(days=7 - day.weekday())
+
+
 def battle_after(
     connection: Any, player_id: int, after: datetime, later: datetime
 ) -> bool:
@@ -110,8 +116,7 @@ def battle_after(
     battles by attacker, then defender, so each day is its own lookup: one
     lookup over every day reads the whole table (500 ms a call at the 12
     October 2026 Reset)."""
-    day = domain.ranked_day_for(later).start
-    reset = day + timedelta(days=7 - day.weekday())
+    reset = _monday_reset_after(later)
     return bool(connection.execute(
         """
         SELECT EXISTS (
@@ -218,20 +223,33 @@ def dropped_between(
     )
 
 
-def in_legend_i(connection: Any, player_id: int, at: datetime) -> bool:
-    """Whether the player's answers read before ``at`` leave them a Legend I
-    player, as ``judge`` tracks them: the newest is Legend I, or is a
-    lower-league answer that proves nothing, judged with the answers next to
-    it, after a Legend I one."""
-    answers = readings(connection, player_id, until=at, newest_first=True,
+def in_legend_i(connection: Any, player_id: int, day: domain.RankedDay) -> bool:
+    """Whether the player was a Legend I player on ``day``, a Legend day with
+    no Reset reading at either end, as one wrongly left untracked: their
+    newest answer read before it is a lower-league one that proves nothing,
+    judged with the answers next to it, after a Legend I one, as when
+    ``judge`` tracks them again. Leagues change only at a Monday Reset, so
+    that holds until the first one after the first of those lower-league
+    answers, and from then on only in a week with a saved Legend battle or a
+    Legend I answer. Any other such day, as one a collection outage left
+    unread, is no Legend I day."""
+    answers = readings(connection, player_id, until=day.start, newest_first=True,
                        limit=_NEWEST)[::-1]
-    if not answers or answers[-1].eligible:
-        return bool(answers)
-    return any(answer.eligible for answer in answers) and not left_legend_i(
+    first = len(answers)
+    while first and not answers[first - 1].eligible:
+        first -= 1
+    if not first or first == len(answers) or left_legend_i(
         connection, player_id,
-        answers + readings(connection, player_id, since=at, limit=_NEIGHBOURS),
+        answers + readings(connection, player_id, since=day.start, limit=_NEIGHBOURS),
         len(answers) - 1,
-    )
+    ):
+        return False
+    if day.start < _monday_reset_after(answers[first].read_at):
+        return True
+    week = _monday_reset_after(day.start) - timedelta(days=7)
+    return any(answer.eligible for answer in readings(
+        connection, player_id, since=week, until=week + timedelta(days=7),
+    )) or battle_after(connection, player_id, week, week)
 
 
 def judge(
@@ -319,7 +337,7 @@ def judge(
         # tracks them again. The last answer's day too, saved or not: a
         # player untracked at its Reset gets no Reset reading to save it;
         # and when none of them proves the player left, every day between,
-        # through the day tracking them again, which they never left.
+        # through the day tracking them again (``in_legend_i``).
         day = domain.ranked_day_for(stretch[0].read_at).start - timedelta(days=1)
         day_text = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         every_day = not any(left_legend_i(connection, player_id, answers, index)
