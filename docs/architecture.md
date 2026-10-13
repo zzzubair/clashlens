@@ -243,12 +243,12 @@ any process exits the others are stopped and the container restarts them
 all. Their database connections are budgeted: each process's
 `--database-pool-size` is at most 16, and processes times (pool size plus the
 two maintenance connections and the maintenance lock's one) may not exceed
-38. With the collector's 32, the uploads process's 4, the API's 8 and the
+38. With the collector's 32, the uploads process's 4, the API's 8, the
 Discord bot's 5 (its own pool under the API's database login: 4 for commands,
-1 for attack alerts) that leaves one for operators within an application
-budget of 88 of PostgreSQL's 100 (checked on 8 October 2026); with the bot off
-the budget stays 84. The 12 outside the budget, 9 ordinary plus the 3
-reserved for superusers, stay free for maintenance and inspection.
+1 for attack alerts) and two for operators, the application budget is 89 of
+PostgreSQL's 100 (checked on 8 October 2026); with the bot off it is 84. With
+the bot on, the 11 outside the budget, 8 ordinary plus the 3 reserved for
+superusers, stay free for maintenance and inspection.
 
 All threads in a process share its one `--database-pool-size` pool, which has
 at least one connection a thread: the worker refuses fewer, and the pool

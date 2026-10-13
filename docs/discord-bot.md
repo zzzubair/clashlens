@@ -84,7 +84,11 @@ Nothing below has been done yet. Do the steps in order.
 7. **Test in a test server.** Install the app to a private test server ("Add to
    Server"). Run `/stats`: everyone in the channel sees it. Have a second,
    unconnected account run `/stats`: only they see the connect pointer.
-8. **Launch.** Turn "Public Bot" on when ready, and share the install link.
+8. **Test attack alerts.** Before announcing alerts, turn attack alerts on for
+   a test player on the website's Discord alerts page. A DM saying "Attack
+   alerts are on for …" should arrive; then, after that player's next real
+   defense, the attack alert DM should arrive too.
+9. **Launch.** Turn "Public Bot" on when ready, and share the install link.
 
 To turn the bot off, set `CLASHLENS_DISCORD_BOT=off` (or remove the line) and
 run `./ops up`; the token file can stay. To stop it at once without `up`:
