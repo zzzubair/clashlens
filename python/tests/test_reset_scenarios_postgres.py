@@ -581,7 +581,8 @@ def test_monday_reset_with_sundays_ending_around_5000(
         # The 05:20 settlement check: every loss and raise has landed.
         # DROPPED_WEEKLY's profile has shown Legend II since 05:13.
         story.players[DROPPED_WEEKLY].dropped = True
-        story.read(DROPPED_WEEKLY, monday + timedelta(minutes=13), 4940)
+        for minutes in (13, 20):
+            story.read(DROPPED_WEEKLY, monday + timedelta(minutes=minutes), 4940)
         story.reads(monday + timedelta(minutes=20), {
             tag: 5000 for tag in story.players if tag != DROPPED_WEEKLY}, season)
         story.run_worker()

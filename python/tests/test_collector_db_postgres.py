@@ -907,6 +907,37 @@ def test_reset_baseline_stores_unchanged_fields_as_boundary_evidence(
         assert result.observation_id is not None
 
 
+def test_refresh_saves_an_unchanged_profile_for_the_worker_to_judge_again(
+    database_url: str,
+) -> None:
+    """A Refresh re-judges an untracked player's league (league_drop), so it
+    saves the profile even when the fields match the last one."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("legend-ii-fields")
+        database.record_response(_handoff(
+            occurrence_key="legend-ii", response_hash=_hash("legend-ii-bytes-1"),
+            content_fingerprint=fingerprint, player_id=player_id,
+        ))
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET active = false, next_due_at = NULL,"
+                " eligibility_state = 'ineligible' WHERE id = %s", (player_id,),
+            )
+            work_id = connection.execute(
+                "SELECT * FROM clashlens_enqueue_interactive('live_refresh', '#2PP', 30, false)"
+            ).fetchone()[0]
+        result = database.record_response(_handoff(
+            occurrence_key="refresh", response_hash=_hash("legend-ii-bytes-2"),
+            content_fingerprint=fingerprint, player_id=player_id,
+            completed_at=NOW + timedelta(minutes=1), collector_work_id=work_id,
+        ))
+
+        assert result.changed is True
+        assert result.observation_id is not None
+
+
 def test_season_boundary_reset_requires_league_history(
     database_url: str,
 ) -> None:

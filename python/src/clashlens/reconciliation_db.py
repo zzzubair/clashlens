@@ -12,6 +12,7 @@ from . import (
     boundary,
     domain,
     first_battle_log,
+    league_drop,
     ranked_day_inputs,
     reading_rule,
     reset_baselines,
@@ -810,41 +811,11 @@ def _dropped_from_legend_i(
     connection: Any, player_id: int, since: datetime, until: datetime
 ) -> bool:
     """Whether a profile of the player read from ``since`` and before
-    ``until`` shows a league below Legend I. Each reading counts at its own
-    time; a saved profile can be read again."""
-    return bool(
-        connection.execute(
-            """
-            WITH version AS (
-                SELECT version.id, version.observed_at, version.eligibility_state
-                FROM players AS player
-                JOIN player_profile_versions AS version
-                  ON version.normalized_tag = player.normalized_tag
-                WHERE player.id = %(player)s
-            ), reading AS (
-                SELECT version.*, seen.observed_at AS read_at
-                FROM version
-                JOIN player_profile_effects AS seen
-                  ON seen.profile_version_id = version.id
-                 AND seen.observed_at >= %(since)s
-                UNION ALL
-                SELECT version.*, version.observed_at
-                FROM version
-                WHERE version.observed_at >= %(since)s
-                  AND NOT EXISTS (
-                      SELECT 1 FROM player_profile_effects AS seen
-                      WHERE seen.profile_version_id = version.id
-                  )
-            )
-            SELECT EXISTS (
-                SELECT 1 FROM reading AS dropped
-                WHERE dropped.eligibility_state = 'ineligible'
-                  AND dropped.read_at < %(until)s
-            )
-            """,
-            {"player": player_id, "since": since, "until": until},
-        ).fetchone()[0]
-    )
+    ``until`` proves they left Legend I (``league_drop``): one the parser
+    accepted, or one with another lower-league answer next to it and no
+    Legend battle after the earlier of the two. Each reading counts at its
+    own time; a saved profile can be read again."""
+    return league_drop.dropped_between(connection, player_id, since, until)
 
 
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
