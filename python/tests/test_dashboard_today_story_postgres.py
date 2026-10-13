@@ -8,6 +8,9 @@ and the page asks again, each time waiting up to 4 seconds for today's
 read, until the range comes. Neither that board nor the Live Leaderboard
 read it is built on ever serves the next Legend day, even when a read from
 before the Reset finishes after it. See docs/testing.md.
+
+The worker saves a day's live numbers only while the database's clock is in
+that day, so the story is today's Legend day, whatever the date.
 """
 
 from __future__ import annotations
@@ -18,33 +21,42 @@ from datetime import timedelta
 from threading import Event
 from typing import Any
 
+import psycopg
+import pytest
 from domain_test_support import as_api_role, domain_database
-from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
+from test_reset_scenarios_postgres import _story, attacks, defenses
 
 from clashlens import api_dashboard, api_leaderboard
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
-# Three players, by Season Day 8's battles, and one first read on Day 9.
+# Three players, by today's battles, and one first read tomorrow.
 CLIMBER, DONE, RESTING, NEWCOMER = "#2PP", "#8PP", "#9PP", "#PPP"
 
 
 def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_reset(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    monday = day(8)
     with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
+        if today.day_number in (1, 28):
+            # Day 1 starts everyone at 5,000, and Day 28's Reset starts a new
+            # Season: neither has the story's two days in one Season.
+            pytest.skip(f"Season Day {today.day_number}")
+        day_start, season, reset = today.start, today.season_start, today.end
         story = _story(connection_info, archive_server, monkeypatch,
                        CLIMBER, DONE, RESTING, NEWCOMER)
         # Two +40 attacks so far: 5,380, with 6 attacks and 8 defenses open.
-        story.players[CLIMBER].battles = attacks(monday, 40, 40)
+        story.players[CLIMBER].battles = attacks(day_start, 40, 40)
         # Every battle used: 8 attacks of 40 and 8 defenses of 30 end on 5,280.
         story.players[DONE].battles = (
-            attacks(monday, *[40] * 8) + defenses(monday, *[30] * 8)
+            attacks(day_start, *[40] * 8) + defenses(day_start, *[30] * 8)
         )
-        story.reset(monday, {CLIMBER: (5300, SEASON), DONE: (5200, SEASON),
-                             RESTING: (5100, SEASON)})
-        afternoon = monday + timedelta(hours=10)
-        story.reads(afternoon, {CLIMBER: 5380, DONE: 5280, RESTING: 5100})
+        story.reset(day_start, {CLIMBER: (5300, season), DONE: (5200, season),
+                                RESTING: (5100, season)})
+        afternoon = day_start + timedelta(hours=10)
+        story.reads(afternoon, {CLIMBER: 5380, DONE: 5280, RESTING: 5100}, season)
         story.run_worker()
 
         # Each read of the shared board waits until the test lets it go.
@@ -91,18 +103,18 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
                 for tag in (CLIMBER, DONE, RESTING)
             }
 
-            # A read due seconds before the Day 9 Reset is still going after it.
+            # A read due seconds before the next Reset is still going after it.
             go.clear()
             ticks[0] += api_dashboard.BOARD_SECONDS
-            before_reset = day(9) - timedelta(seconds=10)
+            before_reset = reset - timedelta(seconds=10)
             api_dashboard.get_player_today(api, board, CLIMBER, now=before_reset)
-            # The Day 9 Reset finds a player new to the board.
-            story.reset(day(9), {NEWCOMER: (5400, SEASON)})
-            next_day = day(9) + timedelta(hours=1)
+            # The next Reset finds a player new to the board.
+            story.reset(reset, {NEWCOMER: (5400, season)})
+            next_day = reset + timedelta(hours=1)
             # The next Legend day never shows the day before's board.
             tomorrow = api_dashboard.get_player_today(api, board, CLIMBER, now=next_day)
-            # A follow-up waiting when the late read finishes gets Day 9's
-            # board, built on Day 9's Live Leaderboard.
+            # A follow-up waiting when the late read finishes gets the next
+            # day's board, built on that day's Live Leaderboard.
             with ThreadPoolExecutor(1) as pool:
                 pending = pool.submit(
                     api_dashboard.get_player_today, api, board, NEWCOMER, now=next_day,
@@ -137,9 +149,9 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
     assert tomorrow is not None
     assert (tomorrow["rank_range"], tomorrow["board_computed_at"]) == (None, None)
     assert newcomer is not None and climber is not None
-    # Every slot open on Day 9: best ends 5,700, 5,600, 5,420 and the
+    # Every slot open the next day: best ends 5,700, 5,600, 5,420 and the
     # newcomer's 5,720; the newcomer's worst, 5,080, sits under all four.
     assert newcomer["rank_range"] == {"best": 1, "worst": 4}
     assert climber["board_computed_at"] == next_day.isoformat()
-    # One read for Day 8's requests, one due before the Reset, one for Day 9.
+    # One read for today's requests, one due before the Reset, one for the next day.
     assert reads == [now, before_reset, next_day]
