@@ -191,6 +191,27 @@ test("asks first, counts only after Accept without player tags, and remembers th
   ).toEqual([]);
 });
 
+test("accepting again after Decline counts the page it is made on afresh", async ({
+  page,
+}) => {
+  const posthog = await fakePostHog(page);
+  const lookups = () =>
+    posthog.events.filter(({ event }) => event === "player_lookup_result").length;
+  await page.goto(`${analyticsFixtureOrigin}/players/%232PP`);
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect.poll(lookups).toBe(1);
+
+  await reopenFromFooter(page);
+  await banner(page).getByRole("button", { name: "Decline" }).click();
+  await page.getByRole("banner").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await reopenFromFooter(page);
+  await banner(page).getByRole("button", { name: "Accept" }).click();
+  await expect.poll(lookups).toBe(2);
+});
+
 test("Decline loads nothing, is remembered, and can be changed on the privacy page", async ({
   page,
   context,

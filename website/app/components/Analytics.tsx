@@ -105,6 +105,12 @@ export function Analytics() {
   const shown = useRef<{ path: string; selection: Selection } | null>(null);
 
   useEffect(() => {
+    if (accepted) return;
+    counted = { path: "", keys: new Set() };
+    shown.current = null;
+  }, [accepted]);
+
+  useEffect(() => {
     if (!token) return;
     startAnalytics({ token });
     const click = (event: MouseEvent) => onClick(event, shown.current?.selection ?? null);
