@@ -428,6 +428,8 @@ describe("player route historical independence", () => {
     });
     expect(html.match(/class="legend-day"/g)).toHaveLength(28);
     expect(html.match(/class="battle-profile-link"/g)).toHaveLength(448);
+    expect(html.match(/>Show army</g)).toHaveLength(448);
+    expect(html).not.toContain("army-portraits");
     expect(html).toContain("Synthetic Clasher 448");
     expect(html).toContain("4 Oct 2026");
   });

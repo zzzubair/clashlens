@@ -1,3 +1,4 @@
+import type { ArmyUnitNames } from "../lib/army";
 import type {
   EodProofState,
   HistoricalSeasonSummary,
@@ -459,6 +460,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       : null,
     recentDays: screen.recent_day_starts.map(dayAt),
     seasonDays: screen.season_day_starts.map(dayAt),
+    armyUnits: mapArmyUnits(screen.army_units),
     dataQuality: mapDataQuality(screen.data_quality),
     provenance: mapSnakeProvenanceRequired(screen.provenance),
   };
@@ -466,6 +468,18 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
   calculateStartingTrophies(player.recentDays, player.profile);
   if (player.currentDay) calculateStartingTrophies([player.currentDay], player.profile);
   return player;
+}
+
+// A unit with a malformed entry is left out; its portrait shows its id.
+function mapArmyUnits(value: unknown): ArmyUnitNames {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([id, unit]) =>
+      isRecord(unit) && isString(unit.name)
+        ? [[id, { name: unit.name, siege: unit.siege === true }]]
+        : [],
+    ),
+  );
 }
 
 // A battle reported in the first 5 minutes after a Reset belongs to the day

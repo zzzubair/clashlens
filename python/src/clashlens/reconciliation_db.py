@@ -110,6 +110,13 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             ).fetchone() is None:
                 day_starts = set()
             pending = sorted(day_starts)
+            # Each Reset's board records wait for the end, so the Reset locks
+            # they take are held only while they and the commit run, not
+            # while every day is calculated. On 13 October 2026 a Season
+            # repair job held up to 8 Resets while it calculated 8 days, and
+            # 81% of the other repair jobs gave up waiting: about 1 of 6
+            # background slots ran.
+            members: list[dict[str, Any]] = []
             while pending:
                 day_start = pending.pop(0)
                 following = day_start + timedelta(days=1)
@@ -124,6 +131,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     processing_version=claim.processing_version,
                     domain_rule_version=claim.domain_rule_version,
                     analytics_rule_version=claim.analytics_rule_version,
+                    boundary_members=members,
                 ) and following not in day_starts and (
                     ranked_day_for(following).official_season_id
                     == ranked_day_for(day_start).official_season_id
@@ -138,6 +146,9 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone() is not None:
                     day_starts.add(following)
                     pending.insert(0, following)
+            # Oldest Reset first, the lock order every path keeps.
+            for member in sorted(members, key=lambda member: member["boundary_at"]):
+                boundary._record_boundary_generation(database, connection, **member)
             reconcile_pass.note_fix_done(connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
@@ -154,10 +165,13 @@ def recalculate_ranked_day(
     processing_version: str,
     domain_rule_version: str,
     analytics_rule_version: str,
+    boundary_members: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
     whether the day has ended and this changed the state, end or next start
-    of its saved result, or saved its first."""
+    of its saved result, or saved its first. With ``boundary_members``, a new
+    result's record for its Reset's board is added there for the caller to
+    make before it commits, instead of made here."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -769,14 +783,17 @@ def recalculate_ranked_day(
         # legacy fixture or a late/discovered player. A busy Reset fails
         # the whole calculation, which rolls back, releasing any earlier
         # Resets it took, and retries later instead of holding them.
-        boundary._record_boundary_generation(database, 
-            connection,
-            boundary_at=ranked_day.end,
-            player_id=player_id,
-            ranked_day_version_id=version_id,
-            ranked_day_input_hash=input_hash,
-            reset_lock_wait=RESET_LOCK_WAIT,
-        )
+        member = {
+            "boundary_at": ranked_day.end,
+            "player_id": player_id,
+            "ranked_day_version_id": version_id,
+            "ranked_day_input_hash": input_hash,
+            "reset_lock_wait": RESET_LOCK_WAIT,
+        }
+        if boundary_members is None:
+            boundary._record_boundary_generation(database, connection, **member)
+        else:
+            boundary_members.append(member)
     return now >= ranked_day.end and (
         previous_version is None
         or (_text_value(previous_version[4]), *previous_version[5:7]) != (
