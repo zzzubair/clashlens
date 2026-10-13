@@ -436,8 +436,6 @@ export interface LegendDayData {
   /** Null when the player page could not be read. */
   day: PlayerDay | null;
   range: RankRange | null;
-  /** The projected place at the next Reset, inside `range`; null until it can be worked out. */
-  projected: number | null;
 }
 
 export interface BasesData {

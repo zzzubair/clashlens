@@ -537,7 +537,6 @@ const hit = (stars: number, destruction: number, trophies: number, minutes: numb
 const TODAY = {
   tag: MAIN,
   rank_range: { best: 95, worst: 760 },
-  projected_rank: 240,
   open_defenses: 7,
   automatic_defense_each: 21,
   opponents: [
@@ -1145,7 +1144,6 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(day).toContain("Legend day · Lens Main Day 9 of 28");
     expect(day).toContain("Trophies 5,370 Net today –");
     expect(day).toContain("Last Reset #318 → Now #316 → Next Reset #95 – #760");
-    expect(day).toContain("Projected #240 at Reset");
     expect(day).toContain("2 attacks");
     expect(day).toContain("1 defense");
     expect(day).toContain("7 defenses remain · auto defense −21 each");
