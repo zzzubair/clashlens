@@ -9,13 +9,14 @@ cannot tell them apart.
 A lower-league answer proves the player left Legend I when the parser
 accepted it, or when the player's next or previous answer, from another API
 response, is a lower league too, no profile response between the two went
-unsaved, and the player has no Legend battle after the earlier of the two.
-Real demotions are proven by their next saved answer: at latest the next
-Reset reading, which is always saved, and that Reset's Daily board leaves
-out the day they left by (``boundary_manifest``). Tracking (``judge``), the
-day results' weekly drop (``reconciliation_db._dropped_from_legend_i``) and
-a Reset reading's league (``reset_baselines._load_reset_baseline``) all
-follow this.
+unsaved, and the player has no Legend battle after the earlier of the two
+before the next Monday Reset, the first time a league can change. Real
+demotions are proven by their next saved answer: at latest the next Reset
+reading, which is always saved, and that Reset's Daily board leaves out the
+day they left by (``boundary_manifest``). Tracking (``judge``), the day
+results' weekly drop (``reconciliation_db._dropped_from_legend_i``) and a
+Reset reading's league (``reset_baselines._load_reset_baseline``) all
+follow this; a saved battle log re-checks them (``recheck_battle_players``).
 """
 
 from __future__ import annotations
@@ -98,15 +99,17 @@ def readings(
 
 def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
     """Whether the player has a saved Legend battle, attack or defense, fought
-    after ``after``. The battle index holds each day's battles by attacker,
-    then defender, so each day is its own lookup: one lookup over every day
-    reads the whole table (500 ms a call at the 12 October 2026 Reset)."""
-    first_day = domain.ranked_day_for(after).start - timedelta(days=1)
+    after ``after`` in a Legend day before the next Monday Reset, the first
+    time a player can change league: a later one can follow a promotion back.
+    The battle index holds each day's battles by attacker, then defender, so
+    each day is its own lookup: one lookup over every day reads the whole
+    table (500 ms a call at the 12 October 2026 Reset)."""
+    day = domain.ranked_day_for(after).start
     return bool(connection.execute(
         """
         SELECT EXISTS (
             SELECT 1
-            FROM generate_series(%(day)s::timestamptz, clock_timestamp(),
+            FROM generate_series(%(day)s::timestamptz, %(last)s::timestamptz,
                                  interval '24 hours') AS day (start)
             CROSS JOIN LATERAL (
                 (SELECT 1 FROM legend_battles AS battle
@@ -125,7 +128,8 @@ def battle_after(connection: Any, player_id: int, after: datetime) -> bool:
             ) AS battle
         )
         """,
-        {"day": first_day, "player": player_id, "after": after},
+        {"day": day - timedelta(days=1), "last": day + timedelta(days=6 - day.weekday()),
+         "player": player_id, "after": after},
     ).fetchone()[0])
 
 
@@ -294,11 +298,18 @@ def judge(connection: Any, player_id: int) -> None:
         )
 
 
-def recheck_battle_players(connection: Any, player_ids: list[int]) -> None:
+def recheck_battle_players(
+    connection: Any, player_ids: list[int], reporter_id: int, observed_at: datetime
+) -> None:
     """Judge again each untracked player a saved battle log names who was
     stopped by lower-league answers: a Legend battle after them may now show
-    they never left. The caller holds no player row; rows are taken in order."""
-    for (player_id,) in connection.execute(
+    they never left. Then, for them and the log's own player, tracked or not,
+    recalculate from the day before each saved day since the previous week's
+    Monday Reset that lower-league answers made no Legend I day, once those
+    answers no longer prove it; a tracked player another log names is
+    re-checked by their own. The caller holds no player row; rows are taken
+    in order."""
+    untracked = [int(row[0]) for row in connection.execute(
         """
         SELECT id FROM players
         WHERE id = ANY(%s::bigint[]) AND NOT active AND eligibility_state = 'ineligible'
@@ -306,5 +317,40 @@ def recheck_battle_players(connection: Any, player_ids: list[int]) -> None:
         FOR NO KEY UPDATE
         """,
         (sorted(set(player_ids)),),
+    ).fetchall()]
+    for player_id in untracked:
+        judge(connection, player_id)
+    week = domain.ranked_day_for(observed_at).start
+    for player_id, day_start, version_id in connection.execute(
+        """
+        SELECT day.player_id, day.ranked_day_start, day.id
+        FROM ranked_day_versions AS day
+        WHERE day.player_id = ANY(%(players)s::bigint[])
+          AND day.ranked_day_start >= %(since)s
+          AND day.reconciliation_rule_version = %(rule)s
+          AND day.failure_reasons ? 'player_not_eligible'
+          AND NOT EXISTS (
+              SELECT 1 FROM ranked_day_versions AS newer
+              WHERE newer.player_id = day.player_id
+                AND newer.ranked_day_start = day.ranked_day_start
+                AND newer.reconciliation_rule_version = day.reconciliation_rule_version
+                AND newer.version > day.version
+          )
+        ORDER BY day.player_id, day.ranked_day_start
+        """,
+        {"players": sorted({reporter_id, *untracked}),
+         "since": week - timedelta(days=week.weekday() + 7),
+         "rule": RECONCILIATION_RULE_VERSION},
     ).fetchall():
-        judge(connection, int(player_id))
+        day = domain.ranked_day_for(day_start)
+        until = day.end + timedelta(days=1)
+        if all(answer.eligible for answer in readings(
+            connection, player_id, since=day.start, until=until,
+        )) or dropped_between(connection, player_id, day.start, until):
+            continue
+        previous = day.start - timedelta(days=1)
+        first_battle_log._queue(
+            connection, player_id, previous if previous >= day.season_start else day.start,
+            None, key=f"reconcile:league-recheck:{player_id}:{int(version_id)}",
+            trigger="league_recheck", priority=PYTHON_BACKFILL_PRIORITY,
+        )
