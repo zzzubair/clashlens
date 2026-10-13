@@ -244,7 +244,7 @@ API's memory the same way. A defense whose attacking army could not be read
 counts only in All defenses. Until the worker has counted every one of the
 days the grey numbers show –.
 
-Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
+Crews at `/crews` stay hidden unless `CLASHLENS_CREWS_ENABLED=true`. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at
 `/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,

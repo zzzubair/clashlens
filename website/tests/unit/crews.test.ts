@@ -48,7 +48,7 @@ import CrewBoardRoute, {
 import CrewRoute, { loader as crewLoader } from "../../app/routes/crews.$crewId";
 import { loader as listLoader } from "../../app/routes/crews";
 import { action as createAction, loader as newLoader } from "../../app/routes/crews.new";
-import { loadWebsiteConfig } from "../../app/server/config.server";
+import { isCrewsEnabled, loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -183,7 +183,7 @@ async function render(
 }
 
 beforeEach(() => {
-  vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+  vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
   mocks.getWebsiteConfig.mockReturnValue(
     loadWebsiteConfig({
       NODE_ENV: "test",
@@ -208,6 +208,11 @@ afterEach(() => {
 });
 
 describe("crews switch", () => {
+  it("has its own setting, separate from the dashboard", () => {
+    expect(isCrewsEnabled({ CLASHLENS_DASHBOARD_ENABLED: "true" })).toBe(false);
+    expect(isCrewsEnabled({ CLASHLENS_CREWS_ENABLED: "true" })).toBe(true);
+  });
+
   async function renderNavigation() {
     return render("/", {
       path: "/",
@@ -217,7 +222,7 @@ describe("crews switch", () => {
   }
 
   it("hides every crew page, the create form and the menu link while it is off", async () => {
-    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "");
+    vi.stubEnv("CLASHLENS_CREWS_ENABLED", "");
     const crew = { crewId: CREW_ID };
     for (const run of [
       () => listLoader(args("/crews") as never),
