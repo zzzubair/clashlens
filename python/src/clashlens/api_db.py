@@ -720,6 +720,9 @@ def _screen_events(
             continue
         seen.add(identity)
         (offense if lens == "offense" else defense).append(event)
+    # Rows are numbered in play order: the first battle of the Legend day is 1.
+    offense.reverse()
+    defense.reverse()
     return offense, defense
 
 
