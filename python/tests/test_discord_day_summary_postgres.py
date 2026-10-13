@@ -16,6 +16,7 @@ from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 from test_reset_scenarios_postgres import (
     PREVIOUS_SEASON,
     SEASON,
+    Battle,
     Player,
     Story,
     _saturday,
@@ -217,14 +218,15 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
     """The previous Season's Monday Reset, 28 September 2026, as its days
     must have ended by the real clock. RAISED's Sunday ends at 4,940 and the
     Monday raise takes it to 5,000. WAITING's Sunday cannot be calculated,
-    so the Monday board publishes without it. Clash Lens first saw
-    KNOWN_START at the Sunday Reset, at 5,400, but that Reset's battle log
-    never came, so nothing proves the day's battles from its start: its 8
-    attacks and 8 defenses give its change, +80, and the worker saves no end
-    of day, which the summary shows as unavailable, not 5,480. It names
-    WAITING as not finished; right after WAITING's page is read the fix
-    lands, WAITING's day saves and the board is corrected with WAITING on
-    top, and the others keep their places from the board the round began
+    so the Monday board ranks it by its last reading, 4,950, above RAISED,
+    though a defense after that reading ended its day at 4,910. Clash Lens
+    first saw KNOWN_START at the Sunday Reset, at 5,400, but that Reset's
+    battle log never came, so nothing proves the day's battles from its
+    start: its 8 attacks and 8 defenses give its change, +80, and the worker
+    saves no end of day, which the summary shows as unavailable, not 5,480.
+    It names WAITING as not finished; right after WAITING's page is read the
+    fix lands, WAITING's day saves and the board is corrected with WAITING
+    below RAISED, and RAISED keeps its place from the board the round began
     with."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday = day(20, season), day(21, season), day(22, season)
@@ -241,13 +243,15 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (WAITING, RAISED, KNOWN_START)})
         # From 5,300 each Saturday ends at 5,140. RAISED's Sunday: an attack
-        # gains 40 and 8 defenses lose 240, 4,940. WAITING's and
-        # KNOWN_START's: 8 attacks gain 320 and 8 defenses lose 240, +80, to
-        # 5,220 and 5,480.
+        # gains 40 and 8 defenses lose 240, 4,940. WAITING's: an attack gains
+        # 40 and 7 defenses lose 230, 4,950 at its last reading, then a
+        # defense 5 minutes before the Reset loses 40, 4,910. KNOWN_START's:
+        # 8 attacks gain 320 and 8 defenses lose 240, +80, to 5,480.
         story.players[RAISED].battles = (
             _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[30] * 8))
         story.players[WAITING].battles = (
-            _saturday(saturday) + attacks(sunday, *[40] * 8) + defenses(sunday, *[30] * 8))
+            _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[40] * 3, *[30] * 3, 20)
+            + [Battle(monday - timedelta(minutes=5), -40, False)])
         story.players[KNOWN_START].battles = (
             attacks(sunday, *[40] * 8) + defenses(sunday, *[30] * 8))
         story.reset(saturday, {WAITING: (5300, season), RAISED: (5300, season)})
@@ -257,10 +261,10 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
         story.reset(sunday, {
             WAITING: (5140, season), RAISED: (5140, season), KNOWN_START: (5400, season),
         }, no_log=(KNOWN_START,))
-        story.reads(monday - timedelta(minutes=10), {WAITING: 5220, RAISED: 4940}, season)
+        story.reads(monday - timedelta(minutes=10), {WAITING: 4950, RAISED: 4940}, season)
         story.reset(monday, {
-            WAITING: (5220, season), RAISED: (5000, season), KNOWN_START: (5480, season)})
-        story.reads(monday + timedelta(minutes=20), {WAITING: 5220, RAISED: 5000}, season)
+            WAITING: (5000, season), RAISED: (5000, season), KNOWN_START: (5480, season)})
+        story.reads(monday + timedelta(minutes=20), {WAITING: 5000, RAISED: 5000}, season)
         story.run_worker()
         story.wait(timedelta(hours=1))
         known = story.saved_day(KNOWN_START, sunday)
@@ -300,8 +304,7 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
     assert board is not None and corrected and corrected[0] is not None
     before = {entry["tag"]: entry["position"] for entry in board["entries"]}
     after = {entry["tag"]: entry["position"] for entry in corrected[0]["entries"]}
-    assert WAITING not in before and after[WAITING] == 1
-    assert after[RAISED] == before[RAISED] + 1
+    assert before[RAISED] == before[WAITING] + 1 and after[WAITING] == after[RAISED] + 1
     assert sent == 1
     assert [(user, reply.title) for user, reply in discord.sent] == [
         (DISCORD_ID, "Legend day summary · Sun 27 Sep"),
