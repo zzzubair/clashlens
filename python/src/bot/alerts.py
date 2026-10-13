@@ -14,11 +14,13 @@ Discord nonce, which Discord checks for repeats for a few minutes. A DM that
 clearly did not reach Discord (a 5xx or 429 answer, or a connection that
 failed before the request went out) is tried again, waiting longer each time
 and at least as long as Discord asks, while those still hold and within 15
-minutes of the battle being saved or the confirmation asked for. A DM whose
-try may have reached Discord with no answer back (a timeout, or a connection
-lost after sending) is tried again only within 2 minutes of that try, inside
-Discord's nonce check. After that it is logged as not delivered, never sent
-again. A crash can lose an alert but never send it twice. Discord refusing a
+minutes of the battle being saved or the confirmation asked for. Once a try
+may have reached Discord with no answer back (a timeout, or a connection lost
+after sending), the DM is tried again only within 2 minutes of its first try,
+when it was logged, inside Discord's nonce check. Both limits are checked
+with a fresh clock just before each request goes out to Discord, after any
+wait; past them the DM is logged as not delivered, never sent again. A crash
+can lose an alert but never send it twice. Discord refusing a
 DM (bot not added, DMs closed, unknown user) is logged with the reason, which
 the website shows with what the Clasher can do. That DM is not tried again.
 """
@@ -51,7 +53,7 @@ INTERVAL_SECONDS = 10.0
 RETRY_SECONDS = 10.0
 RETRY_LONGEST_SECONDS = 120.0
 # A DM whose try may have reached Discord is tried again only this long after
-# that try, while Discord's nonce check still stops a repeat.
+# its first try, while Discord's nonce check still stops a repeat.
 NONCE_SECONDS = 120.0
 # Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
@@ -116,7 +118,11 @@ class Unreachable(Exception):
 
 
 class Messenger(Protocol):
-    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None: ...
+    async def send_dm(
+        self, discord_user_id: str, reply: Reply, nonce: int, send_by: float
+    ) -> None:
+        """Send the DM, raising Unreachable instead of making any request to
+        Discord at or after `send_by`, by the loop's clock."""
 
 
 @dataclass
@@ -130,8 +136,10 @@ class Delivery:
     # When its `WINDOW` started: the battle saved, or the confirmation asked for.
     since: datetime
     reply: Reply
-    # Its delivery log id once claimed, also the nonce of every try.
+    # Its delivery log id once claimed, also the nonce of every try, and the
+    # loop's clock time then, just before its first try.
     id: int = 0
+    claimed_at: float = 0.0
     # The loop's clock time of the next try, and the wait before it.
     retry_at: float = 0.0
     wait: float = 0.0
@@ -295,6 +303,7 @@ class AlertLoop:
             self._pruned_at = clock
         sent = 0
         for delivery in list(self._waiting):
+            clock = asyncio.get_running_loop().time()
             expired = clock >= delivery.last_try_by
             if not expired and delivery.retry_at > clock:
                 continue
@@ -336,7 +345,8 @@ class AlertLoop:
         if claimed is None:
             return 0
         delivery.id = claimed
-        delivery.last_try_by = asyncio.get_running_loop().time() + (
+        delivery.claimed_at = asyncio.get_running_loop().time()
+        delivery.last_try_by = delivery.claimed_at + (
             delivery.since + WINDOW - datetime.now(UTC)
         ).total_seconds()
         return await self._send(delivery)
@@ -345,16 +355,17 @@ class AlertLoop:
         """Try one logged DM, and log how it went or wait to try again; 1
         when it was delivered."""
         state, reason = "sent", None
-        started = asyncio.get_running_loop().time()
         try:
             await self.messenger.send_dm(
-                delivery.discord_user_id, delivery.reply, delivery.id
+                delivery.discord_user_id, delivery.reply, delivery.id, delivery.last_try_by
             )
         except Refused as refusal:
             state, reason = "refused", refusal.reason
         except Unreachable as outage:
             if outage.maybe_sent:
-                delivery.last_try_by = min(delivery.last_try_by, started + NONCE_SECONDS)
+                delivery.last_try_by = min(
+                    delivery.last_try_by, delivery.claimed_at + NONCE_SECONDS
+                )
             delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
             delivery.retry_at = asyncio.get_running_loop().time() + max(
                 delivery.wait, outage.retry_after

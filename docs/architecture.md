@@ -77,10 +77,12 @@ before it is first sent. Every try sends the same Discord nonce, which Discord
 checks for repeats for a few minutes. A DM that clearly did not reach Discord
 (a 5xx or 429 answer, or a connection that failed before the request went out)
 is tried again within 15 minutes of the battle being saved or the confirmation
-asked for; one whose try may have reached Discord with no answer back (a
-timeout, or a connection lost after sending) is tried again only within 2
-minutes of that try, then recorded as not delivered. Refusals are never tried
-again. So no DM Discord took is sent twice. The bot reads
+asked for. Once a try may have reached Discord with no answer back (a timeout,
+or a connection lost after sending), the DM is tried again only within 2
+minutes of its first try, when it was recorded. Both limits are checked with a
+fresh clock just before each request goes out to Discord, after any wait; past
+them the DM is recorded as not delivered. Refusals are never tried again. So
+no DM Discord took is sent twice. The bot reads
 new defenses only through that migration's `clashlens_discord_attack_alerts_due`
 function, never the battle tables. Attack alerts run whenever the bot runs.
 The agreed Discord setup

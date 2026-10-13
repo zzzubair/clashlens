@@ -12,7 +12,9 @@ the person who typed the command (`Reply.private`) are shown to them alone.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
+import math
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -398,25 +400,47 @@ class ReplyView(_OwnedView):
             pass
 
 
+# The loop's clock time by which each request for the attack alert DM being
+# sent must start; none does by default.
+_SEND_BY: contextvars.ContextVar[float] = contextvars.ContextVar("send_by", default=math.inf)
+
+
+class _TooLate(Exception):
+    """A request for an attack alert DM would start after its `send_by`."""
+
+
+async def _before_request(_session: Any, _context: Any, _params: Any) -> None:
+    if asyncio.get_running_loop().time() >= _SEND_BY.get():
+        raise _TooLate
+
+
 class DiscordMessenger:
     """Sends attack alerts as normal DMs from the bot. discord.py waits out
-    Discord's rate limits before each request and gives up on one after
-    aiohttp's 5 minutes. A request is never cancelled here: cancelling one in
-    a global rate limit wait leaves that wait shut for every later request."""
+    Discord's rate limits before each request, tries a request again itself
+    after a rate limit or a server error, and gives up on one after aiohttp's
+    5 minutes. Each request, its own tries again included, is checked against
+    the DM's `send_by` with a fresh clock just as it starts, and not made
+    after it. A request is never cancelled here: cancelling one in a global
+    rate limit wait leaves that wait shut for every later request."""
 
     def __init__(self, client: discord.Client) -> None:
         self.client = client
 
-    async def send_dm(self, discord_user_id: str, reply: Reply, nonce: int) -> None:
+    async def send_dm(
+        self, discord_user_id: str, reply: Reply, nonce: int, send_by: float
+    ) -> None:
         embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
         view = discord.ui.View(timeout=None)
         for link in reply.links:
             view.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
         sending = False
+        late = _SEND_BY.set(send_by)
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
             sending = True
             await channel.send(embed=embed, view=view, nonce=nonce)
+        except _TooLate as error:
+            raise Unreachable from error
         except discord.DiscordServerError as error:
             raise Unreachable from error
         except discord.HTTPException as error:
@@ -431,6 +455,8 @@ class DiscordMessenger:
             raise Unreachable(
                 maybe_sent=sending and not isinstance(error, aiohttp.ClientConnectorError)
             ) from error
+        finally:
+            _SEND_BY.reset(late)
 
 
 def build_client(commands: Commands) -> tuple[discord.Client, app_commands.CommandTree]:
@@ -442,7 +468,11 @@ def build_client(commands: Commands) -> tuple[discord.Client, app_commands.Comma
     # Not privileged; it only keeps the servers the bot is in, which avoids
     # discord.py's warning about missing server state.
     intents.guilds = True
-    client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMentions.none())
+    trace = aiohttp.TraceConfig()
+    trace.on_request_start.append(_before_request)
+    client = discord.Client(
+        intents=intents, allowed_mentions=discord.AllowedMentions.none(), http_trace=trace
+    )
     tree = app_commands.CommandTree(
         client,
         allowed_contexts=app_commands.AppCommandContext(
