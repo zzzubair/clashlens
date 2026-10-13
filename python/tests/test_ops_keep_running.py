@@ -1,4 +1,4 @@
-"""Check when ./ops up leaves the collector, database, pod and network running."""
+"""Check when ./ops up leaves the database, pod, network and collector running."""
 
 import json
 import subprocess
@@ -12,7 +12,8 @@ OLD_COLLECTOR = "sha256:" + "1" * 64
 NEW_COLLECTOR = "sha256:" + "2" * 64
 POSTGRES = "sha256:" + "3" * 64
 SAME_CONTENTS = '["sha256:aa"] ["python"] null ["PATH=/opt/venv/bin"] "10001:10001"'
-KEPT = {"clashlens-collector", "clashlens-postgres", "clashlens-pod", "clashlens-network"}
+DATABASE = {"clashlens-postgres", "clashlens-pod", "clashlens-network"}
+KEPT = DATABASE | {"clashlens-collector"}
 FAKE_MANAGER = f"""#!{sys.executable}
 import json, os, sys
 from pathlib import Path
@@ -51,7 +52,7 @@ stop_units
 keep_running_check
 [[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
 keep_running_record
-printf 'keep=%s collector=%s\n' "$KEEP_RUNNING" "${RELEASE[COLLECTOR_IMAGE]}"
+printf 'keep=%s collector=%s\n' "$(collector_kept && echo true || echo false)" "${RELEASE[COLLECTOR_IMAGE]}"
 """
 
 # The real up, with the host and configuration checks before the keep decision skipped.
@@ -69,6 +70,22 @@ RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 up_stack
 """
 
+# The real up through a whole release, with only steps that need a real host,
+# database or containers skipped.
+RELEASE_UP = r"""
+source "$1" help >/dev/null
+for step in require_host load_release load_production_config validate_runtime_values \
+  guard_generated_units guard_existing_resources guard_trusted_proxy_ip guard_network_subnet \
+  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units \
+  try_pending_migrations write_environment prepare_secrets render_units wait_postgres \
+  apply_migrations configure_database wait_stack; do
+  eval "$step() { :; }"
+done
+MODE=production PREFIX=clashlens RELEASE_FILE=$STATE_DIR/release.env WEBSITE_PORT=3000
+printf 'RELEASE_MODE=production\nCOLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "$NEW_COLLECTOR" "$POSTGRES" > "$RELEASE_FILE"
+RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
+up_stack
+"""
 
 @pytest.fixture
 def stack(tmp_path):
@@ -124,7 +141,7 @@ def stack(tmp_path):
     }
     # The first up has no record, so it restarts everything and writes one.
     first = deploy(stack)
-    assert "Restarting the collector with the database, pod and network: no record" in first.stdout
+    assert "Restarting the database, pod, network and collector: no record" in first.stdout
     assert "keep=false" in first.stdout
     return stack
 
@@ -141,6 +158,7 @@ def deploy(stack, returncode=0, **overrides):
         check=False,
     )
     assert result.returncode == returncode, result.stderr
+    result.calls = calls
     result.stopped = {
         line.split()[2].removesuffix(".service")
         for line in calls.read_text().splitlines()
@@ -150,9 +168,18 @@ def deploy(stack, returncode=0, **overrides):
 
 
 def assert_restarted(result, reason):
-    assert f"Restarting the collector with the database, pod and network: {reason}" in result.stdout
+    assert f"Restarting the database, pod, network and collector: {reason}" in result.stdout
     assert "keep=false" in result.stdout
     assert KEPT <= result.stopped
+
+
+def assert_collector_restarted(result, reason):
+    assert f"Restarting the collector: {reason}" in result.stdout
+    assert "Leaving the database, pod and network running" in result.stdout
+    assert "keep=false" in result.stdout
+    assert "clashlens-collector" in result.stopped
+    assert not DATABASE & result.stopped
+    assert "--user disable --now clashlens.target" not in Path(result.calls).read_text()
 
 
 def test_unchanged_up_leaves_the_collector_running(stack):
@@ -165,25 +192,55 @@ def test_unchanged_up_leaves_the_collector_running(stack):
     assert "--user disable --now clashlens.target" not in Path(stack["env"]["CALLS"]).read_text()
 
 
-def test_changed_collector_image_restarts(stack):
+def test_changed_collector_image_restarts_only_the_collector(stack):
     images = json.loads(stack["env"]["IMAGES"])
     images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
-    assert_restarted(deploy(stack, IMAGES=json.dumps(images)), "the collector image changed")
+    result = deploy(stack, IMAGES=json.dumps(images))
+    assert_collector_restarted(result, "the collector image changed")
+    assert f"keep=false collector={NEW_COLLECTOR}" in result.stdout
 
 
-def test_changed_collector_setting_restarts(stack):
+def test_changed_collector_setting_restarts_only_the_collector(stack):
     collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
     collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")
-    assert_restarted(deploy(stack), "changed collector settings")
+    assert_collector_restarted(deploy(stack), "changed collector settings")
     # The restart records the new settings, so the next unchanged up keeps it.
     assert "keep=true" in deploy(stack).stdout
+
+
+def test_stopped_collector_restarts_alone(stack):
+    result = deploy(stack, INACTIVE="clashlens-collector.service")
+    assert_collector_restarted(result, "clashlens-collector is not running")
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [("postgres.env", "changed database settings"), ("clashlens.pod", "changed pod definition")],
+)
+def test_changed_database_input_restarts_all_four(stack, name, reason):
+    folder = "state/clashlens/env" if name.endswith(".env") else "config/containers/systemd"
+    changed = stack["tmp_path"] / folder / name
+    changed.write_text(changed.read_text() + "# changed\n")
+    assert_restarted(deploy(stack), reason)
+
+
+def test_changed_migrations_restart_all_four(stack):
+    # The digest comes from the repository's deploy/migrations, so a record
+    # from an older release stands in for a release that adds a migration.
+    record = stack["tmp_path"] / "state" / "clashlens" / "kept-services.env"
+    text = record.read_text()
+    recorded = next(line for line in text.splitlines() if line.startswith("MIGRATIONS="))
+    record.write_text(text.replace(recorded, "MIGRATIONS=" + "0" * 64))
+    result = deploy(stack)
+    assert_restarted(result, "changed database migrations")
+    assert "--user disable --now clashlens.target" in Path(result.calls).read_text()
 
 
 def test_changed_secret_restarts_without_printing_it(stack):
     secret = stack["tmp_path"] / "secrets" / "clashlens-normal-api-keys"
     secret.write_text("normal-1=new-key-value")
     result = deploy(stack)
-    assert_restarted(result, "changed collector secrets")
+    assert_collector_restarted(result, "changed collector secrets")
     record = (stack["tmp_path"] / "state" / "clashlens" / "kept-services.env").read_text()
     for text in (result.stdout, result.stderr, record):
         assert "key-value" not in text
@@ -192,8 +249,8 @@ def test_changed_secret_restarts_without_printing_it(stack):
 
 def test_worker_only_change_keeps_the_running_collector(stack):
     # The collector image holds all Python source, so a worker-only change
-    # differs from the running one; the person deploying chooses the manual
-    # --keep-collector for it. Choosing automatically is a follow-up.
+    # differs from the running one; the person deploying can choose the
+    # manual --keep-collector for it.
     images = json.loads(stack["env"]["IMAGES"])
     images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
     result = deploy(stack, IMAGES=json.dumps(images), KEEP="true")
@@ -201,8 +258,8 @@ def test_worker_only_change_keeps_the_running_collector(stack):
     assert f"keep=true collector={OLD_COLLECTOR}" in result.stdout
     assert not KEPT & result.stopped
     assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= result.stopped
-    # A plain up restarts all four for any Python change.
-    assert_restarted(deploy(stack, IMAGES=json.dumps(images)), "the collector image changed")
+    # A plain up restarts only the collector for any Python change.
+    assert_collector_restarted(deploy(stack, IMAGES=json.dumps(images)), "the collector image changed")
 
 
 def test_keep_collector_still_restarts_for_a_collector_setting_change(stack):
@@ -211,7 +268,7 @@ def test_keep_collector_still_restarts_for_a_collector_setting_change(stack):
     collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
     collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")
     result = deploy(stack, IMAGES=json.dumps(images), KEEP="true")
-    assert_restarted(result, "changed collector settings")
+    assert_collector_restarted(result, "changed collector settings")
     # The restart runs the release's own collector image, not the kept one.
     assert f"rendered collector={NEW_COLLECTOR}" in result.stdout
     assert f"collector={NEW_COLLECTOR}" in result.stdout.splitlines()[-1]
@@ -248,13 +305,24 @@ def test_failed_up_leaves_the_unchanged_collector_running(stack):
     assert "keep=true" in deploy(stack).stdout
 
 
-def test_failed_up_after_a_change_stops_everything(stack):
+def test_failed_up_after_a_database_change_stops_everything(stack):
+    postgres_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "postgres.env"
+    postgres_env.write_text("POSTGRES_DB=clashlens\nPOSTGRES_INITDB_ARGS=--data-checksums\n")
+    result = deploy(stack, returncode=1, FAILS="true")
+    assert "Restarting the database, pod, network and collector: changed" in result.stdout
+    assert KEPT <= result.stopped
+    assert "--user disable --now clashlens.target" in Path(stack["env"]["CALLS"]).read_text()
+
+
+def test_failed_up_after_a_collector_change_leaves_the_database_running(stack):
     collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
     collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")
     result = deploy(stack, returncode=1, FAILS="true")
-    assert "Restarting the collector with the database, pod and network: changed" in result.stdout
-    assert KEPT <= result.stopped
-    assert "--user disable --now clashlens.target" in Path(stack["env"]["CALLS"]).read_text()
+    assert "Restarting the collector: changed collector settings" in result.stdout
+    assert "clashlens-collector" in result.stopped
+    assert not DATABASE & result.stopped
+    # The record still matches what the database runs with, so the next up keeps it.
+    assert not DATABASE & deploy(stack).stopped
 
 
 def failed_up(stack, **overrides):
@@ -334,3 +402,59 @@ def test_down_stops_the_bot_service_only_when_ops_generated_it(tmp_path, managed
     assert stopped is managed
     if not managed:
         assert "refusing unmanaged systemd unit clashlens-discord-bot.service" in result.stderr
+
+
+def release(stack, **overrides):
+    calls = Path(stack["env"]["CALLS"])
+    calls.unlink(missing_ok=True)
+    result = subprocess.run(
+        ["bash", "-c", RELEASE_UP, "keep-running-test", str(OPS)],
+        env=dict(stack["env"], **overrides),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    result.calls = calls.read_text().splitlines()
+    result.stopped = {
+        line.split()[2].removesuffix(".service")
+        for line in result.calls
+        if line.startswith("--user stop ") and line.endswith(".service")
+    }
+    active = stack["tmp_path"] / "state" / "clashlens" / "active-release.env"
+    result.active = dict(line.split("=", 1) for line in active.read_text().splitlines())
+    return result
+
+
+def test_release_restarts_the_database_only_when_its_own_inputs_change(stack):
+    images = json.loads(stack["env"]["IMAGES"])
+    images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
+    # A worker-only release: the collector image holds all Python source, so it
+    # changes too and the collector restarts, but the database keeps running.
+    worker = release(stack, IMAGES=json.dumps(images))
+    assert "Restarting the collector: the collector image changed" in worker.stdout
+    assert "clashlens-collector" in worker.stopped
+    assert not DATABASE & worker.stopped
+    assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= worker.stopped
+    assert "--user disable --now clashlens.target" not in worker.calls
+    assert "--user start clashlens.target" in worker.calls
+    assert worker.active["COLLECTOR_IMAGE"] == NEW_COLLECTOR
+    assert worker.active["POSTGRES_IMAGE"] == POSTGRES
+    assert "Clash Lens production is ready" in worker.stdout
+
+    # An API- or website-only release leaves the collector image's contents
+    # unchanged, so the collector keeps running with the database.
+    running = {"clashlens-collector": NEW_COLLECTOR, "clashlens-postgres": POSTGRES}
+    api = release(stack, IMAGES=json.dumps(images), RUNNING=json.dumps(running))
+    assert "Leaving the collector, database, pod and network running" in api.stdout
+    assert not KEPT & api.stopped
+    assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= api.stopped
+
+    # A release that changes a database setting restarts all four.
+    postgres_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "postgres.env"
+    postgres_env.write_text("POSTGRES_DB=clashlens\nPOSTGRES_INITDB_ARGS=--data-checksums\n")
+    database = release(stack, IMAGES=json.dumps(images), RUNNING=json.dumps(running))
+    assert "Restarting the database, pod, network and collector: changed database settings" in database.stdout
+    assert KEPT <= database.stopped
+    assert "--user disable --now clashlens.target" in database.calls

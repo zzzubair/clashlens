@@ -247,12 +247,12 @@ it again, and confirm the PostgreSQL and collector start times are unchanged
 (when the restarted service is the collector, only PostgreSQL's). Restarting
 `clashlens-postgres.service` also restarts the worker, API and collector, which
 use the database. `./ops down` stops the whole stack. `./ops up` restarts it,
-but leaves the collector, PostgreSQL, pod and network running when none of them
-changed ([rule](deployment.md#when-up-restarts-the-collector));
-`./ops up --restart-collector` restarts them anyway. Any Python change makes a
-plain `./ops up` restart them; for a worker-only or API-only change, run `./ops
-up --keep-collector` by hand to keep them running (choosing this automatically
-is a follow-up).
+but leaves PostgreSQL, the pod and the network running when nothing they run on
+changed, and the collector too when nothing it runs on changed either
+([rule](deployment.md#when-up-restarts-the-database-and-collector));
+`./ops up --restart-collector` restarts all four anyway. Any Python change makes a
+plain `./ops up` restart the collector, but not PostgreSQL; for a worker-only or
+API-only change, `./ops up --keep-collector` keeps the collector running too.
 
 Use the [alert conditions and delivery rules](alerts.md)
 to interpret messages. Confirm both the measurements below and the recovery

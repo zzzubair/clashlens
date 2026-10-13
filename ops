@@ -42,9 +42,9 @@ Usage: ./ops build [--fixture]
 
 build creates a pinned release. up installs and starts that release; it never
 builds or pulls an image. --fixture is an isolated stack with no live keys.
-up leaves the collector, database, pod and network running when their images
-and configuration are unchanged; --restart-collector restarts them anyway, and
---keep-collector keeps the running collector image for a worker/API-only change.
+up leaves the database, pod and network running when their image and configuration
+are unchanged, and the collector when its own are too; --restart-collector restarts all
+four anyway, and --keep-collector keeps the running collector image for a worker/API-only change.
 down disables the stack across reboot and keeps all database, spool and archive data.
 EOF
 }
