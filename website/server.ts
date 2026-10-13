@@ -76,6 +76,12 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
       response.writeHead(400).end();
       return;
     }
+    // The OBS overlay's preview, which has nothing to click, shows inside its
+    // own account page.
+    if (pathname === "/account/obs-overlay/preview") {
+      response.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+      response.setHeader("X-Frame-Options", "SAMEORIGIN");
+    }
     const file = files.get(pathname);
     if (!file || !["GET", "HEAD"].includes(request.method ?? "")) {
       listener(request, response);

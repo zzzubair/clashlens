@@ -22,6 +22,7 @@ from . import (
     collector_commits,
     collector_intents,
     collector_liveness,
+    collector_overlays,
     collector_reset,
     game_rankings,
     promotion_recheck,
@@ -30,6 +31,7 @@ from . import (
 from .archive import S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
+    REVISIT_INTERVAL,
     CollectorDatabase,
     CollectorIntent,
     CollectorWork,
@@ -99,6 +101,10 @@ class Collector:
         # it running. None runs none, as in tests.
         self.uploads = uploads
         self.battle_logs = BattleLogSchedule()
+        # Players an open OBS overlay shows, read again every few seconds.
+        self.overlay_players = partial(collector_overlays.players_in_use, database)
+        self._overlays: list[tuple[int, str]] = []
+        self._overlays_after = 0.0
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
         self.latency_seconds: dict[tuple[str, str], float] = {}
@@ -297,6 +303,21 @@ class Collector:
             )
         except (psycopg.Error, PoolTimeout):
             pass  # The player keeps the normal cadence.
+
+    async def _open_overlays(self, now: datetime) -> list[int]:
+        """Players an open OBS overlay shows, less those who finished the
+        Legend day, who keep the 8-minute check."""
+        if time.monotonic() >= self._overlays_after:
+            self._overlays_after = time.monotonic() + collector_overlays.REFRESH_SECONDS
+            try:
+                self._overlays = await self._database_call(self.overlay_players)
+            except (psycopg.Error, PoolTimeout):
+                self._overlays = []  # They keep the normal cadence.
+        return [
+            player_id
+            for player_id, tag in self._overlays
+            if self.battle_logs.finished_recheck_at(tag, profile_usable=True, now=now) is None
+        ]
 
     def _reserve_endpoints(
         self, endpoints: tuple[str, ...]
@@ -881,6 +902,22 @@ class Collector:
 
                     claim_time = datetime.now(UTC)
                     available = self.regular_parallelism - len(pending)
+                    overlays = await self._open_overlays(claim_time)
+                    if overlays and available > 0:
+                        # Each once its last check is 30 seconds old: a claim
+                        # makes the next one due 90 seconds after it.
+                        admit(
+                            await self._database_call(
+                                self.database.claim_due_players,
+                                limit=available,
+                                now=claim_time,
+                                only=overlays,
+                                due_by=claim_time
+                                + REVISIT_INTERVAL
+                                - collector_overlays.OVERLAY_GAP,
+                            )
+                        )
+                        available -= len(work)
                     repeat_inflight = sum(
                         not item.first_battle_pending for item in pending.values()
                     )
@@ -900,7 +937,7 @@ class Collector:
                                 first_battle_pending=False,
                             )
                         )
-                    available -= len(work)
+                    available = self.regular_parallelism - len(pending)
                     if available > 0:
                         admit(
                             await self._database_call(

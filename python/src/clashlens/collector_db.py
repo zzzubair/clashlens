@@ -457,19 +457,18 @@ class CollectorDatabase:
         now: datetime | None = None,
         *,
         first_battle_pending: bool | None = None,
+        only: list[int] | None = None,
+        due_by: datetime | None = None,
     ) -> list[CollectorWork]:
+        """Due players, or with `only` those of them due by `due_by`."""
         if limit < 1:
             raise ValueError("player claim limit must be positive")
         claim_time = now or datetime.now(UTC)
-        priority_filter = (
-            "" if first_battle_pending is None else "AND first_battle_pending = %s"
-        )
-        priority_params = () if first_battle_pending is None else (first_battle_pending,)
-        priority_order = (
-            "first_battle_pending DESC, next_due_at, id"
-            if first_battle_pending is None
-            else "next_due_at, id"
-        )
+        filters = [] if first_battle_pending is None else [("first_battle_pending = %s", first_battle_pending)]
+        filters += [] if only is None else [("id = ANY(%s)", only)]
+        priority_filter = "".join(f"AND {sql} " for sql, _ in filters)
+        priority_params = tuple(value for _, value in filters)
+        priority_order = "first_battle_pending DESC, next_due_at, id" if first_battle_pending is None else "next_due_at, id"
         with self._connection() as connection:
             with connection.transaction():
                 if not self._regular_admission_open(connection, claim_time):
@@ -517,7 +516,7 @@ class CollectorDatabase:
                      AND battle.endpoint = 'battle_log'
                     """,
                     (
-                        claim_time,
+                        due_by or claim_time,
                         *priority_params,
                         limit,
                         claim_time + REVISIT_INTERVAL,

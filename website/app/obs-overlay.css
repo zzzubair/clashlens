@@ -1,0 +1,1239 @@
+/*
+ * OBS overlay: the overlay itself (.obs-overlay, drawn by
+ * lib/obs-overlay-view.ts) and its account page (.obs-settings). The overlay
+ * keeps its own colours whatever the site's light or dark switch says; the
+ * account page follows the switch through the --cl-* tokens.
+ */
+
+/* The streamer's font choices beside Clash Lens's own; SIL OFL, see /fonts. */
+@font-face {
+  font-family: Inter;
+  font-weight: 400 900;
+  font-display: block;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  font-weight: 500;
+  font-display: block;
+  src: url("/fonts/barlow-condensed-500-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  font-weight: 600;
+  font-display: block;
+  src: url("/fonts/barlow-condensed-600-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  font-weight: 700;
+  font-display: block;
+  src: url("/fonts/barlow-condensed-700-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Rajdhani;
+  font-weight: 500;
+  font-display: block;
+  src: url("/fonts/rajdhani-500-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Rajdhani;
+  font-weight: 600;
+  font-display: block;
+  src: url("/fonts/rajdhani-600-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Rajdhani;
+  font-weight: 700;
+  font-display: block;
+  src: url("/fonts/rajdhani-700-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Bungee;
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/bungee-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Rubik;
+  font-weight: 400 800;
+  font-display: block;
+  src: url("/fonts/rubik-latin.woff2") format("woff2");
+}
+
+/* ---------- The overlay page: nothing but the overlay, see-through ---------- */
+
+html.obs-page,
+html.obs-page body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.obs-overlay {
+  --ov-night: #1d1426;
+  --ov-gold: #f2c641;
+  --ov-good: #3fbf5f;
+  --ov-mid: #f2b233;
+  --ov-bad: #e5484d;
+  --ov-open: rgb(255 255 255 / 0.12);
+  --ov-open-line: rgb(255 255 255 / 0.22);
+  --ov-text: #fff4e2;
+  --ov-muted: #bcaa98;
+  --ov-panel: #1d1626;
+  --ov-line: #000;
+  --ov-gain: #69db7c;
+  --ov-loss: #ff8787;
+  /* Fonts: the streamer picks one; Clash Lens's own is the default. */
+  --ov-fd: "Lilita One";
+  --ov-fdw: 400;
+  --ov-fb: Nunito;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  font-family: var(--ov-fb), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--ov-text);
+  text-align: left;
+}
+.obs-overlay.ov-font-clean {
+  --ov-fd: Inter;
+  --ov-fdw: 800;
+  --ov-fb: Inter;
+}
+.obs-overlay.ov-font-esports {
+  --ov-fd: "Barlow Condensed";
+  --ov-fdw: 700;
+  --ov-fb: "Barlow Condensed";
+}
+.obs-overlay.ov-font-tech {
+  --ov-fd: Rajdhani;
+  --ov-fdw: 700;
+  --ov-fb: Rajdhani;
+}
+.obs-overlay.ov-font-arcade {
+  --ov-fd: Bungee;
+  --ov-fdw: 400;
+  --ov-fb: Rubik;
+}
+.obs-overlay.ov-dark-text {
+  --ov-text: #1d1426;
+  --ov-muted: #6a5848;
+  --ov-panel: #fff8ec;
+  --ov-line: #1d1426;
+  --ov-open: rgb(29 20 38 / 0.08);
+  --ov-open-line: rgb(29 20 38 / 0.25);
+  --ov-gain: #1f7a33;
+  --ov-loss: #c92a2a;
+}
+
+.obs-overlay .ov-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  width: max-content;
+}
+.obs-overlay .ov-box {
+  position: relative;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.obs-overlay.ov-bg-card .ov-box {
+  background: var(--ov-panel);
+  border: 3px solid var(--ov-line);
+  border-radius: 16px;
+  box-shadow: 0 5px 0 var(--ov-line);
+}
+.obs-overlay.ov-bg-card.ov-dark-text .ov-box {
+  border-color: #1d1426;
+  box-shadow: 0 5px 0 #1d1426;
+}
+.obs-overlay.ov-bg-tint .ov-box {
+  background: rgb(18 13 23 / 0.62);
+  border-radius: 16px;
+}
+.obs-overlay.ov-bg-tint.ov-dark-text .ov-box {
+  background: rgb(255 248 236 / 0.72);
+}
+.obs-overlay.ov-bg-none .ov-box {
+  background: transparent;
+}
+.obs-overlay.ov-bg-none.ov-light-text .ov-box {
+  text-shadow:
+    0 2px 0 #000,
+    0 0 6px rgb(0 0 0 / 0.85);
+}
+.obs-overlay.ov-bg-none.ov-dark-text {
+  --ov-muted: #3a2c22;
+}
+.obs-overlay.ov-bg-none.ov-light-text {
+  --ov-muted: #e6d8c6;
+}
+.obs-overlay.ov-bg-none.ov-dark-text .ov-box {
+  text-shadow:
+    0 1px 0 #fff,
+    0 0 6px rgb(255 255 255 / 0.9);
+}
+
+.obs-overlay .ov-lilita {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  letter-spacing: 0.01em;
+}
+.obs-overlay .ov-name {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.obs-overlay .ov-muted {
+  color: var(--ov-muted);
+}
+.obs-overlay .ov-num {
+  font-variant-numeric: tabular-nums;
+}
+.obs-overlay .ov-gain {
+  color: var(--ov-gain);
+}
+.obs-overlay .ov-loss {
+  color: var(--ov-loss);
+}
+.obs-overlay .ov-ico {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.14em;
+  flex: none;
+}
+.obs-overlay .ov-trophy-ico {
+  color: var(--ov-gold);
+}
+
+.obs-overlay .ov-squares {
+  display: flex;
+  gap: 4px;
+}
+.obs-overlay .ov-sq {
+  box-sizing: border-box;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  color: #1d1426;
+  text-shadow: none;
+}
+.obs-overlay .ov-sq.ov-open {
+  background: var(--ov-open);
+  border: 2px dashed var(--ov-open-line);
+}
+.obs-overlay .ov-sq.ov-good {
+  background: var(--ov-good);
+  box-shadow: inset 0 -3px 0 rgb(0 0 0 / 0.25);
+}
+.obs-overlay .ov-sq.ov-mid {
+  background: var(--ov-mid);
+  box-shadow: inset 0 -3px 0 rgb(0 0 0 / 0.25);
+}
+.obs-overlay .ov-sq.ov-bad {
+  background: var(--ov-bad);
+  color: #fff;
+  box-shadow: inset 0 -3px 0 rgb(0 0 0 / 0.25);
+}
+.obs-overlay .ov-sq.ov-fresh {
+  animation:
+    ov-pop 1.2s cubic-bezier(0.2, 1.6, 0.4, 1),
+    ov-glow 6s ease-out;
+}
+@keyframes ov-glow {
+  0%,
+  70% {
+    outline: 3px solid #ffd447;
+    outline-offset: 2px;
+  }
+  100% {
+    outline: 3px solid transparent;
+    outline-offset: 2px;
+  }
+}
+@keyframes ov-pop {
+  0% {
+    transform: scale(0.2);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.obs-overlay .ov-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ov-muted);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.obs-overlay .ov-brand img {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.obs-overlay .ov-brand .ov-cl {
+  font-family: "Lilita One", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* The pop-up sits over the name and trophies, never over the squares or totals. */
+.obs-overlay .ov-toast {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  background: var(--ov-night);
+  color: #fff4e2;
+  border: 3px solid #000;
+  border-radius: 12px;
+  text-shadow: none;
+  transform: translateY(-140%);
+  opacity: 0;
+  transition:
+    transform 0.45s cubic-bezier(0.2, 1.4, 0.4, 1),
+    opacity 0.3s;
+}
+.obs-overlay .ov-toast.ov-show {
+  transform: none;
+  opacity: 1;
+}
+.obs-overlay .ov-toast .ov-big {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 26px;
+}
+.obs-overlay .ov-toast .ov-stars {
+  color: var(--ov-gold);
+  letter-spacing: 1px;
+  font-size: 16px;
+}
+.obs-overlay .ov-toast .ov-who {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 800;
+  font-size: 14px;
+}
+.obs-overlay .ov-toast.ov-attack {
+  box-shadow: inset 6px 0 0 var(--ov-good);
+}
+.obs-overlay .ov-toast.ov-attack.ov-mid,
+.obs-overlay .ov-toast.ov-defense.ov-mid {
+  box-shadow: inset 6px 0 0 var(--ov-mid);
+}
+.obs-overlay .ov-toast.ov-attack.ov-bad,
+.obs-overlay .ov-toast.ov-defense {
+  box-shadow: inset 6px 0 0 var(--ov-bad);
+}
+.obs-overlay .ov-toast.ov-defense.ov-good {
+  box-shadow: inset 6px 0 0 var(--ov-good);
+}
+.obs-overlay .ov-toast .ov-label {
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #bcaa98;
+}
+
+.obs-overlay .ov-stale {
+  color: #ffb547 !important;
+}
+.obs-overlay.ov-dark-text .ov-stale {
+  color: #b8460c !important;
+}
+.obs-overlay .ov-msg {
+  font-weight: 800;
+}
+
+/* ---------- Card, and the wide card side by side ---------- */
+.obs-overlay.ov-card .ov-box {
+  width: 366px;
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.obs-overlay.ov-card .ov-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.obs-overlay.ov-card .ov-name {
+  font-size: 22px;
+  max-width: 250px;
+}
+.obs-overlay.ov-card .ov-day {
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.obs-overlay.ov-card .ov-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 2px;
+}
+.obs-overlay.ov-card .ov-trophies {
+  font-size: 40px;
+  line-height: 1;
+}
+.obs-overlay.ov-card .ov-rank {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+.obs-overlay.ov-card .ov-rank small {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.obs-overlay.ov-card .ov-rows {
+  margin-top: 9px;
+  display: grid;
+  gap: 6px;
+}
+.obs-overlay.ov-card .ov-row {
+  display: grid;
+  grid-template-columns: 18px auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.obs-overlay.ov-card .ov-row .ov-ico {
+  font-size: 17px;
+}
+.obs-overlay.ov-card .ov-row .ov-sq {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+}
+.obs-overlay.ov-card .ov-row .ov-tot {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 20px;
+  text-align: right;
+}
+.obs-overlay.ov-card .ov-net {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+.obs-overlay.ov-card .ov-net b {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 18px;
+}
+.obs-overlay.ov-card .ov-foot {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+.obs-overlay.ov-card .ov-toast {
+  left: 10px;
+  right: 10px;
+  top: 8px;
+  height: 58px;
+}
+
+.obs-overlay.ov-wide .ov-box {
+  width: auto;
+}
+.obs-overlay.ov-wide .ov-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex: 1;
+}
+.obs-overlay.ov-wide :is(.ov-left, .ov-right) {
+  flex: none;
+}
+.obs-overlay.ov-wide .ov-hero {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.obs-overlay.ov-wide .ov-left .ov-name {
+  max-width: 240px;
+}
+.obs-overlay.ov-wide .ov-right .ov-rows {
+  margin-top: 0;
+}
+.obs-overlay.ov-wide .ov-top {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+/* ---------- Slim strip ---------- */
+.obs-overlay.ov-strip .ov-box {
+  height: 60px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 13px;
+  white-space: nowrap;
+}
+.obs-overlay.ov-strip .ov-brand {
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.1;
+  align-items: flex-start;
+}
+.obs-overlay.ov-strip .ov-brand .ov-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.obs-overlay.ov-strip .ov-name {
+  font-size: 22px;
+  width: 140px;
+}
+.obs-overlay.ov-strip .ov-part {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.obs-overlay.ov-strip .ov-trophies {
+  font-size: 26px;
+}
+.obs-overlay.ov-strip .ov-rank {
+  font-size: 17px;
+  font-weight: 900;
+}
+.obs-overlay.ov-strip .ov-part .ov-ico {
+  font-size: 20px;
+}
+.obs-overlay.ov-strip .ov-sq {
+  width: 15px;
+  height: 26px;
+  font-size: 0;
+  border-radius: 4px;
+}
+.obs-overlay.ov-strip .ov-squares {
+  gap: 3px;
+}
+.obs-overlay.ov-strip .ov-tot {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 21px;
+  min-width: 44px;
+}
+.obs-overlay.ov-strip .ov-net {
+  font-size: 13px;
+  font-weight: 800;
+}
+.obs-overlay.ov-strip .ov-net b {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 21px;
+}
+.obs-overlay.ov-strip .ov-sep {
+  width: 2px;
+  align-self: stretch;
+  margin: 12px 0;
+  background: var(--ov-open-line);
+}
+.obs-overlay.ov-strip .ov-meta {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.obs-overlay.ov-strip .ov-toast {
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: 330px;
+  transform: translateX(-110%);
+}
+.obs-overlay.ov-strip .ov-toast.ov-show {
+  transform: none;
+}
+
+/* ---------- Tall column ---------- */
+.obs-overlay.ov-column .ov-box {
+  width: 190px;
+  padding: 14px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-evenly;
+  text-align: center;
+  gap: 8px;
+}
+.obs-overlay.ov-column .ov-name {
+  font-size: 22px;
+  max-width: 166px;
+}
+.obs-overlay.ov-column .ov-day {
+  font-size: 12px;
+  font-weight: 800;
+  margin-top: -6px;
+}
+.obs-overlay.ov-column .ov-trophies {
+  font-size: 40px;
+  line-height: 1;
+}
+.obs-overlay.ov-column .ov-rank {
+  font-size: 15px;
+  font-weight: 900;
+}
+.obs-overlay.ov-column .ov-block {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+}
+.obs-overlay.ov-column .ov-block .ov-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 900;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.obs-overlay.ov-column .ov-block .ov-tot {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 22px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.obs-overlay.ov-column .ov-squares {
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 5px;
+}
+.obs-overlay.ov-column .ov-sq {
+  width: 34px;
+  height: 30px;
+  font-size: 13px;
+}
+.obs-overlay.ov-column .ov-net {
+  font-size: 13px;
+  font-weight: 800;
+}
+.obs-overlay.ov-column .ov-net b {
+  font-family: var(--ov-fd), sans-serif;
+  font-weight: var(--ov-fdw);
+  font-size: 20px;
+}
+.obs-overlay.ov-column .ov-updated {
+  font-size: 11px;
+  font-weight: 800;
+}
+.obs-overlay.ov-column .ov-toast {
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  height: 84px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  padding: 4px 8px;
+}
+
+/* ---------- The account page ---------- */
+
+.obs-settings .obs-layout {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 22px;
+  margin-top: 22px;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .obs-settings .obs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.obs-settings .form-panel {
+  padding: 16px;
+}
+.obs-settings .form-panel + .form-panel {
+  margin-top: 18px;
+}
+.obs-settings .form-panel h2 {
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.obs-settings .obs-step {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  background: var(--cl-brand-fill);
+  color: var(--cl-brand-night);
+  border: 2px solid var(--cl-brand-night);
+}
+.obs-settings .obs-help {
+  color: var(--cl-muted);
+  font-size: 14px;
+  margin: 4px 0 10px;
+}
+.obs-settings .obs-field {
+  margin-top: 14px;
+}
+.obs-settings .obs-label {
+  display: block;
+  font-weight: 900;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.obs-settings .obs-players {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.obs-settings .obs-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 2px solid var(--cl-border);
+  border-radius: 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  background: var(--cl-surface);
+}
+.obs-settings .obs-player:has(input:checked) {
+  border-color: var(--cl-card-line);
+  background: var(--cl-panel);
+  box-shadow: 0 3px 0 var(--cl-card-line);
+}
+.obs-settings .obs-player input,
+.obs-settings .obs-checks input,
+.obs-settings .obs-toggle input {
+  accent-color: var(--cl-brand-orange);
+  width: 18px;
+  height: 18px;
+}
+.obs-settings .obs-player-name {
+  font-weight: 900;
+}
+.obs-settings .obs-player-tag {
+  color: var(--cl-muted);
+  font-size: 13px;
+}
+.obs-settings .obs-badge {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 900;
+  border-radius: 999px;
+  padding: 1px 9px;
+  border: 2px solid currentColor;
+  white-space: nowrap;
+  color: var(--cl-muted);
+}
+.obs-settings .obs-badge.ok {
+  color: var(--cl-positive);
+}
+.obs-settings .obs-wh {
+  display: flex;
+  gap: 12px;
+}
+.obs-settings .obs-wh label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  font-size: 14px;
+}
+.obs-settings .obs-wh input {
+  width: 86px;
+  font: 800 15px var(--cl-font);
+  padding: 5px 8px;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 10px;
+  background: var(--cl-surface);
+  color: var(--cl-ink);
+}
+.obs-settings .obs-fitinfo {
+  font-size: 13px;
+  color: var(--cl-muted);
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+.obs-settings .obs-fitinfo.warn {
+  color: var(--cl-negative);
+  font-weight: 800;
+}
+.obs-settings :is(.obs-shapes, .obs-fonts) {
+  display: grid;
+  gap: 8px;
+}
+.obs-settings .obs-shapes {
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 10px;
+}
+.obs-settings .obs-fonts {
+  grid-template-columns: repeat(3, 1fr);
+}
+.obs-settings :is(.obs-shape, .obs-font) {
+  position: relative;
+  border: 2px solid var(--cl-border);
+  border-radius: 12px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--cl-surface);
+}
+.obs-settings .obs-shape {
+  padding: 10px 6px 8px;
+  font-weight: 900;
+  font-size: 13px;
+}
+.obs-settings .obs-font {
+  padding: 8px 6px 6px;
+}
+.obs-settings :is(.obs-shape, .obs-font):has(input:checked) {
+  border-color: var(--cl-card-line);
+  background: var(--cl-panel);
+  box-shadow: 0 3px 0 var(--cl-card-line);
+}
+.obs-settings :is(.obs-shape, .obs-font):has(input:focus-visible) {
+  outline: 3px solid var(--cl-brand-orange);
+}
+.obs-settings :is(.obs-shape, .obs-font, .obs-seg) input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.obs-settings .obs-shape-pic {
+  height: 54px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 6px;
+}
+.obs-settings .obs-shape-pic i {
+  display: block;
+  background: var(--cl-brand-fill);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: 4px;
+}
+.obs-settings :is(.obs-shape, .obs-font) small {
+  display: block;
+  color: var(--cl-muted);
+  font-weight: 700;
+  font-size: 11px;
+}
+.obs-settings .obs-font b {
+  display: block;
+  font-size: 20px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.obs-settings .obs-font small {
+  font-weight: 800;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.obs-settings .obs-seg {
+  display: inline-flex;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 3px 0 var(--cl-card-line);
+}
+.obs-settings .obs-seg label {
+  position: relative;
+  padding: 6px 12px;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+  background: var(--cl-surface);
+  border-right: 2px solid var(--cl-card-line);
+}
+.obs-settings .obs-seg label:last-child {
+  border-right: 0;
+}
+.obs-settings .obs-seg label:has(input:checked) {
+  background: var(--cl-brand-fill);
+  color: var(--cl-brand-night);
+}
+.obs-settings .obs-seg label:has(input:focus-visible) {
+  outline: 3px solid var(--cl-brand-orange);
+  outline-offset: -3px;
+}
+.obs-settings .obs-checks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  margin-top: 10px;
+}
+.obs-settings .obs-checks label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.obs-settings .obs-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+.obs-settings .obs-toggle small {
+  display: block;
+  color: var(--cl-muted);
+  font-weight: 600;
+}
+
+.obs-settings .obs-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.obs-settings .obs-preview-head h2 {
+  display: block;
+}
+.obs-settings .obs-preview-head .obs-help {
+  font: 700 13px var(--cl-font);
+  margin: 0;
+}
+.obs-settings .obs-stagewrap {
+  margin-top: 12px;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #333;
+}
+.obs-settings .obs-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: 0 0;
+  /* The game picture, always: the overlay is judged against the game. */
+  background:
+    radial-gradient(circle at 70% 30%, rgb(255 255 255 / 0.25), transparent 30%),
+    repeating-linear-gradient(45deg, rgb(0 0 0 / 0.06) 0 40px, transparent 40px 80px),
+    linear-gradient(160deg, #6bb34a 0%, #4f9a3a 45%, #3d7d2c 100%);
+}
+.obs-settings .obs-canvas::before {
+  content: "";
+  position: absolute;
+  left: 33%;
+  top: 24%;
+  width: 33%;
+  height: 52%;
+  background: linear-gradient(#8a7a66, #6d5f50);
+  clip-path: polygon(50% 0, 100% 30%, 100% 70%, 50% 100%, 0 70%, 0 30%);
+  opacity: 0.7;
+}
+.obs-settings .obs-canvas::after {
+  content: "your game";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 46%;
+  text-align: center;
+  font: 400 64px "Lilita One";
+  color: rgb(255 255 255 / 0.35);
+}
+.obs-settings .obs-cam {
+  position: absolute;
+  right: 2%;
+  bottom: 4%;
+  width: 22%;
+  height: 22%;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #444, #222);
+  border: 4px solid rgb(255 255 255 / 0.4);
+  display: grid;
+  place-items: center;
+  color: rgb(255 255 255 / 0.5);
+  font: 400 36px "Lilita One";
+}
+.obs-settings .obs-canvas iframe {
+  position: absolute;
+  border: 0;
+  background: transparent;
+  color-scheme: normal;
+}
+.obs-settings .obs-handle {
+  position: absolute;
+  cursor: grab;
+  touch-action: none;
+  border-radius: 16px;
+  outline: 4px dashed transparent;
+  outline-offset: 6px;
+  transition: outline-color 0.15s;
+}
+.obs-settings .obs-handle:is(:hover, :focus-visible, .dragging) {
+  outline-color: rgb(255 212 71 / 0.95);
+}
+.obs-settings .obs-handle.dragging {
+  cursor: grabbing;
+}
+.obs-settings .obs-tip {
+  position: absolute;
+  left: 0;
+  top: -54px;
+  font: 800 26px var(--cl-font);
+  color: #1d1426;
+  background: #ffd447;
+  border: 3px solid #1d1426;
+  border-radius: 10px;
+  padding: 2px 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+.obs-settings .obs-handle:is(:hover, :focus-visible, .dragging) .obs-tip,
+.obs-settings .obs-handle:is(:hover, .dragging) .obs-rz {
+  opacity: 1;
+}
+.obs-settings .obs-rz {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: #ffd447;
+  border: 4px solid #1d1426;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.obs-settings .obs-rz[data-dir="nw"] {
+  left: -13px;
+  top: -13px;
+  cursor: nwse-resize;
+}
+.obs-settings .obs-rz[data-dir="se"] {
+  right: -13px;
+  bottom: -13px;
+  cursor: nwse-resize;
+}
+.obs-settings .obs-rz[data-dir="ne"] {
+  right: -13px;
+  top: -13px;
+  cursor: nesw-resize;
+}
+.obs-settings .obs-rz[data-dir="sw"] {
+  left: -13px;
+  bottom: -13px;
+  cursor: nesw-resize;
+}
+.obs-settings .obs-rz[data-dir="n"] {
+  left: calc(50% - 13px);
+  top: -13px;
+  cursor: ns-resize;
+}
+.obs-settings .obs-rz[data-dir="s"] {
+  left: calc(50% - 13px);
+  bottom: -13px;
+  cursor: ns-resize;
+}
+.obs-settings .obs-rz[data-dir="w"] {
+  left: -13px;
+  top: calc(50% - 13px);
+  cursor: ew-resize;
+}
+.obs-settings .obs-rz[data-dir="e"] {
+  right: -13px;
+  top: calc(50% - 13px);
+  cursor: ew-resize;
+}
+.obs-settings .obs-guide {
+  position: absolute;
+  background: rgb(255 212 71 / 0.9);
+  pointer-events: none;
+}
+.obs-settings .obs-guide.v {
+  width: 3px;
+  top: 0;
+  bottom: 0;
+}
+.obs-settings .obs-guide.h {
+  height: 3px;
+  left: 0;
+  right: 0;
+}
+.obs-settings .obs-place {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.obs-settings .obs-place-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.obs-settings .obs-place select {
+  font: 800 14px var(--cl-font);
+  padding: 6px 8px;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 10px;
+  background: var(--cl-surface);
+  color: var(--cl-ink);
+}
+.obs-settings .obs-place-row > label {
+  font-weight: 800;
+  font-size: 14px;
+}
+.obs-settings .obs-place .obs-help {
+  margin: 0;
+}
+.obs-settings .obs-pos {
+  display: inline-flex;
+  gap: 4px;
+}
+.obs-settings .obs-pos .button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+.obs-settings .obs-under {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.obs-settings .obs-addr {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.obs-settings .obs-addr input {
+  flex: 1;
+  min-width: 0;
+  font: 600 13px var(--cl-font-mono);
+  padding: 8px 10px;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 10px;
+  background: var(--cl-panel);
+  color: var(--cl-ink);
+}
+.obs-settings .obs-dims {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+.obs-settings .obs-dim {
+  flex: 1;
+  background: var(--cl-panel);
+  border: 2px solid var(--cl-border);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+.obs-settings .obs-dim b {
+  display: block;
+  font: 400 26px var(--cl-font-heading);
+}
+.obs-settings .obs-dim span {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--cl-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.obs-settings ol.obs-steps {
+  margin: 12px 0 0;
+  padding-left: 22px;
+}
+.obs-settings ol.obs-steps li {
+  margin: 4px 0;
+}
+.obs-settings kbd {
+  font: 700 13px var(--cl-font);
+  background: var(--cl-panel);
+  border: 2px solid var(--cl-border);
+  border-bottom-width: 3px;
+  border-radius: 6px;
+  padding: 0 6px;
+}
+.obs-settings .obs-note {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--cl-muted);
+  border-left: 4px solid var(--cl-brand-orange);
+  padding: 4px 10px;
+  background: var(--cl-panel);
+  border-radius: 0 8px 8px 0;
+}
+.obs-settings .obs-copied {
+  color: var(--cl-positive);
+  font-weight: 900;
+  font-size: 14px;
+}
+/* Start demo is the bright button; Stop demo turns dark. */
+:root .obs-settings .obs-demo[aria-pressed="true"] {
+  background: #1d1426;
+  color: #fff4e2;
+  border-color: #000;
+  box-shadow: 0 3px 0 #000;
+  text-shadow: none;
+}
+.obs-settings .obs-demonote {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: var(--cl-muted);
+  margin: 0;
+}
+.obs-settings .obs-demonote.on {
+  color: var(--cl-accent);
+  font-weight: 800;
+}
+.obs-settings .obs-saved {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--cl-muted);
+}
+.obs-settings .obs-saved.ok {
+  color: var(--cl-positive);
+}
+.obs-settings .obs-replace {
+  margin-left: auto;
+  font-size: 13px;
+  padding: 4px 10px;
+}
