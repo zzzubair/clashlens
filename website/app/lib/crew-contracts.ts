@@ -63,6 +63,27 @@ export interface CrewInviteLink {
   mine: boolean;
 }
 
+/**
+ * What anyone, signed in or not, sees of a crew: its places and the Clash of
+ * Clans accounts in them, never who runs it. `myRole` and `clashers` are
+ * null unless the viewer is in the crew.
+ */
+export interface CrewView {
+  crewId: string;
+  name: string;
+  size: number;
+  used: number;
+  myRole: CrewRole | null;
+  clashers: number | null;
+  players: CrewPlayer[];
+}
+
+/** A crew a player has a place in, for the player's page. */
+export interface PlayerCrew {
+  crewId: string;
+  name: string;
+}
+
 export interface Crew {
   crewId: string;
   name: string;
@@ -317,24 +338,8 @@ export function mapCrew(value: unknown): Crew | null {
     ) {
       return null;
     }
-    const players: CrewPlayer[] = [];
-    for (const player of item.players) {
-      if (
-        !isRecord(player) ||
-        !isTag(player.tag) ||
-        !isNullableString(player.name) ||
-        !(player.trophies === null || isCount(player.trophies)) ||
-        !PLAYER_STATUSES.includes(player.status as CrewPlayerStatus)
-      ) {
-        return null;
-      }
-      players.push({
-        tag: player.tag,
-        name: player.name,
-        trophies: player.trophies,
-        status: player.status as CrewPlayerStatus,
-      });
-    }
+    const players = mapPlayers(item.players);
+    if (players === null) return null;
     members.push({
       username: item.username,
       displayName: item.display_name,
@@ -583,6 +588,67 @@ function mapBoard(value: unknown, key: BoardKey, period: CrewPeriod): Board | nu
     missing.push({ tag: item.tag, name: item.name, reason: item.reason });
   }
   return { rows, missing };
+}
+
+export function mapCrewView(value: unknown): CrewView | null {
+  const header = mapHeader(value);
+  if (
+    header === null ||
+    !isRecord(value) ||
+    value.kind !== "crew-view" ||
+    !(value.my_role === null || isRole(value.my_role)) ||
+    !(value.clashers === null || isCount(value.clashers))
+  ) {
+    return null;
+  }
+  const players = mapPlayers(value.players);
+  if (players === null) return null;
+  return {
+    ...header,
+    myRole: value.my_role,
+    clashers: value.clashers,
+    players,
+  };
+}
+
+export function mapPlayerCrews(value: unknown, tag: string): PlayerCrew[] | null {
+  if (
+    !isRecord(value) ||
+    value.kind !== "player-crews" ||
+    value.tag !== tag ||
+    !Array.isArray(value.crews)
+  ) {
+    return null;
+  }
+  const crews: PlayerCrew[] = [];
+  for (const item of value.crews) {
+    if (!isRecord(item) || !isUuid(item.crew_id) || !isString(item.name)) return null;
+    crews.push({ crewId: item.crew_id, name: item.name });
+  }
+  return crews;
+}
+
+function mapPlayers(value: unknown): CrewPlayer[] | null {
+  if (!Array.isArray(value)) return null;
+  const players: CrewPlayer[] = [];
+  for (const player of value) {
+    if (
+      !isRecord(player) ||
+      !isTag(player.tag) ||
+      !isNullableString(player.name) ||
+      !(player.trophies === null || isCount(player.trophies)) ||
+      !PLAYER_STATUSES.includes(player.status as CrewPlayerStatus)
+    ) {
+      return null;
+    }
+    players.push({
+      tag: player.tag,
+      name: player.name,
+      trophies: player.trophies,
+      status: player.status as CrewPlayerStatus,
+    });
+  }
+  return players;
 }
 
 function mapHeader(

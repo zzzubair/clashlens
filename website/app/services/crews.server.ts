@@ -9,6 +9,7 @@ import {
   isIdempotencyKey,
   isSameOrigin,
   parseBoundedFormData,
+  readLoginIdentity,
 } from "../server/actions.server";
 import { requireLogin } from "../server/auth-guard.server";
 import { getWebsiteConfig, isCrewsEnabled } from "../server/config.server";
@@ -22,16 +23,20 @@ import {
   mapCrew,
   mapCrewBoards,
   mapCrewList,
+  mapCrewView,
   mapInvitePreview,
   mapMadeInvite,
+  mapPlayerCrews,
   type Crew,
   type CrewBoards,
   type CrewList,
   type CrewPeriod,
+  type CrewView,
   type InviteLink,
   type InvitePreview,
   type LinkedAccount,
   type MadeInvite,
+  type PlayerCrew,
 } from "../lib/crew-contracts";
 import { isCanonicalUuid } from "../lib/validation";
 import { checkPlayerTag } from "./group-players.server";
@@ -41,6 +46,9 @@ import {
   requestJson,
   type GoogleAccountIdentity,
 } from "./python.server";
+
+// Under the player page's five-second streaming limit; a timeout hides only the list.
+const PLAYER_CREWS_TIMEOUT_MS = 4_000;
 
 /** The signed-in account's crews. */
 export async function listCrews(identity: GoogleAccountIdentity): Promise<CrewList> {
@@ -94,15 +102,50 @@ export async function getCrew(
   return crew;
 }
 
-/** The crew's six boards for one period. */
+/** What anyone sees of a crew; `identity` is the viewer's, if signed in. */
+export async function viewCrew(
+  identity: GoogleAccountIdentity | undefined,
+  crewId: string,
+): Promise<CrewView> {
+  requireCrewId(crewId);
+  const payload = await requestJson<unknown>(
+    `/v1/crews/${crewId}`,
+    "GET",
+    undefined,
+    "crew-view",
+    undefined,
+    identity,
+  );
+  const crew = mapped(mapCrewView(payload));
+  if (crew.crewId !== crewId) throw new PythonApiError(502, { error: "malformed" });
+  return crew;
+}
+
+/** The crews a player has a place in; none while crews are switched off. */
+export async function getPlayerCrews(tag: string): Promise<PlayerCrew[]> {
+  if (!isCrewsEnabled()) return [];
+  const payload = await requestJson<unknown>(
+    `/v1/players/${encodeURIComponent(tag)}/crews`,
+    "GET",
+    undefined,
+    "player-crews",
+    undefined,
+    undefined,
+    undefined,
+    PLAYER_CREWS_TIMEOUT_MS,
+  );
+  return mapped(mapPlayerCrews(payload, tag));
+}
+
+/** The crew's six boards for one period; anyone can read them. */
 export async function getCrewBoards(
-  identity: GoogleAccountIdentity,
+  identity: GoogleAccountIdentity | undefined,
   crewId: string,
   period: CrewPeriod,
 ): Promise<CrewBoards> {
   requireCrewId(crewId);
   const payload = await requestJson<unknown>(
-    `/v1/account/crews/${crewId}/boards?period=${period}`,
+    `/v1/crews/${crewId}/boards?period=${period}`,
     "GET",
     undefined,
     "crew-boards",
@@ -263,24 +306,25 @@ function mapped<T>(value: T | null): T {
 }
 
 export type CrewPage =
-  | { crew: Crew; boards: CrewBoards; error: null }
+  | { crew: CrewView; boards: CrewBoards; error: null }
   | { crew: null; boards: null; error: WebsiteErrorResponse };
 
 /**
- * A crew page's header and boards for the signed-in account. Crews are
- * hidden while switched off, and a crew the account is not in reads like a
- * missing page.
+ * A crew page's header and boards, for anyone, signed in or not. Crews are
+ * hidden while switched off.
  */
 export async function loadCrewPage(
   request: Request,
   crewId: string | undefined,
   period: CrewPeriod,
 ): Promise<CrewPage> {
-  const identity = await crewGuard(request, crewId);
+  if (!isCrewsEnabled()) throw data(null, { status: 404 });
+  if (crewId === undefined || !isCanonicalUuid(crewId)) throw data(null, { status: 404 });
+  const identity = await viewerIdentity(request);
   try {
     const [crew, boards] = await Promise.all([
-      getCrew(identity, crewId as string),
-      getCrewBoards(identity, crewId as string, period),
+      viewCrew(identity, crewId),
+      getCrewBoards(identity, crewId, period),
     ]);
     return { crew, boards, error: null };
   } catch (cause) {
@@ -321,6 +365,19 @@ async function crewGuard(
   const identity = await requireLogin(request);
   if (crewId === undefined || !isCanonicalUuid(crewId)) throw data(null, { status: 404 });
   return identity;
+}
+
+/** The viewer's login if they have a working one; otherwise they view signed out. */
+async function viewerIdentity(
+  request: Request,
+): Promise<GoogleAccountIdentity | undefined> {
+  try {
+    const config = getWebsiteConfig();
+    if (!config.loginEnabled) return undefined;
+    return (await readLoginIdentity(request, config)) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function loadFailure(request: Request, cause: unknown): WebsiteErrorResponse {

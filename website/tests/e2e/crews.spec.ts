@@ -54,7 +54,7 @@ async function link(page: Page, tag: string): Promise<void> {
 const account = (page: Page, tag: string) =>
   page.locator("label").filter({ hasText: tag }).getByRole("checkbox");
 
-test("an invite is accepted with 2 of 3 accounts, one is kicked, and places stay above those in use", async ({
+test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks inside, one is kicked, and places stay above those in use", async ({
   browser,
 }) => {
   test.setTimeout(150_000);
@@ -97,6 +97,41 @@ test("an invite is accepted with 2 of 3 accounts, one is kicked, and places stay
     await mate.page.getByRole("button", { name: "Join with 2 accounts" }).click();
     await expect(mate.page).toHaveURL(crewPath);
     await expect(mate.page.getByText("4 of 10 places")).toBeVisible();
+
+    // Anyone can look inside, signed out too: from a player's page to the crew
+    // and a board, with nothing to manage and no Clash Lens account named.
+    const visitor = await browser.newContext({ baseURL: websiteOrigin });
+    try {
+      const view = await visitor.newPage();
+      const viewErrors = trackPageErrors(view);
+      await view.goto(`/players/${encodeURIComponent(MATE_TAGS[0]!)}`);
+      await view.getByRole("link", { name: "Night Owls" }).click();
+      await expect(view).toHaveURL(crewPath);
+      await expect(
+        view.getByRole("heading", { name: "Night Owls", level: 1 }),
+      ).toBeVisible();
+      await expect(view.getByText("Joining is by invite only.")).toBeVisible();
+      const accounts = view.getByRole("region", { name: "Accounts (4)" });
+      for (const tag of [...CAPTAIN_TAGS, ...MATE_TAGS.slice(0, 2)]) {
+        await expect(accounts.getByText(tag)).toBeVisible();
+      }
+      await expect(view.getByRole("button", { name: "Invite" })).toHaveCount(0);
+      await expect(view.getByRole("link", { name: "Members" })).toHaveCount(0);
+      await expect(view.getByRole("link", { name: "Edit" })).toHaveCount(0);
+      const html = await view.content();
+      for (const hidden of ["Crew Captain", "crewcaptain", "Crew Mate", "crewmate"]) {
+        expect(html).not.toContain(hidden);
+      }
+      expect(html).not.toContain(invitePath.split("/").pop()!);
+      await view.goto(`${crewPath}/boards/live`);
+      await expect(
+        view.getByRole("heading", { name: "Live leaderboard", level: 1 }),
+      ).toBeVisible();
+      expect(await view.content()).not.toContain("crewcaptain");
+      expectNoPageErrors(viewErrors);
+    } finally {
+      await visitor.close();
+    }
 
     // The captain kicks one of the mate's accounts from its row, on a phone.
     await page.setViewportSize({ width: 390, height: 844 });

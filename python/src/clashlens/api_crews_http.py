@@ -1,6 +1,7 @@
 """Private API routes for crews. Every route answers 404 ``crews_disabled``
 while crews are switched off, before checking the request or reading
-anything."""
+anything. Viewing a crew, its boards and a player's crews needs no
+sign-in; everything else does."""
 
 from __future__ import annotations
 
@@ -75,6 +76,10 @@ def register_crew_routes(
         assert context.account is not None
         return context.account.internal_id
 
+    def viewer(request: Request) -> int | None:
+        context = _authorize(request, "crews.view", database)
+        return None if context.account is None else context.account.internal_id
+
     def writer(request: Request) -> Any:
         return _authorize(request, "crews.write", database)
 
@@ -119,9 +124,18 @@ def register_crew_routes(
             raise ApiError(404, "crew_not_found")
         return JSONResponse(content=_json_safe(result))
 
-    @router.get("/v1/account/crews/{crew_id}/boards")
+    @router.get("/v1/crews/{crew_id}")
+    def view_crew(crew_id: str, request: Request) -> JSONResponse:
+        result = api_crews.view_crew(
+            database, viewer(request), _safe_uuid(crew_id), now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "crew_not_found")
+        return JSONResponse(content=_json_safe(result))
+
+    @router.get("/v1/crews/{crew_id}/boards")
     def crew_boards(crew_id: str, request: Request, period: str = "season") -> JSONResponse:
-        caller = account_id(request)
+        caller = viewer(request)
         if period not in api_crew_boards.PERIODS:
             raise ApiError(422, "invalid_request")
         result = api_crew_boards.get_crew_boards(
@@ -130,6 +144,11 @@ def register_crew_routes(
         if result is None:
             raise ApiError(404, "crew_not_found")
         return JSONResponse(content=_json_safe(result))
+
+    @router.get("/v1/players/{tag}/crews")
+    def player_crews(tag: str, request: Request) -> JSONResponse:
+        viewer(request)
+        return JSONResponse(content=api_crews.player_crews(database, _safe_tag(tag)))
 
     @router.patch("/v1/account/crews/{crew_id}")
     def update_crew(crew_id: str, body: CrewUpdateBody, request: Request) -> JSONResponse:

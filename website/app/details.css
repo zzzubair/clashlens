@@ -47,6 +47,11 @@
   content: "Clan ";
   color: var(--cl-muted);
 }
+.player-page .player-crews {
+  margin: 0.35rem 0 0;
+  color: var(--cl-muted);
+  overflow-wrap: anywhere;
+}
 .player-page .player-summary {
   display: grid;
   grid-template-columns: minmax(13rem, auto) auto;
