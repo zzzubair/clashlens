@@ -13,11 +13,11 @@ import psycopg
 import psycopg_pool
 import pytest
 
-from bot import discord_app
+from bot import discord_app, replies
 from bot.__main__ import ConfigError, command_payload, main, read_token
 from bot.commands import Commands
 from bot.discord_app import DiscordApp
-from bot.replies import Site
+from bot.replies import GOLD, PLAYER_COLOURS, Site
 from clashlens.api_db import AccountContext, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
 
@@ -137,6 +137,17 @@ class FakeStore:
         self.moments.append(now)
         return self.cards[account.internal_id]
 
+    def colours(self, account):
+        self._read("colours")
+        return replies.colours([item["tag"] for item in self.cards[account.internal_id]])
+
+    def alert_switches(self, account):
+        self._read("alert_switches")
+        return [
+            {"tag": item["tag"], "name": item["name"], "on": index == 0, "summary_on": False}
+            for index, item in enumerate(self.cards[account.internal_id])
+        ]
+
     def default_tag(self, account):
         self._read("default_tag")
         # As the database does: the chosen default while still verified,
@@ -206,14 +217,19 @@ class FakeInteraction:
         self.messages: list[dict[str, Any]] = []
 
     def record(self, message: dict[str, Any], *, edited: bool = False) -> None:
-        embed = message.get("embed", discord.Embed())
+        items = list(message["view"].walk_children()) if message.get("view") else []
         self.messages.append(
             {
                 "private": bool(message.get("ephemeral")),
                 "edited": edited,
-                "title": embed.title,
-                "text": embed.description,
-                "footer": embed.footer.text,
+                # Every line the message shows, in order.
+                "text": "\n\n".join(
+                    item.content for item in items if isinstance(item, discord.ui.TextDisplay)
+                ),
+                # Each card's coloured edge.
+                "colours": [
+                    item.accent_colour for item in items if isinstance(item, discord.ui.Container)
+                ],
                 # An edit without a view keeps the old buttons, as on Discord.
                 "view": message.get("view", "old buttons kept"),
             }
@@ -252,12 +268,16 @@ def run_command(
 
 
 def links(message: dict[str, Any]) -> dict[str, str]:
-    return {item.label: item.url for item in message["view"].children if getattr(item, "url", None)}
+    return {
+        item.label: item.url
+        for item in message["view"].walk_children()
+        if getattr(item, "url", None)
+    }
 
 
 def test_commands_install_for_users_and_servers_with_no_share_option() -> None:
     commands = {command["name"]: command for command in command_payload()}
-    assert set(commands) == {"help", "link", "stats"}
+    assert set(commands) == {"help", "link", "alerts", "stats"}
     for command in commands.values():
         # Guild, bot DM and group DM; installable to a server and to a user.
         assert command["contexts"] == [0, 1, 2]
@@ -270,21 +290,43 @@ def test_replies_are_normal_messages_anyone_can_forward(store, dm) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     message = run_command(store, "stats", FakeInteraction(dm=dm), player=None)
-    assert message["title"].startswith("Drift #2PP")
+    assert message["text"].startswith("### Drift #2PP")
     assert message["private"] is False
 
 
-def test_unconnected_person_gets_only_a_private_connect_pointer(store) -> None:
+def test_stats_works_for_anyone_and_never_asks_to_sign_up(store) -> None:
     interaction = FakeInteraction(name="drifter")
     message = run_command(store, "stats", interaction, player=None)
     assert len(interaction.messages) == 1
     assert message["private"] is True
-    assert "(@drifter)" in message["text"]
-    assert set(links(message).values()) == {
-        "https://clashlens.test/account/discord-alerts",
-        "https://clashlens.test/auth/discord?returnPath=%2Faccount",
-    }
+    assert message["text"] == (
+        "Type a player tag or name after /stats to look them up, like "
+        "`/stats #2PP22` or `/stats Wanderer`."
+    )
+    assert links(message) == {}
     assert store.reads == ["account"]
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    named = run_command(store, "stats", FakeInteraction(name="drifter"), player="#8QQ")
+    assert named["text"].startswith("### Lens #8QQ")
+    assert named["private"] is False
+    assert named["colours"] == [GOLD]
+    assert set(links(named)) == {"View details"}
+
+
+def test_own_linked_accounts_keep_their_colour_and_other_players_are_yellow(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    for tag in ("#2PP", "#8QQ", "#9RR"):
+        store.pages[tag] = page(tag, "Someone", [])
+    shown = {
+        tag: run_command(store, "stats", FakeInteraction(), player=tag)["colours"]
+        for tag in ("#2PP", "#8QQ", "#9RR")
+    }
+    assert shown == {
+        "#2PP": [PLAYER_COLOURS[0]],
+        "#8QQ": [PLAYER_COLOURS[1]],
+        "#9RR": [GOLD],
+    }
+    assert GOLD not in PLAYER_COLOURS
 
 
 def test_a_private_reply_is_dropped_when_the_public_placeholder_cannot_be_removed(store) -> None:
@@ -293,40 +335,64 @@ def test_a_private_reply_is_dropped_when_the_public_placeholder_cannot_be_remove
     assert run_command(store, "stats", interaction, player=None) is None
 
 
-def test_help_and_link_work_without_a_connection(store) -> None:
-    help_message = run_command(store, "help", FakeInteraction())
-    assert "not connected yet, use /link" in help_message["text"]
-    assert help_message["private"] is False
-    link_message = run_command(store, "link", FakeInteraction())
-    assert "on the website to use the bot" in link_message["text"]
-    assert link_message["private"] is True
-    # Connecting happens on the website: the bot only points there.
-    assert links(link_message)["Connect Discord on Clash Lens"] == (
-        "https://clashlens.test/account/discord-alerts"
-    )
+CONNECT = "[Connect Discord](https://clashlens.test/account/providers)"
 
+
+def test_help_link_and_alerts_offer_sign_up_without_a_connection(store) -> None:
+    help_message = run_command(store, "help", FakeInteraction())
+    assert "this Discord account isn't connected to Clash Lens yet" in help_message["text"]
+    assert help_message["private"] is False
+    assert links(help_message) == {"Get started on Clash Lens": "https://clashlens.test/login"}
+    assert CONNECT in help_message["text"]
+    for name, purpose in (
+        ("link", "to see your own Legend days here"),
+        ("alerts", "to get attack alerts and Legend day summaries for it in your Discord DMs"),
+    ):
+        message = run_command(store, name, FakeInteraction(name="drifter"))
+        assert message["private"] is True
+        assert "Sign up with this Discord account (@drifter)" in message["text"]
+        assert purpose in message["text"]
+        # Signing up and connecting happen on the website: the bot only points there.
+        assert links(message) == {
+            "Sign up with Discord": (
+                "https://clashlens.test/auth/discord?returnPath=%2Faccount%2Fverify-player"
+            )
+        }
+        # Someone with a Clash Lens account already connects instead.
+        assert CONNECT in message["text"]
+
+
+def test_help_link_and_alerts_show_a_connected_accounts_settings(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
     store.mains[1] = "#8QQ"
-    assert "connected as @drift, 2 verified players" in run_command(
-        store, "help", FakeInteraction()
-    )["text"]
-    # Connected: still only a pointer to the website, not the players.
+    help_message = run_command(store, "help", FakeInteraction())
+    assert "connected as @drift, 2 linked accounts" in help_message["text"]
+    assert links(help_message) == {"Open Clash Lens": "https://clashlens.test/"}
+    assert CONNECT not in help_message["text"]
+    # The default account is chosen on the Clasher's own page.
+    assert "[your Clash Lens page](https://clashlens.test/users/drift)" in help_message["text"]
     linked = run_command(store, "link", FakeInteraction())
-    assert linked["text"].startswith("Connected as @drift.")
-    assert "#2PP" not in linked["text"] and "#8QQ" not in linked["text"]
     assert linked["private"] is False
-    assert links(linked) == {
-        "Discord alerts on Clash Lens": "https://clashlens.test/account/discord-alerts"
-    }
+    assert "**Drift** #2PP\n**Lens** #8QQ · default account" in linked["text"]
+    assert linked["colours"] == [GOLD]
+    assert links(linked) == {"Change linked accounts": "https://clashlens.test/users/drift"}
+    alerts = run_command(store, "alerts", FakeInteraction())
+    assert alerts["private"] is False
+    assert (
+        "**Drift** #2PP\n-# Attack alerts **On** · Legend day summary Off\n"
+        "**Lens** #8QQ\n-# Attack alerts Off · Legend day summary Off"
+    ) in alerts["text"]
+    assert alerts["colours"] == [GOLD]
+    assert links(alerts) == {"Change settings": "https://clashlens.test/account/discord-alerts"}
 
 
 def test_connected_account_without_players_is_pointed_to_the_website(store) -> None:
     store.connect(ME, [])
     message = run_command(store, "stats", FakeInteraction(), player=None)
-    assert "Link a Clash of Clans player on Clash Lens" in message["text"]
+    assert "Link a Clash of Clans account on Clash Lens" in message["text"]
     assert "API token" not in message["text"]
     assert links(message) == {
-        "Link a player on Clash Lens": "https://clashlens.test/account/verify-player"
+        "Link an account on Clash Lens": "https://clashlens.test/account/verify-player"
     }
 
 
@@ -348,25 +414,19 @@ def test_slow_read_asks_to_try_again(store) -> None:
     assert message["text"] == "Clash Lens is taking longer than usual. Try again."
 
 
-def test_every_reply_ends_with_how_old_its_data_is(store) -> None:
-    store.connect(
-        ME,
-        [
-            card("#2PP", "Drift", 5842, observed_at=NOW - timedelta(hours=3)),
-            card("#8QQ", "Lens", 5100, observed_at=None),
-        ],
-    )
+def test_only_stats_says_how_old_its_numbers_are(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    stats = run_command(store, "stats", FakeInteraction(), player="#8QQ")["text"]
+    assert stats.endswith("-# Updated 2 min ago")
     # The player menu, as when the default read finds no player.
     store.no_default.add(1)
-    footer = run_command(store, "stats", FakeInteraction(), player=None)["footer"]
-    assert footer.endswith("Updated 180 min ago")
-    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
-    footer = run_command(store, "stats", FakeInteraction(), player="#8QQ")["footer"]
-    assert footer.endswith("Updated 2 min ago")
-    assert run_command(store, "help", FakeInteraction())["footer"] == "Updated 0 min ago"
-    store.fail = psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
-    footer = run_command(store, "stats", FakeInteraction(), player=None)["footer"]
-    assert footer == "Updated: Unavailable"
+    for message in (
+        run_command(store, "stats", FakeInteraction(), player=None),
+        run_command(store, "help", FakeInteraction()),
+        run_command(store, "link", FakeInteraction()),
+    ):
+        assert "Updated" not in message["text"]
 
 
 @pytest.mark.parametrize(
@@ -390,14 +450,15 @@ def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
         "season_reset_pending": pending,
     }
     message = run_command(store, "stats", FakeInteraction(), player=None)
-    assert message["title"] == "Drift #2PP · Lens Clan"
-    assert message["text"].splitlines() == [word, "", RESET]
+    assert message["text"].splitlines() == [
+        "### Drift #2PP", "-# Lens Clan", "", word, "", RESET, "-# Updated 2 min ago"
+    ]
 
 
 def test_player_names_cannot_ping_or_add_formatting(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     store.pages["#2PP"] = {**page("#2PP", "@everyone **loud**", []), "clan": "<@123456789012345678>"}
-    title = run_command(store, "stats", FakeInteraction(), player=None)["title"]
+    title = run_command(store, "stats", FakeInteraction(), player=None)["text"].split("\n")[0]
     assert "@everyone" not in title and "<@123456789012345678>" not in title
     assert r"\*\*loud\*\*" in title
     built, _tree = discord_app.build_client(Commands(store, SITE))
@@ -411,11 +472,11 @@ def test_a_default_player_no_longer_verified_gives_way_to_the_first(store) -> No
     store.pages["#8QQ"] = page("#8QQ", "Lens", [])
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     first = run_command(store, "stats", FakeInteraction(), player=None)
-    assert first["title"].startswith("Lens #8QQ")
+    assert first["text"].startswith("### Lens #8QQ")
     store.cards[1].pop()
     store.cards[1].append(card("#9RR", "New", 5000))
     after = run_command(store, "stats", FakeInteraction(), player=None)
-    assert after["title"].startswith("Drift #2PP")
+    assert after["text"].startswith("### Drift #2PP")
 
 
 def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None:
@@ -432,7 +493,9 @@ def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None
 
 
 def pick(message: dict[str, Any], interaction: FakeInteraction, value: str) -> None:
-    (select,) = [item for item in message["view"].children if isinstance(item, discord.ui.Select)]
+    (select,) = [
+        item for item in message["view"].walk_children() if isinstance(item, discord.ui.Select)
+    ]
     select._values = [value]
     asyncio.run(select.callback(interaction))
 
@@ -447,7 +510,7 @@ def test_a_public_reply_never_turns_into_a_connect_message(store) -> None:
     pick(message, click, "#8QQ")
     assert [item["edited"] for item in click.messages] == [False]
     assert click.last["private"] is True
-    assert click.last["title"] == "Connect Discord to Clash Lens"
+    assert click.last["text"].startswith("### Get started with Clash Lens")
 
 
 def test_autocomplete_that_ran_out_of_time_waiting_never_reads(store, monkeypatch) -> None:

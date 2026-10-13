@@ -1,8 +1,8 @@
 """The only part of the bot that talks to Discord.
 
 It registers the slash commands, decides who sees a reply, runs the database
-reads off the event loop, and turns a `Reply` into Discord messages with
-buttons.
+reads off the event loop, and turns a `Reply` into a Discord message laid out
+in Discord's cards (its "components v2"), with buttons.
 
 Who sees a reply: every reply is a normal message anyone in the conversation
 can see and forward. Only the not-connected pointer and plain errors meant for
@@ -47,7 +47,34 @@ _REFUSALS = {
     10013: "unknown_user",
     50033: "unknown_user",
 }
-_COLOUR = discord.Colour(0xF2B33D)
+
+
+def lay_out(view: discord.ui.LayoutView, reply: Reply) -> None:
+    """Put `reply` into `view`: its title, each card with its coloured edge
+    and a thin line between its parts, the small print below, then its
+    buttons."""
+    if reply.title:
+        view.add_item(discord.ui.TextDisplay(f"## {reply.title}"))
+    for card in reply.cards:
+        items: list[discord.ui.Item[Any]] = []
+        for index, part in enumerate(card.parts):
+            if index:
+                items.append(discord.ui.Separator())
+            text = discord.ui.TextDisplay(part)
+            if card.button is not None and index == len(card.parts) - 1:
+                items.append(discord.ui.Section(text, accessory=_button(card.button)))
+            else:
+                items.append(text)
+        view.add_item(discord.ui.Container(*items, accent_colour=card.colour))
+    if reply.footer:
+        view.add_item(discord.ui.TextDisplay(f"-# {reply.footer}"))
+    if reply.links:
+        view.add_item(discord.ui.ActionRow(*(_button(link) for link in reply.links)))
+
+
+def _button(link: replies.Link) -> discord.ui.Button[Any]:
+    # Discord shows at most 80 characters on a button.
+    return discord.ui.Button(label=link.label[:80], url=link.url)
 
 
 class Slow(Exception):
@@ -88,14 +115,8 @@ class DiscordApp:
     def render(
         self, reply: Reply, owner: int, origin: discord.Interaction, *, private: bool
     ) -> dict[str, Any]:
-        """The reply as one message with its title and buttons; `deliver`
-        adds the footer."""
-        message: dict[str, Any] = {
-            "embed": discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
-        }
-        if reply.links or reply.choices:
-            message["view"] = ReplyView(self, reply, owner, origin, private)
-        return message
+        """The reply as one message."""
+        return {"view": ReplyView(self, reply, owner, origin, private)}
 
     async def respond(
         self,
@@ -103,10 +124,8 @@ class DiscordApp:
         name: str,
         work: Callable[..., Reply],
         *args: Any,
-        needs_link: bool = True,
     ) -> None:
-        """Answer one slash command; `work` gets the linked account first when
-        the command needs one."""
+        """Answer one slash command with `work`'s reply."""
         started = time.perf_counter()
         outcome = "ok"
         # Outside the bot's own DM a private reply must first remove the public
@@ -115,16 +134,6 @@ class DiscordApp:
         try:
             # Acknowledge before any database work: Discord waits 3 seconds.
             await interaction.response.defer(thinking=True)
-            if needs_link:
-                account = await self.read(self.commands.account, str(interaction.user.id))
-                if account is None:
-                    outcome = "not_linked"
-                    reply = replies.not_linked(
-                        self.commands.site, interaction.user.name, self.commands.now()
-                    )
-                    await self._private(interaction, reply, shared)
-                    return
-                args = (account, *args)
             reply = await self.read(work, *args)
             if reply.private:
                 await self._private(interaction, reply, shared)
@@ -172,27 +181,20 @@ class DiscordApp:
         private = private and not in_bot_dm(interaction)
         message = self.render(reply, interaction.user.id, interaction, private=private)
         try:
-            await self.deliver(interaction, reply, message, private=private)
+            await self.deliver(interaction, message, private=private)
         except discord.HTTPException:
             log.warning("could not send a reply to Discord", exc_info=True)
 
     async def deliver(
         self,
         interaction: discord.Interaction,
-        reply: Reply,
         message: dict[str, Any],
         *,
         private: bool,
         replacing: _OwnedView | None = None,
     ) -> None:
-        """Send `reply`'s rendered message for one interaction, in place of
-        `replacing`'s message when given, ending with the footer and how old
-        the data is now."""
-        ending = replies.updated_line(reply.updated, self.commands.now())
-        message["embed"].set_footer(
-            text=f"{reply.footer}\n{ending}" if reply.footer else ending
-        )
-
+        """Send a rendered message for one interaction, in place of
+        `replacing`'s message when given."""
         if replacing is not None:
             # Without view=None Discord keeps the old buttons on the message.
             await interaction.edit_original_response(**{"view": None, **message})
@@ -223,9 +225,7 @@ class DiscordApp:
                 if reply is None:
                     # Never on the message itself, which others may see.
                     outcome = "not_linked"
-                    reply = replies.not_linked(
-                        self.commands.site, interaction.user.name, self.commands.now()
-                    )
+                    reply = replies.not_linked(self.commands.site, interaction.user.name)
                     await self._send(interaction, reply, private=True)
                     return
                 if reply.private:
@@ -234,9 +234,7 @@ class DiscordApp:
                     await self._send(interaction, reply, private=True)
                     return
                 message = self.render(reply, view.owner, interaction, private=view.private)
-                await self.deliver(
-                    interaction, reply, message, private=view.private, replacing=view
-                )
+                await self.deliver(interaction, message, private=view.private, replacing=view)
         except Slow:
             outcome = "slow"
             await self._send(interaction, replies.slow(), private=True)
@@ -301,7 +299,6 @@ class DiscordApp:
                 "help",
                 app.commands.help,
                 str(interaction.user.id),
-                needs_link=False,
             )
 
         @tree.command(name="link", description=words["link"])
@@ -312,19 +309,38 @@ class DiscordApp:
                 app.commands.link,
                 str(interaction.user.id),
                 interaction.user.name,
-                needs_link=False,
+            )
+
+        @tree.command(name="alerts", description=words["alerts"])
+        async def alerts_command(interaction: discord.Interaction) -> None:
+            await app.respond(
+                interaction,
+                "alerts",
+                app.commands.alerts,
+                str(interaction.user.id),
+                interaction.user.name,
             )
 
         @tree.command(name="stats", description=words["stats"])
         @app_commands.describe(
-            player="A player tag, with or without #, or a name; empty for your default player"
+            player=(
+                "A player tag, with or without #, or a name; empty for your default "
+                "account"
+            )
         )
         @app_commands.autocomplete(player=app.any_player_choices)
         async def stats_command(interaction: discord.Interaction, player: str | None = None) -> None:
-            await app.respond(interaction, "stats", app.commands.stats, player)
+            await app.respond(
+                interaction,
+                "stats",
+                app.commands.stats,
+                str(interaction.user.id),
+                interaction.user.name,
+                player,
+            )
 
 
-class _OwnedView(discord.ui.View):
+class _OwnedView(discord.ui.LayoutView):
     """Buttons only the person who ran the command can use."""
 
     def __init__(self, *, timeout: float | None) -> None:
@@ -345,8 +361,8 @@ class _OwnedView(discord.ui.View):
 
 
 class ReplyView(_OwnedView):
-    """Link buttons, plus the dropdown only the person who ran the command
-    can use."""
+    """The reply's cards and link buttons, plus the dropdown only the person
+    who ran the command can use."""
 
     def __init__(
         self,
@@ -363,8 +379,8 @@ class ReplyView(_OwnedView):
         self.owner = owner
         self.origin = origin
         self.private = private
-        for link in reply.links:
-            self.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
+        lay_out(self, reply)
+        self._choices: discord.ui.ActionRow[ReplyView] | None = None
         if reply.choices:
             select: discord.ui.Select[ReplyView] = discord.ui.Select(
                 placeholder=reply.placeholder,
@@ -384,13 +400,13 @@ class ReplyView(_OwnedView):
                 )
 
             select.callback = picked  # type: ignore[method-assign]
-            self.add_item(select)
+            self._choices = discord.ui.ActionRow(select)
+            self.add_item(self._choices)
 
     async def on_timeout(self) -> None:
-        # Keep the link buttons; the rest would only answer "interaction failed".
-        for item in list(self.children):
-            if not (isinstance(item, discord.ui.Button) and item.url):
-                self.remove_item(item)
+        # Keep the link buttons; the dropdown would only answer "interaction failed".
+        if self._choices is not None:
+            self.remove_item(self._choices)
         try:
             await self.origin.edit_original_response(view=self)
         except discord.HTTPException:
@@ -416,16 +432,14 @@ class DiscordMessenger:
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
     ) -> None:
-        embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
-        view = discord.ui.View(timeout=None)
-        for link in reply.links:
-            view.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
+        view = discord.ui.LayoutView(timeout=None)
+        lay_out(view, reply)
         http = self.client.http
         http.max_ratelimit_timeout = time_left
         self._sending += 1
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
-            await channel.send(embed=embed, view=view, nonce=nonce)
+            await channel.send(view=view, nonce=nonce)
         except asyncio.CancelledError:
             http._global_over.set()
             raise

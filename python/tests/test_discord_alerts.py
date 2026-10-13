@@ -18,7 +18,7 @@ from aiohttp import web
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
-from bot.replies import Reply, Site, attack_alert
+from bot.replies import PLAYER_COLOURS, Reply, Site, attack_alert, say
 from clashlens.domain import ranked_day_for
 
 SITE = Site("https://clashlens.test")
@@ -67,7 +67,7 @@ def _answer(status: int, code: int, headers: dict[str, str] | None = None) -> di
 def test_discord_refusals_are_recorded_with_their_reason(status, code, reason) -> None:
     messenger = DiscordMessenger(FakeClient(_answer(status, code)))  # type: ignore[arg-type]
     with pytest.raises(Refused) as refused:
-        asyncio.run(messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, 60.0))
+        asyncio.run(messenger.send_dm("100000000000000001", say("hi"), 1, 60.0))
     assert refused.value.reason == reason
 
 
@@ -85,7 +85,7 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
         messenger = DiscordMessenger(client)  # type: ignore[arg-type]
         with pytest.raises(Unreachable) as outage:
             asyncio.run(
-                messenger.send_dm("100000000000000001", Reply("hi", title="t"), 1, 60.0)
+                messenger.send_dm("100000000000000001", say("hi"), 1, 60.0)
             )
         assert outage.value.retry_after == wait
 
@@ -103,19 +103,29 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
             "destruction_percentage": 100,
             "trophies_lost": 0,
             "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+            "battle_id": 41,
+            "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC),
         },
         "Unavailable",
+        PLAYER_COLOURS[1],
     )
     asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
-    embed = client.sent[0]["embed"]
-    assert embed.title == "Wanderer #2PP was attacked"
-    assert embed.description.splitlines() == [
-        "@\u200beveryone \\*Drift\\* #8QQ: 3★ · 100% · 0 trophies",
-        "@\u200beveryone \\*Drift\\*'s hit rate in this attack's Season: Unavailable",
+    items = list(client.sent[0]["view"].walk_children())
+    text = "\n".join(item.content for item in items if isinstance(item, discord.ui.TextDisplay))
+    assert text.splitlines() == [
+        "### Wanderer was attacked",
+        f"-# #2PP · <t:{int(datetime(2026, 10, 12, 6, tzinfo=UTC).timestamp())}:t>",
+        "**@\u200beveryone \\*Drift\\*** #8QQ",
+        "★★★  ·  100%  ·  **0** trophies",
+        "-# @\u200beveryone \\*Drift\\*'s hit rate in this attack's Season: Unavailable",
+        "-# [Alert settings](https://clashlens.test/account/discord-alerts)",
     ]
-    assert [item.url for item in client.sent[0]["view"].children] == [
-        "https://clashlens.test/players/%232PP",
-        "https://clashlens.test/account/discord-alerts",
+    # The defender's colour, and a button to the battle highlighted on its Legend day.
+    assert [
+        item.accent_colour for item in items if isinstance(item, discord.ui.Container)
+    ] == [PLAYER_COLOURS[1]]
+    assert [item.url for item in items if isinstance(item, discord.ui.Button)] == [
+        "https://clashlens.test/players/%232PP?day=2026-10-12#battle-41"
     ]
 
 
@@ -200,7 +210,7 @@ def test_a_rate_limit_longer_than_a_dms_time_left_fails_it_at_once(monkeypatch) 
             with pytest.raises(Unreachable) as outage:
                 await asyncio.wait_for(
                     DiscordMessenger(client).send_dm(
-                        "100000000000000001", Reply("hi", title="t"), 7, 20.0
+                        "100000000000000001", say("hi"), 7, 20.0
                     ),
                     5.0,
                 )
@@ -226,11 +236,11 @@ def test_a_dm_cut_off_in_a_wait_for_all_of_discord_holds_up_no_later_one(
             messenger = DiscordMessenger(client)
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(
-                    messenger.send_dm("100000000000000001", Reply("hi", title="t"), 7, 10.0),
+                    messenger.send_dm("100000000000000001", say("hi"), 7, 10.0),
                     0.3,
                 )
             await asyncio.wait_for(
-                messenger.send_dm("100000000000000001", Reply("hi", title="t"), 8, 10.0), 2.0
+                messenger.send_dm("100000000000000001", say("hi"), 8, 10.0), 2.0
             )
         return sends
 
@@ -295,14 +305,15 @@ class ResetRound(AlertStore):
 
     def confirmations_due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "player_id": 2, "tag": "#2PP",
-                 "name": "Wanderer", "confirm_requested_at": self.reset}]
+                 "name": "Wanderer", "confirm_requested_at": self.reset,
+                 "colour": PLAYER_COLOURS[0]}]
 
     def due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": self.reset,
-                 "ranked_day_start": self.reset}]
+                 "ranked_day_start": self.reset, "colour": PLAYER_COLOURS[0]}]
 
     def claim(self, delivery: object) -> int:
         return 3 if delivery.battle_id else 2  # type: ignore[attr-defined]
@@ -348,7 +359,7 @@ def test_an_alert_rates_the_attacker_as_of_when_it_is_written() -> None:
 
     loop = AlertLoop(ResetRound(reset), SlowDiscord(), SITE, now=lambda: moment[0])
     assert asyncio.run(loop.tick()) == 2
-    assert sent[1].body.splitlines()[1] == "Drift's hit rate in this attack's Season: 60%"
+    assert "-# Drift's hit rate in this attack's Season: 60%" in sent[1].text.splitlines()
 
 
 def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:

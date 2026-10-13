@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import discord
+
 from bot import replies
 from bot.alerts import AlertLoop, Unreachable
-from bot.discord_app import DiscordMessenger
-from bot.replies import Reply, Site
+from bot.discord_app import DiscordMessenger, lay_out
+from bot.replies import GREY, Reply, Site, say
 from bot.summaries import Summary, SummaryLoop
 
 SITE = Site("https://clashlens.test")
@@ -80,18 +83,24 @@ def test_the_end_of_day_is_the_saved_one_before_any_weekly_or_season_reset() -> 
     assert season_end is not None and weekly is not None
     assert season_end["status"] == "Verified"
     season_end["end"] = 5320
-    body = replies.day_summary(SITE, RESET, [weekly, season_end])[0][0].body
-    assert [block.split("\n")[1] for block in body.split("\n\n")[:2]] == [
+    cards = replies.day_summary(SITE, RESET, [weekly, season_end], {})[0][0].cards
+    assert [card.parts[0].split("\n")[1] for card in cards] == [
         "5,440 → 5,320 (−120, −320 Season reset)",
         "5,000 → Unavailable (−20, +20 weekly reset)",
     ]
+    # Each card opens that player's day on Clash Lens.
+    assert cards[0].button is not None and cards[0].button.url == (
+        "https://clashlens.test/players/%232PP?day=2026-10-06#legend-day-2026-10-06"
+    )
 
 
 def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
     """40 players' days do not fit one Discord message: each goes in exactly
-    one DM, in order, each DM under Discord's 4,096 characters, numbered,
+    one DM, in order, each DM under Discord's 4,000 characters, numbered,
     and the settings button ends the last; each DM carries the tags of the
-    players it names. Names are escaped."""
+    players it names. Names are escaped. Each player's card has its own
+    colour, the not-finished one grey, and each DM keeps inside Discord's 40
+    parts and 4,000 characters a message."""
     yesterday = RESET - timedelta(days=1)
     days = [
         replies.summary_day(
@@ -102,42 +111,53 @@ def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
         for n in range(40)
     ]
     days.append({"tag": "#WAIT", "name": "Slow", "finished": False})
-    summary = replies.day_summary(SITE, RESET, days)
+    colours = replies.colours([day["tag"] for day in days])
+    summary = replies.day_summary(SITE, RESET, days, colours)
     parts = [part for part, _ in summary]
     assert len(parts) > 1
     assert [part.title for part in parts] == [
         f"Legend day summary · Tue 6 Oct ({n} of {len(parts)})"
         for n in range(1, len(parts) + 1)
     ]
-    assert all(len(part.body) <= 4096 for part in parts)
     assert [len(part.links) for part in parts] == [0] * (len(parts) - 1) + [1]
-    text = "\n\n".join(part.body for part in parts)
-    assert [text.count(f"#{n:04d}**") for n in range(40)] == [1] * 40
-    assert text.index("#0000**") < text.index("#0039**")
+    for part in parts:
+        view = discord.ui.LayoutView()
+        lay_out(view, part)
+        items = list(view.walk_children())
+        assert len(items) <= 40
+        shown = [item.content for item in items if isinstance(item, discord.ui.TextDisplay)]
+        assert sum(map(len, shown)) <= 4000
+    assert {
+        re.search(r"#\d{4}", card.parts[0])[0]: card.colour
+        for part in parts for card in part.cards if card.colour != GREY
+    } == {day["tag"]: colours[day["tag"]] for day in days[:40]}
+    text = "\n\n".join(part.text for part in parts)
+    assert [text.count(f"** #{n:04d} ·") for n in range(40)] == [1] * 40
+    assert text.index("#0000 ·") < text.index("#0039 ·")
     assert "@everyone" not in text and "\\*\\*0\\*\\*" in text
     assert "Not finished yet: Slow #WAIT." in text
     assert [tags for _, tags in summary] == [
-        tuple(day["tag"] for day in days if day["tag"] in part.body) for part in parts
+        tuple(day["tag"] for day in days if day["tag"] in part.text) for part in parts
     ]
-    assert replies.day_summary(SITE, RESET, days[-1:]) == []
+    assert replies.day_summary(SITE, RESET, days[-1:], colours) == []
 
 
 def test_a_long_not_finished_list_is_split_between_dms() -> None:
     """150 players whose day is not finished, with long names, are named at
-    most 40 a line, so no DM goes over Discord's 4,096 characters."""
+    most 40 a line, so no DM goes over Discord's 4,000 characters."""
     yesterday = RESET - timedelta(days=1)
     waiting = [
         {"tag": f"#{n:07d}", "name": f"Still playing {n:06d}", "finished": False}
         for n in range(150)
     ]
     days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1, False), *waiting]
-    summary = replies.day_summary(SITE, RESET, days)
-    assert all(len(part.body) <= 4096 for part, _ in summary)
-    text = "\n\n".join(part.body for part, _ in summary)
+    summary = replies.day_summary(SITE, RESET, days, {})
+    assert all(len(part.text) <= 4000 for part, _ in summary)
+    text = "\n\n".join(part.text for part, _ in summary)
     assert text.count("Not finished yet: ") == 4
     assert [text.count(day["tag"]) for day in waiting] == [1] * 150
     assert [tags for _, tags in summary] == [
-        tuple(day["tag"] for day in days if day["tag"] in part.body) for part, _ in summary
+        tuple(day["tag"] for day in days if day["tag"] in part.text) for part, _ in summary
     ]
 
 
@@ -165,7 +185,7 @@ class _SummaryLog:
 def _three_dms() -> Summary:
     """A summary of three DMs naming #A, #B and #C."""
     return Summary(1, "1", RESET, [
-        (Reply("one"), ("#A",)), (Reply("two"), ("#B",)), (Reply("three"), ("#C",)),
+        (say("one"), ("#A",)), (say("two"), ("#B",)), (say("three"), ("#C",)),
     ])
 
 
@@ -176,7 +196,7 @@ class _Discord:
         self.tries: list[tuple[int | str, str]] = []
 
     async def send_dm(self, _user: str, reply: Reply, nonce: int | str, _left: float) -> None:
-        self.tries.append((nonce, reply.body))
+        self.tries.append((nonce, reply.text))
         if len(self.tries) == 2:
             raise Unreachable
 
@@ -225,9 +245,9 @@ class _TwoSummaries(_SummaryLog):
 
     def due(self) -> list[Summary]:
         return [
-            Summary(2, "2", RESET, [(Reply("first"), ("#B",))]),
+            Summary(2, "2", RESET, [(say("first"), ("#B",))]),
             Summary(1, "1", RESET, [
-                (Reply("second, one"), ("#A",)), (Reply("second, two"), ("#A",)),
+                (say("second, one"), ("#A",)), (say("second, two"), ("#A",)),
             ]),
         ]
 
@@ -246,7 +266,7 @@ class _SlowDiscord:
 
     async def send_dm(self, user: str, reply: Reply, _nonce: int | str, _left: float) -> None:
         await asyncio.sleep(1 if user == "2" else 0.2)
-        self.sent.append(reply.body)
+        self.sent.append(reply.text)
 
 
 def test_each_summary_dm_has_its_own_time_from_its_own_first_try(monkeypatch) -> None:
@@ -267,7 +287,7 @@ def test_a_summary_dm_is_cut_off_at_the_next_reset() -> None:
     the summary is logged as not delivered."""
     log = _SummaryLog(now=RESET + timedelta(days=1) - timedelta(seconds=0.2))
     discord = _SlowDiscord()
-    summary = Summary(2, "2", RESET, [(Reply("late"), ("#A",))])
+    summary = Summary(2, "2", RESET, [(say("late"), ("#A",))])
     assert asyncio.run(SummaryLoop(log, discord).send(summary)) == 0  # type: ignore[arg-type]
     assert discord.sent == []
     assert log.finished == [(7, "failed")]
@@ -292,7 +312,7 @@ class _OneAttack:
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": RESET,
-                 "ranked_day_start": RESET}]
+                 "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0]}]
 
     def hit_rate(self, *_read: object) -> str:
         return "Unavailable"
@@ -318,7 +338,7 @@ class _HeldDiscord:
         if isinstance(nonce, str):
             self.holding += 1
             await self.release.wait()
-        self.sent.append(reply.title or reply.body)
+        self.sent.append(reply.text.splitlines()[0])
 
 
 def test_slow_summary_dms_do_not_delay_an_attack_alert() -> None:
@@ -338,7 +358,7 @@ def test_slow_summary_dms_do_not_delay_an_attack_alert() -> None:
         discord.release.set()
         return alert_sent, during, await sending
 
-    alert = "Wanderer #2PP was attacked"
+    alert = "### Wanderer was attacked"
     assert asyncio.run(scenario()) == (1, [alert], 3)
     assert discord.sent == [alert, "one", "two", "three"]
     assert log.finished == [(7, "sent")]
@@ -368,9 +388,9 @@ def test_dms_sent_at_once_leave_the_clients_rate_limit_wait_as_it_was() -> None:
     messenger = DiscordMessenger(client)  # type: ignore[arg-type]
 
     async def scenario() -> None:
-        alert = asyncio.create_task(messenger.send_dm("1", Reply("alert"), 3, 60.0))
+        alert = asyncio.create_task(messenger.send_dm("1", say("alert"), 3, 60.0))
         summary = asyncio.create_task(
-            messenger.send_dm("2", Reply("summary"), "summary-7-0", 120.0))
+            messenger.send_dm("2", say("summary"), "summary-7-0", 120.0))
         while len(client.releases) < 2:
             await asyncio.sleep(0)
         client.releases[1].set()

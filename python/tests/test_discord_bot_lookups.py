@@ -56,10 +56,10 @@ def test_stats_finds_any_tracked_player_by_tag_or_name(store) -> None:
     store.pages["#8QQ"] = page("#8QQ", "Theirs", [battle("offense", 10, 3, 40, "First")])
     store.known = [{"tag": "#8QQ", "name": "Theirs", "trophies": 5900}]
     by_tag = run_command(store, "stats", FakeInteraction(), player="8qq")
-    assert by_tag["title"] == "Theirs #8QQ · Lens Clan"
+    assert by_tag["text"].startswith("### Theirs #8QQ\n")
     assert by_tag["private"] is False
     by_name = run_command(store, "stats", FakeInteraction(), player=" theirs ")
-    assert by_name["title"] == "Theirs #8QQ · Lens Clan"
+    assert by_name["text"].startswith("### Theirs #8QQ\n")
 
 
 def test_player_by_name_keeps_the_spaces_typed(store) -> None:
@@ -71,7 +71,7 @@ def test_player_by_name_keeps_the_spaces_typed(store) -> None:
         {"tag": "#9RR", "name": "Dark  King", "trophies": 5800},
     ]
     message = run_command(store, "stats", FakeInteraction(), player=" Dark  King ")
-    assert "#9RR" in message["title"]
+    assert message["text"].splitlines()[0].endswith(" #9RR")
     assert autocomplete(store, "any_player_choices", "dark  k") == [
         ("Dark  King #9RR · 5,800", "#9RR")
     ]
@@ -97,15 +97,9 @@ def test_player_known_without_a_current_profile_gets_its_status(store) -> None:
         "rank": None,
     }
     message = run_command(store, "stats", FakeInteraction(), player="#8QQ")
-    assert message["title"] == "Lucy #8QQ"
-    assert message["text"].splitlines() == ["No Legend battles yet", "", RESET]
-
-
-def test_player_needs_a_connected_account(store) -> None:
-    message = run_command(store, "stats", FakeInteraction(), player="#8QQ")
-    assert message["private"] is True
-    assert "on the website to use the bot" in message["text"]
-    assert "player_page" not in store.reads
+    assert message["text"].splitlines() == [
+        "### Lucy #8QQ", "", "No Legend battles yet", "", RESET, "-# Updated: pending"
+    ]
 
 
 def test_player_autocomplete_offers_own_players_then_name_matches(store) -> None:
@@ -195,19 +189,21 @@ def test_stats_without_a_player_totals_the_default_players_season(store) -> None
     store.connect(ME, [card("#2PP", "Drift", 5040)])
     store.pages["#2PP"] = season_page()
     message = run_command(store, "stats", FakeInteraction(), player=None)
-    lines = message["text"].splitlines()
-    assert lines[0].endswith(" · Legend day 3 of 28")
-    assert lines[1:] == [
-        "5,000 → 5,040 (+40)",
+    # Today first: what was gained and lost, then a square per battle, then
+    # the Season so far.
+    assert message["text"].splitlines() == [
+        "### Drift #2PP",
+        "## +0 (0)  −40 (1)",
+        "-# Today so far",
+        "`Attacks ` " + "⬛" * 8 + "  8 left",
+        "`Defenses` 🟥" + "⬛" * 7 + "  7 left",
         "",
-        "**Attacks** 2 · hit rate 50% (1 three-stars) · +30 per attack",
-        "**Defenses** 2 · held 50% (1 not tripled) · −25 per defense",
-        "",
-        RESET,
+        "**Season Stats**",
+        "Attack hit rate: 50%",
+        "Defenses held: 50%",
+        "-# Updated 2 min ago",
     ]
-    assert links(message) == {
-        "Season on Clash Lens": "https://clashlens.test/players/%232PP"
-    }
+    assert links(message) == {"View details": "https://clashlens.test/players/%232PP"}
 
 
 def test_season_keeps_missing_days_and_numbers_visible(store) -> None:
@@ -222,12 +218,10 @@ def test_season_keeps_missing_days_and_numbers_visible(store) -> None:
     ready["days"][0]["start_trophies"] = None
     store.pages["#2PP"] = season
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
-    assert text.splitlines()[1] == "Unavailable → 5,040"
-    assert (
-        "**Attacks** Unavailable · hit rate Unavailable (Unavailable three-stars) · "
-        "Unavailable per attack"
-    ) in text
-    assert "**Defenses** Unavailable · held Unavailable (Unavailable not tripled)" in text
+    assert "Attack hit rate: Unavailable\nDefenses held: Unavailable" in text
+    # Today's defense still shows, with its unknown loss.
+    assert "## +0 (0)  Unavailable (Unavailable)" in text
+    assert "`Defenses` 🟥" in text
 
 
 def test_season_without_any_recorded_day_shows_unavailable_not_zero(store) -> None:
@@ -237,21 +231,24 @@ def test_season_without_any_recorded_day_shows_unavailable_not_zero(store) -> No
     season["screen_ready"]["season_day_starts"] = []
     store.pages["#2PP"] = season
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
-    assert "**Attacks** Unavailable · hit rate Unavailable (Unavailable three-stars)" in text
-    assert " 0 " not in text
+    assert "Attack hit rate: Unavailable\nDefenses held: Unavailable" in text
+    assert " 0 " not in text and "0%" not in text
 
 
 def test_season_history_shows_after_the_player_leaves_legend(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5040)])
     store.pages["#2PP"] = {**season_page(), "state": "not_in_legend"}
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
-    assert "**Attacks** 2 · hit rate 50%" in text
+    assert "Attack hit rate: 50%" in text
 
 
-def test_season_not_available_yet_still_shows_the_reset(store) -> None:
+def test_season_not_available_yet_still_shows_today(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5040)])
     season = season_page()
     season["screen_ready"]["season"] = None
     store.pages["#2PP"] = season
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
-    assert text.splitlines() == ["This Season's days are not available yet.", "", RESET]
+    assert text.startswith("### Drift #2PP\n## +0 (0)  −40 (1)\n")
+    assert text.endswith(
+        "**Season Stats**\nThis Season's days are not available yet.\n-# Updated 2 min ago"
+    )

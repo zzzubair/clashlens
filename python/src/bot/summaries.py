@@ -58,7 +58,7 @@ from .alerts import (
     Unreachable,
 )
 from .replies import Reply, Site
-from .store import Store
+from .store import Store, link_colours
 
 log = logging.getLogger("clashlens.bot.summaries")
 
@@ -196,6 +196,8 @@ class Summaries:
         due = []
         for account_id, discord_user_id, tags in accounts:
             try:
+                with self.database.pool.connection() as connection:
+                    colours = link_colours(connection, account_id)
                 days = [
                     day
                     for tag in tags
@@ -209,7 +211,7 @@ class Summaries:
                 continue
             summary = Summary(
                 int(account_id), str(discord_user_id), reset,
-                replies.day_summary(self.site, reset, days),
+                replies.day_summary(self.site, reset, days, colours),
             )
             if summary.parts:
                 due.append(summary)

@@ -2,8 +2,9 @@
 
 Every method here runs off Discord's event loop, reads through the store and
 returns a `Reply`; nothing here knows about Discord, so tests drive it with a
-fake store. The Discord side checks the link first, so methods that take an
-account only ever see a connected one.
+fake store. Each command looks up who is typing itself: anyone can look up a
+player with /stats, and someone whose Discord is not connected to Clash Lens
+is offered sign-up instead of their own linked accounts.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ from .replies import Reply, Site
 class StoreReads(Protocol):
     def account(self, discord_id: str) -> AccountContext | None: ...
     def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]: ...
+    def colours(self, account: AccountContext) -> dict[str, int]: ...
     def default_tag(self, account: AccountContext) -> str | None: ...
+    def alert_switches(self, account: AccountContext) -> list[dict[str, Any]]: ...
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]: ...
 
@@ -57,9 +60,6 @@ class Commands:
         self.site = site
         self.now = now
 
-    def account(self, discord_id: str) -> AccountContext | None:
-        return self.store.account(discord_id)
-
     def _default(self, account: AccountContext, cards: Sequence[Mapping[str, Any]]) -> str | None:
         """The player commands use when none is named: the only one, or the
         default player chosen on the website, otherwise the first linked."""
@@ -70,16 +70,36 @@ class Commands:
         now = self.now()
         account = self.store.account(discord_id)
         if account is None:
-            return replies.help_reply(self.site, None, 0, now)
+            return replies.help_reply(self.site, None, 0)
         players = self.store.players(account, now)
-        return replies.help_reply(self.site, account.username, len(players), now)
+        return replies.help_reply(self.site, account.username, len(players))
 
     def link(self, discord_id: str, discord_name: str) -> Reply:
         now = self.now()
         account = self.store.account(discord_id)
         if account is None:
-            return replies.not_linked(self.site, discord_name, now)
-        return replies.link_reply(self.site, account.username, now)
+            return replies.not_linked(self.site, discord_name)
+        cards = self.store.players(account, now)
+        if not cards:
+            return replies.no_players(self.site, account.username)
+        return replies.link_reply(
+            self.site, account.username, cards, self._default(account, cards),
+            self.store.colours(account),
+        )
+
+    def alerts(self, discord_id: str, discord_name: str) -> Reply:
+        account = self.store.account(discord_id)
+        if account is None:
+            return replies.not_linked(
+                self.site, discord_name,
+                "get attack alerts and Legend day summaries for it in your Discord DMs",
+            )
+        switches = self.store.alert_switches(account)
+        if not switches:
+            return replies.no_players(self.site, account.username)
+        return replies.alerts_reply(
+            self.site, account.username, switches, self.store.colours(account)
+        )
 
     def _one_moment(self, work: Callable[[datetime], T]) -> T:
         """One moment for every read and the reply. Data saved after a Reset
@@ -92,31 +112,45 @@ class Commands:
             return work(later)
         return result
 
-    def stats(self, account: AccountContext, player: str | None = None) -> Reply:
-        """This Season so far for any tracked player named by tag or name, or
-        with no player for the person's default or only verified player."""
-        return self._one_moment(lambda now: self._stats(account, player, now))
+    def stats(self, discord_id: str, discord_name: str, player: str | None = None) -> Reply:
+        """Today and this Season so far for any tracked player named by tag or
+        name, for anyone; or with no player, for the person's default or only
+        linked account, which needs their Discord connected."""
+        return self._one_moment(
+            lambda now: self._stats(self.store.account(discord_id), discord_name, player, now)
+        )
 
-    def _stats(self, account: AccountContext, player: str | None, now: datetime) -> Reply:
+    def _stats(
+        self, account: AccountContext | None, discord_name: str, player: str | None, now: datetime
+    ) -> Reply:
         if player is not None and player.strip():
             tag = self._find(player, now)
             if isinstance(tag, Reply):
                 return tag
+        elif account is None:
+            return replies.name_a_player()
         else:
             cards = self.store.players(account, now)
             if not cards:
-                return replies.no_players(self.site, account.username, now)
+                return replies.no_players(self.site, account.username)
             tag = self._default(account, cards)
             if tag is None:
-                return replies.which_player(self.site, cards, "stats")
+                return replies.which_player(self.site, account.username, cards, "stats")
         page = self.store.player_page(tag, now)
         if page is None:
-            return replies.not_tracked(self.site, tag, now)
-        status = replies.card_status(page)
-        has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
-        if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
-            return replies.player_status(self.site, page, status, now)
-        return replies.stats_reply(self.site, page, now)
+            return replies.not_tracked(self.site, tag)
+        else:
+            # The person's own linked accounts in their colour, anyone else in
+            # Clash Lens yellow.
+            colour = (
+                replies.GOLD if account is None
+                else self.store.colours(account).get(tag, replies.GOLD)
+            )
+            status = replies.card_status(page)
+            has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
+            if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
+                return replies.player_status(self.site, page, status, now, colour)
+            return replies.stats_reply(self.site, page, now, colour)
 
     def _find(self, value: str, now: datetime) -> str | Reply:
         """The tag of a player typed as a tag (with or without "#") or a name."""
@@ -143,18 +177,19 @@ class Commands:
             return None
         if find_own(self.store.players(account, self.now()), tag) is None:
             return replies.not_own()
-        return self.stats(account, tag)
+        return self._one_moment(lambda now: self._stats(account, "", tag, now))
 
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
         """Autocomplete for /stats: the person's own players first, then known
         players whose name matches what is typed; a known player whose tag is
         exactly what is typed comes first."""
         account = self.store.account(discord_id)
-        if account is None:
-            return []
         now = self.now()
         text = current.strip()
-        choices = [replies.choice_for(card) for card in self.store.players(account, now)]
+        choices = (
+            [] if account is None
+            else [replies.choice_for(card) for card in self.store.players(account, now)]
+        )
         if text:
             choices += [replies.choice_for(item) for item in self.store.search(text, now)]
         tag = tag_text(text)

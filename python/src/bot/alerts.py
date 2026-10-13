@@ -37,7 +37,7 @@ from clashlens.domain import ranked_day_for
 
 from . import replies
 from .replies import Reply, Site
-from .store import Store
+from .store import Store, link_colours
 
 log = logging.getLogger("clashlens.bot.alerts")
 
@@ -95,6 +95,15 @@ _STILL_DUE = """
                ELSE alert.enabled_at < %(since)s END
       AND clock_timestamp() < %(since)s + %(window)s
 """
+
+
+def _coloured(connection: Any, rows: list[dict[str, Any]], tag: str) -> list[dict[str, Any]]:
+    """`rows` with the colour of each one's player, named by its `tag` column."""
+    accounts = {row["account_id"]: link_colours(connection, row["account_id"]) for row in rows}
+    return [
+        {**row, "colour": accounts[row["account_id"]].get(row[tag], replies.GOLD)}
+        for row in rows
+    ]
 
 
 class Refused(Exception):
@@ -167,17 +176,21 @@ class AlertStore:
 
     def due(self) -> list[dict[str, Any]]:
         """Alerts for battles saved within `WINDOW`, by the database's clock,
-        the clock that stamps each battle as saved."""
+        the clock that stamps each battle as saved, each with the defending
+        player's colour."""
         with self.database.pool.connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM clashlens_discord_attack_alerts_due(clock_timestamp() - %s)",
                 (WINDOW,),
             ).fetchall()
-        return [dict(zip(_DUE_COLUMNS, row, strict=True)) for row in rows]
+            return _coloured(
+                connection, [dict(zip(_DUE_COLUMNS, row, strict=True)) for row in rows],
+                "defender_tag",
+            )
 
     def confirmations_due(self) -> list[dict[str, Any]]:
         """Confirmations asked for within `WINDOW` and unsent, for accounts
-        with Discord connected."""
+        with Discord connected, each with the player's colour."""
         with self.database.pool.connection() as connection:
             rows = connection.execute(
                 """
@@ -202,7 +215,10 @@ class AlertStore:
                 """,
                 (WINDOW,),
             ).fetchall()
-        return [dict(zip(_CONFIRM_COLUMNS, row, strict=True)) for row in rows]
+            return _coloured(
+                connection, [dict(zip(_CONFIRM_COLUMNS, row, strict=True)) for row in rows],
+                "tag",
+            )
 
     def hit_rate(self, tag: str, battle_day: datetime, now: datetime) -> str:
         """The player's hit rate in the Season of a battle on the Legend day
@@ -322,7 +338,7 @@ class AlertLoop:
                     switch["discord_user_id"],
                     None,
                     switch["confirm_requested_at"],
-                    replies.alerts_on(self.site, switch),
+                    replies.alerts_on(self.site, switch, switch["colour"]),
                 )
             )
         for alert in await asyncio.to_thread(self.alerts.due):
@@ -336,7 +352,7 @@ class AlertLoop:
                     alert["discord_user_id"],
                     alert["battle_id"],
                     alert["saved_at"],
-                    replies.attack_alert(self.site, alert, rate),
+                    replies.attack_alert(self.site, alert, rate, alert["colour"]),
                 )
             )
         return sent

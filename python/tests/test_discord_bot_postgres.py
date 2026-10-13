@@ -11,7 +11,7 @@ from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import NOW, seed_profile
 
 from bot.commands import Commands
-from bot.replies import Site, which_player
+from bot.replies import Site
 from bot.store import Store
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase, RequestBinding
@@ -248,9 +248,9 @@ def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) ->
             (card,) = store.players(account, NOW)
             assert (card["reason"], card["trophies"]) == (None, 5000)
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
-            reply = commands.stats(account)
-            assert reply.title is not None and reply.title.startswith("Player #2PP")
-            assert "Being checked" not in reply.body
+            reply = commands.stats(DISCORD_ID, "drift")
+            assert reply.text.startswith("### Player #2PP")
+            assert "Being checked" not in reply.text
         finally:
             bot.close()
             owner.close()
@@ -321,9 +321,9 @@ def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) ->
             assert account is not None
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
 
-            found = commands.stats(account, "Drifter")
-            assert found.title is not None and found.title.startswith("Drifter #8QQ")
-            assert "Being checked" not in found.body
+            found = commands.stats(DISCORD_ID, "drift", "Drifter")
+            assert found.text.startswith("### Drifter #8QQ")
+            assert "Being checked" not in found.text
             assert [choice.value for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "#8QQ"
             ]
@@ -366,24 +366,17 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
                     (NOW,),
                 )
                 api_leaderboard.save_live_unplayed(connection, NOW)
-            account_id = _account(owner, "discord", DISCORD_ID, "drift")
+            _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
             account = store.account(DISCORD_ID)
             assert account is not None
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
 
-            found = commands.stats(account, "Drifter")
-            assert found.title is not None and found.title.startswith("Drifter #8QQ")
+            found = commands.stats(DISCORD_ID, "drift", "Drifter")
+            assert found.text.startswith("### Drifter #8QQ")
             assert [choice.label for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "Drifter #8QQ · 5,000"
             ]
-            # The player menu dates the player by the newer profile, read now,
-            # not the older one.
-            seed_profile(owner, "#2PP", 5100)
-            _verify(owner, account_id, "#8QQ")
-            _verify(owner, account_id, "#2PP")
-            menu = which_player(Site("https://clashlens.test"), store.players(account, NOW), "stats")
-            assert menu.choices and menu.updated == NOW
         finally:
             bot.close()
             owner.close()
