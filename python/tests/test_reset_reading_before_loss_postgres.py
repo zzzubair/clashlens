@@ -684,13 +684,14 @@ def test_own_report_after_the_opponents_recalculates_the_day_before(
     assert (states[2][3], states[2][8]) == (end_b, [])
 
 
-def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
+def test_monday_charge_read_before_the_raise_starts_no_next_day(
     database_url: str, archive_server
 ) -> None:
     # Day Y takes 8 defenses; day Z, ending at the Monday Reset, none, so its
-    # automatic loss for all 8 would take it below 5,000, where the weekly
-    # raise hides it. The Monday Reset reading is rejected and a 05:10
-    # reading shows the charge: day Z is not settled, so Monday has no start.
+    # automatic loss for all 8 takes it below 5,000. The Monday Reset reading
+    # is rejected and a 05:10 reading, before the raise landed (12 October
+    # 2026), shows the charge: day Z ends after it, but is not settled, so
+    # Monday has no start.
     day_y, day_z = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
     defenses = [(day_y + timedelta(hours=hour), False) for hour in range(1, 9)]
     start_z = 4990 + 8 * LOSS
@@ -723,7 +724,7 @@ def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
             _process(connection_info, archive_server, jobs)
         day_z_row, day_a_row = _latest_days(connection_info, (day_z, DAY_A))
 
-    assert (day_z_row[0], day_z_row[3]) == ("Partial", start_z)
+    assert (day_z_row[0], day_z_row[3]) == ("Partial", start_z - 8 * LOSS)
     assert day_a_row[2] is None
 
 
