@@ -732,8 +732,7 @@ def get_player_season_summary(
 
 
 def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
-    """Every known player a name search can find, matched by ``name_filter``,
-    each with its place in name order."""
+    """Every known player a name search can find, matched by ``name_filter``."""
     # Off a Season's first Legend day no profile awaits its Season reset for
     # its trophies alone, so those per-player reads are left out.
     opening = (
@@ -772,8 +771,7 @@ def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
         SELECT player.normalized_tag, player.name, player.trophies,
                player.current_observed_at, player.eligibility_state, player.clan,
                player.current_league_season_id, player.frozen_trophies,
-               player.day_battles, player.opening_day_waiting,
-               row_number() OVER (ORDER BY lower(player.name), player.normalized_tag)
+               player.day_battles, player.opening_day_waiting
         FROM matches AS player
         -- Scalar subqueries stop after one row and cannot become a hashed
         -- EXISTS subplan that reads the entire history table.
@@ -797,11 +795,17 @@ def _lower(name: str) -> str:
 
 
 def _read_known_players(database: ApiDatabase, now: datetime) -> list[tuple[Any, ...]]:
-    """Every player a name search can find, each with its name lower-cased."""
+    """Every player a name search can find, each with its place in name order
+    and its name lower-cased."""
     opening_reset = season_opening_reset(now)
     with database.pool.connection() as connection:
         rows = connection.execute(
-            _known_players_sql(opening_reset, ""), {"opening_reset": opening_reset}
+            f"""
+            SELECT known.*,
+                   row_number() OVER (ORDER BY lower(known.name), known.normalized_tag)
+            FROM ({_known_players_sql(opening_reset, "")}) AS known
+            """,
+            {"opening_reset": opening_reset},
         ).fetchall()
     return [(*row, _lower(_text(row[1]))) for row in rows]
 
