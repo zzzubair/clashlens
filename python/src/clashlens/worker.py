@@ -97,6 +97,7 @@ OLDEST_FIRST_CLAIM_EVERY = 4
 # and live pages each get at least half of every lane's claims while both
 # wait. On 8 Oct 2026 the rest went by waiting time, which Reset work wins for
 # 20 minutes, and live responses waited 21 minutes behind the Reset backlog.
+# Until the Reset's board publishes, derived lanes always do (background_pacing).
 RESET_FIRST_CLAIM_EVERY = 2
 # A continuous worker with two or more lanes keeps about two thirds of them
 # (8 of 12) for responses unless told how many. The rest run derived work:
