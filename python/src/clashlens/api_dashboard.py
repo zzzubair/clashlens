@@ -11,6 +11,13 @@ has not caught up with is never counted without its trophies. A player
 without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
+The projected place inside it (projected_place.py) is recomputed with each
+board read from the same trophies and open slots, when each player's newest
+battle that moved their trophies in that log ended by the Daily board's
+rule (the attacker's report time, from the attacker's own log, else 155
+seconds after the defender's), their attacks on the three Legend days
+before today, and the saved examples of the last 7 days.
+
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
 
@@ -38,7 +45,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
-from . import army_types
+from . import army_types, projected_place
 from .api_db import ApiDatabase, _screen_events, _text
 from .api_leaderboard import _LIVE_PLAYERS_SQL, _season_params
 from .domain import (
@@ -64,26 +71,99 @@ OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
+# A battle a published log keeps, as ``event``, with a report time to read.
+_KEPT_EVENT_SQL = """event ->> 'battle_timestamp' ~ '^[0-9]{4}-[0-9][0-9]-[0-9][0-9]T'
+      AND event ->> 'included' IS DISTINCT FROM 'false'
+      AND event ->> 'valid' IS DISTINCT FROM 'false'"""
+
 _BOARD_SQL = f"""
-WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL})
-SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
-       day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
-       day.defense_three_star_count,
+WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL}),
+board AS MATERIALIZED (
+    SELECT live.normalized_tag, live.trophies, player.id AS player_id,
+           recent.yesterday, recent.before, day.attack_count, day.attack_gain,
+           day.defense_count, day.defense_loss, day.defense_three_star_count,
+           day.ranked_day_version_id, day.battles
+    FROM live
+    JOIN players AS player ON player.normalized_tag = live.normalized_tag
+    {projected_place.RECENT_ATTACKS_SQL}LEFT JOIN LATERAL (
+        SELECT attack_count, attack_gain, defense_count, defense_loss,
+               defense_three_star_count, ranked_day_version_id, battles
+        FROM api_player_daily_logs AS daily
+        WHERE daily.player_id = player.id
+          AND daily.ranked_day_start = %(day_start)s
+        ORDER BY daily.version DESC
+        LIMIT 1
+    ) AS day ON true
+),
+-- Each battle those logs keep: the player's side, their report's time and
+-- the opponent.
+report AS MATERIALIZED (
+    SELECT board.player_id, event ->> 'lens' AS lens,
+           event ->> 'battle_identity' AS battle,
+           event -> 'opponent' ->> 'tag' AS opponent,
+           (event ->> 'battle_timestamp')::timestamptz AS reported_at,
+           event ->> 'trophy_change' <> '0' AS moved
+    FROM board
+    CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(board.battles)
+                                            WHEN 'array' THEN board.battles
+                                            ELSE '[]' END) AS event
+    WHERE {_KEPT_EVENT_SQL}
+),
+-- Attackers' own reports of those battles: in the board's logs, and for a
+-- defense none of those has, in its attacker's newest log of the day,
+-- whether or not the attacker is on the board.
+attack AS MATERIALIZED (
+    SELECT battle, reported_at FROM report WHERE lens = 'offense'
+    UNION ALL
+    SELECT event ->> 'battle_identity', (event ->> 'battle_timestamp')::timestamptz
+    FROM (
+        SELECT DISTINCT player.id
+        FROM report AS own
+        JOIN players AS player ON player.normalized_tag = own.opponent
+        WHERE own.lens = 'defense' AND own.moved
+          AND NOT EXISTS (
+              SELECT 1 FROM report AS known
+              WHERE known.lens = 'offense' AND known.battle = own.battle)
+    ) AS attacker
+    CROSS JOIN LATERAL (
+        SELECT daily.battles
+        FROM api_player_daily_logs AS daily
+        WHERE daily.player_id = attacker.id
+          AND daily.ranked_day_start = %(day_start)s
+        ORDER BY daily.version DESC
+        LIMIT 1
+    ) AS day
+    CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(day.battles)
+                                            WHEN 'array' THEN day.battles
+                                            ELSE '[]' END) AS event
+    WHERE event ->> 'lens' = 'offense' AND {_KEPT_EVENT_SQL}
+),
+-- When each player's newest battle that moved their trophies ended, by the
+-- Daily board's rule (analytics.latest_trophy_changes): at the attacker's
+-- report, from the attacker's own log, else 155 seconds after the
+-- defender's.
+latest_change AS (
+    SELECT own.player_id,
+           max(CASE own.lens
+                   WHEN 'defense' THEN COALESCE(
+                       attack.reported_at, own.reported_at + interval '155 seconds')
+                   ELSE own.reported_at
+               END) AS at
+    FROM report AS own
+    LEFT JOIN attack ON own.lens = 'defense' AND attack.battle = own.battle
+    WHERE own.moved
+    GROUP BY own.player_id
+)
+SELECT board.normalized_tag, board.trophies, ranked_day.start_trophies,
+       board.attack_count, board.attack_gain, board.defense_count,
+       board.defense_loss, board.defense_three_star_count,
        COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0),
-       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
-FROM live
-JOIN players AS player ON player.normalized_tag = live.normalized_tag
-LEFT JOIN LATERAL (
-    SELECT attack_count, attack_gain, defense_count, defense_loss,
-           defense_three_star_count, ranked_day_version_id
-    FROM api_player_daily_logs AS daily
-    WHERE daily.player_id = player.id
-      AND daily.ranked_day_start = %(day_start)s
-    ORDER BY daily.version DESC
-    LIMIT 1
-) AS day ON true
+       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0),
+       board.yesterday, board.before, latest_change.at
+FROM board
+LEFT JOIN latest_change ON latest_change.player_id = board.player_id
 LEFT JOIN ranked_day_versions AS ranked_day
-    ON ranked_day.id = day.ranked_day_version_id
+    ON ranked_day.id = board.ranked_day_version_id
 """
 
 # Each player's latest log for one Legend day, with the day's start trophies
@@ -121,6 +201,9 @@ class _Board:
     starts: list[int]
     defenses_below: list[int]
     held_below: list[int]
+    # tag -> its index in ``projected``, which is None until examples are saved.
+    players: dict[str, int]
+    projected: projected_place.ProjectedPlaces | None
 
 
 def _open(used: Any, allowed: int) -> int:
@@ -136,9 +219,12 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     held = defenses = 0
     # Day start trophies -> [defenses, held defenses].
     by_start: dict[int, list[int]] = {}
+    # tag -> (trophies now, open attacks, open defenses, activity, latest
+    # trophy change)
+    inputs: dict[str, tuple[int, int, int, int, datetime | None]] = {}
     for (
         tag, trophies, start, attacks, gained, defended, lost, tripled,
-        zero_attacks, zero_defenses,
+        zero_attacks, zero_defenses, yesterday, before, latest_change_at,
     ) in rows:
         if None in (start, attacks, gained, defended, lost):
             basis, open_attacks, open_defenses = (
@@ -154,6 +240,11 @@ def _read_board(connection: Any, now: datetime) -> _Board:
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
+        inputs[_text(tag)] = (
+            basis, open_attacks, open_defenses,
+            projected_place.activity(int(yesterday), int(before)),
+            latest_change_at,
+        )
         if defended:
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
@@ -166,6 +257,7 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     for value in starts:
         defenses_below.append(defenses_below[-1] + by_start[value][0])
         held_below.append(held_below[-1] + by_start[value][1])
+    examples = projected_place.read_examples(connection, now) if inputs else None
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -177,6 +269,14 @@ def _read_board(connection: Any, now: datetime) -> _Board:
         starts=starts,
         defenses_below=defenses_below,
         held_below=held_below,
+        players={tag: index for index, tag in enumerate(inputs)},
+        projected=None if examples is None else projected_place.ProjectedPlaces(
+            *(list(column) for column in zip(*inputs.values(), strict=True)),
+            list(inputs),
+            examples,
+            # Dashboards read in the same minute imagine the same days.
+            seed=int(now.timestamp()) // 60,
+        ),
     )
 
 
@@ -253,6 +353,15 @@ def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
         if defenses >= SIMILAR_FEWEST_DEFENSES
         else None
     )
+
+
+def projected_rank(board: _Board, tag: str) -> int | None:
+    """The place ``tag`` is projected to finish today on, inside its rank
+    range; None off the board or before any day's examples are saved."""
+    outer = rank_range(board, tag)
+    if outer is None or board.projected is None:
+        return None
+    return board.projected.projected(board.players[tag], outer["best"], outer["worst"])
 
 
 def _battles_known(day: tuple[Any, ...]) -> bool:
@@ -394,6 +503,7 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": _iso(board.computed_at),
         "rank_range": rank_range(board, tag),
+        "projected_rank": projected_rank(board, tag),
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}

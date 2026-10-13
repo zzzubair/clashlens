@@ -58,18 +58,20 @@ function BattleRow({
 }
 
 /**
- * Card 1: live trophies, net today, the rank at the last Reset, the live rank
- * and the range the next Reset can still land in.
+ * Card 1: live trophies, net today, the rank at the last Reset, the live rank,
+ * the range the next Reset can still land in and the projected place in it.
  */
 export function LegendDayCard({
   player,
   day,
   range,
+  projected = null,
   nowMs = null,
 }: {
   player: LinkedPlayerCard;
   day: PlayerDay | null;
   range: RankRange | null;
+  projected?: number | null;
   nowMs?: number | null;
 }) {
   const battles = [...(day?.battles ?? [])].sort((a, b) => a.at - b.at);
@@ -134,6 +136,17 @@ export function LegendDayCard({
           <b>{range ? `${rankText(range.best)} – ${rankText(range.worst)}` : "–"}</b>
           <span className="dash-estimate">estimate · narrows as the day goes on</span>
         </div>
+        {projected ? (
+          <div className="legend-day-projected">
+            <span className="dash-label">Projected</span>
+            <strong>{rankText(projected)} at Reset</strong>
+            <span className="dash-muted">
+              An estimate from how players in your spot finished on recent days. It can be
+              hundreds of places out while battles are left, and gets closer through the
+              day.
+            </span>
+          </div>
+        ) : null}
       </div>
       <BattleRow
         battles={attacks}
