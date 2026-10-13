@@ -65,11 +65,14 @@ export function LegendDayCard({
   player,
   day,
   range,
+  rangeAtMs = null,
   nowMs = null,
 }: {
   player: LinkedPlayerCard;
   day: PlayerDay | null;
   range: RankRange | null;
+  /** When the board behind `range` was read. */
+  rangeAtMs?: number | null;
   nowMs?: number | null;
 }) {
   const battles = [...(day?.battles ?? [])].sort((a, b) => a.at - b.at);
@@ -83,9 +86,13 @@ export function LegendDayCard({
   const net = day?.net ?? null;
   const trophies = day ? day.trophies : player.trophies;
   const openDefenses = day?.openDefenses ?? null;
+  // The oldest read shown, so the card never looks newer than it is.
+  const observed = [day?.observedAtMs ?? null, rangeAtMs].filter(
+    (at): at is number => at !== null,
+  );
   const meta = [
     day?.dayNumber && day.dayCount ? `Day ${day.dayNumber} of ${day.dayCount}` : null,
-    updatedAgo(day?.observedAtMs ?? null, nowMs),
+    updatedAgo(observed.length ? Math.min(...observed) : null, nowMs),
   ].filter(Boolean);
   return (
     <div className="legend-day-card">

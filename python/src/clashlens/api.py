@@ -418,12 +418,18 @@ def create_app(
         return JSONResponse(status_code=200, content=_json_safe(result))
 
     @app.get("/v1/players/{tag}/today")
-    def player_today(tag: str, request: Request) -> JSONResponse:
+    def player_today(
+        tag: str, request: Request, wait_for_board: bool = Query(default=False)
+    ) -> JSONResponse:
         _authorize(request, "player.read", production_database)
         if not dashboard_enabled:
             raise ApiError(404, "dashboard_disabled")
         result = api_dashboard.get_player_today(
-            production_database, dashboard_board, _safe_tag(tag), now=current_time()
+            production_database,
+            dashboard_board,
+            _safe_tag(tag),
+            now=current_time(),
+            board_wait=api_dashboard.BOARD_WAIT_SECONDS if wait_for_board else 0,
         )
         if result is None:
             raise ApiError(404, "player_not_found")

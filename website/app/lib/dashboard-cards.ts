@@ -430,6 +430,10 @@ export interface LegendDayData {
   /** Null when the player page could not be read. */
   day: PlayerDay | null;
   range: RankRange | null;
+  /** When the board behind `range` was read; null without a range. */
+  rangeAtMs: number | null;
+  /** The card with its range, while the shared board is still being read. */
+  later?: Promise<LegendDayData>;
 }
 
 export interface BasesData {
@@ -437,6 +441,8 @@ export interface BasesData {
   rows: OpponentRow[] | null;
   /** When the comparisons with Legends at similar trophies were read; null without them. */
   comparedAtMs: number | null;
+  /** The card with its comparisons, while the shared board is still being read. */
+  later?: Promise<BasesData>;
 }
 
 /** The army cards' first read: the last 7 finished days. */

@@ -3,16 +3,15 @@ data, through the real worker, as the data service serves it.
 
 The shared board behind the range took 7 seconds to read on 13 October 2026
 and every dashboard request waited for it. Now it is read in the
-background: a request without a board waits up to 3 seconds for the read
-under way, then answers without the range. Neither that board nor the Live
-Leaderboard read it is built on ever serves the next Legend day. See
-docs/testing.md.
+background: a request without a board answers at once without the range,
+and a follow-up waits up to 4 seconds for the read under way. Neither that
+board nor the Live Leaderboard read it is built on ever serves the next
+Legend day. See docs/testing.md.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
@@ -28,7 +27,7 @@ from clashlens.api_db import ApiDatabase
 CLIMBER, DONE, RESTING, NEWCOMER = "#2PP", "#8PP", "#9PP", "#PPP"
 
 
-def test_rank_range_waits_briefly_for_the_background_read_and_never_crosses_a_reset(
+def test_rank_range_fills_in_from_the_background_read_and_never_crosses_a_reset(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     monday = day(8)
@@ -65,15 +64,16 @@ def test_rank_range_waits_briefly_for_the_background_read_and_never_crosses_a_re
         api = ApiDatabase(as_api_role(connection_info))
         try:
             now = afternoon + timedelta(minutes=5)
-            # A read slower than the wait: the request answers within the
-            # website's limit with the player's own numbers and no range.
+            # The first request answers at once with the player's own
+            # numbers and no range.
             asked = time.monotonic()
             first = api_dashboard.get_player_today(api, board, CLIMBER, now=now)
             waited = time.monotonic() - asked
-            # A request waiting when the read finishes answers with its range.
+            # A follow-up waiting when the read finishes answers with its range.
             with ThreadPoolExecutor(1) as pool:
                 pending = pool.submit(
-                    api_dashboard.get_player_today, api, board, DONE, now=now
+                    api_dashboard.get_player_today, api, board, DONE, now=now,
+                    board_wait=api_dashboard.BOARD_WAIT_SECONDS,
                 )
                 time.sleep(0.5)
                 go.set()
@@ -91,14 +91,17 @@ def test_rank_range_waits_briefly_for_the_background_read_and_never_crosses_a_re
             tomorrow = api_dashboard.get_player_today(api, board, CLIMBER, now=next_day)
             go.set()
             # Nor this day's Live Leaderboard: the newcomer is on Day 9's board.
-            later = _when_read(lambda: {
-                tag: api_dashboard.get_player_today(api, board, tag, now=next_day)
+            later = {
+                tag: api_dashboard.get_player_today(
+                    api, board, tag, now=next_day,
+                    board_wait=api_dashboard.BOARD_WAIT_SECONDS,
+                )
                 for tag in (CLIMBER, NEWCOMER)
-            })
+            }
         finally:
             api.close()
 
-    assert waited < 5
+    assert waited < 1
     assert first is not None and again is not None
     assert (first["rank_range"], first["board_computed_at"]) == (None, None)
     assert first["open_defenses"] == 8
@@ -123,14 +126,3 @@ def test_rank_range_waits_briefly_for_the_background_read_and_never_crosses_a_re
     assert later[CLIMBER]["board_computed_at"] == next_day.isoformat()
     # One read for the first two requests, one for the new day.
     assert reads == [now, next_day]
-
-
-def _when_read(serve: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """What ``serve`` gives once every answer has its range, within 10 s."""
-    deadline = time.monotonic() + 10
-    while True:
-        served = serve()
-        if all(today["rank_range"] for today in served.values()):
-            return served
-        assert time.monotonic() < deadline, "the board was never read"
-        time.sleep(0.05)

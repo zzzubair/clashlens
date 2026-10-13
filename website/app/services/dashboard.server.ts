@@ -129,10 +129,14 @@ function legendsHeld(value: unknown): LegendsHeld {
   return { held: count(value.held, defenses), defenses };
 }
 
-export async function getPlayerToday(tag: string): Promise<PlayerToday> {
+/** `waitForBoard` asks Python to wait a few seconds for the shared board's read under way. */
+export async function getPlayerToday(
+  tag: string,
+  waitForBoard = false,
+): Promise<PlayerToday> {
   if (!isCanonicalPlayerTag(tag)) throw new PythonApiError(422, { error: "invalid_tag" });
   const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}/today`,
+    `/v1/players/${encodeURIComponent(tag)}/today${waitForBoard ? "?wait_for_board=true" : ""}`,
     "GET",
     undefined,
     undefined,
@@ -263,9 +267,6 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     page.currentDayPublishedAt,
   ].map((value) => (value ? Date.parse(value) : Number.NaN));
   const observed = [profileAt, battlesAt].filter(Number.isFinite);
-  // A range shown is as old as the board it came from.
-  if (today?.rankRange && today.boardComputedAtMs !== null)
-    observed.push(today.boardComputedAtMs);
   return {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
@@ -278,7 +279,7 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
     trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-    // The oldest of the trophy, battle and range reads, so the card never looks newer than it is.
+    // The older of the trophy and battle reads, so the card never looks newer than it is.
     observedAtMs: observed.length ? Math.min(...observed) : null,
     battlesObservedAtMs: Number.isFinite(battlesAt) ? battlesAt : null,
     openDefenses: today?.openDefenses ?? null,
@@ -750,9 +751,14 @@ export function readCards(
     const page = await pages(ctx.selected.tag);
     return page === null ? null : seasonData(page);
   };
-  // Legend day and Bases you attacked share one read of today's numbers.
+  // Legend day and Bases you attacked share one read of today's numbers, which
+  // answers at once. Without the shared board, one more read waits for it,
+  // and both cards fill in its range and comparisons when it comes.
   let todayRead: Promise<PlayerToday | null> | undefined;
+  let boardRead: Promise<PlayerToday> | undefined;
   const today = () => (todayRead ??= getPlayerToday(ctx.selected.tag).catch(() => null));
+  const withBoard = (read: PlayerToday) =>
+    (boardRead ??= getPlayerToday(ctx.selected.tag, true).catch(() => read));
   const armies = async (lens: ArmyLens) => ({
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
@@ -766,17 +772,26 @@ export function readCards(
         pages(ctx.selected.tag).catch(() => null),
         today(),
       ]);
-      return {
+      const data = (read: PlayerToday | null): CardDataMap["legend-day"] => ({
         player: ctx.selected,
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
-      };
+        rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
+      });
+      return read?.boardComputedAtMs === null
+        ? { ...data(read), later: withBoard(read).then(data) }
+        : data(read);
     },
     bases: async () => {
       const read = await today();
-      return read === null
-        ? null
-        : { rows: read.opponents, comparedAtMs: read.boardComputedAtMs };
+      if (read === null) return null;
+      const data = (read: PlayerToday): CardDataMap["bases"] => ({
+        rows: read.opponents,
+        comparedAtMs: read.boardComputedAtMs,
+      });
+      return read.boardComputedAtMs === null
+        ? { ...data(read), later: withBoard(read).then(data) }
+        : data(read);
     },
     "armies-defense": () => armies("defense"),
     "armies-offense": () => armies("offense"),

@@ -122,7 +122,7 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
     monkeypatch, enabled: bool, read: str
 ) -> None:
     monkeypatch.setattr(
-        api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
+        api_dashboard, "get_player_today", lambda _db, _board, tag, **_: {"tag": tag}
     )
     monkeypatch.setattr(
         api_dashboard, "get_player_armies", lambda _db, _days, tag, **_: {"tag": tag}
@@ -143,6 +143,30 @@ def test_dashboard_reads_refuse_while_the_dashboard_is_off(
             404,
             "dashboard_disabled",
         )
+
+
+def test_only_a_today_read_that_asks_waits_for_the_board(monkeypatch) -> None:
+    waits: list[float] = []
+
+    def today(_db: Any, _board: Any, tag: str, **kwargs: Any) -> dict[str, str]:
+        waits.append(kwargs["board_wait"])
+        return {"tag": tag}
+
+    monkeypatch.setattr(api_dashboard, "get_player_today", today)
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=True,
+    )
+    with TestClient(app) as client:
+        for target in (
+            "/v1/players/%232PP/today",
+            "/v1/players/%232PP/today?wait_for_board=true",
+        ):
+            response = client.get(target, headers=_signed_headers(target))
+            assert response.status_code == 200
+    assert waits == [0, api_dashboard.BOARD_WAIT_SECONDS]
 
 
 def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
@@ -462,9 +486,7 @@ def test_a_failed_board_read_waits_its_turn() -> None:
     assert live.tries == 2
 
 
-def test_a_request_waits_for_the_board_under_way_but_not_past_the_wait(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_only_a_follow_up_waits_for_the_board_under_way_and_not_past_its_wait() -> None:
     go = Event()
 
     class Live:
@@ -487,15 +509,18 @@ def test_a_request_waits_for_the_board_under_way_but_not_past_the_wait(
     database = SimpleNamespace(
         pool=SimpleNamespace(connection=lambda: nullcontext(NoLogs()))
     )
-    monkeypatch.setattr(api_dashboard, "BOARD_WAIT_SECONDS", 0.3)
     board = api_dashboard.DashboardBoard(Live())  # type: ignore[arg-type]
-    # A read slower than the wait: the request answers without the board.
+    # The first request answers at once, without the board.
     asked = time.monotonic()
     assert board.current(database, NOW) is None  # type: ignore[arg-type]
+    assert time.monotonic() - asked < 0.2
+    # A follow-up waits for the read, but no longer than it may.
+    asked = time.monotonic()
+    assert board.current(database, NOW, wait=0.3) is None  # type: ignore[arg-type]
     assert 0.3 <= time.monotonic() - asked < 2
-    # A request waiting when the read finishes gets the board at once.
+    # A follow-up waiting when the read finishes gets the board at once.
     with ThreadPoolExecutor(1) as pool:
-        waiting = pool.submit(board.current, database, NOW)
+        waiting = pool.submit(board.current, database, NOW, wait=5)
         time.sleep(0.1)
         go.set()
         found = waiting.result(timeout=5)

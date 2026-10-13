@@ -113,13 +113,23 @@ function cardBody(
     value: NonNullable<Awaited<typeof read>>,
     context: ViewContext,
   ) => ReactNode;
-  if (!(read instanceof Promise)) return read === null ? failed : view(read, context);
+  // A card waiting on a slower read shows what it has until that fills it in.
+  const show = (loaded: NonNullable<Awaited<typeof read>>) => {
+    const later = (loaded as { later?: Promise<typeof loaded> }).later;
+    if (!later) return view(loaded, context);
+    return (
+      <Suspense fallback={view(loaded, context)}>
+        <Await resolve={later} errorElement={view(loaded, context)}>
+          {(full: typeof loaded) => view(full, context)}
+        </Await>
+      </Suspense>
+    );
+  };
+  if (!(read instanceof Promise)) return read === null ? failed : show(read);
   return (
     <Suspense fallback={loading}>
       <Await resolve={read} errorElement={failed}>
-        {(loaded: Awaited<typeof read>) =>
-          loaded === null ? failed : view(loaded, context)
-        }
+        {(loaded: Awaited<typeof read>) => (loaded === null ? failed : show(loaded))}
       </Await>
     </Suspense>
   );

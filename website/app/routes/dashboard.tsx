@@ -238,9 +238,9 @@ export function headers() {
 }
 
 /**
- * Reload the cards for another account, never for anything else. A save's
- * answer carries the settings as saved, and the page reads only the cards
- * they change; a save that lands during a switch still reads the new account.
+ * Reload the cards for another account, whatever else happened, such as a
+ * save landing during the switch, failed or not. A save's answer carries
+ * the settings as saved, and the page reads only the cards they change.
  */
 export function shouldRevalidate({
   currentUrl,
@@ -249,13 +249,13 @@ export function shouldRevalidate({
   formAction,
   defaultShouldRevalidate,
 }: ShouldRevalidateFunctionArgs) {
-  const samePlayer =
-    currentUrl.searchParams.get("player") === nextUrl.searchParams.get("player");
-  if (isDashboardSave(formMethod, formAction) && samePlayer) return false;
+  if (currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player"))
+    return true;
+  if (isDashboardSave(formMethod, formAction)) return false;
   if (formMethod || currentUrl.pathname !== nextUrl.pathname) {
     return defaultShouldRevalidate;
   }
-  return !samePlayer;
+  return false;
 }
 
 /** The linked player a switch is loading, before its answer arrives. */
