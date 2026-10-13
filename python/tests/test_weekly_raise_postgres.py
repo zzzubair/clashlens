@@ -24,7 +24,7 @@ from test_reset_scenarios_postgres import (
     defenses,
 )
 
-LATE_RAISE, LOSS_TOO, RAISE_UNDONE = "#2PP", "#8PP", "#9PP"
+LATE_RAISE, LOSS_TOO, RAISE_UNDONE, LATE_CREDIT = "#2PP", "#8PP", "#9PP", "#PPP"
 
 
 def _loss_states(connection_info: str, start) -> dict[str, str]:
@@ -51,15 +51,17 @@ def test_monday_reset_reading_before_the_weekly_raise(
 ) -> None:
     """Each Sunday ends below 5,000 and the Reset reading at 05:04 shows it
     unraised; the 05:20 check shows the raise. Sunday is Complete, on the
-    Monday board as complete, and Monday starts at 5,000. A player read
-    unraised again at 05:40, after the raise showed, stays Inconsistent.
+    Monday board as complete and proven, even when the last reading before
+    the Reset still lacked a late attack's gain, and Monday starts at 5,000.
+    A player read unraised again at 05:40, after the raise showed, stays
+    Inconsistent.
     The days must have ended by the real clock, so this is the previous
     Season's Monday, 28 September 2026."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
-                       LATE_RAISE, LOSS_TOO, RAISE_UNDONE)
+                       LATE_RAISE, LOSS_TOO, RAISE_UNDONE, LATE_CREDIT)
         # From 5,300 each Saturday ends at 5,140.
         for player in story.players.values():
             player.battles = _saturday(saturday)
@@ -73,12 +75,16 @@ def test_monday_reset_reading_before_the_weekly_raise(
         story.players[LOSS_TOO].battles += (
             attacks(sunday, 40) + defenses(sunday, *[30] * 7) + monday_battles)
         story.players[RAISE_UNDONE].battles += attacks(sunday, 40) + defenses(sunday, *[30] * 8)
+        # Its attack at 04:48 also ends Sunday at 4,940, but the 04:50
+        # check does not show its gain yet: 4,900.
+        story.players[LATE_CREDIT].battles += defenses(sunday, *[30] * 8) + attacks(
+            monday - timedelta(hours=1, minutes=12), 40)
         story.reset(saturday, {tag: (5300, season) for tag in story.players})
         story.reset(sunday, {tag: (5140, season) for tag in story.players})
-        story.reads(monday - timedelta(minutes=10),
-                    {LATE_RAISE: 4940, LOSS_TOO: 4970, RAISE_UNDONE: 4940}, season)
+        story.reads(monday - timedelta(minutes=10), {
+            LATE_RAISE: 4940, LOSS_TOO: 4970, RAISE_UNDONE: 4940, LATE_CREDIT: 4900}, season)
         story.reset(monday, {LATE_RAISE: (4940, season), LOSS_TOO: (4970, season),
-                             RAISE_UNDONE: (4940, season)})
+                             RAISE_UNDONE: (4940, season), LATE_CREDIT: (4940, season)})
         # The 05:20 settlement check: the raise has landed. RAISE_UNDONE then
         # reads unraised again, which no way the game works can show.
         story.reads(monday + timedelta(minutes=20), dict.fromkeys(story.players, 5000), season)
@@ -102,7 +108,7 @@ def test_monday_reset_reading_before_the_weekly_raise(
         "state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,
         "automatic_loss": None, "raise": 60, "attacks": 1, "defenses": 8, "residual": 0,
     }
-    assert sundays[LATE_RAISE] == sunday_day
+    assert sundays[LATE_RAISE] == sundays[LATE_CREDIT] == sunday_day
     assert sundays[LOSS_TOO] == {**sunday_day, "automatic_loss": 30, "defenses": 7}
     # The raise hides the end, so no 5,000 reading proves the loss.
     assert loss_states[LOSS_TOO] == "calculated"
@@ -113,11 +119,14 @@ def test_monday_reset_reading_before_the_weekly_raise(
     }
     assert mondays == {LATE_RAISE: monday_day, LOSS_TOO: monday_day}
     assert monday_members == {
-        LATE_RAISE: "complete", LOSS_TOO: "complete", RAISE_UNDONE: "inconsistent"}
+        LATE_RAISE: "complete", LOSS_TOO: "complete", RAISE_UNDONE: "inconsistent",
+        LATE_CREDIT: "complete"}
     assert tuesday_members == {LATE_RAISE: "complete", LOSS_TOO: "complete"}
     # The Monday board ranks each total at 05:00:00, before the loss and raise.
-    assert _ranked(monday_board) == {LOSS_TOO: 4970, LATE_RAISE: 4940, RAISE_UNDONE: 4940}
+    assert _ranked(monday_board) == {
+        LOSS_TOO: 4970, LATE_RAISE: 4940, RAISE_UNDONE: 4940, LATE_CREDIT: 4940}
     # The Reset reading matched each total before the raise, so it proves it.
     assert {entry["tag"]: entry["confidence"] for entry in monday_board["entries"]} == {
-        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", RAISE_UNDONE: "uncertain"}
+        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", RAISE_UNDONE: "uncertain",
+        LATE_CREDIT: "confirmed"}
     assert _ranked(tuesday_board) == {LATE_RAISE: 4800, LOSS_TOO: 4800}

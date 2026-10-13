@@ -353,10 +353,12 @@ def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
     """The players with saved days of the Season whose results the 13
     October 2026 rule, that the weekly raise can land after the Monday Reset
     reading, can change: those whose Reset reading at a weekly Monday Reset
-    of the Season, not its first, showed Legend I below 5,000, whatever
-    their days were saved as. A Sunday ending at 5,100 before its 200
-    automatic loss, read at 4,900, was saved Complete with Monday at 5,000,
-    but only that reading now proves its board total. On 12 October 2026
+    of the Season, not its first, showed Legend I, below 5,000 once the
+    gains of Monday attacks reported before it are taken off, whatever their
+    days were saved as. A Sunday ending at 5,100 before its 200 automatic loss, read at
+    4,900, was saved Complete with Monday at 5,000, but only that reading
+    now proves its board total; a Sunday ending at 4,980 read at 5,020 with
+    a Monday attack for 40 was saved Inconsistent. On 12 October 2026
     every Reset reading came before the raise. A player with no Reset
     reading there is not chosen. Each chosen player's later days are
     recalculated with them."""
@@ -371,7 +373,16 @@ def _weekly_raise_players(connection: Any, start: datetime) -> list[int]:
             WHERE evidence.boundary_at > %(start)s AND evidence.boundary_at < %(end)s
               AND extract(isodow FROM evidence.boundary_at AT TIME ZONE 'UTC') = 1
               AND profile.eligibility_state = 'eligible'
-              AND profile.trophies < %(trophies)s
+              AND profile.trophies - (
+                  SELECT COALESCE(sum(report.attacker_gain), 0)
+                  FROM legend_battles AS battle
+                  JOIN battle_perspectives AS side
+                    ON side.battle_id = battle.id AND side.perspective = 'attacker'
+                  JOIN battle_evidence AS report ON report.id = side.evidence_id
+                  WHERE battle.ranked_day_start = evidence.boundary_at
+                    AND battle.attacker_player_id = evidence.player_id
+                    AND report.battle_timestamp < effect.observed_at
+              ) < %(trophies)s
               AND EXISTS (
                   SELECT 1 FROM ranked_day_versions AS day
                   WHERE day.player_id = evidence.player_id

@@ -785,7 +785,8 @@ def reset_trophies(
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. A Reset that resets trophies
-    proves only the start, so there the reading must agree too.
+    proves only the start, so there the reading must agree too, unless a
+    weekly Reset reading taken before the raise landed matched the day.
 
     Otherwise the total is the reading plus the day's battles stamped after
     it, which needs the day's continuous battle logs, a reading taken at
@@ -939,9 +940,10 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
         settled = int(final) + int(automatic_loss or 0)
         # The game resets trophies at a Season's end, and raises a total at
         # or below 5,000 at a weekly one, so that Reset's reading proves
-        # nothing and the reading must agree.
+        # nothing and the reading must agree, unless the weekly one was read
+        # before the raise landed and matched the day's end (``clean``).
         end_reset = _text_value(boundary_kind) == "season" or (
-            _text_value(boundary_kind) == "weekly" and int(final) <= 5000
+            _text_value(boundary_kind) == "weekly" and int(final) <= 5000 and not read_clean
         )
         if not end_reset or total == settled:
             return settled - int(after_reset), (
