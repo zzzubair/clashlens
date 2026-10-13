@@ -51,7 +51,9 @@ more blocks with a coloured edge, with link buttons. Messages about one of the
 Clasher's own linked accounts (attack alerts, the alerts-on message, that
 account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account
-keeps its colour everywhere. Everything else uses Clash Lens yellow. `/stats`
+keeps its colour everywhere. Everything else uses Clash Lens yellow, except
+the grey card in a Legend day summary naming the players whose day is not
+finished yet. `/stats`
 ends with when the player's profile was last read ("Updated N min ago"); no
 other message has that line. `/stats` shows a square for each of today's
 recorded battles, and dark squares with how many are left only while the
@@ -130,7 +132,7 @@ Nothing below has been done yet. Do the steps in order.
    ```sh
    podman exec clashlens-discord-bot python -m bot register
    ```
-   It prints `registered 4 commands: help, link, alerts, stats`. Commands appear only
+   It prints `registered 4 commands: alerts, help, link, stats`. Commands appear only
    where the app is installed, so nobody else sees them yet.
 6. **Test in a DM.** Open the install link from the Installation page, choose
    "Add to My Apps", then DM the bot:
