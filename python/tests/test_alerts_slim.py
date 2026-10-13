@@ -1,6 +1,7 @@
 """The 15-minute daily-calculation and unreadable-monitoring alerts, against a
 local HTTP server, never Discord."""
 
+import http.client
 import json
 import os
 import subprocess
@@ -507,3 +508,43 @@ def test_website_check_sends_only_the_website_alert(runtime):
     assert "outside the server" in rt.posts[0]["content"]
     state = json.loads((state_dir / "alerts.json").read_text())
     assert set(state["incidents"]) == {"site"}
+
+
+def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
+    runtime, monkeypatch, capsys
+):
+    rt = runtime
+    rt.battle_day = "1"
+
+    def broken(_origin):
+        raise RuntimeError("private detail")
+
+    monkeypatch.setattr(alerts, "website_daily_board", broken)
+    assert rt.run() == 1
+    assert [p for p in rt.posts if "no-attack window" in p["content"]]
+    error = capsys.readouterr().err
+    assert "Reset publication status unavailable; run ./ops logs website" in error
+    assert "private" not in error
+
+
+
+
+@pytest.mark.parametrize("path", ["/discord", "/leaderboards/tracked", "/metrics"])
+def test_an_interrupted_answer_leaves_the_rest_running(runtime, monkeypatch, path):
+    # An answer cut off partway through, from Discord, the website page or the
+    # collector, fails only its own part; the later checks and deliveries go on.
+    rt = runtime
+    rt.battle_day = "1"
+    rt.health_streaks["clashlens-python-worker"] = 2
+    read = http.client.HTTPResponse.read
+
+    def cut_off(self, amt=None):
+        if path in self.url:
+            raise http.client.IncompleteRead(b"")
+        return read(self, amt)
+
+    monkeypatch.setattr(http.client.HTTPResponse, "read", cut_off)
+    assert rt.run() == 1
+    assert any("--battle-day" in call for call in rt.calls)
+    for text in ("failed its last 2 health checks", "no-attack window"):
+        assert [a for a in rt.attempts if text in a["content"]]

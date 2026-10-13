@@ -462,6 +462,11 @@ it("shows the newest Daily board from one read, then names its Season and day wi
   const { html, status } = await render("view=daily&page=2");
   expect(status).toBe(200);
   expect(html).toContain('<p class="rankings-kicker">Day 7</p>');
+  // The private alert check reads the board's Reset from this heading
+  // (website_daily_board in python/src/clashlens/alerts.py).
+  expect(html).toContain(
+    '<h1 id="leaderboard-title">Leaderboard at <time class="local-time" dateTime="2026-10-12T05:00:00Z"',
+  );
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledTimes(1);
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
     100,

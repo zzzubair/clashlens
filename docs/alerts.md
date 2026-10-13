@@ -186,11 +186,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   every day including Mondays and Season ends. The check opens the website's
   public Daily leaderboard page at its public address, `CLASHLENS_PUBLIC_ORIGIN`,
   the one visitors use; with none set, the board can never count as readable.
-  The page sends a visitor
-  on to the board's own address, by Season and day, only once the website has
-  read the newest frozen board from the API and accepted it; the check
-  follows that address, then enters the private API container to find which
-  Reset that board belongs to. So a board saved as published but not shown
+  The page shows the
+  newest frozen board, headed by its Reset, only once the website has read it
+  from the API and accepted it; the check reads that Reset from the heading.
+  Until 13 Oct 2026 the page redirected to the board's own address instead,
+  and the check failed every minute after the website stopped redirecting.
+  So a board saved as published but not shown
   by the website does not count, and neither does a page or check that
   cannot be read at 05:30. Once that Reset's record shows the board was
   readable, a later failed read does not reopen this alert. It also alerts when an earlier Reset has not
@@ -316,6 +317,13 @@ began, when each of at most seven currently unreadable check parts (the Reset
 publication check has two: the website page and the private API) first failed, and
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
+
+Each command and each network connect or read has its own time limit, and a
+part of the check that fails, runs out or gets a broken answer leaves only its
+own reading unknown, so the rest still run and the final delivery still
+happens. There is no limit on the whole run: one stopped at the alert
+service's four-minute limit sends nothing more, and its warnings go out on the
+next run about a minute later.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.

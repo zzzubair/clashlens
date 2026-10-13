@@ -5,17 +5,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from urllib.parse import urlsplit
 
 import psycopg
-import test_alerts
-from domain_test_support import as_api_role, domain_database
+from domain_test_support import domain_database
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from clashlens import alerts, reset_acceptance
 from clashlens.collector_db import CollectorDatabase
 
-runtime = test_alerts.runtime
 RESET = datetime(2026, 10, 8, 5, tzinfo=UTC)
 
 
@@ -421,49 +418,4 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         assert readable == shown + 1500
         # No board generation yet: no member waits or failed.
         assert board == [0, 0]
-
-
-def test_the_board_check_resolves_the_board_the_website_showed(
-    runtime, database_url: str, tmp_path, monkeypatch, capsys
-) -> None:
-    from fastapi.testclient import TestClient
-
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
-
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        url_file = tmp_path / "database-url"
-        url_file.write_text(as_api_role(connection_info))
-        monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
-        database = ApiDatabase(as_api_role(connection_info), max_size=2)
-        app = create_app(
-            database, keys={("typescript-website", "current"): b"a" * 32}, clock=lambda: runtime.now
-        )
-        client = TestClient(app, raise_server_exceptions=False)
-
-        def request(url, *, headers=None, **_kwargs):
-            parsed = urlsplit(url)
-            response = client.get(f"{parsed.path}?{parsed.query}", headers=headers)
-            if response.status_code == 404:
-                raise alerts.urllib.error.HTTPError(url, 404, "Not Found", None, None)
-            assert response.status_code == 200
-            return response.content
-
-        monkeypatch.setattr(alerts, "request", request)
-        try:
-            # The website showed no board yet.
-            alerts.publication_probe([])
-            assert capsys.readouterr().out.split()[1] == "0"
-            with psycopg.connect(connection_info, autocommit=True) as owner:
-                owner.execute("SET session_replication_role = replica")
-                players = _seed_reset(owner, RESET)
-                _publish(owner, RESET, players)
-            # The Season and day the website's page sent its visitor on to.
-            board = alerts.signed_read("http://127.0.0.1:8000", "/v1/leaderboards/frozen?limit=1")
-            daily = [board["official_season_id"], str(board["season_day_number"])]
-            alerts.publication_probe(daily)
-            assert int(capsys.readouterr().out.split()[1]) == int(RESET.timestamp())
-        finally:
-            client.close()
-            database.close()
 

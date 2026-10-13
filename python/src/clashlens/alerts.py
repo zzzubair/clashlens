@@ -239,10 +239,16 @@ def request(
         req.add_header("Content-Type", "application/json")
     # Do not send a secret URL or signed request through ambient proxies/redirects.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    with opener.open(req, timeout=10) as response:
-        if not 200 <= response.status < 300:
-            raise CheckError("HTTP check failed")
-        return response.read(1024 * 1024)
+    # Each connect and read has its own 10 seconds, not the whole request, and a
+    # run has no overall limit but the alert service's. Any broken answer is a
+    # CheckError, so a failing check never stops the others.
+    try:
+        with opener.open(req, timeout=10) as response:
+            if not 200 <= response.status < 300:
+                raise CheckError("HTTP check failed")
+            return response.read(1024 * 1024)
+    except http.client.HTTPException:
+        raise CheckError("HTTP check failed") from None
 
 
 def private_read_probe(origin: str = "http://127.0.0.1:8000") -> None:
@@ -324,25 +330,14 @@ def leaderboard_freshness_probe(now: datetime | None = None) -> None:
     print(sources["stale_count"], board["total_entries"], max(0, int(age)))
 
 
-def publication_probe(daily: list[str], origin: str = "http://127.0.0.1:8000") -> None:
-    """Run inside the API container; prints how many Resets are unpublished,
-    then the Reset of the Daily leaderboard the website showed, or 0.
+def publication_probe() -> None:
+    """Run inside the API container; prints how many Resets are unpublished.
 
     A Reset counts when no generation of it has published both its frozen
     leaderboard and its army results an hour after its target time, or when
     a Reset since the first one has no generation at all 70 minutes after it.
-    ``daily`` is the Season and day of the board the website's public page
-    showed, or empty when it showed none; that board's Reset is read with the
-    website's own signed request.
     """
     from clashlens.api_db import ApiDatabase
-
-    served = 0
-    if daily:
-        season, day = daily
-        selector = {"official_season_id": season, "season_day_number": day, "limit": 1}
-        board = signed_read(origin, "/v1/leaderboards/frozen?" + urllib.parse.urlencode(selector))
-        served = int(datetime.fromisoformat(board["boundary_at"]).timestamp())
 
     url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
     database = ApiDatabase(url, max_size=1)
@@ -366,8 +361,7 @@ def publication_probe(daily: list[str], origin: str = "http://127.0.0.1:8000") -
                      + (SELECT count(*) FROM expected
                         WHERE boundary_at NOT IN (SELECT boundary_at FROM resets))
                 """
-            ),
-            served,
+            )
         )
     finally:
         database.close()
@@ -428,44 +422,36 @@ def reset_probe(served: str, read_at: str) -> None:
     )
 
 
-def website_daily_board(origin: str) -> list[str]:
-    """The Season and day of the Daily leaderboard the website's public page
-    shows at its public address ``origin``, or an empty list when it shows
+def website_daily_board(origin: str) -> int:
+    """The Reset, in Unix seconds, of the Daily leaderboard the website's
+    public page shows at its public address ``origin``, or 0 when it shows
     none yet.
 
-    The page sends a visitor on to the board's own address only once the
-    website has read the newest frozen board from the API and accepted it, and
-    that address must then show the board's own heading, so a board the
-    website cannot reach, rejects or fails to show does not count.
+    The page shows the newest frozen board, headed "Leaderboard at" its Reset,
+    only once the website has read that board from the API and accepted it,
+    so a board the website cannot reach, rejects or fails to show does not
+    count. Until 13 Oct 2026 it redirected to the board's own address instead.
     """
     if not origin:
         raise CheckError("No public website address; set CLASHLENS_PUBLIC_ORIGIN")
     try:
-        request(origin + "/leaderboards/tracked?view=daily&page=1")
+        page = request(origin + "/leaderboards/tracked?view=daily&page=1")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return []
-        if error.code not in (301, 302, 303, 307, 308):
-            raise
-        target = urllib.parse.urljoin(origin + "/", error.headers.get("Location", ""))
-    else:
-        raise CheckError("Daily leaderboard page showed no board")
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
-    daily = [query.get("season", [""])[0], query.get("day", [""])[0]]
-    if (
-        not target.startswith(origin + "/leaderboards/tracked?")
-        or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", daily[0])
-        or not re.fullmatch(r"[1-9][0-9]?", daily[1])
-    ):
-        raise CheckError("Daily leaderboard page sent an invalid board address")
-    # The board shows a "Day N" label right above its "Leaderboard at" heading;
-    # React separates "Day " and N with an empty comment when it renders.
-    heading = (
-        rf'>Day (?:<!-- -->)?{daily[1]}</p><h1 id="leaderboard-title">Leaderboard at '
+            return 0
+        raise
+    # website/app/routes/tracked-leaderboard.tsx; its unit test pins this markup.
+    heading = re.search(
+        r'<h1 id="leaderboard-title">Leaderboard at <time [^>]*\bdatetime="([^"]+)"',
+        page.decode(errors="replace"),
+        re.IGNORECASE,
     )
-    if not re.search(heading, request(target).decode(errors="replace")):
+    if not heading:
         raise CheckError("Daily leaderboard page did not show the board")
-    return daily
+    reset = datetime.fromisoformat(heading[1])
+    if reset.utcoffset() != timedelta(0) or reset.time().isoformat() != "05:00:00":
+        raise CheckError("Daily leaderboard page showed an invalid Reset")
+    return int(reset.timestamp())
 
 
 def completeness_probe() -> None:
@@ -723,7 +709,7 @@ def observe(
         elif "clashlens_collector_active_players" not in metrics:
             raise ValueError
         metrics_read = "clashlens_collector_pending_processing" in metrics
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, CheckError):
         errors.append(
             "Collector metrics unavailable; fetch-gap clock continues and spool usage is unknown"
         )
@@ -931,15 +917,12 @@ def observe(
     # The board counts as readable only once the website's public Daily
     # leaderboard page shows it at the address visitors use.
     try:
-        daily = website_daily_board(config["public_origin"])
+        served = website_daily_board(config["public_origin"])
         read_at = int(time.time())
-    except (OSError, ValueError, CheckError, http.client.HTTPException):
+    except Exception:  # noqa: BLE001 - any page failure leaves only this check unknown.
         errors.append("Reset publication status unavailable; run ./ops logs website")
-        daily = read_at = None
-    publication = run_probe(
-        "api", ["--publication", *(daily or [])], 2, "Reset publication status"
-    )
-    served = None if publication is None or daily is None else publication[1]
+        served = read_at = None
+    publication = run_probe("api", ["--publication"], 1, "Reset publication status")
     # The worker's database role writes the Reset's record and reads battles;
     # the API's does neither.
     record = run_probe(
@@ -1163,7 +1146,7 @@ def observe_site(
     try:
         for url in config["urls"]:
             request(url)
-    except (OSError, ValueError, CheckError, http.client.HTTPException):
+    except (OSError, ValueError, CheckError):
         since = state.setdefault("site_failing_since", now)
         return {"site": True if now - since >= 120 else None}, [
             "Website or health check did not answer"
@@ -1222,8 +1205,8 @@ def main() -> int:
         if sys.argv[1:] == ["--leaderboard"]:
             leaderboard_freshness_probe()
             return 0
-        if sys.argv[1:2] == ["--publication"] and len(sys.argv) in (2, 4):
-            publication_probe(sys.argv[2:])
+        if sys.argv[1:] == ["--publication"]:
+            publication_probe()
             return 0
         if sys.argv[1:2] == ["--reset"] and len(sys.argv) == 4:
             reset_probe(*sys.argv[2:])

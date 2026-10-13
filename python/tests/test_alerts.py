@@ -60,11 +60,8 @@ def runtime(tmp_path, monkeypatch):
         volume_failed=False,
         read_requests=[],
         probe_status=200,
-        website_status=302,
-        board_page=(
-            '<p class="rankings-kicker">Day <!-- -->7</p>'
-            '<h1 id="leaderboard-title">Leaderboard at 9 Oct 2026, 05:00 UTC</h1>'
-        ),
+        website_status=200,
+        board_page=None,
         calls=[],
     )
     key = b"a" * 32
@@ -99,11 +96,12 @@ def runtime(tmp_path, monkeypatch):
                 body, status = b'{"ready":true}', 200
             elif self.path == "/healthz":
                 body, status = b'{"status":"ok"}', rt.site_status
-            elif self.path.startswith("/leaderboards/tracked?view=daily&page=1"):
-                # The public page sends a visitor on to the board it accepted.
-                body, status = b"", rt.website_status
-            elif self.path.startswith("/leaderboards/tracked?"):
-                body, status = rt.board_page.encode(), 200
+            elif self.path == "/leaderboards/tracked?view=daily&page=1":
+                # The public page shows the newest board it accepted.
+                page = rt.board_page
+                if page is None:
+                    page = board_page(rt.served or reset_at(rt.now))
+                body, status = page.encode(), rt.website_status
             else:
                 proof = verify_proof(
                     headers=[
@@ -119,10 +117,6 @@ def runtime(tmp_path, monkeypatch):
                 rt.read_requests.append((self.path, proof))
                 body, status = b'{"users":[],"results":[]}', rt.probe_status
             self.send_response(status)
-            if status == 302:
-                self.send_header(
-                    "Location", "/leaderboards/tracked?view=daily&season=2026-10&day=7&page=1"
-                )
             self.end_headers()
             self.wfile.write(body)
 
@@ -181,7 +175,7 @@ def runtime(tmp_path, monkeypatch):
         elif "--leaderboard" in args:
             code, output = 0, rt.leaderboard
         elif "--publication" in args:
-            code, output = 0, f"{rt.publication} {rt.served or reset_at(rt.now)}"
+            code, output = 0, rt.publication
         elif "--reset" in args:
             # A healthy Reset: all 13,000 collected, frozen 05:10, readable 05:15.
             at = reset_at(rt.now)
@@ -227,6 +221,17 @@ def runtime(tmp_path, monkeypatch):
 def reset_at(now: float) -> int:
     """The latest 05:00 UTC Reset at or before ``now``."""
     return int(now - (now - 5 * 3600) % 86400)
+
+
+def board_page(reset: int) -> str:
+    """The Daily board's heading as the website renders it since 13 Oct 2026,
+    the board shown at the address visitors use rather than a redirect to it."""
+    shown = datetime.fromtimestamp(reset, UTC)
+    return (
+        '<p class="rankings-kicker">Day <!-- -->7</p><h1 id="leaderboard-title">'
+        f'Leaderboard at <time class="local-time" dateTime="{shown:%Y-%m-%dT%H:%M:%SZ}"'
+        f' title="{shown:%-d %b %Y, %H:%M} UTC">{shown:%-d %b %Y, %H:%M} UTC</time></h1>'
+    )
 
 
 def trigger(rt, condition, value=True):
@@ -471,11 +476,11 @@ def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runti
 @pytest.mark.parametrize(
     "page",
     [
-        (
-            '<p class="rankings-kicker">Day <!-- -->6</p>'
-            '<h1 id="leaderboard-title">Leaderboard at 8 Oct 2026, 05:00 UTC</h1>'
-        ),
+        '<h1 id="leaderboard-title">Leaderboard at 8 Oct 2026, 05:00 UTC</h1>',
         '<h1 id="leaderboard-title">Daily leaderboard</h1>',
+        board_page(reset_at(datetime(2026, 10, 9, 12, tzinfo=UTC).timestamp())).replace(
+            "05:00:00Z", "05:01:00Z"
+        ),
     ],
 )
 def test_daily_page_without_the_board_fails_the_check(runtime, page, capsys):
@@ -807,9 +812,6 @@ def test_publication_probe_counts_resets_missing_their_publication(
         url_file = tmp_path / "database-url"
         url_file.write_text(as_api_role(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
-        monkeypatch.setattr(
-            alerts, "signed_read", lambda *_: {"boundary_at": latest.isoformat()}
-        )
 
         def unpublished(*generations):
             with psycopg.connect(connection_info) as connection:
@@ -829,10 +831,8 @@ def test_publication_probe_counts_resets_missing_their_publication(
                          boundary + timedelta(minutes=5)),
                     )
             capsys.readouterr()
-            alerts.publication_probe(["2026-10", "7"])
-            count, served = map(int, capsys.readouterr().out.split())
-            assert served == int(latest.timestamp())
-            return count
+            alerts.publication_probe()
+            return int(capsys.readouterr().out)
 
         assert unpublished() == 0
         published = [(2, 1, "published", "published"), (1, 1, "superseded", "superseded"),
