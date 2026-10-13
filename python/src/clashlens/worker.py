@@ -1103,8 +1103,7 @@ class ObservationProcessor:
                     retryable=is_dependency,
                 )
             return ProcessResult(claim.job_id, "processed")
-        if claim.work_type == "reconcile_pass":  # queued by queue_refresh's recheck
-            return ProcessResult(claim.job_id, queue_refresh.reconcile_pass.run_step(self.database, claim))
+        if claim.work_type == "reconcile_pass": return ProcessResult(claim.job_id, queue_refresh.reconcile_pass.run_step(self.database, claim))
         if claim.work_type not in {"process_observation", "replay_observation"}:
             return self._fail(claim, "unsupported_work_type", retryable=False)
         source_contract_error = validate_source_observation_contract(
