@@ -157,3 +157,59 @@ def test_a_reading_before_the_raise_shows_a_quiet_sunday_charged(
     assert result.automatic_defense_evidence_state == ("calculated" if charged else "not_applicable")
     assert (result.next_start_trophies, result.expected_next_start_trophies) == (5000, 5000)
     assert result.boundary_adjustment == 5000 - result.final_trophies_before_reset
+
+
+@pytest.mark.parametrize(("reset_reading", "charged"), [(4960, True), (5000, False)])
+def test_a_reading_before_the_raise_charges_a_quiet_sunday_from_above_5000(
+    reset_reading: int, charged: bool,
+) -> None:
+    # Sunday, at 5,200 with no battle, can be charged 240 for its 8 empty
+    # defense slots. The Reset reading at 05:04 shows 4,960 before the raise,
+    # then one at 05:20 shows 5,000: the charge landed and took Sunday below
+    # 5,000, so Monday starts at 5,000. Readings of 5,000 alone show only the
+    # raise, which fits the charge crossing 5,000 and proves nothing.
+    result = reconcile_ranked_day(_input(
+        start_trophies=5200,
+        next_start_trophies=reset_reading,
+        boundary_kind="weekly",
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        contributions=(),
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
+        readings=(Reading(DAY.end + timedelta(minutes=20), 5000),),
+    ))
+
+    if not charged:
+        assert (result.state, result.failure_reasons) == ("Partial", ("end_reading_unverified",))
+        assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (5200, None)
+        return
+    assert result.state == "Complete"
+    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (4960, 240)
+    assert result.automatic_defense_evidence_state == "calculated"
+    assert (result.next_start_trophies, result.expected_next_start_trophies) == (5000, 5000)
+    assert result.boundary_adjustment == 40
+
+
+@pytest.mark.parametrize(("boundary", "proven"), [("weekly", True), ("season", False)])
+def test_a_later_reading_before_the_raise_proves_the_end(boundary: str, proven: bool) -> None:
+    # 8 defenses of 30 and an attack of 40 reported at 04:54:30 end the day
+    # at 4,800. The Reset reading of 4,800 at 05:04 may or may not show the
+    # attack, so it proves nothing; one at 05:20 shows 4,800 before the
+    # weekly raise and proves the end, the Daily board's total; one at 05:40
+    # shows the raise to 5,000, which proves nothing.
+    result = reconcile_ranked_day(_input(
+        start_trophies=5000,
+        next_start_trophies=4800,
+        boundary_kind=boundary,
+        previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
+        contributions=_battles("defense", (30,) * 8) + (BattleContribution(
+            "offense-late", "offense", 40, battle_timestamp=DAY.end - timedelta(seconds=330)),),
+        start_baseline_evidence={"start_trophies_source": "season_rule"},
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
+        readings=(Reading(DAY.end + timedelta(minutes=20), 4800), Reading(DAY.end + timedelta(minutes=40), 5000)),
+    ))
+
+    assert (result.final_trophies_before_reset, result.next_start_trophies) == (4800, 5000)
+    assert result.input_evidence.get("end_reading") == ({
+        "read_at": (DAY.end + timedelta(minutes=20)).isoformat(), "trophies": 4800,
+        "outcome": "verified", "exact": False, "new_day_change": 0, "clean": True,
+    } if proven else None)

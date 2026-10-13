@@ -432,16 +432,6 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
             "reset": data.boundary_kind == "season",
         }
-        if end_available and data.next_start_trophies is not None:
-            residual = data.next_start_trophies - expected_next
-            reset = next((item for item in _readings(data) if item.reset_reading), None)
-            # A late Reset reading may already show new-day battles, landed or in flight.
-            judged = reading_rule.judge(reset, **rule) if (
-                end_hidden_by_reset and residual and reset is not None) else None
-            if judged is not None and judged.matched:
-                reading_correction, residual, next_start_trophies = -residual, 0, expected_next
-                observed_trophy_change = next_start_trophies - start_trophies
-                end_reading_evidence = reading_rule.unraised_end(judged) if data.boundary_kind == "weekly" else None
         # Every reading from the end Reset on judges a clean, ended day
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
@@ -456,16 +446,30 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             else None
         )
         zero_defense_loss = _zero_defense_loss(data, defense_count)
-        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
-            if data.boundary_kind == "weekly" and zero_defense_loss and verdict.outcome == "verified" and verdict.loss == zero_defense_loss:
+        unraised = reading_rule.unraised_end(reading_rule.judge(verdict.reading, **rule)) if (
+            data.boundary_kind == "weekly" and verdict is not None and verdict.clean and verdict.reading) else None
+        if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
+                verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
+                and final_trophies - zero_defense_loss <= 5000):
+            if end_hidden_by_reset or unraised:
                 automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
                 net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
-            verdict = None
-        if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
-            verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
-            and final_trophies - zero_defense_loss <= 5000):
-            # The weekly raise to 5,000 hides whether the charge landed.
-            verdict = replace(verdict, outcome="unverified", loss=0, exact=False)
+                expected_next, end_hidden_by_reset = 5000, True
+            else:
+                # The weekly raise to 5,000 hides whether the charge landed.
+                verdict = replace(verdict, outcome="unverified", loss=0, exact=False)
+        if end_available and data.next_start_trophies is not None:
+            residual = data.next_start_trophies - expected_next
+            reset = next((item for item in _readings(data) if item.reset_reading), None)
+            # A late Reset reading may already show new-day battles, landed or in flight.
+            judged = reading_rule.judge(reset, **rule) if (
+                end_hidden_by_reset and residual and reset is not None) else None
+            if judged is not None and judged.matched:
+                reading_correction, residual, next_start_trophies = -residual, 0, expected_next
+                observed_trophy_change = next_start_trophies - start_trophies
+                end_reading_evidence = reading_rule.unraised_end(judged) if data.boundary_kind == "weekly" else None
+        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
+            end_reading_evidence, verdict = end_reading_evidence or unraised, None
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
             if zero_defense_loss and verdict.loss == zero_defense_loss:
@@ -503,11 +507,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             # The saved residual is the Reset reading's, less what it was found
             # to show above, so the saved next start still adds up; the
             # contradicting reading's own is kept with that reading.
-            residual = (
-                next_start_trophies - expected_next
-                if next_start_trophies is not None
-                else None
-            )
+            residual = next_start_trophies - expected_next if next_start_trophies is not None else None
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             failures.append("trophy_equation_mismatch")
         elif verdict is not None and data.next_start_trophies is not None:
