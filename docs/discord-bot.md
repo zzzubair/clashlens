@@ -1,12 +1,13 @@
 # Discord bot
 
 The Clash Lens Discord bot complements the website with three slash commands:
-`/help`, `/link` (a pointer to the website, where Discord is connected) and
-`/stats` (this Season so far for any tracked player, or the person's default
-player). Its code is in [`python/src/bot`](../python/src/bot). People use it
-mostly in a direct message (DM) with the bot, and also in servers. `/stats`
-needs the person's Discord account connected to their Clash Lens account on the
-website. Connecting Discord and choosing the default player happen on the
+`/help`, `/link` (a pointer to the website's Discord alerts page, where Discord
+is connected and attack alerts are turned on) and `/stats` (this Season so far
+for any tracked player, or the person's default player). Its code is in
+[`python/src/bot`](../python/src/bot). People use it mostly in a direct
+message (DM) with the bot, and also in servers. `/stats` needs the person's
+Discord account connected to their Clash Lens account on the website.
+Connecting Discord and choosing the default player happen on the
 website, never in the bot. Every reply is a normal message anyone can forward;
 only the not-connected pointer and plain errors are private to the person.
 
@@ -15,9 +16,10 @@ only the not-connected pointer and plain errors are private to the person.
 - One container, `clashlens-discord-bot`, in the Clash Lens pod, from the same
   Python image as the API. It opens one connection out to Discord (the
   "gateway") and listens on no port, so it adds no public endpoint.
-- It reads Clash Lens data read-only, with the private API's own read code and
-  the API's database login, so numbers in Discord match the website. It writes
-  nothing; see [architecture](architecture.md).
+- It reads Clash Lens data with the private API's own read code and the API's
+  database login, so numbers in Discord match the website. While it runs it
+  also sends the attack alert DMs Clashers turn on; its one write is their
+  delivery log, see [architecture](architecture.md).
 - It needs no privileged Discord access ("intents"), and its replies can never
   mention or ping anyone.
 - `./ops up` always installs the unit
@@ -44,8 +46,8 @@ on purpose.
 Nothing below has been done yet. Do the steps in order.
 
 1. **Discord application.** In the Discord Developer Portal, open the Clash Lens
-   application (the same one the website's Discord sign-in uses is fine, or a
-   new one).
+   application. It must be the one the website's Discord sign-in uses, since
+   connecting Discord on the website is what adds the bot for attack alerts.
    - Bot page: name it "Clash Lens", leave the picture empty, turn off "Public
      Bot" until launch, and leave every privileged intent off.
    - General Information: leave "Interactions Endpoint URL" empty, or the bot
