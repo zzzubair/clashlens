@@ -128,9 +128,23 @@ def runtime(tmp_path):
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
-if "--format" in args:
+if os.environ.get("CALLS"):
+    with open(os.environ["CALLS"], "a") as calls:
+        calls.write(" ".join(args).replace("\n", " ") + "\n")
+# Existing Podman resources and their managed labels, by kind: {"secret": {"name": "ops"}}.
+resources = json.loads(os.environ.get("RESOURCES", "{}"))
+if args[1:2] == ["ls"]:
+    sys.exit(125) if os.environ.get("LISTING_FAILS") else print("\n".join(resources.get(args[0], {})))
+elif args[1:2] == ["exists"] and args[0] in resources:
+    sys.exit(0 if args[2] in resources[args[0]] else 1)
+elif "--format" in args:
     fmt = args[args.index("--format") + 1]
-    if "managed" in fmt: print("ops")
+    names = args[args.index("--format") + 2:]
+    if "managed" in fmt and args[0] in resources:
+        if any(name not in resources[args[0]] for name in names): sys.exit(125)
+        print("\n".join(resources[args[0]][name] for name in names))
+    elif "managed" in fmt: print("ops")
+    elif "Image" in fmt and "Running" in fmt: print("sha256:" + "a" * 64, "true", "test-pod")
     elif "Rootless" in fmt or "Running" in fmt: print("true")
     elif "Image" in fmt: print("sha256:" + "a" * 64)
     elif "Pod" in fmt or "Id" in fmt: print("test-pod")
@@ -194,7 +208,7 @@ def backup_row(number, days, *, duration_hours=0, delta_of=None, start_lsn=0):
     }
 
 
-def run_ops(runtime, rows, *args, upload_exit=0, current_lsn=""):
+def run_ops(runtime, rows, *args, upload_exit=0, current_lsn="", **extra_env):
     env, _ = runtime
     return subprocess.run(
         ["bash", str(OPS), *args],
@@ -203,6 +217,7 @@ def run_ops(runtime, rows, *args, upload_exit=0, current_lsn=""):
             BACKUPS=json.dumps(rows),
             UPLOAD_EXIT=str(upload_exit),
             CURRENT_LSN=current_lsn,
+            **extra_env,
         ),
         capture_output=True,
         text=True,
@@ -745,6 +760,61 @@ def test_invalid_catalogue_refuses_deletion(runtime):
 def test_status_reports_missing_or_stale_remote_backup(runtime, rows):
     result = run_ops(runtime, rows, "backup-status")
     assert result.returncode != 0
+
+
+# What a production host holds: the running stack, every ops secret, and resources ops does not own.
+PRODUCTION_RESOURCES = {
+    "container": {
+        **{f"clashlens-{name}": "ops" for name in ("postgres", "collector", "python-api", "python-worker", "website", "discord-bot")},
+        "unrelated-app": "",
+    },
+    "pod": {"clashlens-pod": "ops", "unrelated-pod": ""},
+    "network": {"clashlens-private": "ops", "podman": ""},
+    "volume": {"clashlens-postgres-data": "ops", "unrelated-data": ""},
+    "secret": {
+        **{f"clashlens-{name}": "ops" for name in (
+            "postgres-password", "collector-database-url", "worker-database-url", "api-database-url",
+            "collector-archive-access-key", "collector-archive-secret-key", "worker-archive-access-key",
+            "worker-archive-secret-key", "normal-api-keys", "interactive-api-keys", "interactive-1",
+            "hmac-current", "hmac-previous", "login-secret", "google-client-secret", "discord-client-secret",
+            "walg-config", "archive-operator-database-url", "archive-operator-access-key",
+            "archive-operator-secret-key", "history-operator-database-url", "discord-bot-token",
+        )},
+        "unrelated-secret": "",
+    },
+}
+
+
+def test_status_checks_every_resource_in_a_few_podman_calls(runtime, tmp_path):
+    calls = tmp_path / "calls"
+    result = run_ops(
+        runtime, [backup_row(1, 0.5)], "backup-status",
+        CALLS=str(calls), RESOURCES=json.dumps(PRODUCTION_RESOURCES),
+    )
+    assert result.returncode == 0, result.stderr
+    podman = [call for call in calls.read_text().splitlines() if not call.startswith("--user ")]
+    # Before: two calls per guarded name (95 calls, 25 s on the server). Now one listing and one
+    # label read per kind, and one call each for the host, images and running container.
+    assert len(podman) == 18, podman
+    assert sum(call.startswith("secret inspect ") for call in podman) == 1
+    assert not [call for call in podman if " exists " in f" {call} "]
+
+
+@pytest.mark.parametrize("listing_fails", [False, True])
+@pytest.mark.parametrize(
+    ("kind", "name"),
+    [("secret", "clashlens-hmac-current"), ("container", "clashlens-ops-fixture-login"), ("volume", "clashlens-postgres-data")],
+)
+def test_status_refuses_an_unmanaged_resource_by_name(runtime, kind, name, listing_fails):
+    resources = json.loads(json.dumps(PRODUCTION_RESOURCES))
+    resources[kind][name] = "someone-else"
+    result = run_ops(
+        runtime, [backup_row(1, 0.5)], "backup-status",
+        RESOURCES=json.dumps(resources), **({"LISTING_FAILS": "1"} if listing_fails else {}),
+    )
+    assert result.returncode != 0
+    assert f"refusing to replace unmanaged Podman {kind} {name}" in result.stderr
+    assert not Path(runtime[0]["REMOTE_ACTIVITY"]).exists()
 
 
 def test_scheduled_backup_waits_for_operation_lock(runtime):

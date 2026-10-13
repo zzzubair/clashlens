@@ -99,9 +99,9 @@ parse_mode() {
 require_host() {
   command -v "$PODMAN_BIN" >/dev/null 2>&1 || die "Podman is required"
   command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || die "systemd is required"
-  "$PODMAN_BIN" info >/dev/null 2>&1 || die "rootless Podman is unavailable"
-  [[ "$($PODMAN_BIN info --format '{{.Host.Security.Rootless}}')" == true ]] || \
-    die "./ops requires rootless Podman"
+  local rootless
+  rootless=$("$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}' 2>/dev/null) || die "rootless Podman is unavailable"
+  [[ "$rootless" == true ]] || die "./ops requires rootless Podman"
   "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1 || \
     die "the systemd user manager is unavailable"
 }
@@ -412,14 +412,14 @@ guard_generated_units() {
 }
 
 managed_label() {
-  local kind=$1 name=$2 format
+  local kind=$1 format
   case "$kind" in
     container) format='{{index .Config.Labels "org.clashlens.managed"}}' ;;
     secret) format='{{index .Spec.Labels "org.clashlens.managed"}}' ;;
     pod|network|volume) format='{{index .Labels "org.clashlens.managed"}}' ;;
     *) die "unknown managed resource type $kind" ;;
   esac
-  "$PODMAN_BIN" "$kind" inspect --format "$format" "$name" 2>/dev/null || true
+  "$PODMAN_BIN" "$kind" inspect --format "$format" "${@:2}" 2>/dev/null || true
 }
 
 guard_resource() {
@@ -450,24 +450,27 @@ guard_trusted_proxy_ip() {
 }
 
 guard_existing_resources() {
-  local prefix resource
+  local prefix resource kind name listing labels present list
+  local -A names=([network]="clashlens-private clashlens-ops-fixture-private" [volume]="clashlens-postgres-data clashlens-ops-fixture-postgres-data")
   for prefix in clashlens clashlens-ops-fixture; do
-    for resource in postgres collector python-api python-worker website discord-bot archive clash-api login admin-operation archive-prune history-prune; do
-      guard_resource container "$prefix-$resource"
-    done
-    guard_resource pod "$prefix-pod"
+    names[pod]+=" $prefix-pod"
+    for resource in postgres collector python-api python-worker website discord-bot archive clash-api login admin-operation archive-prune history-prune; do names[container]+=" $prefix-$resource"; done
   done
-  guard_resource network clashlens-private
-  guard_resource network clashlens-ops-fixture-private
-  guard_resource volume clashlens-postgres-data
-  guard_resource volume clashlens-ops-fixture-postgres-data
-  local secret
-  for secret in clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url \
-    clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key \
-    clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous \
-    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config \
-    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token; do
-    guard_resource secret "$secret"
+  names[secret]="clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url
+    clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key
+    clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous
+    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config
+    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token"
+  # One listing and one label read per kind (two calls per name took 25 s); anything unexpected, a failed listing included, falls back to guard_resource.
+  for kind in container pod network volume secret; do
+    if [[ "$kind" == container ]]; then list=(--all --format '{{.Names}}'); else list=(--format '{{.Name}}'); fi
+    listing=$("$PODMAN_BIN" "$kind" ls "${list[@]}" 2>/dev/null) || listing=${names[$kind]// /$'\n'}
+    present=()
+    for name in ${names[$kind]}; do [[ $'\n'$listing$'\n' == *$'\n'"$name"$'\n'* ]] && present+=("$name"); done
+    ((${#present[@]})) || continue
+    labels=$(managed_label "$kind" "${present[@]}")
+    [[ "$labels" == "$(printf 'ops\n%.0s' "${present[@]}")" ]] && continue
+    for name in "${present[@]}"; do guard_resource "$kind" "$name"; done
   done
 }
 
@@ -658,17 +661,16 @@ load_active_release() {
   RELEASE=()
   load_kv_file "$ACTIVE_RELEASE_FILE" RELEASE
   [[ "${RELEASE[RELEASE_MODE]-}" == "$MODE" ]] || die "active release mode does not match the installed stack"
-  local name
-  for name in COLLECTOR_IMAGE PYTHON_IMAGE WEBSITE_IMAGE POSTGRES_IMAGE; do
+  local name names=(COLLECTOR_IMAGE PYTHON_IMAGE WEBSITE_IMAGE POSTGRES_IMAGE) images=()
+  [[ "$MODE" != fixture ]] || names+=(FIXTURES_IMAGE LOGIN_IMAGE)
+  for name in "${names[@]}"; do
     [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "active release has an invalid $name"
+    images+=("${RELEASE[$name]}")
+  done
+  # One call when every image is present; checking each one names the missing image.
+  "$PODMAN_BIN" image inspect --format '{{.Id}}' "${images[@]}" >/dev/null 2>&1 || for name in "${names[@]}"; do
     "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "active release image $name is missing"
   done
-  if [[ "$MODE" == fixture ]]; then
-    for name in FIXTURES_IMAGE LOGIN_IMAGE; do
-      [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "active release has an invalid $name"
-      "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "active release image $name is missing"
-    done
-  fi
 }
 
 promote_active_release() {
@@ -1231,15 +1233,13 @@ prepare_managed_runtime() {
   guard_existing_resources
   guard_systemd_units
   container=$(container_name "$MANAGED_PREFIX" "$service")
-  actual_image=$($PODMAN_BIN inspect --format '{{.Image}}' "$container" 2>/dev/null) || die "$service is not running"
+  read -r actual_image running actual_pod < <($PODMAN_BIN inspect --format '{{.Image}} {{.State.Running}} {{.Pod}}' "$container" 2>/dev/null) || die "$service is not running"
   actual_image=$(normalize_image_id "$actual_image")
   local expected_image=${RELEASE[PYTHON_IMAGE]}
   [[ "$service" != postgres ]] || expected_image=${RELEASE[POSTGRES_IMAGE]}
   [[ "$actual_image" == "$expected_image" ]] || die "$service is not the pinned release"
-  actual_pod=$($PODMAN_BIN inspect --format '{{.Pod}}' "$container" 2>/dev/null) || die "cannot inspect $service pod"
   expected_pod=$($PODMAN_BIN pod inspect --format '{{.Id}}' "$MANAGED_PREFIX-pod" 2>/dev/null) || die "managed pod is absent"
   [[ "$actual_pod" == "$expected_pod" ]] || die "$service is not in the managed pod"
-  running=$($PODMAN_BIN inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)
   [[ "$running" == true ]] || die "$service is not running"
 }
 
