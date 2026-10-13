@@ -29,10 +29,11 @@ battle that moved their trophies ended by the Daily board's rule
 (analytics.latest_trophy_changes, here from each player's newest published
 log of today, each read once as published logs never change) and the saved
 examples of the last 7 days. It takes seconds of calculation, so it runs in
-a separate Python process, one at a time, and requests look it up: until
-the first one of a Legend day finishes, and once the newest is 10 minutes
-old, it is left out. The dashboard asks again while the range shows without
-it, each follow-up waiting for the one under way within its 4 seconds.
+a separate Python process, one at a time, a board read meanwhile worked out
+right after, and requests look it up: until the first one of a Legend day
+finishes, and once the newest is 10 minutes old, it is left out. The
+dashboard asks again while the range shows without it, each follow-up
+waiting within its 4 seconds while the player's place is worked out.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -494,25 +495,33 @@ class DashboardBoard:
             self._reading = False
             self._read_done.notify_all()
             project, self._projecting = not self._projecting, True
-        if project:
-            self._project(database, now, board)
+        while project:
+            places = self._project(database, board)
+            with self._lock:
+                if places is not None:
+                    self._projection = _Projection(board.day_start, places)
+                    self._projected_at = self._clock()
+                newest = self._board or board
+                project, board = newest is not board, newest
+                self._projecting = project
+                self._read_done.notify_all()
 
-    def _project(self, database: ApiDatabase, now: datetime, board: _Board) -> None:
-        """Work out ``board``'s projected places, after the board is shown.
-        A failure keeps the last ones until they are too old."""
+    def _project(self, database: ApiDatabase, board: _Board) -> dict[str, int] | None:
+        """``board``'s projected places, or None when they could not be
+        worked out: the last ones are kept until they are too old."""
         try:
             with database.pool.connection() as connection:
                 inputs, self._reports = _projection_inputs(
-                    connection, now, board, self._reports
+                    connection, board.computed_at, board, self._reports
                 )
-            places = {}
-            if inputs is not None:
-                middles = self._compute(
-                    projected_place.middle_places, *inputs,
-                    # Projections from the same minute imagine the same days.
-                    seed=int(now.timestamp()) // 60,
-                )
-                places = dict(zip(board.slots_left, middles, strict=True))
+            if inputs is None:
+                return {}
+            middles = self._compute(
+                projected_place.middle_places, *inputs,
+                # Projections from the same minute imagine the same days.
+                seed=int(board.computed_at.timestamp()) // 60,
+            )
+            return dict(zip(board.slots_left, middles, strict=True))
         except Exception as error:  # noqa: BLE001 - tried again after the next read
             print(
                 json.dumps(
@@ -524,18 +533,14 @@ class DashboardBoard:
                 ),
                 flush=True,
             )
-            places = None
-        with self._lock:
-            if places is not None:
-                self._projection = _Projection(board.day_start, places)
-                self._projected_at = self._clock()
-            self._projecting = False
-            self._read_done.notify_all()
+            return None
 
-    def projection(self, now: datetime, *, wait: float = 0) -> _Projection | None:
+    def projection(
+        self, now: datetime, tag: str, *, wait: float = 0
+    ) -> _Projection | None:
         """Today's newest projected places, or None before the first of the
         Legend day or once the newest is too old, after waiting up to
-        ``wait`` seconds for the one being worked out."""
+        ``wait`` seconds while ``tag``'s place is being worked out."""
         day_start = ranked_day_for(now).start
 
         def shown() -> _Projection | None:
@@ -548,9 +553,13 @@ class DashboardBoard:
                 return None
             return projection
 
+        def placed() -> bool:
+            projection = shown()
+            return projection is not None and tag in projection.places
+
         with self._lock:
             self._read_done.wait_for(
-                lambda: shown() is not None or not self._projecting, max(0.0, wait)
+                lambda: placed() or not self._projecting, max(0.0, wait)
             )
             return shown()
 
@@ -678,9 +687,9 @@ def get_player_today(
     day = ranked_day_for(now)
     until = time.monotonic() + board_wait
     board = board_cache.current(database, now, wait=board_wait)
-    projection = None if board is None else board_cache.projection(
-        now, wait=until - time.monotonic()
-    )
+    projection = None
+    if board is not None and tag in board.ends:
+        projection = board_cache.projection(now, tag, wait=until - time.monotonic())
     with database.pool.connection() as connection:
         if connection.execute(
             "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)

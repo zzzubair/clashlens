@@ -545,18 +545,21 @@ def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None
     assert found is not None and found.day_start == reset
 
 
-def test_only_a_follow_up_waits_for_the_projection(monkeypatch) -> None:
+def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> None:
     """The projection is worked out after the board read, so a request
     gets the range at once and the projected place once it is ready; a
-    follow-up waits for the one under way, but no longer than it may. One
-    10 minutes old, or from the Legend day before, is not shown."""
+    follow-up waits while its player's place is worked out, but no longer
+    than it may: also for a player new to the board, and across a Reset
+    while the day before's is still worked out. One 10 minutes old, or from
+    another Legend day, is not shown."""
     go = Event()
+    rows = [("#2PP", None, 5000), ("#8PP", None, 5000)]
 
     class Live:
-        """Two players on 5,000 with every battle left."""
+        """Players on 5,000 with every battle left."""
 
         def current(self, _database: Any, _now: Any) -> Any:
-            return SimpleNamespace(rows=[("#2PP", None, 5000), ("#8PP", None, 5000)])
+            return SimpleNamespace(rows=list(rows))
 
     class NoLogs:
         def execute(self, _sql: str, _params: Any) -> NoLogs:
@@ -565,16 +568,16 @@ def test_only_a_follow_up_waits_for_the_projection(monkeypatch) -> None:
         def fetchall(self) -> list[tuple[Any, ...]]:
             return []
 
-    def compute(_function: Any, *_args: Any, **_kwargs: Any) -> list[int]:
+    def compute(_function: Any, tags: list[str], **_kwargs: Any) -> list[int]:
         go.wait(10)
         # The second player is projected first; the first's 3rd place is
-        # kept inside their outer range.
-        return [3, 1]
+        # kept inside their outer range while two are on the board.
+        return [3, 1, 2][: len(tags)]
 
     # Examples are saved; what the calculation is given is the method's own test.
     monkeypatch.setattr(
         api_dashboard, "_projection_inputs",
-        lambda _connection, _now, _board, reports: ((), reports),
+        lambda _connection, _now, board, reports: ((list(board.slots_left),), reports),
     )
     database = SimpleNamespace(
         pool=SimpleNamespace(connection=lambda: nullcontext(NoLogs()))
@@ -584,37 +587,56 @@ def test_only_a_follow_up_waits_for_the_projection(monkeypatch) -> None:
         Live(), clock=lambda: clock[0], compute=compute  # type: ignore[arg-type]
     )
 
-    def ranks(wait: float = 0) -> dict[str, Any]:
-        found = board.current(database, NOW, wait=2)  # type: ignore[arg-type]
+    def ranks(tag: str, now: Any = NOW, wait: float = 0) -> tuple[Any, Any]:
+        found = board.current(database, now, wait=2)  # type: ignore[arg-type]
         assert found is not None
-        projection = board.projection(NOW, wait=wait)
-        return {
-            tag: (api_dashboard.rank_range(found, tag),
-                  api_dashboard.projected_rank(found, projection, tag))
-            for tag in ("#2PP", "#8PP")
-        }
+        projection = board.projection(now, tag, wait=wait)
+        return (api_dashboard.rank_range(found, tag),
+                api_dashboard.projected_rank(found, projection, tag))
 
-    without = {
-        "#2PP": ({"best": 1, "worst": 2}, None),
-        "#8PP": ({"best": 1, "worst": 2}, None),
-    }
+    def followed_up(tag: str, now: Any = NOW) -> tuple[Any, Any]:
+        """A follow-up waiting when the calculation finishes."""
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(ranks, tag, now, 5)
+            time.sleep(0.1)
+            go.set()
+            return waiting.result(timeout=5)
+
+    def read_at(now: Any) -> None:
+        """Waits until the board read for ``now`` is shown."""
+        deadline = time.monotonic() + 5
+        while getattr(board.current(database, now), "computed_at", None) != now:  # type: ignore[arg-type]
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+    two = {"best": 1, "worst": 2}
     asked = time.monotonic()
-    assert ranks() == without
+    assert ranks("#2PP") == (two, None)
     assert time.monotonic() - asked < 1
-    # A follow-up waits for the projection, but no longer than it may.
     asked = time.monotonic()
-    assert ranks(wait=0.3) == without
+    assert ranks("#2PP", wait=0.3) == (two, None)
     assert 0.3 <= time.monotonic() - asked < 2
-    # A follow-up waiting when it finishes gets it at once.
-    with ThreadPoolExecutor(1) as pool:
-        waiting = pool.submit(ranks, 5)
-        time.sleep(0.1)
-        go.set()
-        assert waiting.result(timeout=5) == {
-            "#2PP": ({"best": 1, "worst": 2}, 2),
-            "#8PP": ({"best": 1, "worst": 2}, 1),
-        }
-    # Not on the next Legend day, nor once 10 minutes old.
-    assert board.projection(ranked_day_for(NOW).end) is None
-    clock[0] = api_dashboard.BOARD_MAX_AGE_SECONDS
-    assert board.projection(NOW) is None
+    assert followed_up("#8PP") == (two, 1)
+    assert ranks("#2PP") == (two, 2)
+
+    # A player new to the board waits for the next calculation, not the last.
+    three = {"best": 1, "worst": 3}
+    go.clear()
+    rows.append(("#9PP", None, 5000))
+    later = NOW + timedelta(minutes=1)
+    clock[0] = api_dashboard.BOARD_SECONDS
+    read_at(later)
+    assert followed_up("#9PP", later) == (three, 2)
+
+    # At the Reset the new day's board is worked out right after the day
+    # before's.
+    go.clear()
+    reset = ranked_day_for(NOW).end
+    clock[0] = 2 * api_dashboard.BOARD_SECONDS
+    read_at(reset - timedelta(seconds=2))
+    assert followed_up("#2PP", reset + timedelta(seconds=1)) == (three, 3)
+
+    # Not on another Legend day, nor once 10 minutes old.
+    assert board.projection(NOW, "#2PP") is None
+    clock[0] += api_dashboard.BOARD_MAX_AGE_SECONDS
+    assert board.projection(reset + timedelta(seconds=1), "#2PP") is None
