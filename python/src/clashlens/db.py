@@ -65,6 +65,7 @@ SUPPORTED_WORK_TYPES = (
     "build_analytics",
     "build_army_analytics",
     "redecode_army",
+    "reconcile_pass",
 )
 # Work a worker slot may be limited to. Responses are the collector's saved
 # API responses; population builds each read a whole Reset's players.
@@ -195,7 +196,7 @@ def _supported_job_filter(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             *params,
-            ["reconcile_ranked_day"],
+            ["reconcile_ranked_day", "reconcile_pass"],
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
@@ -345,7 +346,7 @@ def _supported_claim_filter(
             "processing_version": PROCESSING_VERSION,
             "domain_rule_version": DOMAIN_RULE_VERSION,
             **params,
-            "reconcile_work_types": ["reconcile_ranked_day"],
+            "reconcile_work_types": ["reconcile_ranked_day", "reconcile_pass"],
             "analytics_rule_version": ANALYTICS_RULE_VERSION,
             "build_work_types": ["build_snapshot", "build_analytics"],
             "army_work_types": ["build_army_analytics", "redecode_army"],

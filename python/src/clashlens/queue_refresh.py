@@ -313,17 +313,13 @@ def due_recheck_slot(
 
 class DailyRecheck:
     """Run the twice-daily recheck from the worker loop, logging its count,
-    and after each the reconcile pass (``reconcile_pass``), a batch a call."""
+    and queue the reconcile pass (``reconcile_pass``) after each."""
 
     def __init__(self, database: db.Database) -> None:
         self.database, self.next_check_at, self.done = database, float("-inf"), set()
-        self.reconcile_pass = reconcile_pass.ReconcilePass(database)
 
     def run_when_due(self, now: datetime | None = None) -> None:
-        if not isinstance(self.database, db.Database):
-            return
-        self.reconcile_pass.run_when_due(self.done, now)
-        if monotonic() < self.next_check_at:
+        if not isinstance(self.database, db.Database) or monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
         with self.database.pool.connection() as connection:
@@ -331,7 +327,8 @@ class DailyRecheck:
         if due is None or due[0] in self.done:
             return
         try:
-            result = {"status": "queued", "days": queue_recheck(self.database, *due)}
+            result = {"status": "queued", "days": queue_recheck(self.database, *due),
+                      "reconcile_pass": reconcile_pass.queue_pass(self.database, due[0])}
             self.done.add(due[0])
         except Exception as error:  # noqa: BLE001 - retry at the next check
             result = {"status": "failed", "error": repr(error)[:300]}

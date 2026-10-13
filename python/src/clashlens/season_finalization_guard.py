@@ -62,7 +62,8 @@ CASE
                 THEN requested.value::bigint END
     ), true)
     WHEN job.work_type IN (
-        'reconcile_ranked_day', 'build_snapshot', 'build_analytics', 'build_army_analytics'
+        'reconcile_ranked_day', 'build_snapshot', 'build_analytics', 'build_army_analytics',
+        'reconcile_pass'
     ) THEN COALESCE((
         SELECT CASE WHEN bool_and(pg_input_is_valid(value, 'timestamptz')) THEN bool_or(
             CASE WHEN pg_input_is_valid(value, 'timestamptz') THEN

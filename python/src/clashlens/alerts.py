@@ -140,6 +140,7 @@ WORK_NAMES = {
     "replay_observation": "replayed API responses",
     "reconcile_ranked_day": "daily result calculations",
     "redecode_army": "army re-decoding",
+    "reconcile_pass": "nightly re-check steps",
 }
 
 # Checks that would otherwise stay unknown, and so hide their own problem,
@@ -559,7 +560,7 @@ def reconcile_probe() -> None:
     """Run inside the worker container; prints the nightly re-check's last
     24 hours: new findings of each check in ``RECONCILE_CHECKS`` order,
     recalculations queued, findings still there after their recalculation,
-    then the findings open now."""
+    then of the findings open now, those whose recalculation failed, and all."""
     import psycopg
 
     url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
@@ -571,19 +572,24 @@ def reconcile_probe() -> None:
         totals = connection.execute(
             f"SELECT count(*) FILTER (WHERE fix_queued_at > {since}),"
             f" count(*) FILTER (WHERE escalated_at > {since}),"
-            " count(*) FILTER (WHERE resolved_at IS NULL) FROM reconcile_findings").fetchone()
+            " count(*) FILTER (WHERE resolved_at IS NULL AND EXISTS ("
+            "SELECT 1 FROM python_processing_jobs_worker AS job"
+            " WHERE job.deduplication_key = 'reconcile:pass:' || finding.id"
+            " AND job.state IN ('failed', 'cancelled'))),"
+            " count(*) FILTER (WHERE resolved_at IS NULL)"
+            " FROM reconcile_findings AS finding").fetchone()
     print(*(found.get(name, 0) for name in RECONCILE_CHECKS), *totals)
 
 
 def reconcile_line(counts: list[int]) -> str:
     found = dict(zip(RECONCILE_CHECKS.values(), counts, strict=False))
-    queued, escalated, open_findings = counts[len(found):len(found) + 3]
+    queued, escalated, failed, open_findings = counts[len(found):len(found) + 4]
     return (
         f"Clash Lens nightly re-check, last 24 hours: {sum(found.values())} new problems"
         f" ({', '.join(f'{name} {count}' for name, count in found.items())});"
         f" {queued} recalculations queued; {escalated} still wrong after their"
-        f" recalculation; {open_findings} open. Next step: docs/operating.md,"
-        " Nightly re-check line."
+        f" recalculation; {open_findings} open, {failed} of them with a failed"
+        " recalculation. Next step: docs/operating.md, Nightly re-check line."
     )
 
 
@@ -993,7 +999,7 @@ def observe(
         findings["battle_day"] = battle_day[0] > 0
     today = datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%d")
     if clock >= RECONCILE_LINE_AT and state.get("reconcile_line_day") != today:
-        counts = run_probe("worker", ["--reconcile-pass"], len(RECONCILE_CHECKS) + 3,
+        counts = run_probe("worker", ["--reconcile-pass"], len(RECONCILE_CHECKS) + 4,
                            "Nightly re-check counts")
         try:
             if counts is not None:

@@ -569,8 +569,8 @@ def test_the_nightly_recheck_line_goes_once_a_day_from_noon(runtime, monkeypatch
     assert lines() == [(
         "Clash Lens nightly re-check, last 24 hours: 5 new problems (recount 1, chain 0,"
         " ledger 0, battle copies 0, missing days 2, board rows 2); 2 recalculations"
-        " queued; 0 still wrong after their recalculation; 3 open. Next step:"
-        " docs/operating.md, Nightly re-check line."
+        " queued; 0 still wrong after their recalculation; 3 open, 1 of them with a"
+        " failed recalculation. Next step: docs/operating.md, Nightly re-check line."
     )]
     assert at(rt, 86400, start) == 0
     assert len(lines()) == 2

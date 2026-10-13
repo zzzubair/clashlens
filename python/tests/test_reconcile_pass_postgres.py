@@ -1,7 +1,8 @@
 """The nightly re-check of finished Legend days (``reconcile_pass``), end to
 end: a Season's first three days saved by the real worker from saved game
-data, errors planted in what it saved, the re-check run over the Season, the
-worker recalculating what it queued, and the Daily board rebuilt."""
+data, errors planted in what it saved, the re-check's steps claimed and run
+by the real worker over the Season, the worker recalculating what they
+queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from datetime import datetime, timedelta
 import psycopg
 from domain_test_support import domain_database, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_reconciliation_postgres import _processor
 from test_reset_scenarios_postgres import (
     SEASON,
     Battle,
@@ -21,7 +23,6 @@ from test_reset_scenarios_postgres import (
 )
 
 from clashlens import alerts, queue_refresh, reconcile_pass
-from clashlens.db import Database
 
 # One player per planted error, and one with none.
 LATE, JOINED, LEDGER, CHAIN, COPIES, BOARD, STUCK, CLEAN = (
@@ -38,17 +39,30 @@ def _as_worker(connection_info: str) -> str:
     return make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
 
 
-def _run_pass(connection_info: str, now: datetime) -> None:
-    """One whole pass at ``now``, as the worker's timer runs it after the
-    night recheck, a batch a call, with the worker's database role."""
-    database = Database(_as_worker(connection_info))
+def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
+              *, steps: int | None = None) -> int:
+    """Queue the pass of ``slot``, by default the night recheck's at ``now``,
+    and run its waiting steps, or the first ``steps``, at ``now``, each
+    claimed by the real worker with its own database role; how many ran."""
+    monkeypatch.setattr(reconcile_pass, "_now", lambda: now)
+    database, processor = _processor(_as_worker(story.connection_info), story.archive_server)
+    ran = 0
     try:
-        checker = reconcile_pass.ReconcilePass(database)
-        checker.run_when_due({f"{day_of(now):%Y-%m-%d}:night"}, now)
-        while checker.current is not None:
-            checker.run_when_due(set(), now)
+        reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
+        while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
+            assert processor.process_job(job, owner="test").outcome == "processed"
+            ran += 1
     finally:
         database.close()
+    return ran
+
+
+def _waiting_step(connection_info: str) -> int | None:
+    with psycopg.connect(connection_info) as connection:
+        row = connection.execute(
+            "SELECT id FROM python_processing_jobs WHERE work_type = 'reconcile_pass'"
+            " AND status = 'pending' ORDER BY id LIMIT 1").fetchone()
+    return None if row is None else int(row[0])
 
 
 def day_of(now: datetime) -> datetime:
@@ -102,16 +116,60 @@ def _plant(connection_info: str) -> None:
             WHERE id = %s
             """,
             (_version(connection, CHAIN, day(1)),))
-        # Two battle logs disagreeing on one of Day 2's attacks.
+        # A report of one of Day 2's attacks by its defender, from another
+        # battle log, with other stars, under the label saying both reports
+        # agree.
+        battle = connection.execute(
+            """
+            SELECT min(battle.id) FROM legend_battles AS battle
+            JOIN players AS player ON player.id = battle.attacker_player_id
+            WHERE player.normalized_tag = %s AND battle.ranked_day_start = %s
+            """, (COPIES, day(2))).fetchone()[0]
         connection.execute(
             """
-            UPDATE legend_battles SET disagreement_state = 'disagreement',
-                disagreement_fields = ARRAY['stars']
+            WITH copy AS (
+                INSERT INTO battle_evidence (battle_id, source_row_id, observation_id,
+                    reporting_player_id, perspective, battle_timestamp, stars,
+                    destruction_percentage, army_share_code, reporter_trophies,
+                    opponent_trophies, attacker_gain, defender_loss, trophy_rule_version,
+                    source_observed_at, parser_version)
+                SELECT evidence.battle_id, evidence.source_row_id,
+                       (SELECT max(id) FROM collector_observations
+                        WHERE endpoint = 'battle_log' AND id <> evidence.observation_id),
+                       battle.defender_player_id, 'defender', evidence.battle_timestamp,
+                       (evidence.stars + 1) %% 4, evidence.destruction_percentage,
+                       evidence.army_share_code, evidence.opponent_trophies,
+                       evidence.reporter_trophies, evidence.attacker_gain,
+                       evidence.defender_loss, evidence.trophy_rule_version,
+                       evidence.source_observed_at, evidence.parser_version
+                FROM battle_perspectives AS shown
+                JOIN battle_evidence AS evidence ON evidence.id = shown.evidence_id
+                JOIN legend_battles AS battle ON battle.id = shown.battle_id
+                WHERE shown.battle_id = %s AND shown.perspective = 'attacker'
+                RETURNING id, battle_id, source_observed_at
+            )
+            INSERT INTO battle_perspectives (battle_id, perspective, evidence_id,
+                                             source_observed_at)
+            SELECT battle_id, 'defender', id, source_observed_at FROM copy
+            """, (battle,))
+        connection.execute(
+            "UPDATE legend_battles SET disagreement_state = 'agreed',"
+            " disagreement_fields = '{}' WHERE id = %s", (battle,))
+        # One of Day 3's attacks against a tracked player whose own report of
+        # it is missing.
+        connection.execute(
+            """
+            UPDATE legend_battles SET defender_player_id = (
+                SELECT id FROM players WHERE normalized_tag = %s)
             WHERE id = (SELECT min(battle.id) FROM legend_battles AS battle
                         JOIN players AS player ON player.id = battle.attacker_player_id
                         WHERE player.normalized_tag = %s AND battle.ranked_day_start = %s)
             """,
-            (COPIES, day(2)))
+            (CLEAN, COPIES, day(3)))
+        # A Day 2 whose saved result its page lost.
+        connection.execute(
+            "DELETE FROM api_player_daily_logs WHERE ranked_day_start = %s AND player_id ="
+            " (SELECT id FROM players WHERE normalized_tag = %s)", (day(2), JOINED))
         # A confirmed Daily board row 7 trophies off its day. Board rows are
         # otherwise never changed.
         connection.execute("SET LOCAL session_replication_role = replica")
@@ -165,12 +223,13 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     Reset, as a log the game cached for a minute can be; the log read at
     05:20 shows it, but no recheck of Day 2 was queued, so Day 2 keeps 7
     defenses and an automatic loss of 30 for the eighth, and the Daily board
-    shows 5,030. JOINED was first tracked on Day 3, so no Day 1 was saved.
-    Each other player but CLEAN has one error planted in what was saved.
-    The re-check must find exactly these, queue the recalculation of LATE's
-    Day 2, JOINED's Day 1 and STUCK's Day 1 within its budget, once each,
-    and the rebuilt board must then show LATE at 5,000."""
-    night = day(4) + timedelta(hours=18)
+    shows 5,030. JOINED was first tracked at the Reset ending Day 2, so it
+    has no Day 1, as it should. Each other player but CLEAN has one error
+    planted in what was saved, JOINED's Day 2 is lost from its page, and
+    COPIES has two battles whose reports do not agree. The re-check must
+    find exactly these, queue the recalculation of LATE's Day 2, JOINED's
+    Day 2 and STUCK's Day 1 within its budget, once each, and the rebuilt
+    board must then show LATE at 5,000."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        LATE, LEDGER, CHAIN, COPIES, BOARD, STUCK, CLEAN, JOINED)
@@ -201,43 +260,37 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         story.wait(timedelta(hours=1))
         board_before = story.served_board(day(3))
         late_before = story.saved_day(LATE, day(2))
-        with psycopg.connect(connection_info) as connection:
-            connection.execute("UPDATE players SET active = true WHERE normalized_tag = ANY(%s)",
-                               (list(story.players),))
         _plant(connection_info)
 
-        # Nothing runs from 04:00 to 07:00 UTC, and a pass running at 04:00
+        # No pass starts from 04:00 to 07:00 UTC, and a pass reaching 04:00
         # stops there.
         monkeypatch.setattr(reconcile_pass, "BATCH_DAYS", 3)
         monkeypatch.setattr(reconcile_pass, "PASS_FIX_LIMIT", 2)
-        database = Database(_as_worker(connection_info))
-        try:
-            checker = reconcile_pass.ReconcilePass(database)
-            checker.run_when_due({f"{day(4):%Y-%m-%d}:night"}, day(5) + timedelta(minutes=30))
-            quiet = (checker.current, _open(connection_info))
-            checker.run_when_due({f"{day(4):%Y-%m-%d}:night"}, day(5) - timedelta(hours=1, minutes=1))
-            started = checker.current is not None
-            checker.run_when_due(set(), day(5) - timedelta(hours=1))
-            stopped = checker.current
-        finally:
-            database.close()
+        morning = f"{day(4):%Y-%m-%d}:morning"
+        quiet = _run_pass(story, monkeypatch, day(5) + timedelta(minutes=30), morning)
+        _run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1), morning, steps=0)
+        stopped = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1), morning),
+                   _waiting_step(connection_info), _open(connection_info))
 
-        _run_pass(connection_info, night)
+        # Four nights' passes: each its own, and none queued twice.
+        nights = [day(4 + number) + timedelta(hours=18) for number in range(4)]
+        first_steps = _run_pass(story, monkeypatch, nights[0])
+        again = _run_pass(story, monkeypatch, nights[0])
         first = _open(connection_info)
         first_queued = _queued(connection_info)
         # The next pass queues what the budget left, and nothing twice.
-        _run_pass(connection_info, night)
+        _run_pass(story, monkeypatch, nights[1])
         second_queued = _queued(connection_info)
         story.run_worker()
         late_fixed = story.saved_day(LATE, day(2))
-        joined_saved = story.saved_day(JOINED, day(1)) is not None
-        _run_pass(connection_info, night)
+        joined_saved = story.saved_day(JOINED, day(2)) is not None
+        _run_pass(story, monkeypatch, nights[2])
         after_fixes = _open(connection_info)
         escalated = _escalated(connection_info)
         # The Reset's board rebuilds 6 hours after a correction.
         story.wait(timedelta(hours=7))
         board_after = story.served_board(day(3))
-        _run_pass(connection_info, night)
+        _run_pass(story, monkeypatch, nights[3])
         last = _open(connection_info)
         unfinished = story.unfinished_jobs()
         # The daily line's counts, read as the worker reads them.
@@ -248,15 +301,17 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         alerts.reconcile_probe()
         line = alerts.reconcile_line([int(n) for n in capsys.readouterr().out.split()])
 
-    assert quiet == (None, set())
-    assert started and stopped is None
+    assert quiet == 0
+    assert stopped == (1, None, set())
     assert late_before["defenses"] == 7 and late_before["automatic_loss"] == 30
     assert _ranked(board_before)[LATE] == 5030
+    # Days 1 to 3, 3 players a step: 7 players on Day 1, then 8.
+    assert (first_steps, again) == (9, 0)
     planted = {("ledger", LEDGER, 1), ("chain", CHAIN, 2), ("copies", COPIES, 2),
-               ("board", BOARD, 2), ("recount", STUCK, 1)}
-    assert first == planted | {("recount", LATE, 2), ("missing_day", JOINED, 1)}
+               ("copies", COPIES, 3), ("board", BOARD, 2), ("recount", STUCK, 1)}
+    assert first == planted | {("recount", LATE, 2), ("missing_day", JOINED, 2)}
     # Oldest day first, 2 a pass, at backfill priority.
-    assert first_queued == [(JOINED, "reconcile_pass", 25, "pending"),
+    assert first_queued == [(LATE, "reconcile_pass", 25, "pending"),
                             (STUCK, "reconcile_pass", 25, "pending")]
     assert [row[:3] for row in second_queued] == [
         (LATE, "reconcile_pass", 25), (JOINED, "reconcile_pass", 25),
@@ -271,6 +326,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert last == planted - {("board", BOARD, 2)}
     assert unfinished == []
     assert line.startswith(
-        "Clash Lens nightly re-check, last 24 hours: 8 new problems (recount 2, chain 1,"
-        " ledger 1, battle copies 1, missing days 1, board rows 2); 3 recalculations"
-        " queued; 1 still wrong after their recalculation; 4 open.")
+        "Clash Lens nightly re-check, last 24 hours: 9 new problems (recount 2, chain 1,"
+        " ledger 1, battle copies 2, missing days 1, board rows 2); 3 recalculations"
+        " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
+        " failed recalculation.")

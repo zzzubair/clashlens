@@ -1080,10 +1080,13 @@ window need re-measuring before any change. Nothing is moved automatically.
 
 **What it means:** not an alert. Once a day from 12:00 UTC the alert check
 posts what the nightly re-check of finished Legend days
-(`python/src/clashlens/reconcile_pass.py`) found in the last 24 hours. The
-worker runs it after each twice-daily recheck is queued, never from 04:00 to
-07:00 UTC, over every finished day of the Season, 500 player-days every 10
-seconds. Each count is a problem first found in those 24 hours:
+(`python/src/clashlens/reconcile_pass.py`) found in the last 24 hours. Each
+twice-daily recheck queues one pass right after it, as `reconcile_pass` jobs
+at backfill priority: each job judges 500 player-days and queues the next,
+over every finished day of the Season, in the room live work leaves. None
+starts from 04:00 to 07:00 UTC, and a pass reaching 04:00 stops. The players
+judged for a day are the ones the Reset sweeps starting and ending it
+tracked. Each count is a problem first found in those 24 hours:
 
 - **recount:** a saved day whose attacks, defenses, gain or loss differ
   from its saved battles counted again;
@@ -1091,19 +1094,23 @@ seconds. Each count is a problem first found in those 24 hours:
   start says;
 - **ledger:** a start plus gain less losses that is not the saved end, or
   more than 8 attacks or defenses;
-- **battle copies:** a battle the two players' logs disagree on, or that only
-  one of two tracked players' logs shows;
-- **missing days:** a tracked player with days saved this Season but not
-  this one;
+- **battle copies:** a battle whose two players' saved reports differ in
+  stars, destruction, army, trophies, gain or loss, or whose second report
+  is missing though both players were tracked;
+- **missing days:** a player the Reset ending the day tracked, with no saved
+  day;
 - **board rows:** a confirmed Daily board row whose day now has no end or
-  another one.
+  another one. Rows not marked confirmed are not checked yet; correcting
+  them belongs to later automatic board corrections.
 
 Recount and missing-day problems get the normal recalculation of their day
 queued once, at backfill priority, at most 2,000 a pass, and none while a
 Season repair recalculates the Season's days. "Still wrong after their
-recalculation" counts those found again once that ran: the calculation, not
-the data, is the suspect. The rest are listed only. A problem not found again
-is resolved; resolved ones are deleted after 48 hours.
+recalculation" counts those found again in a check that read the day after
+that recalculation finished: the calculation, not the data, is the suspect.
+"With a failed recalculation" counts open problems whose recalculation
+failed instead; read its failure first. The rest are listed only. A problem
+not found again is resolved. Nothing deletes the rows.
 
 **First checks:** the open problems, newest first:
 
@@ -1116,7 +1123,8 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 ```
 
 `subject_id` is the battle for battle copies and the Daily board snapshot
-for board rows. `./ops logs worker` shows each pass as `reconcile_pass`.
+for board rows. `./ops logs worker` shows each pass's end as
+`reconcile_pass`.
 
 **Fix or escalate:** escalate any still wrong after their recalculation, and
 any chain or ledger problem: the worker's calculation can produce neither.

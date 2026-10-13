@@ -54,7 +54,7 @@ def runtime(tmp_path, monkeypatch):
         database="healthy 0",
         completeness="0",
         battle_day="0",
-        reconcile="1 0 0 0 2 2 2 0 3",
+        reconcile="1 0 0 0 2 2 2 0 1 3",
         health_streaks={},
         site_status=200,
         disk_used=10,
