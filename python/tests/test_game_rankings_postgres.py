@@ -14,8 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 
 import psycopg
-from domain_test_support import domain_database
+from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_reconciliation_postgres import _processor, _profile
 from test_reset_settlement_collection_postgres import _collector
 
 from clashlens import game_rankings
@@ -213,47 +214,19 @@ def _seed(info: str) -> None:
         )
 
 
-def _readings(info: str, readings: list[tuple[str, timedelta, int]]) -> None:
-    """Our saved profile readings: (tag, response completed after the Reset, trophies)."""
-    with psycopg.connect(info) as connection:
+def _readings(info: str, archive_server, readings: list[tuple[str, timedelta, int]]) -> None:
+    """The game's profile answers we saved, (tag, response completed after the
+    Reset, trophies), each processed by the real worker as it arrives."""
+    database, processor = _processor(info, archive_server)
+    try:
         for index, (tag, after, trophies) in enumerate(readings):
-            connection.execute(
-                """
-                WITH observation AS (
-                    INSERT INTO collector_observations (
-                        occurrence_key, scope, player_id, normalized_tag, endpoint,
-                        request_started_at, response_completed_at, http_status,
-                        response_hash, collector_version, key_label, evidence_headers,
-                        request_method, request_path, request_query,
-                        paging_envelope_state, source_adapter_version
-                    )
-                    SELECT 'reading-' || %(index)s, 'player', id, normalized_tag, 'profile',
-                           %(at)s, %(at)s, 200, repeat('b', 64), 'test', 'normal-test',
-                           '{}'::jsonb, 'GET', '/v1/players/test', '', 'not_applicable',
-                           'supercell-profile-parser-v3'
-                    FROM players WHERE normalized_tag = %(tag)s
-                    RETURNING id, player_id, normalized_tag
-                ), version AS (
-                    INSERT INTO player_profile_versions (
-                        player_id, observation_id, normalized_tag, endpoint_version,
-                        schema_version, parser_version, observed_at, source_http_status,
-                        name, trophies, league_tier_id, league_tier_name,
-                        eligibility_state, profile_json
-                    )
-                    SELECT player_id, id, normalized_tag, 'test', 'test', 'test', %(at)s, 200,
-                           'Player', %(trophies)s, 105000036, 'Legend I', 'eligible', '{}'
-                    FROM observation
-                    RETURNING id, observation_id
-                )
-                INSERT INTO player_profile_effects (
-                    profile_version_id, observation_id, effect_kind, observed_at,
-                    source_http_status, endpoint_version, schema_version, parser_version
-                )
-                SELECT id, observation_id, 'current_profile', %(at)s, 200, 'test', 'test', 'test'
-                FROM version
-                """,
-                {"index": index, "tag": tag, "at": RESET + after, "trophies": trophies},
+            store_observation(
+                info, archive_server, occurrence_key=f"reading-{index}", endpoint="profile",
+                body=_profile(trophies, tag), observed_at=RESET + after, normalized_tag=tag,
             )
+            processor.process_until_idle(owner="readings")
+    finally:
+        database.close()
 
 
 def _database(info: str) -> CollectorDatabase:
@@ -306,7 +279,7 @@ def _printed_score(info: str, capsys, after: timedelta = timedelta(hours=2, minu
 
 
 def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
-    database_url: str, tmp_path, capsys, monkeypatch
+    database_url: str, archive_server, tmp_path, capsys, monkeypatch
 ) -> None:
     monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
     answers = {
@@ -320,7 +293,7 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     with domain_database(database_url) as info, _game(answers) as origin:
         _seed(info)
         # Our readings around the country pulls, sent at 05:07:02.
-        _readings(info, [
+        _readings(info, archive_server, [
             ("#2PP", timedelta(minutes=5), 5390),  # matches France's 5,390
             ("#2QQ", timedelta(minutes=4), 5300),  # France says 5,310: a miss
             ("#2QQ", timedelta(minutes=8), 5310),  # after the pull, so not compared

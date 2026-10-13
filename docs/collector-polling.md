@@ -200,8 +200,8 @@ their attack and defense counts, so the stored battles are the evidence.
 Order comparisons still use every published board position. A
 `previousRank` of 0 or less counts as unknown. Each score also saves the
 board's own measured coverage, the share of our eligible players it holds,
-as `board_measured_coverage`, separate from S4's players missing from the
-game's lists. S5 compares each board player's trophies in a country list with
+as `board_measured_coverage`, separate from S4's players in the game's lists
+missing from our board. S5 compares each board player's trophies in a country list with
 our newest saved profile reading at the moment that list was pulled, through
 one read-only lookup the collector's login may call (migration 0109); a
 player with no saved reading by then is not compared.
@@ -214,6 +214,13 @@ player with no saved reading by then is not compared.
 | S4 | Legend I players in country lists not on the board, not at 5,000 with 0 attack wins | 9 at the 14:07 pull |
 | S5 | percent of board players in country lists whose list trophies equal our newest saved reading at the pull; the bar is at least 95% | not measured |
 | S6 | percent of board entries, faults left out, marked uncertain | not measured |
+
+Scores saved before migration 0109 deployed used the old S3, which also
+counted confirmed entries whose breaks were all with uncertain ones, and the
+old S5, the percent of the lists' Legend I players on the board, saved as
+`s5_legend_i_on_board_percent`. They are kept as they were, not recalculated.
+Every score saved after it deploys, starting with the first Reset scored then,
+uses the definitions above and saves `s5_live_trophies_match_percent`.
 
 The score also counts exact global ranks, tied pairs and how often the
 board's order inside a tie matches the game's, and how many 05:00:30 global
