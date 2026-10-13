@@ -95,7 +95,7 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
-DAY_RULES_REVISION = "2026-10-11-unplayed-5000"
+DAY_RULES_REVISION = "2026-10-13-weekly-raise-late"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
 REPAIR_SCOPES = ("day-1-or-unplayed",)
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")

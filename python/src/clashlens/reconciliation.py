@@ -432,15 +432,6 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
             "reset": data.boundary_kind == "season",
         }
-        if end_available and data.next_start_trophies is not None:
-            residual = data.next_start_trophies - expected_next
-            reset = next((item for item in _readings(data) if item.reset_reading), None)
-            # A late Reset reading may already show new-day battles, landed or in flight.
-            judged = reading_rule.judge(reset, **rule) if (
-                end_hidden_by_reset and residual and reset is not None) else None
-            if judged is not None and judged.matched:
-                reading_correction, residual, next_start_trophies = -residual, 0, expected_next
-                observed_trophy_change = next_start_trophies - start_trophies
         # Every reading from the end Reset on judges a clean, ended day
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
@@ -454,14 +445,25 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
-        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
-            verdict = None
         zero_defense_loss = _zero_defense_loss(data, defense_count)
         if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
-            verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
-            and final_trophies - zero_defense_loss <= 5000):
-            # The weekly raise to 5,000 hides whether the charge landed.
-            verdict = replace(verdict, outcome="unverified", loss=0, exact=False)
+                verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
+                and final_trophies - zero_defense_loss <= 5000):
+            automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
+            net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
+            expected_next, end_hidden_by_reset = 5000, True
+        if end_available and data.next_start_trophies is not None:
+            residual = data.next_start_trophies - expected_next
+            reset = next((item for item in _readings(data) if item.reset_reading), None)
+            # A late Reset reading may already show new-day battles, landed or in flight.
+            judged = reading_rule.judge(reset, **rule) if (
+                end_hidden_by_reset and residual and reset is not None) else None
+            if judged is not None and judged.matched:
+                reading_correction, residual, next_start_trophies = -residual, 0, expected_next
+                observed_trophy_change = next_start_trophies - start_trophies
+        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
+            end_reading_evidence = reading_rule.unraised_end(verdict) if data.boundary_kind == "weekly" else None
+            verdict = None
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
             if zero_defense_loss and verdict.loss == zero_defense_loss:
@@ -499,11 +501,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             # The saved residual is the Reset reading's, less what it was found
             # to show above, so the saved next start still adds up; the
             # contradicting reading's own is kept with that reading.
-            residual = (
-                next_start_trophies - expected_next
-                if next_start_trophies is not None
-                else None
-            )
+            residual = next_start_trophies - expected_next if next_start_trophies is not None else None
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             failures.append("trophy_equation_mismatch")
         elif verdict is not None and data.next_start_trophies is not None:
@@ -785,22 +783,24 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     it landed. On 2 October 2026 that explained 728 of 733 next days whose
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
-    A start taken from the day before's calculated end already has both.
+    A start taken from the day before's calculated end already has both. A
+    Monday after a day the weekly raise takes to 5,000 starts there,
+    whatever its Reset reading shows.
     """
     previous = data.previous_day
-    if (
-        data.start_trophies is None
+    start, loss, correction = data.start_trophies, 0, 0
+    if not (
+        data.start_trophies is None or previous is None or not previous.complete
         or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
-        or previous is None
-        or not previous.complete
         or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
-        or previous.end_baseline_id is None
-        or previous.end_baseline_id != data.start_baseline_id
+        or previous.end_baseline_id is None or previous.end_baseline_id != data.start_baseline_id
     ):
-        return data.start_trophies, 0, 0
-    loss = previous.unsettled_automatic_loss
-    correction = previous.reset_reading_correction
-    return data.start_trophies - loss + correction, loss, correction
+        loss, correction = previous.unsettled_automatic_loss, previous.reset_reading_correction
+        start = data.start_trophies - loss + correction
+    if start is not None and previous and previous.expected_next_start == 5000 and (
+            data.ranked_day.start.weekday() == 0 and not data.season_first_day):
+        start, correction = 5000, correction + 5000 - start
+    return start, loss, correction
 
 
 def _deduplicate_contributions(

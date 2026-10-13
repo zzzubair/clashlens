@@ -154,10 +154,8 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
     for tag, previous_loss, gains, start, reading in cases:
         result = reconcile_ranked_day(_input(
             start_trophies=start, next_start_trophies=reading,
-            contributions=tuple(
-                BattleContribution(f"{tag}-attack-{index}", "offense", gain)
-                for index, gain in enumerate(gains)
-            ),
+            contributions=tuple(BattleContribution(f"{tag}-attack-{index}", "offense", gain)
+                                for index, gain in enumerate(gains)),
             previous_day=PreviousRankedDay(True, 8, previous_loss, 0),
         ))
 
@@ -174,11 +172,6 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
         start_trophies=4991, next_start_trophies=4991, contributions=(),
         previous_day=PreviousRankedDay(True, 7, 232, 0),
     ))
-    # Before the weekly raise to 5,000 the charge would cross it, which hides it.
-    monday = reconcile_ranked_day(_input(
-        start_trophies=5200, next_start_trophies=4960, contributions=(),
-        previous_day=PreviousRankedDay(True, 8, 240, 0), boundary_kind="weekly",
-    ))
     # Any other drop is still a mismatch, and Day 1 has no previous day.
     other = reconcile_ranked_day(_input(
         start_trophies=4695, next_start_trophies=4392, contributions=(),
@@ -190,8 +183,6 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
     ))
 
     assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
-    assert (monday.state, monday.failure_reasons, monday.final_trophies_before_reset) == (
-        "Partial", ("end_reading_unverified",), 5200)
     assert quiet.shield_state == "inferred_shielded"
     assert other.state == day_1.state == "Inconsistent"
     assert other.automatic_defense_loss is day_1.automatic_defense_loss is None

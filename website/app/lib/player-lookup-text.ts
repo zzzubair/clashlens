@@ -371,16 +371,23 @@ export function isLegendDay(codes: string[], battles: number) {
 // Uncertain and its reasons lead with the gap.
 export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
   const ended = Date.parse(day.period.split(" – ")[1]);
-  const own =
+  const battles =
     day.startTrophies != null && day.trophyChange !== null
-      ? day.startTrophies + day.trophyChange + (day.resetAdjustment?.amount ?? 0)
+      ? day.startTrophies + day.trophyChange
       : null;
+  const reset = day.resetAdjustment?.amount ? day.resetAdjustment : null;
+  const own = battles === null ? null : battles + (reset?.amount ?? 0);
   const following =
     savedDays(player).find((saved) => Date.parse(saved.period.split(" – ")[0]) === ended)
       ?.startTrophies ?? null;
+  // The battles' own total first, then what the game's reset made of it.
   const conflict =
-    own !== null && following !== null && own !== following
-      ? `Battles add up to ${own.toLocaleString("en-GB")}; next day started at ${following.toLocaleString("en-GB")}.`
+    battles !== null && own !== null && following !== null && own !== following
+      ? `Battles add up to ${battles.toLocaleString("en-GB")}${
+          reset
+            ? `, which the ${reset.kind} reset takes to ${own.toLocaleString("en-GB")}`
+            : ""
+        }; next day started at ${following.toLocaleString("en-GB")}.`
       : null;
   const evidence = presentDay(dayEvidence(day), false);
   return {
