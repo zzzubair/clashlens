@@ -62,7 +62,7 @@ class Commands:
 
     def _default(self, account: AccountContext, cards: Sequence[Mapping[str, Any]]) -> str | None:
         """The player commands use when none is named: the only one, or the
-        default player chosen on the website."""
+        default player chosen on the website, otherwise the first linked."""
         chosen = self.store.default_tag(account)
         return cards[0]["tag"] if len(cards) == 1 else chosen
 

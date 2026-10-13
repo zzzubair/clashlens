@@ -302,7 +302,7 @@ def not_tracked(site: Site, tag: str, now: datetime) -> Reply:
 
 
 def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
-    """No player named and no default chosen: ask with a dropdown of the
+    """No player named and no default found: ask with a dropdown of the
     person's own players."""
     return Reply(
         "Which player? Pick one below, or choose a default player on Clash Lens.",
