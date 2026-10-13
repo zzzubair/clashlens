@@ -26,8 +26,10 @@ worker's own calculation:
    confirmed are left to later board corrections.
 
 Each problem is a row in ``reconcile_findings`` (migration 0110); one its
-check judged again and did not find is resolved and kept. A read older than
-the one that last saw or resolved a finding leaves it as that read left it.
+check judged again and did not find is resolved and kept, as is a board
+finding once a newer Daily board of its Reset replaced its board. A read
+older than the one that last saw or resolved a finding leaves it as that
+read left it.
 Checks 1 and 5 are fixed only by queueing the normal recalculation of the
 day, once per finding, at backfill priority, at most ``PASS_FIX_LIMIT`` a
 pass. The recalculation marks its finding in the transaction saving its
@@ -205,14 +207,25 @@ WHERE (attacker = ANY(%(players)s::bigint[])
        OR saved < 2 AND attacker IN (SELECT member FROM tracked)
                     AND defender IN (SELECT member FROM tracked))
 """
-# The confirmed rows of the newest Daily board of the Reset ending the day.
-_BOARD = """
+# The newest Daily board of the Reset ending the day.
+_NEWEST_BOARD = """
+SELECT id FROM leaderboard_snapshots
+WHERE snapshot_kind = 'frozen' AND state = 'published' AND boundary_at = %(reset)s
+ORDER BY version DESC, id DESC LIMIT 1
+"""
+# Its confirmed rows.
+_BOARD = f"""
 SELECT entry.player_id, board.id, entry.trophies
-FROM (SELECT id FROM leaderboard_snapshots
-      WHERE snapshot_kind = 'frozen' AND state = 'published' AND boundary_at = %(reset)s
-      ORDER BY version DESC, id DESC LIMIT 1) AS board
+FROM ({_NEWEST_BOARD}) AS board
 JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
 WHERE entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
+"""
+# The batch's players with an open board finding of the day about a board
+# the newest one replaced.
+_REPLACED = f"""
+SELECT player_id FROM reconcile_findings
+WHERE ranked_day_start = %(day)s AND player_id = ANY(%(players)s::bigint[])
+  AND check_name = 'board' AND resolved_at IS NULL AND subject_id <> ({_NEWEST_BOARD})
 """
 # The trophies of a day's battles that ended at or after its Reset, which a
 # board's total leaves out (``boundary_manifest.reset_trophies``): an attack
@@ -314,7 +327,10 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
                                 {"reports": 2, "fields": []},
                                 {"reports": int(saved), "fields": list(fields)}))
     rows = connection.execute(_BOARD, params).fetchall()
-    judged |= {(int(row[0]), "board") for row in rows}
+    # A board finding is judged with its row, or once a newer board replaced
+    # its board, whose rows are judged as any.
+    judged |= {(int(row[0]), "board")
+               for row in [*rows, *connection.execute(_REPLACED, params)]}
     versions = [ends[int(row[0])][0] for row in rows
                 if ends.get(int(row[0]), (None, None))[1] is not None]
     after_reset = dict(connection.execute(

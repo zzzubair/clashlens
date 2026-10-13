@@ -409,16 +409,12 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert after_fixes == planted | {("board", LATE, 2)}
     assert escalated == {STUCK}
     assert _ranked(board_after)[LATE] == 5000
-    # LATE's 04:58 defense has no attacker's report saved, so its attack may
-    # have ended after the Reset: the rebuilt row is not proven, the pass
-    # compares only confirmed rows, and LATE's board finding stays open.
-    assert {entry["tag"]: entry["confidence"]
-            for entry in board_after["entries"]}[LATE] == "uncertain"
-    assert last == (planted - {("board", BOARD, 2)}) | {("board", LATE, 2)}
+    # The rebuilt board replaced the one both board problems were about.
+    assert last == planted - {("board", BOARD, 2)}
     assert unfinished == []
     assert line.startswith(
         "Clash Lens nightly re-check, last 24 hours: 9 new problems (recount 2, chain 1,"
         " ledger 1, battle copies 2, missing days 1, board rows 2); 3 recalculations"
-        " queued; 1 still wrong after their recalculation; 6 open, 0 of them with a"
+        " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
         " failed recalculation.")
     assert repaired == (True, True)

@@ -1114,9 +1114,11 @@ that recalculation's result saved (`fix_done_at`): the calculation, not the
 data, is the suspect. "With a failed recalculation" counts open problems
 whose recalculation failed instead; read its failure first. The rest are
 listed only. A problem its check judges again and does not find is
-resolved; a check that could not judge it, such as a recount of a day whose
-page lost its result, a chain or ledger missing a trophy count, or a board
-row no longer confirmed, leaves it open. Nothing deletes the rows.
+resolved, as is a board-row problem once a newer Daily board of its Reset
+replaces the board it was about; the newer board's confirmed rows are then
+checked as any. A check that could not judge a problem, such as a recount of
+a day whose page lost its result, or a chain or ledger missing a trophy
+count, leaves it open. Nothing deletes the rows.
 
 **First checks:** the open problems, newest first:
 
