@@ -187,8 +187,9 @@ token and attempt exactly as if it were claimed alone, and whichever response
 thread frees up first takes the next. A batch is never larger than the
 threads of its kind not holding a claim, less one derived thread whose turn
 the maintenance timer may hold, so each claim has a free thread to start it
-within its lease. Derived threads share their own batches
-of daily results and redecodes the same way; a build is always claimed alone.
+within its lease. Derived threads share their own batches of daily results,
+redecodes and nightly re-check steps the same way; a build is always claimed
+alone.
 One thread at a time claims each kind's next batch, so a process holds at most
 one unstarted batch of each kind, and each batch takes turns as a thread's
 single claims do, including which take Reset-priority work first, and three
@@ -216,7 +217,8 @@ and runs maintenance between batches.
 Those threads are split by kind of work so long jobs cannot hold them all.
 `--response-lanes` sets how many claim only responses, by default about two
 thirds, 8 of the production worker's 12; they alone use the newest-job plan.
-The rest claim derived work: daily results, builds and army redecodes. Only
+The rest claim derived work: daily results, builds, army redecodes and
+[nightly re-check](operating.md#nightly-re-check-line) steps. Only
 one derived thread may claim a snapshot, analytics or army build. It looks
 for a build first and takes other derived work only when none is ready, so
 the other derived threads keep daily results moving. It claims no build while
