@@ -6,6 +6,7 @@ queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta
 
 import psycopg
@@ -22,7 +23,8 @@ from test_reset_scenarios_postgres import (
     defenses,
 )
 
-from clashlens import alerts, queue_refresh, reconcile_pass
+from clashlens import alerts, domain_repair, queue_refresh, reconcile_pass
+from clashlens.db import Database
 
 # One player per planted error, and one with none.
 LATE, JOINED, LEDGER, CHAIN, COPIES, BOARD, STUCK, CLEAN = (
@@ -40,18 +42,29 @@ def _as_worker(connection_info: str) -> str:
 
 
 def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
-              *, steps: int | None = None) -> int:
+              *, steps: int | None = None, reads_end: datetime | None = None) -> int:
     """Queue the pass of ``slot``, by default the night recheck's at ``now``,
-    and run its waiting steps, or the first ``steps``, at ``now``, each
-    claimed by the real worker with its own database role; how many ran."""
-    monkeypatch.setattr(reconcile_pass, "_now", lambda: now)
+    and run its waiting steps, or the first ``steps``, at ``now``, or with
+    the clock at ``reads_end`` once a step's reads end, each claimed by the
+    real worker with its own database role; how many ran."""
+    clock = [now]
+    monkeypatch.setattr(reconcile_pass, "_now", lambda: clock[0])
     database, processor = _processor(_as_worker(story.connection_info), story.archive_server)
+    judge = reconcile_pass.judge
+
+    def slow_judge(*args):
+        judgment = judge(*args)
+        clock[0] = reads_end or clock[0]
+        return judgment
+
     ran = 0
     try:
-        reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
-        while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
-            assert processor.process_job(job, owner="test").outcome == "processed"
-            ran += 1
+        with monkeypatch.context() as patch:
+            patch.setattr(reconcile_pass, "judge", slow_judge)
+            reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
+            while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
+                assert processor.process_job(job, owner="test").outcome == "processed"
+                ran += 1
     finally:
         database.close()
     return ran
@@ -215,6 +228,59 @@ def _escalated(connection_info: str) -> set[str]:
             " WHERE finding.escalated_at IS NOT NULL").fetchall()}
 
 
+def _record_as_repair_starts(connection_info: str, patch, tag: str) -> dict:
+    """Make the step that found ``tag``'s problem, having decided whether it
+    may queue recalculations, start a Season repair, its receipt and then
+    its first days, and wait 5 seconds before saving what it found; the
+    repair's thread."""
+    record, repair, season = reconcile_pass.record, {}, str(int(SEASON.timestamp()))
+    revision = domain_repair.DAY_RULES_REVISION
+    with psycopg.connect(connection_info) as connection:
+        player = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
+        players = [row[0] for row in connection.execute("SELECT id FROM players ORDER BY id")]
+
+    def run() -> None:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO season_repairs (official_season_id, rule_revision,"
+                    " before_days, before_boards) VALUES (%s, %s, '{}', '{}')",
+                    (season, revision))
+            domain_repair._queue_days(database, season, revision, SEASON, players)
+        finally:
+            database.close()
+
+    def record_late(connection, day, judgment, **kwargs):
+        if "thread" not in repair and any(f.player_id == player for f in judgment[0]):
+            repair["thread"] = threading.Thread(target=run)
+            repair["thread"].start()
+            repair["thread"].join(timeout=5)
+        return record(connection, day, judgment, **kwargs)
+
+    patch.setattr(reconcile_pass, "record", record_late)
+    return repair
+
+
+def _repair_after_fix(connection_info: str, tag: str) -> bool:
+    """Whether every recalculation the Season repair queued was queued after
+    the re-check's recalculation of ``tag``'s day."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            SELECT max(fix.id) < min(repair.id)
+            FROM python_processing_jobs AS fix
+            JOIN players AS player ON player.id = (fix.input_json ->> 'player_id')::bigint
+            CROSS JOIN python_processing_jobs AS repair
+            WHERE fix.deduplication_key LIKE 'reconcile:pass:%%'
+              AND player.normalized_tag = %s
+              AND repair.deduplication_key LIKE 'reconcile:season-repair:%%'
+            """,
+            (tag,),
+        ).fetchone()[0]
+
+
 def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     database_url: str, archive_server, monkeypatch, tmp_path, capsys
 ) -> None:
@@ -263,7 +329,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         _plant(connection_info)
 
         # No pass starts from 04:00 to 07:00 UTC, and a pass reaching 04:00
-        # stops there.
+        # stops there, even inside a step.
         monkeypatch.setattr(reconcile_pass, "BATCH_DAYS", 3)
         monkeypatch.setattr(reconcile_pass, "PASS_FIX_LIMIT", 2)
         morning = f"{day(4):%Y-%m-%d}:morning"
@@ -271,6 +337,11 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         _run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1), morning, steps=0)
         stopped = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1), morning),
                    _waiting_step(connection_info), _open(connection_info))
+        crossing = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1),
+                              f"{day(3):%Y-%m-%d}:night",
+                              reads_end=day(5) - timedelta(hours=1) + timedelta(seconds=1)),
+                    _waiting_step(connection_info), _open(connection_info),
+                    _queued(connection_info))
 
         # Four nights' passes: each its own, and none queued twice.
         nights = [day(4 + number) + timedelta(hours=18) for number in range(4)]
@@ -301,8 +372,23 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         alerts.reconcile_probe()
         line = alerts.reconcile_line([int(n) for n in capsys.readouterr().out.split()])
 
+        # A Season repair reaching its days phase while a step saves what it
+        # read: the step's recalculation, decided before, is queued before
+        # any of the repair's.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE ranked_day_versions SET attack_count = attack_count + 1 WHERE id = %s",
+                (_version(connection, CLEAN, day(1)),))
+        with monkeypatch.context() as patch:
+            repair = _record_as_repair_starts(connection_info, patch, CLEAN)
+            _run_pass(story, monkeypatch, nights[3] + timedelta(days=1))
+        repair["thread"].join(timeout=60)
+        repaired = (("recount", CLEAN, 1) in _open(connection_info),
+                    _repair_after_fix(connection_info, CLEAN))
+
     assert quiet == 0
     assert stopped == (1, None, set())
+    assert crossing == (1, None, set(), [])
     assert late_before["defenses"] == 7 and late_before["automatic_loss"] == 30
     assert _ranked(board_before)[LATE] == 5030
     # Days 1 to 3, 3 players a step: 7 players on Day 1, then 8.
@@ -330,3 +416,4 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         " ledger 1, battle copies 2, missing days 1, board rows 2); 3 recalculations"
         " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
         " failed recalculation.")
+    assert repaired == (True, True)

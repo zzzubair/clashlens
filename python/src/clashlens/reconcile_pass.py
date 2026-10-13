@@ -3,11 +3,13 @@
 Right after the twice-daily recheck (``queue_refresh.DailyRecheck``) queues
 its morning or 23:00 slot, it queues the slot's pass: one ``reconcile_pass``
 job at backfill priority, so background pacing runs it only in the room live
-work leaves. Each job is a step: one Legend day and the next 500 players the
-Reset sweeps starting and ending it tracked. It queues the next step as it
-finishes, oldest day first, until every finished day of the Season of the
-newest ended day is judged. It compares things produced separately, in plain
-SQL over saved battles, days and boards, never the worker's own calculation:
+work leaves. Each job is a step: one Legend day and its next 500 players,
+each with a saved day for it, such as a day rebuilt from a first battle log,
+or tracked by the Reset sweeps starting and ending it. It queues the next
+step as it finishes, oldest day first, until every finished day of the
+Season of the newest ended day is judged. It compares things produced
+separately, in plain SQL over saved battles, days and boards, never the
+worker's own calculation:
 
 1. ``recount``: the day's attacks, defenses, gain and loss counted again
    from the saved battles against the saved day;
@@ -23,19 +25,26 @@ SQL over saved battles, days and boards, never the worker's own calculation:
    automatic loss, less the battles that ended after the Reset. Rows not
    confirmed are left to later board corrections.
 
-Each problem is a row in ``reconcile_findings`` (migration 0110); one not
-found again is resolved and kept. Checks 1 and 5 are fixed only by queueing
-the normal recalculation of the day, once per finding, at backfill
-priority, at most ``PASS_FIX_LIMIT`` a pass; a finding still there after its
-recalculation finished, judged from a read made after that, is marked
-escalated and never queued again. A recalculation that failed is left open,
-not escalated. The other checks only list. Nothing else is written, and no
-recalculation is queued while a Season repair recalculates the Season's days.
+Each problem is a row in ``reconcile_findings`` (migration 0110); one its
+check judged again and did not find is resolved and kept. A read older than
+the one that last saw or resolved a finding leaves it as that read left it.
+Checks 1 and 5 are fixed only by queueing the normal recalculation of the
+day, once per finding, at backfill priority, at most ``PASS_FIX_LIMIT`` a
+pass. The recalculation marks its finding in the transaction saving its
+result (``note_fix_done``), so a finding still there in a read that also saw
+that mark is marked escalated and never queued again; one whose
+recalculation failed is left open, not escalated. The other checks only
+list. Nothing else is written,
+and no recalculation is queued while a Season repair recalculates the
+Season's days: a step decides under the guard the repair takes to queue
+them (``domain_repair.recalculating_days``).
 
-The checks read in READ ONLY transactions with a statement timeout and take
-no row locks, in the connection pool the worker already has. No pass starts
-from 04:00 to 07:00 UTC, and a pass reaching 04:00 stops there. On 9 October
-2026 the same checks found 7 recount differences, 0 chain breaks, 0 ledger
+The checks read in READ ONLY transactions, each one snapshot, with a
+statement timeout and take no row locks, in the connection pool the worker
+already has; a step first extends its job's lease over all its reads. No
+pass starts from 04:00 to 07:00 UTC; each read of a step is limited to the
+time left before 04:00 when it starts, and a step reaching 04:00 keeps
+nothing and queues nothing more. On 9 October 2026 the same checks found 7 recount differences, 0 chain breaks, 0 ledger
 breaks, 5 one-sided battles, 1,019 missing days and 850 board rows over the
 Season's first 4 days. The alert check posts one line a day with the counts
 (``alerts.reconcile_probe``).
@@ -49,16 +58,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import psycopg
 from psycopg.types.json import Jsonb
 
-from . import db, domain, first_battle_log, job_outcomes
+from . import db, domain, domain_repair, first_battle_log, job_outcomes
 
 WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
 PASS_FIX_LIMIT = 2000
-STATEMENT_TIMEOUT = "60s"
+STATEMENT_SECONDS = 60
+# A step's job lease: its 8 reads at STATEMENT_SECONDS each, and room to spare.
+STEP_LEASE_SECONDS = 600
 QUIET_HOURS = range(4, 7)  # UTC: the Reset and its catching up.
 FIXED_CHECKS = ("recount", "missing_day")
+FIX_KEY = "reconcile:pass:"
 
 
 def _now() -> datetime:
@@ -71,9 +84,14 @@ SELECT DISTINCT member FROM collector_reset_sweeps AS sweep
 CROSS JOIN LATERAL unnest(sweep.member_ids) AS member
 WHERE sweep.boundary_at IN (%(day)s, %(reset)s)
 """
-# A step's players: the next tracked ones by id.
+# A step's players: the next by id of those tracked and every one with a
+# saved day for the day.
 _STEP_PLAYERS = f"""
-SELECT member FROM ({_TRACKED}) AS tracked (member)
+SELECT member FROM (
+    {_TRACKED}
+    UNION
+    SELECT player_id FROM ranked_day_versions WHERE ranked_day_start = %(day)s
+) AS judged (member)
 WHERE member > %(after)s ORDER BY member LIMIT %(limit)s
 """
 # The batch's players the Reset sweep ending the day tracked: each one's
@@ -129,8 +147,8 @@ GROUP BY side.player_id
 # is missing though both players were tracked, compared from the reports
 # themselves: each side's trophies as the attacker's and the defender's,
 # and either side's trophies only when both reports carry them. A battle is
-# judged with its attacker, or with its defender when the attacker was
-# untracked.
+# judged with its attacker, or with its defender when the attacker is
+# neither tracked nor has a saved day for the day.
 _COPIES = f"""
 WITH tracked AS ({_TRACKED}), reports AS (
     SELECT battle.id, battle.attacker_player_id AS attacker,
@@ -174,19 +192,24 @@ WITH tracked AS ({_TRACKED}), reports AS (
 SELECT CASE WHEN attacker = ANY(%(players)s::bigint[]) THEN attacker ELSE defender END,
        id, saved, fields
 FROM paired
-WHERE (attacker = ANY(%(players)s::bigint[]) OR attacker NOT IN (SELECT member FROM tracked))
+WHERE (attacker = ANY(%(players)s::bigint[])
+       OR attacker NOT IN (SELECT member FROM tracked)
+          AND NOT EXISTS (SELECT 1 FROM ranked_day_versions AS saved_day
+                          WHERE saved_day.player_id = paired.attacker
+                            AND saved_day.ranked_day_start = %(day)s))
   AND (cardinality(fields) > 0
        OR saved < 2 AND attacker IN (SELECT member FROM tracked)
                     AND defender IN (SELECT member FROM tracked))
 """
-# The confirmed rows of the newest Daily board of the Reset ending the day.
+# The newest Daily board of the Reset ending the day, with its confirmed
+# rows of the batch.
 _BOARD = """
 SELECT entry.player_id, board.id, entry.trophies
 FROM (SELECT id FROM leaderboard_snapshots
       WHERE snapshot_kind = 'frozen' AND state = 'published' AND boundary_at = %(reset)s
       ORDER BY version DESC, id DESC LIMIT 1) AS board
-JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
-WHERE entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
+LEFT JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
+    AND entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
 """
 # The trophies of a day's battles that ended at or after its Reset, which a
 # board's total leaves out (``boundary_manifest.reset_trophies``): an attack
@@ -211,6 +234,12 @@ WHERE day.id = ANY(%(versions)s)
            ELSE attack.reported_at END >= day.ranked_day_end
 GROUP BY day.id
 """
+# The batch's open findings of the day whose recalculation is saved.
+_FIXED = """
+SELECT id FROM reconcile_findings
+WHERE ranked_day_start = %(day)s AND player_id = ANY(%(players)s::bigint[])
+  AND resolved_at IS NULL AND fix_done_at IS NOT NULL
+"""
 
 
 @dataclass(frozen=True)
@@ -223,18 +252,25 @@ class Finding:
     saved: dict[str, Any] = field(default_factory=dict)
 
 
+# A day's findings, each player and check judged, and the open findings
+# whose recalculation is saved.
+Judgment = tuple[list[Finding], set[tuple[int, str]], set[int]]
+
+
 def _params(day: datetime, players: list[int]) -> dict[str, Any]:
     params = {"players": players, "day": day, "reset": day + domain.RANKED_DAY_DURATION}
     params["window_start"], params["window_end"] = domain.battle_window(day)
     return params
 
 
-def judge(connection: Any, day: datetime, players: list[int]) -> list[Finding]:
+def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
     """Every problem the six checks find in ``players``' day from ``day``,
-    reading only, in the caller's transaction."""
+    each player and check judged, and the open findings whose recalculation
+    is saved, reading only, in the caller's transaction."""
     params = _params(day, players)
     days: dict[tuple[int, datetime], Any] = {
         (int(row[0]), row[1]): row for row in connection.execute(_DAYS, params)}
+    judged = {(player, check) for player in players for check in ("missing_day", "copies")}
     findings = [Finding("missing_day", int(row[0]))
                 for row in connection.execute(_EXPECTED, params)
                 if (int(row[0]), day) not in days]
@@ -247,15 +283,18 @@ def judge(connection: Any, day: datetime, players: list[int]) -> list[Finding]:
         (_, _, version, season_id, start_trophies, end, _, automatic,
          attacks, gain, defenses, loss) = row
         ends[player] = (version, end, automatic)
+        judged |= {(player, "recount"), (player, "ledger")}
         recount = recounts.get(player, (0, 0, 0, 0))
         if recount != (attacks, gain, defenses, loss):
             findings.append(Finding("recount", player, 0, version, _counts(*recount),
                                     _counts(attacks, gain, defenses, loss)))
         before = days.get((player, day - domain.RANKED_DAY_DURATION))
-        if (before is not None and before[2] is not None and before[3] == season_id
-                and None not in (before[6], start_trophies) and before[6] != start_trophies):
-            findings.append(Finding("chain", player, 0, version, {"start": before[6]},
-                                    {"start": start_trophies}))
+        if before is not None and before[2] is not None:
+            judged.add((player, "chain"))
+            if (before[3] == season_id and None not in (before[6], start_trophies)
+                    and before[6] != start_trophies):
+                findings.append(Finding("chain", player, 0, version, {"start": before[6]},
+                                        {"start": start_trophies}))
         if None not in (start_trophies, end) and (
                 start_trophies + gain - loss - (automatic or 0) != end):
             findings.append(Finding("ledger", player, 0, version,
@@ -269,7 +308,10 @@ def judge(connection: Any, day: datetime, players: list[int]) -> list[Finding]:
         findings.append(Finding("copies", int(player), int(battle), None,
                                 {"reports": 2, "fields": []},
                                 {"reports": int(saved), "fields": list(fields)}))
-    rows = connection.execute(_BOARD, params).fetchall()
+    boards = connection.execute(_BOARD, params).fetchall()
+    if boards:
+        judged |= {(player, "board") for player in players}
+    rows = [row for row in boards if row[0] is not None]
     versions = [ends[int(row[0])][0] for row in rows
                 if ends.get(int(row[0]), (None, None))[1] is not None]
     after_reset = dict(connection.execute(
@@ -281,71 +323,100 @@ def judge(connection: Any, day: datetime, players: list[int]) -> list[Finding]:
         if expected != trophies:
             findings.append(Finding("board", int(player), int(board), version,
                                     {"trophies": expected}, {"trophies": trophies}))
-    return findings
+    fixed = {int(row[0]) for row in connection.execute(_FIXED, params)}
+    return findings, judged, fixed
 
 
 def _counts(attacks: int, gain: int, defenses: int, loss: int) -> dict[str, int]:
     return {"attacks": attacks, "gain": gain, "defenses": defenses, "loss": loss}
 
 
-def record(connection: Any, day: datetime, players: list[int], findings: list[Finding],
-           *, read_at: datetime, fix: bool, fix_room: int) -> Counter[str]:
-    """Save ``findings`` of ``players``' day from ``day``, judged from a read
-    at ``read_at``, resolve those players' other open findings of the day,
-    mark escalated each one whose recalculation finished before that read,
-    and queue up to ``fix_room`` recalculations when ``fix``; the counts."""
+def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datetime,
+           fix: bool, fix_room: int) -> Counter[str]:
+    """Save the findings of a judgment of a day from ``day`` read at
+    ``read_at``, resolve the open findings of each player and check it judged
+    and did not find, mark escalated each it found whose recalculation it
+    read saved, and queue up to ``fix_room`` recalculations when ``fix``; the
+    counts. A finding a newer read saw or resolved is left as it was."""
+    findings, judged, fixed = judgment
     counts = Counter[str]()
-    seen = []
     for finding in findings:
-        finding_id, found_at, fix_queued_at, escalated_at = connection.execute(
+        row = connection.execute(
             """
             INSERT INTO reconcile_findings AS finding (check_name, player_id,
-                ranked_day_start, subject_id, ranked_day_version_id, expected, saved)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ranked_day_start, subject_id, ranked_day_version_id, expected, saved,
+                last_seen_at)
+            SELECT %(check)s::text, %(player)s::bigint, %(day)s::timestamptz,
+                   %(subject)s::bigint, %(version)s::bigint, %(expected)s, %(saved)s,
+                   %(read_at)s::timestamptz
+            WHERE NOT EXISTS (
+                SELECT 1 FROM reconcile_findings
+                WHERE ranked_day_start = %(day)s AND player_id = %(player)s
+                  AND check_name = %(check)s AND subject_id = %(subject)s
+                  AND resolved_at > %(read_at)s)
             ON CONFLICT (ranked_day_start, player_id, check_name, subject_id)
                 WHERE resolved_at IS NULL
-            DO UPDATE SET last_seen_at = clock_timestamp(),
+            DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at,
                 ranked_day_version_id = EXCLUDED.ranked_day_version_id,
                 expected = EXCLUDED.expected, saved = EXCLUDED.saved
+            WHERE finding.last_seen_at < EXCLUDED.last_seen_at
             RETURNING id, found_at, fix_queued_at, escalated_at
             """,
-            (finding.check, finding.player_id, day, finding.subject_id, finding.version_id,
-             Jsonb(finding.expected), Jsonb(finding.saved)),
+            {"check": finding.check, "player": finding.player_id, "day": day,
+             "subject": finding.subject_id, "version": finding.version_id,
+             "expected": Jsonb(finding.expected), "saved": Jsonb(finding.saved),
+             "read_at": read_at},
         ).fetchone()
-        seen.append(finding_id)
+        if row is None:
+            continue
+        finding_id, found_at, fix_queued_at, escalated_at = row
         counts["found" if found_at > read_at else "open"] += 1
-        key = f"reconcile:pass:{finding_id}"
         if fix_queued_at is None:
             if fix and finding.check in FIXED_CHECKS and counts["queued"] < fix_room:
                 # Due now at backfill priority; once, under the finding's own key.
                 first_battle_log._queue(
-                    connection, finding.player_id, day, None, key=key,
+                    connection, finding.player_id, day, None, key=f"{FIX_KEY}{finding_id}",
                     trigger="reconcile_pass", later_days=False,
                     priority=db.PYTHON_BACKFILL_PRIORITY)
                 connection.execute(
                     "UPDATE reconcile_findings SET fix_queued_at = clock_timestamp()"
                     " WHERE id = %s", (finding_id,))
                 counts["queued"] += 1
-        elif escalated_at is None and connection.execute(
-            """
-            SELECT EXISTS (SELECT 1 FROM python_processing_jobs_worker
-                WHERE deduplication_key = %s AND state = 'complete' AND completed_at < %s)
-            """,
-            (key, read_at),
-        ).fetchone()[0]:
+        elif escalated_at is None and finding_id in fixed:
             connection.execute(
                 "UPDATE reconcile_findings SET escalated_at = clock_timestamp() WHERE id = %s",
                 (finding_id,))
             counts["escalated"] += 1
+    players, checks = zip(*judged, strict=True) if judged else ((), ())
     counts["resolved"] = connection.execute(
         """
-        UPDATE reconcile_findings SET resolved_at = clock_timestamp()
-        WHERE resolved_at IS NULL AND ranked_day_start = %s
-          AND player_id = ANY(%s::bigint[]) AND id <> ALL(%s)
+        UPDATE reconcile_findings AS finding SET resolved_at = %(read_at)s
+        FROM unnest(%(players)s::bigint[], %(checks)s::text[]) AS judged (player_id, check_name)
+        WHERE finding.resolved_at IS NULL AND finding.ranked_day_start = %(day)s
+          AND finding.player_id = judged.player_id AND finding.check_name = judged.check_name
+          AND finding.last_seen_at < %(read_at)s
         """,
-        (day, players, seen),
+        {"read_at": read_at, "players": list(players), "checks": list(checks), "day": day},
     ).rowcount
     return counts
+
+
+def note_fix_done(connection: Any, claim: db.Claim) -> None:
+    """Mark done the finding a recalculation the pass queued is for, in the
+    transaction saving its result: a read seeing the mark sees the result."""
+    if claim.input_json.get("trigger") == "reconcile_pass":
+        connection.execute(
+            "UPDATE reconcile_findings SET fix_done_at = clock_timestamp() WHERE id = %s",
+            (int(claim.deduplication_key.removeprefix(FIX_KEY)),))
+
+
+def _read_limit(now: datetime) -> int:
+    """A read's time limit in milliseconds: ``STATEMENT_SECONDS``, or the
+    time left before the next 04:00 UTC if less."""
+    stop = now.replace(hour=QUIET_HOURS.start, minute=0, second=0, microsecond=0)
+    if stop <= now:
+        stop += timedelta(days=1)
+    return max(1, min(STATEMENT_SECONDS * 1000, int((stop - now).total_seconds() * 1000)))
 
 
 def _newest_day(slot: str) -> domain.RankedDay:
@@ -394,35 +465,46 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
     newest = _newest_day(slot)
     detail: dict[str, Any] = {}
     try:
+        now = _now()
+        stopped = now.hour in QUIET_HOURS
+        if not stopped:
+            database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
         with database.pool.connection() as connection:
-            stopped = _now().hour in QUIET_HOURS
             if not stopped:
                 with connection.transaction():
-                    connection.execute("SET TRANSACTION READ ONLY")
-                    connection.execute(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'")
-                    read_at = connection.execute("SELECT transaction_timestamp()").fetchone()[0]
+                    # One snapshot for every read, the time it was taken.
+                    connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                    connection.execute(f"SET LOCAL statement_timeout = {_read_limit(now)}")
+                    read_at = connection.execute("SELECT statement_timestamp()").fetchone()[0]
                     players = [int(row[0]) for row in connection.execute(
                         _STEP_PLAYERS, {**_params(day, []), "after": after, "limit": BATCH_DAYS})]
-                    findings = judge(connection, day, players) if players else []
+                    judgment = judge(connection, day, players) if players else ([], set(), set())
             with connection.transaction():
                 job = database._lock_live_claim(connection, claim)
+                stopped = stopped or _now().hour in QUIET_HOURS
                 if not stopped:
-                    # Locked, a Season repair cannot start its days phase
-                    # before this step's recalculations are queued.
-                    repairing = any(row[0] > 0 and row[1] is None for row in connection.execute(
-                        "SELECT queued_through_player_id, boards_queued_at FROM season_repairs"
-                        " WHERE official_season_id = %s FOR SHARE", (newest.official_season_id,)))
-                    counts = record(connection, day, players, findings, read_at=read_at,
-                                    fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
-                    detail = {**counts, "days": len(players), "repairing": repairing,
-                              **Counter(f"seen:{finding.check}" for finding in findings)}
-                    queued += counts["queued"]
-                    if len(players) == BATCH_DAYS:
-                        _queue_step(connection, slot, day, players[-1], queued)
-                    elif day < newest.start:
-                        _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0, queued)
-                    else:
-                        detail["finished"] = True
+                    with connection.transaction():
+                        # Under its guard, a Season repair cannot start
+                        # queueing days before this step commits.
+                        repairing = domain_repair.recalculating_days(
+                            connection, newest.official_season_id)
+                        counts = record(connection, day, judgment, read_at=read_at,
+                                        fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
+                        done = {**counts, "days": len(players), "repairing": repairing,
+                                **Counter(f"seen:{finding.check}" for finding in judgment[0])}
+                        if len(players) == BATCH_DAYS:
+                            _queue_step(connection, slot, day, players[-1],
+                                        queued + counts["queued"])
+                        elif day < newest.start:
+                            _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0,
+                                        queued + counts["queued"])
+                        else:
+                            done["finished"] = True
+                        # A step reaching 04:00 keeps none of it.
+                        stopped = _now().hour in QUIET_HOURS
+                        if stopped:
+                            raise psycopg.Rollback()
+                        detail, queued = done, queued + counts["queued"]
                 database._finish_claim(connection, claim, job, state="complete",
                                        outcome="processed")
     except db.LeaseLost:

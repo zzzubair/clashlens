@@ -510,6 +510,7 @@ def _queue_days(
     from . import first_battle_log
 
     with database.pool.connection() as connection, connection.transaction():
+        _guard_days(connection, season_id)
         for player, first_day in connection.execute(
             """
             SELECT player_id, min(ranked_day_start) FROM ranked_day_versions
@@ -531,6 +532,28 @@ def _queue_days(
             """,
             (players[-1], season_id, revision),
         )
+
+
+def recalculating_days(connection: Any, season_id: str) -> bool:
+    """Whether a Season repair is recalculating the Season's days. Holds the
+    Season's guard ``_queue_days`` takes until the caller's transaction ends,
+    so no repair starts queueing days before then."""
+    _guard_days(connection, season_id)
+    return any(
+        through > 0 and boards is None
+        for through, boards in connection.execute(
+            "SELECT queued_through_player_id, boards_queued_at FROM season_repairs"
+            " WHERE official_season_id = %s",
+            (season_id,),
+        )
+    )
+
+
+def _guard_days(connection: Any, season_id: str) -> None:
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"clashlens:season-repair-days:{season_id}",),
+    )
 
 
 def _repair_key(revision: str, season_id: str, player_id: int) -> str:

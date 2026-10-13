@@ -4,12 +4,13 @@
 -- reconcile_findings: one row per problem with a player's saved day,
 -- battle or Daily board row, which check found it, what it expected and
 -- what was saved, the version of the day it judged, and when it was found,
--- last seen, given a recalculation, seen again after that recalculation,
--- and gone. A problem the re-check no longer finds is resolved and kept;
--- nothing deletes rows. About 200 bytes a row; on 9 October 2026 the checks
+-- last seen by a read, given a recalculation, given that recalculation's
+-- result, seen again after that result, and read gone. A problem the
+-- re-check no longer finds is resolved and kept; nothing deletes rows.
+-- About 240 bytes a row with its lookups; on 9 October 2026 the checks
 -- would have found about 1,000 to 3,000 problems at once. Each later
 -- problem adds a row, so at 1,000 new problems a day the table grows about
--- 73 MB a year.
+-- 88 MB a year.
 --
 -- The re-check runs as its own job type, reconcile_pass: one step of a pass
 -- a job, at backfill priority, claimed like a daily result calculation.
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS reconcile_findings (
     found_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     last_seen_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     fix_queued_at timestamptz,
+    -- Set by the recalculation in the transaction saving its result.
+    fix_done_at timestamptz,
     escalated_at timestamptz,
     resolved_at timestamptz
 );
@@ -43,6 +46,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS reconcile_findings_open
     WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS reconcile_findings_found
     ON reconcile_findings (found_at);
+-- A day's findings of a player, resolved ones too: a read older than the one
+-- that resolved a problem does not find it again.
+CREATE INDEX IF NOT EXISTS reconcile_findings_day
+    ON reconcile_findings (ranked_day_start, player_id);
 
 REVOKE ALL ON reconcile_findings FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON reconcile_findings TO clashlens_python_worker;

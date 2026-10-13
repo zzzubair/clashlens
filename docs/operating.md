@@ -1084,8 +1084,11 @@ posts what the nightly re-check of finished Legend days
 twice-daily recheck queues one pass right after it, as `reconcile_pass` jobs
 at backfill priority: each job judges 500 player-days and queues the next,
 over every finished day of the Season, in the room live work leaves. None
-starts from 04:00 to 07:00 UTC, and a pass reaching 04:00 stops. The players
-judged for a day are the ones the Reset sweeps starting and ending it
+starts from 04:00 to 07:00 UTC; each read of a job is limited to the time
+left before 04:00 when the job starts, and a job reaching 04:00 keeps
+nothing and queues nothing more. The players judged for a day are every
+player with a saved day for it, including days rebuilt from a player's
+first battle log, and the ones the Reset sweeps starting and ending it
 tracked. Each count is a problem first found in those 24 hours:
 
 - **recount:** a saved day whose attacks, defenses, gain or loss differ
@@ -1106,18 +1109,20 @@ tracked. Each count is a problem first found in those 24 hours:
 Recount and missing-day problems get the normal recalculation of their day
 queued once, at backfill priority, at most 2,000 a pass, and none while a
 Season repair recalculates the Season's days. "Still wrong after their
-recalculation" counts those found again in a check that read the day after
-that recalculation finished: the calculation, not the data, is the suspect.
-"With a failed recalculation" counts open problems whose recalculation
-failed instead; read its failure first. The rest are listed only. A problem
-not found again is resolved. Nothing deletes the rows.
+recalculation" counts those found again in a check that read the day with
+that recalculation's result saved (`fix_done_at`): the calculation, not the
+data, is the suspect. "With a failed recalculation" counts open problems
+whose recalculation failed instead; read its failure first. The rest are
+listed only. A problem its check judges again and does not find is
+resolved; a check that could not judge it, such as a recount of a day whose
+page lost its result, leaves it open. Nothing deletes the rows.
 
 **First checks:** the open problems, newest first:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
   "SELECT check_name, player_id, ranked_day_start, subject_id, expected, saved,
-          found_at, fix_queued_at, escalated_at
+          found_at, fix_queued_at, fix_done_at, escalated_at
    FROM reconcile_findings WHERE resolved_at IS NULL
    ORDER BY found_at DESC LIMIT 50"
 ```
