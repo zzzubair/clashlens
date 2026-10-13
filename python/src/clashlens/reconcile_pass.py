@@ -42,9 +42,9 @@ them (``domain_repair.recalculating_days``).
 The checks read in READ ONLY transactions, each one snapshot, with a
 statement timeout and take no row locks, in the connection pool the worker
 already has; a step first extends its job's lease over all its reads. No
-pass starts from 04:00 to 07:00 UTC; each read of a step is limited to the
-time left before 04:00 when it starts, and a step reaching 04:00 keeps
-nothing and queues nothing more. On 9 October 2026 the same checks found 7 recount differences, 0 chain breaks, 0 ledger
+pass starts from 04:00 to 07:00 UTC: no statement of a step starts at or
+after 04:00 or runs past it, and a step reaching 04:00 keeps nothing and
+queues nothing more. On 9 October 2026 the same checks found 7 recount differences, 0 chain breaks, 0 ledger
 breaks, 5 one-sided battles, 1,019 missing days and 850 board rows over the
 Season's first 4 days. The alert check posts one line a day with the counts
 (``alerts.reconcile_probe``).
@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import psycopg
+from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
 from . import db, domain, domain_repair, first_battle_log, job_outcomes
@@ -201,15 +201,14 @@ WHERE (attacker = ANY(%(players)s::bigint[])
        OR saved < 2 AND attacker IN (SELECT member FROM tracked)
                     AND defender IN (SELECT member FROM tracked))
 """
-# The newest Daily board of the Reset ending the day, with its confirmed
-# rows of the batch.
+# The confirmed rows of the newest Daily board of the Reset ending the day.
 _BOARD = """
 SELECT entry.player_id, board.id, entry.trophies
 FROM (SELECT id FROM leaderboard_snapshots
       WHERE snapshot_kind = 'frozen' AND state = 'published' AND boundary_at = %(reset)s
       ORDER BY version DESC, id DESC LIMIT 1) AS board
-LEFT JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
-    AND entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
+JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
+WHERE entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
 """
 # The trophies of a day's battles that ended at or after its Reset, which a
 # board's total leaves out (``boundary_manifest.reset_trophies``): an attack
@@ -283,18 +282,20 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
         (_, _, version, season_id, start_trophies, end, _, automatic,
          attacks, gain, defenses, loss) = row
         ends[player] = (version, end, automatic)
-        judged |= {(player, "recount"), (player, "ledger")}
+        judged.add((player, "recount"))
         recount = recounts.get(player, (0, 0, 0, 0))
         if recount != (attacks, gain, defenses, loss):
             findings.append(Finding("recount", player, 0, version, _counts(*recount),
                                     _counts(attacks, gain, defenses, loss)))
         before = days.get((player, day - domain.RANKED_DAY_DURATION))
-        if before is not None and before[2] is not None:
+        if (before is not None and before[2] is not None and before[3] == season_id
+                and None not in (before[6], start_trophies)):
             judged.add((player, "chain"))
-            if (before[3] == season_id and None not in (before[6], start_trophies)
-                    and before[6] != start_trophies):
+            if before[6] != start_trophies:
                 findings.append(Finding("chain", player, 0, version, {"start": before[6]},
                                         {"start": start_trophies}))
+        if None not in (start_trophies, end):
+            judged.add((player, "ledger"))
         if None not in (start_trophies, end) and (
                 start_trophies + gain - loss - (automatic or 0) != end):
             findings.append(Finding("ledger", player, 0, version,
@@ -308,10 +309,8 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
         findings.append(Finding("copies", int(player), int(battle), None,
                                 {"reports": 2, "fields": []},
                                 {"reports": int(saved), "fields": list(fields)}))
-    boards = connection.execute(_BOARD, params).fetchall()
-    if boards:
-        judged |= {(player, "board") for player in players}
-    rows = [row for row in boards if row[0] is not None]
+    rows = connection.execute(_BOARD, params).fetchall()
+    judged |= {(int(row[0]), "board") for row in rows}
     versions = [ends[int(row[0])][0] for row in rows
                 if ends.get(int(row[0]), (None, None))[1] is not None]
     after_reset = dict(connection.execute(
@@ -410,13 +409,35 @@ def note_fix_done(connection: Any, claim: db.Claim) -> None:
             (int(claim.deduplication_key.removeprefix(FIX_KEY)),))
 
 
-def _read_limit(now: datetime) -> int:
-    """A read's time limit in milliseconds: ``STATEMENT_SECONDS``, or the
-    time left before the next 04:00 UTC if less."""
+class _Stopped(Exception):
+    """A step reached 04:00 UTC."""
+
+
+class _Timed:
+    """A step's connection: each statement starts only before ``deadline``
+    and may run until it, at most ``STATEMENT_SECONDS``."""
+
+    def __init__(self, connection: Any, deadline: datetime) -> None:
+        self.connection, self.deadline = connection, deadline
+
+    def execute(self, query: Any, params: Any = None) -> Any:
+        left = int((self.deadline - _now()).total_seconds() * 1000)
+        if left <= 0:
+            raise _Stopped
+        self.connection.execute(
+            f"SET LOCAL statement_timeout = {min(left, STATEMENT_SECONDS * 1000)}")
+        try:
+            return self.connection.execute(query, params)
+        except QueryCanceled:
+            if _now() >= self.deadline:
+                raise _Stopped from None
+            raise
+
+
+def _next_stop(now: datetime) -> datetime:
+    """The next 04:00 UTC after ``now``."""
     stop = now.replace(hour=QUIET_HOURS.start, minute=0, second=0, microsecond=0)
-    if stop <= now:
-        stop += timedelta(days=1)
-    return max(1, min(STATEMENT_SECONDS * 1000, int((stop - now).total_seconds() * 1000)))
+    return stop if stop > now else stop + timedelta(days=1)
 
 
 def _newest_day(slot: str) -> domain.RankedDay:
@@ -464,49 +485,49 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
         tzinfo=UTC)
     newest = _newest_day(slot)
     detail: dict[str, Any] = {}
+    stopped = False
     try:
         now = _now()
-        stopped = now.hour in QUIET_HOURS
-        if not stopped:
-            database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
         with database.pool.connection() as connection:
-            if not stopped:
+            timed = _Timed(connection, _next_stop(now))
+            try:
+                if now.hour in QUIET_HOURS:
+                    raise _Stopped
+                database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
                 with connection.transaction():
                     # One snapshot for every read, the time it was taken.
                     connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-                    connection.execute(f"SET LOCAL statement_timeout = {_read_limit(now)}")
-                    read_at = connection.execute("SELECT statement_timestamp()").fetchone()[0]
-                    players = [int(row[0]) for row in connection.execute(
+                    read_at = timed.execute("SELECT statement_timestamp()").fetchone()[0]
+                    players = [int(row[0]) for row in timed.execute(
                         _STEP_PLAYERS, {**_params(day, []), "after": after, "limit": BATCH_DAYS})]
-                    judgment = judge(connection, day, players) if players else ([], set(), set())
-            with connection.transaction():
-                job = database._lock_live_claim(connection, claim)
-                stopped = stopped or _now().hour in QUIET_HOURS
-                if not stopped:
-                    with connection.transaction():
-                        # Under its guard, a Season repair cannot start
-                        # queueing days before this step commits.
-                        repairing = domain_repair.recalculating_days(
-                            connection, newest.official_season_id)
-                        counts = record(connection, day, judgment, read_at=read_at,
-                                        fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
-                        done = {**counts, "days": len(players), "repairing": repairing,
-                                **Counter(f"seen:{finding.check}" for finding in judgment[0])}
-                        if len(players) == BATCH_DAYS:
-                            _queue_step(connection, slot, day, players[-1],
-                                        queued + counts["queued"])
-                        elif day < newest.start:
-                            _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0,
-                                        queued + counts["queued"])
-                        else:
-                            done["finished"] = True
-                        # A step reaching 04:00 keeps none of it.
-                        stopped = _now().hour in QUIET_HOURS
-                        if stopped:
-                            raise psycopg.Rollback()
-                        detail, queued = done, queued + counts["queued"]
-                database._finish_claim(connection, claim, job, state="complete",
-                                       outcome="processed")
+                    judgment = judge(timed, day, players) if players else ([], set(), set())
+                with connection.transaction():
+                    job = database._lock_live_claim(timed, claim)
+                    # Under its guard, a Season repair cannot start queueing
+                    # days before this step commits.
+                    repairing = domain_repair.recalculating_days(
+                        timed, newest.official_season_id)
+                    counts = record(timed, day, judgment, read_at=read_at,
+                                    fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
+                    done = {**counts, "days": len(players), "repairing": repairing,
+                            **Counter(f"seen:{finding.check}" for finding in judgment[0])}
+                    if len(players) == BATCH_DAYS:
+                        _queue_step(timed, slot, day, players[-1], queued + counts["queued"])
+                    elif day < newest.start:
+                        _queue_step(timed, slot, day + domain.RANKED_DAY_DURATION, 0,
+                                    queued + counts["queued"])
+                    else:
+                        done["finished"] = True
+                    database._finish_claim(timed, claim, job, state="complete",
+                                           outcome="processed")
+                detail, queued = done, queued + counts["queued"]
+            except _Stopped:
+                # Nothing it read is kept, and nothing more is queued.
+                stopped = True
+                with connection.transaction():
+                    database._finish_claim(
+                        connection, claim, database._lock_live_claim(connection, claim),
+                        state="complete", outcome="processed")
     except db.LeaseLost:
         return "lease_lost"
     except (AssertionError, KeyError, TypeError, ValueError) as error:

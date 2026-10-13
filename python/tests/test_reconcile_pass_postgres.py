@@ -6,6 +6,7 @@ queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
+import itertools
 import threading
 from datetime import datetime, timedelta
 
@@ -42,29 +43,20 @@ def _as_worker(connection_info: str) -> str:
 
 
 def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
-              *, steps: int | None = None, reads_end: datetime | None = None) -> int:
+              *, steps: int | None = None, tick: timedelta = timedelta(0)) -> int:
     """Queue the pass of ``slot``, by default the night recheck's at ``now``,
-    and run its waiting steps, or the first ``steps``, at ``now``, or with
-    the clock at ``reads_end`` once a step's reads end, each claimed by the
-    real worker with its own database role; how many ran."""
-    clock = [now]
-    monkeypatch.setattr(reconcile_pass, "_now", lambda: clock[0])
+    and run its waiting steps, or the first ``steps``, at ``now``, the clock
+    moving ``tick`` each time the pass reads it, each claimed by the real
+    worker with its own database role; how many ran."""
+    times = (now + tick * count for count in itertools.count())
+    monkeypatch.setattr(reconcile_pass, "_now", lambda: next(times))
     database, processor = _processor(_as_worker(story.connection_info), story.archive_server)
-    judge = reconcile_pass.judge
-
-    def slow_judge(*args):
-        judgment = judge(*args)
-        clock[0] = reads_end or clock[0]
-        return judgment
-
     ran = 0
     try:
-        with monkeypatch.context() as patch:
-            patch.setattr(reconcile_pass, "judge", slow_judge)
-            reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
-            while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
-                assert processor.process_job(job, owner="test").outcome == "processed"
-                ran += 1
+        reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
+        while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
+            assert processor.process_job(job, owner="test").outcome == "processed"
+            ran += 1
     finally:
         database.close()
     return ran
@@ -337,9 +329,10 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         _run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1), morning, steps=0)
         stopped = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1), morning),
                    _waiting_step(connection_info), _open(connection_info))
-        crossing = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1),
-                              f"{day(3):%Y-%m-%d}:night",
-                              reads_end=day(5) - timedelta(hours=1) + timedelta(seconds=1)),
+        # A step starting at 03:59:56, its clock a second on at each statement,
+        # reaching 04:00 between its reads.
+        crossing = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, seconds=5),
+                              f"{day(3):%Y-%m-%d}:night", tick=timedelta(seconds=1)),
                     _waiting_step(connection_info), _open(connection_info),
                     _queued(connection_info))
 

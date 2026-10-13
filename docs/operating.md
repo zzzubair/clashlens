@@ -1084,9 +1084,9 @@ posts what the nightly re-check of finished Legend days
 twice-daily recheck queues one pass right after it, as `reconcile_pass` jobs
 at backfill priority: each job judges 500 player-days and queues the next,
 over every finished day of the Season, in the room live work leaves. None
-starts from 04:00 to 07:00 UTC; each read of a job is limited to the time
-left before 04:00 when the job starts, and a job reaching 04:00 keeps
-nothing and queues nothing more. The players judged for a day are every
+starts from 04:00 to 07:00 UTC: no read or write of a job starts at or
+after 04:00 or runs past it, and a job reaching 04:00 keeps nothing and
+queues nothing more. The players judged for a day are every
 player with a saved day for it, including days rebuilt from a player's
 first battle log, and the ones the Reset sweeps starting and ending it
 tracked. Each count is a problem first found in those 24 hours:
@@ -1115,7 +1115,8 @@ data, is the suspect. "With a failed recalculation" counts open problems
 whose recalculation failed instead; read its failure first. The rest are
 listed only. A problem its check judges again and does not find is
 resolved; a check that could not judge it, such as a recount of a day whose
-page lost its result, leaves it open. Nothing deletes the rows.
+page lost its result, a chain or ledger missing a trophy count, or a board
+row no longer confirmed, leaves it open. Nothing deletes the rows.
 
 **First checks:** the open problems, newest first:
 
