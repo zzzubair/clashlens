@@ -638,6 +638,7 @@ describe("today read for the Legend day and Bases cards", () => {
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
       projectedRank: null,
+      projectedRankPending: false,
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [
@@ -666,32 +667,37 @@ describe("today read for the Legend day and Bases cards", () => {
     );
   });
 
-  it("reads the projected place inside the Next Reset range", async () => {
-    mocks.requestJson.mockResolvedValue({
+  it("reads the projected place inside the Next Reset range, and whether it is still worked out", async () => {
+    const today = {
       tag: MAIN,
       rank_range: { best: 95, worst: 760 },
       projected_rank: 240,
+      projected_rank_pending: false,
       legends_held: null,
       open_defenses: null,
       automatic_defense_each: null,
       opponents: null,
       board_computed_at: null,
-    });
+    };
+    mocks.requestJson.mockResolvedValue(today);
     expect(await getPlayerToday(MAIN)).toMatchObject({
       rankRange: { best: 95, worst: 760 },
       projectedRank: 240,
+      projectedRankPending: false,
     });
     mocks.requestJson.mockResolvedValue({
-      tag: MAIN,
-      rank_range: { best: 95, worst: 760 },
-      projected_rank: 0,
-      legends_held: null,
-      open_defenses: null,
-      automatic_defense_each: null,
-      opponents: null,
-      board_computed_at: null,
+      ...today,
+      projected_rank: null,
+      projected_rank_pending: true,
     });
-    await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
+    expect(await getPlayerToday(MAIN)).toMatchObject({
+      projectedRank: null,
+      projectedRankPending: true,
+    });
+    for (const bad of [{ projected_rank: 0 }, { projected_rank_pending: "yes" }]) {
+      mocks.requestJson.mockResolvedValue({ ...today, ...bad });
+      await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
+    }
   });
 
   it("keeps a today read without saved battles apart from one with no attacks", async () => {
@@ -828,7 +834,8 @@ describe("dashboard route", () => {
   it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
     const boardAt = "2026-10-07T09:05:00+00:00";
     // Today's read answers before the board is read; asked again, it waits
-    // for it, and the time after for the projected place worked out after it.
+    // for it, and the time after for the projected place worked out after
+    // it. Once no day's examples are saved, there is none to wait for.
     let waits = 0;
     mocks.requestJson.mockImplementation(async (path: string) => {
       const waited = path.endsWith("?wait_for_board=true");
@@ -836,7 +843,8 @@ describe("dashboard route", () => {
       return {
         tag: MAIN,
         rank_range: waited ? { best: 95, worst: 760 } : null,
-        projected_rank: waits > 1 ? 240 : null,
+        projected_rank: waits === 2 ? 240 : null,
+        projected_rank_pending: waits === 1,
         open_defenses: 7,
         automatic_defense_each: 21,
         opponents: [],
@@ -882,11 +890,17 @@ describe("dashboard route", () => {
         projected: 240,
       },
     });
+    const none = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+    );
+    expect(none.cards["legend-day"]).toMatchObject({ projected: null });
+    expect(none.cards["legend-day"]).not.toHaveProperty("boardPending");
     // One read of today's numbers serves both cards each time.
     expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
-      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
-      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+      ...Array(3).fill(
+        `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+      ),
     ]);
   });
 

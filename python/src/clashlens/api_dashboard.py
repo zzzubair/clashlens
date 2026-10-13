@@ -32,8 +32,9 @@ examples of the last 7 days. It takes seconds of calculation, so it runs in
 a separate Python process, one at a time, a board read meanwhile worked out
 right after, and requests look it up: until the first one of a Legend day
 finishes, and once the newest is 10 minutes old, it is left out. The
-dashboard asks again while the range shows without it, each follow-up
-waiting within its 4 seconds while the player's place is worked out.
+dashboard asks again while the player's place is still to be worked out,
+not once today's projection found no day's examples saved, each follow-up
+waiting within its 4 seconds while it is worked out.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -683,13 +684,20 @@ def get_player_today(
     range and comparisons are None while the shared board is unavailable,
     after waiting up to ``board_wait`` seconds for it, the projected place
     also while its projection is worked out, within the same wait, and
-    ``board_computed_at`` says when the board was read."""
+    ``board_computed_at`` says when the board was read.
+    ``projected_rank_pending`` says the player's place is still to be worked
+    out, so the dashboard asks again."""
     day = ranked_day_for(now)
     until = time.monotonic() + board_wait
     board = board_cache.current(database, now, wait=board_wait)
     projection = None
+    pending = False
     if board is not None and tag in board.ends:
         projection = board_cache.projection(now, tag, wait=until - time.monotonic())
+        # Not once today's projection found no day's examples saved.
+        pending = projection is None or (
+            bool(projection.places) and tag not in projection.places
+        )
     with database.pool.connection() as connection:
         if connection.execute(
             "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
@@ -780,6 +788,7 @@ def get_player_today(
         "board_computed_at": None if board is None else _iso(board.computed_at),
         "rank_range": None if board is None else rank_range(board, tag),
         "projected_rank": None if board is None else projected_rank(board, projection, tag),
+        "projected_rank_pending": pending,
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}

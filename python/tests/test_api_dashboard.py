@@ -547,11 +547,11 @@ def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None
 
 def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> None:
     """The projection is worked out after the board read, so a request
-    gets the range at once and the projected place once it is ready; a
-    follow-up waits while its player's place is worked out, but no longer
-    than it may: also for a player new to the board, and across a Reset
-    while the day before's is still worked out. One 10 minutes old, or from
-    another Legend day, is not shown."""
+    gets the range at once and the projected place once it is ready, told
+    to ask again until then; a follow-up waits while its player's place is
+    worked out, but no longer than it may: also for a player new to the
+    board, and across a Reset while the day before's is still worked out.
+    One 10 minutes old, or from another Legend day, is not shown."""
     go = Event()
     rows = [("#2PP", None, 5000), ("#8PP", None, 5000)]
 
@@ -567,6 +567,9 @@ def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> 
 
         def fetchall(self) -> list[tuple[Any, ...]]:
             return []
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
 
     def compute(_function: Any, tags: list[str], **_kwargs: Any) -> list[int]:
         go.wait(10)
@@ -594,6 +597,11 @@ def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> 
         return (api_dashboard.rank_range(found, tag),
                 api_dashboard.projected_rank(found, projection, tag))
 
+    def pending(tag: str, now: Any = NOW) -> bool:
+        """Whether the dashboard is told to ask again for ``tag``'s place."""
+        today = api_dashboard.get_player_today(database, board, tag, now=now)  # type: ignore[arg-type]
+        return today["projected_rank_pending"]
+
     def followed_up(tag: str, now: Any = NOW) -> tuple[Any, Any]:
         """A follow-up waiting when the calculation finishes."""
         with ThreadPoolExecutor(1) as pool:
@@ -613,11 +621,13 @@ def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> 
     asked = time.monotonic()
     assert ranks("#2PP") == (two, None)
     assert time.monotonic() - asked < 1
+    assert pending("#2PP")
     asked = time.monotonic()
     assert ranks("#2PP", wait=0.3) == (two, None)
     assert 0.3 <= time.monotonic() - asked < 2
     assert followed_up("#8PP") == (two, 1)
     assert ranks("#2PP") == (two, 2)
+    assert not pending("#2PP")
 
     # A player new to the board waits for the next calculation, not the last.
     three = {"best": 1, "worst": 3}
@@ -626,6 +636,7 @@ def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> 
     later = NOW + timedelta(minutes=1)
     clock[0] = api_dashboard.BOARD_SECONDS
     read_at(later)
+    assert pending("#9PP", later)
     assert followed_up("#9PP", later) == (three, 2)
 
     # At the Reset the new day's board is worked out right after the day

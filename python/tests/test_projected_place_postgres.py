@@ -89,8 +89,9 @@ def test_card_shows_a_projected_place_learned_from_the_day_before(
     still has 2 attacks. The outer range lets either finish first. The day
     before, CHASER was in the same spot at 20:00 and won 80 more, so the
     projected place puts CHASER first and DONE second. Before any day's
-    examples are saved the card has no projected place; the worker's first
-    run saves every finished day with a Daily board at once."""
+    examples are saved the card has no projected place and does not ask
+    again for one; the worker's first run saves every finished day with a
+    Daily board at once."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, DONE, CHASER)
         # Today's card is read at 20:00. The worker publishes a day's battles
@@ -147,9 +148,11 @@ def test_card_shows_a_projected_place_learned_from_the_day_before(
 
     assert unfinished == []
     assert saved_before == 0
-    assert {tag: card["projected_rank"] for tag, card in hidden.items()} == {
-        DONE: None, CHASER: None,
-    }
+    # Without examples there is no place, nor one for the card to ask again for.
+    assert {
+        tag: (card["projected_rank"], card["projected_rank_pending"])
+        for tag, card in hidden.items()
+    } == {DONE: (None, False), CHASER: (None, False)}
     # The days before today with a published Daily board, saved in one run.
     assert len(boards) > 1 and boards[-1] == EXAMPLE
     assert saved == [(start, 96, 0, 95) for start in boards]
@@ -158,9 +161,10 @@ def test_card_shows_a_projected_place_learned_from_the_day_before(
     assert {tag: card["rank_range"] for tag, card in cards.items()} == {
         DONE: {"best": 1, "worst": 2}, CHASER: {"best": 1, "worst": 2},
     }
-    assert {tag: card["projected_rank"] for tag, card in cards.items()} == {
-        DONE: 2, CHASER: 1,
-    }
+    assert {
+        tag: (card["projected_rank"], card["projected_rank_pending"])
+        for tag, card in cards.items()
+    } == {DONE: (2, False), CHASER: (1, False)}
 
 
 # Three players finish today on the same trophies; RAIDER attacks HIT.
