@@ -127,10 +127,13 @@ def test_bases_compare_with_legends_at_similar_trophies(
     assert {tag: row["reset_trophies"] for tag, row in bases.items()} == {
         TYPICAL: 5400, STRONG: 5410,
     }
-    # Players within 100 trophies of each base: the 24 near 5,400 and the
-    # two bases, 58 of 208 held, losing 6,928 (33.3 a defense); the 192
-    # defenses near 4,900 are left out.
-    near = {"held": 58, "defenses": 208, "lost": 24 * 272 + 248 + 152}
+    # Within 20 trophies of each base are only 184 and 168 defenses, so each
+    # comparison widens until it holds 200: to 24 trophies for the typical
+    # base, leaving out the player at 5,426, and to 28 for the strong one,
+    # leaving out the player at 5,380. Both hold 23 of the players near 5,400
+    # and the two bases, 56 of 200 held, losing 6,656 (33.3 a defense); the
+    # 192 defenses near 4,900 are left out.
+    near = {"held": 56, "defenses": 200, "lost": 23 * 272 + 248 + 152}
     assert {tag: row["legends_held"] for tag, row in bases.items()} == {
         TYPICAL: near, STRONG: near,
     }

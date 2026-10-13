@@ -462,7 +462,7 @@ def test_bases_compare_only_with_players_at_similar_trophies() -> None:
     # Unknown Reset trophies: no comparison.
     assert api_dashboard.similar_held(board, None) is None
 
-    # With 8 more defenses at 5,520, 5,250 has none within 100 and 24 within
+    # With 8 more defenses at 5,520, 5,250 has none within 20 and 24 within
     # 150, then 220 within 250, so it stops short of 5,520 at 270.
     wider = board_of(rows + [player("#D", 5520, 8, 8)])
     assert api_dashboard.similar_held(wider, 5250) == {

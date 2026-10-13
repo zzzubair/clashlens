@@ -202,7 +202,7 @@ Reset hides the day's numbers behind a new-day notice until it reloads.
 Bases you attacked rates each base Hard / Average / Easy in the mode its
 settings choose. Held % compares the base's held share today with today's held
 share among tracked Legend players at similar trophies, whose day started
-within 100 trophies of the base's Reset trophies, widened until that holds 200
+within 20 trophies of the base's Reset trophies, widened until that holds 200
 defenses but never past 300 either side, and at least 50 defenses (Average is
 within 15 points). Without that comparison a base with 3+ defenses shows "–"
 and "no comparison yet". Trophies, the default, compares the trophies it gave

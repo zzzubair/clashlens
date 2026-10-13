@@ -38,7 +38,7 @@ waiting within its 4 seconds while it is worked out.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share and trophies lost on defense among players whose day started
-within 100 trophies of the base's, widened evenly until it holds 200 defenses
+within 20 trophies of the base's, widened evenly until it holds 200 defenses
 but never past 300 either side, because held share falls and trophies lost
 rise as trophies rise (last Season: about 65% held under 4,900, 30% at 5,400
 and up; on 13 October 2026 about 31 lost a defense near 4,900 and 36 at
@@ -90,7 +90,7 @@ BOARD_STATEMENT_TIMEOUT = "30s"
 # Bases you attacked: compare with players whose day started this near the
 # base's Reset trophies, widened until the comparison holds enough defenses
 # but never past the most; with fewer than the fewest there, no comparison.
-SIMILAR_TROPHIES = 100
+SIMILAR_TROPHIES = 20
 SIMILAR_MOST_TROPHIES = 300
 SIMILAR_DEFENSES = 200
 SIMILAR_FEWEST_DEFENSES = 50
@@ -608,7 +608,7 @@ def projected_rank(
 
 def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
     """Today's held and all defenses, and the trophies those defenses lost,
-    of players whose day started within 100 trophies of ``trophies``, widened
+    of players whose day started within 20 trophies of ``trophies``, widened
     evenly until there are 200 defenses but never past 300. None under 50
     defenses there, or when ``trophies`` is unknown."""
     if trophies is None:

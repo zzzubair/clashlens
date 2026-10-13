@@ -356,7 +356,7 @@ export interface OpponentRow {
 
 /**
  * Today's held share and trophies lost on defense among tracked Legend players
- * whose day started near the base's Reset trophies: within 100, widened until
+ * whose day started near the base's Reset trophies: within 20, widened until
  * 200 defenses but never past 300, and at least 50 defenses.
  */
 export interface LegendsHeld {
