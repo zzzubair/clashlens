@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -1317,15 +1318,15 @@ function BattleColumn({
                 {index + 1}
               </span>
               <div className="battle-opponent">
-                <a
+                <Link
                   className="battle-profile-link"
-                  href={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
+                  to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
                   aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${dayLabel}`}
                 >
                   <strong>
                     <bdi>{event.opponent.name ?? event.opponent.tag}</bdi>
                   </strong>
-                </a>
+                </Link>
                 {event.opponent.name ? (
                   <span className="player-tag">{event.opponent.tag}</span>
                 ) : null}

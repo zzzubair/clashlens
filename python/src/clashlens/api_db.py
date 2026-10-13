@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+import time
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import BoundedSemaphore, Lock
+from threading import BoundedSemaphore, Lock, Thread
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -456,6 +458,104 @@ def _account_context(row: Any) -> AccountContext:
         username=_text(row[2]),
         display_name=_text(row[3]),
     )
+
+
+def _start_thread(work: Callable[[], None]) -> None:
+    Thread(target=work, name="clashlens-shared-copy", daemon=True).start()
+
+
+class SharedCopy[Copy]:
+    """One answer every request shares, read with ``read(database, now)``.
+
+    Younger than ``seconds`` it is served as is. Until ``longest`` it is still
+    served while one background read replaces it, so no visitor waits for
+    that read. With no copy yet, a copy for another ``key(now)`` (a Legend
+    day or Season it was not read for), or one older than ``longest`` because
+    its background reads keep failing or running late, the request reads it
+    itself and its failure reaches the visitor; requests arriving meanwhile
+    wait for that one read."""
+
+    def __init__(
+        self,
+        read: Callable[[Any, datetime], Copy],
+        *,
+        key: Callable[[datetime], Hashable],
+        seconds: float,
+        longest: float,
+        name: str,
+        clock: Callable[[], float] = time.monotonic,
+        start: Callable[[Callable[[], None]], None] = _start_thread,
+    ) -> None:
+        if not 0 < seconds <= longest:
+            raise ValueError("a shared copy must refresh before it expires")
+        self._read = read
+        self._key = key
+        self._seconds = seconds
+        self._longest = longest
+        self._name = name
+        self._clock = clock
+        self._start = start
+        self._lock = Lock()
+        # Held for every read, so one runs at a time.
+        self._reading = Lock()
+        # (key, clock reading when its read started, copy)
+        self._copy: tuple[Hashable, float, Copy] | None = None
+        self._refreshing = False
+
+    def _usable(self, key: Hashable, age_limit: float) -> Copy | None:
+        copy = self._copy
+        if copy is None or copy[0] != key or self._clock() - copy[1] >= age_limit:
+            return None
+        return copy[2]
+
+    def current(self, database: Any, now: datetime) -> Copy:
+        key = self._key(now)
+        with self._lock:
+            fresh = self._usable(key, self._seconds)
+            if fresh is not None:
+                return fresh
+            served = self._usable(key, self._longest)
+            refresh = served is not None and not self._refreshing
+            self._refreshing = self._refreshing or refresh
+        if refresh:
+            self._start(lambda: self._refresh(database, now, key))
+        if served is not None:
+            return served
+        with self._reading:
+            with self._lock:
+                # Read by another request while this one waited.
+                fresh = self._usable(key, self._seconds)
+            return fresh if fresh is not None else self._read_copy(database, now, key)
+
+    def _read_copy(self, database: Any, now: datetime, key: Hashable) -> Copy:
+        started = self._clock()
+        copy = self._read(database, now)
+        with self._lock:
+            self._copy = (key, started, copy)
+        return copy
+
+    def _refresh(self, database: Any, now: datetime, key: Hashable) -> None:
+        try:
+            with self._reading:
+                with self._lock:
+                    # A request may already have read one for a later Legend day.
+                    current = self._copy is not None and self._copy[0] == key
+                if current:
+                    self._read_copy(database, now, key)
+        except Exception as error:  # noqa: BLE001 - the next request tries again
+            print(
+                json.dumps(
+                    {
+                        "event": self._name,
+                        "status": "refresh_failed",
+                        "error": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
+        finally:
+            with self._lock:
+                self._refreshing = False
 
 
 def _text(value: Any) -> Any:

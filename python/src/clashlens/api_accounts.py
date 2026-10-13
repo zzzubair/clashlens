@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_groups, api_player_lookup, api_players
+from . import api_db, api_groups, api_leaderboard, api_player_lookup, api_players
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -1078,7 +1078,11 @@ def search_public_users(
 
 
 def get_public_user(
-    database: ApiDatabase, normalized_username: str, *, now: datetime
+    database: ApiDatabase,
+    normalized_username: str,
+    *,
+    now: datetime,
+    live_board: api_leaderboard.LiveBoardCache | None = None,
 ) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         account = connection.execute(
@@ -1091,14 +1095,22 @@ def get_public_user(
         ).fetchone()
         if account is None:
             return None
+        players = _linked_players(connection, int(account[0]))
+    cards: list[dict[str, Any]] = []
+    if players:
+        # Ranks from the shared Live Leaderboard, read outside a held
+        # connection so a board read never waits for a second one.
+        board = None if live_board is None else live_board.current(database, now)
         # One read gives every linked player's card, never one per player.
-        return {
-            "username": _text(account[1]),
-            "display_name": _text(account[2]),
-            "verified_players": api_players.player_cards(
-                connection, _linked_players(connection, int(account[0])), now=now
-            ),
-        }
+        with database.pool.connection() as connection:
+            cards = api_players.player_cards(
+                connection, players, now=now, live_board=board
+            )
+    return {
+        "username": _text(account[1]),
+        "display_name": _text(account[2]),
+        "verified_players": cards,
+    }
 
 
 def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[str, Any] | None:

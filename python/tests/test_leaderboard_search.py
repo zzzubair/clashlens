@@ -14,7 +14,7 @@ from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 from clashlens import analytics, api_leaderboard, api_players
 from clashlens.analytics import tie_order_key
 from clashlens.api import create_app
-from clashlens.api_db import ApiDatabase
+from clashlens.api_db import ApiDatabase, SharedCopy
 from clashlens.domain import ranked_day_for
 
 
@@ -32,6 +32,50 @@ def board_database(database_url: str):
             yield database
         finally:
             database.close()
+
+
+def test_shared_copy_reaches_visitors_failures_only_once_too_old(capsys):
+    clock = [0.0]
+    refreshes = []
+    reads = []
+    failing = [False]
+
+    def read(_database, now):
+        reads.append(now)
+        if failing[0]:
+            raise RuntimeError("database unavailable")
+        return len(reads)
+
+    copy = SharedCopy(
+        read,
+        key=lambda now: ranked_day_for(now).start,
+        seconds=30,
+        longest=60,
+        name="test_copy",
+        clock=lambda: clock[0],
+        start=refreshes.append,
+    )
+    assert copy.current(None, NOW) == 1
+    # The background read fails: the copy is still served, and tried again.
+    clock[0] = 31
+    failing[0] = True
+    assert copy.current(None, NOW) == 1
+    refreshes.pop()()
+    assert '"event": "test_copy", "status": "refresh_failed"' in capsys.readouterr().out
+    assert copy.current(None, NOW) == 1
+    assert len(refreshes) == 1
+    # Too old to serve: the visitor's own read fails, as with no copy at all.
+    clock[0] = 60
+    with pytest.raises(RuntimeError):
+        copy.current(None, NOW)
+    failing[0] = False
+    assert copy.current(None, NOW) == 4
+    # A new Legend day is read at once, even within the 30 seconds.
+    assert copy.current(None, NOW + timedelta(days=1)) == 5
+    # A background read started for the old day does not replace the new one.
+    refreshes.pop()()
+    assert copy.current(None, NOW + timedelta(days=1)) == 5
+    assert len(reads) == 5
 
 
 def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_database):
@@ -81,7 +125,10 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
 def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
     database = board_database
     clock = [0.0]
-    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    refreshes = []
+    cache = api_leaderboard.LiveBoardCache(
+        clock=lambda: clock[0], start=refreshes.append
+    )
     home = api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
     target = home["entries"][24]["tag"]
     with database.pool.connection() as connection:
@@ -89,15 +136,23 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
             "UPDATE player_profile_versions SET trophies = 7000 WHERE normalized_tag = %s",
             (target,),
         )
-    clock[0] = 29.9
+    clock[0] = 19.9
     rankings = api_leaderboard.get_live_leaderboard(
         database, limit=100, now=NOW, cache=cache
     )
     assert rankings["entries"][:25] == home["entries"]
-    clock[0] = 30.0
+    assert refreshes == []
+    # At 20 seconds old it is still served at once while one background read runs.
+    clock[0] = 20.0
+    expired = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
+    api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
+    assert expired["entries"][:25] == home["entries"]
+    assert len(refreshes) == 1
+    refreshes.pop()()
     later = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
     assert later["entries"][0]["tag"] == target
     assert later["entries"][0]["trophies"] == 7000
+    assert refreshes == []
     # A new Season is read at once: these profiles still name the old one.
     next_season = api_leaderboard.get_live_leaderboard(
         database, limit=100, now=NOW + timedelta(days=28), cache=cache
@@ -109,7 +164,9 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
 def test_search_then_focus_read_the_same_cached_board(board_database):
     database = board_database
     clock = [0.0]
-    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    cache = api_leaderboard.LiveBoardCache(
+        clock=lambda: clock[0], start=lambda refresh: None
+    )
     api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
     seed_profile(database, "#PQQ", 7000)
     with database.pool.connection() as connection:
@@ -138,6 +195,7 @@ def test_search_then_focus_read_the_same_cached_board(board_database):
     }
     assert search_then_focus("#P22")["results"][0]["trophies"] == 6000
     assert len(search_then_focus("Player")["results"]) == 20
+    # At 30 seconds old with no background read done, it is read again.
     clock[0] = 30.0
     found = search_then_focus("#PQQ")
     assert found["exact_tag"] == "#PQQ"
@@ -185,6 +243,15 @@ def test_equal_trophies_follow_season_attack_destruction(board_database, monkeyp
     assert board["ordering_rule_version"] == "tracked-trophies-attack-destruction-v2"
     assert found["results"][0]["rank"] == 4
     assert positions == {"#P28": 2}
+    # Positions taken from the shared board follow the same tie order.
+    reader = ApiDatabase(as_api_role(database.pool.conninfo))
+    try:
+        shared = api_leaderboard.LiveBoardCache().current(reader, NOW)
+    finally:
+        reader.close()
+    assert shared.positions(["#P22", "#P28", "#P29", "#P2P", "#PQQ"]) == {
+        "#P22": 1, "#P28": 2, "#P29": 3, "#P2P": 4
+    }
 
     # Battles moved out of the Season leave a player with no attacks.
     with database.pool.connection() as connection, connection.transaction():
@@ -538,6 +605,11 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                 known = api_players.search_known_players(
                     database, "Player", now=now, freshness_seconds=900
                 )
+                # The header search's held copy decides the same way.
+                assert api_players.search_known_players(
+                    database, "Player", now=now, freshness_seconds=900,
+                    names=api_players.KnownPlayerNames(),
+                ) == known
                 assert {r["tag"] for r in known if r["season_reset_pending"]} == waiting
                 assert all(
                     r["trophies"] is None for r in known if r["season_reset_pending"]
@@ -557,6 +629,10 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                         "SELECT id, normalized_tag, NULL, NULL, NULL FROM players"
                     ).fetchall()
                     cards = api_players.player_cards(connection, ids, now=now)
+                    assert api_players.player_cards(
+                        connection, ids, now=now,
+                        live_board=api_leaderboard.LiveBoardCache().current(database, now),
+                    ) == cards
                 assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting
                 average = api_analytics.get_basic_analytics(
                     database, now=now, freshness_seconds=900

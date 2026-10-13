@@ -183,6 +183,11 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
             assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
+            # The website's profile takes them from the shared Live board.
+            assert api_accounts.get_public_user(
+                database, "groupowner", now=NOW,
+                live_board=api_leaderboard.LiveBoardCache(),
+            )["verified_players"] == cards
             # A newer uncertain profile names no league, rather than the
             # older Electro League 33 staying shown.
             with database.pool.connection() as connection:
@@ -209,5 +214,35 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                 "verified_players"
             ]
             assert [card["league"] for card in cards if card["tag"] == "#YQ2"] == [None]
+        finally:
+            database.close()
+
+
+def test_profile_without_linked_players_does_not_read_the_live_board(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            create_owner(database)
+            # A copy the shared board read now would stay current.
+            cache = api_leaderboard.LiveBoardCache(clock=lambda: 0.0)
+            assert api_accounts.get_public_user(
+                database, "nobody", now=NOW, live_board=cache
+            ) is None
+            assert api_accounts.get_public_user(
+                database, "groupowner", now=NOW, live_board=cache
+            ) == {
+                "username": "groupowner", "display_name": "Group Owner",
+                "verified_players": [],
+            }
+            seed_profile(database, "#2PP", 5300)
+            # Neither profile read the board, so the first board page reads it.
+            board = api_leaderboard.get_live_leaderboard(
+                database, limit=50, now=NOW, cache=cache
+            )
+            assert [entry["tag"] for entry in board["entries"]] == ["#2PP"]
         finally:
             database.close()
