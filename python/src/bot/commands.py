@@ -170,11 +170,12 @@ class Commands:
             return named[0]["tag"]
         return tag if is_tag else replies.no_such_player(text)
 
-    def pick(self, discord_id: str, action: str, tag: str) -> Reply | None:
-        """A dropdown choice; None when this Discord user is no longer connected."""
+    def pick(self, discord_id: str, action: str, tag: str) -> Reply:
+        """A dropdown choice; which player to look up when this Discord user
+        is no longer connected, as for /stats with no player."""
         account = self.store.account(discord_id)
         if account is None:
-            return None
+            return replies.name_a_player()
         if find_own(self.store.players(account, self.now()), tag) is None:
             return replies.not_own()
         return self._one_moment(lambda now: self._stats(account, "", tag, now))

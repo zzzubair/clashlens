@@ -513,7 +513,12 @@ def test_a_public_reply_never_turns_into_a_connect_message(store) -> None:
     pick(message, click, "#8QQ")
     assert [item["edited"] for item in click.messages] == [False]
     assert click.last["private"] is True
-    assert click.last["text"].startswith("### Get started with Clash Lens")
+    # /stats never asks to sign up, link or connect, even from its menu.
+    assert click.last["text"] == (
+        "Type a player tag or name after /stats to look them up, like "
+        "`/stats #2PP22` or `/stats Wanderer`."
+    )
+    assert links(click.last) == {}
 
 
 def test_autocomplete_that_ran_out_of_time_waiting_never_reads(store, monkeypatch) -> None:

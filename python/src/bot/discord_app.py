@@ -206,7 +206,7 @@ class DiscordApp:
             await interaction.followup.send(**message, ephemeral=private)
 
     async def on_component(
-        self, interaction: discord.Interaction, view: _OwnedView, work: Callable[[], Reply | None]
+        self, interaction: discord.Interaction, view: _OwnedView, work: Callable[[], Reply]
     ) -> None:
         """A dropdown pick: swap the message for the new reply."""
         started = time.perf_counter()
@@ -222,12 +222,6 @@ class DiscordApp:
                 # first command no longer can.
                 view.origin = interaction
                 reply = await self.read(work)
-                if reply is None:
-                    # Never on the message itself, which others may see.
-                    outcome = "not_linked"
-                    reply = replies.not_linked(self.commands.site, interaction.user.name)
-                    await self._send(interaction, reply, private=True)
-                    return
                 if reply.private:
                     # A refusal for the clicker never replaces the message.
                     outcome = "refused"
