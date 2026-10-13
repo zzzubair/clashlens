@@ -117,8 +117,21 @@ test("leaderboard updates stay visible and expandable on a 375 px phone", async 
 test("leaderboard ages and old-data labels advance while the page stays open", async ({
   page,
 }) => {
+  // The stack keeps collecting, and the clock change below makes the page read
+  // the board again, so every read answers with this one saved board.
+  const saved = await page.request.get("/leaderboards/tracked.data?view=live&page=1");
+  expect(saved.ok()).toBe(true);
+  const body = await saved.text();
+  await page.route("**/leaderboards/tracked.data*", (route) =>
+    route.fulfill({ contentType: saved.headers()["content-type"], body }),
+  );
+  await page.goto("/blog");
   await page.clock.install({ time: Date.now() + 60 * 60_000 });
-  await page.goto("/leaderboards/tracked?view=live&page=1");
+  // Enter through client navigation so the page shows the saved board.
+  await page.evaluate(() => {
+    history.pushState(null, "", "/leaderboards/tracked?view=live&page=1");
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
   const update = page
     .getByRole("table", { name: "Live Leaderboard", exact: true })
     .locator('tbody tr td[data-label="Last updated"]')
