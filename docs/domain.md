@@ -76,9 +76,15 @@ A domain change is complete only when every affected source observation, derived
   does not prove ownership or bypass eligibility.
 - Discovery and eligible tracking are automatic; no separate Start tracking
   button or sign-in is required for a public tag lookup. Name search covers
-  actively tracked players and players with recorded history. Other known tags
-  remain directly accessible. A non-Legend-I page shows the eligibility
-  explanation and any history, without a full current profile section.
+  actively tracked players and players with recorded history. The website's
+  player name search, in the header and on Home, reads them, with their names,
+  clans and trophies, from one shared copy, reread in the background once a
+  minute old, never served once two minutes old and reread at once at each
+  Reset, so a new or renamed player or new trophies can take up to about two
+  minutes to appear there; Discord's player suggestions read them at once.
+  Other known tags remain directly accessible. A non-Legend-I page shows the
+  eligibility explanation and any history, without a full current profile
+  section.
 - Discover clan members when a clan is first encountered and check its member
   list daily thereafter. Keep duplicate work bounded without dropping new tags.
   Starting collection from supplied lists does not wait for clan discovery.
