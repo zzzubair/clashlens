@@ -766,17 +766,22 @@ def observe(
 
     findings["warning"] = early_warning(metrics if metrics_read else {}, state, clock)
 
-    sent = set()
+    sent = {"health"}
+
+    def send_found() -> None:
+        # Every other warning found by now goes once, so a slow or failing
+        # later check never holds it back; recoveries wait for the end.
+        found = {name for name, active in findings.items() if active is True} - sent
+        sent.update(found)
+        if found:
+            send(dict.fromkeys(found, True))
 
     def check_health() -> None:
         # Sent before and between the slow checks below: Podman kills about
-        # three minutes in, and each slow check may take 25 seconds. Every
-        # other warning found by now goes too, once, so a slow or failing
-        # later check never holds it back; recoveries wait for the end.
+        # three minutes in, and each slow check may take 25 seconds.
+        send_found()
         findings["health"] = health_warning(podman, state)
-        found = {name for name, active in findings.items() if active is True} - sent
-        sent.update(found)
-        send({**dict.fromkeys(found, True), "health": findings["health"]})
+        send({"health": findings["health"]})
 
     check_health()
 
@@ -936,6 +941,7 @@ def observe(
         findings["publication"] = publication[0] > 0 or late
     elif late:
         findings["publication"] = True
+    send_found()
 
     def slow_probe(argument: str, unavailable: str):
         # A failed reading is not kept, so the next check retries it.

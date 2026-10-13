@@ -318,12 +318,14 @@ publication check has two: the website page and the private API) first failed, a
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
-A new alert goes out at the first pause between checks after it is found,
-or when the check ends if none follows, so a later check that is slow, fails
-or crashes, or a run stopped at the alert service's four-minute limit, never
-holds it back. Recoveries and the unreadable-check and failed-deploy alerts
-are sent when the check ends. Until 13 Oct 2026 only the health-check early
-warning went out early.
+A new alert goes out at the next pause between checks, before the container
+health checks are read again, and the Reset and 05:30 board alerts go out as
+soon as they are found, before the slow untracked battler and battle-day
+checks. So a check after that point that is slow, fails or crashes, or a run
+stopped at the alert service's four-minute limit, never holds it back.
+Recoveries and the unreadable-check and failed-deploy alerts are sent when the
+check ends. Until 13 Oct 2026 only the health-check early warning went out
+early.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.
