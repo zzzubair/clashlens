@@ -66,6 +66,10 @@ test("with no project token no analytics code loads and nothing is sent", async 
   page.on("request", (request) => requests.push(request.url()));
   await page.goto(`${blogFixtureOrigin}/privacy`);
   await expect(page.getByText("Visitor counting is not switched on")).toBeVisible();
+  await expect(page.getByText("Clash Lens, run by Zubair Shaik. Contact:")).toBeVisible();
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "privacy@clashlens.net" }).first(),
+  ).toHaveAttribute("href", "mailto:privacy@clashlens.net");
   await expect(page.getByRole("switch")).toHaveCount(0);
   await page.getByRole("contentinfo").getByRole("link", { name: "Blog" }).click();
   await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
