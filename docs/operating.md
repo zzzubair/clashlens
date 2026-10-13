@@ -1083,10 +1083,10 @@ posts what the nightly re-check of finished Legend days
 (`python/src/clashlens/reconcile_pass.py`) found in the last 24 hours. Each
 twice-daily recheck queues one pass right after it, as `reconcile_pass` jobs
 at backfill priority: each job judges 500 player-days and queues the next,
-over every finished day of the Season, in the room live work leaves. None
-starts from 04:00 to 07:00 UTC: no read or write of a job starts at or
-after 04:00 or runs past it, and a job reaching 04:00 keeps nothing and
-queues nothing more. The players judged for a day are every
+over every finished day of the Season, in the room live work leaves. The
+pass starts no work from 03:50 to 07:00 UTC and is always finished before
+04:00: each job's reads may take 6 minutes and saving what they found 2,
+and a job not saved by 03:58 keeps nothing and queues nothing more. The players judged for a day are every
 player with a saved day for it, including days rebuilt from a player's
 first battle log, and the ones the Reset sweeps starting and ending it
 tracked. Each count is a problem first found in those 24 hours:

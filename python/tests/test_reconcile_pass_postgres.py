@@ -6,7 +6,6 @@ queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
-import itertools
 import threading
 from datetime import datetime, timedelta
 
@@ -43,20 +42,29 @@ def _as_worker(connection_info: str) -> str:
 
 
 def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
-              *, steps: int | None = None, tick: timedelta = timedelta(0)) -> int:
+              *, steps: int | None = None, reads_end: datetime | None = None) -> int:
     """Queue the pass of ``slot``, by default the night recheck's at ``now``,
-    and run its waiting steps, or the first ``steps``, at ``now``, the clock
-    moving ``tick`` each time the pass reads it, each claimed by the real
-    worker with its own database role; how many ran."""
-    times = (now + tick * count for count in itertools.count())
-    monkeypatch.setattr(reconcile_pass, "_now", lambda: next(times))
+    and run its waiting steps, or the first ``steps``, at ``now``, or at
+    ``reads_end`` once a step's reads end, each claimed by the real worker
+    with its own database role; how many ran."""
+    clock = [now]
+    monkeypatch.setattr(reconcile_pass, "_now", lambda: clock[0])
     database, processor = _processor(_as_worker(story.connection_info), story.archive_server)
+    judge = reconcile_pass.judge
+
+    def slow_judge(*args):
+        judgment = judge(*args)
+        clock[0] = reads_end or clock[0]
+        return judgment
+
     ran = 0
     try:
-        reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
-        while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
-            assert processor.process_job(job, owner="test").outcome == "processed"
-            ran += 1
+        with monkeypatch.context() as patch:
+            patch.setattr(reconcile_pass, "judge", slow_judge)
+            reconcile_pass.queue_pass(database, slot or f"{day_of(now):%Y-%m-%d}:night")
+            while ran != steps and (job := _waiting_step(story.connection_info)) is not None:
+                assert processor.process_job(job, owner="test").outcome == "processed"
+                ran += 1
     finally:
         database.close()
     return ran
@@ -320,21 +328,20 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         late_before = story.saved_day(LATE, day(2))
         _plant(connection_info)
 
-        # No pass starts from 04:00 to 07:00 UTC, and a pass reaching 04:00
-        # stops there, even inside a step.
+        # No pass starts work from 03:50 to 07:00 UTC, and a step not saved
+        # by 03:58 keeps nothing: one queued at 03:49 and run at 03:50, and
+        # one run at 03:49 whose reads take until 03:58:30.
         monkeypatch.setattr(reconcile_pass, "BATCH_DAYS", 3)
         monkeypatch.setattr(reconcile_pass, "PASS_FIX_LIMIT", 2)
         morning = f"{day(4):%Y-%m-%d}:morning"
         quiet = _run_pass(story, monkeypatch, day(5) + timedelta(minutes=30), morning)
-        _run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=1), morning, steps=0)
-        stopped = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1), morning),
+        _run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=11), morning, steps=0)
+        stopped = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=10), morning),
                    _waiting_step(connection_info), _open(connection_info))
-        # A step starting at 03:59:56, its clock a second on at each statement,
-        # reaching 04:00 between its reads.
-        crossing = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, seconds=5),
-                              f"{day(3):%Y-%m-%d}:night", tick=timedelta(seconds=1)),
-                    _waiting_step(connection_info), _open(connection_info),
-                    _queued(connection_info))
+        slow = (_run_pass(story, monkeypatch, day(5) - timedelta(hours=1, minutes=11),
+                          f"{day(3):%Y-%m-%d}:night",
+                          reads_end=day(5) - timedelta(hours=1, minutes=1, seconds=30)),
+                _waiting_step(connection_info), _open(connection_info), _queued(connection_info))
 
         # Four nights' passes: each its own, and none queued twice.
         nights = [day(4 + number) + timedelta(hours=18) for number in range(4)]
@@ -381,7 +388,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
 
     assert quiet == 0
     assert stopped == (1, None, set())
-    assert crossing == (1, None, set(), [])
+    assert slow == (1, None, set(), [])
     assert late_before["defenses"] == 7 and late_before["automatic_loss"] == 30
     assert _ranked(board_before)[LATE] == 5030
     # Days 1 to 3, 3 players a step: 7 players on Day 1, then 8.

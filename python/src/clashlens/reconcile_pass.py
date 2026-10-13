@@ -34,19 +34,20 @@ pass. The recalculation marks its finding in the transaction saving its
 result (``note_fix_done``), so a finding still there in a read that also saw
 that mark is marked escalated and never queued again; one whose
 recalculation failed is left open, not escalated. The other checks only
-list. Nothing else is written,
-and no recalculation is queued while a Season repair recalculates the
-Season's days: a step decides under the guard the repair takes to queue
-them (``domain_repair.recalculating_days``).
+list. Nothing else is written, and no recalculation is queued while a
+Season repair recalculates the Season's days: a step decides under the
+guard the repair takes to queue them (``domain_repair.recalculating_days``).
 
 The checks read in READ ONLY transactions, each one snapshot, with a
 statement timeout and take no row locks, in the connection pool the worker
-already has; a step first extends its job's lease over all its reads. No
-pass starts from 04:00 to 07:00 UTC: no statement of a step starts at or
-after 04:00 or runs past it, and a step reaching 04:00 keeps nothing and
-queues nothing more. On 9 October 2026 the same checks found 7 recount differences, 0 chain breaks, 0 ledger
-breaks, 5 one-sided battles, 1,019 missing days and 850 board rows over the
-Season's first 4 days. The alert check posts one line a day with the counts
+already has; a step first extends its job's lease over all its work. No
+step starts from 03:50 to 07:00 UTC, and the pass is always finished before
+04:00: a step's reads may take ``READ_SECONDS`` in all and saving what they
+found ``WRITE_SECONDS``, 8 minutes together, and a step not saved by 03:58
+keeps nothing and queues nothing more. On 9 October 2026 the same checks
+found 7 recount differences, 0 chain breaks, 0 ledger breaks, 5 one-sided
+battles, 1,019 missing days and 850 board rows over the Season's first 4
+days. The alert check posts one line a day with the counts
 (``alerts.reconcile_probe``).
 """
 
@@ -55,10 +56,9 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
-from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
 from . import db, domain, domain_repair, first_battle_log, job_outcomes
@@ -67,9 +67,13 @@ WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
 PASS_FIX_LIMIT = 2000
 STATEMENT_SECONDS = 60
-# A step's job lease: its 8 reads at STATEMENT_SECONDS each, and room to spare.
+# A step's time limits: all its reads, and saving what they found.
+READ_SECONDS, WRITE_SECONDS = 360, 120
+# A step's job lease: both limits, and room to spare.
 STEP_LEASE_SECONDS = 600
-QUIET_HOURS = range(4, 7)  # UTC: the Reset and its catching up.
+# UTC: no step starts from 03:50 and none is saved from 03:58, until 07:00,
+# the Reset and its catching up being done.
+STEPS_STOP, SAVES_STOP, QUIET_END = time(3, 50), time(3, 58), time(7)
 FIXED_CHECKS = ("recount", "missing_day")
 FIX_KEY = "reconcile:pass:"
 
@@ -410,34 +414,19 @@ def note_fix_done(connection: Any, claim: db.Claim) -> None:
 
 
 class _Stopped(Exception):
-    """A step reached 04:00 UTC."""
+    """A step reached its quiet hours."""
 
 
-class _Timed:
-    """A step's connection: each statement starts only before ``deadline``
-    and may run until it, at most ``STATEMENT_SECONDS``."""
-
-    def __init__(self, connection: Any, deadline: datetime) -> None:
-        self.connection, self.deadline = connection, deadline
-
-    def execute(self, query: Any, params: Any = None) -> Any:
-        left = int((self.deadline - _now()).total_seconds() * 1000)
-        if left <= 0:
-            raise _Stopped
-        self.connection.execute(
-            f"SET LOCAL statement_timeout = {min(left, STATEMENT_SECONDS * 1000)}")
-        try:
-            return self.connection.execute(query, params)
-        except QueryCanceled:
-            if _now() >= self.deadline:
-                raise _Stopped from None
-            raise
+def _quiet(now: datetime, since: time) -> bool:
+    """Whether ``now`` is from ``since`` to 07:00 UTC."""
+    return since <= now.time() < QUIET_END
 
 
-def _next_stop(now: datetime) -> datetime:
-    """The next 04:00 UTC after ``now``."""
-    stop = now.replace(hour=QUIET_HOURS.start, minute=0, second=0, microsecond=0)
-    return stop if stop > now else stop + timedelta(days=1)
+def _limit(connection: Any, seconds: int) -> None:
+    """Hold the caller's transaction to ``seconds`` in all, each statement to
+    at most ``STATEMENT_SECONDS``."""
+    connection.execute(f"SET LOCAL transaction_timeout = '{seconds}s';"
+                       f" SET LOCAL statement_timeout = '{STATEMENT_SECONDS}s'")
 
 
 def _newest_day(slot: str) -> domain.RankedDay:
@@ -470,8 +459,8 @@ def _queue_step(connection: Any, slot: str, day: datetime, after: int, queued: i
 def queue_pass(database: db.Database, slot: str) -> bool:
     """Queue ``slot``'s pass, a twice-daily recheck slot such as
     ``2026-10-13:night``, from its Season's first day, once; whether it was
-    new. None starts from 04:00 to 07:00 UTC."""
-    if _now().hour in QUIET_HOURS:
+    new. None starts from 03:50 to 07:00 UTC."""
+    if _quiet(_now(), STEPS_STOP):
         return False
     with database.pool.connection() as connection, connection.transaction():
         return _queue_step(connection, slot, _newest_day(slot).season_start, 0, 0)
@@ -487,39 +476,41 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
     detail: dict[str, Any] = {}
     stopped = False
     try:
-        now = _now()
+        database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
         with database.pool.connection() as connection:
-            timed = _Timed(connection, _next_stop(now))
             try:
-                if now.hour in QUIET_HOURS:
+                if _quiet(_now(), STEPS_STOP):
                     raise _Stopped
-                database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
                 with connection.transaction():
                     # One snapshot for every read, the time it was taken.
                     connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-                    read_at = timed.execute("SELECT statement_timestamp()").fetchone()[0]
-                    players = [int(row[0]) for row in timed.execute(
+                    _limit(connection, READ_SECONDS)
+                    read_at = connection.execute("SELECT statement_timestamp()").fetchone()[0]
+                    players = [int(row[0]) for row in connection.execute(
                         _STEP_PLAYERS, {**_params(day, []), "after": after, "limit": BATCH_DAYS})]
-                    judgment = judge(timed, day, players) if players else ([], set(), set())
+                    judgment = judge(connection, day, players) if players else ([], set(), set())
                 with connection.transaction():
-                    job = database._lock_live_claim(timed, claim)
+                    _limit(connection, WRITE_SECONDS)
+                    job = database._lock_live_claim(connection, claim)
                     # Under its guard, a Season repair cannot start queueing
                     # days before this step commits.
                     repairing = domain_repair.recalculating_days(
-                        timed, newest.official_season_id)
-                    counts = record(timed, day, judgment, read_at=read_at,
+                        connection, newest.official_season_id)
+                    counts = record(connection, day, judgment, read_at=read_at,
                                     fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
                     done = {**counts, "days": len(players), "repairing": repairing,
                             **Counter(f"seen:{finding.check}" for finding in judgment[0])}
                     if len(players) == BATCH_DAYS:
-                        _queue_step(timed, slot, day, players[-1], queued + counts["queued"])
+                        _queue_step(connection, slot, day, players[-1], queued + counts["queued"])
                     elif day < newest.start:
-                        _queue_step(timed, slot, day + domain.RANKED_DAY_DURATION, 0,
+                        _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0,
                                     queued + counts["queued"])
                     else:
                         done["finished"] = True
-                    database._finish_claim(timed, claim, job, state="complete",
+                    database._finish_claim(connection, claim, job, state="complete",
                                            outcome="processed")
+                    if _quiet(_now(), SAVES_STOP):
+                        raise _Stopped
                 detail, queued = done, queued + counts["queued"]
             except _Stopped:
                 # Nothing it read is kept, and nothing more is queued.
