@@ -226,16 +226,10 @@ def complete_verification(
                     connection.execute(
                         """
                         UPDATE verified_player_links
-                        SET verification_request_id = %s, verified_at = %s,
-                            updated_at = %s
+                        SET verification_request_id = %s, updated_at = %s
                         WHERE player_id = %s
                         """,
-                        (
-                            binding.request_id,
-                            completed_at,
-                            completed_at,
-                            player_id,
-                        ),
+                        (binding.request_id, completed_at, player_id),
                     )
                     audit_outcome = "already_linked"
                     result = OperationResult(

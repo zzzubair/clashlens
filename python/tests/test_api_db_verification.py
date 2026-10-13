@@ -711,3 +711,40 @@ def test_every_link_checks_the_players_profile_at_once(
                 collector.close()
         finally:
             database.close()
+
+
+def test_verifying_a_linked_player_again_keeps_the_first_linked_default(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_id = create_account(database, "google-again", "againowner")
+
+            def link(tag: str, completed_at: datetime) -> str:
+                binding = verification_binding(account_id, "google-again", tag)
+                assert api_verification.reserve_verification(
+                    database, binding, normalized_tag=tag
+                ).fresh
+                return api_verification.complete_verification(
+                    database,
+                    binding,
+                    normalized_tag=tag,
+                    outcome=VerificationOutcome.VERIFIED,
+                    account_id=account_id,
+                    completed_at=completed_at,
+                ).payload["status"]
+
+            def default() -> str | None:
+                with database.pool.connection() as connection:
+                    return api_accounts.default_player_tag(connection, account_id)
+
+            assert link("#2PP", NOW) == "linked"
+            assert link("#8PY", NOW + timedelta(minutes=1)) == "linked"
+            assert default() == "#2PP"
+            assert link("#2PP", NOW + timedelta(minutes=2)) == "already_linked"
+            assert default() == "#2PP"
+        finally:
+            database.close()

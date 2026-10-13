@@ -109,3 +109,44 @@
   color: var(--cl-muted);
   font-size: 0.9rem;
 }
+
+/* The owner's default account control sits in each card's top-right corner,
+   beside the card link rather than inside it. */
+.linked-player-hint {
+  margin: 0 0 0.75rem;
+}
+
+.linked-player-owned {
+  position: relative;
+}
+
+.linked-player-owned .linked-player-identity {
+  padding-right: 8rem;
+}
+
+.linked-player-make-default,
+.linked-player-default {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+}
+
+.linked-player-make-default .button {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.86rem;
+}
+
+.linked-player-default {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.75rem;
+  color: var(--cl-positive);
+  font-size: 0.86rem;
+  font-weight: 650;
+  background: color-mix(in srgb, var(--cl-positive) 12%, transparent);
+  border: 1px solid var(--cl-positive);
+  border-radius: var(--cl-radius);
+}

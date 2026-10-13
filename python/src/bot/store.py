@@ -148,7 +148,8 @@ class Store:
         return cards
 
     def default_tag(self, account: AccountContext) -> str | None:
-        """The default player chosen on the website, while still verified."""
+        """The default player chosen on the website, while still verified,
+        otherwise the first verified player."""
         with self.database.pool.connection() as connection:
             return api_accounts.default_player_tag(connection, account.internal_id)
 

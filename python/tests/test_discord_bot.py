@@ -110,6 +110,9 @@ class FakeStore:
         self.accounts: dict[str, AccountContext] = {}
         self.cards: dict[int, list[dict[str, Any]]] = {}
         self.mains: dict[int, str] = {}
+        # Accounts whose default read finds no player, as when their links
+        # are removed between the player and default reads.
+        self.no_default: set[int] = set()
         self.pages: dict[str, dict[str, Any]] = {}
         self.fail: Exception | None = None
         self.reads: list[str] = []
@@ -136,10 +139,13 @@ class FakeStore:
 
     def default_tag(self, account):
         self._read("default_tag")
-        # As the database does: a default no longer verified is not read.
-        own = {item["tag"] for item in self.cards[account.internal_id]}
+        # As the database does: the chosen default while still verified,
+        # otherwise the first verified player.
+        own = [item["tag"] for item in self.cards[account.internal_id]]
+        if account.internal_id in self.no_default or not own:
+            return None
         tag = self.mains.get(account.internal_id)
-        return tag if tag in own else None
+        return tag if tag in own else own[0]
 
     def player_page(self, tag, now):
         self._read("player_page")
@@ -350,6 +356,8 @@ def test_every_reply_ends_with_how_old_its_data_is(store) -> None:
             card("#8QQ", "Lens", 5100, observed_at=None),
         ],
     )
+    # The player menu, as when the default read finds no player.
+    store.no_default.add(1)
     footer = run_command(store, "stats", FakeInteraction(), player=None)["footer"]
     assert footer.endswith("Updated 180 min ago")
     store.pages["#8QQ"] = page("#8QQ", "Lens", [])
@@ -397,20 +405,22 @@ def test_player_names_cannot_ping_or_add_formatting(store) -> None:
     assert not (mentions.everyone or mentions.users or mentions.roles)
 
 
-def test_a_default_player_no_longer_verified_is_not_used(store) -> None:
+def test_a_default_player_no_longer_verified_gives_way_to_the_first(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
     store.mains[1] = "#8QQ"
     store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    store.pages["#2PP"] = page("#2PP", "Drift", [])
     first = run_command(store, "stats", FakeInteraction(), player=None)
     assert first["title"].startswith("Lens #8QQ")
     store.cards[1].pop()
     store.cards[1].append(card("#9RR", "New", 5000))
     after = run_command(store, "stats", FakeInteraction(), player=None)
-    assert after["text"].startswith("Which player?")
+    assert after["title"].startswith("Drift #2PP")
 
 
 def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.no_default.add(1)
     message = run_command(store, "stats", FakeInteraction(), player=None)
     view = message["view"]
     stranger = FakeInteraction(OTHER)
@@ -429,6 +439,7 @@ def pick(message: dict[str, Any], interaction: FakeInteraction, value: str) -> N
 
 def test_a_public_reply_never_turns_into_a_connect_message(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.no_default.add(1)
     message = run_command(store, "stats", FakeInteraction(), player=None)
     assert message["private"] is False
     del store.accounts[str(ME)]

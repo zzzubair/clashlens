@@ -149,8 +149,9 @@ def not_your_menu() -> Reply:
     return Reply("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher chooses the bot's default player.
-DISCORD_SETTINGS = "/account/providers"
+# The account page, which opens the Clasher's profile, where Make default
+# chooses the bot's default player; a signed-out visitor signs in first.
+DISCORD_SETTINGS = "/account"
 # Where a Clasher connects Discord and turns attack alerts on or off; /link
 # opens it, and a signed-out visitor signs in first and lands there.
 DISCORD_ALERTS = "/account/discord-alerts"
@@ -302,7 +303,7 @@ def not_tracked(site: Site, tag: str, now: datetime) -> Reply:
 
 
 def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
-    """No player named and no default chosen: ask with a dropdown of the
+    """No player named and no default found: ask with a dropdown of the
     person's own players."""
     return Reply(
         "Which player? Pick one below, or choose a default player on Clash Lens.",

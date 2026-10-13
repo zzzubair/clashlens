@@ -41,6 +41,10 @@ async function fakePostHog(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false });
     Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => undefined });
+    // No load is sampled for its load time unless a test asks, so event counts
+    // never depend on chance or on when the page finished loading.
+    const random = Math.random;
+    Math.random = () => 0.1 + random() * 0.9;
   });
   await page.route(`${posthogHost}/**`, async (route) => {
     const body = route.request().postDataBuffer();

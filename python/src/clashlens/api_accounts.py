@@ -1146,15 +1146,18 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
 
 
 def default_player_tag(connection: Any, account_id: int) -> str | None:
-    """The account's chosen default player while it is still verified to it."""
+    """The account's chosen default player while it is still verified to it,
+    otherwise its first verified player; None with no verified player."""
     row = connection.execute(
         """
         SELECT player.normalized_tag
-        FROM account_default_players AS chosen
-        JOIN verified_player_links AS link
-            ON link.player_id = chosen.player_id AND link.account_id = chosen.account_id
-        JOIN players AS player ON player.id = chosen.player_id
-        WHERE chosen.account_id = %s
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        LEFT JOIN account_default_players AS chosen
+            ON chosen.account_id = link.account_id AND chosen.player_id = link.player_id
+        WHERE link.account_id = %s
+        ORDER BY chosen.player_id IS NULL, link.verified_at, link.player_id
+        LIMIT 1
         """,
         (account_id,),
     ).fetchone()
