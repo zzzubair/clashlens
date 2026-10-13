@@ -173,7 +173,7 @@ export function defaultSettings(): DashboardSettings {
     cutoffs: [...DEFAULT_CUTOFFS],
     group: null,
     groupWindow: "7",
-    basesMode: "held",
+    basesMode: "trophies",
   };
 }
 
@@ -241,7 +241,7 @@ export function serializeSettings(settings: DashboardSettings): Record<string, u
     stored.cutoffs = settings.cutoffs;
   if (settings.group) stored.group = settings.group;
   if (settings.groupWindow !== "7") stored.window = settings.groupWindow;
-  if (settings.basesMode !== "held") stored.bases = settings.basesMode;
+  if (settings.basesMode !== "trophies") stored.bases = settings.basesMode;
   return stored;
 }
 
@@ -263,7 +263,7 @@ export function readSettings(value: unknown): DashboardSettings {
   if (typeof value.group === "string" && UUID.test(value.group))
     settings.group = value.group;
   if (value.window === "season") settings.groupWindow = "season";
-  if (value.bases === "trophies") settings.basesMode = "trophies";
+  if (value.bases === "held") settings.basesMode = "held";
   return settings;
 }
 
@@ -290,7 +290,7 @@ export function parsePostedSettings(value: unknown): DashboardSettings | null {
   )
     return null;
   if (value.window !== undefined && value.window !== "season") return null;
-  if (value.bases !== undefined && value.bases !== "trophies") return null;
+  if (value.bases !== undefined && value.bases !== "held") return null;
   return readSettings(value);
 }
 

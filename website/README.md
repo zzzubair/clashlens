@@ -206,9 +206,10 @@ within 100 trophies of the base's Reset trophies, widened until that holds 200
 defenses but never past 300 either side, and at least 50 defenses (Average is
 within 15 points). Without that comparison a base with 3+ defenses shows "–"
 and "no comparison yet". The similar-trophies comparison is Held % only:
-Trophies compares the trophies it gave up a defense today with the fixed
-Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average is within
-`BASE_TROPHY_BAND` trophies). Under 3 defenses is too early.
+Trophies, the default, compares the trophies it gave up a defense today with
+the fixed Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average
+is within `BASE_TROPHY_BAND` trophies) and shows the total it lost today, such
+as "lost −250 in 8 defenses". Under 3 defenses is too early.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;

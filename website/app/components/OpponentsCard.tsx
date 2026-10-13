@@ -33,18 +33,13 @@ function heldShare(defenses: OpponentRow["defenses"]): number {
   return defenses.filter((defense) => defense.stars < 3).length / defenses.length;
 }
 
-/** Trophies given up a defense today, rounded, as a negative number. */
-function lostEach(trophies: number, defenses: number): string {
-  return signed(-Math.round(trophies / defenses));
-}
-
 /**
  * Card 3: one row per attack today, hardest bases first. Held % mode compares
  * the base's held share today with today's among tracked Legend players at
  * similar trophies, and shows "–" when there are too few of them. Trophies
  * mode compares the trophies it gave up a defense with the fixed Legends 32
- * for every base, whatever its trophies. Colours follow the attacker: green
- * is good for you, red is bad.
+ * for every base, whatever its trophies, and shows the total it lost today.
+ * Colours follow the attacker: green is good for you, red is bad.
  */
 export function OpponentsCard({
   rows,
@@ -174,7 +169,7 @@ export function OpponentsCard({
                             ? `${Math.round(heldShare(row.defenses) * 100)}% vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
                             : "no comparison yet"
                         }`
-                      : `gave up ${lostEach(trophiesGivenUp(row.defenses), row.defenses.length)} a defense`}
+                      : `lost ${signed(-trophiesGivenUp(row.defenses))} in ${row.defenses.length} defenses`}
                 </span>
               </div>
               <div className="opponents-action">

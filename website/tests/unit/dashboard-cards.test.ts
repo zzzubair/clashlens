@@ -1209,14 +1209,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     );
   });
 
-  it("rates the bases by trophies given up when that is the saved setting", async () => {
+  it("rates the bases by trophies given up by default", async () => {
     python.preferences = {
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
     expect(bases).toContain("Base strength · vs all Legends −32 a defense");
-    expect(bases).toContain("Hard gave up −15 a defense");
-    expect(bases).toContain("Easy gave up −38 a defense");
+    expect(bases).toContain("Hard lost −90 in 6 defenses");
+    expect(bases).toContain("Easy lost −151 in 4 defenses");
   });
 
   it("keeps Legend day from the player page when today's read fails", async () => {

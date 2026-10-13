@@ -366,8 +366,8 @@ function SettingsDialog({
           <Choice
             legend="Rate each base by"
             options={[
-              ["held", "Held %"],
               ["trophies", "Trophies"],
+              ["held", "Held %"],
             ]}
             value={basesMode}
             onChange={setBasesMode}
@@ -840,7 +840,7 @@ export function Dashboard({
             {editing && CARDS[card].settings ? (
               <button
                 type="button"
-                className="dash-card-settings"
+                className="button button-primary dash-card-settings"
                 aria-label={`${CARDS[card].title} settings`}
                 disabled={saving}
                 onClick={() => setEditingSettings(card)}

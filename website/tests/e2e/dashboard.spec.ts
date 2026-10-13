@@ -324,11 +324,11 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   await expect(kept).toHaveAttribute("data-kept", "");
   expect(reads.filter((read) => read.startsWith("GET"))).toEqual([]);
 
-  // Rating bases by trophies changes the card in place.
+  // Rating bases by held share changes the card in place.
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await page.getByRole("button", { name: "Bases you attacked settings" }).click();
   const bases = page.getByRole("dialog", { name: "Bases you attacked settings" });
-  await bases.getByRole("button", { name: "Trophies" }).click();
+  await bases.getByRole("button", { name: "Held %" }).click();
   await bases.getByRole("button", { name: "Save" }).click();
   await expect(bases).toBeHidden();
   expect(reads.filter((read) => read.startsWith("GET"))).toEqual([]);
@@ -359,7 +359,7 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   await goal.getByRole("button", { name: "Save" }).click();
   await expect(goal).toBeHidden();
   await page.getByRole("button", { name: "Bases you attacked settings" }).click();
-  await bases.getByRole("button", { name: "Held %" }).click();
+  await bases.getByRole("button", { name: "Trophies" }).click();
   await bases.getByRole("button", { name: "Save" }).click();
   await expect(bases).toBeHidden({ timeout: 1_500 });
   await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 40", {

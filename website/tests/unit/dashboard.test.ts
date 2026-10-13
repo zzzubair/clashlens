@@ -207,7 +207,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
       group: null,
       groupWindow: "7",
-      basesMode: "held",
+      basesMode: "trophies",
     });
     expect(DEFAULT_LAYOUT).toEqual([
       "legend-day",
@@ -237,7 +237,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       groupWindow: "season",
-      basesMode: "trophies",
+      basesMode: "held",
     };
     const stored = serializeSettings(settings);
     expect(stored).toEqual({
@@ -247,7 +247,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       window: "season",
-      bases: "trophies",
+      bases: "held",
     });
     expect(serializeSettings({ ...defaultSettings(), layout: "default" })).toEqual({
       v: 3,
@@ -303,7 +303,7 @@ describe("dashboard settings", () => {
       { cutoffs: [10, 50, 100, 200, 500, 1000, 7000] },
       { group: "not-a-group" },
       { window: "7" },
-      { bases: "held" },
+      { bases: "trophies" },
       { bases: "rank" },
       { extra: true },
     ]) {
@@ -587,7 +587,7 @@ describe("Bases you attacked", () => {
     expect(await updated("trophies")).toContain("updated 2 min ago");
   });
 
-  it("rates bases by trophies given up a defense in Trophies mode", async () => {
+  it("rates bases by trophies given up a defense and shows the day's total in Trophies mode", async () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
@@ -599,9 +599,9 @@ describe("Bases you attacked", () => {
     );
     expect(plain).toContain("Base strength · vs all Legends −32 a defense");
     // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense.
-    expect(plain).toContain("Hard gave up −28 a defense");
+    expect(plain).toContain("Hard lost −165 in 6 defenses");
     // One held and three tripled: 145 over 4 is −36 a defense.
-    expect(plain).toContain("Easy gave up −36 a defense");
+    expect(plain).toContain("Easy lost −145 in 4 defenses");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });
 });
