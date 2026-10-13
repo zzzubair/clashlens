@@ -318,16 +318,17 @@ publication check has two: the website page and the private API) first failed, a
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
-A new alert goes out at the next pause between checks, before the container
-health checks are read again. Each pause comes straight after a check's
-reading, except that the disk alert also waits for the restart history read,
-and the 05:30 board alert for the Reset progress read it needs. So a later
-check that is slow, fails or crashes, or a run stopped at the alert service's
-four-minute limit, never holds a found alert back. Recoveries and the
-unreadable-check and failed-deploy alerts are sent when the check ends, and so
-is an alert whose earlier recovery Discord has not yet accepted, right after
-that recovery. Until 13 Oct 2026 only the health-check early warning went out
-early.
+Each part of the check has its own time limit, and one that fails or runs
+out leaves only its own reading unknown, so the rest still run. Even if every
+part runs out, a run takes at most 217 seconds: collector metrics 5, nine
+health checks of three container reads at 2 seconds each and up to two
+Discord messages at 2 seconds each (90 in all), the database volume read 2,
+restart history 5, backup 25, four container probes at 10, the two slow
+probes at 20 and the website page 10. That leaves 23 of the alert service's
+240 seconds (four minutes) for the final Discord messages, 11 at 2 seconds
+each; any not sent by then go out on the next run. Until 13 Oct 2026 the
+limits added up to 810 seconds, so a slow run could be stopped before
+sending anything.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.

@@ -169,6 +169,16 @@ UNTRACKED_BATTLER_LIMIT = 10
 # battles (11 Oct 2026) for conditions at least an hour old, so they run once
 # a quarter hour (:00, :15, :30, :45 UTC) and other checks reuse that reading.
 SLOW_PROBE_INTERVAL = 900
+# Time limits in seconds, so a run ends inside the alert service's 240 even
+# when every call runs out: collector metrics 5 + 9 health checks x (3
+# container reads x 2 + up to 2 Discord messages x 2) + database volume read
+# 2 + restart history 5 + backup 25 + 4 probes x 10 + 2 slow probes x 20 +
+# website page 10 = 217, leaving 23 for the final Discord messages; any not
+# sent by then go out on the next run.
+READ_TIMEOUT = 2
+DISCORD_TIMEOUT = 2
+PROBE_TIMEOUT = 10
+SLOW_PROBE_TIMEOUT = 20
 # The early warning. Podman kills a container after six failed health checks
 # in a row, about three minutes, so two failures leave time to act. Overdue
 # work normally reaches 35 minutes after a Reset (6 Oct 2026), hence the
@@ -204,7 +214,7 @@ class CheckError(Exception):
     """A fixed, secret-free diagnostic safe for the journal."""
 
 
-def command(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
+def command(args: list[str], timeout: int = READ_TIMEOUT) -> subprocess.CompletedProcess:
     with subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
@@ -228,7 +238,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request(
-    url: str, *, payload: dict | None = None, headers: dict | None = None
+    url: str, *, payload: dict | None = None, headers: dict | None = None, timeout: int = 10
 ) -> bytes:
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers=headers or {})
@@ -239,7 +249,7 @@ def request(
         req.add_header("Content-Type", "application/json")
     # Do not send a secret URL or signed request through ambient proxies/redirects.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    with opener.open(req, timeout=10) as response:
+    with opener.open(req, timeout=timeout) as response:
         if not 200 <= response.status < 300:
             raise CheckError("HTTP check failed")
         return response.read(1024 * 1024)
@@ -656,6 +666,7 @@ def deliver(
                 request(
                     webhook,
                     payload={"content": content, "allowed_mentions": {"parse": []}},
+                    timeout=DISCORD_TIMEOUT,
                 )
             except (OSError, ValueError, CheckError):
                 print(
@@ -682,7 +693,7 @@ def observe(
     metrics_read = False
     try:
         body = request(
-            f"http://127.0.0.1:{int(config['health_port'])}/metrics"
+            f"http://127.0.0.1:{int(config['health_port'])}/metrics", timeout=5
         ).decode()
         for line in body.splitlines():
             parts = line.split()
@@ -703,7 +714,7 @@ def observe(
         elif "clashlens_collector_active_players" not in metrics:
             raise ValueError
         metrics_read = "clashlens_collector_pending_processing" in metrics
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, CheckError, http.client.HTTPException):
         errors.append(
             "Collector metrics unavailable; fetch-gap clock continues and spool usage is unknown"
         )
@@ -766,24 +777,9 @@ def observe(
 
     findings["warning"] = early_warning(metrics if metrics_read else {}, state, clock)
 
-    sent = {"health"}
-
     def check_health() -> None:
         # Sent before and between the slow checks below: Podman kills about
-        # three minutes in, and each slow check may take 25 seconds. Every
-        # other warning found by now goes first, once, so a slow or failing
-        # later check never holds it back; recoveries, and warnings behind a
-        # saved recovery Discord has not accepted, wait for the end.
-        recovering = {
-            name
-            for name, incident in state.get("incidents", {}).items()
-            if incident.get("pending", {}).get("active") is False
-        }
-        found = {name for name, active in findings.items() if active is True}
-        found -= sent | recovering
-        sent.update(found)
-        if found:
-            send(dict.fromkeys(found, True))
+        # three minutes in, and each slow check may take 25 seconds.
         findings["health"] = health_warning(podman, state)
         send({"health": findings["health"]})
 
@@ -839,7 +835,8 @@ def observe(
                 "--output=json",
                 "--output-fields=USER_UNIT",
                 f"MESSAGE_ID={RESTART_MESSAGE}",
-            ]
+            ],
+            5,
         )
         if result.returncode:
             raise ValueError
@@ -885,15 +882,17 @@ def observe(
         "--probe",
     ]
     try:
-        findings["reads"] = command(probe, 25).returncode != 0
+        findings["reads"] = command(probe, PROBE_TIMEOUT).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
     check_health()
 
-    def run_probe(service: str, arguments: list[str], count: int, unavailable: str):
+    def run_probe(
+        service: str, arguments: list[str], count: int, unavailable: str, timeout=PROBE_TIMEOUT
+    ):
         try:
             container = f"clashlens-python-{service}"
-            result = command([podman, "exec", container, *probe[3:-1], *arguments], 25)
+            result = command([podman, "exec", container, *probe[3:-1], *arguments], timeout)
             values = [int(value) for value in result.stdout.split()]
             # A newer probe may print more values than this check reads.
             if result.returncode or len(values) < count:
@@ -901,6 +900,7 @@ def observe(
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
             values = None
+        check_health()
         return values
 
     board = run_probe("api", ["--leaderboard"], 3, "Live Leaderboard freshness")
@@ -922,7 +922,6 @@ def observe(
     else:
         state.pop("leaderboard_stale_since", None)
         findings["leaderboard"] = False
-    check_health()
     # The board counts as readable only once the website's public Daily
     # leaderboard page shows it at the address visitors use.
     try:
@@ -945,14 +944,13 @@ def observe(
         findings["publication"] = publication[0] > 0 or late
     elif late:
         findings["publication"] = True
-    check_health()
 
     def slow_probe(argument: str, unavailable: str):
         # A failed reading is not kept, so the next check retries it.
         last = state.setdefault("slow_probes", {}).get(argument)
         if last and last["at"] // SLOW_PROBE_INTERVAL == now // SLOW_PROBE_INTERVAL:
             return last["values"]
-        values = run_probe("worker", [argument], 1, unavailable)
+        values = run_probe("worker", [argument], 1, unavailable, SLOW_PROBE_TIMEOUT)
         if values is not None:
             state["slow_probes"][argument] = {"at": now, "values": values}
         return values
@@ -960,11 +958,9 @@ def observe(
     completeness = slow_probe("--completeness", "Untracked Legend I battler count")
     if completeness is not None:
         findings["completeness"] = completeness[0] > UNTRACKED_BATTLER_LIMIT
-    check_health()
     battle_day = slow_probe("--battle-day", "Battle-day check")
     if battle_day is not None:
         findings["battle_day"] = battle_day[0] > 0
-    check_health()
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})

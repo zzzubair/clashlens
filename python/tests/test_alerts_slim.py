@@ -1,6 +1,7 @@
 """The 15-minute daily-calculation and unreadable-monitoring alerts, against a
 local HTTP server, never Discord."""
 
+import http.client
 import json
 import os
 import subprocess
@@ -509,21 +510,6 @@ def test_website_check_sends_only_the_website_alert(runtime):
     assert set(state["incidents"]) == {"site"}
 
 
-def test_a_check_that_crashes_later_does_not_hold_back_an_earlier_warning(
-    runtime, monkeypatch
-):
-    # Until 13 Oct 2026 warnings went out only at the end of a check, so a
-    # later crash, or a run past systemd's four minutes, lost them all.
-    rt = runtime
-    rt.backup_failed = True
-    break_command(error=RuntimeError("private detail"), match="--leaderboard")(
-        rt, monkeypatch
-    )
-    with pytest.raises(RuntimeError):
-        rt.run()
-    assert [p for p in rt.posts if "The backup check failed" in p["content"]]
-
-
 def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
     runtime, monkeypatch, capsys
 ):
@@ -541,28 +527,33 @@ def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
     assert "private" not in error
 
 
-def test_a_warning_behind_a_rejected_recovery_waits_for_it_at_the_end(
-    runtime, monkeypatch
-):
-    rt = runtime
-    rt.reads_failed = True
-    assert rt.run() == 0
-    # Discord rejects the recovery, then the read fails again next run.
-    rt.reads_failed, rt.post_status = False, 500
-    assert rt.run() == 1
-    rt.reads_failed, rt.post_status = True, 204
-    commands_before_post = []
+
+def metrics_cut_off(_rt, monkeypatch):
     inner = alerts.request
 
     def request(url, **kwargs):
-        if "payload" in kwargs:
-            commands_before_post.append(len(rt.calls))
+        if url.endswith("/metrics"):
+            raise http.client.IncompleteRead(b"")
         return inner(url, **kwargs)
 
     monkeypatch.setattr(alerts, "request", request)
-    assert rt.run() == 0
-    reads = [p["content"] for p in rt.posts if "private player-data read" in p["content"]]
-    assert len(reads) == 3
-    assert "recovered" in reads[1] and reads[2].startswith("Clash Lens alert:")
-    # Both went out after every check had run.
-    assert commands_before_post == [len(rt.calls)] * 2
+
+
+@pytest.mark.parametrize(
+    "fail",
+    [
+        break_command(error=subprocess.TimeoutExpired("podman", 10), match="--leaderboard"),
+        metrics_cut_off,
+    ],
+)
+def test_a_check_that_times_out_or_raises_leaves_the_rest_running(
+    runtime, monkeypatch, fail
+):
+    # Every check is caught and time-limited, so the later checks still run
+    # and the final delivery still sends what they found.
+    rt = runtime
+    rt.battle_day = "1"
+    fail(rt, monkeypatch)
+    assert rt.run() == 1
+    assert any("--battle-day" in call for call in rt.calls)
+    assert [p for p in rt.posts if "no-attack window" in p["content"]]
