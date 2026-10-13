@@ -109,10 +109,10 @@ To roll back, do not reverse a migration. Revert the code change on `main`
 while keeping every migration file, then `./ops build` and `./ops up` that
 revert. The previous release can read the database only if no migration since
 it changed a table it reads; check the migrations listed between the two
-revisions before choosing this. A worker-only or API-only change deploys with
-`./ops up --keep-collector`, which restarts only the worker, API and website
-and leaves the collector, database, pod and network running, as described
-below.
+revisions before choosing this. A plain `./ops up` leaves PostgreSQL, the pod and the
+network running unless something they run on changed, and restarts the
+collector on any Python change; `./ops up --keep-collector` keeps the collector
+running too for a worker-only or API-only change, as described below.
 
 ## Clean Fedora fixture
 
@@ -521,7 +521,7 @@ the private API have no host port. Production discovery is on unless
 
 `up` first checks configuration and existing resources without stopping services.
 Once those checks pass, it disables and stops the whole target, except as described in
-[when up restarts the collector](#when-up-restarts-the-collector).
+[when up restarts the database and collector](#when-up-restarts-the-database-and-collector).
 It then starts PostgreSQL by itself, applies every missing numbered migration in order,
 verifies the fixed archive contract, rotates the admin and runtime-role
 passwords through standard input, and only then enables the application target.
@@ -529,49 +529,61 @@ A failed migration leaves application services disabled for the next reboot.
 Re-running `up` applies only migrations
 whose recorded version is absent.
 
-### When up restarts the collector
+### When up restarts the database and collector
 
-`up` leaves the collector running when nothing it runs on changed, because a
-restart empties its scheduling memory, such as the Season 0 wait in
-[collector polling](collector-polling.md). The collector cannot outlive the
-database, pod or network, so these four keep running, or restart, together.
-They keep running only when all of these hold since the last successful `up`:
+A restart empties PostgreSQL's cache and the collector's scheduling memory,
+such as the Season 0 wait in [collector polling](collector-polling.md), so `up`
+leaves each running when nothing it runs on changed. PostgreSQL, the pod, the
+network and the database volume keep running, or restart, together. The
+collector cannot outlive them, so it restarts whenever they do, but it can
+restart while they keep running.
 
-- the collector and PostgreSQL images have the same file layers and run
-  settings (build labels such as the commit are ignored);
-- their rendered service files, apart from the image line, their settings
-  files, the pod, network and database volume files, and the migration files
-  are unchanged;
-- the contents of their secrets are unchanged, compared by hash and never
+PostgreSQL, the pod and the network keep running only when all of these hold
+since the last successful `up`:
+
+- the PostgreSQL image has the same file layers and run settings (build labels
+  such as the commit are ignored);
+- its rendered service file, apart from the image line, its settings file, the
+  pod, network and database volume files, and the migration files are
+  unchanged;
+- the contents of its secrets are unchanged, compared by hash and never
   printed;
-- all four are running and the collector and PostgreSQL containers are healthy.
+- all four are running and the PostgreSQL container is healthy.
 
-The collector's image holds all of `python/src`, so a release that changes
-only worker or API code still has a different collector image, and a plain
-`./ops up` restarts all four on any Python change. The narrow path for a
-worker-only or API-only change is the manual `./ops up --keep-collector`,
-which the person deploying chooses: it keeps the running collector image
-instead of the new one. Every other condition above must still hold, so a
-release that also changes the collector's or PostgreSQL's settings, service
-files or secrets, the PostgreSQL image, or any migration still restarts all
-four, on the new collector image. `up` cannot tell collector code from worker
-code, so use it only when the release changes no collector code; the next
-`up` without it starts the new collector image. Choosing the collector image
-automatically is a recorded follow-up. `--keep-collector` and
-`--restart-collector` cannot be combined.
+The collector also keeps running only when, as well, its image has the same
+file layers and run settings, its rendered service file, apart from the image
+line, its settings file and the contents of its secrets are unchanged, and it
+is running and healthy. Otherwise only the collector restarts, on the new
+image.
 
-Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
-before. It prints which happened and why, for example `Restarting the collector
-with the database, pod and network: changed collector settings.` The API,
-worker, website, fixture services and timers always restart. Files are compared
-whole, so even a comment-only edit restarts the four; that is deliberate, because
-such edits are rare and a needless restart is safe. When the four keep running, an
-`up` that fails after comparing them, for example because the website is unhealthy, stops only
-the services it restarted and leaves the four running. While they keep running,
-the active release records their running images, so their image
-revision label can name an older commit than the release. The record of what
-they run with is `kept-services.env` in the state directory; it holds only
-hashes.
+The collector's image holds all of `python/src`, and the collector runs much
+of the worker's code, so any Python change restarts the collector, while
+PostgreSQL, the pod and the network keep running. A release that changes
+nothing in `python/src`, its locked dependencies or the root `Containerfile`,
+such as a website-only change, leaves the collector running too. The narrow path for a
+worker-only or API-only change is the manual `./ops up --keep-collector`, which
+the person deploying chooses: it keeps the running collector image instead of
+the new one. Every other condition above must still hold, so a release that
+also changes the collector's settings, service file or secrets still restarts
+the collector, and one that changes anything PostgreSQL runs on still restarts
+all four, both on the new collector image. `up` cannot tell collector code from
+worker code, so use it only when the release changes no code the collector
+runs; the next `up` without it starts the new collector image.
+`--keep-collector` and `--restart-collector` cannot be combined.
+
+`./ops up --restart-collector` restarts all four, as before. `up` prints which
+happened and why, for example `Restarting the collector: changed collector
+settings.` followed by `Leaving the database, pod and network running: their
+image and configuration are unchanged.` The API, worker, website, fixture
+services and timers always restart. Files are compared whole, so even a
+comment-only edit restarts what reads them; that is deliberate, because such
+edits are rare and a needless restart is safe. When some of the four keep
+running, an `up` that fails after comparing them, for example because the
+website is unhealthy, stops only the services it restarted and leaves those
+running. While they keep running, the active release records their running
+images, so their image revision label can name an older commit than the
+release. The record of what they run with is `kept-services.env` in the state
+directory; it holds only hashes.
 
 ## Blog posts
 

@@ -1,30 +1,34 @@
 # Sourced by ./ops: what up checks before it stops anything, stopping the
-# stack, leaving the collector running through an up that changes nothing it
-# runs on, and the alerts' view of all that.
+# stack, leaving the database and collector running through an up that changes
+# nothing they run on, and the alerts' view of all that.
 #
-# The collector Requires the database and pod and exits about a second into a
-# database outage, so it keeps running only if all of these keep running too.
-# The collector's scheduling memory, such as the Season 0 wait, survives only
-# while its process does.
-KEEP_UNITS=(clashlens-collector clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume)
+# The database keeps its cache, and the collector its scheduling memory, such
+# as the Season 0 wait, only while their processes run. The collector Requires
+# the database and pod and exits about a second into a database outage, so it
+# keeps running only if they do. The database, pod, network and volume keep
+# running or restart together, decided apart from the collector.
+DATABASE_UNITS=(clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume)
 KEEP_RECORD="$STATE_DIR/kept-services.env"
-KEEP_LABELS=(MODE 'deployment mode' COLLECTOR_UNIT 'collector service definition' COLLECTOR_ENV 'collector settings'
-  COLLECTOR_SECRETS 'collector secrets' POSTGRES_UNIT 'database service definition' POSTGRES_ENV 'database settings'
+DATABASE_LABELS=(MODE 'deployment mode' POSTGRES_UNIT 'database service definition' POSTGRES_ENV 'database settings'
   POSTGRES_SECRETS 'database secrets' POD_UNIT 'pod definition' NETWORK_UNIT 'network definition'
   VOLUME_UNIT 'database volume definition' MIGRATIONS 'database migrations')
+COLLECTOR_LABELS=(COLLECTOR_UNIT 'collector service definition' COLLECTOR_ENV 'collector settings'
+  COLLECTOR_SECRETS 'collector secrets')
 RESTART_COLLECTOR=false
 # --keep-collector: the release changes only worker or API code, so the
 # collector keeps its running image even though the new one differs.
 KEEP_COLLECTOR=false
 COLLECTOR_RELEASE_IMAGE=
-KEEP_RUNNING=false
+# What this up leaves running: nothing, the database units, or those and the collector.
+KEPT_UNITS=()
 declare -Ag KEEP_PARTS=()
 
+collector_kept() { [[ " ${KEPT_UNITS[*]} " == *' clashlens-collector '* ]]; }
+
 stop_units() {
-  local unit state keep=' '
-  [[ "$KEEP_RUNNING" != true ]] || keep=" ${KEEP_UNITS[*]} "
+  local unit state keep=" ${KEPT_UNITS[*]} "
   "$SYSTEMCTL_BIN" --user stop "${TIMER_UNITS[@]}" >/dev/null 2>&1 || true
-  if [[ "$KEEP_RUNNING" == true ]]; then
+  if ((${#KEPT_UNITS[@]})); then
     # Stopping the target stops every PartOf member, so it stays active; up starts it again.
     "$SYSTEMCTL_BIN" --user disable clashlens.target >/dev/null 2>&1 || true
   else
@@ -51,43 +55,56 @@ image_identity() {
   printf '%s' "$fields" | sha256sum | cut -d' ' -f1
 }
 
-# Before stopping anything: keep the collector only if it, the database, pod
-# and network run, a record of their configuration exists and both images
-# match, or only the collector's differs and --keep-collector was given.
+# Keep $1's running image when its contents match the release's, pinning it so
+# the units and the active release name what runs; otherwise set the caller's reason.
+keep_running_image() {
+  local service=$1 container state image running current
+  container=$(container_name "$PREFIX" "$service")
+  state=$(container_state "$container")
+  [[ "$state" == healthy || "$state" == running ]] || { reason="the $service container is $state"; return; }
+  image=$($PODMAN_BIN inspect --format '{{.Image}}' "$container" 2>/dev/null) || { reason="the $service container could not be inspected"; return; }
+  image=$(normalize_image_id "$image")
+  running=$(image_identity "$image" || true)
+  current=$(image_identity "${RELEASE[${service^^}_IMAGE]}" || true)
+  if [[ -z "$running" || "$running" != "$current" ]]; then
+    [[ "$service" == collector && "$KEEP_COLLECTOR" == true ]] || { reason="the $service image changed"; return; }
+    COLLECTOR_RELEASE_IMAGE=${RELEASE[COLLECTOR_IMAGE]}
+  fi
+  RELEASE[${service^^}_IMAGE]=$image
+}
+
+# Before stopping anything: keep the database, pod and network only if they
+# run, a record of their configuration exists and the database image matches;
+# keep the collector too only if it also runs and its image matches, or
+# --keep-collector was given.
 keep_running_plan() {
-  local reason= unit service image running current
-  KEEP_RUNNING=false
+  local reason= unit
+  KEPT_UNITS=()
   [[ "$RESTART_COLLECTOR" != true || "$KEEP_COLLECTOR" != true ]] || die "use either --restart-collector or --keep-collector"
   if [[ "$RESTART_COLLECTOR" == true ]]; then reason='--restart-collector was given'
-  elif [[ ! -f "$KEEP_RECORD" || -L "$KEEP_RECORD" ]]; then reason='no record of the configuration it runs with'
+  elif [[ ! -f "$KEEP_RECORD" || -L "$KEEP_RECORD" ]]; then reason='no record of the configuration they run with'
   else
-    for unit in "${KEEP_UNITS[@]}"; do
+    for unit in "${DATABASE_UNITS[@]}"; do
       [[ "$($SYSTEMCTL_BIN --user is-active "$unit.service" 2>/dev/null || true)" == active ]] || { reason="$unit is not running"; break; }
     done
-    for service in collector postgres; do
-      [[ -z "$reason" ]] || break
-      current=$(container_state "$(container_name "$PREFIX" "$service")")
-      [[ "$current" == healthy || "$current" == running ]] || { reason="the $service container is $current"; break; }
-      image=$($PODMAN_BIN inspect --format '{{.Image}}' "$(container_name "$PREFIX" "$service")" 2>/dev/null) || { reason="the $service container could not be inspected"; break; }
-      image=$(normalize_image_id "$image")
-      running=$(image_identity "$image" || true)
-      current=$(image_identity "${RELEASE[${service^^}_IMAGE]}" || true)
-      if [[ -z "$running" || "$running" != "$current" ]]; then
-        [[ "$service" == collector && "$KEEP_COLLECTOR" == true ]] || { reason="the $service image changed"; break; }
-        COLLECTOR_RELEASE_IMAGE=${RELEASE[COLLECTOR_IMAGE]}
-      fi
-      # Same contents: keep the running image pinned so units and the active release match it.
-      RELEASE[${service^^}_IMAGE]=$image
-    done
+    [[ -n "$reason" ]] || keep_running_image postgres
   fi
   if [[ -n "$reason" ]]; then
-    [[ -z "$COLLECTOR_RELEASE_IMAGE" ]] || RELEASE[COLLECTOR_IMAGE]=$COLLECTOR_RELEASE_IMAGE
-    COLLECTOR_RELEASE_IMAGE=
     rm -f -- "$KEEP_RECORD"
-    printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
+    printf 'Restarting the database, pod, network and collector: %s.\n' "$reason"
     return
   fi
-  KEEP_RUNNING=true
+  KEPT_UNITS=("${DATABASE_UNITS[@]}")
+  if [[ "$($SYSTEMCTL_BIN --user is-active clashlens-collector.service 2>/dev/null || true)" != active ]]; then
+    reason='clashlens-collector is not running'
+  else
+    keep_running_image collector
+  fi
+  if [[ -n "$reason" ]]; then
+    printf 'Restarting the collector: %s.\n' "$reason"
+    return
+  fi
+  KEPT_UNITS+=(clashlens-collector)
 }
 
 file_digest() { sed '/^Image=/d' -- "$1" | sha256sum | cut -d' ' -f1; }
@@ -116,46 +133,60 @@ keep_running_parts() {
   KEEP_PARTS[POSTGRES_SECRETS]=$(secret_digest "$QUADLET_DIR/clashlens-postgres.container") || return 1
 }
 
-# After the new files are written: restart them all if anything they read changed.
+# After the new files are written: restart the database with the collector if
+# anything the database reads changed, or only the collector if only its files did.
 keep_running_check() {
-  local index value changed=() reason=
+  local index value database_changed=() collector_changed=() reason=
   if ! keep_running_parts; then
     KEEP_PARTS=()
     reason='a secret could not be read to compare'
-  elif [[ "$KEEP_RUNNING" == true ]]; then
+  elif ((${#KEPT_UNITS[@]})); then
     local -A recorded=()
     while IFS='=' read -r index value; do if [[ -n "$index" ]]; then recorded[$index]=$value; fi; done < "$KEEP_RECORD"
-    for ((index = 0; index < ${#KEEP_LABELS[@]}; index += 2)); do
-      [[ "${recorded[${KEEP_LABELS[index]}]-}" == "${KEEP_PARTS[${KEEP_LABELS[index]}]}" ]] || changed+=("${KEEP_LABELS[index + 1]}")
+    for ((index = 0; index < ${#DATABASE_LABELS[@]}; index += 2)); do
+      [[ "${recorded[${DATABASE_LABELS[index]}]-}" == "${KEEP_PARTS[${DATABASE_LABELS[index]}]}" ]] || database_changed+=("${DATABASE_LABELS[index + 1]}")
+    done
+    for ((index = 0; index < ${#COLLECTOR_LABELS[@]}; index += 2)); do
+      [[ "${recorded[${COLLECTOR_LABELS[index]}]-}" == "${KEEP_PARTS[${COLLECTOR_LABELS[index]}]}" ]] || collector_changed+=("${COLLECTOR_LABELS[index + 1]}")
     done
   fi
-  [[ "$KEEP_RUNNING" == true ]] || return 0
-  ((${#changed[@]} == 0)) || reason="changed $(IFS=,; printf '%s' "${changed[*]}" | sed 's/,/, /g')"
-  if [[ -z "$reason" ]]; then
+  ((${#KEPT_UNITS[@]})) || return 0
+  ((${#database_changed[@]} == 0)) || reason="changed $(IFS=,; printf '%s' "${database_changed[*]}" | sed 's/,/, /g')"
+  if [[ -n "$reason" ]]; then
+    rm -f -- "$KEEP_RECORD"
+    printf 'Restarting the database, pod, network and collector: %s.\n' "$reason"
+    KEPT_UNITS=()
+  elif collector_kept && ((${#collector_changed[@]})); then
+    printf 'Restarting the collector: changed %s.\n' "$(IFS=,; printf '%s' "${collector_changed[*]}" | sed 's/,/, /g')"
+    KEPT_UNITS=("${DATABASE_UNITS[@]}")
+  elif collector_kept; then
     if [[ -n "$COLLECTOR_RELEASE_IMAGE" ]]; then
       printf 'Leaving the collector, database, pod and network running: --keep-collector keeps the running collector image, and their configuration is unchanged.\n'
     else
       printf 'Leaving the collector, database, pod and network running: their images and configuration are unchanged.\n'
     fi
     return
+  else
+    # The plan already stopped the collector.
+    printf 'Leaving the database, pod and network running: their image and configuration are unchanged.\n'
+    return
   fi
-  rm -f -- "$KEEP_RECORD"
-  printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
-  KEEP_RUNNING=false
+  ((${#KEPT_UNITS[@]} == 0)) || printf 'Leaving the database, pod and network running: their image and configuration are unchanged.\n'
   if [[ -n "$COLLECTOR_RELEASE_IMAGE" ]]; then
     RELEASE[COLLECTOR_IMAGE]=$COLLECTOR_RELEASE_IMAGE
+    COLLECTOR_RELEASE_IMAGE=
     render_units
   fi
   stop_units
 }
 
 keep_running_record() {
-  local temporary index
+  local temporary index labels=("${DATABASE_LABELS[@]}" "${COLLECTOR_LABELS[@]}")
   ((${#KEEP_PARTS[@]})) || return 0
   temporary=$(mktemp "$STATE_DIR/kept-services.env.XXXXXX")
   chmod 600 "$temporary"
-  for ((index = 0; index < ${#KEEP_LABELS[@]}; index += 2)); do
-    printf '%s=%s\n' "${KEEP_LABELS[index]}" "${KEEP_PARTS[${KEEP_LABELS[index]}]}" >> "$temporary"
+  for ((index = 0; index < ${#labels[@]}; index += 2)); do
+    printf '%s=%s\n' "${labels[index]}" "${KEEP_PARTS[${labels[index]}]}" >> "$temporary"
   done
   mv -f "$temporary" "$KEEP_RECORD"
 }
