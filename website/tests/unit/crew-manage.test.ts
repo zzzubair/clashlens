@@ -202,7 +202,7 @@ async function render(
 }
 
 beforeEach(() => {
-  vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+  vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
   mocks.getWebsiteConfig.mockReturnValue(
     loadWebsiteConfig({
       NODE_ENV: "test",
@@ -351,7 +351,7 @@ describe("invite", () => {
   });
 
   it("is hidden while crews are switched off", async () => {
-    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "false");
+    vi.stubEnv("CLASHLENS_CREWS_ENABLED", "false");
     const response = await thrown(() =>
       crewAction(
         post(`/crews/${CREW_ID}`, { intent: "invite" }, { crewId: CREW_ID }) as never,
@@ -621,7 +621,7 @@ describe("join by invite", () => {
       joinLoader(get("/crews/join/short", { code: "short" }) as never),
     );
     expect((malformed as { init: { status: number } }).init.status).toBe(404);
-    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "false");
+    vi.stubEnv("CLASHLENS_CREWS_ENABLED", "false");
     const off = await thrown(() =>
       joinLoader(get(`/crews/join/${CODE}`, { code: CODE }) as never),
     );

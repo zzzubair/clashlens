@@ -475,11 +475,14 @@ dashboard's own player reads (`/v1/players/{tag}/today` and
 `/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
 API, so turning it on or off takes `./ops up`.
 
-Crews use the same setting: they ship with the dashboard and have no switch of
-their own. While it is off, every private API crew route
+Crews on the website have their own setting, `CLASHLENS_CREWS_ENABLED=true` in
+`app.env` (default `false`), which `./ops` passes to the website only; the
+private API's crew routes still follow the dashboard setting. While the
+website setting is off, every `/crews` page shows the normal page-not-found
+page and the navigation bar has no Crews link. While the dashboard setting is
+off, every private API crew route
 (`/v1/account/crews…` and `/v1/account/crew-invites/…`) answers 404
-`crews_disabled` before reading anything, every `/crews` page shows the normal
-page-not-found page, and the navigation bar has no Crews link. Migration 0095
+`crews_disabled` before reading anything. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.
 
 Visitor counting stays off, with no script and no requests, until
