@@ -12,10 +12,13 @@ They go out only during the Legend day that Reset starts: a bot that was
 down for a whole day skips that day's summaries.
 
 Each player's day is read with the website's own player page read, so the
-numbers, the label (Verified, Calculated, Uncertain) and the place on the
-Daily board saved at the Reset are the ones their page shows. A player whose
-day is not saved yet is named as not finished; one with no Legend day that
-day is left out, and a Clasher with no finished day gets no DM.
+numbers and the label (Verified, Calculated, Uncertain) are the ones their
+page shows; the end of day is the day's own, before any weekly or Season
+reset, which is shown beside it. Every place in a round's summaries is read
+from one version of the Reset's Daily board. A player whose day is not saved
+yet, or whom that board went without, is named as not finished; one with no
+Legend day that day is left out, and a Clasher with no finished day gets no
+DM.
 
 Each summary is logged before its first DM and sent by the attack alert
 loop, with the same tries again; so no Clasher is sent the same day's
@@ -94,6 +97,25 @@ class Summaries:
         now = self.now()
         reset = ranked_day_for(now).start
         with self.database.pool.connection() as connection:
+            # The Reset's Daily board, as the player page finds it
+            # (season_summaries.reset_board_ranks).
+            board = connection.execute(
+                """
+                SELECT snapshot.id FROM leaderboard_snapshots AS snapshot
+                WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+                  AND snapshot.boundary_at = %s
+                  AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                                   WHERE g.snapshot_id = snapshot.id)
+                       OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                                  WHERE g.snapshot_id = snapshot.id
+                                    AND g.snapshot_state <> 'superseded'))
+                ORDER BY snapshot.version DESC, snapshot.id DESC
+                LIMIT 1
+                """,
+                (reset,),
+            ).fetchone()
+            if board is None:
+                return []
             accounts = connection.execute(
                 """
                 SELECT account.id, identity.provider_subject,
@@ -111,24 +133,33 @@ class Summaries:
                       SELECT 1 FROM discord_day_summary_deliveries AS logged
                       WHERE logged.account_id = account.id AND logged.reset_at = %(reset)s
                   )
-                  -- The Reset's Daily board, as the player page finds it
-                  -- (season_summaries.reset_board_ranks).
-                  AND EXISTS (
-                      SELECT 1 FROM leaderboard_snapshots AS snapshot
-                      WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-                        AND snapshot.boundary_at = %(reset)s
-                        AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                                         WHERE g.snapshot_id = snapshot.id)
-                             OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                                        WHERE g.snapshot_id = snapshot.id
-                                          AND g.snapshot_state <> 'superseded'))
-                  )
                 GROUP BY account.id, identity.provider_subject
                 ORDER BY account.id
                 LIMIT %(batch)s
                 """,
                 {"reset": reset, "batch": BATCH},
             ).fetchall()
+            # Each player's place on that board, and whether it went without
+            # them as their day's result was not saved in time.
+            standing = {
+                tag: (position, unfinished)
+                for tag, position, unfinished in connection.execute(
+                    """
+                    SELECT player.normalized_tag, entry.position, EXISTS (
+                        SELECT 1 FROM boundary_publication_generations AS g
+                        JOIN boundary_publication_generation_members AS member
+                            ON member.generation_id = g.id
+                        WHERE g.snapshot_id = %(board)s AND member.player_id = player.id
+                          AND member.snapshot_status IN ('pending', 'unavailable', 'failed')
+                    )
+                    FROM players AS player
+                    LEFT JOIN leaderboard_snapshot_entries AS entry
+                        ON entry.snapshot_id = %(board)s AND entry.player_id = player.id
+                    WHERE player.normalized_tag = ANY(%(tags)s::text[])
+                    """,
+                    {"board": board[0], "tags": [tag for _, _, tags in accounts for tag in tags]},
+                ).fetchall()
+            }
         due = []
         for account_id, discord_user_id, tags in accounts:
             try:
@@ -136,7 +167,7 @@ class Summaries:
                     day
                     for tag in tags
                     if (page := self.store.player_page(tag, now)) is not None
-                    and (day := replies.summary_day(page, reset)) is not None
+                    and (day := replies.summary_day(page, reset, *standing[tag])) is not None
                 ]
             except Exception:
                 # Unlogged, so the next round reads this account again.

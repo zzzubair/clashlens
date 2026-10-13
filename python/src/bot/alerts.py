@@ -24,8 +24,8 @@ website shows with what the Clasher can do. That DM is not tried again.
 
 The same loop sends each Legend day's summary DMs (summaries.py) once a
 minute, with the same tries again, logged in their own delivery log. A
-summary's next DM waits as a DM to try again does, so each is checked as
-still due before it is sent.
+summary's next DM is sent as soon as the one before is delivered, if still
+due, with its own 2 minutes from its own first try.
 """
 
 from __future__ import annotations
@@ -321,8 +321,7 @@ class AlertLoop:
         self.now = now
         self._pruned_at: float | None = None
         self._summarised_at: float | None = None
-        # Claimed DMs Discord could not take yet, and the next DMs of
-        # summaries, waiting for their next try.
+        # Claimed DMs Discord could not take yet, waiting for their next try.
         self._waiting: list[Delivery] = []
 
     async def run(self) -> None:
@@ -337,7 +336,7 @@ class AlertLoop:
 
     async def tick(self) -> int:
         """Log as not delivered each waiting DM past its last try or no
-        longer due, and try each other one whose time has come, then send every
+        longer due, and try again each other one whose time has come, then send every
         confirmation, then every alert, due now, then, once a minute, the
         Legend day summaries due, one at a time; returns how many DMs were
         sent."""
@@ -402,9 +401,9 @@ class AlertLoop:
 
     async def _send(self, delivery: Delivery) -> int:
         """Try one logged DM, cut off at its last moment, and log how it went
-        or wait to try again if there is time; 1 when it was delivered. A
-        delivered DM with more to follow leaves the next one waiting, to be
-        tried in the next round with its own 2 minutes."""
+        or wait to try again if there is time; the DMs delivered. A delivered
+        DM with more to follow starts the next one while it is still due,
+        with its own 2 minutes; one no longer due is logged as not delivered."""
         left = delivery.time_left()
         if left <= 0:
             await self._finish(delivery, "failed", None)
@@ -436,10 +435,12 @@ class AlertLoop:
         if state == "sent" and delivery.more:
             delivery.reply, delivery.tags = delivery.more.pop(0)
             delivery.part += 1
-            delivery.claimed_at = delivery.retry_at = asyncio.get_running_loop().time()
             delivery.wait = 0.0
-            self._waiting.append(delivery)
-            return 1
+            if not await asyncio.to_thread((delivery.log or self.alerts).still_due, delivery):
+                await self._finish(delivery, "failed", None)
+                return 1
+            delivery.claimed_at = asyncio.get_running_loop().time()
+            return 1 + await self._send(delivery)
         await self._finish(delivery, state, reason)
         return int(state == "sent")
 

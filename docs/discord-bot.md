@@ -51,9 +51,13 @@ whose summary is on: starting and end-of-day trophies, the trophy change,
 attacks and defenses with their trophies, the day's label (Verified,
 Calculated, Uncertain) and its place on that Daily board, with a link to the
 day on the player page. The numbers come from the player page's own read, so
-they match it. A player whose day is not saved yet is named as not finished;
-a player with no Legend day that day is left out, and an account with no
-finished day gets no DM. A summary too long for one message goes as several.
+they match it. The end of day is the day's own, before any weekly or Season
+reset at that Reset, which is shown beside the change. Every place in one
+round of summaries comes from the same version of that Daily board. A player
+whose day is not saved yet, or whom that board went without, is named as not
+finished; a player with no Legend day that day is left out, and an account
+with no finished day gets no DM. A summary too long for one message goes as
+several, each sent as soon as the one before is delivered.
 
 - Each player's summary is on until turned off on the website's Discord
   alerts page, separately from its attack alerts. Each player turned off is

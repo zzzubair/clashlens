@@ -498,16 +498,20 @@ def _adjustment(day: Mapping[str, Any], *kinds: str) -> Mapping[str, Any] | None
     return next((item for item in day["adjustments"] if item.get("type") in kinds), None)
 
 
-def summary_day(page: Mapping[str, Any], reset: datetime) -> dict[str, Any] | None:
+def summary_day(
+    page: Mapping[str, Any], reset: datetime, place: int | None, unfinished: bool
+) -> dict[str, Any] | None:
     """The player's Legend day that ended at `reset`, as their page shows it:
-    its label, end of day and the place on that Reset's Daily board, with
-    "finished" False while its final result is not saved yet. None when the
-    page has no such Legend day."""
+    its label, its own end of day before any weekly or Season reset at
+    `reset`, and `place`, its place on that Reset's Daily board. "finished"
+    is False while its final result is not saved yet, as for a player that
+    board went without (`unfinished`) with no saved day. None when the page
+    has no such Legend day."""
     ready = page.get("screen_ready") or {}
     days = {datetime.fromisoformat(day["ranked_day_start"]): day for day in ready.get("days", [])}
     day = days.get(reset - timedelta(days=1))
     if day is None:
-        return None
+        return {"tag": page["tag"], "name": page["name"], "finished": False} if unfinished else None
     codes = day["uncertainty_reasons"]
     battles = len(day["offense_events"]) + len(day["defense_events"])
     # The page's own rule for a day that is not a Legend day.
@@ -517,32 +521,23 @@ def summary_day(page: Mapping[str, Any], reset: datetime) -> dict[str, Any] | No
         return {"tag": page["tag"], "name": page["name"], "finished": False}
     start = day["start_trophies"]
     net = day["net_trophy_change"]
-    raised = _adjustment(day, "weekly_reset", "season_reset")
-    # dayEnd on the website: the next day's start, else, within a day of
-    # the Reset, the start plus the change and any reset at that Reset.
-    following = days.get(reset)
-    following = None if following is None else following["start_trophies"]
-    own = None if start is None or net is None else start + net + (raised or {}).get("amount", 0)
-    conflict = None
-    if own is not None and following is not None and own != following:
-        conflict = f"Battles add up to {number(own)}; next day started at {number(following)}."
     automatic = _adjustment(day, "automatic_defense")
     return {
         "tag": page["tag"],
         "name": page["name"],
         "finished": True,
-        "status": "Uncertain" if conflict else _day_status(day),
-        "conflict": conflict,
+        "status": _day_status(day),
         "start": start,
-        "end": following if following is not None else own,
+        # The saved end of day: the Season pages' end_trophies.
+        "end": None if start is None or net is None else start + net,
         "net": net,
-        "raised": raised,
+        "raised": _adjustment(day, "weekly_reset", "season_reset"),
         "attack_count": day["attack_count"],
         "attack_gain": day["attack_gain"],
         "defense_count": day["defense_count"],
         "defense_loss": day["defense_loss"],
         "automatic_loss": None if automatic is None else -automatic["amount"],
-        "place": day.get("reset_rank"),
+        "place": place,
     }
 
 
@@ -569,8 +564,7 @@ def _summary_block(site: Site, day: Mapping[str, Any], key: str) -> str:
     )
     if day["status"] == "Uncertain":
         lines.append(
-            day["conflict"]
-            or "Uncertain: some of this day's battles or readings may be missing, so these "
+            "Uncertain: some of this day's battles or readings may be missing, so these "
             "numbers may be off. The day on Clash Lens says why."
         )
     lines.append(

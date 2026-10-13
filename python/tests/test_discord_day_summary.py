@@ -24,7 +24,6 @@ def _day(start: datetime, **fields: object) -> dict:
         "offense_events": [{}] * 8, "defense_events": [{}] * 8,
         "start_trophies": 5000, "net_trophy_change": 80,
         "attack_count": 8, "attack_gain": 320, "defense_count": 8, "defense_loss": 240,
-        "reset_rank": 1234,
         **fields,
     }
 
@@ -34,26 +33,49 @@ def _page(tag: str, *days: dict, name: str = "Wanderer") -> dict:
 
 
 def test_a_finished_day_reads_as_its_page_shows_it() -> None:
-    """The day ended at RESET, labelled as the website labels it; the next
-    day's start is the end of day, and a gap from the battles makes it
-    Uncertain. A day not saved yet is not finished; a day the player had not
-    signed up for is no Legend day."""
+    """The day ended at RESET, labelled as the website labels it, with the
+    place given from the Reset's Daily board. A day not saved yet is not
+    finished, nor is a player that board went without before their day
+    saved; a day the player had not signed up for is no Legend day."""
     yesterday = RESET - timedelta(days=1)
-    verified = replies.summary_day(_page("#2PP", _day(yesterday)), RESET)
+    verified = replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1234, False)
     assert verified is not None
     assert (verified["status"], verified["end"], verified["place"]) == ("Verified", 5080, 1234)
-    calculated = replies.summary_day(_page("#2PP", _day(yesterday, confidence="inferred")), RESET)
+    calculated = replies.summary_day(
+        _page("#2PP", _day(yesterday, confidence="inferred")), RESET, 1234, False)
     assert calculated is not None and calculated["status"] == "Calculated"
-    gap = replies.summary_day(
-        _page("#2PP", _day(yesterday), _day(RESET, start_trophies=5070)), RESET)
-    assert gap is not None and gap["status"] == "Uncertain" and gap["end"] == 5070
-    assert gap["conflict"] == "Battles add up to 5,080; next day started at 5,070."
-    live = replies.summary_day(_page("#2PP", _day(yesterday, state="Live")), RESET)
+    live = replies.summary_day(_page("#2PP", _day(yesterday, state="Live")), RESET, None, False)
     assert live == {"tag": "#2PP", "name": "Wanderer", "finished": False}
+    # A player Clash Lens knows with no saved day at all.
+    unsaved = {"tag": "#2PP", "name": "Wanderer"}
+    assert replies.summary_day(unsaved, RESET, None, True) == live
+    assert replies.summary_day(unsaved, RESET, None, False) is None
     unenrolled = _day(yesterday, uncertainty_reasons=["not_enrolled"],
                       offense_events=[], defense_events=[])
-    assert replies.summary_day(_page("#2PP", unenrolled), RESET) is None
-    assert replies.summary_day(_page("#2PP", _day(RESET)), RESET) is None
+    assert replies.summary_day(_page("#2PP", unenrolled), RESET, None, False) is None
+    assert replies.summary_day(_page("#2PP", _day(RESET)), RESET, None, False) is None
+
+
+def test_the_end_of_day_is_before_any_weekly_or_season_reset() -> None:
+    """A Season's last day from 5,440 loses 120, and the Season reset takes
+    the 5,320 to 5,000: the end of day is 5,320, as its Season page shows,
+    with the reset beside the change, and the next day starting at 5,000
+    leaves it Verified. A Monday raise from 4,980 is shown the same way."""
+    yesterday = RESET - timedelta(days=1)
+    season_end = replies.summary_day(_page("#2PP", _day(
+        yesterday, start_trophies=5440, net_trophy_change=-120,
+        adjustments=[{"type": "season_reset", "amount": -320}],
+    ), _day(RESET)), RESET, 3, False)
+    assert season_end is not None
+    assert (season_end["status"], season_end["end"]) == ("Verified", 5320)
+    body = replies.day_summary(SITE, RESET, [season_end])[0][0].body
+    assert body.split("\n")[1] == "5,440 → 5,320 (−120, −320 Season reset)"
+    weekly = replies.summary_day(_page("#2PP", _day(
+        yesterday, net_trophy_change=-20, adjustments=[{"type": "weekly_reset", "amount": 20}],
+    ), _day(RESET)), RESET, 3, False)
+    assert weekly is not None
+    body = replies.day_summary(SITE, RESET, [weekly])[0][0].body
+    assert body.split("\n")[1] == "5,000 → 4,980 (−20, +20 weekly reset)"
 
 
 def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
@@ -66,7 +88,7 @@ def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
         replies.summary_day(
             _page(f"#{n:04d}", _day(yesterday, start_trophies=6000 - n),
                   name=f"@everyone **{n}**"),
-            RESET,
+            RESET, n + 1, False,
         )
         for n in range(40)
     ]
@@ -99,7 +121,7 @@ def test_a_long_not_finished_list_is_split_between_dms() -> None:
         {"tag": f"#{n:07d}", "name": f"Still playing {n:06d}", "finished": False}
         for n in range(150)
     ]
-    days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET), *waiting]
+    days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1, False), *waiting]
     summary = replies.day_summary(SITE, RESET, days)
     assert all(len(part.body) <= 4096 for part, _ in summary)
     text = "\n\n".join(part.body for part, _ in summary)
@@ -155,8 +177,8 @@ class _Discord:
 
 
 def _send_summary(gone: str | None) -> tuple[list[int], _Discord, _SummaryLog]:
-    """A summary of three DMs naming #A, #B and #C, sent by the alert loop
-    round by round until none waits."""
+    """A summary of three DMs naming #A, #B and #C, sent by the alert loop,
+    then round by round until none waits."""
     log, discord = _SummaryLog(gone), _Discord()
     loop = AlertLoop(_NoAlerts(), discord, SITE)  # type: ignore[arg-type]
     delivery = Delivery(1, 0, "1", None, RESET, Reply("one"), log=log,  # type: ignore[arg-type]
@@ -178,7 +200,7 @@ def test_a_split_summary_sends_its_dms_in_order_each_with_its_own_nonce(monkeypa
     names before it is tried, and the summary is logged sent once all went."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     sent, discord, log = _send_summary(None)
-    assert sent == [1, 0, 1, 1]
+    assert sent == [1, 2]
     assert discord.tries == [
         ("summary-7-0", "one"), ("summary-7-1", "two"),
         ("summary-7-1", "two"), ("summary-7-2", "three"),
@@ -193,6 +215,65 @@ def test_a_summary_dm_naming_a_player_turned_off_is_not_sent(monkeypatch) -> Non
     not delivered."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     sent, discord, log = _send_summary("#B")
-    assert sent == [1, 0]
+    assert sent == [1]
     assert discord.tries == [("summary-7-0", "one")]
     assert log.finished == [(7, "failed")]
+
+
+class _TwoSummaries:
+    """Two Clashers' summaries due: the first's in two DMs, then the
+    second's, each due while the loop asks."""
+
+    NONCE_PREFIX = "summary-"
+
+    def __init__(self) -> None:
+        self.ids = iter((7, 8))
+        self.finished: dict[int, str] = {}
+
+    def due(self) -> list[Delivery]:
+        return [
+            Delivery(1, 0, "1", None, RESET, Reply("first, one"), log=self, tags=("#A",),
+                     more=[(Reply("first, two"), ("#A",))]),
+            Delivery(2, 0, "2", None, RESET, Reply("second"), log=self, tags=("#B",)),
+        ]
+
+    def prune(self) -> None:
+        pass
+
+    def claim(self, _delivery: Delivery) -> int:
+        return next(self.ids)
+
+    def still_due(self, _delivery: Delivery) -> bool:
+        return True
+
+    def finish(self, delivery_id: int, state: str, _reason: str | None) -> None:
+        self.finished[delivery_id] = state
+
+
+class _SlowDiscord:
+    """Answers the second Clasher only after their DM's last moment."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send_dm(self, user: str, reply: Reply, _nonce: int | str, _left: float) -> None:
+        if user == "2":
+            await asyncio.sleep(1)
+        self.sent.append(reply.body)
+
+
+def test_a_slow_dm_to_one_clasher_does_not_cost_another_their_next_dm(monkeypatch) -> None:
+    """The first Clasher's first DM is delivered, then Discord takes longer
+    than the second Clasher's DM may wait: the first Clasher's second DM went
+    as soon as their first did, so only the second Clasher's is logged as not
+    delivered."""
+    monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 0.2)
+    summaries, discord = _TwoSummaries(), _SlowDiscord()
+    loop = AlertLoop(_NoAlerts(), discord, SITE, summaries=summaries)  # type: ignore[arg-type]
+
+    async def rounds() -> list[int]:
+        return [await loop.tick(), await loop.tick()]
+
+    assert asyncio.run(rounds()) == [2, 0]
+    assert discord.sent == ["first, one", "first, two"]
+    assert summaries.finished == {7: "sent", 8: "failed"}
