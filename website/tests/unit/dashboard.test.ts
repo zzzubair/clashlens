@@ -412,12 +412,28 @@ describe("Legend day card", () => {
     expect(updated(emptyDay({ observedAtMs: at(12) }))).toContain("updated 12 min ago");
   });
 
-  const render = (day: PlayerDay | null, range = { best: 95, worst: 760 }) =>
+  const render = (
+    day: PlayerDay | null,
+    range = { best: 95, worst: 760 },
+    projected: number | null = null,
+  ) =>
     text(
       renderToStaticMarkup(
-        createElement(LegendDayCard, { player: linked(MAIN), day, range }),
+        createElement(LegendDayCard, { player: linked(MAIN), day, range, projected }),
       ),
     );
+
+  it("shows the projected place beside the outer range, labelled an estimate", () => {
+    const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
+    expect(html).toContain(
+      "Next Reset #1 – #12,270 estimate · narrows as the day goes on Projected #3,000 at Reset",
+    );
+    expect(html).toContain(
+      "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
+    );
+    // Before any day's examples are saved, only the outer range shows.
+    expect(render(emptyDay({}))).not.toContain("Projected");
+  });
 
   it("shows trophies, net, the ranks and the next Reset range as an estimate", () => {
     const html = render(
@@ -621,6 +637,8 @@ describe("today read for the Legend day and Bases cards", () => {
     });
     expect(await getPlayerToday(MAIN)).toEqual({
       rankRange: { best: 95, worst: 760 },
+      projectedRank: null,
+      projectedRankPending: false,
       openDefenses: 7,
       automaticDefenseEach: 21,
       opponents: [
@@ -647,6 +665,39 @@ describe("today read for the Legend day and Bases cards", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("reads the projected place inside the Next Reset range, and whether it is still worked out", async () => {
+    const today = {
+      tag: MAIN,
+      rank_range: { best: 95, worst: 760 },
+      projected_rank: 240,
+      projected_rank_pending: false,
+      legends_held: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+      board_computed_at: null,
+    };
+    mocks.requestJson.mockResolvedValue(today);
+    expect(await getPlayerToday(MAIN)).toMatchObject({
+      rankRange: { best: 95, worst: 760 },
+      projectedRank: 240,
+      projectedRankPending: false,
+    });
+    mocks.requestJson.mockResolvedValue({
+      ...today,
+      projected_rank: null,
+      projected_rank_pending: true,
+    });
+    expect(await getPlayerToday(MAIN)).toMatchObject({
+      projectedRank: null,
+      projectedRankPending: true,
+    });
+    for (const bad of [{ projected_rank: 0 }, { projected_rank_pending: "yes" }]) {
+      mocks.requestJson.mockResolvedValue({ ...today, ...bad });
+      await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
+    }
   });
 
   it("keeps a today read without saved battles apart from one with no attacks", async () => {
@@ -763,7 +814,13 @@ describe("dashboard route", () => {
     // A first visit reads the default cards that sit behind the pop-up.
     // Legend day still has the account's live trophies and rank.
     expect(data.cards).toEqual({
-      "legend-day": { player: linked(MAIN), day: null, range: null, rangeAtMs: null },
+      "legend-day": {
+        player: linked(MAIN),
+        day: null,
+        range: null,
+        rangeAtMs: null,
+        projected: null,
+      },
       "legend-clock": null,
       bases: null,
       goal: null,
@@ -776,12 +833,18 @@ describe("dashboard route", () => {
 
   it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
     const boardAt = "2026-10-07T09:05:00+00:00";
-    // Today's read answers before the board is read; asked again, it waits for it.
+    // Today's read answers before the board is read; asked again, it waits
+    // for it, and the time after for the projected place worked out after
+    // it. Once no day's examples are saved, there is none to wait for.
+    let waits = 0;
     mocks.requestJson.mockImplementation(async (path: string) => {
       const waited = path.endsWith("?wait_for_board=true");
+      if (waited) waits += 1;
       return {
         tag: MAIN,
         rank_range: waited ? { best: 95, worst: 760 } : null,
+        projected_rank: waits === 2 ? 240 : null,
+        projected_rank_pending: waits === 1,
         open_defenses: 7,
         automatic_defense_each: 21,
         opponents: [],
@@ -803,19 +866,41 @@ describe("dashboard route", () => {
     const again = await load(
       `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
     );
+    // Legend day has its range but not yet its projected place, so asks again.
     expect(again.cards).toEqual({
       "legend-day": {
         player: linked(MAIN),
         day: null,
         range: { best: 95, worst: 760 },
         rangeAtMs: Date.parse(boardAt),
+        projected: null,
+        boardPending: true,
       },
       bases: { rows: [], comparedAtMs: Date.parse(boardAt) },
     });
+    const last = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+    );
+    expect(last.cards).toEqual({
+      "legend-day": {
+        player: linked(MAIN),
+        day: null,
+        range: { best: 95, worst: 760 },
+        rangeAtMs: Date.parse(boardAt),
+        projected: 240,
+      },
+    });
+    const none = await load(
+      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+    );
+    expect(none.cards["legend-day"]).toMatchObject({ projected: null });
+    expect(none.cards["legend-day"]).not.toHaveProperty("boardPending");
     // One read of today's numbers serves both cards each time.
     expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
-      `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+      ...Array(3).fill(
+        `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,
+      ),
     ]);
   });
 
@@ -1105,6 +1190,7 @@ describe("dashboard page", () => {
             day: null,
             range: null,
             rangeAtMs: null,
+            projected: null,
             boardPending: true,
           },
           bases: { rows: [], comparedAtMs: null, boardPending: true },

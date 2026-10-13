@@ -84,8 +84,9 @@ function hasView(card: CardId): card is keyof CardDataMap {
   return Object.hasOwn(CARD_VIEWS, card);
 }
 
-// A card read before the shared board asks again at most this many times,
-// the server waiting up to 4 seconds for the board each time.
+// A card read before the shared board, or Legend day while its projected
+// place is worked out, asks again at most this many times, the server waiting
+// up to 4 seconds for them each time.
 const BOARD_TRIES = 3;
 
 /**

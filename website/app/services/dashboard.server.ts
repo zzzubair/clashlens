@@ -56,6 +56,10 @@ import {
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
   rankRange: RankRange | null;
+  /** The place the player is projected to finish on; null before it can be worked out. */
+  projectedRank: number | null;
+  /** The projected place is still to be worked out, so the page asks again. */
+  projectedRankPending: boolean;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
@@ -143,6 +147,9 @@ export async function getPlayerToday(
   );
   if (!isRecord(payload) || payload.tag !== tag) malformed();
   const range = payload.rank_range;
+  // A data service older than the projected place leaves both out.
+  const pending = payload.projected_rank_pending ?? false;
+  if (typeof pending !== "boolean") malformed();
   return {
     rankRange: nullable(range, (item) => {
       if (!isRecord(item)) malformed();
@@ -151,6 +158,12 @@ export async function getPlayerToday(
       if (best < 1 || worst < best) malformed();
       return { best, worst };
     }),
+    projectedRank: nullable(payload.projected_rank ?? null, (item) => {
+      const rank = count(item);
+      if (rank < 1) malformed();
+      return rank;
+    }),
+    projectedRankPending: pending,
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
     opponents: nullable(payload.opponents, (items) => {
@@ -754,12 +767,13 @@ export function readCards(
     return page === null ? null : seasonData(page);
   };
   // Legend day and Bases you attacked share one read of today's numbers.
-  // Read before the shared board, each says so and the page asks again.
+  // Read before the shared board, or Legend day while its projected place is
+  // worked out, each says so and the page asks again.
   let todayRead: Promise<PlayerToday | null> | undefined;
   const today = () =>
     (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard).catch(() => null));
-  const waiting = (read: PlayerToday | null) =>
-    read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
+  const waiting = (read: PlayerToday | null, projecting = false) =>
+    projecting || read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
   const armies = async (lens: ArmyLens) => ({
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
@@ -778,7 +792,8 @@ export function readCards(
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
         rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
-        ...waiting(read),
+        ...waiting(read, read?.projectedRankPending),
+        projected: read?.projectedRank ?? null,
       };
     },
     bases: async () => {

@@ -22,6 +22,20 @@ read, never one from before the Reset; each log's "no opponent, no battle"
 slots sit in a large saved record, so each saved day's are read once, not
 every minute.
 
+The projected place inside the range (projected_place.py) is worked out
+after each board read, from that read's trophies and open slots, each
+player's attacks on the three Legend days before today, when their newest
+battle that moved their trophies ended by the Daily board's rule
+(analytics.latest_trophy_changes, here from each player's newest published
+log of today, each read once as published logs never change) and the saved
+examples of the last 7 days. It takes seconds of calculation, so it runs in
+a separate Python process, one at a time, a board read meanwhile worked out
+right after, and requests look it up: until the first one of a Legend day
+finishes, and once the newest is 10 minutes old, it is left out. The
+dashboard asks again while the player's place is still to be worked out,
+not once today's projection found no day's examples saved, each follow-up
+waiting within its 4 seconds while it is worked out.
+
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
 base's, widened evenly until it holds 200 defenses but never past 300 either
@@ -40,15 +54,18 @@ battles with each type, from the worker's saved counts for each day.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import time
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, Thread
 from typing import Any
 
-from . import army_types
+from . import army_types, projected_place
 from .api_db import ApiDatabase, _screen_events, _text
 from .api_leaderboard import LiveBoardCache
 from .domain import (
@@ -109,6 +126,41 @@ FROM ranked_day_versions
 WHERE id = ANY(%s)
 """
 
+# Each player's id and attacks on the three Legend days before
+# %(day_start)s, for their projected place.
+_PROJECTION_PLAYERS_SQL = f"""
+SELECT player.normalized_tag, player.id, recent.yesterday, recent.before
+FROM players AS player
+{projected_place.RECENT_ATTACKS_SQL}WHERE player.normalized_tag = ANY(%(tags)s)
+"""
+
+# Each player's newest published log of the Legend day %(day_start)s.
+_NEWEST_LOGS_SQL = """
+SELECT DISTINCT ON (daily.player_id) daily.player_id, daily.id
+FROM api_player_daily_logs AS daily
+WHERE daily.ranked_day_start = %(day_start)s
+ORDER BY daily.player_id, daily.version DESC
+"""
+# The battles the given logs keep with a report time: each report's side,
+# battle, time and whether it moved the player's trophies.
+_LOG_REPORTS_SQL = """
+SELECT daily.id, event ->> 'lens', event ->> 'battle_identity',
+       (event ->> 'battle_timestamp')::timestamptz,
+       event ->> 'trophy_change' <> '0'
+FROM api_player_daily_logs AS daily
+CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(daily.battles)
+                                        WHEN 'array' THEN daily.battles
+                                        ELSE '[]' END) AS event
+WHERE daily.id = ANY(%s)
+  AND event ->> 'battle_timestamp' ~ '^[0-9]{4}-[0-9][0-9]-[0-9][0-9]T'
+  AND event ->> 'included' IS DISTINCT FROM 'false'
+  AND event ->> 'valid' IS DISTINCT FROM 'false'
+"""
+_LOGS_A_READ = 2000
+# With only the defender's report, a battle ends this long after it, the
+# median attack length (analytics.latest_trophy_changes).
+_DEFENSE_REPORT_TO_END = timedelta(seconds=155)
+
 # Each player's latest log for one Legend day, with the day's start trophies
 # and its "no opponent, no battle" defense slots, which the game counts as
 # used.
@@ -144,6 +196,15 @@ class _Board:
     starts: list[int]
     defenses_below: list[int]
     held_below: list[int]
+    # tag -> (trophies now, open attacks, open defenses), for the projection.
+    slots_left: dict[str, tuple[int, int, int]]
+
+
+@dataclass(frozen=True)
+class _Projection:
+    day_start: datetime
+    # tag -> projected place, before it is kept inside the tag's range.
+    places: dict[str, int]
 
 
 def _open(used: Any, allowed: int) -> int:
@@ -172,6 +233,7 @@ def _read_board(
         }
     slots = {version: slots[version] for version in versions if version in slots}
     ends: dict[str, tuple[int, int]] = {}
+    slots_left: dict[str, tuple[int, int, int]] = {}
     held = defenses = 0
     # Day start trophies -> [defenses, held defenses].
     by_start: dict[int, list[int]] = {}
@@ -195,6 +257,7 @@ def _read_board(
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
+        slots_left[tag] = (basis, open_attacks, open_defenses)
         if defended:
             defenses += int(defended)
             held += int(defended) - int(tripled or 0)
@@ -218,6 +281,7 @@ def _read_board(
         starts=starts,
         defenses_below=defenses_below,
         held_below=held_below,
+        slots_left=slots_left,
     ), slots
 
 
@@ -225,11 +289,112 @@ def _in_background(read: Callable[[], None]) -> None:
     Thread(target=read, name="dashboard-board", daemon=True).start()
 
 
+# A log's kept battles: (attack, battle, report time, moved trophies).
+_Reports = tuple[tuple[bool, str, datetime, bool], ...]
+
+
+def _latest_changes(
+    connection: Any, day_start: datetime, reports: dict[int, _Reports]
+) -> tuple[dict[int, datetime], dict[int, _Reports]]:
+    """When each player's newest battle that moved their trophies today
+    ended, by the Daily board's rule: at the attacker's report, from the
+    attacker's own log whether or not they are on the board, else 155
+    seconds after the defender's. ``reports`` holds the logs already read
+    and comes back with only today's newest."""
+    newest = dict(connection.execute(_NEWEST_LOGS_SQL, {"day_start": day_start}).fetchall())
+    kept = {log: reports[log] for log in newest.values() if log in reports}
+    unread = [log for log in newest.values() if log not in kept]
+    read: dict[int, list[tuple[bool, str, datetime, bool]]] = {log: [] for log in unread}
+    # A few thousand at a time: all of them, after a restart, took about
+    # 3 s on 13,300 players with 11 battles each.
+    for first in range(0, len(unread), _LOGS_A_READ):
+        for log, lens, battle, at, moved in connection.execute(
+            _LOG_REPORTS_SQL, (unread[first : first + _LOGS_A_READ],)
+        ):
+            read[log].append((lens == "offense", _text(battle), at, moved is True))
+    kept |= {log: tuple(events) for log, events in read.items()}
+    attack_ends = {
+        battle: at
+        for events in kept.values()
+        for attack, battle, at, _ in events
+        if attack
+    }
+    latest: dict[int, datetime] = {}
+    for player, log in newest.items():
+        ends = [
+            at if attack else attack_ends.get(battle, at + _DEFENSE_REPORT_TO_END)
+            for attack, battle, at, moved in kept[log]
+            if moved
+        ]
+        if ends:
+            latest[player] = max(ends)
+    return latest, kept
+
+
+def _projection_inputs(
+    connection: Any, now: datetime, board: _Board, reports: dict[int, _Reports]
+) -> tuple[tuple[Any, ...] | None, dict[int, _Reports]]:
+    """projected_place.middle_places's inputs for ``board``'s players, or
+    None before any day's examples are saved, and ``_latest_changes``'s
+    logs read."""
+    examples = projected_place.read_examples(connection, now)
+    if examples is None or not board.slots_left:
+        return None, reports
+    tags = list(board.slots_left)
+    players = {
+        _text(row[0]): row[1:]
+        for row in connection.execute(
+            _PROJECTION_PLAYERS_SQL, {"tags": tags, "day_start": board.day_start}
+        ).fetchall()
+    }
+    latest, reports = _latest_changes(connection, board.day_start, reports)
+    trophies, open_attacks, open_defenses = (
+        list(column) for column in zip(*board.slots_left.values(), strict=True)
+    )
+    found = [players.get(tag, (None, 0, 0)) for tag in tags]
+    return (
+        trophies,
+        open_attacks,
+        open_defenses,
+        [projected_place.activity(int(yesterday), int(before))
+         for _, yesterday, before in found],
+        [None if player_id is None else latest.get(int(player_id))
+         for player_id, _, _ in found],
+        tags,
+        examples,
+    ), reports
+
+
+_child: ProcessPoolExecutor | None = None
+_child_lock = Lock()
+
+
+def _in_child_process(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """``function(*args, **kwargs)`` in a separate Python process, started
+    once and kept, so its seconds of calculation never hold up this
+    process's requests. One that died is started again next time."""
+    global _child
+    with _child_lock:
+        if _child is None:
+            _child = ProcessPoolExecutor(
+                1, mp_context=multiprocessing.get_context("spawn")
+            )
+        child = _child
+    try:
+        return child.submit(function, *args, **kwargs).result()
+    except BrokenProcessPool:
+        with _child_lock:
+            if _child is child:
+                _child = None
+        raise
+
+
 class DashboardBoard:
     """The board for rank ranges and held share, read in the background at
     most once every ``seconds``, one read at a time, so no request waits for
-    it unless it asks to. ``run`` starts a read; tests pass one that reads at
-    once."""
+    it unless it asks to, and the projected places worked out after each
+    read, one at a time. ``run`` starts a read; tests pass one that reads at
+    once. ``compute`` runs the projection's calculation."""
 
     def __init__(
         self,
@@ -238,11 +403,13 @@ class DashboardBoard:
         seconds: float = BOARD_SECONDS,
         run: Callable[[Callable[[], None]], None] = _in_background,
         clock: Callable[[], float] = time.monotonic,
+        compute: Callable[..., Any] = _in_child_process,
     ) -> None:
         self._live_board = live_board or LiveBoardCache()
         self._seconds = seconds
         self._run = run
         self._clock = clock
+        self._compute = compute
         self._lock = Lock()
         self._read_done = Condition(self._lock)
         self._board: _Board | None = None
@@ -252,6 +419,11 @@ class DashboardBoard:
         self._tried_day: datetime | None = None
         # Saved day -> its (attack, defense) "no opponent, no battle" slots.
         self._slots: dict[int, tuple[int, int]] = {}
+        self._projection: _Projection | None = None
+        self._projected_at = float("-inf")
+        self._projecting = False
+        # Published log -> its battles, for the projection's equal-trophy order.
+        self._reports: dict[int, _Reports] = {}
 
     def current(
         self, database: ApiDatabase, now: datetime, *, wait: float = 0
@@ -323,6 +495,74 @@ class DashboardBoard:
             self._next_read = self._read_at + self._seconds
             self._reading = False
             self._read_done.notify_all()
+            project, self._projecting = not self._projecting, True
+        while project:
+            places = self._project(database, board)
+            with self._lock:
+                if places is not None:
+                    self._projection = _Projection(board.day_start, places)
+                    self._projected_at = self._clock()
+                newest = self._board or board
+                project, board = newest is not board, newest
+                self._projecting = project
+                self._read_done.notify_all()
+
+    def _project(self, database: ApiDatabase, board: _Board) -> dict[str, int] | None:
+        """``board``'s projected places, or None when they could not be
+        worked out: the last ones are kept until they are too old."""
+        try:
+            with database.pool.connection() as connection:
+                inputs, self._reports = _projection_inputs(
+                    connection, board.computed_at, board, self._reports
+                )
+            if inputs is None:
+                return {}
+            middles = self._compute(
+                projected_place.middle_places, *inputs,
+                # Projections from the same minute imagine the same days.
+                seed=int(board.computed_at.timestamp()) // 60,
+            )
+            return dict(zip(board.slots_left, middles, strict=True))
+        except Exception as error:  # noqa: BLE001 - tried again after the next read
+            print(
+                json.dumps(
+                    {
+                        "event": "dashboard_projection",
+                        "status": "failed",
+                        "error": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
+            return None
+
+    def projection(
+        self, now: datetime, tag: str, *, wait: float = 0
+    ) -> _Projection | None:
+        """Today's newest projected places, or None before the first of the
+        Legend day or once the newest is too old, after waiting up to
+        ``wait`` seconds while ``tag``'s place is being worked out."""
+        day_start = ranked_day_for(now).start
+
+        def shown() -> _Projection | None:
+            projection = self._projection
+            if (
+                projection is None
+                or projection.day_start != day_start
+                or self._clock() >= self._projected_at + BOARD_MAX_AGE_SECONDS
+            ):
+                return None
+            return projection
+
+        def placed() -> bool:
+            projection = shown()
+            return projection is not None and tag in projection.places
+
+        with self._lock:
+            self._read_done.wait_for(
+                lambda: placed() or not self._projecting, max(0.0, wait)
+            )
+            return shown()
 
 
 def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
@@ -337,6 +577,18 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
     # count includes this player, whose best end always reaches its own worst.
     maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, worst_end)
     return {"best": surely_above + 1, "worst": maybe_above_or_self}
+
+
+def projected_rank(
+    board: _Board, projection: _Projection | None, tag: str
+) -> int | None:
+    """The place ``tag`` is projected to finish today on, inside its rank
+    range; None off the board or without a projection for it."""
+    outer = rank_range(board, tag)
+    middle = None if projection is None else projection.places.get(tag)
+    if outer is None or middle is None:
+        return None
+    return min(outer["worst"], max(outer["best"], middle))
 
 
 def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
@@ -430,10 +682,22 @@ def get_player_today(
     """One player's dashboard numbers for today, or None for an unknown tag.
     ``opponents`` is None until the player's log for today is published; the
     range and comparisons are None while the shared board is unavailable,
-    after waiting up to ``board_wait`` seconds for it, and
-    ``board_computed_at`` says when it was read."""
+    after waiting up to ``board_wait`` seconds for it, the projected place
+    also while its projection is worked out, within the same wait, and
+    ``board_computed_at`` says when the board was read.
+    ``projected_rank_pending`` says the player's place is still to be worked
+    out, so the dashboard asks again."""
     day = ranked_day_for(now)
+    until = time.monotonic() + board_wait
     board = board_cache.current(database, now, wait=board_wait)
+    projection = None
+    pending = False
+    if board is not None and tag in board.ends:
+        projection = board_cache.projection(now, tag, wait=until - time.monotonic())
+        # Not once today's projection found no day's examples saved.
+        pending = projection is None or (
+            bool(projection.places) and tag not in projection.places
+        )
     with database.pool.connection() as connection:
         if connection.execute(
             "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
@@ -523,6 +787,8 @@ def get_player_today(
         "ranked_day_start": _iso(day.start),
         "board_computed_at": None if board is None else _iso(board.computed_at),
         "rank_range": None if board is None else rank_range(board, tag),
+        "projected_rank": None if board is None else projected_rank(board, projection, tag),
+        "projected_rank_pending": pending,
         # Every player's, only for the website released before each base had
         # its own; never a base's comparison.
         "legends_held": {"held": board.held, "defenses": board.defenses}

@@ -432,8 +432,10 @@ export interface LegendDayData {
   range: RankRange | null;
   /** When the board behind `range` was read; null without a range. */
   rangeAtMs: number | null;
-  /** Read before the shared board: the page asks again for the range. */
+  /** Read before the shared board or while the projected place is worked out: asks again. */
   boardPending?: true;
+  /** The projected place at the next Reset, inside `range`; null until it can be worked out. */
+  projected: number | null;
 }
 
 export interface BasesData {
