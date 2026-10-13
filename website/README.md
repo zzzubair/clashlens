@@ -83,7 +83,9 @@ its trophy change plus any weekly or Season reset at its closing Reset; an
 older day without the next day's start shows Unavailable. When that sum
 disagrees with the next day's start, the end shows the next day's start and
 the whole day is Uncertain, its badges and explanation both, which says so,
-such as Battles add up to 5,050; next day started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
+such as Battles add up to 5,050; next day started at 5,992, or, with a
+reset, Battles add up to 4,968, which the weekly reset takes to 5,000; next
+day started at 4,968. Trophies at last Reset follows the same rule. Under Defenses, a day with an
 automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
