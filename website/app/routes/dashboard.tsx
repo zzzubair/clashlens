@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Link,
   data,
   redirect,
+  useFetcher,
   useLoaderData,
   useNavigation,
   useSearchParams,
@@ -239,7 +240,7 @@ export function headers() {
 /**
  * Reload the cards for another account, never for anything else. A save's
  * answer carries the settings as saved, and the page reads only the cards
- * they change.
+ * they change; a save that lands during a switch still reads the new account.
  */
 export function shouldRevalidate({
   currentUrl,
@@ -248,11 +249,13 @@ export function shouldRevalidate({
   formAction,
   defaultShouldRevalidate,
 }: ShouldRevalidateFunctionArgs) {
-  if (isDashboardSave(formMethod, formAction)) return false;
+  const samePlayer =
+    currentUrl.searchParams.get("player") === nextUrl.searchParams.get("player");
+  if (isDashboardSave(formMethod, formAction) && samePlayer) return false;
   if (formMethod || currentUrl.pathname !== nextUrl.pathname) {
     return defaultShouldRevalidate;
   }
-  return currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player");
+  return !samePlayer;
 }
 
 /** The linked player a switch is loading, before its answer arrives. */
@@ -445,11 +448,21 @@ function SignedInDashboard({
   // A switch shows the new player's tab and empty cards at once, never the
   // last player's numbers under the new name.
   const switching = switchingTo(useNavigation(), loaderData.players);
+  // Saves live above each player's cards, so one still lands after a switch.
+  const fetcher = useFetcher<DashboardActionData>();
   // Settings saved since this load; the next load reads them back.
   const [saved, setSaved] = useState<{
     from: DashboardSettings;
     settings: DashboardSettings;
   } | null>(null);
+  // Each save's answer shows as soon as it is back, over the load it lands on.
+  const answer = fetcher.data;
+  const applied = useRef(answer);
+  useEffect(() => {
+    if (!answer?.settings || applied.current === answer) return;
+    applied.current = answer;
+    setSaved({ from: loaderData.settings, settings: answer.settings });
+  }, [answer, loaderData.settings]);
   const settings =
     saved?.from === loaderData.settings ? saved.settings : loaderData.settings;
   const selectedTag = switching?.tag ?? loaderData.selectedTag;
@@ -496,7 +509,7 @@ function SignedInDashboard({
             data={switching ? null : loaderData.cards}
             dayOver={dayOver}
             idempotencyKey={loaderData.idempotencyKey}
-            onSaved={(next) => setSaved({ from: loaderData.settings, settings: next })}
+            fetcher={fetcher}
           />
         </>
       )}

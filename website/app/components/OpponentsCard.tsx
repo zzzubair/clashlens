@@ -51,16 +51,21 @@ export function OpponentsCard({
   timeZone,
   mode = "held",
   nowMs = null,
+  comparedAtMs = null,
 }: {
   rows: OpponentRow[] | null;
   timeZone: string;
   mode?: BasesMode;
   nowMs?: number | null;
+  /** When Held % mode's comparisons were read. */
+  comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
-  // The oldest opponent read, so the card never looks newer than it is.
+  // The oldest opponent or comparison read, so the card never looks newer than it is.
   const observed = (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
+  if (rows?.length && mode === "held" && comparedAtMs !== null)
+    observed.push(comparedAtMs);
   const head = (
     <CardHead
       title={

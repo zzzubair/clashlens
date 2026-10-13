@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
   StaticRouterProvider,
@@ -530,6 +531,25 @@ describe("Bases you attacked", () => {
     expect(await render([])).toContain("· today · 0 of 8 No attacks yet today.");
   });
 
+  it("shows the older of the opponents' reads and Held % mode's comparison", async () => {
+    const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
+    const updated = async (mode: "held" | "trophies") =>
+      text(
+        await renderInRouter(
+          createElement(OpponentsCard, {
+            rows: [{ ...row("Easy one", held(1, 4)), observedAtMs: at(2) }],
+            timeZone: "UTC",
+            mode,
+            nowMs: at(0),
+            comparedAtMs: at(9),
+          }),
+        ),
+      );
+    expect(await updated("held")).toContain("updated 9 min ago");
+    // Trophies mode compares with a fixed number, so only the opponent's read counts.
+    expect(await updated("trophies")).toContain("updated 2 min ago");
+  });
+
   it("rates bases by trophies given up a defense in Trophies mode", async () => {
     const plain = text(
       await renderInRouter(
@@ -560,6 +580,7 @@ describe("today read for the Legend day and Bases cards", () => {
       rank_range: { best: 95, worst: 760 },
       open_defenses: 7,
       automatic_defense_each: 21,
+      board_computed_at: "2026-10-07T09:05:00+00:00",
       opponents: [
         {
           tag: "#8PY",
@@ -597,6 +618,7 @@ describe("today read for the Legend day and Bases cards", () => {
           legends: { held: 41, defenses: 100 },
         },
       ],
+      boardComputedAtMs: Date.UTC(2026, 9, 7, 9, 5),
     });
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
@@ -613,10 +635,12 @@ describe("today read for the Legend day and Bases cards", () => {
       open_defenses: null,
       automatic_defense_each: null,
       opponents: null,
+      board_computed_at: null,
     });
     expect(await getPlayerToday(MAIN)).toMatchObject({
       rankRange: { best: 95, worst: 760 },
       opponents: null,
+      boardComputedAtMs: null,
     });
   });
 
@@ -627,6 +651,7 @@ describe("today read for the Legend day and Bases cards", () => {
       open_defenses: null,
       automatic_defense_each: null,
       opponents: [],
+      board_computed_at: null,
     });
     await expect(getPlayerToday(MAIN)).rejects.toMatchObject({ status: 502 });
   });
@@ -860,6 +885,54 @@ describe("dashboard route", () => {
     expect(check("/dashboard?player=%232PP8QLY0", "/dashboard?player=%232PP8QLY0")).toBe(
       false,
     );
+  });
+
+  it("reads the new player, with the save, when a save lands during a switch", async () => {
+    // The account's Goal, which the save changes once the test lets it land.
+    let goal = 100;
+    let land: (() => void) | null = null;
+    let reads = 0;
+    let release = () => {};
+    const router = createMemoryRouter(
+      [
+        {
+          id: "dashboard",
+          path: "/dashboard",
+          shouldRevalidate,
+          loader: async ({ request }) => {
+            const read = {
+              player: new URL(request.url).searchParams.get("player"),
+              goal,
+            };
+            // The switch's own read starts before the save lands, and is slow.
+            if (read.player === "B" && ++reads === 1)
+              await new Promise<void>((resolve) => (release = resolve));
+            return read;
+          },
+          action: () =>
+            new Promise((resolve) => {
+              land = () => {
+                goal = 50;
+                resolve({ saved: true });
+              };
+            }),
+        },
+      ],
+      { initialEntries: ["/dashboard?player=A"] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    void router.fetch("save", "dashboard", "/dashboard?player=A", {
+      formMethod: "post",
+      formData: new FormData(),
+    });
+    const switched = router.navigate("/dashboard?player=B");
+    await vi.waitFor(() => expect(reads > 0 && land !== null).toBe(true));
+    land!();
+    await vi.waitFor(() => expect(router.state.navigation.state).toBe("idle"));
+    release();
+    await switched;
+    expect(router.state.location.search).toBe("?player=B");
+    expect(router.state.loaderData.dashboard).toEqual({ player: "B", goal: 50 });
   });
 });
 

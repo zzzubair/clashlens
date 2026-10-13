@@ -12,12 +12,14 @@ without them starts from their profile trophies with every slot open. The
 range is an estimate: a battle not yet read leaves a slot looking open.
 
 The board for that comparison, and today's held share across it, are read
-in the background at most once a minute and shared by every dashboard, so a
-request never waits for them: until the first read of a Legend day finishes,
-and once the newest read is 10 minutes old, the range and the comparisons are
-left out. The board's players and trophies are the Live Leaderboard's shared
-read; each log's "no opponent, no battle" slots sit in a large saved record,
-so each saved day's are read once, not every minute.
+in the background at most once a minute and shared by every dashboard. A
+request waits for them only when no board of today's can serve: up to 3
+seconds for the read under way, so the cards fill when it finishes. Past
+that, or once the newest read is 10 minutes old, the range and the
+comparisons are left out. The board's players and trophies are the Live
+Leaderboard's shared read, never one from before the Reset; each log's "no
+opponent, no battle" slots sit in a large saved record, so each saved day's
+are read once, not every minute.
 
 Each base you attacked is compared with players at similar trophies: today's
 held share among players whose day started within 100 trophies of the
@@ -42,7 +44,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Lock, Thread
+from threading import Condition, Lock, Thread
 from typing import Any
 
 from . import army_types
@@ -59,6 +61,9 @@ from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 BOARD_SECONDS = 60
 # A board read this long ago is no longer shown: its refreshes are failing.
 BOARD_MAX_AGE_SECONDS = 600
+# Without a board to show, a request waits this long for the read under way,
+# inside the website's 5 second limit.
+BOARD_WAIT_SECONDS = 3
 # Bases you attacked: compare with players whose day started this near the
 # base's Reset trophies, widened until the comparison holds enough defenses
 # but never past the most; with fewer than the fewest there, no comparison.
@@ -221,8 +226,9 @@ def _in_background(read: Callable[[], None]) -> None:
 
 class DashboardBoard:
     """The board for rank ranges and held share, read in the background at
-    most once every ``seconds``, one read at a time, so no request waits for
-    it. ``run`` starts a read; tests pass one that reads at once."""
+    most once every ``seconds``, one read at a time. A request waits only
+    when there is no board to show, and then at most BOARD_WAIT_SECONDS.
+    ``run`` starts a read; tests pass one that reads at once."""
 
     def __init__(
         self,
@@ -237,6 +243,7 @@ class DashboardBoard:
         self._run = run
         self._clock = clock
         self._lock = Lock()
+        self._read_done = Condition(self._lock)
         self._board: _Board | None = None
         self._read_at = float("-inf")
         self._next_read = float("-inf")
@@ -246,8 +253,9 @@ class DashboardBoard:
         self._slots: dict[int, tuple[int, int]] = {}
 
     def current(self, database: ApiDatabase, now: datetime) -> _Board | None:
-        """Today's newest board, or None while today's first read runs or
-        once the newest is too old. A due read starts in the background."""
+        """Today's newest board, or None when today's first read or a read
+        replacing one too old is not done within BOARD_WAIT_SECONDS. A due
+        read starts in the background."""
         day_start = ranked_day_for(now).start
         with self._lock:
             # A new Legend day reads at once; a failed read waits its turn.
@@ -258,7 +266,8 @@ class DashboardBoard:
                 self._reading, self._tried_day = True, day_start
         if start:
             self._run(lambda: self._read(database, now))
-        with self._lock:
+
+        def shown() -> _Board | None:
             board = self._board
             if (
                 board is None
@@ -267,6 +276,12 @@ class DashboardBoard:
             ):
                 return None
             return board
+
+        with self._lock:
+            self._read_done.wait_for(
+                lambda: shown() is not None or not self._reading, BOARD_WAIT_SECONDS
+            )
+            return shown()
 
     def _read(self, database: ApiDatabase, now: datetime) -> None:
         # A failed read waits a turn instead of starting again at once.
@@ -288,12 +303,14 @@ class DashboardBoard:
             with self._lock:
                 self._next_read = self._clock() + self._seconds
                 self._reading = False
+                self._read_done.notify_all()
             return
         with self._lock:
             self._board, self._slots = board, slots
             self._read_at = self._clock()
             self._next_read = self._read_at + self._seconds
             self._reading = False
+            self._read_done.notify_all()
 
 
 def rank_range(board: _Board, tag: str) -> dict[str, int] | None:

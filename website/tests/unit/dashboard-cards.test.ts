@@ -541,6 +541,7 @@ const TODAY = {
   rank_range: { best: 95, worst: 760 },
   open_defenses: 7,
   automatic_defense_each: 21,
+  board_computed_at: iso(NOW - 15 * 60_000),
   opponents: [
     {
       tag: BO,
@@ -1148,7 +1149,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
   });
 
   it("shows today's read on Legend day and Bases you attacked, and the army reads", async () => {
-    const cards = cardsIn(await render(await load()));
+    const data = await load();
+    const cards = cardsIn(await render(data));
+    // Both cards are as old as the board behind the range and the comparisons.
+    expect(data.cards["legend-day"]?.day?.observedAtMs).toBe(NOW - 15 * 60_000);
+    expect(data.cards.bases?.comparedAtMs).toBe(NOW - 15 * 60_000);
 
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);

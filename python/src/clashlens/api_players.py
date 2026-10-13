@@ -567,13 +567,11 @@ def player_cards(
 def rank_cards(
     cards: list[dict[str, Any]], positions: Callable[[list[str]], dict[str, int]]
 ) -> None:
-    """Each card's Live Leaderboard rank from ``positions``, which is not
-    asked when every player is outside Legend I."""
-    found = (
-        {}
-        if all(card["state"] == "not_in_legend" for card in cards)
-        else positions([card["tag"] for card in cards])
-    )
+    """Each card's Live Leaderboard rank from ``positions``, asked only for
+    the players tracked in Legend I now, and not at all without one: only
+    they are on the board, and a rank read before a player left stays off."""
+    tags = [card["tag"] for card in cards if card["state"] == "tracking"]
+    found = positions(tags) if tags else {}
     for card in cards:
         card["rank"] = found.get(card["tag"])
 

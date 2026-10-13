@@ -328,7 +328,7 @@ export interface PlayerDay {
   lastResetRank: number | null;
   /** The profile's trophies, read with `observedAtMs`; null until the Season's reset shows. */
   trophies: number | null;
-  /** The older of the profile and battle reads, Unix milliseconds. */
+  /** The oldest of the profile, battle and Next Reset range reads, Unix milliseconds. */
   observedAtMs: number | null;
   /** When today's battles were published, Unix milliseconds. */
   battlesObservedAtMs: number | null;

@@ -60,6 +60,8 @@ export interface PlayerToday {
   automaticDefenseEach: number | null;
   /** Null until the player's battles for today are saved. */
   opponents: OpponentRow[] | null;
+  /** When the board behind the range and the bases' comparisons was read; null without one. */
+  boardComputedAtMs: number | null;
 }
 
 function malformed(): never {
@@ -151,6 +153,7 @@ export async function getPlayerToday(tag: string): Promise<PlayerToday> {
       if (!Array.isArray(items)) malformed();
       return items.slice(0, 8).map(opponent);
     }),
+    boardComputedAtMs: nullable(payload.board_computed_at, time),
   };
 }
 
@@ -260,6 +263,9 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     page.currentDayPublishedAt,
   ].map((value) => (value ? Date.parse(value) : Number.NaN));
   const observed = [profileAt, battlesAt].filter(Number.isFinite);
+  // A range shown is as old as the board it came from.
+  if (today?.rankRange && today.boardComputedAtMs !== null)
+    observed.push(today.boardComputedAtMs);
   return {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
@@ -272,7 +278,7 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
     trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-    // The older of the trophy and battle reads, so the card never looks newer than it is.
+    // The oldest of the trophy, battle and range reads, so the card never looks newer than it is.
     observedAtMs: observed.length ? Math.min(...observed) : null,
     battlesObservedAtMs: Number.isFinite(battlesAt) ? battlesAt : null,
     openDefenses: today?.openDefenses ?? null,
@@ -768,7 +774,9 @@ export function readCards(
     },
     bases: async () => {
       const read = await today();
-      return read === null ? null : { rows: read.opponents };
+      return read === null
+        ? null
+        : { rows: read.opponents, comparedAtMs: read.boardComputedAtMs };
     },
     "armies-defense": () => armies("defense"),
     "armies-offense": () => armies("offense"),

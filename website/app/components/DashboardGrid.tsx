@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { Await, useFetcher } from "react-router";
+import { Await, useFetcher, type FetcherWithComponents } from "react-router";
 
 import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
@@ -58,6 +58,7 @@ const CARD_VIEWS: {
       mode={context.basesMode}
       timeZone={context.timeZone}
       nowMs={context.nowMs}
+      comparedAtMs={data.comparedAtMs}
     />
   ),
   "armies-defense": (data) => <ArmiesOnDefenseCard data={data} />,
@@ -477,8 +478,9 @@ function FirstVisit({
 /**
  * The divider with "⚙ Customise dashboard", the card grid and Customise.
  * Customise edits a draft of the card order; Done saves it. Card settings
- * and the group picked on Group watch save at once. A save keeps the cards
- * already shown and reads only those it changes or adds.
+ * and the group picked on Group watch save at once, through `fetcher`, which
+ * outlives a switch to another player. A save keeps the cards already shown
+ * and reads only those it changes or adds.
  */
 export function Dashboard({
   tag,
@@ -486,22 +488,23 @@ export function Dashboard({
   data,
   dayOver,
   idempotencyKey,
-  onSaved,
+  fetcher,
 }: {
   tag: string;
+  /** As last saved: a change reads again the cards it changes or adds. */
   settings: DashboardSettings;
   /** Null while the player's cards load. */
   data: CardReads | null;
   dayOver: boolean;
   idempotencyKey: string;
-  onSaved: (settings: DashboardSettings) => void;
+  fetcher: FetcherWithComponents<DashboardActionData>;
 }) {
-  const fetcher = useFetcher<DashboardActionData>();
   const refresher = useFetcher<DashboardLoaderData>();
   // Cards read again after a save, and cards waiting for that read.
   const [refreshed, setRefreshed] = useState<CardReads>({});
   const [stale, setStale] = useState<CardId[]>([]);
-  const applied = useRef<DashboardActionData | undefined>(undefined);
+  // The cards' load and the settings they now follow.
+  const readWith = useRef({ data, settings });
   const requested = useRef<CardId[]>([]);
   const merged = useRef<DashboardLoaderData | undefined>(undefined);
   const [draft, setDraft] = useState<DashboardSettings["layout"] | null>(null);
@@ -523,26 +526,31 @@ export function Dashboard({
     return () => window.clearInterval(timer);
   }, []);
 
-  const saving = fetcher.state !== "idle";
-  const saved = fetcher.state === "idle" && fetcher.data?.saved === true;
+  // A save is done once its answer is back; the reads it starts come later.
+  const saving = fetcher.state === "submitting";
+  const answer = saving ? undefined : fetcher.data;
+  const saved = answer?.saved === true;
   const reads = data === null ? null : { ...data, ...refreshed };
   for (const card of stale) if (reads) delete reads[card as keyof CardReads];
 
-  // A save's answer is the settings as saved: show them, and read again only
-  // the cards whose numbers follow them or that have no data yet.
+  // Saved settings read again only the cards whose numbers follow them or
+  // that have no data yet. A new load's cards follow its own settings.
   useEffect(() => {
-    const answer = fetcher.data;
-    if (fetcher.state !== "idle" || !answer?.settings || applied.current === answer)
+    const before = readWith.current;
+    readWith.current = { data, settings };
+    if (before.data !== data) {
+      setRefreshed({});
+      setStale([]);
       return;
-    applied.current = answer;
-    const missing = shownCards(answer.settings.layout).filter(
-      (card) => hasView(card) && reads !== null && reads[card] === undefined,
+    }
+    if (reads === null || before.settings === settings) return;
+    const missing = shownCards(settings.layout).filter(
+      (card) => hasView(card) && reads[card] === undefined,
     );
-    const next = [...changedCards(settings, answer.settings), ...missing];
-    onSaved(answer.settings);
+    const next = [...changedCards(before.settings, settings), ...missing];
     if (next.length)
       setStale((current) => [...new Set([...current, ...next])] as CardId[]);
-  }, [fetcher.state, fetcher.data, settings, reads, onSaved]);
+  }, [data, settings, reads]);
   // One read for every out-of-date card; a newer one replaces it.
   const { load } = refresher;
   const loading = data === null;
@@ -554,34 +562,30 @@ export function Dashboard({
     );
   }, [stale, tag, loading, load]);
   useEffect(() => {
-    const answer = refresher.data;
-    if (refresher.state !== "idle" || !answer || merged.current === answer) return;
-    merged.current = answer;
-    // A card the answer leaves out, or a failed answer, says it could not load.
+    const loaded = refresher.data;
+    if (refresher.state !== "idle" || !loaded || merged.current === loaded) return;
+    merged.current = loaded;
+    // A card the answer leaves out, a failed answer, or one for another
+    // player says it could not load.
     const cards = Object.fromEntries(
       requested.current.map((card) => [
         card,
-        answer.kind === "signed-in"
-          ? (answer.cards[card as keyof CardReads] ?? null)
+        loaded.kind === "signed-in" && loaded.selectedTag === tag
+          ? (loaded.cards[card as keyof CardReads] ?? null)
           : null,
       ]),
     ) as CardReads;
     setRefreshed((current) => ({ ...current, ...cards }));
     setStale((current) => current.filter((card) => !requested.current.includes(card)));
-  }, [refresher.state, refresher.data]);
+  }, [refresher.state, refresher.data, tag]);
   useEffect(() => {
-    if (
-      finishing === null ||
-      fetcher.state !== "idle" ||
-      fetcher.data === finishing.after
-    )
-      return;
+    if (finishing === null || saving || fetcher.data === finishing.after) return;
     setFinishing(null);
     if (fetcher.data?.saved) {
       setDraft(null);
       setAdding(false);
     }
-  }, [finishing, fetcher.state, fetcher.data]);
+  }, [finishing, saving, fetcher.data]);
   useEffect(() => {
     if (saved) setEditingSettings(null);
   }, [saved]);
@@ -650,7 +654,7 @@ export function Dashboard({
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
   };
   const firstVisit = settings.layout === null && !editing;
-  const error = fetcher.state === "idle" ? fetcher.data?.error : null;
+  const error = answer?.error;
 
   return (
     <>

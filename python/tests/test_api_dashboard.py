@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from threading import Event
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -455,3 +460,44 @@ def test_a_failed_board_read_waits_its_turn() -> None:
     clock[0] = api_dashboard.BOARD_SECONDS
     assert board.current(None, NOW) is None  # type: ignore[arg-type]
     assert live.tries == 2
+
+
+def test_a_request_waits_for_the_board_under_way_but_not_past_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    go = Event()
+
+    class Live:
+        """A Live Leaderboard read that finishes when the test lets it go,
+        with one player at 5,000."""
+
+        def current(self, _database: Any, _now: Any) -> Any:
+            go.wait(10)
+            return SimpleNamespace(rows=[("#2PP", None, 5000)])
+
+    class NoLogs:
+        """A connection with no log saved today."""
+
+        def execute(self, _sql: str, _params: Any) -> NoLogs:
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return []
+
+    database = SimpleNamespace(
+        pool=SimpleNamespace(connection=lambda: nullcontext(NoLogs()))
+    )
+    monkeypatch.setattr(api_dashboard, "BOARD_WAIT_SECONDS", 0.3)
+    board = api_dashboard.DashboardBoard(Live())  # type: ignore[arg-type]
+    # A read slower than the wait: the request answers without the board.
+    asked = time.monotonic()
+    assert board.current(database, NOW) is None  # type: ignore[arg-type]
+    assert 0.3 <= time.monotonic() - asked < 2
+    # A request waiting when the read finishes gets the board at once.
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(board.current, database, NOW)
+        time.sleep(0.1)
+        go.set()
+        found = waiting.result(timeout=5)
+    assert found is not None
+    assert api_dashboard.rank_range(found, "#2PP") == {"best": 1, "worst": 1}

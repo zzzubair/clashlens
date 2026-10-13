@@ -228,7 +228,7 @@ async function signInWithPlayers(
 test("a switch shows the chosen player at once, never the last one's numbers, and a save reads only what it changes", async ({
   page,
 }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(180_000);
   const errors = trackPageErrors(page);
   // Two fake Clash API players in Legend League that no other browser test links.
   const [first, second] = ["#Q00VC", "#Q00VU"] as const;
@@ -345,11 +345,68 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   expect(gets[0]).toContain(`player=${encodeURIComponent(first)}`);
   expect(gets[0]).toContain("cards=goal");
   await expect(kept).toHaveAttribute("data-kept", "");
+
+  // A slow Goal read never holds up the next save: Bases closes on its answer.
+  const slowGoal = async (route: Route) => {
+    const request = route.request();
+    if (request.method() === "GET" && new URL(request.url()).searchParams.get("cards"))
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await route.fallback();
+  };
+  await page.route(slow, slowGoal);
+  await page.getByRole("button", { name: "Goal settings" }).click();
+  await goal.getByRole("spinbutton").fill("40");
+  await goal.getByRole("button", { name: "Save" }).click();
+  await expect(goal).toBeHidden();
+  await page.getByRole("button", { name: "Bases you attacked settings" }).click();
+  await bases.getByRole("button", { name: "Held %" }).click();
+  await bases.getByRole("button", { name: "Save" }).click();
+  await expect(bases).toBeHidden({ timeout: 1_500 });
+  await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 40", {
+    timeout: 10_000,
+  });
+  await page.unroute(slow, slowGoal);
+
+  // A save that lands after a switch shows on the new player's dashboard.
+  const slowSave = async (route: Route) => {
+    if (route.request().method() === "POST")
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await route.fallback();
+  };
+  await page.route(slow, slowSave);
+  await page.getByRole("button", { name: "Move Goal later" }).click();
+  await bar.getByRole("button", { name: "Done" }).click();
+  await tab(second).click();
+  await expect(tab(second)).toHaveAttribute("aria-current", "page");
+  const later = ["Legend day", "Goal", ...moved.slice(2)];
+  await expect.poll(() => cardOrder(page)).toEqual(later);
+  await expect(legendDay).toContainText(await name(second));
+  await expect(legendDay).not.toContainText("Loading…");
+  await page.unroute(slow, slowSave);
+
+  // A card read again that comes back for another player is never shown.
+  const otherPlayer = async (route: Route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== "GET" || !url.searchParams.get("cards"))
+      return route.fallback();
+    url.searchParams.set("player", first);
+    await route.continue({ url: url.href });
+  };
+  await page.route(slow, otherPlayer);
+  await page.getByRole("button", { name: "Customise dashboard" }).click();
+  await page.getByRole("button", { name: "Goal settings" }).click();
+  await goal.getByRole("spinbutton").fill("30");
+  await goal.getByRole("button", { name: "Save" }).click();
+  await expect(goal).toBeHidden();
+  await expect(page.getByRole("region", { name: "Goal" })).toContainText(
+    "This card could not be loaded right now.",
+  );
+  await page.unroute(slow, otherPlayer);
   await bar.getByRole("button", { name: "Done" }).click();
 
   // Everything saved is still there after a reload.
   await page.reload();
-  await expect.poll(() => cardOrder(page)).toEqual(moved);
-  await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
+  await expect.poll(() => cardOrder(page)).toEqual(later);
+  await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 30");
   expectNoPageErrors(errors);
 });

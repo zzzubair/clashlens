@@ -435,6 +435,8 @@ export interface LegendDayData {
 export interface BasesData {
   /** Null until the player's battles for today are saved. */
   rows: OpponentRow[] | null;
+  /** When the comparisons with Legends at similar trophies were read; null without them. */
+  comparedAtMs: number | null;
 }
 
 /** The army cards' first read: the last 7 finished days. */

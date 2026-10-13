@@ -153,6 +153,23 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
     assert later["entries"][0]["tag"] == target
     assert later["entries"][0]["trophies"] == 7000
     assert refreshes == []
+    # A board read before a Reset is read again after it, within 30 seconds.
+    climber = later["entries"][1]["tag"]
+    with database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET trophies = 7100 WHERE normalized_tag = %s",
+            (climber,),
+        )
+    after_reset = api_leaderboard.get_live_leaderboard(
+        database,
+        limit=100,
+        now=ranked_day_for(NOW).end + timedelta(seconds=5),
+        cache=cache,
+    )
+    assert (after_reset["entries"][0]["tag"], after_reset["entries"][0]["trophies"]) == (
+        climber,
+        7100,
+    )
     # A new Season is read at once: these profiles still name the old one.
     next_season = api_leaderboard.get_live_leaderboard(
         database, limit=100, now=NOW + timedelta(days=28), cache=cache
