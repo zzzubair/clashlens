@@ -213,3 +213,72 @@ def test_a_later_reading_before_the_raise_proves_the_end(boundary: str, proven: 
         "read_at": (DAY.end + timedelta(minutes=20)).isoformat(), "trophies": 4800,
         "outcome": "verified", "exact": False, "new_day_change": 0, "clean": True,
     } if proven else None)
+
+
+def test_a_5000_reading_before_the_raise_takes_no_charge_even_after_new_day_battles() -> None:
+    # Sunday, at 5,190 with no battle, can be charged 240 for its 8 empty
+    # defense slots; its Reset reading at 05:02 shows 5,190. Monday's two
+    # attacks of 40 and a defense of 30 have landed by 05:30, when a reading
+    # shows 5,000: 4,950 plus Monday's 50. A 5,000 reading never proves the
+    # charge, so Sunday stays uncertain and uncharged.
+    monday = tuple(
+        BattleContribution(f"monday-{n}", lens, amount, battle_timestamp=DAY.end + timedelta(minutes=6 + n))
+        for n, (lens, amount) in enumerate((("offense", 40), ("offense", 40), ("defense", 30))))
+    result = reconcile_ranked_day(_input(
+        start_trophies=5190,
+        next_start_trophies=5190,
+        boundary_kind="weekly",
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        contributions=(),
+        new_day_contributions=monday,
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=2)).isoformat()}},
+        readings=(Reading(DAY.end + timedelta(minutes=30), 5000),),
+    ))
+
+    assert (result.state, result.failure_reasons) == ("Partial", ("end_reading_unverified",))
+    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (5190, None)
+    assert result.input_evidence["end_reading"]["clean"] is False
+
+
+def test_a_charge_shown_before_the_raise_stands_on_the_day_s_earlier_readings() -> None:
+    # Sunday starts at 4,960 and six attacks of 40 take it to 5,200, which a
+    # reading at 17:00 shows. It can be charged 240 for its 8 empty defense
+    # slots. Monday reads 4,960 at 05:04, then 5,000: alone, 4,960 could be
+    # the six attacks not credited yet, but the 17:00 reading showed them,
+    # so the charge landed and Monday starts at 5,000.
+    result = reconcile_ranked_day(_input(
+        start_trophies=4960,
+        next_start_trophies=4960,
+        boundary_kind="weekly",
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        contributions=_battles("offense", (40,) * 6),
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
+        readings=(Reading(DAY.start + timedelta(hours=12), 5200), Reading(DAY.end + timedelta(minutes=20), 5000)),
+    ))
+
+    assert result.state == "Complete"
+    assert (result.final_trophies_before_reset, result.automatic_defense_loss) == (4960, 240)
+    assert result.automatic_defense_evidence_state == "calculated"
+    assert (result.next_start_trophies, result.expected_next_start_trophies) == (5000, 5000)
+    assert result.input_evidence["end_reading"]["trophies"] == 4960
+
+
+def test_a_reading_that_may_show_an_unreported_defense_proves_no_end() -> None:
+    # Sunday ends at 4,900 with no battle and can be charged 240. A Monday
+    # defense of 40 at 05:01 that only the opponent has reported may show in
+    # any reading from then: the Reset reading of 4,860 at 05:13 fits
+    # Sunday's end less that defense, but it proves nothing.
+    result = reconcile_ranked_day(_input(
+        start_trophies=4900,
+        next_start_trophies=4860,
+        boundary_kind="weekly",
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        contributions=(),
+        new_day_contributions=(BattleContribution(
+            "monday-defense", "defense", 40, battle_timestamp=DAY.end + timedelta(minutes=1)),),
+        first_unshown_report=DAY.end + timedelta(minutes=1),
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=13)).isoformat()}},
+    ))
+
+    assert (result.final_trophies_before_reset, result.next_start_trophies) == (4900, 5000)
+    assert result.input_evidence.get("end_reading") is None

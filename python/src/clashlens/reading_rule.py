@@ -102,6 +102,10 @@ class Verdict:
     clean: bool = False
     # Attacks some reading lacked the gains of, the game's attacker-profile lag.
     lagged: tuple[str, ...] = ()
+    # The clean reading shows the loss decided and neither 5,000 nor the
+    # weekly raise, with or without the new-day battles it shows: read
+    # before the raise landed, it proves the day's end before the loss.
+    unraised: bool = False
 
 
 Way = tuple[int, bool, frozenset[str]]
@@ -249,16 +253,14 @@ def judge(
     return _Judged(reading, False, bool(maybes), residual=reading.trophies - expected)
 
 
-def unraised_end(judged: _Judged | None) -> dict[str, Any] | None:
-    """What a reading taken before the weekly raise landed proves when it
-    fits one way only, unraised, every battle landed and none in flight:
-    the day's end before its automatic loss, the Daily board's total. A
-    reading showing the raise proves nothing, nor the loss."""
-    if judged is None or judged.ambiguous or judged.missed or len(judged.losses) != 1 or any(
-            raised for _, raised, _ in judged.ways):
+def unraised_end(verdict: Verdict) -> dict[str, Any] | None:
+    """What a verdict decided by a reading taken before the weekly raise
+    landed proves (``Verdict.unraised``): the day's end before its automatic
+    loss, the Daily board's total. A 5,000 reading proves nothing, nor the loss."""
+    if not verdict.unraised or verdict.reading is None:
         return None
-    return {"read_at": judged.reading.read_at.isoformat(), "trophies": judged.reading.trophies,
-            "outcome": "verified", "exact": False, "new_day_change": judged.new_day_change,
+    return {"read_at": verdict.reading.read_at.isoformat(), "trophies": verdict.reading.trophies,
+            "outcome": "verified", "exact": False, "new_day_change": verdict.new_day_change,
             "clean": True}
 
 
@@ -290,8 +292,8 @@ def decide(
     the loss landed, or the weekly raise applied, a later one that fits only
     without it contradicts too (``_settle``), and a clean match fits
     one way only. Otherwise the last
-    trustworthy clean match decides, the last read before the weekly raise
-    when one was, a match proving the day with the loss
+    trustworthy clean match decides, the last showing neither 5,000 nor the
+    weekly raise when one does, a match proving the day with the loss
     landed when one is certain or a reading showed it, or, read before the
     loss, proving its end before the loss; with none, the last clean
     confirm-only match showing the most loss confirms. Neither it nor a
@@ -331,6 +333,10 @@ def decide(
     def shows(item: _Judged) -> int:
         return item.loss if len(item.losses) == 1 else 0
 
+    def unraised(item: _Judged) -> bool:
+        return floor is not None and floor not in (
+            item.reading.trophies, item.reading.trophies - item.new_day_change)
+
     lagged = tuple(dict.fromkeys(name for item in judged for name in item.lagged))
     # Of the credits the readings during the day showed, those of battles it judges stay shown.
     judged_ids = {effect.identity for effect in (*day_effects, *new_day_effects)}
@@ -366,13 +372,14 @@ def decide(
     if matches:
         loss = max(shown, *(item.loss for item in matches))
         decider = [item for item in matches if item.loss == loss] or matches
-        decider = ([item for item in decider if not any(way[1] for way in item.ways)] or decider)[-1]
+        decider = ([item for item in decider if unraised(item)] or decider)[-1]
         return Verdict(
             # A certain loss must have landed for the whole day; a possible
             # one (a day with no defense slot used) is uncharged until a
             # reading shows otherwise.
             "verified", decider.reading, loss, bool(loss or not loss_certain),
             (), decider.new_day_change, clean=True, lagged=lagged,
+            unraised=unraised(decider) and decider.loss == loss,
         )
     # A reading showing the lag confirms nothing, and no guess stands beside it.
     guessed = next((item for item in judged if item.matched), None)

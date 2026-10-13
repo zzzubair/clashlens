@@ -446,18 +446,16 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             else None
         )
         zero_defense_loss = _zero_defense_loss(data, defense_count)
-        unraised = reading_rule.unraised_end(reading_rule.judge(verdict.reading, **rule)) if (
-            data.boundary_kind == "weekly" and verdict is not None and verdict.clean and verdict.reading) else None
         if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
                 verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
                 and final_trophies - zero_defense_loss <= 5000):
-            if end_hidden_by_reset or unraised:
+            if verdict.unraised:
                 automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
                 net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
                 expected_next, end_hidden_by_reset = 5000, True
             else:
                 # The weekly raise to 5,000 hides whether the charge landed.
-                verdict = replace(verdict, outcome="unverified", loss=0, exact=False)
+                verdict = replace(verdict, outcome="unverified", loss=0, exact=False, clean=False)
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             reset = next((item for item in _readings(data) if item.reset_reading), None)
@@ -467,9 +465,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             if judged is not None and judged.matched:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
-                end_reading_evidence = reading_rule.unraised_end(judged) if data.boundary_kind == "weekly" else None
         if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
-            end_reading_evidence, verdict = end_reading_evidence or unraised, None
+            end_reading_evidence = reading_rule.unraised_end(verdict) if data.boundary_kind == "weekly" else None
+            verdict = None
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
             if zero_defense_loss and verdict.loss == zero_defense_loss:
