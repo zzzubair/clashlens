@@ -101,9 +101,9 @@ OLDEST_FIRST_CLAIM_EVERY = 4
 RESET_FIRST_CLAIM_EVERY = 2
 # A continuous worker with two or more lanes keeps about two thirds of them
 # (8 of 12) for responses unless told how many. The rest run derived work:
-# daily results, builds and redecodes. Only one of them may run a population
-# build, and the timer's Reset publication checks and correction sweep take
-# one of their turns.
+# daily results, builds, redecodes and nightly re-check steps. Only one of
+# them may run a population build, and the timer's Reset publication checks
+# and correction sweep take one of their turns.
 DERIVED_WITHOUT_BUILDS = tuple(
     work_type
     for work_type in SUPPORTED_WORK_TYPES
@@ -1103,6 +1103,7 @@ class ObservationProcessor:
                     retryable=is_dependency,
                 )
             return ProcessResult(claim.job_id, "processed")
+        if claim.work_type == "reconcile_pass": return ProcessResult(claim.job_id, queue_refresh.reconcile_pass.run_step(self.database, claim))
         if claim.work_type not in {"process_observation", "replay_observation"}:
             return self._fail(claim, "unsupported_work_type", retryable=False)
         source_contract_error = validate_source_observation_contract(

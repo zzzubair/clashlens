@@ -819,8 +819,10 @@ after it, which judges its readings against that loss. The 07:00 day-end recheck
 and the twice-daily recheck of each player's last two ended days judge those
 days again within a day; an older day waits for the 05:30 late-battle check,
 which looks back 7 days, or a Season repair; a correction more than 7 days
-old within the current Season escapes these checks until the planned nightly
-recalculation pass.
+old within the current Season escapes these checks unless the
+[nightly re-check](#nightly-re-check-line) finds the day no longer matches
+its saved battles counted again and queues its recalculation; other such
+corrections wait for its planned check of stale days.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
@@ -1075,6 +1077,68 @@ look at the days and reports the alert counts.
 window need re-measuring before any change. Nothing is moved automatically.
 
 **Recovered:** neither sign appears in the current or previous Legend day.
+
+### Nightly re-check line
+
+**What it means:** not an alert. Once a day from 12:00 UTC the alert check
+posts what the nightly re-check of finished Legend days
+(`python/src/clashlens/reconcile_pass.py`) found in the last 24 hours. Each
+twice-daily recheck queues one pass right after it, as `reconcile_pass` jobs
+at backfill priority: each job judges 500 player-days and queues the next,
+over every finished day of the Season, in the room live work leaves. The
+pass starts no work from 03:50 to 07:00 UTC and is always finished before
+04:00: each job's reads may take 6 minutes and saving what they found 2,
+and a job not saved by 03:58 keeps nothing and queues nothing more. The
+players judged for a day are every player with a saved day for it,
+including days rebuilt from a player's first battle log, and the ones the
+Reset sweeps starting and ending it tracked. Each count is a problem first found in those 24 hours:
+
+- **recount:** a saved day whose attacks, defenses, gain or loss differ
+  from its saved battles counted again;
+- **chain:** a day that did not start where the day before's saved next
+  start says;
+- **ledger:** a start plus gain less losses that is not the saved end, or
+  more than 8 attacks or defenses;
+- **battle copies:** a battle whose two players' saved reports differ in
+  stars, destruction, army, trophies, gain or loss, or whose second report
+  is missing though both players were tracked;
+- **missing days:** a player the Reset ending the day tracked, with no saved
+  day;
+- **board rows:** a confirmed Daily board row whose day now has no end or
+  another one. Rows not marked confirmed are not checked yet; correcting
+  them belongs to later automatic board corrections.
+
+Recount and missing-day problems get the normal recalculation of their day
+queued once, at backfill priority, at most 2,000 a pass, and none while a
+Season repair recalculates the Season's days. "Still wrong after their
+recalculation" counts those found again in a check that read the day with
+that recalculation's result saved (`fix_done_at`): the calculation, not the
+data, is the suspect. "With a failed recalculation" counts open problems
+whose recalculation failed instead; read its failure first. The rest are
+listed only. A problem its check judges again and does not find is
+resolved, as is a board-row problem once a newer Daily board of its Reset
+replaces the board it was about; the newer board's confirmed rows are then
+checked as any. A check that could not judge a problem, such as a recount of
+a day whose page lost its result, or a chain or ledger missing a trophy
+count, leaves it open. Nothing deletes the rows.
+
+**First checks:** the open problems, newest first:
+
+```sh
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT check_name, player_id, ranked_day_start, subject_id, expected, saved,
+          found_at, fix_queued_at, fix_done_at, escalated_at
+   FROM reconcile_findings WHERE resolved_at IS NULL
+   ORDER BY found_at DESC LIMIT 50"
+```
+
+`subject_id` is the battle for battle copies and the Daily board snapshot
+for board rows. `./ops logs worker` shows each pass's end as
+`reconcile_pass`.
+
+**Fix or escalate:** escalate any still wrong after their recalculation, and
+any chain or ledger problem: the worker's calculation can produce neither.
+A board row whose day changed is rebuilt by the board's own corrections.
 
 ### Season final ranks missing
 

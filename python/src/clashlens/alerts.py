@@ -140,6 +140,7 @@ WORK_NAMES = {
     "replay_observation": "replayed API responses",
     "reconcile_ranked_day": "daily result calculations",
     "redecode_army": "army re-decoding",
+    "reconcile_pass": "nightly re-check steps",
 }
 
 # Checks that would otherwise stay unknown, and so hide their own problem,
@@ -198,6 +199,12 @@ METRICS_MAX_AGE = 300
 # board_deadline.MAX_UNFINISHED: this check runs on the host without the
 # worker's imports.
 BOARD_MAX_UNFINISHED = 50
+# The nightly re-check's line (reconcile_pass), once a day from this time,
+# after the morning pass has usually finished, with its checks' names.
+RECONCILE_LINE_AT = "12:00"
+RECONCILE_CHECKS = {"recount": "recount", "chain": "chain", "ledger": "ledger",
+                    "copies": "battle copies", "missing_day": "missing days",
+                    "board": "board rows"}
 
 
 class CheckError(Exception):
@@ -547,6 +554,43 @@ def battle_day_probe() -> None:
                 """
             ).fetchone()[0]
         )
+
+
+def reconcile_probe() -> None:
+    """Run inside the worker container; prints the nightly re-check's last
+    24 hours: new findings of each check in ``RECONCILE_CHECKS`` order,
+    recalculations queued, findings still there after their recalculation,
+    then of the findings open now, those whose recalculation failed, and all."""
+    import psycopg
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    since = "clock_timestamp() - interval '1 day'"
+    with psycopg.connect(url) as connection:
+        found = dict(connection.execute(
+            f"SELECT check_name, count(*) FROM reconcile_findings"
+            f" WHERE found_at > {since} GROUP BY check_name").fetchall())
+        totals = connection.execute(
+            f"SELECT count(*) FILTER (WHERE fix_queued_at > {since}),"
+            f" count(*) FILTER (WHERE escalated_at > {since}),"
+            " count(*) FILTER (WHERE resolved_at IS NULL AND EXISTS ("
+            "SELECT 1 FROM python_processing_jobs_worker AS job"
+            " WHERE job.deduplication_key = 'reconcile:pass:' || finding.id"
+            " AND job.state IN ('failed', 'cancelled'))),"
+            " count(*) FILTER (WHERE resolved_at IS NULL)"
+            " FROM reconcile_findings AS finding").fetchone()
+    print(*(found.get(name, 0) for name in RECONCILE_CHECKS), *totals)
+
+
+def reconcile_line(counts: list[int]) -> str:
+    found = dict(zip(RECONCILE_CHECKS.values(), counts, strict=False))
+    queued, escalated, failed, open_findings = counts[len(found):len(found) + 4]
+    return (
+        f"Clash Lens nightly re-check, last 24 hours: {sum(found.values())} new problems"
+        f" ({', '.join(f'{name} {count}' for name, count in found.items())});"
+        f" {queued} recalculations queued; {escalated} still wrong after their"
+        f" recalculation; {open_findings} open, {failed} of them with a failed"
+        " recalculation. Next step: docs/operating.md, Nightly re-check line."
+    )
 
 
 def elapsed_without_reset(start: float, end: float) -> float:
@@ -953,6 +997,17 @@ def observe(
     battle_day = slow_probe("--battle-day", "Battle-day check")
     if battle_day is not None:
         findings["battle_day"] = battle_day[0] > 0
+    today = datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%d")
+    if clock >= RECONCILE_LINE_AT and state.get("reconcile_line_day") != today:
+        counts = run_probe("worker", ["--reconcile-pass"], len(RECONCILE_CHECKS) + 4,
+                           "Nightly re-check counts")
+        try:
+            if counts is not None:
+                request(read_webhook(Path(config["webhook_file"])), payload={
+                    "content": reconcile_line(counts), "allowed_mentions": {"parse": []}})
+                state["reconcile_line_day"] = today
+        except (OSError, ValueError, CheckError):
+            errors.append("Nightly re-check line not delivered; the next run retries it")
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})
@@ -1216,6 +1271,9 @@ def main() -> int:
             return 0
         if sys.argv[1:] == ["--battle-day"]:
             battle_day_probe()
+            return 0
+        if sys.argv[1:] == ["--reconcile-pass"]:
+            reconcile_probe()
             return 0
         if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
             state_dir, webhook, *urls = sys.argv[2:]

@@ -1,7 +1,8 @@
 """When background work may start.
 
 Background work is every job at backfill priority: army re-decodes, Season
-repair and day-end recalculations, first battle logs and league histories.
+repair and day-end recalculations, first battle logs, league histories, and
+the nightly re-check (``reconcile_pass``) and the recalculations it queues.
 On 9 Oct 2026 six re-decodes each held about 103 battle locks for 5 to 14
 seconds, 568 jobs were leased at once beside Season repair, and live
 responses fell to about 8,000 players over 2 minutes late. So however many

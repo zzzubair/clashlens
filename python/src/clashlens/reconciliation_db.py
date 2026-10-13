@@ -15,6 +15,7 @@ from . import (
     league_drop,
     ranked_day_inputs,
     reading_rule,
+    reconcile_pass,
     reset_baselines,
 )
 from .db import (
@@ -137,6 +138,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone() is not None:
                     day_starts.add(following)
                     pending.insert(0, following)
+            reconcile_pass.note_fix_done(connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )

@@ -548,3 +548,29 @@ def test_an_interrupted_answer_leaves_the_rest_running(runtime, monkeypatch, pat
     assert any("--battle-day" in call for call in rt.calls)
     for text in ("failed its last 2 health checks", "no-attack window"):
         assert [a for a in rt.attempts if text in a["content"]]
+
+
+def test_the_nightly_recheck_line_goes_once_a_day_from_noon(runtime, monkeypatch):
+    rt = runtime
+    monkeypatch.setattr(alerts, "RECONCILE_LINE_AT", "12:00")
+    start = rt.now  # 12:00 UTC.
+
+    def lines():
+        return [p["content"] for p in rt.posts if "nightly re-check" in p["content"]]
+
+    assert at(rt, -60, start) == 0
+    assert lines() == []
+    # Discord refuses it: the next run sends it again.
+    rt.post_status = 500
+    assert at(rt, 0, start) == 1
+    rt.post_status = 204
+    for seconds in (60, 120, 3600):
+        assert at(rt, seconds, start) == 0
+    assert lines() == [(
+        "Clash Lens nightly re-check, last 24 hours: 5 new problems (recount 1, chain 0,"
+        " ledger 0, battle copies 0, missing days 2, board rows 2); 2 recalculations"
+        " queued; 0 still wrong after their recalculation; 3 open, 1 of them with a"
+        " failed recalculation. Next step: docs/operating.md, Nightly re-check line."
+    )]
+    assert at(rt, 86400, start) == 0
+    assert len(lines()) == 2
