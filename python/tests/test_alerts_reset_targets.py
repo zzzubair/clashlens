@@ -131,9 +131,9 @@ def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
         # The website, or the API behind it, could not answer.
         (503, None),
         # The page rendered without a board: the website rejected it.
-        (200, None),
-        # The board's own page answered with an error message.
-        (302, "<h2>This standings page is unavailable</h2>"),
+        (200, '<h1 id="leaderboard-title">Daily leaderboard</h1>'),
+        # The page answered with an error message instead of the board.
+        (200, "<h2>This standings page is unavailable</h2>"),
     ],
 )
 def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website, board_page) -> None:
@@ -146,7 +146,7 @@ def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website, board_page)
     assert len(late) == 1
     assert "board was not readable at 05:30; the website check could not read it" in late[0]
     # The page shows the board again.
-    rt.website_status, rt.board_page = 302, shown
+    rt.website_status, rt.board_page = 200, shown
     at(rt, 5, 40)
     assert rt.run() == 0
     at(rt, 5, 55)
@@ -181,7 +181,7 @@ def test_the_record_keeps_when_the_website_showed_the_board(rt) -> None:
     probe = next(args for args in rt.calls if "--reset" in args)
     assert probe[-2:] == [str(reset), str(int(rt.now))]
     publication = next(args for args in rt.calls if "--publication" in args)
-    assert publication[-2:] == ["2026-10", "7"]
+    assert publication[-1] == "--publication"
 
 
 def test_unreadable_reset_progress_warns_after_ten_minutes(rt) -> None:

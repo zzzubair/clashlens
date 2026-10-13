@@ -557,22 +557,32 @@ source_revision() {
 }
 
 source_fingerprint() {
-  local file relative digest listing found_ops=false
+  local listing
   listing=$(mktemp)
   if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops ops-keep-running.sh | LC_ALL=C sort -z > "$listing"; then
     rm -f "$listing"
     die "cannot enumerate release inputs"
   fi
-  while IFS= read -r -d '' file; do
-    relative=$file
-    [[ "$relative" != ops ]] || found_ops=true
-    file="$ROOT/$relative"
-    [[ -f "$file" ]] || { rm -f "$listing"; die "release input $relative is missing"; }
-    digest=$(sha256sum "$file" | cut -d' ' -f1)
-    printf '%s\0%s\n' "$relative" "$digest"
-  done < "$listing"
+  # One process hashes every input. Two processes for each of ~700 files took
+  # 3.7 s on an idle machine, inside the 25-second backup check alerts run each minute.
+  python3 - "$ROOT" "$listing" <<'PY' || { rm -f "$listing"; exit 1; }
+import hashlib, os, sys
+root, listing = (os.fsencode(arg) for arg in sys.argv[1:])
+with open(listing, "rb") as handle:
+    names = handle.read().split(b"\0")[:-1]
+for name in names:
+    path = os.path.join(root, name)
+    if not os.path.isfile(path):
+        sys.exit(f"ops: release input {os.fsdecode(name)} is missing")
+    with open(path, "rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    # The digest sha256sum printed: marked when it escaped the file's path.
+    escaped = any(char in path for char in (b"\\", b"\n", b"\r"))
+    sys.stdout.buffer.write(name + b"\0" + b"\\" * escaped + digest.encode() + b"\n")
+if b"ops" not in names:
+    sys.exit("ops: release inputs do not include ops")
+PY
   rm -f "$listing"
-  [[ "$found_ops" == true ]] || die "release inputs do not include ops"
 }
 
 image_id() {

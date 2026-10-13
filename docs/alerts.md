@@ -186,11 +186,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   every day including Mondays and Season ends. The check opens the website's
   public Daily leaderboard page at its public address, `CLASHLENS_PUBLIC_ORIGIN`,
   the one visitors use; with none set, the board can never count as readable.
-  The page sends a visitor
-  on to the board's own address, by Season and day, only once the website has
-  read the newest frozen board from the API and accepted it; the check
-  follows that address, then enters the private API container to find which
-  Reset that board belongs to. So a board saved as published but not shown
+  The page shows the
+  newest frozen board, headed by its Reset, only once the website has read it
+  from the API and accepted it; the check reads that Reset from the heading.
+  Until 13 Oct 2026 the page redirected to the board's own address instead,
+  and the check failed every minute after the website stopped redirecting.
+  So a board saved as published but not shown
   by the website does not count, and neither does a page or check that
   cannot be read at 05:30. Once that Reset's record shows the board was
   readable, a later failed read does not reopen this alert. It also alerts when an earlier Reset has not
@@ -316,6 +317,13 @@ began, when each of at most seven currently unreadable check parts (the Reset
 publication check has two: the website page and the private API) first failed, and
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
+
+A new alert goes out at the first pause between checks after it is found,
+or when the check ends if none follows, so a later check that is slow, fails
+or crashes, or a run stopped at the alert service's four-minute limit, never
+holds it back. Recoveries and the unreadable-check and failed-deploy alerts
+are sent when the check ends. Until 13 Oct 2026 only the health-check early
+warning went out early.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.

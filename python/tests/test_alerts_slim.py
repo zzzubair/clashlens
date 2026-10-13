@@ -507,3 +507,35 @@ def test_website_check_sends_only_the_website_alert(runtime):
     assert "outside the server" in rt.posts[0]["content"]
     state = json.loads((state_dir / "alerts.json").read_text())
     assert set(state["incidents"]) == {"site"}
+
+
+def test_a_check_that_crashes_later_does_not_hold_back_an_earlier_warning(
+    runtime, monkeypatch
+):
+    # Until 13 Oct 2026 warnings went out only at the end of a check, so a
+    # later crash, or a run past systemd's four minutes, lost them all.
+    rt = runtime
+    rt.backup_failed = True
+    break_command(error=RuntimeError("private detail"), match="--leaderboard")(
+        rt, monkeypatch
+    )
+    with pytest.raises(RuntimeError):
+        rt.run()
+    assert [p for p in rt.posts if "The backup check failed" in p["content"]]
+
+
+def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
+    runtime, monkeypatch, capsys
+):
+    rt = runtime
+    rt.battle_day = "1"
+
+    def broken(_origin):
+        raise RuntimeError("private detail")
+
+    monkeypatch.setattr(alerts, "website_daily_board", broken)
+    assert rt.run() == 1
+    assert [p for p in rt.posts if "no-attack window" in p["content"]]
+    error = capsys.readouterr().err
+    assert "Reset publication status unavailable; run ./ops logs website" in error
+    assert "private" not in error
