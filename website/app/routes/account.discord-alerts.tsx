@@ -11,8 +11,13 @@ const PAGE = "/account/discord-alerts";
 
 export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
 
-/** The outcome of the last switch and its player, shown once on that row. */
-type Saved = { outcome: "on" | "off" | "failed"; tag: string } | null;
+/** The outcome of the last switch, its player and which switch it was,
+ * shown once on that row. */
+type Saved = {
+  outcome: "on" | "off" | "failed";
+  tag: string;
+  kind: "attack" | "summary";
+} | null;
 
 export interface DiscordAlertsLoaderData {
   connected: boolean;
@@ -34,10 +39,11 @@ export async function loader({
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const params = new URL(request.url).searchParams;
-  const outcome = params.get("alerts");
+  const kind = params.has("summary") ? "summary" : "attack";
+  const outcome = params.get(kind === "summary" ? "summary" : "alerts");
   const saved: Saved =
     outcome === "on" || outcome === "off" || outcome === "failed"
-      ? { outcome, tag: params.get("tag") ?? "" }
+      ? { outcome, tag: params.get("tag") ?? "", kind }
       : null;
   try {
     const { createPythonClient } = await import("../services/python.server");
@@ -70,8 +76,9 @@ export async function loader({
 }
 
 /**
- * POST /account/discord-alerts — turn one player's attack alerts on or off,
- * or start connecting Discord, which comes back to this page.
+ * POST /account/discord-alerts — turn one player's attack alerts or Legend
+ * day summary on or off, or start connecting Discord, which comes back to
+ * this page.
  */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") {
@@ -116,7 +123,8 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
     }
   }
   let on = form["on"];
-  if (form["intent"] !== "attack-alert" || (on !== "on" && on !== "off")) {
+  const summary = form["intent"] === "day-summary";
+  if ((!summary && form["intent"] !== "attack-alert") || (on !== "on" && on !== "off")) {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
   try {
@@ -126,12 +134,15 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       form["tag"] ?? "",
       on === "on",
       form["idempotencyKey"] ?? "",
+      summary ? "day_summary" : "attack",
     );
   } catch {
     on = "failed";
   }
   const tag = encodeURIComponent(form["tag"] ?? "");
-  return redirect(`${PAGE}?alerts=${on}&tag=${tag}`, { headers: NO_STORE });
+  return redirect(`${PAGE}?${summary ? "summary" : "alerts"}=${on}&tag=${tag}`, {
+    headers: NO_STORE,
+  });
 }
 
 export function headers() {
@@ -159,7 +170,8 @@ export default function DiscordAlertsRoute() {
         <h1 id="discord-alerts-title">Discord alerts</h1>
         <p className="lede">
           Get a Discord message from the Clash Lens bot as soon as Clash Lens saves an
-          attack on one of your players.
+          attack on one of your players, and a summary of your players&apos; Legend day
+          after each Reset.
         </p>
       </section>
       {data.error ? (
@@ -168,11 +180,20 @@ export default function DiscordAlertsRoute() {
           <a href={PAGE}>Try again</a>
         </aside>
       ) : data.connected ? (
-        <AttackAlertSwitches
-          alerts={data.alerts}
-          saved={data.saved}
-          idempotencyKey={data.idempotencyKey}
-        />
+        <>
+          <AttackAlertSwitches
+            alerts={data.alerts}
+            saved={data.saved?.kind === "attack" ? data.saved : null}
+            idempotencyKey={data.idempotencyKey}
+          />
+          {data.alerts && data.alerts.players.length > 0 ? (
+            <DaySummarySwitches
+              alerts={data.alerts}
+              saved={data.saved?.kind === "summary" ? data.saved : null}
+              idempotencyKey={data.idempotencyKey}
+            />
+          ) : null}
+        </>
       ) : (
         <section className="form-panel stack-form" aria-labelledby="connect-title">
           <h2 id="connect-title">Connect Discord first</h2>
@@ -217,15 +238,21 @@ function ConnectDiscord({
   );
 }
 
-/** What happened to the last switch. */
-function SavedNote({ outcome }: { outcome: "on" | "off" | "failed" }) {
+/** What happened to the last switch; only attack alerts send a confirmation. */
+function SavedNote({
+  outcome,
+  confirms = true,
+}: {
+  outcome: "on" | "off" | "failed";
+  confirms?: boolean;
+}) {
   return outcome === "failed" ? (
     <p className="attack-alert-saved notice notice-unavailable" role="alert">
       Not saved. Try again.
     </p>
   ) : (
     <p className="attack-alert-saved" role="status">
-      {outcome === "on"
+      {outcome === "on" && confirms
         ? "Saved. The bot is sending you a confirmation message on Discord now. If it doesn't arrive, reload this page."
         : "Saved."}
     </p>
@@ -333,6 +360,71 @@ function AttackAlertSwitches({
           </figure>
         </>
       )}
+    </section>
+  );
+}
+
+/** Per-player switches for the Legend day summary, on until turned off and
+ * separate from attack alerts. */
+function DaySummarySwitches({
+  alerts,
+  saved,
+  idempotencyKey,
+}: {
+  alerts: AttackAlerts;
+  saved: Saved;
+  idempotencyKey: string;
+}) {
+  const label = (player: { tag: string; name: string | null }) =>
+    `${player.name ?? "Unnamed"} ${player.tag}`;
+  return (
+    <section className="form-panel stack-form" aria-labelledby="summary-title">
+      <h2 id="summary-title">Legend day summary</h2>
+      <p id="day-summary-help" className="form-help">
+        After each Reset&apos;s Daily board is published, the bot sends you one message
+        summing up the Legend day just ended for every player with the summary on:
+        starting and end-of-day trophies, attacks, defenses and the player&apos;s place on
+        the Daily board. Each player&apos;s summary is on or off on its own, separately
+        from its attack alerts.
+      </p>
+      <ul className="player-link-list" aria-describedby="day-summary-help">
+        {alerts.players.map((player) => (
+          <li
+            key={player.tag}
+            className={`attack-alert-row${player.summaryOn ? " attack-alert-on" : ""}`}
+          >
+            <div className="attack-alert-state">
+              <strong>{label(player)}</strong>
+              <span
+                className={`state-badge ${player.summaryOn ? "state-live" : "state-missing"}`}
+              >
+                {player.summaryOn ? "✓ On" : "Off"}
+              </span>
+              <span className="attack-alert-meaning">
+                {player.summaryOn
+                  ? `${player.name ?? player.tag}'s Legend day is in your summary after each Reset.`
+                  : `${player.name ?? player.tag} is left out of your summary.`}
+              </span>
+            </div>
+            <form method="post" className="inline-form">
+              <input type="hidden" name="intent" value="day-summary" />
+              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+              <input type="hidden" name="tag" value={player.tag} />
+              <input type="hidden" name="on" value={player.summaryOn ? "off" : "on"} />
+              <button
+                type="submit"
+                aria-label={`Turn ${player.summaryOn ? "off" : "on"} the Legend day summary for ${label(player)}`}
+                className={`button ${player.summaryOn ? "button-secondary" : "button-primary"}`}
+              >
+                {player.summaryOn ? "Turn off" : "Turn on"}
+              </button>
+            </form>
+            {saved?.tag === player.tag ? (
+              <SavedNote outcome={saved.outcome} confirms={false} />
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

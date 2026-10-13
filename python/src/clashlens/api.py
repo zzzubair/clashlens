@@ -152,6 +152,8 @@ class DefaultPlayerBody(StrictBody):
 
 class AttackAlertBody(DefaultPlayerBody):
     on: bool
+    # Which switch: the player's attack alerts or its Legend day summary.
+    alert: Literal["attack", "day_summary"] = "attack"
 
 
 class ExportBody(StrictBody):
@@ -1009,6 +1011,14 @@ def create_app(
         context = _authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
         normalized_tag = _safe_tag(body.tag)
+        if body.alert == "day_summary":
+            return _operation_response(api_discord_alerts.set_day_summary(
+                production_database,
+                _binding(request, context, "account.update",
+                         {"day_summary": normalized_tag, "on": body.on}),
+                normalized_tag=normalized_tag,
+                on=body.on,
+            ))
         result = api_discord_alerts.set_attack_alert(production_database,
             _binding(request, context, "account.update",
                      {"attack_alert": normalized_tag, "on": body.on}),

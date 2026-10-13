@@ -444,3 +444,180 @@ def alerts_on(site: Site, switch: Mapping[str, Any]) -> Reply:
         updated=switch["confirm_requested_at"],
         links=(Link("Alert settings", site.url(DISCORD_ALERTS)),),
     )
+
+
+# The website's codes that leave a day's 8 attacks and 8 defenses in doubt,
+# and that mean a battle may be missing from its logs: BATTLE_DOUBT_CODES and
+# GAP_CODES in website/app/lib/player-lookup-text.ts, which labels each day.
+_BATTLE_DOUBT_CODES = frozenset({
+    "perspective_disagreement",
+    "duplicate_contribution_disagreement",
+    "trophy_equation_mismatch",
+    "ranked_version_mismatch",
+    "attack_star_total_mismatch",
+    "defense_star_total_mismatch",
+    "truncated_reasons",
+    "attack_count_exceeds_eight",
+    "defense_count_exceeds_eight",
+})
+_GAP_CODES = frozenset({
+    "missing_start_battle_log_baseline",
+    "missing_end_battle_log_baseline",
+    "battle_log_row_gap",
+    "battle_log_overlap_gap",
+    "battle_log_stale_window",
+    "battle_log_row_count_exceeds_fifty",
+    "unclassified_rows",
+})
+# Discord shows at most 4,096 characters in a message's description.
+_SUMMARY_LENGTH = 3_900
+# Players named in one "Not finished yet" line, so no line outgrows a DM.
+_WAITING_NAMES = 40
+
+
+def _day_status(day: Mapping[str, Any]) -> str:
+    """A finished day's label on the player page: presentDay in
+    website/app/lib/player-lookup-text.ts."""
+    codes = day["uncertainty_reasons"]
+    coverage = (
+        day["coverage"] if day["coverage"] in ("complete", "partial")
+        else day["completeness"]["state"]
+    )
+    doubtful = any(code in _BATTLE_DOUBT_CODES for code in codes) or (
+        not day["battles_complete"]
+        and (coverage != "complete" or any(code in _GAP_CODES for code in codes))
+    )
+    if day["net_trophy_change"] is None or doubtful:
+        return "Uncertain"
+    if day["state"] == "Complete" and day["confidence"] == "exact" and not codes:
+        return "Verified"
+    return "Calculated"
+
+
+def _adjustment(day: Mapping[str, Any], *kinds: str) -> Mapping[str, Any] | None:
+    return next((item for item in day["adjustments"] if item.get("type") in kinds), None)
+
+
+def summary_day(
+    page: Mapping[str, Any], reset: datetime, place: int | None, unfinished: bool
+) -> dict[str, Any] | None:
+    """The player's Legend day that ended at `reset`, as their page shows it:
+    its label, its saved "version", and `place`, its place on that Reset's
+    Daily board. Its "end" is None until set to the end of day saved with
+    that version, before any weekly or Season reset at `reset`. "finished"
+    is False while its final result is not saved yet, as for a player that
+    board went without (`unfinished`) with no saved day. None when the page
+    has no such Legend day."""
+    ready = page.get("screen_ready") or {}
+    days = {datetime.fromisoformat(day["ranked_day_start"]): day for day in ready.get("days", [])}
+    day = days.get(reset - timedelta(days=1))
+    if day is None:
+        return {"tag": page["tag"], "name": page["name"], "finished": False} if unfinished else None
+    codes = day["uncertainty_reasons"]
+    battles = len(day["offense_events"]) + len(day["defense_events"])
+    # The page's own rule for a day that is not a Legend day.
+    if not battles and ("not_enrolled" in codes or "player_not_eligible" in codes):
+        return None
+    if day["state"] == "Live":
+        return {"tag": page["tag"], "name": page["name"], "finished": False}
+    automatic = _adjustment(day, "automatic_defense")
+    return {
+        "tag": page["tag"],
+        "name": page["name"],
+        "finished": True,
+        "status": _day_status(day),
+        "version": day["version"],
+        "start": day["start_trophies"],
+        "end": None,
+        "net": day["net_trophy_change"],
+        "raised": _adjustment(day, "weekly_reset", "season_reset"),
+        "attack_count": day["attack_count"],
+        "attack_gain": day["attack_gain"],
+        "defense_count": day["defense_count"],
+        "defense_loss": day["defense_loss"],
+        "automatic_loss": None if automatic is None else -automatic["amount"],
+        "place": place,
+    }
+
+
+def _summary_block(site: Site, day: Mapping[str, Any], key: str) -> str:
+    lines = [f"**{safe(day['name'])} {day['tag']}** · {day['status']}"]
+    if day["start"] is None and day["end"] is None and day["net"] is None:
+        lines.append("Trophies unavailable")
+    else:
+        change = "change unavailable" if day["net"] is None else signed(day["net"])
+        if day["raised"]:
+            kind = "weekly" if day["raised"]["type"] == "weekly_reset" else "Season"
+            change += f", {signed(day['raised']['amount'])} {kind} reset"
+        lines.append(
+            f"{_known(day['start'], number)} → {_known(day['end'], number)} ({change})"
+        )
+    defenses = f"Defenses {_known(day['defense_count'], number)} " + (
+        f"({_known(None if day['defense_loss'] is None else -day['defense_loss'], signed)})"
+    )
+    if day["automatic_loss"]:
+        defenses += f" · {signed(-day['automatic_loss'])} automatic loss"
+    lines.append(
+        f"Attacks {_known(day['attack_count'], number)} "
+        f"({_known(day['attack_gain'], signed)}) · {defenses}"
+    )
+    if day["status"] == "Uncertain":
+        lines.append(
+            "Uncertain: some of this day's battles or readings may be missing, so these "
+            "numbers may be off. The day on Clash Lens says why."
+        )
+    lines.append(
+        f"Daily board place {_known(day['place'], number)} · "
+        f"[Day on Clash Lens]({site.player(day['tag'])}?day={key}#legend-day-{key})"
+    )
+    return "\n".join(lines)
+
+
+def day_summary(
+    site: Site, reset: datetime, days: Sequence[Mapping[str, Any]]
+) -> list[tuple[Reply, tuple[str, ...]]]:
+    """The Legend day summary DMs for the day that ended at `reset`, each with
+    the tags of the players it names: one block per finished day from
+    `summary_day`, most trophies first, then the players whose day is not
+    finished yet, at most `_WAITING_NAMES` a line; several DMs when too long
+    for one, and none when no day is finished."""
+    finished = sorted(
+        (day for day in days if day["finished"]),
+        key=lambda day: (day["end"] is None, -(day["end"] or 0), day["tag"]),
+    )
+    if not finished:
+        return []
+    start = reset - timedelta(days=1)
+    key = start.date().isoformat()
+    blocks = [(_summary_block(site, day, key), (day["tag"],)) for day in finished]
+    waiting = [day for day in days if not day["finished"]]
+    for first in range(0, len(waiting), _WAITING_NAMES):
+        line = waiting[first:first + _WAITING_NAMES]
+        blocks.append((
+            "Not finished yet: "
+            + ", ".join(f"{safe(day['name'])} {day['tag']}" for day in line)
+            + ". Their day shows on Clash Lens once it is saved.",
+            tuple(day["tag"] for day in line),
+        ))
+    blocks.append(("Places are from the Daily board at the 05:00 UTC Reset.", ()))
+    parts: list[list[tuple[str, tuple[str, ...]]]] = [[]]
+    for text, tags in blocks:
+        if parts[-1] and len(
+            "\n\n".join([*(block for block, _ in parts[-1]), text])
+        ) > _SUMMARY_LENGTH:
+            parts.append([])
+        parts[-1].append((text, tags))
+    title = f"Legend day summary · {start:%a} {start.day} {start:%b}"
+    return [
+        (
+            Reply(
+                "\n\n".join(text for text, _ in part),
+                title=title if len(parts) == 1 else f"{title} ({index} of {len(parts)})",
+                updated=reset,
+                links=(Link("Summary settings", site.url(DISCORD_ALERTS)),)
+                if index == len(parts) else (),
+            ),
+            tuple(tag for _, tags in part for tag in tags),
+        )
+        for index, part in enumerate(parts, 1)
+    ]

@@ -116,7 +116,7 @@ class Unreachable(Exception):
 
 class Messenger(Protocol):
     async def send_dm(
-        self, discord_user_id: str, reply: Reply, nonce: int, time_left: float
+        self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
     ) -> None:
         """Send the DM with `nonce`, which Discord checks for repeats, raising
         Unreachable at once rather than wait out a rate limit longer than

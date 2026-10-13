@@ -40,7 +40,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
-import { mapAttackAlerts, type AttackAlerts } from "../../app/lib/discord";
+import { mapAttackAlerts } from "../../app/lib/discord";
 import {
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
@@ -60,10 +60,12 @@ const PLAYERS = [
   { tag: "#2PP", name: "Wanderer" },
   { tag: "#8QQ", name: "Nightfall" },
 ];
-const ALERTS: AttackAlerts = {
+// The private API's payload: Wanderer's attack alerts on and summary off,
+// Nightfall's the other way round.
+const ALERTS = {
   players: [
-    { ...PLAYERS[0], on: true },
-    { ...PLAYERS[1], on: false },
+    { ...PLAYERS[0], on: true, summary_on: false },
+    { ...PLAYERS[1], on: false, summary_on: true },
   ],
   undelivered: null,
 };
@@ -210,7 +212,7 @@ describe("Discord attack alerts settings", () => {
     expect(mocks.requestJson).toHaveBeenCalledWith(
       "/v1/account/discord-alerts",
       "POST",
-      Buffer.from(JSON.stringify({ tag: "#8QQ", on: true })),
+      Buffer.from(JSON.stringify({ tag: "#8QQ", on: true, alert: "attack" })),
       undefined,
       KEY,
       IDENTITY,
@@ -228,6 +230,46 @@ describe("Discord attack alerts settings", () => {
     expect(failed[0]).toContain("Not saved. Try again.");
   });
 
+  it("shows each player's Legend day summary switch apart from its attack alerts", async () => {
+    const html = await renderPage();
+    const summary = html.split('id="summary-title"')[1];
+    expect(summary).toContain("After each Reset&#x27;s Daily board is published");
+    const rows = summary.split("<li").slice(1);
+    expect(rows[0]).not.toContain("attack-alert-on");
+    expect(rows[0]).toContain("Wanderer is left out of your summary.");
+    expect(rows[0]).toContain(
+      'aria-label="Turn on the Legend day summary for Wanderer #2PP"',
+    );
+    expect(rows[1]).toContain("✓ On");
+    expect(rows[1]).toContain(
+      "Nightfall&#x27;s Legend day is in your summary after each Reset.",
+    );
+    expect(rows[1]).toContain('name="intent" value="day-summary"');
+  });
+
+  it("saves a Legend day summary switch and says so on its own row", async () => {
+    const response = await alertsAction({
+      request: post({ intent: "day-summary", tag: "#8QQ", on: "off" }),
+    } as never);
+    expect(mocks.requestJson).toHaveBeenCalledWith(
+      "/v1/account/discord-alerts",
+      "POST",
+      Buffer.from(JSON.stringify({ tag: "#8QQ", on: false, alert: "day_summary" })),
+      undefined,
+      KEY,
+      IDENTITY,
+    );
+    expect(response.headers.get("Location")).toBe(
+      "/account/discord-alerts?summary=off&tag=%238QQ",
+    );
+    const [alerts, summary] = (await renderPage("?summary=on&tag=%238QQ")).split(
+      'id="summary-title"',
+    );
+    expect(alerts).not.toContain("Saved.");
+    expect(summary.split("<li")[2]).toContain("Saved.");
+    expect(summary).not.toContain("confirmation message");
+  });
+
   it("refuses a switch that is neither on nor off", async () => {
     const response = await alertsAction({
       request: post({ intent: "attack-alert", tag: "#8QQ", on: "yes" }),
@@ -240,6 +282,12 @@ describe("Discord attack alerts settings", () => {
     expect(mapAttackAlerts({ players: [{ tag: "#2PP", name: null, on: "yes" }] })).toBe(
       null,
     );
+    expect(
+      mapAttackAlerts({
+        players: [{ tag: "#2PP", name: null, on: true }],
+        undelivered: null,
+      }),
+    ).toBe(null);
     expect(
       mapAttackAlerts({
         players: [],

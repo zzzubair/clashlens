@@ -86,6 +86,27 @@ def _switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
     ).status_code
 
 
+def _summary_switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
+    """Turn a player's Legend day summary on or off as the website does,
+    through the private API."""
+    return api_discord_alerts.set_day_summary(
+        database,
+        RequestBinding(
+            request_id=str(uuid4()),
+            caller="typescript-website",
+            provider="discord",
+            provider_subject=DISCORD_ID,
+            account_id=account_id,
+            operation="account.update",
+            method="POST",
+            request_target="/v1/account/discord-alerts",
+            identity={"day_summary": tag, "on": on},
+        ),
+        normalized_tag=tag,
+        on=on,
+    ).status_code
+
+
 def _defend(connection_info: str, player_id: int, *, saved_ago: timedelta = timedelta(0)) -> None:
     """A defense of the player by a new untracked opponent, saved `saved_ago` ago."""
     with psycopg.connect(connection_info, autocommit=True) as connection:
@@ -485,11 +506,12 @@ def test_the_page_lists_every_verified_player(database_url: str) -> None:
         players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
 
     assert len(players) == 501
-    assert players[-1] == {"tag": "#2PP", "name": None, "on": True}
+    assert players[-1] == {"tag": "#2PP", "name": None, "on": True, "summary_on": True}
 
 
 def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
-    """Moving the player to another account and back does not turn alerts on."""
+    """Moving the player to another account and back does not turn alerts
+    on, nor leave its Legend day summary off."""
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
@@ -501,10 +523,11 @@ def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
             theirs = _account(owner, "google", "google-subject", "other")
             _verify(owner, mine, "#2PP")
             assert _switch(api, mine, "#2PP", True) == 200
+            assert _summary_switch(api, mine, "#2PP", False) == 200
             _verify(owner, theirs, "#2PP")
             _verify(owner, mine, "#2PP")
             players = api_discord_alerts.get_attack_alerts(api, mine)["players"]
         finally:
             api.close()
             owner.close()
-    assert players == [{"tag": "#2PP", "name": None, "on": False}]
+    assert players == [{"tag": "#2PP", "name": None, "on": False, "summary_on": True}]
