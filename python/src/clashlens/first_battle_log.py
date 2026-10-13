@@ -146,9 +146,11 @@ def _queue(
     *, key: str | None = None, trigger: str = "first_battle_log",
     later_days: bool = True, priority: int | None = None,
     due_at: datetime | None = None, last_day: datetime | None = None,
+    every_day: bool = False,
 ) -> int | None:
     """Queue the recalculation of one day and, with ``later_days``, every
-    saved later day of its Season and ``last_day``, saved or not, by default
+    saved later day of its Season and ``last_day``, saved or not, with
+    ``every_day`` each day up to it too, by default
     from the player's earliest saved battle log, ``observation_id``; ``None``
     when it was already queued. Without ``priority``, the day's own: Reset
     priority while its Reset is the latest, else live. Due now, or at
@@ -178,6 +180,7 @@ def _queue(
                 **({
                     "last_ranked_day_start": last_text,
                     "recalculate_season": day.official_season_id,
+                    **({"every_day": True} if every_day else {}),
                 } if later_days else {}),
                 "trigger": trigger,
             }),

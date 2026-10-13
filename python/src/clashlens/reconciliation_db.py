@@ -73,11 +73,17 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
             day_starts = {day_start}
             if "recalculate_season" in claim.input_json:
-                day_starts.add(
-                    datetime.fromisoformat(
-                        str(claim.input_json["last_ranked_day_start"])
-                    )
+                last_day = datetime.fromisoformat(
+                    str(claim.input_json["last_ranked_day_start"])
                 )
+                day_starts.add(last_day)
+                # Days a player was wrongly left untracked, saved or not
+                # (``league_drop.judge``).
+                if claim.input_json.get("every_day"):
+                    day_starts.update(
+                        day_start + timedelta(days=offset)
+                        for offset in range(1, (last_day - day_start).days)
+                    )
                 saved_days = connection.execute(
                     """
                     SELECT DISTINCT ranked_day_start

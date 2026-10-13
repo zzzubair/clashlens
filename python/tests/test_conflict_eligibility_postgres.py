@@ -303,3 +303,69 @@ def test_one_conflict_legend_ii_answer_keeps_a_legend_i_player_tracked(
     # show nothing about the week it left: the repaired Season keeps its drop.
     assert promoted_tracking == (True, "eligible")
     assert repaired == (dropped, False)
+
+
+def test_a_wrongly_stopped_player_tracked_again_by_a_battle_gets_each_legend_day(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """BUSY, still in Legend I, was stopped at 17:00 on Monday 28 September
+    by one conflict Legend II answer under the old rule, so Tuesday's Reset
+    sweep, which reads only KEEP, left it out. On Wednesday at 06:00 a
+    Refresh still reads conflict Legend II, but BUSY's battle log shows a
+    Legend defense at 06:00 on Tuesday, so it never left: tracking it again
+    saves Monday and Tuesday as Legend I days, though neither was saved."""
+    season = PREVIOUS_SEASON
+    saturday, sunday = day(20, season), day(21, season)
+    monday, tuesday, wednesday = day(22, season), day(23, season), day(24, season)
+    busy, keep = "#PPP", "#9PP"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, busy, keep)
+        for player in story.players.values():
+            player.battles = _saturday(saturday) + attacks(sunday, 40) + defenses(
+                sunday, *[30] * 8) + attacks(monday + timedelta(hours=4), 40, 40) + defenses(
+                monday, *[30] * 8)
+        story.players[busy].battles.append(Battle(tuesday + timedelta(hours=1), -30, False))
+        story.reset(saturday, dict.fromkeys(story.players, (5300, season)))
+        story.reset(sunday, dict.fromkeys(story.players, (5140, season)))
+        story.reads(monday - timedelta(minutes=10), dict.fromkeys(story.players, 4940), season)
+        story.reset(monday, dict.fromkeys(story.players, (5000, season)))
+        story.reads(monday + timedelta(minutes=20), dict.fromkeys(story.players, 5000), season)
+        evening = monday + timedelta(hours=12)
+        _legend_ii(story, busy, evening, 5000, accepted=False)
+        story.run_worker()
+        # The old rule: tracking stopped, Monday's weekly drop.
+        stopped_rule = reconciliation_db._dropped_from_legend_i
+        with monkeypatch.context() as patch:
+            patch.setattr(reconciliation_db, "_dropped_from_legend_i",
+                          lambda connection, player_id, since, until: player_id == stopped
+                          or stopped_rule(connection, player_id, since, until))
+            with psycopg.connect(connection_info) as connection:
+                stopped = connection.execute(
+                    "UPDATE players SET active = false, next_due_at = NULL,"
+                    " eligibility_state = 'ineligible' WHERE normalized_tag = %s"
+                    " RETURNING id", (busy,),
+                ).fetchone()[0]
+                first_battle_log.queue_weekly_drop(connection, stopped, evening)
+            story.wait(timedelta(hours=1))
+        story.reads(tuesday - timedelta(minutes=10), {keep: 4840}, season)
+        story.reset(tuesday, {keep: (4840, season)})
+        refresh = wednesday + timedelta(hours=1)
+        _legend_ii(story, busy, refresh, 4810, accepted=False)
+        story.run_worker()
+        story.read(busy, refresh + timedelta(minutes=1))
+        story.wait(timedelta(hours=1))
+        tracked = _tracked(story)[busy]
+        days = _days(story, sunday, monday)[busy]
+        busy_monday = story.saved_day(busy, monday)
+        busy_tuesday = story.saved_day(busy, tuesday)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert tracked == (True, "eligible")
+    raised = {"state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,
+              "automatic_loss": None, "raise": 60, "attacks": 1, "defenses": 8,
+              "residual": 0}
+    assert days == (raised, True)
+    assert (busy_monday["start"], busy_monday["attacks"], busy_monday["defenses"]) == (
+        5000, 2, 8)
+    assert busy_tuesday is not None and busy_tuesday["defenses"] == 1

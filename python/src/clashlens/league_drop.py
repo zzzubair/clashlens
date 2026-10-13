@@ -296,12 +296,15 @@ def judge(connection: Any, player_id: int) -> None:
         # The days those lower-league answers made non-Legend days, and every
         # later saved day of their Season, once for each newest answer that
         # tracks them again. The last answer's day too, saved or not: a
-        # player untracked at its Reset gets no Reset reading to save it.
+        # player untracked at its Reset gets no Reset reading to save it;
+        # and when none of them proves the player left, every day between.
         day = domain.ranked_day_for(stretch[0].read_at).start - timedelta(days=1)
         day_text = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         first_battle_log._queue(
             connection, player_id, day, None,
             last_day=domain.ranked_day_for(stretch[-1].read_at).start,
+            every_day=not any(left_legend_i(connection, player_id, answers, index)
+                              for index in range(start, end)),
             key=(f"reconcile:league-return:{player_id}:{day_text}:"
                  f"{newest.read_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
                  f"{RECONCILIATION_RULE_VERSION}"),
