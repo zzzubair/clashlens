@@ -21,11 +21,17 @@
 -- October 2026 about 92,000 battles and 180,000 profile answers were saved,
 -- so at most about 450,000 marks a day pass through it.
 --
--- The seed marks every (player, week) with evidence since the current
--- Season began, Monday 5 October 2026, so the worker decides them all: on
--- that copy 50,217 marks for 26,524 players, written in 55 seconds while the
--- evidence tables' triggers were being added, so saving profiles and battles
--- waits that long when this migration runs.
+-- The seed marks every (player, week) with evidence since Monday 28
+-- September 2026, the previous Season's last week, so the worker decides
+-- them all. The current Season's first week needs that week before it:
+-- without it no answer read in the hour after the 5 October Reset counts
+-- and nothing carries forward, so #V02JGRJC, read in Legend II at 05:14 and
+-- 05:21 after a Legend I week, stayed unknown. A marked week decides its
+-- whole Season, so the previous Season's earlier weeks are decided too,
+-- from battles and league history only, as raw responses start on 1
+-- October 2026. On that copy: 75,434 marks for 27,351 players, written in
+-- 27 seconds while the evidence tables' triggers were being added, so
+-- saving profiles and battles waits that long when this migration runs.
 BEGIN;
 
 -- The Monday 05:00 UTC Reset starting the week holding `at`. Monday
@@ -205,23 +211,23 @@ FROM (
     SELECT version.player_id, clashlens_week_start(seen.observed_at) AS week_start
     FROM player_profile_effects AS seen
     JOIN player_profile_versions AS version ON version.id = seen.profile_version_id
-    WHERE seen.observed_at >= timestamptz '2026-10-05 05:00:00+00'
+    WHERE seen.observed_at >= timestamptz '2026-09-28 05:00:00+00'
     UNION
     SELECT player_id, clashlens_week_start(observed_at)
     FROM player_profile_versions
-    WHERE observed_at >= timestamptz '2026-10-05 05:00:00+00'
+    WHERE observed_at >= timestamptz '2026-09-28 05:00:00+00'
     UNION
     SELECT side.player_id, clashlens_week_start(battle.ranked_day_start)
     FROM legend_battles AS battle
     CROSS JOIN LATERAL (VALUES (battle.attacker_player_id),
                                (battle.defender_player_id)) AS side (player_id)
-    WHERE battle.ranked_day_start >= timestamptz '2026-10-05 05:00:00+00'
+    WHERE battle.ranked_day_start >= timestamptz '2026-09-28 05:00:00+00'
     UNION
     SELECT player_id,
            clashlens_week_start(to_timestamp(league_season_id::bigint) - interval '7 days')
     FROM player_league_history_entries
     WHERE to_timestamp(league_season_id::bigint) - interval '7 days'
-          >= timestamptz '2026-10-05 05:00:00+00'
+          >= timestamptz '2026-09-28 05:00:00+00'
 ) AS evidence
 ORDER BY player_id, week_start;
 
