@@ -16,6 +16,7 @@ import { ArmyPortraits } from "../components/ArmyPortraits";
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
@@ -44,6 +45,7 @@ import {
   newestPlayer,
   playerLookupView,
   presentDay,
+  savedDays,
   seasonForDay,
   selectPlayerHistory,
   showsCurrentSeason,
@@ -199,24 +201,22 @@ export async function loader({
   const seasons = seasonsResult.status === "fulfilled" ? seasonsResult.value : [];
   const seasonsError =
     seasonsResult.status === "rejected" ? await safeError(seasonsResult.reason) : null;
-  // A day link from an ended Season opens that Season at the day.
+  // A day link from an ended Season opens that Season at the day. The address
+  // stays as linked: a redirect would drop a #battle- part the server never sees.
   const day = url.searchParams.get("day") ?? "";
   const daySeason =
     selectedSeason === null && /^\d{4}-\d{2}-\d{2}$/.test(day)
       ? seasonForDay(seasons, day)
       : null;
-  if (daySeason !== null) {
-    url.searchParams.set("season", daySeason);
-    throw redirect(`${canonicalPath}${url.search}#legend-day-${day}`, {
-      headers: { "Cache-Control": "no-store" },
-    });
-  }
-  const historical =
-    historicalResult.status === "fulfilled" ? historicalResult.value : null;
+  const [seasonResult] =
+    daySeason === null
+      ? [historicalResult]
+      : await Promise.allSettled([
+          client.then((api) => api.getPlayerSeason(normalizedTag, daySeason)),
+        ]);
+  const historical = seasonResult.status === "fulfilled" ? seasonResult.value : null;
   const historicalError =
-    historicalResult.status === "rejected"
-      ? await safeError(historicalResult.reason)
-      : null;
+    seasonResult.status === "rejected" ? await safeError(seasonResult.reason) : null;
   const refreshStatus = refreshResult.status === "fulfilled" ? refreshResult.value : null;
   const refreshError =
     workId && !validWorkId
@@ -233,7 +233,7 @@ export async function loader({
     noJsIdempotencyKey,
     seasons,
     seasonsError,
-    selectedSeason,
+    selectedSeason: selectedSeason ?? daySeason,
     historical,
     historicalError,
     lookup,
@@ -304,7 +304,6 @@ export default function PlayerRoute() {
 }
 
 function PlayerContent({ data }: { data: PlayerLoaderData }) {
-  const location = useLocation();
   const [searchParams] = useSearchParams();
   const selectedDay = validDay(searchParams.get("day"));
   const refreshFetcher = useFetcher<RefreshWork | RefreshError | null>();
@@ -404,6 +403,30 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     (!todayEnded || !liveDay(dayEvidence(player.currentDay)).routine)
       ? legendDayKey(player.currentDay.period)
       : null);
+  // A linked day outside the current Season's log, such as an ended Season's,
+  // shows its battles from the days the page already has.
+  const pastDayKey =
+    data.selectedSeason !== null ||
+    !history.some(({ day }) => legendDayKey(day.period) === selectedDay)
+      ? selectedDay
+      : null;
+  const pastDay = player
+    ? savedDays(player).find((day) => legendDayKey(day.period) === pastDayKey)
+    : undefined;
+  const dayBattles =
+    pastDayKey &&
+    (pastDay ||
+      data.historical?.dailyEntries.some(
+        (day) => legendDayKey(day.period) === pastDayKey,
+      )) ? (
+      <DayBattles day={pastDayKey} battles={pastDay} units={player?.armyUnits ?? {}} />
+    ) : null;
+  const linkedBattle = (
+    <LinkedBattle
+      log={data.selectedSeason === null ? history.map(({ day }) => day) : []}
+      day={pastDay}
+    />
+  );
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -416,51 +439,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
-
-  useEffect(() => {
-    if (!location.hash.startsWith("#battle-")) return;
-    let battleId: string;
-    try {
-      battleId = decodeURIComponent(location.hash.slice(1));
-    } catch {
-      return;
-    }
-    const battle = document.getElementById(battleId);
-    if (!battle?.matches(".battle-slot")) return;
-    let frame = 0;
-    let highlightTimer: ReturnType<typeof setTimeout> | undefined;
-    const highlight = () => {
-      if (document.hidden) return;
-      cancelAnimationFrame(frame);
-      clearTimeout(highlightTimer);
-      battle.classList.remove("battle-arrival");
-      const day = battle.closest("details");
-      if (day) day.open = true;
-      battle.scrollIntoView({ block: "center", behavior: "instant" });
-      // Let scrolling and layout finish before the two-second highlight starts.
-      frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => {
-          battle.classList.add("battle-arrival");
-          highlightTimer = setTimeout(
-            () => battle.classList.remove("battle-arrival"),
-            2000,
-          );
-        });
-      });
-    };
-    if (document.readyState === "complete") highlight();
-    else window.addEventListener("load", highlight, { once: true });
-    window.addEventListener("pageshow", highlight);
-    document.addEventListener("visibilitychange", highlight);
-    return () => {
-      cancelAnimationFrame(frame);
-      clearTimeout(highlightTimer);
-      window.removeEventListener("load", highlight);
-      window.removeEventListener("pageshow", highlight);
-      document.removeEventListener("visibilitychange", highlight);
-      battle.classList.remove("battle-arrival");
-    };
-  }, [location.hash, location.key, player?.tag]);
 
   useEffect(() => {
     if (automaticRefreshHandled.current) return;
@@ -627,6 +605,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.error && !(lookup && data.error.error.code === "missing") ? (
           <ErrorNotice error={data.error} />
         ) : null}
+        {linkedBattle}
         {data.seasonsError ? (
           <SeasonsError tag={data.requestedTag} selectedSeason={data.selectedSeason} />
         ) : null}
@@ -646,6 +625,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         ) : (
           seasonMenu(false)
         )}
+        {dayBattles}
         {data.selectedSeason === null && player && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
@@ -751,6 +731,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           ? "Player not found. Clash of Clans did not find this tag at its latest check."
           : "Now tracking in Legend I."}
       </p>
+      {linkedBattle}
       {data.seasonsError ? (
         <SeasonsError tag={trackedPlayer.tag} selectedSeason={data.selectedSeason} />
       ) : null}
@@ -768,10 +749,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           menu={seasonMenu(true)}
         />
       )}
+      {dayBattles}
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
           {selectedDay &&
+          !pastDay &&
           !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (
             <p className="section-note" role="status">
               No saved Legend log for {legendDayDate(selectedDay)}.
@@ -898,6 +881,41 @@ function SelectedSeason({
   );
 }
 
+// A linked day's Attacks and Defenses, or a note when the page no longer has them.
+function DayBattles({
+  day,
+  battles,
+  units,
+}: {
+  day: string;
+  battles: RankedDaySummary | undefined;
+  units: ArmyUnitNames;
+}) {
+  return (
+    <section className="data-section" aria-labelledby="day-battles-title">
+      <h2 id="day-battles-title">Battles on {legendDayDate(day)}</h2>
+      {battles ? (
+        <div className="battle-columns">
+          {(["Attacks", "Defenses"] as const).map((title) => (
+            <BattleColumn
+              key={title}
+              title={title}
+              events={title === "Attacks" ? battles.offenseEvents : battles.defenseEvents}
+              day={day}
+              dayLabel={legendDayDate(day)}
+              units={units}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="section-note">
+          Attacks and defenses from this day are no longer shown here.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function SeasonFinish({
   summary,
   menu,
@@ -958,6 +976,11 @@ function SeasonFinish({
 
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
   const selectedDay = validDay(useSearchParams()[0].get("day"));
+  const { hash } = useLocation();
+  // A day link opens at its row unless the link names a place on the page.
+  useEffect(() => {
+    if (!hash) document.getElementById(`legend-day-${selectedDay}`)?.scrollIntoView();
+  }, [hash, selectedDay]);
   return (
     <section className="data-section" aria-label="Daily trophy totals">
       {selectedDay &&

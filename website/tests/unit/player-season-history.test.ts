@@ -540,26 +540,77 @@ describe("past-Season view", () => {
     expect(past).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
-  it("sends an ended Season's day link to that Season with the day marked", async () => {
-    mocks.createPythonClient.mockReturnValue(newSeasonClient());
-    const request = new Request(
-      "https://clashlens.example/players/%232PP?day=2026-10-04",
-    );
-    const response = await playerLoader({ request, params: { tag: TAG } } as never).then(
-      () => null,
-      (thrown: unknown) => thrown,
-    );
-    expect(response).toBeInstanceOf(Response);
-    expect((response as Response).headers.get("Location")).toBe(
-      `/players/%232PP?day=2026-10-04&season=${SEASON}#legend-day-2026-10-04`,
-    );
+  // A client whose player has one saved attack on the ended Season's last day.
+  const lastDayBattleClient = async () => {
+    const client = newSeasonClient();
+    const [today, lastDay, ...older] = await client
+      .getPlayer()
+      .then((player: PlayerPage) => player.recentDays);
+    const battle = {
+      battleId: "last-day-attack",
+      battleTimestamp: "2026-10-05T04:58:00Z",
+      opponent: { tag: "#9GJ", name: "Rival" },
+      destructionPercentage: 100,
+      stars: 3,
+      trophyChange: 40,
+      perspectiveDisagreement: false,
+      armyShareCode: null,
+    };
+    client.getPlayer.mockResolvedValue({
+      ...(await client.getPlayer()),
+      recentDays: [today, { ...lastDay, offenseEvents: [battle] }, ...older],
+    });
+    return client;
+  };
 
-    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-10-04");
+  it("opens an ended Season's day link at the day, with its battles, at the linked address", async () => {
+    const client = await lastDayBattleClient();
+    // The bot's link form: no Season named, and a #battle- part the server never sees.
+    const html = await loadAndRender(client, null, "2026-10-04");
+    expect(client.getPlayerSeason).toHaveBeenCalledWith(TAG, SEASON);
     expect(html.match(/aria-current="date"/g)).toHaveLength(1);
     expect(html).toContain(
       '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
     );
     expect(html).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
+    expect(html).toContain("Battles on 4 Oct 2026");
+    expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
+    expect(html).toContain("/players/%239GJ?day=2026-10-04#battle-last-day-attack");
+    expect(html).not.toContain("Daily Legend log");
+  });
+
+  it("shows a linked ended-Season day's saved battles when the Season has no summary", async () => {
+    // A Partial last day leaves the Season without a summary, so no Season is chosen.
+    const client = await lastDayBattleClient();
+    client.getPlayerSeasons.mockResolvedValue([]);
+    const html = await loadAndRender(client, null, "2026-10-04");
+    expect(client.getPlayerSeason).not.toHaveBeenCalled();
+    expect(html).toContain("Battles on 4 Oct 2026");
+    expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
+    expect(html).toContain("Daily Legend log");
+    expect(html).not.toContain("No saved Legend log");
+  });
+
+  it("says when a linked ended-Season day's battles are no longer on the page", async () => {
+    const client = newSeasonClient();
+    const player: PlayerPage = await client.getPlayer();
+    client.getPlayer.mockResolvedValue({
+      ...player,
+      recentDays: player.recentDays.filter(
+        ({ period }) => !period.startsWith("2026-10-03"),
+      ),
+    });
+    const html = await loadAndRender(client, null, "2026-10-03");
+    expect(html).toContain("Battles on 3 Oct 2026");
+    expect(html).toContain(
+      "Attacks and defenses from this day are no longer shown here.",
+    );
+    expect(html).not.toContain("battle-slot");
+  });
+
+  it("shows no battles for a linked ended-Season day the Season table lacks", async () => {
+    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
+    expect(html).not.toContain("Battles on");
   });
 
   it("says when an ended Season has no saved log for the linked day", async () => {

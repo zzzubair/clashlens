@@ -348,7 +348,7 @@ export function legendDayKey(period: string): string {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Every saved record of a player, in the order the log prefers them.
-function savedDays(player: PlayerPage) {
+export function savedDays(player: PlayerPage) {
   return [
     ...player.seasonDays,
     ...(player.currentDay ? [player.currentDay] : []),

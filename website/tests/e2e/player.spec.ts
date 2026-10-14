@@ -575,6 +575,183 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   expect(documents).toEqual([]);
 });
 
+// Opens a battle link as a fresh page load, the way a Discord button does. The
+// server's page shows `served`; every later read of the page data gets `later`.
+async function openBattleLink(
+  page: Page,
+  link: string,
+  now: number,
+  served: (saved: Record<string, unknown>) => void,
+  later: (saved: Record<string, unknown>) => void,
+) {
+  await refuseRefreshes(page);
+  await page.clock.install({ time: now });
+  const url = new URL(link, "http://clashlens.test");
+  const html = await (await page.request.get(`${url.pathname}${url.search}`)).text();
+  // Only the given player data shows, whatever the local services answered.
+  const clean = { error: null, seasonsError: null, lookupError: null };
+  const document = await withServerData(html, (saved) =>
+    served(Object.assign(saved, clean)),
+  );
+  const pageData = await page.request.get(`/players/%232PP.data${url.search}`);
+  const decoded = decodePageData(await pageData.text());
+  later(
+    Object.assign(
+      Object.values(decoded).find((route) => route.data && "player" in route.data)!.data!,
+      clean,
+    ),
+  );
+  const body = encodePageData(decoded);
+  await page.route(
+    (target) => target.pathname === "/players/%232PP",
+    (route) => route.fulfill({ contentType: "text/html", body: document }),
+  );
+  await page.route("**/players/%232PP.data*", (route) =>
+    route.fulfill({ contentType: pageData.headers()["content-type"], body }),
+  );
+  await page.goto(link);
+}
+
+for (const [device, size] of [
+  ["phone", { width: 375, height: 812 }],
+  ["desktop", { width: 1280, height: 900 }],
+] as const) {
+  for (const theme of ["light", "dark"] as const) {
+    test.describe(`battle links on ${device} in ${theme}`, () => {
+      test.beforeEach(async ({ page }) => {
+        await page.setViewportSize(size);
+        await page.addInitScript(
+          (value) => localStorage.setItem("clashlens-theme", value),
+          theme,
+        );
+      });
+
+      test("a battle saved before its day updates is highlighted once it arrives", async ({
+        page,
+      }) => {
+        const now = Date.parse("2026-10-10T12:00:00Z");
+        const player = worstCasePlayer("#2PP", now);
+        const battle = player.currentDay!.offenseEvents[0];
+        const link = `/players/%232PP?day=2026-10-10#battle-${encodeURIComponent(battle.battleId)}`;
+        const withoutBattle = {
+          ...player,
+          currentDay: {
+            ...player.currentDay!,
+            offenseEvents: player.currentDay!.offenseEvents.slice(1),
+          },
+        };
+        await openBattleLink(
+          page,
+          link,
+          now,
+          (saved) =>
+            Object.assign(saved, { player: withoutBattle, seasons: WORST_SEASONS }),
+          (saved) => Object.assign(saved, { player, seasons: WORST_SEASONS }),
+        );
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        const waiting = page.getByRole("status").filter({
+          hasText: "Still adding this battle to the Legend log.",
+        });
+        await expect(waiting).toBeVisible();
+        await expectUsableLayout(page);
+        // The page reads the player again within five seconds and finds the battle.
+        const slot = page.locator(`[id="battle-${battle.battleId}"]`);
+        await expect(slot).toHaveClass(/battle-arrival/, { timeout: 10_000 });
+        await expect(slot).toBeInViewport();
+        await expect(waiting).toHaveCount(0);
+        await expect(page).toHaveURL(new URL(link, page.url()).href);
+
+        // A card replaced as the highlight starts, as when Reset moves its day, is
+        // the one highlighted.
+        await expect(slot).not.toHaveClass(/battle-arrival/);
+        await page.evaluate((id) => {
+          window.dispatchEvent(new Event("pageshow"));
+          const card = document.getElementById(id)!;
+          card.replaceWith(card.cloneNode(true));
+        }, `battle-${battle.battleId}`);
+        await expect(slot).toHaveClass(/battle-arrival/);
+      });
+
+      test("a battle the page never gets is named, not silently missed", async ({
+        page,
+      }) => {
+        const now = Date.parse("2026-10-10T12:00:00Z");
+        const player = worstCasePlayer("#2PP", now);
+        const data = (saved: Record<string, unknown>) =>
+          Object.assign(saved, { player, seasons: WORST_SEASONS });
+        await openBattleLink(
+          page,
+          "/players/%232PP?day=2026-10-10#battle-not-saved",
+          now,
+          data,
+          data,
+        );
+        await expect(page.getByText("Still adding this battle")).toBeVisible();
+        // The page stops checking after two minutes and says so.
+        const missing = page
+          .getByRole("status")
+          .filter({ hasText: "This battle isn't on this page." });
+        await expect
+          .poll(
+            async () => {
+              await page.clock.runFor(60_000);
+              return missing.count();
+            },
+            { timeout: 15_000 },
+          )
+          .toBe(1);
+        await expectUsableLayout(page);
+        await page.getByRole("button", { name: "Check again" }).click();
+        await expect(page.getByText("Still adding this battle")).toBeVisible();
+
+        // An older day's battle gets the same checks: a late report can still add it.
+        await page.goto("/players/%232PP?day=2026-10-06#battle-not-saved");
+        await expect(page.getByText("Still adding this battle")).toBeVisible();
+      });
+
+      test("a last-day battle linked after its Season ended opens in that Season", async ({
+        page,
+      }) => {
+        // Just after the Reset that ended the Season on 30 Aug.
+        const now = Date.parse("2026-08-30T06:00:00Z");
+        const player = worstCasePlayer("#2PP", now);
+        const lastDay = player.seasonDays[0];
+        const battle = lastDay.defenseEvents[0];
+        const link = `/players/%232PP?day=2026-08-29#battle-${encodeURIComponent(battle.battleId)}`;
+        const ended = (saved: Record<string, unknown>) =>
+          Object.assign(saved, {
+            player,
+            seasons: WORST_SEASONS,
+            selectedSeason: WORST_SEASON_SUMMARY.seasonId,
+            historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
+          });
+        await openBattleLink(page, link, now, ended, ended);
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        await expect(
+          page.getByRole("heading", { name: "Battles on 29 Aug 2026" }),
+        ).toBeVisible();
+        const slot = page.locator(`[id="battle-${battle.battleId}"]`);
+        await expect(slot).toHaveClass(/battle-arrival/);
+        await expect(slot).toBeInViewport();
+        await expect(page.locator('[aria-current="date"]')).toHaveCount(1);
+        await expect(page.getByText("Daily Legend log")).toHaveCount(0);
+        await expect(page).toHaveURL(new URL(link, page.url()).href);
+        await expectUsableLayout(page);
+
+        // A day of that Season whose battles the page no longer has says so.
+        await page.goto("/players/%232PP?day=2026-08-10#battle-not-saved");
+        await expect(
+          page.getByRole("heading", { name: "Battles on 10 Aug 2026" }),
+        ).toBeVisible();
+        await expect(
+          page.getByText("Attacks and defenses from this day are no longer shown here."),
+        ).toBeVisible();
+        await expectUsableLayout(page);
+      });
+    });
+  }
+}
+
 for (const status of [400, 429]) {
   test(`a Season switch shows that Season when the automatic refresh gets ${status}`, async ({
     page,
