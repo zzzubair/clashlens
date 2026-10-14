@@ -780,7 +780,8 @@ def reset_trophies(
     loss is the total whatever the reading shows. It proves it with exact
     confidence, or when a reading from its end Reset on matched it with
     every battle landed and none in flight, even before the automatic loss
-    landed: that reading shows the total itself. A day started by the day
+    landed, or one during the day after its last battle landed: that
+    reading shows the total itself. A day started by the day
     before's calculated end, or read before its loss, otherwise has a part
     no reading matched. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
@@ -788,6 +789,8 @@ def reset_trophies(
     and the board showed 4,902, not 4,931. A Reset that resets trophies
     proves only the start, so there the reading must agree too, unless a
     weekly Reset reading taken before the raise landed matched the day.
+    Unproven, the Complete day's total still stands: on 12 October 2026
+    #VRU8LVG2's board showed its 04:11 reading, 5,007, not its 4,967 end.
 
     Otherwise the total is the reading plus the day's battles stamped after
     it, which needs the day's continuous battle logs, a reading taken at
@@ -946,10 +949,9 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
         end_reset = _text_value(boundary_kind) == "season" or (
             _text_value(boundary_kind) == "weekly" and int(final) <= 5000 and not read_clean
         )
-        if not end_reset or total == settled:
-            return settled - int(after_reset), (
-                _text_value(confidence) == "exact" or bool(read_clean)
-            ) and not end_unknown
+        return settled - int(after_reset), (not end_reset or total == settled) and (
+            _text_value(confidence) == "exact" or bool(read_clean)
+        ) and not end_unknown
     if total is None:
         return reading, False
     return total - int(after_reset_after_reading), False

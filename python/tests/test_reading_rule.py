@@ -30,12 +30,12 @@ LOSS = 70
 
 
 def verdict(*readings: Reading, loss=(LOSS,), certain=True, new_day=(), day=DAY_BATTLES,
-            start_proven=True, end=END_BEFORE_LOSS, unknown_from=None, floor=None):
+            start_proven=True, end=END_BEFORE_LOSS, unknown_from=None, floor=None, proof=None):
     return decide(
         readings, reset_at=RESET, end_before_loss=end,
         loss_candidates=loss, loss_certain=certain, day_effects=day,
         new_day_effects=new_day, unknown_from=unknown_from, start_proven=start_proven,
-        floor=floor,
+        floor=floor, proof=proof,
     )
 
 
@@ -801,3 +801,49 @@ def test_only_a_covered_season_zero_reading_can_show_a_loss() -> None:
     assert (covered.outcome, covered.loss) == ("verified", 10)
     assert read(Reading(at(20), 5990, uncovered=True)).outcome == "unverified"
     assert read(Reading(at(20), 5990, confirm_only=True), unknown_from=at(8)).outcome == "unverified"
+
+
+def test_a_reading_after_the_days_last_battle_shows_its_end() -> None:
+    # From 6,000, the +20 attack and the 10-trophy defense have landed by
+    # 08:10: from then a reading of 6,010 shows the day's end.
+    day_start = RESET - timedelta(days=1)
+    evening = Reading(day_start + timedelta(hours=12), 6010)
+
+    def proof(*readings: Reading, pending_loss: int = 0, day=DAY_BATTLES, earlier=()):
+        return contradiction_during_day(
+            readings, day_start=day_start, reset_at=RESET, start=6000,
+            pending_loss=pending_loss, day_effects=day, earlier=earlier,
+        )[2]
+
+    assert proof(evening) == evening
+    # Not while the defense may still land, nor after a reading that disagrees.
+    assert proof(Reading(day_start + timedelta(hours=3, minutes=5), 6010)) is None
+    assert proof(Reading(day_start + timedelta(hours=11), 6100), evening) is None
+    # A Season 0 reading shows it only when no trustworthy reading does.
+    seasonless = replace(evening, confirm_only=True)
+    assert proof(seasonless) == seasonless
+    sooner = replace(evening, read_at=evening.read_at - timedelta(hours=1))
+    assert proof(sooner, seasonless) == sooner
+    # Nor when it also fits with the day before's 30 loss not landed, as the
+    # late credit of its +30 attack would explain.
+    defense = DAY_BATTLES[1:]
+    assert proof(Reading(evening.read_at, 5990), pending_loss=30, day=defense) is not None
+    assert proof(Reading(evening.read_at, 5990), pending_loss=30, day=defense, earlier=(
+        Effect("late", 30, day_start - timedelta(hours=1)),)) is None
+
+
+def test_a_reading_showing_the_days_end_decides_like_one_read_before_the_loss() -> None:
+    shown = Reading(RESET - timedelta(hours=1), END_BEFORE_LOSS)
+
+    result = verdict(proof=shown)
+    assert (result.outcome, result.loss, result.exact, result.clean) == ("verified", 0, False, True)
+    later = verdict(Reading(at(20), 5870), proof=shown)
+    assert (later.reading, later.exact) == (Reading(at(20), 5870), True)
+    # It cannot show whether the loss landed: a Season 0 reading still can.
+    seasonless = verdict(Reading(at(20), 5870, confirm_only=True), proof=shown)
+    assert (seasonless.loss, seasonless.exact) == (LOSS, True)
+    # A trustworthy reading from the Reset on that disagrees still wins.
+    assert verdict(Reading(at(20), 5900), proof=shown).outcome == "contradicted"
+    # Read before the Reset, it cannot show a possible loss did not land.
+    assert verdict(proof=shown, certain=False).outcome == "unverified"
+    assert verdict(proof=replace(shown, trophies=5950)).outcome == "unverified"
