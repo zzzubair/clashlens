@@ -8,7 +8,7 @@ import pytest
 from psycopg.errors import DeadlockDetected
 from test_collector import _Client, _collector, _Spool, _Store
 
-from clashlens import worker
+from clashlens import stage_metrics, worker
 from clashlens.archive import ArchiveReadResult
 from clashlens.collector_db import CollectorWork
 from clashlens.league_history import (
@@ -17,6 +17,7 @@ from clashlens.league_history import (
     LEAGUE_HISTORY_SCHEMA_VERSION,
 )
 from clashlens.operating import SchedulingDelayMetrics, WorkerMetrics
+from clashlens.stage_metrics import StageMetrics
 
 
 @pytest.mark.parametrize(
@@ -95,7 +96,8 @@ def test_worker_jobs_expose_elapsed_and_thread_computation(
 ) -> None:
     clock = [100.0, 10.0]
     monkeypatch.setattr(worker, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(worker, "thread_time", lambda: clock[1])
+    monkeypatch.setattr(stage_metrics, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(stage_metrics, "thread_time", lambda: clock[1])
 
     def complete(*_args):
         clock[0] += 2.0
@@ -128,7 +130,7 @@ def test_worker_jobs_expose_elapsed_and_thread_computation(
         http_status=200,
         observed_at=datetime.now(UTC),
     )
-    metrics = worker.StageMetrics()
+    metrics = StageMetrics()
     processor = worker.ObservationProcessor(database, archive, metrics)
     assert processor._process_claim(claim, lease_seconds=30).outcome == "processed"
     snapshot = WorkerMetrics().snapshot(
@@ -146,8 +148,9 @@ def test_worker_records_retries_and_exceptions_without_losing_samples(
 ) -> None:
     clock = [100.0, 10.0]
     monkeypatch.setattr(worker, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(worker, "thread_time", lambda: clock[1])
-    metrics = worker.StageMetrics()
+    monkeypatch.setattr(stage_metrics, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(stage_metrics, "thread_time", lambda: clock[1])
+    metrics = StageMetrics()
     processor = worker.ObservationProcessor(SimpleNamespace(), None, metrics)
     attempts = 0
 
@@ -174,7 +177,7 @@ def test_worker_records_retries_and_exceptions_without_losing_samples(
 
 
 def test_stages_without_thread_timing_show_none_rather_than_zero() -> None:
-    metrics = worker.StageMetrics()
+    metrics = StageMetrics()
     metrics.record("python_claim", 10.0)
     snapshot = WorkerMetrics().snapshot(
         stages=metrics.snapshot(), database_pool={}, queue={}, spool={}
