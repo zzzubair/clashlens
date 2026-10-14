@@ -795,9 +795,6 @@ class Database:
         self._supports_denormalized_contract = bool(denormalized_contract)
         self._supports_content_dedup = bool(content_dedup)
         with self.pool.connection() as connection:
-            self._supports_compact_battles = connection.execute(
-                "SELECT to_regclass('battle_payload_rows') IS NOT NULL"
-            ).fetchone()[0]
             self._supports_season_summaries = connection.execute(
                 "SELECT to_regclass('player_season_summaries') IS NOT NULL"
             ).fetchone()[0]

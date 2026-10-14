@@ -22,20 +22,9 @@ from .reconciliation import (
 
 def _source_rows(database: Database) -> tuple[str, str, str]:
     """Where a battle log's rows live, their ID column, and how rows join their report."""
-    content_dedup = getattr(database, "_supports_content_dedup", False)
-    source_rows_relation = (
-        "battle_log_observation_source_rows" if content_dedup else "battle_source_rows"
-    )
-    source_row_id_column = "source_row_id" if content_dedup else "id"
-    evidence_join = (
-        "be.id = sr.evidence_id"
-        if getattr(database, "_supports_compact_battles", False) else
-        "(sr.observation_row_id IS NOT NULL AND be.observation_row_id = sr.observation_row_id)"
-        " OR (sr.observation_row_id IS NULL AND be.source_row_id = sr.source_row_id)"
-        if content_dedup
-        else "be.source_row_id = sr.id"
-    )
-    return source_rows_relation, source_row_id_column, evidence_join
+    if getattr(database, "_supports_content_dedup", False):
+        return "battle_log_observation_source_rows", "source_row_id", "be.id = sr.evidence_id"
+    return "battle_source_rows", "id", "be.source_row_id = sr.id"
 
 
 def only_no_opponent_gaps_sql(database: Database, log: str) -> str:
@@ -161,7 +150,7 @@ def load_coverage(
     coverage_rows = connection.execute(
         _coverage_sql(
             database,
-            shared_read=getattr(database, "_supports_compact_battles", False),
+            shared_read=getattr(database, "_supports_content_dedup", False),
         ),
         (
             player_id,
@@ -193,7 +182,7 @@ def load_coverage(
         )
         if end_index is not None:
             coverage_rows = coverage_rows[: end_index + 1]
-    if getattr(database, "_supports_compact_battles", False):
+    if getattr(database, "_supports_content_dedup", False):
         # Keep both ends of identical runs. Interior duplicate polls
         # add no overlap/quality evidence, and their later expiry
         # must not manufacture a new ranked-day publication.
