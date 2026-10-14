@@ -549,8 +549,8 @@ const TODAY = {
       name: "Bo",
       reset_trophies: 5688,
       hit: hit(2, 88, 31, 25),
-      // Held 1 of 4, 151 trophies given up; 41% at similar trophies.
-      legends_held: { held: 41, defenses: 100 },
+      // Held 1 of 4, 151 trophies given up; 41% and 36 a defense at similar trophies.
+      legends_held: { held: 41, defenses: 100, lost: 3600 },
       defenses: [
         defense(3, -40),
         defense(2, -31, true),
@@ -564,8 +564,8 @@ const TODAY = {
       name: "Ava",
       reset_trophies: 5712,
       hit: hit(3, 100, 40, 10),
-      // Held 5 of 6, 90 trophies given up; 41% at similar trophies.
-      legends_held: { held: 41, defenses: 100 },
+      // Held 5 of 6, 90 trophies given up; 41% and 36 a defense at similar trophies.
+      legends_held: { held: 41, defenses: 100, lost: 3600 },
       defenses: [
         defense(1, -10),
         defense(1, -10),
@@ -1209,14 +1209,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     );
   });
 
-  it("rates the bases by trophies given up when that is the saved setting", async () => {
+  it("rates the bases by trophies given up by default", async () => {
     python.preferences = {
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
-    expect(bases).toContain("Base strength · vs all Legends −32 a defense");
-    expect(bases).toContain("Hard gave up −15 a defense");
-    expect(bases).toContain("Easy gave up −38 a defense");
+    expect(bases).toContain("Base strength · vs Legends at similar trophies today");
+    expect(bases).toContain("Hard lost −90 · avg −216 · in 6 defenses");
+    expect(bases).toContain("Easy lost −151 · avg −144 · in 4 defenses");
   });
 
   it("keeps Legend day from the player page when today's read fails", async () => {

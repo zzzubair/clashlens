@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router";
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
 import {
   BASE_STRENGTH_MIN_DEFENSES,
-  LEGENDS_DEFENSE_LOSS,
   baseStrength,
   trophiesGivenUp,
 } from "../lib/dashboard";
@@ -33,18 +32,39 @@ function heldShare(defenses: OpponentRow["defenses"]): number {
   return defenses.filter((defense) => defense.stars < 3).length / defenses.length;
 }
 
-/** Trophies given up a defense today, rounded, as a negative number. */
-function lostEach(trophies: number, defenses: number): string {
-  return signed(-Math.round(trophies / defenses));
+/**
+ * Trophies mode's line: the trophies the base lost today, what Legends at
+ * similar trophies lost over as many defenses, then the defense count both
+ * cover, such as "lost −185 · avg −194 · in 6 defenses".
+ */
+function trophiesLine(row: OpponentRow): string {
+  const count = row.defenses.length;
+  const { legends } = row;
+  const average =
+    legends?.defenses && legends.lost !== null
+      ? (legends.lost * count) / legends.defenses
+      : null;
+  const early = count < BASE_STRENGTH_MIN_DEFENSES;
+  return [
+    `lost ${signed(-trophiesGivenUp(row.defenses))}`,
+    ...(average !== null ? [`avg ${signed(-Math.round(average))}`] : []),
+    `in ${count} defense${count === 1 ? "" : "s"}`,
+    ...(early
+      ? [`needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`]
+      : average === null
+        ? ["no comparison yet"]
+        : []),
+  ].join(" · ");
 }
 
 /**
  * Card 3: one row per attack today, hardest bases first. Held % mode compares
  * the base's held share today with today's among tracked Legend players at
  * similar trophies, and shows "–" when there are too few of them. Trophies
- * mode compares the trophies it gave up a defense with the fixed Legends 32
- * for every base, whatever its trophies. Colours follow the attacker: green
- * is good for you, red is bad.
+ * mode compares the trophies it gave up a defense with what those players
+ * lost a defense, and shows the total it lost today beside what they lost
+ * on average over as many defenses.
+ * Colours follow the attacker: green is good for you, red is bad.
  */
 export function OpponentsCard({
   rows,
@@ -57,15 +77,14 @@ export function OpponentsCard({
   timeZone: string;
   mode?: BasesMode;
   nowMs?: number | null;
-  /** When Held % mode's comparisons were read. */
+  /** When the comparisons with Legends at similar trophies were read. */
   comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
   // The oldest opponent or comparison read, so the card never looks newer than it is.
   const observed = (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
-  if (rows?.length && mode === "held" && comparedAtMs !== null)
-    observed.push(comparedAtMs);
+  if (rows?.length && comparedAtMs !== null) observed.push(comparedAtMs);
   const head = (
     <CardHead
       title={
@@ -108,12 +127,7 @@ export function OpponentsCard({
           <span>Player · trophies at Reset</span>
           <span>Your hit</span>
           <span>Their defenses today</span>
-          <span>
-            Base strength
-            {mode === "trophies"
-              ? ` · vs all Legends ${signed(-LEGENDS_DEFENSE_LOSS)} a defense`
-              : " · vs Legends at similar trophies today"}
-          </span>
+          <span>Base strength · vs Legends at similar trophies today</span>
           <span />
         </div>
         {sorted.map(({ row, strength }, index) => {
@@ -166,15 +180,15 @@ export function OpponentsCard({
                   {STRENGTH_LABELS[strength]}
                 </span>
                 <span className="dash-muted">
-                  {row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
-                    ? `held ${held} of ${row.defenses.length} · needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
-                    : mode === "held"
-                      ? `held ${held} of ${row.defenses.length} · ${
-                          row.legends?.defenses
+                  {mode === "held"
+                    ? `held ${held} of ${row.defenses.length} · ${
+                        row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
+                          ? `needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
+                          : row.legends?.defenses
                             ? `${Math.round(heldShare(row.defenses) * 100)}% vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
                             : "no comparison yet"
-                        }`
-                      : `gave up ${lostEach(trophiesGivenUp(row.defenses), row.defenses.length)} a defense`}
+                      }`
+                    : trophiesLine(row)}
                 </span>
               </div>
               <div className="opponents-action">

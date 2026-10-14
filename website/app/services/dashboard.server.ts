@@ -130,7 +130,12 @@ function opponent(value: unknown): OpponentRow {
 function legendsHeld(value: unknown): LegendsHeld {
   if (!isRecord(value)) malformed();
   const defenses = count(value.defenses);
-  return { held: count(value.held, defenses), defenses };
+  return {
+    held: count(value.held, defenses),
+    defenses,
+    // A data service older than Trophies mode's comparison leaves it out.
+    lost: nullable(value.lost ?? null, (item) => count(item)),
+  };
 }
 
 /** `waitForBoard` asks Python to wait a few seconds for the shared board's read under way. */

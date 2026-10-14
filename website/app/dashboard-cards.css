@@ -1008,6 +1008,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Your hit sets the right column's width and the strength line wraps under
+     it, so a long Trophies line never squeezes the name. */
+  .opponents-strength {
+    contain: inline-size;
+  }
+
   .dash-star-boxes {
     flex-wrap: nowrap;
     gap: 3px;

@@ -202,13 +202,15 @@ Reset hides the day's numbers behind a new-day notice until it reloads.
 Bases you attacked rates each base Hard / Average / Easy in the mode its
 settings choose. Held % compares the base's held share today with today's held
 share among tracked Legend players at similar trophies, whose day started
-within 100 trophies of the base's Reset trophies, widened until that holds 200
+within 20 trophies of the base's Reset trophies, widened until that holds 200
 defenses but never past 300 either side, and at least 50 defenses (Average is
 within 15 points). Without that comparison a base with 3+ defenses shows "–"
-and "no comparison yet". The similar-trophies comparison is Held % only:
-Trophies compares the trophies it gave up a defense today with the fixed
-Legends −32 a defense for every base (`LEGENDS_DEFENSE_LOSS`; Average is within
-`BASE_TROPHY_BAND` trophies). Under 3 defenses is too early.
+and "no comparison yet". Trophies, the default, compares the trophies it gave
+up a defense today with what the same Legends at similar trophies lost a
+defense (Average is within `BASE_TROPHY_BAND` trophies a defense) and shows the
+total it lost today beside theirs over as many defenses, such as "lost −185 ·
+avg −201 · in 6 defenses". Under 3 defenses the rating is too early, but
+Trophies still shows the total so far beside theirs.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
@@ -224,7 +226,7 @@ on the private API, for the selected account only. Its board of every
 tracked player's trophies and today's attack and defense counts is read in the
 background at most once a minute and shared by every dashboard, so loading
 the page never waits for it. Until today's first read finishes, or once the
-newest is 10 minutes old, the Next Reset range and Held % comparisons are left
+newest is 10 minutes old, the Next Reset range and base comparisons are left
 out and the page asks again up to 3 times, each waiting up to 4 seconds for
 that read ([`api_dashboard.py`](../python/src/clashlens/api_dashboard.py)).
 Legend day's projected place is asked for the same way while it is worked

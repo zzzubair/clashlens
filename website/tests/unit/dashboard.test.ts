@@ -55,7 +55,6 @@ import type {
 import {
   BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
-  LEGENDS_DEFENSE_LOSS,
   addableCards,
   baseStrength,
   defaultSettings,
@@ -207,7 +206,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
       group: null,
       groupWindow: "7",
-      basesMode: "held",
+      basesMode: "trophies",
     });
     expect(DEFAULT_LAYOUT).toEqual([
       "legend-day",
@@ -237,7 +236,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       groupWindow: "season",
-      basesMode: "trophies",
+      basesMode: "held",
     };
     const stored = serializeSettings(settings);
     expect(stored).toEqual({
@@ -247,7 +246,7 @@ describe("dashboard settings", () => {
       cutoffs: [10, 20, 50, 100, 200, 300, 400],
       group: GROUP,
       window: "season",
-      bases: "trophies",
+      bases: "held",
     });
     expect(serializeSettings({ ...defaultSettings(), layout: "default" })).toEqual({
       v: 3,
@@ -289,6 +288,9 @@ describe("dashboard settings", () => {
     expect(posted({ goal: 1 })?.goal).toBe(1);
     expect(posted({ goal: 10_000 })?.goal).toBe(10_000);
     expect(posted({ layout: [] })?.layout).toEqual([]);
+    expect(posted({ bases: "held" })?.basesMode).toBe("held");
+    // A page left open from before Trophies was the default still saves.
+    expect(posted({ bases: "trophies" })?.basesMode).toBe("trophies");
     for (const bad of [
       { v: 2 },
       { layout: null },
@@ -303,7 +305,6 @@ describe("dashboard settings", () => {
       { cutoffs: [10, 50, 100, 200, 500, 1000, 7000] },
       { group: "not-a-group" },
       { window: "7" },
-      { bases: "held" },
       { bases: "rank" },
       { extra: true },
     ]) {
@@ -318,7 +319,7 @@ describe("dashboard settings", () => {
   });
 
   it("rates a base within 15 points of today's Legends held share as Average", () => {
-    const legends = { held: 50, defenses: 100 };
+    const legends = { held: 50, defenses: 100, lost: 3200 };
     const defenses = (held: number, total: number) =>
       Array.from({ length: total }, (_, index) => ({
         stars: index < held ? 1 : 3,
@@ -331,26 +332,38 @@ describe("dashboard settings", () => {
     expect(baseStrength(defenses(7, 20), legends)).toBe("average");
     expect(baseStrength(defenses(6, 20), legends)).toBe("easy");
     // A 30% base is Easy against 52% but Average against 30% at its trophies.
-    expect(baseStrength(defenses(6, 20), { held: 52, defenses: 100 })).toBe("easy");
-    expect(baseStrength(defenses(6, 20), { held: 30, defenses: 100 })).toBe("average");
+    expect(baseStrength(defenses(6, 20), { ...legends, held: 52 })).toBe("easy");
+    expect(baseStrength(defenses(6, 20), { ...legends, held: 30 })).toBe("average");
     expect(baseStrength(defenses(2, 2), legends)).toBe("early");
     // 3+ defenses without enough Legends at similar trophies: no comparison.
     expect(baseStrength(defenses(3, 3), null)).toBe("unavailable");
   });
 
-  it("rates a base by trophies given up a defense against the fixed Legends 32", () => {
+  it("rates a base by trophies given up a defense against Legends at similar trophies", () => {
     const gaveUp = (each: number) =>
       [0, 1, 2].map(() => ({ stars: 2, trophyChange: -each, yours: false }));
     const band = BASE_TROPHY_BAND;
-    expect(LEGENDS_DEFENSE_LOSS).toBe(32);
-    // Today's Legends held share plays no part, read or not.
-    for (const legends of [{ held: 50, defenses: 100 }, null]) {
-      expect(baseStrength(gaveUp(32 - band), legends, "trophies")).toBe("average");
-      expect(baseStrength(gaveUp(32 - band - 1), legends, "trophies")).toBe("hard");
-      expect(baseStrength(gaveUp(32 + band), legends, "trophies")).toBe("average");
-      expect(baseStrength(gaveUp(32 + band + 1), legends, "trophies")).toBe("easy");
+    // Legends near the base lost 36 a defense; their held share plays no part.
+    for (const held of [0, 100]) {
+      const legends = { held, defenses: 100, lost: 3600 };
+      expect(baseStrength(gaveUp(36 - band), legends, "trophies")).toBe("average");
+      expect(baseStrength(gaveUp(36 - band - 1), legends, "trophies")).toBe("hard");
+      expect(baseStrength(gaveUp(36 + band), legends, "trophies")).toBe("average");
+      expect(baseStrength(gaveUp(36 + band + 1), legends, "trophies")).toBe("easy");
       expect(baseStrength(gaveUp(40).slice(0, 2), legends, "trophies")).toBe("early");
     }
+    // 34 a defense is Hard near players losing 36 and Easy near players losing 32.
+    expect(
+      baseStrength(gaveUp(34), { held: 0, defenses: 100, lost: 3600 }, "trophies"),
+    ).toBe("hard");
+    expect(
+      baseStrength(gaveUp(34), { held: 0, defenses: 100, lost: 3200 }, "trophies"),
+    ).toBe("easy");
+    // Too few Legends near it, or a data service that does not send trophies lost.
+    expect(baseStrength(gaveUp(34), null, "trophies")).toBe("unavailable");
+    expect(
+      baseStrength(gaveUp(34), { held: 0, defenses: 100, lost: null }, "trophies"),
+    ).toBe("unavailable");
   });
 });
 
@@ -500,8 +513,8 @@ describe("Bases you attacked", () => {
     },
     defenses,
     observedAtMs: null,
-    // Legends at similar trophies today: 41% held.
-    legends: { held: 41, defenses: 100 },
+    // Legends at similar trophies today: 41% held, 32 lost a defense.
+    legends: { held: 41, defenses: 100, lost: 3200 },
   });
   const held = (count: number, total: number) =>
     Array.from({ length: total }, (_, index) => ({
@@ -582,26 +595,54 @@ describe("Bases you attacked", () => {
           }),
         ),
       );
+    // Both modes compare with the same read of Legends at similar trophies.
     expect(await updated("held")).toContain("updated 9 min ago");
-    // Trophies mode compares with a fixed number, so only the opponent's read counts.
-    expect(await updated("trophies")).toContain("updated 2 min ago");
+    expect(await updated("trophies")).toContain("updated 9 min ago");
   });
 
-  it("rates bases by trophies given up a defense in Trophies mode", async () => {
+  it("rates bases by trophies given up a defense and shows the day's total in Trophies mode", async () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
-          rows: [row("Easy one", held(1, 4)), row("Hard one", held(5, 6))],
+          rows: [
+            row("Easy one", held(1, 4)),
+            row("Hard one", held(5, 6)),
+            row("Early", held(1, 2)),
+            row("First", held(0, 1)),
+            {
+              ...row("Near 36", held(1, 4)),
+              legends: { held: 30, defenses: 100, lost: 3600 },
+            },
+            {
+              ...row("Old service", held(1, 4)),
+              legends: { held: 41, defenses: 100, lost: null },
+            },
+          ],
           timeZone: "UTC",
           mode: "trophies",
         }),
       ),
     );
-    expect(plain).toContain("Base strength · vs all Legends −32 a defense");
-    // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense.
-    expect(plain).toContain("Hard gave up −28 a defense");
+    expect(plain).toContain("Base strength · vs Legends at similar trophies today");
+    // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense,
+    // against 32 a defense, 192 over 6, at similar trophies.
+    expect(plain).toContain("Hard lost −165 · avg −192 · in 6 defenses");
     // One held and three tripled: 145 over 4 is −36 a defense.
-    expect(plain).toContain("Easy gave up −36 a defense");
+    expect(plain).toContain("Easy lost −145 · avg −128 · in 4 defenses");
+    // The same base near players losing 36 a defense is Average.
+    expect(plain).toContain(
+      "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 · avg −144 · in 4 defenses",
+    );
+    expect(plain).toContain("– lost −145 · in 4 defenses · no comparison yet");
+    // Under 3 defenses the rating waits, but the day's total so far shows
+    // beside the average.
+    expect(plain).toContain(
+      "Too early lost −65 · avg −64 · in 2 defenses · needs 3+ defenses",
+    );
+    expect(plain).toContain(
+      "Too early lost −40 · avg −32 · in 1 defense · needs 3+ defenses",
+    );
+    expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });
 });
@@ -631,7 +672,7 @@ describe("today read for the Legend day and Bases cards", () => {
           },
           defenses: [{ stars: 3, trophy_change: -40, yours: true }],
           observed_at: "2026-10-07T09:10:00+00:00",
-          legends_held: { held: 41, defenses: 100 },
+          legends_held: { held: 41, defenses: 100, lost: 3300 },
         },
       ],
     });
@@ -654,7 +695,7 @@ describe("today read for the Legend day and Bases cards", () => {
           },
           defenses: [{ stars: 3, trophyChange: -40, yours: true }],
           observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
-          legends: { held: 41, defenses: 100 },
+          legends: { held: 41, defenses: 100, lost: 3300 },
         },
       ],
       boardComputedAtMs: Date.UTC(2026, 9, 7, 9, 5),

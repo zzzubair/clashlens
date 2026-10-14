@@ -458,29 +458,35 @@
   opacity: 0.35;
 }
 
-/* The outlined "⚙ Settings" button inside the card's top-right corner. */
+/*
+ * "⚙ Settings", filled apart from the outlined controls: a full row under the
+ * strip, and on a wide screen the top-right corner of a Medium or Large card.
+ */
 .dash-card-settings {
-  position: absolute;
-  z-index: 1;
-  top: 3.4rem;
-  right: 0.8rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.6rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
-  border-radius: 8px;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  min-height: 2.4rem;
+  padding: 0.3rem 0.8rem;
   font: inherit;
-  font-size: 0.82rem;
   font-weight: 900;
-  cursor: pointer;
 }
 
-/* While customising, the Settings button takes the corner the card's note uses. */
-.dash-card-settings ~ .dash-card-head .dash-card-meta {
-  visibility: hidden;
+@media not (max-width: 40rem) {
+  :is(.dash-card-m, .dash-card-l) > .dash-card-settings {
+    position: absolute;
+    z-index: 1;
+    top: 3.3rem;
+    right: 1rem;
+    margin: 0;
+  }
+
+  /* There the button takes the corner the card's note uses. */
+  :is(.dash-card-m, .dash-card-l)
+    > .dash-card-settings
+    ~ .dash-card-head
+    .dash-card-meta {
+    visibility: hidden;
+  }
 }
 
 .dash-dialog {
