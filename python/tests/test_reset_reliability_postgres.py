@@ -377,6 +377,28 @@ def test_a_board_build_that_fails_once_runs_again_and_publishes(
             database.close()
 
 
+def _repair_lists(connection_info: str, state: str) -> None:
+    """A Season repair in ``state`` that lists DAY_END's Reset, not yet done."""
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            """
+            WITH campaign AS (
+                INSERT INTO domain_repair_campaigns (
+                    official_season_id, season_start, season_end, write_deadline,
+                    state, target_versions, inventory_cutoff, plan_digest)
+                VALUES ('repair', %(start)s, %(start)s + interval '28 days',
+                        %(start)s + interval '35 days', %(state)s, '{}', %(start)s,
+                        repeat('0', 64))
+                RETURNING id)
+            INSERT INTO domain_repair_items (
+                campaign_id, kind, target_key, reasons, boundary_at)
+            SELECT id, 'publication', 'reset', ARRAY['payout'], %(reset)s
+            FROM campaign
+            """,
+            {"start": DAY_START - timedelta(days=3), "reset": DAY_END, "state": state},
+        )
+
+
 def test_a_paused_repair_holds_no_first_board_past_0600(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -385,24 +407,7 @@ def test_a_paused_repair_holds_no_first_board_past_0600(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    """
-                    WITH campaign AS (
-                        INSERT INTO domain_repair_campaigns (
-                            official_season_id, season_start, season_end, write_deadline,
-                            state, target_versions, inventory_cutoff, plan_digest)
-                        VALUES ('repair', %(start)s, %(start)s + interval '28 days',
-                                %(start)s + interval '35 days', 'paused', '{}', %(start)s,
-                                repeat('0', 64))
-                        RETURNING id)
-                    INSERT INTO domain_repair_items (
-                        campaign_id, kind, target_key, reasons, boundary_at)
-                    SELECT id, 'publication', 'reset', ARRAY['payout'], %(reset)s
-                    FROM campaign
-                    """,
-                    {"start": DAY_START - timedelta(days=3), "reset": DAY_END},
-                )
+            _repair_lists(connection_info, "paused")
             _swept(connection_info, archive_server, processor)
             for tag in PLAYERS:
                 _calculate(database, processor, tag)
@@ -413,6 +418,44 @@ def test_a_paused_repair_holds_no_first_board_past_0600(
             monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(hours=1))
             _build(database, processor)
             assert _board(database) == (1, list(PLAYERS))
+        finally:
+            database.close()
+
+
+def test_a_repair_holds_a_correction_started_before_it_past_0600(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, the replaced generation made the Reset look never published, so
+    # past 06:00 the repair let the correction build.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            _build(database, processor)
+            assert _board(database) == (1, list(PLAYERS))
+            with database.pool.connection() as connection:
+                boundary_publication._queue_boundary_army_correction(
+                    database, connection, boundary_at=DAY_END,
+                    generation_id=connection.execute(
+                        "SELECT id FROM boundary_publication_generations WHERE boundary_at = %s",
+                        (DAY_END,),
+                    ).fetchone()[0],
+                )
+            _repair_lists(connection_info, "active")
+            _build(database, processor)
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT generation, army_manifest_id FROM boundary_publication_generations"
+                    " WHERE boundary_at = %s ORDER BY generation DESC LIMIT 1",
+                    (DAY_END,),
+                ).fetchone() == (2, None)
+                connection.execute("UPDATE domain_repair_items SET state = 'done'")
+            _build(database, processor)
+            assert _board(database) == (2, list(PLAYERS))
         finally:
             database.close()
 

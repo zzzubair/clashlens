@@ -67,14 +67,16 @@ def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool
 
 
 def overdue(connection: Any, boundary_at: datetime) -> bool:
-    """Whether the Reset still has no published board and army results
-    ``HARD_DEADLINE`` after it: nothing may hold them back then."""
+    """Whether the Reset has never published a board, or never its army
+    results, ``HARD_DEADLINE`` after it: nothing may hold them back then. A
+    generation a correction replaced still counts for what it published."""
     return connection.execute(
         """
-        SELECT clock_timestamp() >= %s AND NOT EXISTS (
-            SELECT FROM boundary_publication_generations
-            WHERE boundary_at = %s AND snapshot_state = 'published'
-              AND army_state = 'published')
+        SELECT clock_timestamp() >= %s AND NOT coalesce(
+            bool_or(snapshot_state IN ('published', 'superseded') AND snapshot_id IS NOT NULL)
+            AND bool_or(army_state IN ('published', 'superseded')
+                        AND army_publication_id IS NOT NULL), false)
+        FROM boundary_publication_generations WHERE boundary_at = %s
         """,
         (boundary_at + HARD_DEADLINE, boundary_at),
     ).fetchone()[0]

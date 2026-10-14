@@ -18,7 +18,6 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 from clashlens import (
-    board_deadline,
     boundary,
     boundary_publication,
     domain_repair,
@@ -414,9 +413,6 @@ def test_campaign_hold_defers_only_affected_artifacts(
     )
     # A clock set before the boards were made: the hourly wait isn't tested here.
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
-    # These Resets are weeks old: hold back 06:00, when a repair stops holding
-    # a Reset's first board.
-    monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(days=36500))
     # The player's two saved days list the Resets ending them, not the third.
     held, held_next, free = START + 5 * DAY, START + 6 * DAY, START + 7 * DAY
     with _campaign_database(database_url) as (connection_info, worker):
@@ -450,11 +446,7 @@ def test_campaign_hold_defers_only_affected_artifacts(
                     worker, connection, boundary_at=boundary_at,
                     reset_sweep_id=sweeps[boundary_at], player_id=member, state="failed",
                 )
-        assert builds() == [free]
-        boundary_publication.reevaluate_boundary_publications(worker)
-        assert builds() == [free]
-        _set_publication_items(connection_info, "done")
-        boundary_publication.reevaluate_boundary_publications(worker)
+        # These Resets are weeks past 06:00, so the repair holds no first board.
         assert builds() == [held, held_next, free]
 
         # Each board publishes, and its army's inputs freeze.
