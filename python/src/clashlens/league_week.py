@@ -8,8 +8,8 @@ yet and no day is recalculated from it.
 
 Database triggers (migration 0115) mark a (player, week) in
 ``league_week_dirty`` in the same transaction as any evidence about it, so
-no evidence arrives unmarked, whichever code path saved it. The worker's
-maintenance timer takes the marks (``decide_due``) and decides each marked
+no evidence arrives unmarked, whichever code path saved it. A worker thread
+of its own takes the marks (``decide_until``) and decides each marked
 player's whole Season again in one pure pass (``decide_season``): a week's
 Monday entry and which of its early answers count depend on the weeks before
 it. An unchanged decision writes nothing.
@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import IntEnum, StrEnum
+from threading import Event
 from time import monotonic
 from typing import Any
 
@@ -511,10 +512,13 @@ def save_season(
     }
 
 
-# Each run of the worker's 10-second maintenance timer decides for at most
-# this long, so the Reset publication checks sharing the timer never wait
-# long behind it.
+# The worker decides on a thread of its own, without pause while marks wait,
+# so a Monday Reset's marks are decided within minutes of being saved and
+# the Reset publication checks never wait behind it; with nothing marked it
+# looks again every IDLE_SECONDS. Each call decides for at most TICK_SECONDS
+# so the thread notices the worker stopping.
 TICK_SECONDS = 2.0
+IDLE_SECONDS = 2.0
 BATCH = 200
 RETRY_SECONDS = 60
 REPORT_SECONDS = 60
@@ -527,20 +531,31 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def decide_due(database: Any) -> None:
-    """Decide the marked players' Seasons for up to ``TICK_SECONDS``, on the
-    worker's maintenance timer. Only the current and previous Season are
-    decided again: raw responses older than that are pruned, so an older
-    week's evidence is incomplete. A failure is reported and tried again
-    after ``RETRY_SECONDS``; once a minute the work done is reported."""
+def decide_until(database: Any, stop: Event) -> None:
+    """The worker's league week thread: decide marked Seasons until ``stop``
+    is set."""
+    while not stop.is_set():
+        if not decide_due(database):
+            stop.wait(IDLE_SECONDS)
+
+
+def decide_due(database: Any) -> bool:
+    """Decide the marked players' Seasons for up to ``TICK_SECONDS``; whether
+    any mark was found. Only the current and previous Season are decided
+    again: raw responses older than that are pruned, so an older week's
+    evidence is incomplete. A failure is reported and tried again after
+    ``RETRY_SECONDS``; once a minute the work done is reported."""
     global _retry_at, _report_at
     started = monotonic()
     if started < _retry_at:
-        return
+        return False
     deadline = started + TICK_SECONDS
+    found = False
     try:
-        while _decide_batch(database, deadline) and monotonic() < deadline:
-            pass
+        while _decide_batch(database, deadline):
+            found = True
+            if monotonic() >= deadline:
+                break
         if monotonic() >= _report_at and _tally["marks"]:
             _report_at = monotonic() + REPORT_SECONDS
             with database.pool.connection() as connection:
@@ -556,6 +571,8 @@ def decide_due(database: Any) -> None:
         _retry_at = monotonic() + RETRY_SECONDS
         print(json.dumps({"event": "league_week", "status": "failed",
                           "error": type(error).__name__}), flush=True)
+        return False
+    return found
 
 
 def _decide_batch(database: Any, deadline: float) -> bool:
