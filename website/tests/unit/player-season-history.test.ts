@@ -540,7 +540,8 @@ describe("past-Season view", () => {
     expect(past).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
   });
 
-  it("opens an ended Season's day link at the day, with its battles, at the linked address", async () => {
+  // A client whose player has one saved attack on the ended Season's last day.
+  const lastDayBattleClient = async () => {
     const client = newSeasonClient();
     const [today, lastDay, ...older] = await client
       .getPlayer()
@@ -559,6 +560,11 @@ describe("past-Season view", () => {
       ...(await client.getPlayer()),
       recentDays: [today, { ...lastDay, offenseEvents: [battle] }, ...older],
     });
+    return client;
+  };
+
+  it("opens an ended Season's day link at the day, with its battles, at the linked address", async () => {
+    const client = await lastDayBattleClient();
     // The bot's link form: no Season named, and a #battle- part the server never sees.
     const html = await loadAndRender(client, null, "2026-10-04");
     expect(client.getPlayerSeason).toHaveBeenCalledWith(TAG, SEASON);
@@ -571,6 +577,18 @@ describe("past-Season view", () => {
     expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
     expect(html).toContain("/players/%239GJ?day=2026-10-04#battle-last-day-attack");
     expect(html).not.toContain("Daily Legend log");
+  });
+
+  it("shows a linked ended-Season day's saved battles when the Season has no summary", async () => {
+    // A Partial last day leaves the Season without a summary, so no Season is chosen.
+    const client = await lastDayBattleClient();
+    client.getPlayerSeasons.mockResolvedValue([]);
+    const html = await loadAndRender(client, null, "2026-10-04");
+    expect(client.getPlayerSeason).not.toHaveBeenCalled();
+    expect(html).toContain("Battles on 4 Oct 2026");
+    expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
+    expect(html).toContain("Daily Legend log");
+    expect(html).not.toContain("No saved Legend log");
   });
 
   it("says when a linked ended-Season day's battles are no longer on the page", async () => {
