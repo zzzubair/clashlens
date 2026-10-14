@@ -7,12 +7,12 @@
 -- player_league_weeks: one row per player per week with any league evidence:
 -- Legend I, below Legend I or unknown, how a Legend I week began, the proof
 -- and the strongest evidence against it. A row changes only when its
--- decision does; decision_number counts the changes. About 15,000 to 28,000
--- rows and 3 to 6 MB a week while a Season is open, about 80 MB a year if
--- never deleted (stage 4 proposes deleting all but Legend I rows when a
--- Season retires). The (player, week, league) key is what a saved Legend day
--- will reference in stage 2, so a public day can exist only in a Legend I
--- week.
+-- decision does; decision_number counts the changes. Measured on the copy of
+-- 14 October 2026: 50,215 rows for the weeks of 5 and 12 October, 11 MB with
+-- both keys, 224 bytes a row; so about 25,000 rows and 5.6 MB a week, about
+-- 290 MB a year if never deleted. The (player, week, league) key is what a
+-- saved Legend day will reference in stage 2, so a public day can exist only
+-- in a Legend I week.
 --
 -- league_week_dirty: a mark per (player, week) whose evidence changed since
 -- it was last decided. Triggers on every evidence table write the marks in
@@ -22,7 +22,10 @@
 -- so at most about 450,000 marks a day pass through it.
 --
 -- The seed marks every (player, week) with evidence since the current
--- Season began, Monday 5 October 2026, so the worker decides them all.
+-- Season began, Monday 5 October 2026, so the worker decides them all: on
+-- that copy 50,217 marks for 26,524 players, written in 55 seconds while the
+-- evidence tables' triggers were being added, so saving profiles and battles
+-- waits that long when this migration runs.
 BEGIN;
 
 -- The Monday 05:00 UTC Reset starting the week holding `at`. Monday
