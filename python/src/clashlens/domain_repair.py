@@ -65,7 +65,9 @@ The ``republish-current-season`` command's ``preview`` writes nothing;
 nothing; ``activate`` refuses until every stage in ``REQUIRED_STAGES`` has a
 handler. An active or paused campaign holds each listed Reset until its item
 is done: no new publication build, and corrections, even from decode jobs
-queued before the campaign, stay queued.
+queued before the campaign, stay queued. From 06:00 it no longer holds a
+Reset that has never published its board or its army results
+(``board_deadline.overdue``).
 At the Season's end plus seven days the command refuses every write for it.
 """
 
