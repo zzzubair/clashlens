@@ -96,6 +96,16 @@ CREATE TABLE IF NOT EXISTS league_week_dirty (
 CREATE INDEX IF NOT EXISTS league_week_dirty_player_week
     ON league_week_dirty (player_id, week_start);
 
+-- The worker reads a player's lower league profiles first: a week with a
+-- Legend battle needs its other profiles only when one exists.
+CREATE INDEX IF NOT EXISTS player_profile_versions_lower_league
+    ON player_profile_versions (player_id) WHERE eligibility_state = 'ineligible';
+-- And each week's first battle, attack or defense: the battles' own index
+-- finds a player's attacks, but its defenses only by reading every battle
+-- of each day.
+CREATE INDEX IF NOT EXISTS legend_battles_defender_day
+    ON legend_battles (defender_player_id, ranked_day_start);
+
 REVOKE ALL PRIVILEGES ON TABLE player_league_weeks, league_week_dirty FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON TABLE player_league_weeks TO clashlens_python_worker;
 GRANT SELECT, INSERT, DELETE ON TABLE league_week_dirty TO clashlens_python_worker;
