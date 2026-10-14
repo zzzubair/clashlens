@@ -49,6 +49,9 @@ REVOKE ALL PRIVILEGES ON TABLE legend_days, player_leagues_now FROM PUBLIC;
 GRANT SELECT ON TABLE legend_days, player_leagues_now
     TO clashlens_python_api, clashlens_python_worker;
 REVOKE ALL PRIVILEGES ON TABLE api_player_daily_logs FROM clashlens_python_api;
+-- A Season summary whose every day is in a week below Legend I has no
+-- Legend day left to summarize; the worker deletes it.
+GRANT DELETE ON TABLE player_season_summaries TO clashlens_python_worker;
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (119)
 ON CONFLICT (version) DO NOTHING;

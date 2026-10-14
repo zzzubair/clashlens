@@ -167,8 +167,9 @@ def test_legend_days_are_the_saved_days_of_legend_i_weeks_unchanged(database_url
     """Every column of a saved day in a Legend I week reads through
     legend_days exactly as saved; a day in a week below Legend I is left
     out; a day in an unknown or undecided week gains league_not_confirmed
-    once, even when already saved with it. The data service can no longer
-    read saved days around the rule."""
+    once, even when already saved with it. A Season summary left with no
+    Legend day is deleted. The data service can no longer read saved days
+    around the rule."""
     week = datetime(2026, 10, 12, 5, tzinfo=UTC)
     with domain_database(database_url) as connection_info, psycopg.connect(
         connection_info
@@ -182,12 +183,16 @@ def test_legend_days_are_the_saved_days_of_legend_i_weeks_unchanged(database_url
                 """
                 INSERT INTO api_player_daily_logs (
                     player_id, ranked_day_start, version, state, coverage,
-                    partial_reasons, attack_count, attack_gain)
-                VALUES (%s, %s, 1, 'Complete', 'complete', %s, 8, 240)
+                    partial_reasons, attack_count, attack_gain, official_season_id,
+                    season_day_number)
+                VALUES (%s, %s, 1, 'Complete', 'complete', %s, 8, 240, %s, 10)
                 """,
                 (player, week + timedelta(days=2),
-                 '["league_not_confirmed"]' if player == saved_flag else '[]'),
+                 '["league_not_confirmed"]' if player == saved_flag else '[]', SEASON_ID),
             )
+        summaries = "SELECT count(*) FROM player_season_summaries WHERE player_id = %s"
+        season_summaries.materialize_player_season(connection, below, SEASON_ID)
+        summarized = connection.execute(summaries, (below,)).fetchone()[0]
         for player, league in ((legend_i, "legend_i"), (below, "below_legend_i"),
                                (unknown, "unknown"), (saved_flag, "unknown")):
             connection.execute(
@@ -205,6 +210,8 @@ def test_legend_days_are_the_saved_days_of_legend_i_weeks_unchanged(database_url
                  None if league == "unknown" else week,
                  None if league == "unknown" else 1),
             )
+        season_summaries.materialize_player_season(connection, below, SEASON_ID)
+        summarized_below = connection.execute(summaries, (below,)).fetchone()[0]
         saved = connection.execute(
             "SELECT * FROM api_player_daily_logs WHERE player_id = %s", (legend_i,)
         ).fetchall()
@@ -233,6 +240,7 @@ def test_legend_days_are_the_saved_days_of_legend_i_weeks_unchanged(database_url
             api.execute("SELECT 1 FROM api_player_daily_logs LIMIT 1")
 
     assert through_view == saved
+    assert (summarized, summarized_below) == (1, 0)
     assert shown == {
         legend_i: [],
         unknown: ["league_not_confirmed"],

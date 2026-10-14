@@ -548,6 +548,12 @@ def materialize_player_season(
     acquire_player_season_lock(connection, int(player_id), season_id)
     projected = _project(int(player_id), season_id, connection)
     if projected is None:
+        # No Legend day left this Season, as when every saved day turned out
+        # to be in a week below Legend I: there is nothing to summarize.
+        connection.execute(
+            "DELETE FROM player_season_summaries WHERE player_id = %s AND official_season_id = %s",
+            (int(player_id), season_id),
+        )
         return {"status": "missing", "content_digest": None}
     digest = _digest(projected)
     existing = connection.execute(
