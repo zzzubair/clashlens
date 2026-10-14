@@ -177,6 +177,10 @@ class ReconciliationInput:
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
+    # Whether the day before's automatic loss came off this day's start:
+    # None as the day before's result says (``_settled_start``), else the
+    # other way (``_other_start``).
+    start_charged: bool | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -275,6 +279,22 @@ def day_totals_supported(
 
 
 def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
+    """The day's result. The game takes the day before's automatic loss 7 to
+    12 minutes after the Reset in 7,532 of 7,541 days (5 to 13 October
+    2026), later in 9, and sometimes never: no time shows whether a reading
+    came before it. A day that its own readings do not prove from the start
+    the day before's result gives is tried from the other, and takes it only
+    if they prove it there."""
+    result = _reconcile(data)
+    other = _other_start(data)
+    if result.state != "Complete" and other is not None:
+        alternative = _reconcile(replace(data, start_charged=other))
+        if alternative.state == "Complete":
+            return alternative
+    return result
+
+
+def _reconcile(data: ReconciliationInput) -> ReconciliationResult:
     failures: list[str] = []
     malformed_evidence = data.malformed_evidence
     if data.malformed_evidence:
@@ -391,7 +411,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     during, history, proof = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
         start=previous.final_trophies if raised else reset or start_trophies,
-        pending_loss=previous.automatic_loss if previous else 0, reset=bool(reset),
+        pending_loss=previous.automatic_loss if previous and data.start_charged is not False else 0,
+        reset=bool(reset),
         day_effects=_effects(contributions), earlier=_effects(earlier),
         floor=5000 if raised or reset or data.ranked_day.start.weekday() == 0 else None,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
@@ -775,30 +796,56 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     """The day's starting trophies, what was taken off the Reset reading,
     and what a later reading added to it.
 
-    The previous day's Complete result can say its end reading, this day's
-    start reading, came before the game applied its automatic defense loss. The
-    day then starts from the reading less that loss, as the player did once
-    it landed. On 2 October 2026 that explained 728 of 733 next days whose
-    start was too high and a later reading could check. It can instead say a
-    later reading settled the Reset reading; the day then starts from that.
-    A start taken from the day before's calculated end already has both. A
-    Monday after a day the weekly raise takes to 5,000 starts there,
-    whatever its Reset reading shows.
+    The previous day's result can say its end reading, this day's start
+    reading, came before the game applied its automatic defense loss,
+    whatever that day's state: a reading disagreeing does not change its
+    battles. The day then starts from the reading less that loss, as the
+    player did once it landed. On 2 October 2026 that explained 728 of 733
+    next days whose start was too high and a later reading could check;
+    from 5 to 13 October 2026, 266 days after one not Complete started too
+    high without it. It can instead say a later reading settled the Reset
+    reading; the day then starts from that. ``start_charged`` takes the loss
+    off, or not, whatever it says. A start taken from the day before's
+    calculated end already has both. A Monday after a day the weekly raise
+    takes to 5,000 starts there, whatever its Reset reading shows.
     """
     previous = data.previous_day
     start, loss, correction = data.start_trophies, 0, 0
-    if not (
-        data.start_trophies is None or previous is None or not previous.complete
-        or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
-        or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
-        or previous.end_baseline_id is None or previous.end_baseline_id != data.start_baseline_id
-    ):
-        loss, correction = previous.unsettled_automatic_loss, previous.reset_reading_correction
+    if _reading_start(data):
+        assert previous is not None and data.start_trophies is not None
+        loss = {None: previous.unsettled_automatic_loss, True: previous.automatic_loss,
+                False: 0}[data.start_charged]
+        correction = previous.reset_reading_correction
         start = data.start_trophies - loss + correction
     if start is not None and previous and previous.expected_next_start == 5000 and (
             data.ranked_day.start.weekday() == 0 and not data.season_first_day):
         start, correction = 5000, correction + 5000 - start
     return start, loss, correction
+
+
+def _reading_start(data: ReconciliationInput) -> bool:
+    """Whether the day starts from the Reset reading that ended the day
+    before, a day whose battles are all known (``loss_rule.battles_known``)."""
+    previous = data.previous_day
+    return not (
+        data.start_trophies is None or previous is None or not loss_rule.battles_known(previous)
+        or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
+        or previous.end_baseline_id is None or previous.end_baseline_id != data.start_baseline_id
+    )
+
+
+def _other_start(data: ReconciliationInput) -> bool | None:
+    """The other way the day before's automatic loss can have gone at this
+    day's start: not charged when its result took it to land after the
+    Reset reading, charged when a result its readings did not settle took
+    the reading as is. On a day that starts at 5,000, never."""
+    previous = data.previous_day
+    if previous is None or not previous.automatic_loss or not _reading_start(data) or (
+            data.season_first_day or data.start_baseline_evidence.get("start_trophies_source") == "season_rule"):
+        return None
+    if previous.unsettled_automatic_loss:
+        return False
+    return True if not (previous.complete or previous.reset_reading_correction) else None
 
 
 def _deduplicate_contributions(
@@ -1258,6 +1305,8 @@ def _formula_components(
     }
     # Only days the Reset reading's timing changed carry these keys, so every
     # other saved result keeps its hash.
+    if data.start_charged is not None:
+        components["start_automatic_loss_charged"] = data.start_charged
     if start_unsettled_loss or start_correction:
         components["start_reading_trophies"] = data.start_trophies
     if start_unsettled_loss:

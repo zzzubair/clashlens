@@ -8,9 +8,10 @@ from typing import Any
 
 from . import battle, domain, reading_rule
 from .db import PROCESSING_VERSION, Database, _text_value
-from .domain import CHAIN_BREAK_REASONS, RankedDay
+from .domain import CHAIN_BREAK_REASONS, MAX_DAILY_DEFENSES, RankedDay
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
+    DISPUTED_BATTLE_REASONS,
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
@@ -334,7 +335,8 @@ def load_previous_day(
             expected_next_start_trophies,
             failure_reasons,
             COALESCE(automatic_defense_loss, 0),
-            final_trophies_before_reset
+            final_trophies_before_reset,
+            automatic_defense_evidence_state
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -350,26 +352,27 @@ def load_previous_day(
     if previous_row is None:
         return None
     reasons = previous_row[14] if isinstance(previous_row[14], list) else []
-    # Continuous logs, a saved Legend day and no 9th attack or defense: every
-    # battle of that day is known, whether or not its readings were usable.
-    battles_known = bool(previous_row[5]) and _text_value(
-        previous_row[1]
-    ) in {"Complete", "Partial"} and not any(
-        reason in CHAIN_BREAK_REASONS for reason in reasons
+    state = _text_value(previous_row[1])
+    # Continuous logs, a saved Legend day, no 9th attack or defense and no
+    # disputed battle: every battle of that day is known, whether or not its
+    # readings were usable or agreed. Of 564 days this Season whose
+    # automatic loss was unknown, 372 followed an Inconsistent day whose
+    # logs were complete.
+    battles_known = bool(previous_row[5]) and state in {
+        "Complete", "Partial", "Inconsistent"} and not any(
+        reason in CHAIN_BREAK_REASONS or reason in DISPUTED_BATTLE_REASONS
+        for reason in reasons
     )
-    # With no defense slot used, only a reading shows the automatic loss for
-    # all 8 (see ``loss_rule.zero_defense_loss``), so an end no
-    # reading settled cannot start the next day.
-    end_known = battles_known and (
-        _text_value(previous_row[1]) == "Complete"
-        or int(previous_row[3]) + int(previous_row[11]) > 0
-    )
+    # A loss only a reading shows (``loss_rule.possible_loss``), for all 8
+    # slots of a day with none used or on a first Legend day with fewer
+    # attacks than defenses, leaves an end no reading settled unable to start
+    # the next day, as does a reading that disagreed.
+    slots = int(previous_row[3]) + int(previous_row[11])
+    end_known = battles_known and (state == "Complete" or state == "Partial" and 0 < slots and not (
+        slots < MAX_DAILY_DEFENSES and _text_value(previous_row[17]) == "not_applicable"))
     return (
         PreviousRankedDay(
-            complete=(
-                _text_value(previous_row[1]) == "Complete"
-                and bool(previous_row[5])
-            ),
+            complete=state == "Complete" and bool(previous_row[5]),
             observed_defense_count=int(previous_row[3]),
             observed_defense_loss=int(previous_row[4]),
             shield_run_length=(
@@ -381,7 +384,7 @@ def load_previous_day(
             shield_state=_text_value(previous_row[6]),
             version_id=int(previous_row[0]),
             ranked_day_start=ranked_day.start - timedelta(days=1),
-            state=_text_value(previous_row[1]),
+            state=state,
             confidence=_text_value(previous_row[2]),
             input_hash=(
                 _text_value(previous_row[8])
