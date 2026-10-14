@@ -17,6 +17,9 @@ SEASON_DURATION = timedelta(days=28)
 SEASON_START_TROPHIES = 5000
 # One attack or defense moves trophies by at most this many.
 MAX_BATTLE_TROPHIES = 40
+# The game allows this many attacks and this many defenses a Legend day.
+MAX_DAILY_ATTACKS = 8
+MAX_DAILY_DEFENSES = 8
 # Reasons after which a day's end cannot start the next day: a 9th attack or
 # defense means the game returned more than its own cap, and a day the player
 # was not enrolled or not in Legend I is not a Legend day at all.

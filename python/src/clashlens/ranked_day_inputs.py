@@ -358,7 +358,7 @@ def load_previous_day(
         reason in CHAIN_BREAK_REASONS for reason in reasons
     )
     # With no defense slot used, only a reading shows the automatic loss for
-    # all 8 (see ``reconciliation._zero_defense_loss``), so an end no
+    # all 8 (see ``loss_rule.zero_defense_loss``), so an end no
     # reading settled cannot start the next day.
     end_known = battles_known and (
         _text_value(previous_row[1]) == "Complete"
