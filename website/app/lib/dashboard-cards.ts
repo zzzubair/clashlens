@@ -439,7 +439,6 @@ export interface LegendDayData {
 }
 
 export interface BasesData {
-  tag: string;
   /** Today's Legend day of the Season; null when unknown, which hides the day button. */
   dayNumber: number | null;
   /** Null until the player's battles for today are saved. */

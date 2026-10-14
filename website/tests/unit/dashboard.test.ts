@@ -522,11 +522,13 @@ describe("Bases you attacked", () => {
       trophyChange: index < count ? -25 : -40,
       yours: index === total - 1,
     }));
+  // No earlier Legend day chosen.
+  const TODAY = { chosen: null, read: new Map(), choose: () => {} };
 
   it("lists hard bases first and colours them for the attacker", async () => {
     const html = await renderInRouter(
       createElement(OpponentsCard, {
-        tag: "#8PP",
+        days: TODAY,
         dayNumber: null,
         rows: [
           row("Easy one", held(1, 4)),
@@ -553,7 +555,7 @@ describe("Bases you attacked", () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
-          tag: "#8PP",
+          days: TODAY,
           dayNumber: null,
           rows: [
             { ...row("Early", held(0, 2)), legends: null },
@@ -576,7 +578,7 @@ describe("Bases you attacked", () => {
       text(
         await renderInRouter(
           createElement(OpponentsCard, {
-            tag: "#8PP",
+            days: TODAY,
             dayNumber: null,
             rows,
             timeZone: "UTC",
@@ -598,7 +600,7 @@ describe("Bases you attacked", () => {
       text(
         await renderInRouter(
           createElement(OpponentsCard, {
-            tag: "#8PP",
+            days: TODAY,
             dayNumber: null,
             rows: [{ ...row("Easy one", held(1, 4)), observedAtMs: at(2) }],
             timeZone: "UTC",
@@ -617,7 +619,7 @@ describe("Bases you attacked", () => {
     const plain = text(
       await renderInRouter(
         createElement(OpponentsCard, {
-          tag: "#8PP",
+          days: TODAY,
           dayNumber: null,
           rows: [
             row("Easy one", held(1, 4)),
@@ -934,7 +936,7 @@ describe("dashboard route", () => {
         projected: null,
         boardPending: true,
       },
-      bases: { tag: MAIN, dayNumber: null, rows: [], comparedAtMs: Date.parse(boardAt) },
+      bases: { dayNumber: null, rows: [], comparedAtMs: Date.parse(boardAt) },
     });
     const last = await load(
       `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
@@ -1252,7 +1254,6 @@ describe("dashboard page", () => {
             boardPending: true,
           },
           bases: {
-            tag: MAIN,
             dayNumber: null,
             rows: [],
             comparedAtMs: null,

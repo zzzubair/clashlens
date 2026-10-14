@@ -832,7 +832,6 @@ export function readCards(
       const read = await today();
       if (read === null) return null;
       return {
-        tag: ctx.selected.tag,
         dayNumber: read.dayNumber,
         rows: read.opponents,
         comparedAtMs: read.boardComputedAtMs,

@@ -38,24 +38,22 @@ export function basesPath(tag: string, day: number): string {
 }
 
 /**
- * The Legend day the card shows, today's from the page, an earlier one's
- * read by the card and kept while the page is open: null when it could not
- * be read, undefined while it loads.
+ * The earlier Legend day chosen on Bases you attacked and each earlier day
+ * read for `tag`, kept while the page is open: null when it could not be
+ * read. The dashboard holds them, as its follow-up reads build the card again.
  */
-function useBasesDay(tag: string, today: number | null) {
+export function useBasesDay(tag: string) {
   // The earlier day chosen; null for today, whichever day today is.
   const [chosen, setChosen] = useState<number | null>(null);
   const [read, setRead] = useState<Map<number, PastBases | null>>(new Map());
   // Days whose read is on its way: a day has one read at a time.
   const asking = useRef(new Set<number>());
-  const shown = chosen !== null && today !== null && chosen < today ? chosen : today;
   return {
-    day: shown,
-    past: shown === today || shown === null ? undefined : read.get(shown),
-    loading: shown !== today && shown !== null && !read.has(shown),
-    choose(next: number) {
-      setChosen(next === today ? null : next);
-      if (next === today || read.get(next) || asking.current.has(next)) return;
+    chosen,
+    read,
+    choose(next: number | null) {
+      setChosen(next);
+      if (next === null || read.get(next) || asking.current.has(next)) return;
       asking.current.add(next);
       // A failed read is asked again.
       setRead((old) => {
@@ -75,6 +73,8 @@ function useBasesDay(tag: string, today: number | null) {
     },
   };
 }
+
+export type BasesDay = ReturnType<typeof useBasesDay>;
 
 /** ‹ Day 9 ›: steps through this Season's Legend days up to today. */
 function DayStepper({
@@ -153,17 +153,17 @@ function trophiesLine(row: OpponentRow): string {
  * Colours follow the attacker: green is good for you, red is bad.
  */
 export function OpponentsCard({
-  tag,
   dayNumber,
+  days,
   rows: todayRows,
   timeZone,
   mode = "held",
   nowMs = null,
   comparedAtMs = null,
 }: {
-  tag: string;
   /** Today's Legend day; null hides the day button. */
   dayNumber: number | null;
+  days: BasesDay;
   rows: OpponentRow[] | null;
   timeZone: string;
   mode?: BasesMode;
@@ -173,8 +173,12 @@ export function OpponentsCard({
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
-  const { day, past, loading, choose } = useBasesDay(tag, dayNumber);
-  const earlier = day !== dayNumber;
+  const { chosen, read } = days;
+  const earlier = chosen !== null && dayNumber !== null && chosen < dayNumber;
+  const day = earlier ? chosen : dayNumber;
+  // Undefined while it loads.
+  const past = earlier ? read.get(chosen) : undefined;
+  const loading = earlier && !read.has(chosen);
   const rows = earlier ? (past?.rows ?? null) : todayRows;
   const when = earlier ? "that day" : "today";
   // The oldest opponent or comparison read, so the card never looks newer than it is.
@@ -201,7 +205,11 @@ export function OpponentsCard({
         day !== null && dayNumber !== null ? (
           <span className="bases-day-meta">
             {updated ? <span>{updated}</span> : null}
-            <DayStepper day={day} today={dayNumber} choose={choose} />
+            <DayStepper
+              day={day}
+              today={dayNumber}
+              choose={(next) => days.choose(next === dayNumber ? null : next)}
+            />
           </span>
         ) : (
           updated

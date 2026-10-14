@@ -29,7 +29,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, requestJson: mocks.requestJson };
 });
 
-import { OpponentsCard } from "../../app/components/OpponentsCard";
+import { OpponentsCard, type BasesDay } from "../../app/components/OpponentsCard";
 import { loader } from "../../app/routes/player-bases";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { getPlayerBases } from "../../app/services/dashboard.server";
@@ -110,8 +110,8 @@ describe("Bases you attacked on earlier Legend days", () => {
     const card = (dayNumber: number | null) =>
       render(
         createElement(OpponentsCard, {
-          tag: TAG,
           dayNumber,
+          days: { chosen: null, read: new Map(), choose: () => {} },
           rows: [],
           timeZone: "UTC",
         }),
@@ -125,6 +125,29 @@ describe("Bases you attacked on earlier Legend days", () => {
     const unnumbered = await card(null);
     expect(unnumbered).not.toContain("Legend day");
     expect(unnumbered).toContain("· today · 0 of 8");
+  });
+
+  it("shows the earlier day the dashboard keeps above the card", async () => {
+    mocks.requestJson.mockResolvedValueOnce(DAY_3);
+    const day3 = await getPlayerBases(TAG, 3);
+    const card = (read: BasesDay["read"]) =>
+      render(
+        createElement(OpponentsCard, {
+          dayNumber: 9,
+          days: { chosen: 3, read, choose: () => {} },
+          rows: [],
+          timeZone: "UTC",
+        }),
+      );
+    const shown = await card(new Map([[3, day3]]));
+    expect(shown).toMatch(/Day <!-- -->3<\/span>/);
+    expect(shown).toMatch(/aria-label="Later Legend day"(?![^>]*disabled)/);
+    expect(shown).toContain("Typical");
+    expect(shown).toContain("Their defenses <!-- -->that day");
+    expect(await card(new Map())).toContain("Loading Day 3…");
+    expect(await card(new Map([[3, null]]))).toContain(
+      "Day 3&#x27;s bases couldn&#x27;t be read.",
+    );
   });
 });
 

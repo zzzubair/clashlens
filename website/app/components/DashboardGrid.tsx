@@ -26,7 +26,7 @@ import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "./ArmyCards";
 import { DashboardIcon } from "./DashboardIcon";
 import { CardHead, CardNote } from "./DashboardParts";
 import { LegendDayCard } from "./LegendDayCard";
-import { OpponentsCard } from "./OpponentsCard";
+import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
 import {
   HeatMapCard,
   OffenseConsistencyCard,
@@ -42,6 +42,7 @@ interface ViewContext {
   nowMs: number | null;
   timeZone: string;
   basesMode: BasesMode;
+  basesDay: BasesDay;
   saving: boolean;
   pickGroup: (groupId: string) => void;
 }
@@ -56,10 +57,8 @@ const CARD_VIEWS: {
   "legend-day": (data, context) => <LegendDayCard {...data} nowMs={context.nowMs} />,
   bases: (data, context) => (
     <OpponentsCard
-      // Another account's card starts again on today.
-      key={data.tag}
-      tag={data.tag}
       dayNumber={data.dayNumber}
+      days={context.basesDay}
       rows={data.rows}
       mode={context.basesMode}
       timeZone={context.timeZone}
@@ -570,6 +569,7 @@ export function Dashboard({
   const [dragging, setDragging] = useState<CardId | null>(null);
   const [nowMs, setNowMs] = useState<number | null>(null);
   const [timeZone, setTimeZone] = useState("UTC");
+  const basesDay = useBasesDay(tag);
 
   useEffect(() => {
     setTimeZone(deviceTimeZone());
@@ -703,6 +703,7 @@ export function Dashboard({
     nowMs,
     timeZone,
     basesMode: settings.basesMode,
+    basesDay,
     saving,
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
   };
