@@ -237,8 +237,7 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
         "season": str(NEW_SEASON), "players": 2, "first_seen_day_1": 1,
         "first_seen_later_with_earlier_battles": 1,
         "days": {DAY_1.isoformat(): 2},
-        "already_queued": 0, "waiting_for_profile": 0, "queued": 0,
-        "left_to_queue": 2,
+        "already_queued": 0, "queued": 0, "left_to_queue": 2,
     }
     assert (queued["queued"], queued["left_to_queue"]) == (2, 0)
     assert (again["queued"], again["already_queued"]) == (0, 2)
@@ -258,20 +257,17 @@ def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
             profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
             log=_log(day_1_attack, day_2_attack, filler=older),
         )
-        # The first battle log finishes before the profile the Season rule
-        # needs, so Day 1 waits for it, and so does the backfill.
+        # The first battle log finishes before the profile that proves Day 1's
+        # end, and the backfill runs between them.
         _process(connection_info, archive_server, [log_job])
         database = Database(connection_info)
         try:
-            waiting = first_battle_log.backfill(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
+            first_battle_log.backfill(database, str(NEW_SEASON), queue=True, max_jobs=100)
         finally:
             database.close()
         _process(connection_info, archive_server, [profile_job])
         opponent = _day_1(connection_info, "#2YY")
 
-    assert (waiting["waiting_for_profile"], waiting["queued"]) == (1, 0)
     assert opponent[:4] == ("Complete", "exact", 5000, 5000 + WIN)
     assert opponent[4] is True and opponent[6] == "season_rule"
 

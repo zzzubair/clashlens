@@ -103,12 +103,13 @@ def test_a_mid_season_monday_moves_players_between_leagues(
 
     FAILED stays in Legend I, but its Monday Reset profile and battle log
     never answered. FAILED_TWICE stays in Legend I, but its Reset profile
-    requests fail at every Reset, as 135 tracked players' did through
-    12 October; its regular checks answer. FIRST_SEEN, promoted at the Monday Reset like 83222770 and
-    83226079 were, is first read on Tuesday at 06:25, its battle log
-    reaching back to its Monday battles: its Monday starts at 5,000 and joins
-    the Tuesday board at a rebuild. Three STEADY players stay in Legend I
-    throughout."""
+    requests fail at every Reset, as 135 tracked players' did through 12
+    October; its regular checks answer. FIRST_SEEN, promoted at the Monday
+    Reset like 83222770 and 83226079 were, is first read on Tuesday at
+    06:25, its battle log reaching back to its Monday battles: its Monday
+    starts at 5,000. With no reading at or before the Tuesday Reset, the
+    Tuesday board has no trophies to rank it by. Three STEADY players stay
+    in Legend I throughout."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     week_before = day(1)
     failed = [FAILED, FAILED_TWICE]
@@ -292,4 +293,4 @@ def test_a_mid_season_monday_moves_players_between_leagues(
         STALE: 5020, STALE_LATE: 4980, DROPPED: 4940}
     assert _ranked(tuesday_board) == {
         STEADY_3: 5420, STEADY_2: 5320, STEADY_1: 5220, FAILED: 5060, FAILED_TWICE: 5060,
-        PROMOTED: 5050, FIRST_SEEN: 5040, IDLE_PROMOTED: 5000}
+        PROMOTED: 5050, IDLE_PROMOTED: 5000}

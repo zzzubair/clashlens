@@ -11,12 +11,12 @@ built this way keep every usual day rule; a start from the Season rule stays
 from __future__ import annotations
 
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle, domain, league_drop, reset_baselines
+from . import battle, domain, reset_baselines
 from .analytics import unplayed_profile_sql
 from .battle import ParsedBattleRow
 from .db import (
@@ -33,7 +33,6 @@ from .domain import SEASON_START_TROPHIES, RankedDay
 from .ranked_day_inputs import _source_rows
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
-    RECONCILIATION_RULE_VERSION,
 )
 
 
@@ -118,93 +117,21 @@ def _first_seen_at_5000(
     return (None, None) if row is None else (int(row[0]), row[1])
 
 
-def promoted(connection: Any, player_id: int, boundary_at: datetime) -> bool:
-    """Whether the player was promoted into Legend I at the Reset
-    ``boundary_at``, so the game starts their day at 5,000: a mid-Season
-    Monday Reset, a Legend I profile, accepted or naming Season 0, read
-    during the day, and either no Legend I profile of theirs read in the
-    Season before it and no Legend battle of theirs in the Season before it,
-    or, back after leaving Legend I earlier in the Season (``_returned``),
-    proof they were below Legend I at it. On 12 October 2026, 1,724 promoted
-    players had no Reset reading to start from, and 1,565 of the 1,567 with
-    one at the next Reset had battles adding up to it from exactly 5,000;
-    most were first read in Legend I after their first battle, above or
-    below 5,000."""
-    day = domain.ranked_day_for(boundary_at)
-    if boundary_at.astimezone(UTC).weekday() != 0 or domain.is_season_boundary(boundary_at):
-        return False
-    row = connection.execute(
-        """
-        SELECT max(read_at) FILTER (WHERE read_at < %(reset)s),
-               bool_or(read_at >= %(reset)s
-                       AND (state = 'accepted' OR season = '0'))
-        FROM (
-            SELECT COALESCE(effect.observed_at, profile.observed_at) AS read_at,
-                   profile.source_contract_state AS state,
-                   profile.current_league_season_id AS season
-            FROM players AS player
-            JOIN player_profile_versions AS profile
-              ON profile.normalized_tag = player.normalized_tag
-            LEFT JOIN player_profile_effects AS effect
-              ON effect.profile_version_id = profile.id
-            WHERE player.id = %(player)s AND profile.eligibility_state = 'eligible'
-        ) AS reading
-        WHERE read_at >= %(season_start)s AND read_at < %(day_end)s
-        """,
-        {"player": player_id, "reset": boundary_at,
-         "season_start": day.season_start, "day_end": day.end},
-    ).fetchone()
-    if not row[1]:
-        return False
-    if row[0] is not None:
-        return _returned(connection, player_id, row[0], boundary_at)
-    return not reset_baselines.played_before(
-        connection, player_id, day.season_start, boundary_at)
-
-
-def _returned(
-    connection: Any, player_id: int, legend_i_at: datetime, boundary_at: datetime
-) -> bool:
-    """Whether the player was below Legend I at the Monday Reset
-    ``boundary_at`` after leaving it earlier in the Season: one of their
-    answers read after their last Legend I one before it, read at
-    ``legend_i_at``, proves they left (``league_drop``), and they have no
-    Legend battle after that one and before the Reset."""
-    answers = league_drop.readings(
-        connection, player_id, since=legend_i_at, until=boundary_at)
-    end = len(answers)
-    answers += league_drop.readings(
-        connection, player_id, since=boundary_at, limit=league_drop._NEIGHBOURS)
-    proof = next((
-        answers[index] for index in range(end)
-        if league_drop.left_legend_i(connection, player_id, answers, index)
-    ), None)
-    return proof is not None and not league_drop.battle_after(
-        connection, player_id, proof.read_at, boundary_at - timedelta(days=1))
-
-
 def season_rule_start(
     connection: Any, player_id: int, boundary_at: datetime, *, complete: bool,
-    day_start: bool = False,
+    at_5000: bool,
 ) -> dict[str, Any] | None:
     """The 5,000 by the Season rule at the Reset ``boundary_at``, for a
-    player with no saved reading from it: on Day 1 once they have an
-    accepted Legend I profile naming the Season, at any Reset once a
-    Legend I profile at 5,000 read from it in the Season, whatever Season it
-    names, came before their first Legend battle of the Season, and, as the
-    start of a day (``day_start``), once the player was ``promoted`` into
-    Legend I there. ``complete`` is whether a battle log proves the day's
-    battles up to the Reset."""
-    up = day_start and promoted(connection, player_id, boundary_at)
-    if not (
-        up
-        or domain.is_season_boundary(boundary_at)
-        and reset_baselines._season_rule_holds(connection, player_id, boundary_at)
-        or reset_baselines._unplayed(
-            connection, player_id, boundary_at,
-            *_first_seen_at_5000(connection, player_id, boundary_at),
-        )
-    ):
+    player with no saved reading from it: when the game starts them there
+    (``at_5000``: a Season's first Monday, or a Monday they were promoted
+    at, by the weekly league record), or once a Legend I profile at 5,000
+    read from it in the Season, whatever Season it names, came before their
+    first Legend battle of the Season. ``complete`` is whether a battle log
+    proves the day's battles up to the Reset."""
+    if not (at_5000 or reset_baselines._unplayed(
+        connection, player_id, boundary_at,
+        *_first_seen_at_5000(connection, player_id, boundary_at),
+    )):
         return None
     return {
         "id": None,
@@ -212,12 +139,10 @@ def season_rule_start(
         "state": "season_rule",
         "complete": complete,
         "trophies": SEASON_START_TROPHIES,
-        "eligibility_state": "eligible",
         "evidence": {
             "start_trophies_source": "season_rule",
             "reset_reading": None,
             "battle_log_observation_id": None,
-            **({"promoted_into_legend_i": True} if up else {}),
         },
     }
 
@@ -284,9 +209,8 @@ def queue_earlier_days(
 ) -> None:
     """When a player's earliest saved battle log, even one processed after
     newer ones, was saved on Day 1, or holds their battles from an earlier
-    day of the Season it was saved in, recalculate from that day. Either way
-    it proves the 0/0 days before the player's first sighting at 5,000
-    (``queue_unplayed_days``)."""
+    day of the Season it was saved in, recalculate from that day: it proves
+    those days' battles."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -297,125 +221,9 @@ def queue_earlier_days(
     if saved_day.start == saved_day.season_start:
         earlier = [saved_day.start]
     first = _first_log(connection, player_id)
-    if first[2] < observed_at:
+    if first[2] < observed_at or not earlier:
         return
-    queue_unplayed_days(connection, player_id, observed_at, int(first[1]))
-    if not earlier:
-        return
-    day = min(earlier)
-    if domain.is_season_boundary(day):
-        connection.execute(
-            "SELECT id FROM players WHERE id = %s FOR NO KEY UPDATE", (player_id,)
-        )
-        if not reset_baselines._season_rule_holds(connection, player_id, day):
-            return
-    _queue(connection, player_id, day, int(first[1]))
-
-
-def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
-    """When a player's first accepted Legend I profile naming a Season is
-    saved after their first battle log of that Season, recalculate from Day 1
-    as ``backfill`` would, now that the Season rule can start it."""
-    row = connection.execute(
-        """
-        SELECT profile.current_league_season_id
-        FROM player_profile_versions AS profile
-        WHERE profile.id = %s
-          AND profile.eligibility_state = 'eligible'
-          AND profile.source_contract_state = 'accepted'
-          AND NOT EXISTS (
-              SELECT 1 FROM player_profile_versions AS other
-              WHERE other.player_id = profile.player_id
-                AND other.id <> profile.id
-                AND other.current_league_season_id
-                    = profile.current_league_season_id
-                AND other.eligibility_state = 'eligible'
-                AND other.source_contract_state = 'accepted'
-          )
-        """,
-        (profile_version_id,),
-    ).fetchone()
-    first = _first_log(connection, player_id)
-    if row is None or first is None:
-        return
-    first_day = domain.ranked_day_for(first[2])
-    if first_day.official_season_id != _text_value(row[0]):
-        return
-    if first_day.start == first_day.season_start or connection.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM legend_battles
-            WHERE ranked_day_start = %(day)s
-              AND (attacker_player_id = %(player)s OR defender_player_id = %(player)s)
-        )
-        """,
-        {"day": first_day.season_start, "player": player_id},
-    ).fetchone()[0]:
-        _queue(connection, player_id, first_day.season_start, int(first[1]))
-
-
-def queue_unplayed_days(
-    connection: Any, player_id: int, observed_at: datetime, observation_id: int
-) -> None:
-    """When the player's first profile of the Season of ``observed_at`` that
-    can show them not played yet (``_first_seen_at_5000``) came before their
-    first Legend battle of the Season, whatever Season it names, recalculate
-    each day of the Season before that profile's Legend day, so each shows
-    as a 0/0 day at 5,000. Queued from each such new profile and from the
-    player's first battle log, which proves those days' battles, whichever
-    is processed last, once per day and triggering ``observation_id``."""
-    if _first_log(connection, player_id) is None:
-        return
-    profile_id, seen_at = _first_seen_at_5000(
-        connection, player_id, domain.ranked_day_for(observed_at).season_start
-    )
-    if seen_at is None:
-        return
-    day = domain.ranked_day_for(seen_at)
-    if not reset_baselines._unplayed(
-        connection, player_id, day.start, profile_id, seen_at
-    ):
-        return
-    day_start = day.season_start
-    while day_start < day.start:
-        day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _queue(
-            connection, player_id, day_start, None,
-            key=f"reconcile:unplayed:{player_id}:{day_text}:{observation_id}",
-            trigger="unplayed", later_days=False,
-        )
-        day_start += timedelta(days=1)
-
-
-def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) -> None:
-    """Once a profile read on a weekly Monday's Legend day shows a league
-    below Legend I, recalculate the day before that Reset and each saved day
-    after it, which then show the drop (see
-    ``reconciliation_db._dropped_after_reading``), for a player with a Reset
-    reading there. Runs once per player and profile read at ``observed_at``,
-    when no other work waits, no earlier than ``DAY_END_RECALCULATION_DELAY``
-    after that Reset, once any calculation running when the profile arrived
-    has saved."""
-    from .reconciliation_db import DAY_END_RECALCULATION_DELAY
-
-    day = domain.ranked_day_for(observed_at)
-    ended = day.start - timedelta(days=1)
-    if day.start.weekday() != 0 or day.start == day.season_start or connection.execute(
-        """
-        SELECT 1 FROM reset_baseline_evidence
-        WHERE player_id = %s AND boundary_at = %s LIMIT 1
-        """,
-        (player_id, day.start),
-    ).fetchone() is None:
-        return
-    _queue(
-        connection, player_id, ended, None,
-        key=(f"reconcile:weekly-drop:{player_id}:{ended:%Y-%m-%dT%H:%M:%SZ}:"
-             f"{observed_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ}:"
-             f"{RECONCILIATION_RULE_VERSION}"),
-        trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
-        due_at=day.start + DAY_END_RECALCULATION_DELAY,
-    )
+    _queue(connection, player_id, min(earlier), int(first[1]))
 
 
 def backfill(
@@ -428,9 +236,8 @@ def backfill(
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
     first day their own battles reach back to. Repeating it skips players
-    already queued from their earliest saved battle log. A Day 1 waits for
-    the accepted Legend I profile naming the Season that its Season-rule
-    start needs; ``queue_day_1`` queues it when that profile is saved.
+    already queued from their earliest saved battle log. A day in a week the
+    weekly league record does not say was Legend I saves nothing.
 
     A player first tracked later with no Legend battles on Day 1 gets no
     Day 1: they may not have joined the Season until later, and Clash Lens
@@ -484,17 +291,10 @@ def backfill(
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION},
             ).fetchall()
             waiting = [row for row in rows if not row[4]]
-            ready = [
-                row for row in waiting
-                if row[1] != season_start
-                or reset_baselines._season_rule_holds(
-                    connection, int(row[0]), season_start
-                )
-            ]
             job_ids = [
                 job_id
                 for player_id, day, _, observation_id, _ in (
-                    ready[:max_jobs] if queue else []
+                    waiting[:max_jobs] if queue else []
                 )
                 if (job_id := _queue(
                     connection, int(player_id), day, int(observation_id),
@@ -511,7 +311,6 @@ def backfill(
             for day, count in sorted(Counter(row[1] for row in rows).items())
         },
         "already_queued": len(rows) - len(waiting),
-        "waiting_for_profile": len(waiting) - len(ready),
         "queued": len(job_ids),
-        "left_to_queue": len(ready) - len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
     }

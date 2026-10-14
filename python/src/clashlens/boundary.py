@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, board_deadline
-from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
+from . import battle_day_repair, board_deadline, boundary_members
+from .analytics import SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
@@ -200,141 +198,6 @@ def require_open_generation(row: Any, boundary_at: datetime) -> None:
         )
 
 
-def _create_boundary_generation(
-    database: Database,
-    connection: Any,
-    *,
-    boundary_at: datetime,
-    sweep_id: int,
-    player_ids: list[int],
-    generation: int,
-    supersedes_id: int | None,
-    pending_inputs: list[dict[str, Any]] | None = None,
-    ordering_rule_version: str | None = None,
-) -> tuple[int, int]:
-    population_hash = _boundary_population_hash(player_ids)
-    target_at = boundary_at + timedelta(
-        minutes=10 if boundary_at.weekday() == 0 else 5
-    )
-    row = connection.execute(
-        """
-        INSERT INTO boundary_publication_generations (
-            boundary_at, generation, sweep_id, ordering_rule_version,
-            freshness_rule_version, expected_population_count,
-            expected_population_hash, membership_rule_version,
-            snapshot_rule_version, army_rule_version, target_rule, target_at,
-            supersedes_id, source_generation_id,
-            correction_state, affected_artifacts
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id, generation
-        """,
-        (
-            boundary_at,
-            generation,
-            sweep_id,
-            ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
-            FRESHNESS_RULE_VERSION,
-            len(player_ids),
-            population_hash,
-            "active-members-v1",
-            ANALYTICS_RULE_VERSION,
-            ARMY_ANALYTICS_RULE_VERSION,
-            "boundary-delay-v1",
-            target_at,
-            supersedes_id,
-            supersedes_id,
-            "active" if supersedes_id is not None else "none",
-            ["snapshot", "army"] if supersedes_id is not None else [],
-        ),
-    ).fetchone()
-    if row is None:
-        row = connection.execute(
-            """
-            SELECT id, generation, expected_population_count,
-                   expected_population_hash, sweep_id
-            FROM boundary_publication_generations
-            WHERE boundary_at = %s AND generation = %s
-            FOR UPDATE
-            """,
-            (boundary_at, generation),
-        ).fetchone()
-    assert row is not None
-    generation_id = int(row[0])
-    if len(row) > 2 and (
-        int(row[2]) != len(player_ids)
-        or _text_value(row[3]) != population_hash
-        or int(row[4]) != sweep_id
-    ):
-        raise ValueError(
-            "boundary generation inputs conflict with captured membership"
-        )
-    if supersedes_id is None:
-        connection.execute(
-            """
-            INSERT INTO boundary_publication_generation_members
-                (generation_id, player_id)
-            SELECT %s, unnest(%s::bigint[])
-            ON CONFLICT DO NOTHING
-            """,
-            (generation_id, player_ids),
-        )
-    else:
-        connection.execute(
-            """
-            INSERT INTO boundary_publication_generation_members (
-                generation_id, player_id, ranked_day_version_id,
-                ranked_day_input_hash, status, snapshot_status, army_status
-            )
-            SELECT %s, player_id, ranked_day_version_id,
-                   ranked_day_input_hash, status, snapshot_status, army_status
-            FROM boundary_publication_generation_members
-            WHERE generation_id = %s
-            ON CONFLICT DO NOTHING
-            """,
-            (generation_id, supersedes_id),
-        )
-    for pending in pending_inputs or []:
-        pending_version = pending.get("ranked_day_version_id")
-        pending_snapshot_status = _boundary_snapshot_status(
-            connection,
-            player_id=int(pending["player_id"]),
-            ranked_day_version_id=int(pending_version),
-            boundary_at=boundary_at,
-        )
-        pending_army_status = _boundary_army_status(database, 
-            connection,
-            player_id=int(pending["player_id"]),
-            ranked_day_version_id=int(pending_version),
-            snapshot_status=pending_snapshot_status,
-        )
-        connection.execute(
-            """
-            UPDATE boundary_publication_generation_members
-            SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
-                status = 'terminal', snapshot_status = %s,
-                army_status = %s, updated_at = clock_timestamp()
-            WHERE generation_id = %s AND player_id = %s
-            """,
-            (
-                pending_version,
-                pending.get("input_hash"),
-                pending_snapshot_status,
-                pending_army_status,
-                generation_id,
-                pending.get("player_id"),
-            ),
-        )
-    connection.execute(
-        """
-        UPDATE boundary_publication_generations
-        SET membership_captured_at = COALESCE(membership_captured_at, clock_timestamp())
-        WHERE id = %s
-        """,
-        (generation_id,),
-    )
-    return generation_id, int(row[1])
-
-
 def _inherit_deferred_army_successor_snapshot(
     database, connection: Any, *, generation_id: int
 ) -> bool:
@@ -402,7 +265,8 @@ def _supersede_generation(
     pending_inputs: list[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     """Replace ``generation_id`` with a generation rebuilding both artifacts
-    under the current rules, started as the Reset's active correction.
+    under the current rules and the board's members now
+    (``boundary_members``), started as the Reset's active correction.
     Corrections still waiting on the replaced generation wait on its
     replacement."""
     connection.execute(
@@ -422,21 +286,11 @@ def _supersede_generation(
         """,
         (generation_id,),
     )
-    frozen_members = connection.execute(
-        """
-        SELECT player_id
-        FROM boundary_publication_generation_members
-        WHERE generation_id = %s
-        ORDER BY player_id
-        """,
-        (generation_id,),
-    ).fetchall()
-    new_id, new_generation = _create_boundary_generation(
+    new_id, new_generation = boundary_members.create_generation(
         database,
         connection,
         boundary_at=boundary_at,
         sweep_id=sweep_id,
-        player_ids=[int(row[0]) for row in frozen_members],
         generation=generation + 1,
         supersedes_id=generation_id,
         pending_inputs=pending_inputs,
@@ -828,7 +682,9 @@ def _record_boundary_generation(
 ) -> bool:
     """Record one member result and enqueue each ready artifact once.
 
-    The collector's sweep membership is the frozen population authority.
+    The board's members follow the weekly league record
+    (``boundary_members``): a player whose day is saved after the members
+    were taken joins, at once while nothing froze, else as a changed member.
     A generation is reused until either artifact has frozen; after that a
     changed member starts one superseding generation and later corrections
     coalesce into it.
@@ -845,7 +701,7 @@ def _record_boundary_generation(
     shared = lock_boundary_members(connection, boundary_at, reset_lock_wait)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
-    if player_id not in member_ids:
+    if player_id not in member_ids and not boundary_members.joins_late(boundary_at):
         return True
     current = connection.execute(
         """
@@ -865,11 +721,11 @@ def _record_boundary_generation(
     if shared:
         require_open_generation(current and current[2:7], boundary_at)
     if current is None:
-        generation_id, generation = _create_boundary_generation(database, 
+        generation_id, generation = boundary_members.create_generation(
+            database,
             connection,
             boundary_at=boundary_at,
             sweep_id=sweep_id,
-            player_ids=member_ids,
             generation=1,
             supersedes_id=None,
         )
@@ -884,11 +740,18 @@ def _record_boundary_generation(
             """,
             (generation_id, player_id),
         ).fetchone()
-        # A generation's expected membership is immutable. A player that
-        # appears in the sweep after generation capture is not inserted,
-        # including after a frozen publication.
-        if prior_member is None:
-            return True
+        # A generation's members never change. A player whose day is saved
+        # after they were taken joins the board at its next rebuild, which
+        # takes the members again; before the record, never.
+        joins = prior_member is None
+        if joins:
+            if not boundary_members.joins_late(boundary_at):
+                return True
+            if shared:
+                raise LockNotAvailable(
+                    f"Reset {boundary_at.isoformat()} queues a new member only under its full lock"
+                )
+            prior_member = (None, None)
         changed = (
             prior_member[0] is None
             or int(prior_member[0]) != int(ranked_day_version_id)
@@ -908,10 +771,11 @@ def _record_boundary_generation(
             frozen_artifacts = [
                 kind for kind in frozen_artifacts if kind in affected
             ]
-        elif changed and frozen_artifacts:
+        elif changed and (frozen_artifacts or joins):
             # A ranked-day source feeds both artifacts. Once either
             # manifest has frozen, reprocess both instead of inheriting an
-            # army identity built from the previous source version.
+            # army identity built from the previous source version. A new
+            # member needs both rebuilt, frozen or not.
             frozen_artifacts = ["snapshot", "army"]
         queued = (
             connection.execute(
@@ -1138,8 +1002,9 @@ def queue_board_rebuilds(
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
     profile answered "player not found", whose saved entries differ from
-    the trophies at the Reset ``reset_trophies`` now gives, or its mark, or
-    that an older ordering rule ordered. On 5
+    the trophies at the Reset ``reset_trophies`` now gives, or its mark,
+    that an older ordering rule ordered, or whose members the weekly league
+    record now changes (``boundary_members``). On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1267,7 +1132,22 @@ def queue_board_rebuilds(
                     connection, boundary_at,
                     {player_id: row[2] for player_id, row in added.items()},
                 ))
-                if not not_found and not late_battles and not reordered and not unplayed:
+                # Members the weekly league record now adds or takes off.
+                members = {int(row[0]) for row in connection.execute(
+                    "SELECT player_id FROM boundary_publication_manifest_entries(%s)",
+                    (manifest_id,),
+                )}
+                moved_members = len(members.symmetric_difference(boundary_members.board_members(
+                    connection, boundary_at, [int(value) for value in connection.execute(
+                        """
+                        SELECT sweep.member_ids FROM boundary_publication_generations AS generation
+                        JOIN collector_reset_sweeps AS sweep ON sweep.id = generation.sweep_id
+                        WHERE generation.id = %s
+                        """,
+                        (generation_id,),
+                    ).fetchone()[0] or []],
+                )))
+                if not (not_found or late_battles or reordered or unplayed or moved_members):
                     continue
                 queued = connection.execute(
                     """
@@ -1308,6 +1188,7 @@ def queue_board_rebuilds(
                         "profile_not_found": len(not_found),
                         "late_battles": late_battles,
                         "reordered": reordered,
+                        "members_changed": moved_members,
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue
@@ -1444,12 +1325,6 @@ def queue_army_corrections(
         "in_flight": int(in_flight),
         "resets": resets,
     }
-
-
-def _boundary_population_hash(player_ids: list[int]) -> str:
-    return hashlib.sha256(
-        json.dumps(sorted(player_ids), separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
 
 
 def _create_boundary_artifact_identity(

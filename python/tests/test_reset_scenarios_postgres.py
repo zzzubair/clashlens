@@ -30,6 +30,7 @@ from clashlens import (
     army_types,
     board_deadline,
     boundary_publication,
+    league_week,
     past_reset_pacing,
 )
 from clashlens.api_db import ApiDatabase
@@ -285,13 +286,15 @@ class Story:
             )
 
     def run_worker(self) -> None:
-        """Run the worker as production does: the publication check, then
-        every job due in its claim order, until nothing is left to do. A job
-        sent to wait (a retry or a dependency) is made due again, as time
-        passing would, for at most 20 rounds."""
+        """Run the worker as production does: the weekly league record's
+        decisions and the publication check, then every job due in its claim
+        order, until nothing is left to do. A job sent to wait (a retry or a
+        dependency) is made due again, as time passing would, for at most 20
+        rounds."""
         database, processor = _processor(self.connection_info, self.archive_server)
         try:
             for _ in range(20):
+                league_week.decide_due(database)
                 boundary_publication.reevaluate_boundary_publications(database)
                 processed = processor.process_until_idle(owner="story", max_jobs=10_000)
                 boundary_publication.reevaluate_boundary_publications(database)
@@ -303,7 +306,9 @@ class Story:
                           AND due_at > now()
                         """
                     ).rowcount
-                if not processed and not waiting:
+                    undecided = connection.execute(
+                        "SELECT count(*) FROM league_week_dirty").fetchone()[0]
+                if not processed and not waiting and not undecided:
                     return
         finally:
             database.close()
