@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# Season replay: recalculate the current Season of a production copy with one
+# version of the code, and count every Daily board and saved day it gives.
+# See docs/testing.md, "Season replay".
+set -Eeuo pipefail
+
+HOST=${SEASON_REPLAY_HOST:-wsl}
+CONTAINER=${SEASON_REPLAY_CONTAINER:-clsnap-pg}
+PORT=${SEASON_REPLAY_PORT:-55432}
+SOURCE=${SEASON_REPLAY_SOURCE:-clashlens}
+LANES=${SEASON_REPLAY_LANES:-16}
+DRAIN_HOURS=${SEASON_REPLAY_DRAIN_HOURS:-8}
+HARNESS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage: development/season-replay start <git-ref> <name>
+       development/season-replay resume <name>
+       development/season-replay status <name>
+
+start copies <git-ref>'s code to $SEASON_REPLAY_HOST (default wsl) and runs
+the replay there in the background, in ~/replay/<name>. resume runs a stopped
+replay again with this checkout's harness, skipping the finished steps up to
+park. status prints its steps, and its metrics once written.
+EOF
+}
+
+die() { printf 'season-replay: %s\n' "$*" >&2; exit 1; }
+
+launch() {
+  tar -c -C "$HARNESS" season-replay season_replay.py season-replay.sql | ssh "$HOST" tar -x -C "replay/$1/harness"
+  ssh "$HOST" bash -s -- "$1" "$CONTAINER" "$PORT" "$SOURCE" "$LANES" "$DRAIN_HOURS" <<'EOF'
+cd ~/replay/"$1"
+SEASON_REPLAY_CONTAINER=$2 SEASON_REPLAY_PORT=$3 SEASON_REPLAY_SOURCE=$4 SEASON_REPLAY_LANES=$5 \
+  SEASON_REPLAY_DRAIN_HOURS=$6 setsid nohup bash harness/season-replay run "$1" >> run.log 2>&1 < /dev/null &
+echo $! > run.pid
+echo "started replay $1 of $(cat commit) on $(uname -n) as $!"
+EOF
+}
+
+refuse_running() {
+  ssh "$HOST" bash -s -- "$1" <<'EOF'
+pid=$(cat ~/replay/"$1"/run.pid 2>/dev/null) && kill -0 "$pid" 2>/dev/null && { echo "replay $1 is running as $pid"; exit 1; }
+true
+EOF
+}
+
+start() {
+  local ref=$1 name=$2 commit
+  [[ "$name" =~ ^[a-z0-9_]+$ ]] || die "name must be lowercase letters, digits and _"
+  commit=$(git -C "$HARNESS" rev-parse --verify "$ref^{commit}") || die "unknown ref $ref"
+  refuse_running "$name"
+  ssh "$HOST" "rm -rf replay/$name && mkdir -p replay/$name/code replay/$name/harness && echo $commit > replay/$name/commit"
+  git -C "$HARNESS/.." archive "$commit" python deploy | ssh "$HOST" tar -x -C "replay/$name/code"
+  launch "$name"
+}
+
+resume() {
+  refuse_running "$1"
+  launch "$1"
+}
+
+status() {
+  ssh "$HOST" bash -s -- "$1" <<'EOF'
+cd ~/replay/"$1" || exit 1
+pid=$(cat run.pid) && kill -0 "$pid" 2>/dev/null && echo "running as $pid" || echo "not running"
+column -t -s $'\t' steps.tsv 2>/dev/null
+tail -n 5 run.log
+for file in metrics-before.tsv metrics-after.tsv; do [[ ! -f $file ]] || echo "$PWD/$file"; done
+EOF
+}
+
+# Everything below runs on the replay machine, in ~/replay/<name>.
+
+psql_run() {
+  podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U postgres "$@"
+}
+
+step() {
+  local label=$1 began=$SECONDS
+  shift
+  if [[ $label =~ ^(environment|copy|measure-before|migrate|park)$ ]] && grep -q "^$label"$'\t' steps.tsv; then
+    printf '%s already finished\n' "$label"
+    return
+  fi
+  printf '%s %s\n' "$(date -u +%FT%TZ)" "$label"
+  "$@"
+  printf '%s\t%s\t%s\n' "$label" "$(date -u +%FT%TZ)" "$((SECONDS - began))" >> steps.tsv
+}
+
+make_environment() {
+  UV_PROJECT_ENVIRONMENT=$PWD/venv uv sync --locked --no-dev --python 3.12 --project code/python
+}
+
+copy_database() {
+  psql_run -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)"
+  # A template copy needs the source to itself for a moment.
+  until psql_run -d postgres -c "CREATE DATABASE $DB TEMPLATE $SOURCE STRATEGY FILE_COPY" 2>copy.err; do
+    grep -q 'is being accessed by other users' copy.err || { cat copy.err; return 1; }
+    sleep 10
+  done
+}
+
+measure() {
+  # Scores each board against the game's lists, as the collector does.
+  "$PYTHON" harness/season_replay.py score "$DB_URL_TCP" "$SEASON" > "score-$1.log" 2>&1 || \
+    echo "scoring failed; see score-$1.log"
+  psql_run -d "$DB" -A -F $'\t' -v season_start="'$SEASON_START'" -v label="$1" \
+    < harness/season-replay.sql > "metrics-$1.tsv"
+}
+
+migrate() {
+  local migration version
+  for migration in code/deploy/migrations/*.sql; do
+    version=$((10#$(basename "$migration" | cut -d_ -f1)))
+    if [[ $(psql_run -d "$DB" -At -c "SELECT EXISTS (SELECT FROM clash_lens_schema_migrations WHERE version = $version)") != t ]]; then
+      echo "applying $(basename "$migration")"
+      psql_run -d "$DB" < "$migration"
+    fi
+  done
+}
+
+park_responses() {
+  # Their raw bytes stayed on production's disk, so no worker here can read them.
+  psql_run -d "$DB" <<'SQL'
+CREATE TABLE season_replay_parked_jobs AS
+SELECT id, status, clock_timestamp() AS parked_at FROM python_processing_jobs
+WHERE work_type IN ('process_observation', 'replay_observation')
+  AND status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency');
+UPDATE python_processing_jobs
+SET status = 'pending', due_at = 'infinity', lease_owner = NULL, lease_token = NULL,
+    lease_expires_at = NULL
+WHERE id IN (SELECT id FROM season_replay_parked_jobs);
+SELECT count(*) AS parked_response_jobs FROM season_replay_parked_jobs;
+SQL
+}
+
+offline() {
+  # No network inside: a call to the Clash API or the archive fails at once.
+  unshare -rn "$@"
+}
+
+match_production_planner() {
+  # An empty table that a vacuum or analyze marks as known-empty makes the
+  # battle-log coverage query read every battle record once per battle log;
+  # production resets this statistic since 14 October 2026. Never analyze
+  # that table here afterwards.
+  psql_run -d "$DB" -At -c "SELECT pg_restore_relation_stats('schemaname', 'public',
+    'relname', 'battle_log_observation_rows', 'relpages', 0::integer, 'reltuples', (-1)::real)"
+  psql_run -d "$DB" -c "ALTER DATABASE $DB SET jit = off"
+}
+
+start_worker() {
+  match_production_planner
+  rm -f pg.sock/.s.PGSQL."$PORT" && mkdir -p pg.sock spool
+  "$PYTHON" harness/season_replay.py relay "pg.sock/.s.PGSQL.$PORT" "$PORT" > relay.log 2>&1 &
+  echo $! > relay.pid
+  until [[ -S pg.sock/.s.PGSQL.$PORT ]]; do sleep 1; done
+  if offline "$PYTHON" -c 'import socket; socket.create_connection(("api.clashofclans.com", 443), 5)' 2>/dev/null; then
+    die "the worker's network namespace can reach the internet"
+  fi
+  echo "network check: api.clashofclans.com unreachable from the worker"
+  CLASHLENS_BACKGROUND_JOB_LIMIT=$LANES CLASHLENS_DAY_RECHECK_JOB_LIMIT=$LANES \
+    offline "$PYTHON" harness/season_replay.py cli worker --database-url "$DB_URL" \
+    --archive-endpoint 127.0.0.1:9 --archive-insecure-test-only \
+    --archive-access-key season-replay --archive-secret-key season-replay \
+    --spool-root "$PWD/spool" --run-forever --concurrency "$LANES" --response-lanes 1 \
+    --owner season-replay >> worker.log 2>&1 &
+  echo $! > worker.pid
+}
+
+repair() {
+  local report deadline=$((SECONDS + DRAIN_HOURS * 3600))
+  while ((SECONDS < deadline)); do
+    report=$(offline "$PYTHON" harness/season_replay.py cli republish-current-season \
+      --database-url "$DB_URL" --repair queue --season "$SEASON" --max-jobs 1000)
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$report" >> repair.log
+    grep -q '"refused"' <<<"$report" && die "repair refused: $report"
+    grep -q '"phase": "done"' <<<"$report" && return
+    kill -0 "$(cat worker.pid)" || die "the worker stopped; see worker.log"
+    sleep 60
+  done
+  echo "REPAIR NOT DONE after $DRAIN_HOURS h; see repair.log" | tee -a repair.log
+}
+
+drain() {
+  local deadline=$((SECONDS + DRAIN_HOURS * 3600)) quiet=0 left
+  while ((SECONDS < deadline)); do
+    left=$(psql_run -d "$DB" -At -v season_start="'$SEASON_START'" <<'SQL'
+SELECT (SELECT count(*) FROM python_processing_jobs
+        WHERE status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+          AND due_at < 'infinity')
+     + (SELECT count(*) FROM boundary_publication_corrections
+        WHERE boundary_at > :season_start AND state NOT IN ('finalized', 'terminal'))
+     + (SELECT count(*) FROM (
+          SELECT DISTINCT ON (boundary_at) snapshot_state, army_state
+          FROM boundary_publication_generations WHERE boundary_at > :season_start
+          ORDER BY boundary_at, generation DESC) AS newest
+        WHERE snapshot_state <> 'published' OR army_state <> 'published');
+SQL
+)
+    printf '%s left %s\n' "$(date -u +%FT%TZ)" "$left" >> drain.log
+    if ((left == 0)); then ((++quiet >= 3)) && return; else quiet=0; fi
+    kill -0 "$(cat worker.pid)" || die "the worker stopped; see worker.log"
+    sleep 30
+  done
+  echo "NOT DRAINED after $DRAIN_HOURS h: $left jobs, corrections or boards unfinished" | tee -a drain.log
+}
+
+stop_worker() {
+  kill "$(cat worker.pid)" "$(cat relay.pid)" 2>/dev/null || true
+  wait 2>/dev/null || true
+  psql_run -d "$DB" -A -F $'\t' > failures.tsv <<'SQL'
+SELECT work_type, failure_category, count(*) AS failed_jobs FROM python_processing_jobs
+WHERE status = 'failed' AND updated_at > (SELECT min(parked_at) FROM season_replay_parked_jobs)
+GROUP BY 1, 2 ORDER BY 3 DESC;
+SQL
+}
+
+run() {
+  local name=$1
+  cd ~/replay/"$name"
+  DB=replay_$name
+  DB_URL="postgresql://postgres:postgres@/$DB?host=$PWD/pg.sock&port=$PORT"
+  DB_URL_TCP="postgresql://postgres:postgres@127.0.0.1:$PORT/$DB"
+  PYTHON=$PWD/venv/bin/python
+  export PYTHONPATH=$PWD/code/python/src
+  [[ -f steps.tsv ]] || printf 'step\tfinished\tseconds\n' > steps.tsv
+  trap 'kill $(cat worker.pid relay.pid 2>/dev/null) 2>/dev/null || true' EXIT
+  echo "replay $name of $(cat commit)"
+  step environment make_environment
+  step copy copy_database
+  read -r SEASON SEASON_START < <("$PYTHON" harness/season_replay.py season "$DB_URL_TCP") || true
+  [[ -n "${SEASON_START:-}" ]] || die "could not read the Season from $DB"
+  echo "Season $SEASON from $SEASON_START"
+  step measure-before measure before
+  step migrate migrate
+  step park park_responses
+  step worker start_worker
+  step repair repair
+  step drain drain
+  step stop stop_worker
+  step measure-after measure after
+  echo "done"
+}
+
+case ${1:-} in
+  start) (($# == 3)) || { usage; exit 2; }; start "$2" "$3" ;;
+  resume) (($# == 2)) || { usage; exit 2; }; resume "$2" ;;
+  status) (($# == 2)) || { usage; exit 2; }; status "$2" ;;
+  run) run "$2" ;;
+  *) usage; exit 2 ;;
+esac

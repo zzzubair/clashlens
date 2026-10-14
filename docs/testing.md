@@ -153,6 +153,98 @@ battle on each call, 500 ms a call, and day results fell 88,000 jobs behind.
   plan estimate (about 105,000) and time for that query (about 103 ms a call,
   in the 12 October reliability reports) rule that out there.
 
+## Season replay
+
+A Season replay answers, for one version of the code: if production had run
+this code for the whole current Season, what would every Daily board and
+every saved day look like? Run it on `main` and on a fix, and compare the two
+`metrics-after.tsv` files before the fix merges. It is not a test and does not
+replace the end-to-end test above.
+
+It needs a restored copy of the production database in a PostgreSQL 18
+container on the replay machine (`wsl` by default), and about 70 GB free
+there per replay. From any checkout:
+
+```sh
+development/season-replay start <git-ref> <name>
+development/season-replay status <name>
+```
+
+`start` copies that ref's `python` and `deploy` folders to
+`~/replay/<name>/` on the machine and runs the steps below there in the
+background. `status` prints each finished step with its time in seconds, and
+the paths of the metrics once written. Settings, as environment variables:
+`SEASON_REPLAY_HOST` (default `wsl`), `SEASON_REPLAY_CONTAINER` (`clsnap-pg`),
+`SEASON_REPLAY_PORT` (`55432`), `SEASON_REPLAY_SOURCE`, the copy to start from
+(`clashlens`), `SEASON_REPLAY_LANES`, worker lanes and background job limit
+(`16`), and `SEASON_REPLAY_DRAIN_HOURS`, how long to wait for the queue to
+empty before measuring anyway (`8`).
+
+| Step | What it does | Time on `wsl`, 14 October 2026 |
+|---|---|---|
+| `environment` | Installs the ref's locked Python packages | TIME_ENV |
+| `copy` | Copies the source database to `replay_<name>` | TIME_COPY |
+| `measure-before` | Scores each board against the game's lists and writes `metrics-before.tsv`: production as the copy left it | TIME_BEFORE |
+| `migrate` | Applies the ref's migrations the copy lacks, as `ops` does | TIME_MIGRATE |
+| `park` | Sets aside saved responses still waiting to be processed: their raw bytes stayed on production's disk | TIME_PARK |
+| `worker` | Sets one planner statistic as production has it (below), then starts the real worker with no network | TIME_WORKER |
+| `repair` | Runs the Season repair (`republish-current-season --repair queue`, up to 1,000 jobs a run, once a minute) until it says `done` | TIME_REPAIR |
+| `drain` | Waits until no job, board rebuild or unpublished board is left | TIME_DRAIN |
+| `measure-after` | Scores the boards again and writes `metrics-after.tsv` | TIME_AFTER |
+
+**The metrics** (`development/season-replay.sql`) are three tables. Per
+Reset, the board the website shows: entries on it; entries whose saved day
+is Inconsistent, Partial (no start reading first, then automatic loss
+unknown, then any other reason), or Complete but marked uncertain; entries
+not proven (uncertain, or the day is not Complete) as a count and a share;
+members left off, by reason; and, where the game's lists were saved, the
+collector's own score of the board against them (`game_rankings.score_day`).
+The first columns are those of the per-board table in the boards state report
+of 14 October 2026, and on a copy of production the query gives exactly that
+table's numbers for the boards not rebuilt since. Then every reason behind
+those counts, and per Legend day each player's newest saved day by state.
+
+**How it keeps production's behavior.** It runs the real worker and the
+operator's own Season repair. The only changes are the ones the Reset stories
+make: board rebuilds start as soon as the one before publishes, with no
+6-hour or hourly wait and no 04:30–07:00 quiet window
+(`development/season_replay.py cli`). The worker and the repair run in a
+network namespace with no network: a call to the Clash API or the archive
+fails at once, and the replay checks that before it starts the worker. They
+reach the database through a local socket.
+
+**One planner statistic.** A copy restored and analyzed marks the empty
+table `battle_log_observation_rows` as known to be empty. The database then
+plans the battle-log coverage query of every day calculation to read every
+saved battle record once per battle log: on 14 October 2026 one such query
+took 471 seconds on the copy and the replay finished 1 job in 5 minutes.
+Production had the same plan from 16:56 that day, after an automatic vacuum,
+until it was reset at 17:40. The `worker` step resets it the same way
+(`pg_restore_relation_stats`), after which the replay finished about 420
+jobs a minute. Never analyze or vacuum that table in a replay copy.
+
+**What it does not reproduce.**
+
+- Readings, battles and pulls collected after the copy was taken. The
+  collector does not run.
+- Pacing and timing: when each board would have been built, how late, and
+  what a Reset under load does. Boards here are built from every day's final
+  saved result, so a board built before a late reading in production shows
+  the later state here.
+- Responses saved in the last seconds before the copy and not yet processed.
+  `park` counts them in its output; their days miss that evidence.
+- The worker's database permissions: it connects as the database owner.
+- Army statistics, unless the copy holds the army tables' data.
+
+**How to trust a result.** `metrics-before.tsv` should match production at
+the time of the copy. A replay of `main` should match `metrics-before.tsv`
+except where production had work still waiting (queued board rebuilds, the
+day jobs pending at the copy); explain each difference before comparing a
+fix with it. `failures.tsv` lists every job that failed for good during the
+replay, `repair.log` each repair run's report, and `drain.log` the work left
+over time. A replay that ends `NOT DRAINED` in `drain.log` measured boards
+still being rebuilt.
+
 ## Checking a test fails on the old code
 
 Reverse the fix in a throwaway copy of the code, never in your checkout (a
