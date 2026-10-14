@@ -588,15 +588,22 @@ def _try_enqueue_boundary_artifacts(
                 else ended_day_priority(boundary_at - timedelta(days=1)),
             ),
         )
-    army = connection.execute(
-        "SELECT army_state, army_manifest_id FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
+    army_state, snapshot_state = connection.execute(
+        "SELECT army_state, snapshot_state FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
         (generation_id,),
     ).fetchone()
+    # The army's inputs freeze in a later transaction, once the board and its
+    # statistics have published. Frozen with the board's, on 14 Oct 2026
+    # they took 2 min 58 s, growing each Season day, and the board's build
+    # job stayed unseen until they finished.
+    board_first = (
+        not affected_artifacts or "snapshot" in affected_artifacts
+    ) and _text_value(snapshot_state) in {"ready", "building"}
     if (
         army_pending == 0
-        and army is not None
-        and _text_value(army[0]) == "ready"
+        and _text_value(army_state) == "ready"
         and (not affected_artifacts or "army" in affected_artifacts)
+        and not board_first
     ):
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="army"

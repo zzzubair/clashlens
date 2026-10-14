@@ -133,7 +133,12 @@ def _calculate(database: Database, processor, tag: str) -> list[str]:
 
 
 def _build(database: Database, processor) -> None:
-    while jobs := _waiting(database, BUILDS):
+    """Run the waiting builds one at a time, with the publication check
+    before each, as the worker runs it every 10 seconds."""
+    while True:
+        boundary_publication.reevaluate_boundary_publications(database)
+        if not (jobs := _waiting(database, BUILDS)):
+            return
         result = processor.process_job(jobs[0], owner=f"build-{jobs[0]}")
         assert result is not None and result.outcome == "processed", result
 
@@ -238,6 +243,39 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             assert _members(database)[0] == 3
             _build(database, processor)
             assert _board(database) == (3, ["#2PP", LATE])
+        finally:
+            database.close()
+
+
+def test_the_board_publishes_before_its_army_inputs_freeze(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, the army's inputs froze in the board's own transaction, for
+    # 2 min 58 s on 14 Oct 2026, and its build job stayed unseen until then.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            _build(database, processor)
+            assert _board(database) == (1, list(PLAYERS))
+            with database.pool.connection() as connection:
+                published, army_frozen = connection.execute(
+                    """
+                    SELECT snapshot.published_at, manifest.frozen_at
+                    FROM boundary_publication_generations AS generation
+                    JOIN leaderboard_snapshots AS snapshot
+                      ON snapshot.id = generation.snapshot_id
+                    JOIN boundary_publication_manifests AS manifest
+                      ON manifest.generation_id = generation.id
+                     AND manifest.artifact_kind = 'army'
+                    WHERE generation.boundary_at = %s AND generation.generation = 1
+                    """,
+                    (DAY_END,),
+                ).fetchone()
+            assert published < army_frozen
         finally:
             database.close()
 
