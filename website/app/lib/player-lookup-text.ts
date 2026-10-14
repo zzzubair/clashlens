@@ -90,7 +90,9 @@ export function showsCurrentSeason(
   lookup: PlayerLookup | null,
   history: { day: RankedDaySummary }[],
 ) {
-  return history.length > 0 || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "");
+  return (
+    history.length > 0 || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "")
+  );
 }
 
 /**
@@ -193,10 +195,10 @@ export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
     : day.codes.includes("league_not_confirmed")
       ? "League not confirmed"
       : day.net === null || doubtful
-      ? "Uncertain"
-      : day.state === "Complete" && day.confidence === "exact" && day.codes.length === 0
-        ? "Verified"
-        : "Calculated";
+        ? "Uncertain"
+        : day.state === "Complete" && day.confidence === "exact" && day.codes.length === 0
+          ? "Verified"
+          : "Calculated";
   const reasons = isCurrentDay ? liveDay(day).reasons : dayReasons(day.codes, false, day);
   if (
     reasons.length === 0 &&

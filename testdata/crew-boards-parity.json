@@ -42,7 +42,6 @@
           ]
         },
         {"start": "2026-08-02T05:00:00Z", "partial_reasons": ["missing_battle_log"], "battles": []},
-        {"start": "2026-08-03T05:00:00Z", "partial_reasons": ["not_enrolled"], "battles": []},
         {
           "start": "2026-08-05T05:00:00Z",
           "partial_reasons": [],
