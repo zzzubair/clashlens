@@ -120,18 +120,22 @@ migrate() {
   done
 }
 
-park_responses() {
-  # Their raw bytes stayed on production's disk, so no worker here can read them.
+park_jobs() {
+  # Responses whose raw bytes stayed on production's disk, and work not due
+  # until after the copy, such as the running day's end two hours after the
+  # next Reset: no worker here can do either as production will.
   psql_run -d "$DB" <<'SQL'
 CREATE TABLE season_replay_parked_jobs AS
 SELECT id, status, clock_timestamp() AS parked_at FROM python_processing_jobs
-WHERE work_type IN ('process_observation', 'replay_observation')
-  AND status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency');
+WHERE (work_type IN ('process_observation', 'replay_observation')
+       AND status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency'))
+   OR (status = 'pending' AND due_at > clock_timestamp());
 UPDATE python_processing_jobs
 SET status = 'pending', due_at = 'infinity', lease_owner = NULL, lease_token = NULL,
     lease_expires_at = NULL
 WHERE id IN (SELECT id FROM season_replay_parked_jobs);
-SELECT count(*) AS parked_response_jobs FROM season_replay_parked_jobs;
+SELECT work_type, count(*) AS parked_jobs FROM python_processing_jobs
+WHERE id IN (SELECT id FROM season_replay_parked_jobs) GROUP BY 1;
 SQL
 }
 
@@ -161,6 +165,7 @@ start_worker() {
   fi
   echo "network check: api.clashofclans.com unreachable from the worker"
   CLASHLENS_BACKGROUND_JOB_LIMIT=$LANES CLASHLENS_DAY_RECHECK_JOB_LIMIT=$LANES \
+    SEASON_REPLAY_BOARD_HOLD=$PWD/boards-held \
     offline "$PYTHON" harness/season_replay.py cli worker --database-url "$DB_URL" \
     --archive-endpoint 127.0.0.1:9 --archive-insecure-test-only \
     --archive-access-key season-replay --archive-secret-key season-replay \
@@ -176,6 +181,7 @@ repair() {
       --database-url "$DB_URL" --repair queue --season "$SEASON" --max-jobs 1000)
     printf '%s %s\n' "$(date -u +%FT%TZ)" "$report" >> repair.log
     grep -q '"refused"' <<<"$report" && die "repair refused: $report"
+    grep -Eq '"phase": "(inputs|days)"' <<<"$report" || rm -f boards-held
     grep -q '"phase": "done"' <<<"$report" && return
     kill -0 "$(cat worker.pid)" || die "the worker stopped; see worker.log"
     sleep 60
@@ -186,10 +192,12 @@ repair() {
 drain() {
   local deadline=$((SECONDS + DRAIN_HOURS * 3600)) quiet=0 left
   while ((SECONDS < deadline)); do
+    # A retry is due within minutes; the running day's end, queued again by
+    # each recalculation, not until two hours after the next Reset.
     left=$(psql_run -d "$DB" -At -v season_start="'$SEASON_START'" <<'SQL'
 SELECT (SELECT count(*) FROM python_processing_jobs
         WHERE status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
-          AND due_at < 'infinity')
+          AND due_at < clock_timestamp() + interval '1 hour')
      + (SELECT count(*) FROM boundary_publication_corrections
         WHERE boundary_at > :season_start AND state NOT IN ('finalized', 'terminal'))
      + (SELECT count(*) FROM (
@@ -235,7 +243,9 @@ run() {
   echo "Season $SEASON from $SEASON_START"
   step measure-before measure before
   step migrate migrate
-  step park park_responses
+  step park park_jobs
+  # Boards wait until the repair has recalculated every day.
+  [[ -f repair.log ]] && ! tail -n 1 repair.log | grep -Eq '"phase": "(inputs|days)"' || touch boards-held
   step worker start_worker
   step repair repair
   step drain drain

@@ -11,6 +11,7 @@ newest board against the game's own ranking lists saved in the database.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from datetime import UTC, datetime, time, timedelta
 
@@ -44,6 +45,16 @@ def _unpaced_cli(argv: list[str]) -> int:
     pacing.NEWEST_RESET_CORRECTION_INTERVAL = timedelta(0)
     pacing._in_quiet_window = lambda _now: False
     pacing.OPERATOR_QUIET_START = pacing.PAST_RESET_QUIET_END = time(0)
+    # While the repair recalculates days, no board rebuild starts: unpaced
+    # rebuilds follow one another so closely that a player's Season
+    # recalculation never gets the Reset locks they hold.
+    hold = os.environ.get("SEASON_REPLAY_BOARD_HOLD")
+    if hold:
+        latest_reset = pacing._latest_reset
+        pacing._in_quiet_window = lambda _now: os.path.exists(hold)
+        pacing._latest_reset = lambda connection: (
+            datetime.max.replace(tzinfo=UTC) if os.path.exists(hold) else latest_reset(connection)
+        )
     return cli.main(argv)
 
 

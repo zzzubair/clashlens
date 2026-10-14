@@ -186,7 +186,7 @@ empty before measuring anyway (`8`).
 | `copy` | Copies the source database to `replay_<name>` | TIME_COPY |
 | `measure-before` | Scores each board against the game's lists and writes `metrics-before.tsv`: production as the copy left it | TIME_BEFORE |
 | `migrate` | Applies the ref's migrations the copy lacks, as `ops` does | TIME_MIGRATE |
-| `park` | Sets aside saved responses still waiting to be processed: their raw bytes stayed on production's disk | TIME_PARK |
+| `park` | Sets aside work no worker here can do as production will: saved responses still waiting to be processed, whose raw bytes stayed on production's disk, and jobs not due until after the copy, such as the running day's end | TIME_PARK |
 | `worker` | Sets one planner statistic as production has it (below), then starts the real worker with no network | TIME_WORKER |
 | `repair` | Runs the Season repair (`republish-current-season --repair queue`, up to 1,000 jobs a run, once a minute) until it says `done` | TIME_REPAIR |
 | `drain` | Waits until no job, board rebuild or unpublished board is left | TIME_DRAIN |
@@ -208,7 +208,11 @@ those counts, and per Legend day each player's newest saved day by state.
 operator's own Season repair. The only changes are the ones the Reset stories
 make: board rebuilds start as soon as the one before publishes, with no
 6-hour or hourly wait and no 04:30–07:00 quiet window
-(`development/season_replay.py cli`). The worker and the repair run in a
+(`development/season_replay.py cli`). Until the repair has recalculated
+every day, no board rebuild starts at all: with no wait between rebuilds,
+one always held the Reset locks a player's Season recalculation needs, and on
+14 October 2026 the last 3 players waited 2 hours 25 minutes; with the hold
+they finished within 5 minutes. The worker and the repair run in a
 network namespace with no network: a call to the Clash API or the archive
 fails at once, and the replay checks that before it starts the worker. They
 reach the database through a local socket.
@@ -233,6 +237,8 @@ jobs a minute. Never analyze or vacuum that table in a replay copy.
   the later state here.
 - Responses saved in the last seconds before the copy and not yet processed.
   `park` counts them in its output; their days miss that evidence.
+- The running Legend day: its day-end jobs wait for the next Reset, which
+  the copy never sees, so `park` sets them aside and its days stay Live.
 - The worker's database permissions: it connects as the database owner.
 - Army statistics, unless the copy holds the army tables' data.
 
