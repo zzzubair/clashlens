@@ -25,7 +25,7 @@ from test_reset_settlement_state_postgres import (
     _season_profile,
 )
 
-from clashlens import domain_repair, first_battle_log, reconciliation_db
+from clashlens import domain_repair, first_battle_log, loss_rule, reconciliation_db
 from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import allocate_trophies
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
@@ -351,10 +351,12 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
         jobs += _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=8),
                             tag="#2YY", profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
                             log=_log(*ATTACKS, filler=older))
-        # Saved before the fix, Day 1 needed the previous Season's last day.
-        original = reconciliation_db.reconcile_ranked_day
+        # Saved before the fix, Day 1 needed the previous Season's last day,
+        # and no first Legend day averaged its own defenses.
+        original, first_day = reconciliation_db.reconcile_ranked_day, loss_rule.first_day
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
                             lambda data: original(replace(data, season_first_day=False)))
+        monkeypatch.setattr(loss_rule, "first_day", lambda data: False)
         _process(connection_info, archive_server, jobs)
         before = _day_1(connection_info)
         # The run before this correction already queued, and finished, the
@@ -371,6 +373,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
         _process(connection_info, archive_server, [])
         unchanged = _day_1(connection_info)
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+        monkeypatch.setattr(loss_rule, "first_day", first_day)
 
         preview, queued = repair_season(connection_info, str(NEW_SEASON))
         again = repair_season(connection_info, str(NEW_SEASON))[1]
