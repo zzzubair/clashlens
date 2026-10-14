@@ -1453,7 +1453,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
-                ("#Y8V9YYP9C", 5191, "uncertain"),
+                ("#Y8V9YYP9C", 5185, "uncertain"),
                 ("#2GL8CJL", 5145, "uncertain"),
                 ("#PL0Q0UVLC", 5140, "uncertain"),
                 ("#P0VPRVPJJ", 5130, "uncertain"),

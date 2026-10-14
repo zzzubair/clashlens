@@ -180,6 +180,7 @@ story was checked on 12 October 2026:
 | `test_season_end_reset_and_its_first_day` | PR 441 (`18495dd4`), `reconciliation.py` and `reconciliation_db.py` | DISAGREES's Day 1 saved Inconsistent instead of Complete |
 | `test_wednesday_reset_with_days_that_once_could_not_save` | PR 414's migration `0092_shield_runs_any_length.sql` (`a104bbc0`) | SHIELD_RUN's third shielded day refused by the database, as on 9 October |
 | `test_weekly_raise_postgres.py` | The late weekly raise fix (13 October 2026), `python/src` | LATE_RAISE's Sunday saved Inconsistent with next start 4,940 instead of Complete at 5,000, as 4,136 Sundays were on 12 October |
+| `test_monday_board_proof_postgres.py` | The Monday board proof fix (14 October 2026), `python/src` | LL02YLGG ranked at its 03:05:53 reading, 5,036, instead of its Complete day's 4,996. With only `boundary_manifest.py` kept, NEVER, EXACT and BELOW stayed uncertain instead of confirmed |
 | `test_reset_at_full_size` | PR 467 (`2ec9b97b`) | The Monday Reset read the whole battles table about 734 times (about 100 million rows) instead of under 20; the story took 119 seconds instead of about 90 |
 
 ## Reset cases and their tests
@@ -200,6 +201,8 @@ Every boundary case in section 8 of the three reliability reports of
 | No defense on a Monday; the raise hides the charge, unless a reading before the raise landed shows it | O6, F10, S no defenses | Monday story ZERO | `test_reset_reading_before_loss_postgres.py::test_monday_charge_read_before_the_raise_starts_no_next_day` |
 | Reset reading taken before the automatic loss, on a Monday | O5 | Monday story UNSETTLED | |
 | Attack ending after 05:00, with the Monday raise | O8, F19, S battle at 05:00 | Monday story IN_FLIGHT | `test_board_battle_end_postgres.py` |
+| Day ending at or below 5,000 that only a reading during the day can prove, taken after its last battle landed (12 October 2026: 1,326 entries unproven) | Monday board report | `test_monday_board_proof_postgres.py`: NEVER (Season 0), EXACT, BELOW; AFTER, read before two more battles, stays unproven | `test_reading_rule.py::test_a_reading_after_the_days_last_battle_shows_its_end` |
+| Complete day no reading proves shows its own total, never an older reading | Monday board report | `test_monday_board_proof_postgres.py` LL02YLGG | |
 | Dropped from Legend I at the Monday Reset: no raise | O14, F6, S weekly drop | Monday story DROPPED_WEEKLY | `test_reset_settlement_state_postgres.py::test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading` |
 
 ### Season end and Day 1

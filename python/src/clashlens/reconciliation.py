@@ -390,14 +390,14 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                                        or data.previous_day and data.previous_day.final_trophies)
     raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
     earlier = _deduplicate_contributions(data.previous_day_contributions)[0] if previous else ()
-    during, history = reading_rule.contradiction_during_day(
+    during, history, proof = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
         start=previous.final_trophies if raised else reset or start_trophies,
         pending_loss=previous.automatic_loss if previous else 0, reset=bool(reset),
         day_effects=_effects(contributions), earlier=_effects(earlier),
         floor=5000 if raised or reset or data.ranked_day.start.weekday() == 0 else None,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
-        malformed_evidence or inconsistent_evidence) else (None, None)
+        malformed_evidence or inconsistent_evidence) else (None, None, None)
     automatic_value_known = automatic_state != "unknown"
     if start_available and automatic_value_known:
         assert start_trophies is not None
@@ -438,7 +438,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             reading_rule.decide(
                 _readings(replace(data, readings=(), unreadable_from=None, covered_until=None) if official_end else data),
                 reset_at=data.ranked_day.end, start_proven=start_proven, **rule, history=history,
-                unknown_from=None if official_end else data.first_unshown_report,
+                unknown_from=None if official_end else data.first_unshown_report, proof=proof,
             )
             if ended and coverage_complete
             and not (malformed_evidence or inconsistent_evidence)

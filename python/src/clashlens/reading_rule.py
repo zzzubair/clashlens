@@ -12,10 +12,12 @@ attacks shows the game crediting the attacker's profile late, which it can
 do until the player stops attacking: it neither confirms nor contradicts. A
 trustworthy reading that fits no value makes the day Uncertain, and no
 later match erases that; nor can a later reading take back a loss an
-earlier one showed landed. Otherwise the last clean match decides. A
-reading can only confirm when it is not trustworthy: a Legend I profile
-naming Season 0, one read after the player's continuous battle logs, or
-one read after a battle only the opponent has reported so far.
+earlier one showed landed. Otherwise the last clean match decides; a
+reading during the day taken once its last battle had landed, fitting one
+way only, is one, read before the loss. A reading can only confirm when it
+is not trustworthy: a Legend I profile naming Season 0, one read after the
+player's continuous battle logs, or one read after a battle only the
+opponent has reported so far.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -251,8 +253,9 @@ def judge(
 
 def unraised_end(verdict: Verdict) -> dict[str, Any] | None:
     """What a clean verdict proves of a day the weekly raise hides, its
-    reading taken before the raise landed (``decide`` never takes a 5,000
-    one): the day's end before its automatic loss, the Daily board's total."""
+    reading taken before the raise landed (``decide`` takes a 5,000 one only
+    during the day): the day's end before its automatic loss, the Daily
+    board's total."""
     if verdict.outcome != "verified" or not verdict.clean or verdict.reading is None:
         return None
     return {"read_at": verdict.reading.read_at.isoformat(), "trophies": verdict.reading.trophies,
@@ -274,6 +277,7 @@ def decide(
     floor: int | None = None,
     reset: bool = False,
     history: frozenset[Way] | None = None,
+    proof: Reading | None = None,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
@@ -299,7 +303,11 @@ def decide(
     nor the latter that it did. A reading that fits
     only with a battle not yet shown, or read one way, is a guess: taken
     when the day's start is proven and no clean reading decided. ``history``
-    is what the readings during the day left possible.
+    is what the readings during the day left possible, and ``proof`` the
+    reading during the day that shows its end (``contradiction_during_day``):
+    equal to the end before the loss, it is a clean match read before the
+    loss, beside the confirm-only ones, as it cannot show whether the loss
+    landed; so never on a day whose loss is only possible.
     """
     judged = [
         judged for judged in (
@@ -347,6 +355,8 @@ def decide(
     shown = max((shows(item) for item in settled if not floored(item)), default=0)
     matches = [item for item in settled if clean(item)]
     possible = bool(loss_candidates) and not loss_certain
+    proven = [_Judged(proof, True, False)] if proof is not None and not possible and (
+        proof.trophies == end_before_loss) else []
     floored_loss = next((item for item in settled if possible and shows(item) > shown), None)
     if floored_loss is not None:
         return Verdict("unverified", floored_loss.reading, lagged=lagged)
@@ -358,9 +368,7 @@ def decide(
         shows a loss, nor that a possible loss did not land; a Season 0
         reading may show a possible loss landed, but showing none proves
         nothing: it may be read before the loss lands."""
-        ways = _following(item.ways, next(
-            (before.ways for before in reversed(settled)
-             if before.reading.read_at <= item.reading.read_at), history))
+        ways = _ways_after(item, settled, history)
         if item.reading.uncovered or unknown(item):
             ways = frozenset() if possible else frozenset(way for way in ways if not way[0])
         elif possible and not all(way[0] for way in ways):
@@ -370,7 +378,7 @@ def decide(
     judged = sorted(
         [*settled, *filter(None, (confirming(item) for item in judged if not trusted(item)))],
         key=lambda item: (item.reading.read_at, item.reading.trophies))
-    matches = matches or [item for item in judged if clean(item)]
+    matches = matches or proven + [item for item in judged if clean(item)]
     if matches:
         loss = max(shown, *(item.loss for item in matches))
         decider = ([item for item in matches if item.loss == loss] or matches)[-1]
@@ -404,7 +412,7 @@ def contradiction_during_day(
     earlier: tuple[Effect, ...] = (),
     floor: int | None = None,
     reset: bool = False,
-) -> tuple[Verdict | None, frozenset[Way] | None]:
+) -> tuple[Verdict | None, frozenset[Way] | None, Reading | None]:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
     allows at its time: the day before's end, ``start`` before any weekly
@@ -419,22 +427,41 @@ def contradiction_during_day(
     ways, and the latest attacks' late credits, ``earlier`` the day before's
     battles already in its end, may be missing. Also every way the day's
     battles may have shown by then, from which the readings from its end
-    Reset on go on (``decide``'s ``history``)."""
-    judged = (
-        judge(
-            reading, end_before_loss=start + pending_loss,
-            loss_candidates=(pending_loss,) if pending_loss else (),
-            loss_certain=bool(pending_loss), day_effects=earlier,
-            new_day_effects=day_effects, floor=floor, reset=reset,
+    Reset on go on (``decide``'s ``history``). And, with no reading
+    disagreeing, the last that shows the day's end: taken once every battle
+    of the day had landed, so none came after it, and fitting one way only
+    among those the trustworthy readings before it leave possible; a
+    confirm-only one only when no trustworthy one does (``decide``'s
+    ``proof``)."""
+    judged = [
+        item for item in (
+            judge(
+                reading, end_before_loss=start + pending_loss,
+                loss_candidates=(pending_loss,) if pending_loss else (),
+                loss_certain=bool(pending_loss), day_effects=earlier,
+                new_day_effects=day_effects, floor=floor, reset=reset,
+            )
+            for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
+            if day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
         )
-        for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
-        if not reading.confirm_only
-        and day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
-    )
-    misfit, settled = _settle(item for item in judged if item is not None)
+        if item is not None
+    ]
+    misfit, settled = _settle(item for item in judged if not item.reading.confirm_only)
     before = {effect.identity for effect in earlier}
-    return misfit, None if not settled else frozenset(
+    history = None if not settled else frozenset(
         (0, False, shown - before) for _, _, shown in settled[-1].ways)
+    landed = max((effect.lands_until for effect in day_effects if effect.change or effect.disputed),
+                 default=day_start)
+
+    def shows_end(item: _Judged) -> bool:
+        return item.reading.read_at >= landed and item.matched and not (
+            item.ambiguous or item.missed) and len(item.losses) == 1
+
+    confirming = [_narrowed(item, ways) for item in judged
+                  if item.reading.confirm_only and (ways := _ways_after(item, settled))]
+    proofs = [item.reading for item in settled if shows_end(item)] or [
+        item.reading for item in confirming if shows_end(item)]
+    return misfit, history, None if misfit or not proofs else proofs[-1]
 
 
 def _settle(
@@ -454,6 +481,16 @@ def _settle(
         surviving = ways
         settled.append(_narrowed(item, ways))
     return None, settled
+
+
+def _ways_after(
+    item: _Judged, settled: list[_Judged], history: frozenset[Way] | None = None,
+) -> frozenset[Way]:
+    """The ways ``item`` fits that can follow the last of ``settled`` taken
+    before it, or ``history`` when none was."""
+    return _following(item.ways, next(
+        (before.ways for before in reversed(settled)
+         if before.reading.read_at <= item.reading.read_at), history))
 
 
 def _following(ways: frozenset[Way], before: frozenset[Way] | None) -> frozenset[Way]:
