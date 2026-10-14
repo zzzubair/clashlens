@@ -8,10 +8,11 @@ day calculation failed for good after the Reset is Failed. And from
 ``BOARD_DEADLINE`` after the Reset, while the Reset has no published board,
 at most ``MAX_UNFINISHED`` members still waiting are Unavailable, so the
 board builds without them (owner decision, 12 Oct 2026). More waiting means
-something bigger is broken: the board keeps waiting and the alert check says
-how many (``alerts``). When such a member's day saves later, it changes the
-member as any new result does, which starts a correction, and the board is
-rebuilt with it.
+something bigger is broken: the board keeps waiting, and the alert check
+says how many (``alerts``), until ``HARD_DEADLINE``, when every member still
+waiting is Unavailable (owner decision, 14 Oct 2026). When such a member's
+day saves later, it changes the member as any new result does, which starts
+a correction, and the board is rebuilt with it.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Any
 
 BOARD_DEADLINE = timedelta(minutes=30)
 MAX_UNFINISHED = 50
+HARD_DEADLINE = timedelta(hours=1)
 
 
 def cut_due(connection: Any, boundary_at: datetime) -> bool:
@@ -52,7 +54,8 @@ def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool
         """,
         (boundary_at, generation_id, MAX_UNFINISHED + 1),
     ).fetchone()
-    return unpublished and now >= boundary_at + BOARD_DEADLINE and 0 < waiting <= MAX_UNFINISHED
+    return unpublished and now >= boundary_at + BOARD_DEADLINE and 0 < waiting and (
+        waiting <= MAX_UNFINISHED or now >= boundary_at + HARD_DEADLINE)
 
 
 def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id: int) -> None:

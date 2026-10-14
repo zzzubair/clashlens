@@ -26,6 +26,7 @@ from test_reconciliation_postgres import (
     _profile,
     _seed_reset_collection_identity,
 )
+from test_reset_scenarios_postgres import _tag
 
 from clashlens import (
     api_leaderboard,
@@ -54,11 +55,11 @@ def _attack(at: datetime) -> bytes:
     }]}).encode()
 
 
-def _swept(connection_info: str, archive_server, processor) -> None:
+def _swept(connection_info: str, archive_server, processor, tags=PLAYERS) -> None:
     """Save and process both Resets' readings for each player: each day
     starts and ends at 6,000 with no battles."""
     with psycopg.connect(connection_info) as connection:
-        for tag in PLAYERS:
+        for tag in tags:
             connection.execute(
                 "INSERT INTO players (normalized_tag, active) VALUES (%s, true)", (tag,)
             )
@@ -82,7 +83,7 @@ def _swept(connection_info: str, archive_server, processor) -> None:
             )
     jobs = []
     for at in (DAY_START, DAY_END):
-        for tag in PLAYERS:
+        for tag in tags:
             key, ids = f"{tag}-{at:%d}", []
             for endpoint, body in (("profile", _profile(6000, tag)),
                                    ("battle_log", b'{"items": []}')):
@@ -207,9 +208,10 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database) == (1, {"#2PP": "complete", LATE: "pending"})
-            # From 05:30, more unfinished than it may publish without means
-            # something bigger is broken: it keeps waiting.
+            # From 05:30 until 06:00, more unfinished than it may publish
+            # without means something bigger is broken: it keeps waiting.
             monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(minutes=30))
+            monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(days=36500))
             monkeypatch.setattr(board_deadline, "MAX_UNFINISHED", 0)
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database)[1][LATE] == "pending"
@@ -247,6 +249,33 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             assert _members(database)[0] == 3
             _build(database, processor)
             assert _board(database) == (3, ["#2PP", LATE])
+        finally:
+            database.close()
+
+
+def test_at_0600_the_board_publishes_without_every_unfinished_player(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, more than 50 unfinished kept it waiting for good.
+    late = [f"#{_tag(number)}" for number in range(1, 52)]
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor, ("#2PP", *late))
+            _calculate(database, processor, "#2PP")
+            monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(minutes=30))
+            boundary_publication.reevaluate_boundary_publications(database)
+            assert _members(database) == (
+                1, {"#2PP": "complete", **dict.fromkeys(late, "unavailable")})
+            _build(database, processor)
+            assert _board(database) == (1, ["#2PP"])
+
+            # Their days save later, and the board is rebuilt with them.
+            for tag in late:
+                assert set(_calculate(database, processor, tag)) == {"processed"}
+            _build(database, processor)
+            assert sorted(_board(database)[1]) == sorted(["#2PP", *late])
         finally:
             database.close()
 

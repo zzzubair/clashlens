@@ -1104,7 +1104,8 @@ def reset_stages(
         waiting, failed = (list(record[5:7]) + [0, 0])[:2]
         if waiting:
             blocked.append(f"the board waits for {waiting:,} players' day results" + (
-                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30"
+                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30;"
+                " at 06:00 it publishes without them all"
                 if waiting > BOARD_MAX_UNFINISHED else ""))
         if failed:
             blocked.append(f"{failed:,} players' day calculations failed for good")
