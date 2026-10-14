@@ -155,17 +155,28 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     ]);
   errors.splice(logged);
 
-  // Bases you attacked's day button reads the day before and comes back to
-  // today, without leaving the page. On Day 1 there is no earlier day.
+  // Bases you attacked's day button reads an earlier day and comes back to
+  // today, without leaving the page. On Day 1 there is no earlier day. Quick
+  // clicks read only the day the clicking stops on.
   const bases = page.getByRole("region", { name: "Bases you attacked", exact: true });
   const earlier = bases.getByRole("button", { name: "Earlier Legend day" });
+  const later = bases.getByRole("button", { name: "Later Legend day" });
   await expect(bases).toContainText("· today");
   if (await earlier.isEnabled()) {
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const day = /\/bases\?day=(\d+)/.exec(request.url())?.[1];
+      if (day) asked.push(day);
+    });
     await earlier.click();
+    const twice = await earlier.isEnabled();
+    if (twice) await earlier.click();
     await expect(bases).not.toContainText("· today");
     await expect(bases).not.toContainText("Loading Day");
     await expect(bases).not.toContainText("couldn't be read");
-    await bases.getByRole("button", { name: "Later Legend day" }).click();
+    expect(asked).toHaveLength(1);
+    await later.click();
+    if (twice) await later.click();
     await expect(bases).toContainText("· today");
   }
 

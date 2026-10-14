@@ -90,6 +90,10 @@ describe("Bases you attacked on earlier Legend days", () => {
       "GET",
       undefined,
       undefined,
+      undefined,
+      undefined,
+      undefined,
+      15_000,
     );
     expect(read.dayNumber).toBe(3);
     expect(read.rows?.[0]).toMatchObject({

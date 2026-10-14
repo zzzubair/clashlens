@@ -174,10 +174,12 @@ def test_only_a_today_read_that_asks_waits_for_the_board(monkeypatch) -> None:
     assert waits == [0, api_dashboard.BOARD_WAIT_SECONDS]
 
 
-def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -> None:
+def test_bases_read_offers_only_earlier_days_of_this_season(
+    database_url: str, monkeypatch
+) -> None:
     """Bases you attacked's day button: Day 1 up to the day before today,
-    each day's defenses read by one request at a time, once an hour at most,
-    and a Season's kept."""
+    one day's defenses read at a time, whatever the day, once an hour at
+    most, and a Season's kept."""
     today = ranked_day_for(NOW)
     app = create_app(
         FakeDatabase(),
@@ -189,6 +191,15 @@ def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -
         for day in (0, 29):
             target = f"/v1/players/%232PP/bases?day={day}"
             assert client.get(target, headers=_signed_headers(target)).status_code == 422
+
+        def busy(*_args: Any, **_kwargs: Any) -> None:
+            raise api_dashboard.PastDayBusy
+
+        monkeypatch.setattr(api_dashboard, "get_player_bases", busy)
+        target = "/v1/players/%232PP/bases?day=3"
+        response = client.get(target, headers=_signed_headers(target))
+        assert response.status_code == 503
+        monkeypatch.undo()
     with migrated_production_database(
         database_url, include_compact_collector=True
     ) as connection_info:
@@ -224,6 +235,11 @@ def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -
                         for _ in range(8)
                     ]
                     time.sleep(0.1)
+                    # Another day waits its turn, here too long.
+                    monkeypatch.setattr(api_dashboard, "PAST_DAY_WAIT_SECONDS", 0.05)
+                    with pytest.raises(api_dashboard.PastDayBusy):
+                        board.past_day(counted, today.start - timedelta(days=2))
+                    monkeypatch.undo()
                     go.set()
                     first = asked[0].result(timeout=5)
                     assert all(each.result(timeout=5) is first for each in asked)

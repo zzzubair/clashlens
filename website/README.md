@@ -216,7 +216,8 @@ button reads an earlier Legend day of this Season through
 (`GET /v1/players/{tag}/bases?day=N` on the private API, signed-in users only,
 behind the same switch), compared with every player's saved defenses that day,
 and keeps each day it read until the page closes or another account tab is
-chosen.
+chosen. It reads only the day where clicking stops for 0.4 s, and waits up to
+15 s, as the private API reads one earlier day at a time.
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;

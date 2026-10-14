@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -28,6 +28,8 @@ const STRENGTH_ORDER: BaseStrength[] = [
 ];
 /** A Legend day has 8 attacks. */
 const ATTACKS = 8;
+/** An earlier day is read once clicking stops this long, not each day passed. */
+const BASES_PAUSE_MS = 400;
 
 export interface BasesResponse {
   bases: PastBases | null;
@@ -49,28 +51,33 @@ export function useBasesDay(tag: string) {
   const [read, setRead] = useState<Map<number, PastBases | null>>(new Map());
   // Days whose read is on its way: a day has one read at a time.
   const asking = useRef(new Set<number>());
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(pause.current), []);
   return {
     chosen,
     read,
     choose(next: number | null) {
       setChosen(next);
+      clearTimeout(pause.current);
       if (next === null || read.get(next) || asking.current.has(next)) return;
-      asking.current.add(next);
       // A failed read is asked again.
       setRead((old) => {
         const kept = new Map(old);
         kept.delete(next);
         return kept;
       });
-      // Not a router fetcher: its failed read would replace the whole page with an error.
-      void fetch(basesPath(tag, next), { headers: { Accept: "application/json" } })
-        .then((response) => response.json() as Promise<BasesResponse>)
-        .then(({ bases }) => bases ?? null)
-        .catch(() => null)
-        .then((bases) => {
-          asking.current.delete(next);
-          setRead((old) => new Map(old).set(next, bases));
-        });
+      pause.current = setTimeout(() => {
+        asking.current.add(next);
+        // Not a router fetcher: its failed read would replace the whole page with an error.
+        void fetch(basesPath(tag, next), { headers: { Accept: "application/json" } })
+          .then((response) => response.json() as Promise<BasesResponse>)
+          .then(({ bases }) => bases ?? null)
+          .catch(() => null)
+          .then((bases) => {
+            asking.current.delete(next);
+            setRead((old) => new Map(old).set(next, bases));
+          });
+      }, BASES_PAUSE_MS);
     },
   };
 }

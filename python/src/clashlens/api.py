@@ -457,6 +457,8 @@ def create_app(
             )
         except ValueError:
             raise ApiError(422, "invalid_request") from None
+        except api_dashboard.PastDayBusy:
+            raise ApiError(503, "busy") from None
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(content=_json_safe(result))

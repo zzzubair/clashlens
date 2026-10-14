@@ -99,6 +99,10 @@ SIMILAR_FEWEST_DEFENSES = 50
 # An earlier Legend day's comparison is read again once this old, so a
 # repaired day shows through; at most a Season's days are kept.
 PAST_DAY_SECONDS = 3600
+# One earlier day's comparison is read at a time, as a first read reads
+# every saved day (4.1 s on production on 14 October 2026); a request that
+# waits longer than this for its turn is refused as busy.
+PAST_DAY_WAIT_SECONDS = 8
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
 MAX_ARMY_DAYS = 28
@@ -173,8 +177,10 @@ _DEFENSE_REPORT_TO_END = timedelta(seconds=155)
 
 # Every player's defenses, held defenses and trophies lost on defense in
 # their latest log of the Legend day %s, with that day's start trophies:
-# 11,666 players in 2.8 s on 13 October 2026, most of it reading their
-# saved days from disk, so DashboardBoard.past_day keeps it an hour.
+# 11,666 players in 2.8 s on 13 October 2026 and 4.1 s on 14 October, most
+# of it reading the whole table from disk. No index helps: going player by
+# player took 5.2 s, as about 11,700 saved days are read either way. So
+# DashboardBoard.past_day keeps it an hour and runs one such read at a time.
 _PAST_DAY_SQL = """
 SELECT ranked_day.start_trophies, day.defense_count,
        day.defense_count - COALESCE(day.defense_three_star_count, 0),
@@ -434,6 +440,10 @@ def _in_child_process(function: Callable[..., Any], *args: Any, **kwargs: Any) -
         raise
 
 
+class PastDayBusy(Exception):
+    """Another earlier Legend day's comparison is being read."""
+
+
 class DashboardBoard:
     """The board for rank ranges and held share, read in the background at
     most once every ``seconds``, one read at a time, so no request waits for
@@ -469,8 +479,9 @@ class DashboardBoard:
         self._projecting = False
         # Published log -> its battles, for the projection's equal-trophy order.
         self._reports: dict[int, _Reports] = {}
-        # Earlier Legend day start -> [its read's lock, when read, its comparison].
-        self._past: dict[datetime, list[Any]] = {}
+        # Earlier Legend day start -> (when read, its comparison).
+        self._past: dict[datetime, tuple[float, _Similar]] = {}
+        self._past_read = Lock()
 
     def current(
         self, database: ApiDatabase, now: datetime, *, wait: float = 0
@@ -591,25 +602,44 @@ class DashboardBoard:
     def past_day(self, database: ApiDatabase, day_start: datetime) -> _Similar:
         """An earlier Legend day's defenses for comparing bases, read once
         an hour at most: every player's with a saved day, as a finished day
-        has no Live Leaderboard. Requests for a day being read wait for that
-        read without a connection."""
-        with self._lock:
-            kept = self._past.setdefault(day_start, [Lock(), float("-inf"), None])
-            # Only a Season's worth, the newest.
-            for old in sorted(self._past)[:-(SEASON_DURATION // RANKED_DAY_DURATION)]:
-                del self._past[old]
-        with kept[0]:
-            if self._clock() >= kept[1] + PAST_DAY_SECONDS:
-                by_start: dict[int, list[int]] = {}
-                with database.pool.connection() as connection:
-                    rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
-                for start, defended, held, lost in rows:
-                    tally = by_start.setdefault(int(start), [0, 0, 0])
-                    tally[0] += int(defended)
-                    tally[1] += int(held)
-                    tally[2] += int(lost or 0)
-                kept[1], kept[2] = self._clock(), _similar(by_start)
-            return kept[2]
+        has no Live Leaderboard. One read runs at a time, whatever the day,
+        so they hold one database connection between them; others wait
+        without one, and PastDayBusy after PAST_DAY_WAIT_SECONDS."""
+
+        def kept() -> _Similar | None:
+            with self._lock:
+                read = self._past.get(day_start)
+            if read is None or self._clock() >= read[0] + PAST_DAY_SECONDS:
+                return None
+            return read[1]
+
+        similar = kept()
+        if similar is not None:
+            return similar
+        if not self._past_read.acquire(timeout=PAST_DAY_WAIT_SECONDS):
+            raise PastDayBusy
+        try:
+            # Another request may have read it while this one waited.
+            similar = kept()
+            if similar is not None:
+                return similar
+            by_start: dict[int, list[int]] = {}
+            with database.pool.connection() as connection:
+                rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
+            for start, defended, held, lost in rows:
+                tally = by_start.setdefault(int(start), [0, 0, 0])
+                tally[0] += int(defended)
+                tally[1] += int(held)
+                tally[2] += int(lost or 0)
+            similar = _similar(by_start)
+            with self._lock:
+                self._past[day_start] = (self._clock(), similar)
+                # Only a Season's worth, the newest.
+                for old in sorted(self._past)[:-(SEASON_DURATION // RANKED_DAY_DURATION)]:
+                    del self._past[old]
+            return similar
+        finally:
+            self._past_read.release()
 
     def projection(
         self, now: datetime, tag: str, *, wait: float = 0

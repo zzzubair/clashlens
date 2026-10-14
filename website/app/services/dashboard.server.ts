@@ -192,6 +192,12 @@ export async function getPlayerToday(
 }
 
 /** Day `day` of this Season's bases, from GET /v1/players/{tag}/bases?day=. */
+/**
+ * A first read of an earlier day takes about 4 s, after any other day's read
+ * the private API is running (it runs one at a time, up to 8 s).
+ */
+const BASES_TIMEOUT_MS = 15_000;
+
 export async function getPlayerBases(tag: string, day: number): Promise<PastBases> {
   if (!isCanonicalPlayerTag(tag) || !Number.isInteger(day) || day < 1 || day > 28)
     throw new PythonApiError(422, { error: "invalid_request" });
@@ -200,6 +206,10 @@ export async function getPlayerBases(tag: string, day: number): Promise<PastBase
     "GET",
     undefined,
     undefined,
+    undefined,
+    undefined,
+    undefined,
+    BASES_TIMEOUT_MS,
   );
   if (!isRecord(payload) || payload.tag !== tag || payload.season_day_number !== day)
     malformed();
