@@ -46,6 +46,9 @@ def _run(database: Database, connection, work_type: str, complete) -> None:
 def _publish(database: Database, connection) -> None:
     _run(database, connection, "build_snapshot", snapshots.complete_snapshot)
     _run(database, connection, "build_analytics", boundary_publication.complete_analytics)
+    # The army's inputs freeze at the next publication check.
+    connection.commit()
+    boundary_publication.reevaluate_boundary_publications(database)
     _run(database, connection, "build_army_analytics", army_ingestion.complete_army_analytics)
 
 

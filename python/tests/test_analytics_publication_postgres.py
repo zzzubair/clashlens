@@ -41,7 +41,7 @@ def _store_battle_log(
     return job_id
 
 
-def test_frozen_snapshot_waits_for_complete_analytics_publication(
+def test_frozen_snapshot_is_served_once_built_and_its_analytics_follow(
     database_url: str,
     archive_server,
 ) -> None:
@@ -94,7 +94,7 @@ def test_frozen_snapshot_waits_for_complete_analytics_publication(
                 ).fetchall()
 
             by_kind = {text(row[1]): row for row in snapshots}
-            assert text(by_kind["frozen"][2]) == "building"
+            assert text(by_kind["frozen"][2]) == "published"
             assert text(by_kind["live"][2]) == "published"
             assert len(analytics_jobs) == 1
             analytics_job_id, analytics_input, analytics_key, analytics_status = (
@@ -108,11 +108,15 @@ def test_frozen_snapshot_waits_for_complete_analytics_publication(
             )
             assert text(analytics_key).startswith("build_analytics:snapshot:")
 
+            # The Daily board shows none of its analytics, so it does not
+            # wait for them.
             api = ApiDatabase(connection_info)
             try:
-                assert api_leaderboard.get_frozen_leaderboard(api, limit=10) is None
+                served = api_leaderboard.get_frozen_leaderboard(api, limit=10)
             finally:
                 api.close()
+            assert served is not None
+            assert [entry["tag"] for entry in served["entries"]] == ["#2PP"]
 
             analytics_result = processor.process_job(
                 int(analytics_job_id),

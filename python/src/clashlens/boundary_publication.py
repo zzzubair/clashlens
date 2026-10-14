@@ -633,15 +633,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 (snapshot_id,),
             ).fetchone()
             assert existing_summary_count is not None
-            if _text_value(snapshot[4]) == "published":
-                if tuple(int(value) for value in existing_summary_count) != (
-                    2,
-                    2,
-                    2,
-                ):
-                    raise ValueError(
-                        "published frozen snapshot has incomplete analytics"
-                    )
+            if tuple(int(value) for value in existing_summary_count) == (2, 2, 2):
                 if boundary_generation is not None:
                     _maybe_emit_boundary_signal(
                         database, connection, int(boundary_generation[0])
@@ -650,7 +642,8 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     connection, claim, job, state="complete", outcome="processed"
                 )
                 return
-            if _text_value(snapshot[4]) != "building":
+            # The board's build publishes it, before these statistics.
+            if _text_value(snapshot[4]) not in {"building", "published"}:
                 raise ValueError("frozen snapshot is not available for analytics")
 
             ranked_day = None
@@ -982,7 +975,9 @@ def complete_analytics(database: Database, claim: Claim) -> None:
             assert complete is not None
             if tuple(int(value) for value in complete) != (2, 2, 2):
                 raise ValueError("analytics publication is incomplete")
-            published = connection.execute(
+            # A build queued before boards published at their build's end
+            # left its board building.
+            connection.execute(
                 """
                 UPDATE leaderboard_snapshots
                 SET state = 'published', published_at = clock_timestamp()
@@ -990,8 +985,6 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 """,
                 (snapshot_id,),
             )
-            if published.rowcount != 1:
-                raise ValueError("frozen snapshot publication fence was lost")
             connection.execute(
                 """
                 UPDATE leaderboard_snapshots

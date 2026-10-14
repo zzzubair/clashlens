@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import as_api_role, domain_database, store_observation, text
 from psycopg.types.json import Jsonb
 from test_reconciliation_postgres import (
     DAY_END,
@@ -26,6 +26,7 @@ from test_reconciliation_postgres import (
 )
 
 from clashlens import (
+    api_leaderboard,
     board_deadline,
     boundary,
     boundary_publication,
@@ -33,6 +34,7 @@ from clashlens import (
     queue_refresh,
     reconciliation_db,
 )
+from clashlens.api_db import ApiDatabase
 from clashlens.db import WORKER_STATEMENT_TIMEOUT_SECONDS, Database
 
 PLAYERS = ("#2PP", "#8PP")
@@ -276,6 +278,34 @@ def test_the_board_publishes_before_its_army_inputs_freeze(
                     (DAY_END,),
                 ).fetchone()
             assert published < army_frozen
+        finally:
+            database.close()
+
+
+def test_the_board_is_served_once_built_before_its_statistics(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, it waited for the army share code statistics no Daily board
+    # shows: 1 min 22 s on 14 Oct 2026.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            for build in _waiting(database, ["build_snapshot"]):
+                assert processor.process_job(build, owner="build").outcome == "processed"
+            assert _waiting(database, ["build_analytics"])
+            api = ApiDatabase(as_api_role(connection_info))
+            try:
+                served = api_leaderboard.get_frozen_leaderboard(api, limit=100)
+            finally:
+                api.close()
+            assert served is not None and served["reset_at"] == DAY_END.isoformat()
+            assert sorted(entry["tag"] for entry in served["entries"]) == list(PLAYERS)
+            _build(database, processor)
+            assert _board(database) == (1, list(PLAYERS))
         finally:
             database.close()
 
