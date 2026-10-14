@@ -951,8 +951,9 @@
     display: none;
   }
 
+  /* The right column wraps past 60%, so a long Trophies line never squeezes the name. */
   .opponents-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) fit-content(60%);
     row-gap: 0.5rem;
   }
 
