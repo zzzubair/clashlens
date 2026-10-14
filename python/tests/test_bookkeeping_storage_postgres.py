@@ -177,7 +177,7 @@ def test_compact_bookkeeping_keeps_results_pages_and_leaderboard_unchanged(
                 ).fetchone()[0] == 0
                 after = _log_rows(connection)
                 assert after[: len(rows)] == rows
-                assert [row[4] for row in after[len(rows):]] == [0, 1, 2]
+                assert [row[3] for row in after[len(rows):]] == [0, 1, 2]
         finally:
             api.close()
             database.close()

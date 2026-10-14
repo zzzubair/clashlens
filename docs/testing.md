@@ -299,3 +299,4 @@ Every boundary case in section 8 of the three reliability reports of
 | Case | Reports | End-to-end test | Other tests |
 |---|---|---|---|
 | A Reset query whose cost grows with the battles saved (the never-played check of PR 451) | O9, S never played | Reset-size story | `test_unplayed_5000_postgres.py::test_the_never_played_check_reads_only_the_players_own_battles` |
+| A day result's battle log read going through the empty, unused battle_log_observation_rows table: once a vacuum recorded it as 0 rows (14 October 2026, 16:56), each read took 10 to 70 seconds | 14 Oct diagnosis | `test_coverage_single_read_postgres.py::test_day_coverage_never_reads_the_unused_occurrence_table`: with production's statistics restored, the old code's read scans every battle report | |

@@ -530,18 +530,16 @@ def complete_analytics(database: Database, claim: Claim) -> None:
     # stored log before the day filter applies, so this selects the logs
     # first. A legacy row counts once per evidence version, as in the view;
     # the newer layouts' latest-evidence lookup returns one row and is
-    # omitted. A row with no outcome of its own takes its source row's.
+    # omitted.
     occurrences = """
-        SELECT NULL::text AS outcome, source.id AS source_row_id,
-               log.parser_version
+        SELECT source.id AS source_row_id, log.parser_version
         FROM selected_log AS log
         JOIN battle_source_rows AS source
           ON source.battle_log_observation_id = log.id
     """
     if content_dedup:
         occurrences = """
-            SELECT NULL::text AS outcome, source.id AS source_row_id,
-                   log.parser_version
+            SELECT source.id AS source_row_id, log.parser_version
             FROM selected_log AS log
             JOIN battle_source_rows AS source
               ON source.battle_log_observation_id = log.id
@@ -550,20 +548,13 @@ def complete_analytics(database: Database, claim: Claim) -> None:
              AND evidence.observation_row_id IS NULL
             WHERE log.parsed_payload_id IS NULL
             UNION ALL
-            SELECT occurrence.outcome, occurrence.source_row_id,
-                   log.parser_version
-            FROM selected_log AS log
-            JOIN battle_log_observation_rows AS occurrence
-              ON occurrence.battle_log_observation_id = log.id
-            WHERE log.parsed_payload_id IS NULL
-            UNION ALL
-            SELECT NULL, member.source_row_id, log.parser_version
+            SELECT member.source_row_id, log.parser_version
             FROM selected_log AS log
             JOIN battle_payload_rows AS member
               ON member.parsed_payload_id = log.parsed_payload_id
              AND member.reporting_player_id = log.player_id
             UNION ALL
-            SELECT NULL, member.source_row_id, log.parser_version
+            SELECT member.source_row_id, log.parser_version
             FROM selected_log AS log
             JOIN battle_payload_row_lists AS list
               ON list.parsed_payload_id = log.parsed_payload_id
@@ -734,22 +725,21 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     WHERE log.observed_at >= %s
                       AND log.observed_at < %s
                 ), counted AS (
-                    SELECT outcome, source_row_id, parser_version,
+                    SELECT source_row_id, parser_version,
                            count(*) AS occurrences
                     FROM ({occurrences}) AS occurrence
-                    GROUP BY outcome, source_row_id, parser_version
+                    GROUP BY source_row_id, parser_version
                 )
                 SELECT COALESCE(sum(counted.occurrences), 0)
                 FROM counted
                 JOIN battle_source_rows AS source
                   ON source.id = counted.source_row_id
                 WHERE (
-                      COALESCE(counted.outcome, source.outcome)
-                          = 'malformed_legend_row'
+                      source.outcome = 'malformed_legend_row'
                       AND NOT {no_opponent}
                    )
                    OR (
-                      COALESCE(counted.outcome, source.outcome) = 'valid_legend'
+                      source.outcome = 'valid_legend'
                       AND (
                           NOT (source.source_json ? 'armyShareCode')
                           OR source.source_json ->> 'armyShareCode' IS NULL

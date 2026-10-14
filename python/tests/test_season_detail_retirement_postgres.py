@@ -1307,7 +1307,7 @@ def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
             assert battle_ingestion._guard_battle_rows(connection, [item]) == [item]
 
 
-def test_pre_anchor_battle_ingestion_works_for_both_paths(
+def test_pre_anchor_battle_ingestion_works(
     database_url: str, archive_server
 ) -> None:
     from domain_test_support import store_observation
@@ -1330,22 +1330,6 @@ def test_pre_anchor_battle_ingestion_works_for_both_paths(
             )
             compact = processor.process_job(compact_job, owner="pre-anchor-compact")
             assert compact is not None and compact.outcome == "processed"
-        finally:
-            database.close()
-        database, processor = _processor(connection_info, archive_server)
-        database._supports_compact_battles = False
-        try:
-            _, legacy_job = store_observation(
-                connection_info,
-                archive_server,
-                occurrence_key="pre-anchor-legacy",
-                endpoint="battle_log",
-                body=body + b"\n",
-                observed_at=DAY0 + timedelta(minutes=1),
-                normalized_tag="#2PP",
-            )
-            legacy = processor.process_job(legacy_job, owner="pre-anchor-legacy")
-            assert legacy is not None and legacy.outcome == "processed"
         finally:
             database.close()
 

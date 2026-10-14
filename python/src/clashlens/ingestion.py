@@ -71,7 +71,6 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
 
 
 def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -> None:
-    compact = getattr(database, "_supports_compact_battles", False)
     projection = _profile_semantic_projection(profile)
     if not getattr(database, "_supports_content_dedup", False):
         return _complete_profile_legacy(database, claim, profile)
@@ -98,7 +97,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 schema_version=schema_version,
                 parse_outcome="valid",
                 parsed_json=profile.profile_json,
-                representation="player_profile_versions" if compact else None,
+                representation="player_profile_versions",
             )
             connection.execute(
                 """
@@ -164,7 +163,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                         profile.previous_league_season_id,
                         profile.eligibility_reason, profile.source_contract_state,
                         profile.season_anchor_state,
-                        Jsonb({"clan": {"name": projection["clan_name"]}} if compact else profile.profile_json),
+                        Jsonb({"clan": {"name": projection["clan_name"]}}),
                         parsed_payload_id, Jsonb(projection),
                     ),
                 ).fetchone()
