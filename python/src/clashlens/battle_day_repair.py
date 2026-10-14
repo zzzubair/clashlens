@@ -346,7 +346,7 @@ def add_republish_command(
         "--repair", choices=domain_repair.REPAIR_ACTIONS
     )
     # With --players, the Season repair recalculates only the players a rule
-    # change can affect; see domain_repair._scoped_players.
+    # change can affect; see domain_repair._scoped_players and _promoted_players.
     republish_current_season.add_argument("--players", choices=domain_repair.REPAIR_SCOPES)
     # With --campaign, run one action of a Season's repair campaign instead
     # of queueing a batch; see domain_repair.
