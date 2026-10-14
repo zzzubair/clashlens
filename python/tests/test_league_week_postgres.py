@@ -1,0 +1,203 @@
+"""End-to-end: the weekly league record decided from saved game data.
+
+The collector's saved responses for a 12 October 2026-like Monday go
+through the real worker into PostgreSQL; then the worker's maintenance timer
+decides each player's weeks. Stage 1 records the weeks and changes no day or
+board, so these tests check the records. See docs/testing.md.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import psycopg
+from domain_test_support import domain_database, text
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
+
+from clashlens import league_week, queue_refresh, worker
+from clashlens.db import Database
+from clashlens.stage_metrics import StageMetrics
+
+W1, W2 = SEASON, SEASON + timedelta(days=7)
+
+
+def test_every_evidence_table_marks_the_weeks_it_changes(database_url: str) -> None:
+    """Evidence nobody marks is never decided: each table in
+    ``EVIDENCE_TABLES`` needs a trigger writing ``league_week_dirty``, and
+    no other table has one."""
+    with domain_database(database_url) as connection_info, psycopg.connect(
+        connection_info
+    ) as connection:
+        tables = {
+            text(table) for (table,) in connection.execute(
+                """
+                SELECT DISTINCT trigger.tgrelid::regclass::text
+                FROM pg_trigger AS trigger
+                JOIN pg_proc AS function ON function.oid = trigger.tgfoid
+                WHERE NOT trigger.tgisinternal
+                  AND function.prosrc LIKE '%league_week_dirty%'
+                """
+            ).fetchall()
+        }
+    assert tables == set(league_week.EVIDENCE_TABLES)
+
+
+def test_a_battle_moved_to_another_day_marks_both_weeks(database_url: str) -> None:
+    """A repair moving a battle to another day (as migration 0057 did) marks
+    the week it left and the week it joined, for both players; a second
+    report of the battle that moves nothing marks nothing; deleting it marks
+    its week."""
+    with domain_database(database_url) as connection_info, psycopg.connect(
+        connection_info
+    ) as connection:
+        first, second = (connection.execute(
+            "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (tag,)
+        ).fetchone()[0] for tag in ("#2PP", "#8PP"))
+        sunday, monday = W2 - timedelta(days=1), W2
+
+        def marks() -> set[tuple[int, datetime]]:
+            return {(player, week) for player, week in connection.execute(
+                "DELETE FROM league_week_dirty RETURNING player_id, week_start").fetchall()}
+
+        battle = connection.execute(
+            """
+            INSERT INTO legend_battles (ranked_day_start, attacker_player_id, defender_player_id)
+            VALUES (%s, %s, %s) RETURNING id
+            """,
+            (sunday, first, second),
+        ).fetchone()[0]
+        inserted = marks()
+        connection.execute(
+            "UPDATE legend_battles SET disagreement_state = 'agreed' WHERE id = %s", (battle,))
+        agreed = marks()
+        connection.execute(
+            "UPDATE legend_battles SET ranked_day_start = %s WHERE id = %s", (monday, battle))
+        moved = marks()
+        connection.execute("DELETE FROM legend_battles WHERE id = %s", (battle,))
+        deleted = marks()
+
+    assert inserted == {(first, W1), (second, W1)}
+    assert agreed == set()
+    assert moved == {(first, W1), (second, W1), (first, W2), (second, W2)}
+    assert deleted == {(first, W2), (second, W2)}
+
+
+STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH = "#2PP", "#8PP", "#9PP", "#PPP", "#YPP"
+
+
+def _decide(connection_info: str, monkeypatch) -> None:
+    """The worker's maintenance timer, run as the worker's database login
+    until no week is left to decide, on Wednesday 14 October 2026."""
+    monkeypatch.setattr(league_week, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
+    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+    # The twice-daily re-check follows the real clock; it is not under test.
+    monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
+    options = conninfo_to_dict(connection_info).get("options", "")
+    database = Database(make_conninfo(
+        connection_info, options=f"{options} -c role=clashlens_python_worker"))
+    maintenance = worker.TimedMaintenance(database, StageMetrics())
+    try:
+        for _ in range(20):
+            maintenance.next_reevaluation_at = float("-inf")
+            maintenance.run_due()
+            with psycopg.connect(connection_info) as connection:
+                if not connection.execute("SELECT count(*) FROM league_week_dirty").fetchone()[0]:
+                    return
+        raise AssertionError("the maintenance timer left weeks undecided")
+    finally:
+        maintenance.close()
+        database.close()
+
+
+def _records(connection_info: str, tags: list[str]) -> dict[tuple[str, datetime], tuple]:
+    """Each player's week: league, entry, strength, proof kind, when the
+    proof was read or fought, when a pair's second answer was read, the
+    evidence against, and the decision number."""
+    with psycopg.connect(connection_info) as connection:
+        return {
+            (text(tag), week): (text(league), text(entry), strength, text(kind), proof_at,
+                                second_at, text(against), number)
+            for tag, week, league, entry, strength, kind, proof_at, second_at, against, number
+            in connection.execute(
+                """
+                SELECT player.normalized_tag, week.week_start, week.league, week.entry,
+                       week.strength, week.proof_kind, week.proof_at,
+                       second.response_completed_at, week.against_kind, week.decision_number
+                FROM player_league_weeks AS week
+                JOIN players AS player ON player.id = week.player_id
+                LEFT JOIN collector_observations AS second ON second.id = week.proof_second_id
+                WHERE player.normalized_tag = ANY(%s)
+                """,
+                (tags,),
+            ).fetchall()
+        }
+
+
+def test_the_12_october_2026_monday_in_the_weekly_league_record(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Five players around the 12 October 2026 Monday Reset, the Season's
+    second week. STAYED, at 4,960 below 5,000, and GLITCH play Legend
+    battles both weeks; GLITCH is read once in Legend II naming Season 0
+    hours after the Reset, as 86 players were. DROPPED played Sunday, is
+    still shown in Legend I by the Reset reading, then in Legend II naming
+    Season 0 by the settlement check and once more after the display window.
+    FAILED's Monday Reset request failed; its battles show later. FIRST_SEEN
+    was promoted at the Reset and first read on Tuesday.
+
+    Every Legend I week is Legend I, DROPPED's second is below, proven only
+    once its second Legend II answer is saved, and deciding again with
+    nothing new changes nothing."""
+    sunday, monday, tuesday = day(7), day(8), day(9)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch,
+                       STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH)
+        for tag in (STAYED, FAILED, GLITCH):
+            story.players[tag].battles = attacks(sunday, 40, 40) + defenses(sunday, 40) + attacks(
+                monday, 40) + defenses(monday, 30)
+        story.players[DROPPED].battles = attacks(sunday, 40) + defenses(sunday, 40, 40)
+        story.players[FIRST_SEEN].battles = attacks(monday + timedelta(hours=3), 40, 40)
+        story.reset(sunday, {STAYED: (4920, SEASON), DROPPED: (4960, SEASON),
+                             FAILED: (5100, SEASON), GLITCH: (5100, SEASON)})
+        story.reset(monday, {STAYED: (5000, SEASON), DROPPED: (4920, SEASON),
+                             FAILED: (None, SEASON), GLITCH: (5140, SEASON)})
+        story.players[DROPPED].dropped = True
+        story.reads(monday + timedelta(minutes=20), {DROPPED: 4920})
+        story.players[GLITCH].dropped = True
+        story.read(GLITCH, monday + timedelta(hours=6), 5150)
+        story.players[GLITCH].dropped = False
+        story.reads(monday + timedelta(hours=7), {STAYED: 5010, FAILED: 5150, GLITCH: 5150})
+        story.reads(tuesday + timedelta(hours=1, minutes=25), {FIRST_SEEN: 5080})
+        story.run_worker()
+        _decide(connection_info, monkeypatch)
+        before_pair = _records(connection_info, list(story.players))
+        story.reads(monday + timedelta(hours=9), {DROPPED: 4920})
+        story.run_worker()
+        _decide(connection_info, monkeypatch)
+        decided = _records(connection_info, list(story.players))
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO league_week_dirty (player_id, week_start, source)"
+                " SELECT player_id, week_start, 'seed' FROM player_league_weeks")
+        _decide(connection_info, monkeypatch)
+        again = _records(connection_info, list(story.players))
+
+    battle = ("legend_i", "stayed", 3, "battle")
+    assert decided == {
+        (STAYED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (STAYED, W2): (*battle, monday, None, None, 1),
+        (GLITCH, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (GLITCH, W2): (*battle, monday, None, None, 1),
+        (FAILED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (FAILED, W2): (*battle, monday, None, None, 1),
+        (DROPPED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (DROPPED, W2): ("below_legend_i", None, 1, "unconfirmed_pair",
+                        monday + timedelta(minutes=20), monday + timedelta(hours=9), None, 2),
+        (FIRST_SEEN, W2): ("legend_i", "first_seen", 3, "battle", monday, None, None, 1),
+    }
+    # The Reset reading still showed Legend I, inside the display window;
+    # one Legend II answer alone proves nothing.
+    assert before_pair[DROPPED, W2] == (
+        "unknown", None, 0, None, None, None, None, 1)
+    assert again == decided
