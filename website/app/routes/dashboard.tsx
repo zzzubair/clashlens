@@ -29,7 +29,7 @@ import {
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
-import { normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
@@ -300,30 +300,42 @@ function AccountTabs({
         const net =
           !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
         const name = player.name ?? player.tag;
+        // The tab switches the dashboard; Page beside it opens the player page.
         return (
-          <Link
-            key={player.tag}
-            className="dash-account"
-            to={`?${next.toString()}`}
-            aria-current={player.tag === selectedTag ? "page" : undefined}
-            preventScrollReset
-            replace
-          >
-            <bdi className="dash-name" title={name}>
-              {name}
-            </bdi>
-            <span className="dash-account-line">
-              {accountLine(player)}
-              {net !== null ? (
-                <>
-                  {" · "}
-                  <b className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}>
-                    {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
-                  </b>
-                </>
-              ) : null}
-            </span>
-          </Link>
+          <span key={player.tag} className="dash-account-tab">
+            <Link
+              className="dash-account"
+              to={`?${next.toString()}`}
+              aria-current={player.tag === selectedTag ? "page" : undefined}
+              preventScrollReset
+              replace
+            >
+              <bdi className="dash-name" title={name}>
+                {name}
+              </bdi>
+              <span className="dash-account-line">
+                {accountLine(player)}
+                {net !== null ? (
+                  <>
+                    {" · "}
+                    <b
+                      className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}
+                    >
+                      {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
+                    </b>
+                  </>
+                ) : null}
+              </span>
+            </Link>
+            <Link
+              className="dash-account-page"
+              to={canonicalPlayerPath(player.tag)}
+              aria-label={`${name} player page`}
+            >
+              <DashboardIcon name="open" />
+              <span aria-hidden="true">Page</span>
+            </Link>
+          </span>
         );
       })}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
