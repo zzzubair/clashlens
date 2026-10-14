@@ -322,10 +322,8 @@ def test_past_reset_build_ready_in_the_quiet_window_starts_after_it(
 
                 clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
                 boundary_publication.reevaluate_boundary_publications(database)
-                assert _build_jobs(connection, PAST, 2) == [
-                    "build_army_analytics",
-                    "build_snapshot",
-                ]
+                # The army's build follows once the board publishes.
+                assert _build_jobs(connection, PAST, 2) == ["build_snapshot"]
         finally:
             database.close()
 
@@ -342,10 +340,8 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 for boundary_at in (PAST, LIVE):
                     _created(connection, boundary_at, NOON - timedelta(hours=10))
                 _record(database, connection, player_id, PAST, 2)
-                assert _build_jobs(connection, PAST, 2) == [
-                    "build_army_analytics",
-                    "build_snapshot",
-                ]
+                # The army's build follows once the board publishes.
+                assert _build_jobs(connection, PAST, 2) == ["build_snapshot"]
                 clock.now = datetime(2026, 8, 11, 4, 31, tzinfo=UTC)
                 _record(database, connection, player_id, LIVE, 2)
                 connection.commit()
@@ -375,11 +371,7 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 return sorted(jobs)
 
             def both(boundary_text: str) -> list[tuple[str, int, str]]:
-                return [
-                    (boundary_text, generation, work_type)
-                    for generation in (1, 2)
-                    for work_type in ("build_army_analytics", "build_snapshot")
-                ]
+                return [(boundary_text, generation, "build_snapshot") for generation in (1, 2)]
 
             live = LIVE.strftime("%Y-%m-%dT%H:%M:%SZ")
             past = PAST.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -395,7 +387,7 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 ).fetchall()
             assert [(str(state), count) for state, count in attempts] == [
                 ("pending", 0)
-            ] * 4
+            ] * 2
 
             clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
             assert claimed() == both(past)
