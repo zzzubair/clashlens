@@ -11,8 +11,8 @@
 -- the reason league_not_confirmed so every reader shows it as not
 -- confirmed. league says which: 'legend_i' or 'unknown'.
 --
--- player_leagues_now: each player's league this week and last week, from
--- the record; a week the record has not decided is 'unknown'.
+-- player_leagues_now: each player's league this week, from the record; a
+-- week the record has not decided is 'unknown'.
 --
 -- Both are plain views, read with the migration owner's rights; they hold
 -- no rows and cost nothing to keep.
@@ -39,16 +39,11 @@ LEFT JOIN player_league_weeks AS week
 WHERE week.league IS DISTINCT FROM 'below_legend_i';
 
 CREATE OR REPLACE VIEW player_leagues_now AS
-SELECT player.id AS player_id,
-       COALESCE(this_week.league, 'unknown') AS league,
-       COALESCE(last_week.league, 'unknown') AS league_last_week
+SELECT player.id AS player_id, COALESCE(this_week.league, 'unknown') AS league
 FROM players AS player
 LEFT JOIN player_league_weeks AS this_week
   ON this_week.player_id = player.id
- AND this_week.week_start = clashlens_week_start(now())
-LEFT JOIN player_league_weeks AS last_week
-  ON last_week.player_id = player.id
- AND last_week.week_start = clashlens_week_start(now()) - interval '7 days';
+ AND this_week.week_start = clashlens_week_start(now());
 
 REVOKE ALL PRIVILEGES ON TABLE legend_days, player_leagues_now FROM PUBLIC;
 GRANT SELECT ON TABLE legend_days, player_leagues_now
