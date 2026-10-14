@@ -51,9 +51,9 @@ one Reset told the way production lives it:
    fights. `attacks(start, 40, 40)` gives attacks an hour apart from an hour
    after `start`; `defenses(start, 30, 30)` defenses an hour apart from 30
    minutes after it. Both take the attacker's army share code as `army=`
-   (else the fixture's Other army); `multiplayer(start, n)` non-Legend battles that
-   take rows of the 50-row battle log. `Battle(at, trophies, attack)` places
-   one battle exactly.
+   (else the fixture's Other army); `multiplayer(start, n)` non-Legend battles
+   that take rows of the 50-row battle log. `Battle(at, trophies, attack)`
+   places one battle exactly.
 2. **What the collector saves.** `story.reset(boundary, readings)` is a Reset
    sweep: it saves each member's profile, showing the given trophies and
    Season (None for Season 0, and None trophies for a profile that never
