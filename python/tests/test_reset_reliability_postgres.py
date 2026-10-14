@@ -19,6 +19,7 @@ import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database, store_observation, text
 from psycopg.types.json import Jsonb
+from test_boundary_publication_manifests_postgres import _freeze_army_inputs
 from test_reconciliation_postgres import (
     DAY_END,
     DAY_START,
@@ -32,6 +33,7 @@ from test_reset_scenarios_postgres import _tag
 from clashlens import (
     alerts,
     api_leaderboard,
+    army_ingestion,
     board_deadline,
     boundary,
     boundary_manifest,
@@ -425,6 +427,134 @@ def test_army_results_publish_while_the_boards_statistics_keep_failing(
                     (DAY_END,),
                 ).fetchall()
             assert [tuple(map(text, row)) for row in states] == [("building", "published")]
+        finally:
+            database.close()
+
+
+def test_a_failed_army_build_runs_again_and_a_left_out_players_day_still_joins_the_board(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    run, faults = army_ingestion.complete_army_analytics, [ValueError("an army build fault")]
+
+    def faulty(database, claim):
+        if faults and claim.input_json.get("boundary_at") == f"{DAY_END:%Y-%m-%dT%H:%M:%SZ}":
+            raise faults.pop()
+        return run(database, claim)
+
+    monkeypatch.setattr(army_ingestion, "complete_army_analytics", faulty)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        outcomes = []
+
+        def background_passes(waited: bool) -> None:
+            """Six background checks, each running the builds due; once
+            ``waited``, a rerun's wait is over too."""
+            for _ in range(6):
+                boundary_publication.reevaluate_boundary_publications(database)
+                for job_id in _waiting(database, BUILDS):
+                    if waited:
+                        _due_now(database, job_id)
+                    if result := processor.process_job(job_id, owner=f"build-{job_id}"):
+                        outcomes.append(result.outcome)
+
+        def served() -> list[tuple[str, str]]:
+            api = ApiDatabase(as_api_role(connection_info))
+            try:
+                board = api_leaderboard.get_frozen_leaderboard(api, limit=100)
+            finally:
+                api.close()
+            assert board is not None and board["reset_at"] == DAY_END.isoformat()
+            return [(entry["tag"], entry["confidence"]) for entry in board["entries"]]
+
+        try:
+            _swept(connection_info, archive_server, processor)
+            _calculate(database, processor, "#2PP")
+            background_passes(waited=False)
+            assert (faults, outcomes.count("failed")) == ([], 1)
+            assert served() == [("#2PP", "confirmed"), (LATE, "uncertain")]
+
+            # The left-out player's day saves while the army build waits.
+            assert set(_calculate(database, processor, LATE)) == {"processed"}
+            background_passes(waited=False)
+            assert served() == [("#2PP", "confirmed"), (LATE, "uncertain")]
+            background_passes(waited=True)
+            assert served() == [("#2PP", "confirmed"), (LATE, "confirmed")]
+            assert _board(database) == (2, list(PLAYERS))
+        finally:
+            database.close()
+
+
+def test_an_army_rerun_waits_a_minute_however_often_the_statistics_failed(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    run, faults = army_ingestion.complete_army_analytics, [ValueError("an army build fault")]
+
+    def statistics(_database, _claim):
+        raise ValueError("a statistics fault")
+
+    def army_once(database, claim):
+        if faults and claim.input_json.get("boundary_at") == f"{DAY_END:%Y-%m-%dT%H:%M:%SZ}":
+            raise faults.pop()
+        return run(database, claim)
+
+    monkeypatch.setattr(boundary_publication, "complete_analytics", statistics)
+    monkeypatch.setattr(army_ingestion, "complete_army_analytics", army_once)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            for work_types in (["build_snapshot", "build_analytics"],) * 5 + (BUILDS,):
+                boundary_publication.reevaluate_boundary_publications(database)
+                for job_id in _waiting(database, work_types):
+                    _due_now(database, job_id)
+                    processor.process_job(job_id, owner=f"build-{job_id}")
+            boundary_publication.reevaluate_boundary_publications(database)
+            with database.pool.connection() as connection:
+                waits = dict(connection.execute(
+                    """
+                    SELECT rerun.work_type, rerun.due_at - failed.updated_at
+                    FROM python_processing_jobs_worker AS rerun
+                    JOIN python_processing_jobs_worker AS failed
+                      ON failed.id = split_part(rerun.deduplication_key, ':retry:', 2)::bigint
+                    WHERE rerun.state = 'pending' AND rerun.input_json ->> 'boundary_at' = %s
+                    """,
+                    (f"{DAY_END:%Y-%m-%dT%H:%M:%SZ}",),
+                ).fetchall())
+            assert {text(kind): wait for kind, wait in waits.items()} == {
+                "build_analytics": timedelta(minutes=16),
+                "build_army_analytics": timedelta(minutes=1),
+            }
+        finally:
+            database.close()
+
+
+def test_an_army_build_that_gave_up_on_pending_members_runs_at_once_they_settle(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs, army_job, _input = _freeze_army_inputs(
+                connection_info, archive_server, processor)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE boundary_publication_generation_members SET army_status = 'pending'")
+                connection.execute(
+                    "UPDATE python_processing_jobs SET max_attempts = 1 WHERE id = %s",
+                    (army_job,))
+            assert processor.process_job(army_job, owner="army").outcome == "failed"
+            # A background check while they are still pending, then one after.
+            monkeypatch.setattr(
+                boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending")
+            boundary_publication.reevaluate_boundary_publications(database)
+            monkeypatch.undo()
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(rerun, _input)] = jobs("build_army_analytics")
+            result = processor.process_job(rerun, owner="rerun")
+            assert (result and result.outcome) == "processed"
         finally:
             database.close()
 
