@@ -46,8 +46,10 @@ export interface OverlayPlayer {
   day?: {
     number: number | null;
     of: number;
-    gained: number;
-    lost: number;
+    /** The day's totals; null unless every battle so far is in `battles`. */
+    gained: number | null;
+    lost: number | null;
+    net: number | null;
     battles: OverlayBattle[];
   };
 }

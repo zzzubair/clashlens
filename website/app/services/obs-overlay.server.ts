@@ -122,11 +122,15 @@ async function readPlayer(tag: string): Promise<OverlayPlayer> {
       ...day.offenseEvents.map((event) => battle(event, "attack")),
       ...day.defenseEvents.map((event) => battle(event, "defense")),
     ].sort((a, b) => a.at.localeCompare(b.at));
+    const complete = day.battlesComplete === true;
+    const gained = complete ? day.offense.trophyGain : null;
+    const lost = complete ? day.defense.trophyLoss : null;
     out.day = {
       number: day.dayNumber,
       of: page.season?.dayCount ?? 28,
-      gained: day.offense.trophyGain ?? 0,
-      lost: day.defense.trophyLoss ?? 0,
+      gained,
+      lost,
+      net: day.trophyChange ?? (gained !== null && lost !== null ? gained - lost : null),
       battles,
     };
   }

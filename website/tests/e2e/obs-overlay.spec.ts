@@ -89,9 +89,9 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
   await expect(address).not.toHaveValue(firstLink);
   const secondLink = await address.inputValue();
   await expect(source.locator(".ov-stage")).toBeEmpty({ timeout: 8_000 });
-  expect((await source.request.get(`${new URL(firstLink).pathname}/settings`)).status()).toBe(
-    404,
-  );
+  expect(
+    (await source.request.get(`${new URL(firstLink).pathname}/settings`)).status(),
+  ).toBe(404);
   await source.goto(new URL(secondLink).pathname);
   await expect(source.locator(".obs-overlay")).toHaveClass(/ov-strip/);
   await expect(source.locator(".ov-name")).toBeVisible();
@@ -108,6 +108,33 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
     (await (await source.request.get(`${new URL(secondLink).pathname}/settings`)).json())
       .settings as Record<string, string>;
   await expect.poll(settingsOf).toMatchObject({ cw: "1280", w: "1280", h: "720" });
+
+  // A choice changed back while its save is still on the way is saved after it.
+  let sent: () => void = () => {};
+  const sending = new Promise<void>((resolve) => {
+    sent = () => resolve();
+  });
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  await page.route(
+    "**/account/obs-overlay/save",
+    async (route) => {
+      sent();
+      await held;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  await page.locator(".obs-seg label", { hasText: "Light" }).click();
+  await sending;
+  await page.locator(".obs-seg label", { hasText: "Dark" }).click();
+  const lightLanded = page.waitForResponse("**/account/obs-overlay/save");
+  release();
+  await lightLanded;
+  await expect.poll(settingsOf).toMatchObject({ text: "dark" });
+  await expect(saved).toHaveText("Saved. Your overlay in OBS updates within 3 seconds.");
 
   // An overlay saved bigger than its stream is brought inside it on reopening,
   // and OBS gets the corrected size too.

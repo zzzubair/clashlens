@@ -155,9 +155,10 @@ function ago(iso: string | undefined): { text: string; stale: boolean } | null {
   return { text: `Updated ${Math.round(m / 60)} h ago`, stale: true };
 }
 
-const signed = (n: number, kind: "gain" | "loss") =>
-  kind === "gain" ? `+${fmt(n)}` : `−${fmt(n)}`;
-const netText = (n: number) => (n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(-n)}` : "±0");
+const signed = (n: number | null, kind: "gain" | "loss") =>
+  n === null ? "–" : kind === "gain" ? `+${fmt(n)}` : `−${fmt(n)}`;
+const netText = (n: number | null) =>
+  n === null ? "–" : n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(-n)}` : "±0";
 
 function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
   const stars = [3, 3, 3, 2, 3, 1, 3, 2][(i * 3 + (kind === "attack" ? 0 : 5)) % 8];
@@ -240,8 +241,8 @@ export function mountOverlay(
     const battles = day ? day.battles : [];
     const attacks = battles.filter((b) => b.kind === "attack");
     const defenses = battles.filter((b) => b.kind === "defense");
-    const gained = day ? day.gained : 0;
-    const lost = day ? day.lost : 0;
+    const gained = day?.gained ?? null;
+    const lost = day?.lost ?? null;
     return {
       name: d.name ?? (cfg.tag ? `#${cfg.tag}` : "Pick a player"),
       legend: d.state === "legend",
@@ -254,8 +255,11 @@ export function mountOverlay(
       defenses,
       gained,
       lost,
-      net: gained - lost,
-      left: 8 - attacks.length + (8 - defenses.length),
+      net: day?.net ?? null,
+      left:
+        gained === null || lost === null
+          ? null
+          : 8 - attacks.length + (8 - defenses.length),
       updated: ago(d.profileReadAt),
     };
   }
@@ -271,7 +275,7 @@ export function mountOverlay(
   const trophyHtml = (m: Model, cls: string) =>
     `<span class="${cls} ov-lilita ov-num">${icon("trophy", "ov-trophy-ico")} ${fmt(m.trophies)}</span>`;
   const netValue = (m: Model) =>
-    `<b class="ov-num ${m.net >= 0 ? "ov-gain" : "ov-loss"}">${netText(m.net)}</b>`;
+    `<b class="ov-num ${m.net === null ? "" : m.net >= 0 ? "ov-gain" : "ov-loss"}">${netText(m.net)}</b>`;
 
   function renderCard(m: Model, show: Set<Part>) {
     const upd =
@@ -307,7 +311,7 @@ export function mountOverlay(
         );
       if (rows.length) body += `<div class="ov-rows">${rows.join("")}</div>`;
       if (show.has("net"))
-        body += `<div class="ov-net"><span class="ov-muted">${m.left ? `${m.left} battle${m.left === 1 ? "" : "s"} left` : "All 16 battles done"}</span><span>Net today ${netValue(m)}</span></div>`;
+        body += `<div class="ov-net"><span class="ov-muted">${m.left === null ? "" : m.left ? `${m.left} battle${m.left === 1 ? "" : "s"} left` : "All 16 battles done"}</span><span>Net today ${netValue(m)}</span></div>`;
     }
     // A normal card stacks left over right; a wide card puts them side by side.
     return `<div class="ov-box">
@@ -562,7 +566,7 @@ export function mountOverlay(
           trophies,
           rank: 4100 - Math.round((trophies - 5064) * 6),
           profileReadAt: new Date().toISOString(),
-          day: { ...day },
+          day: { ...day, net: day.gained - day.lost },
         },
         quiet,
       );
@@ -588,6 +592,7 @@ export function mountOverlay(
       cancel(pollTimer);
       if (!first && !prev.demo && prev.tag === cfg.tag && data?.name) startDemo();
       else if (!prev.demo || first || prev.tag !== cfg.tag) {
+        if (prev.tag !== cfg.tag) data = null;
         const start = () => {
           if (cfg.demo) startDemo();
         };
@@ -631,7 +636,7 @@ export function mountOverlay(
   if (link !== null) {
     // A saved link: the settings live on Clash Lens and are read again every
     // 3 seconds, so a change on the account page shows here with no new address.
-    let version: number | null = null;
+    let applied: string | null = null;
     let started = false;
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
@@ -647,7 +652,7 @@ export function mountOverlay(
           data = null;
           stage.innerHTML = "";
           started = false;
-          version = null;
+          applied = null;
           wait = 60_000;
         } else if (res.ok) {
           const saved = (await res.json()) as {
@@ -655,8 +660,9 @@ export function mountOverlay(
             version: number;
             tag: string | null;
           };
-          if (saved.version !== version) {
-            version = saved.version;
+          const key = `${saved.version} ${saved.tag}`;
+          if (key !== applied) {
+            applied = key;
             const query = new URLSearchParams({
               ...saved.settings,
               p: (saved.tag ?? "").replace(/^#/, ""),

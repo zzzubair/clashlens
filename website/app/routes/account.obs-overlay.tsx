@@ -320,6 +320,9 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       settings: savedSettings(initial.current.form, initial.current.place),
     }),
   );
+  const latest = useRef({ json: savedJson, tag: form.tag, settings });
+  latest.current = { json: savedJson, tag: form.tag, settings };
+  const saving = useRef(false);
   const address = `${origin}/o/${link}`;
   const screen = form.fit === "screen";
   const [w, h] = screen
@@ -377,29 +380,36 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const queryRef = useRef(query);
   queryRef.current = query;
 
-  // Saved on Clash Lens against the private link, 0.3 seconds after the last change.
+  // Saved on Clash Lens against the private link, 0.3 seconds after the last
+  // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
     if (savedJson === lastSaved.current) return;
     const timer = setTimeout(async () => {
-      setSaved({ text: "Saving…", ok: false });
+      if (saving.current) return;
+      saving.current = true;
       try {
-        const res = await post({
-          intent: "save",
-          tag: form.tag ?? "",
-          settings: JSON.stringify(settings),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        lastSaved.current = savedJson;
+        while (latest.current.json !== lastSaved.current) {
+          const next = latest.current;
+          setSaved({ text: "Saving…", ok: false });
+          const res = await post({
+            intent: "save",
+            tag: next.tag ?? "",
+            settings: JSON.stringify(next.settings),
+          });
+          if (!res.ok) throw new Error(String(res.status));
+          lastSaved.current = next.json;
+        }
         setSaved({
           text: "Saved. Your overlay in OBS updates within 3 seconds.",
           ok: true,
         });
       } catch {
         setSaved({ text: "Not saved. Check your connection.", ok: false });
+      } finally {
+        saving.current = false;
       }
     }, 300);
     return () => clearTimeout(timer);
-    // settings and form.tag are what savedJson is made of.
   }, [savedJson]);
 
   function resize(w: number, h: number) {
