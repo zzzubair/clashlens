@@ -182,15 +182,20 @@ empty before measuring anyway (`8`).
 
 | Step | What it does | Time on `wsl`, 14 October 2026 |
 |---|---|---|
-| `environment` | Installs the ref's locked Python packages | TIME_ENV |
-| `copy` | Copies the source database to `replay_<name>` | TIME_COPY |
-| `measure-before` | Scores each board against the game's lists and writes `metrics-before.tsv`: production as the copy left it | TIME_BEFORE |
-| `migrate` | Applies the ref's migrations the copy lacks, as `ops` does | TIME_MIGRATE |
-| `park` | Sets aside work no worker here can do as production will: saved responses still waiting to be processed, whose raw bytes stayed on production's disk, and jobs not due until after the copy, such as the running day's end | TIME_PARK |
-| `worker` | Sets one planner statistic as production has it (below), then starts the real worker with no network | TIME_WORKER |
-| `repair` | Runs the Season repair (`republish-current-season --repair queue`, up to 1,000 jobs a run, once a minute) until it says `done` | TIME_REPAIR |
-| `drain` | Waits until no job, board rebuild or unpublished board is left | TIME_DRAIN |
-| `measure-after` | Scores the boards again and writes `metrics-after.tsv` | TIME_AFTER |
+| `environment` | Installs the ref's locked Python packages | 22 s |
+| `copy` | Copies the source database to `replay_<name>` | 81 min, while other copies were made on the same disk |
+| `measure-before` | Scores each board against the game's lists and writes `metrics-before.tsv`: production as the copy left it | 41 s |
+| `migrate` | Applies the ref's migrations the copy lacks, as `ops` does | 67 s, with nothing to apply |
+| `park` | Sets aside work no worker here can do as production will: saved responses still waiting to be processed, whose raw bytes stayed on production's disk, and jobs not due until after the copy, such as the running day's end | 4 s |
+| `worker` | Sets one planner statistic as production has it (below), then starts the real worker with no network | 2 s |
+| `repair` | Runs the Season repair (`republish-current-season --repair queue`, up to 1,000 jobs a run, once a minute) until it says `done` | 59 min for the days of 17,366 of 17,369 players; the boards were not timed (below) |
+| `drain` | Waits until no job, board rebuild or unpublished board is left | Not timed |
+| `measure-after` | Scores the boards again and writes `metrics-after.tsv` | Not timed |
+
+The first replay, of `main` on 14 October 2026, stopped twice in the
+repair's board rebuilds when `wsl` restarted, so the last three times are
+not known yet. `development/season-replay resume <name>` carries on a
+stopped replay from its worker step without copying again.
 
 **The metrics** (`development/season-replay.sql`) are three tables. Per
 Reset, the board the website shows: entries on it; entries whose saved day
