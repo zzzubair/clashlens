@@ -120,7 +120,11 @@ REEVALUATION_LOCK_WAIT = "50ms"
 
 
 def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> int:
-    boundary.lock_boundary_publication(connection, boundary_at, REEVALUATION_LOCK_WAIT)
+    # Members due to be left out are worth queueing for the lock with their
+    # results: on 14 Oct 2026 this check, waiting 50 ms, missed 05:30.
+    boundary.lock_boundary_publication(connection, boundary_at, (
+        boundary.TAIL_LOCK_WAIT if board_deadline.cut_due(connection, boundary_at)
+        else REEVALUATION_LOCK_WAIT))
     generations = connection.execute(
         """
         SELECT id

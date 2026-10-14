@@ -24,22 +24,48 @@ BOARD_DEADLINE = timedelta(minutes=30)
 MAX_UNFINISHED = 50
 
 
-def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id: int) -> None:
-    """Under the Reset's full lock, settle ``generation_id``'s waiting members
-    as above while its board has not frozen."""
+def cut_due(connection: Any, boundary_at: datetime) -> bool:
+    """Whether the Reset's newest unfrozen generation has members to leave
+    out now, as below."""
     generation = connection.execute(
+        """
+        SELECT id FROM boundary_publication_generations
+        WHERE boundary_at = %s AND snapshot_state = 'pending'
+          AND snapshot_manifest_id IS NULL
+        ORDER BY generation DESC LIMIT 1
+        """,
+        (boundary_at,),
+    ).fetchone()
+    return generation is not None and _cut_due(connection, boundary_at, generation[0])
+
+
+def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool:
+    now, unpublished, waiting = connection.execute(
         """
         SELECT clock_timestamp(), NOT EXISTS (
             SELECT FROM boundary_publication_generations
-            WHERE boundary_at = %s AND snapshot_state = 'published')
-        FROM boundary_publication_generations
+            WHERE boundary_at = %s AND snapshot_state = 'published'), (
+            SELECT count(*) FROM (
+                SELECT FROM boundary_publication_generation_members
+                WHERE generation_id = %s AND snapshot_status = 'pending'
+                LIMIT %s) AS waiting)
+        """,
+        (boundary_at, generation_id, MAX_UNFINISHED + 1),
+    ).fetchone()
+    return unpublished and now >= boundary_at + BOARD_DEADLINE and 0 < waiting <= MAX_UNFINISHED
+
+
+def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id: int) -> None:
+    """Under the Reset's full lock, settle ``generation_id``'s waiting members
+    as above while its board has not frozen."""
+    if connection.execute(
+        """
+        SELECT FROM boundary_publication_generations
         WHERE id = %s AND snapshot_state = 'pending' AND snapshot_manifest_id IS NULL
         """,
-        (boundary_at, generation_id),
-    ).fetchone()
-    if generation is None:
+        (generation_id,),
+    ).fetchone() is None:
         return
-    now, unpublished = generation
     day = f"{(boundary_at - timedelta(days=1)).astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
     # Failed jobs are few, found through the queue's state index.
     failed = connection.execute(
@@ -59,26 +85,16 @@ def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id
         {"generation": generation_id, "boundary": boundary_at, "day": day},
     ).rowcount
     unfinished = 0
-    if unpublished and now >= boundary_at + BOARD_DEADLINE:
-        waiting = connection.execute(
+    if _cut_due(connection, boundary_at, generation_id):
+        unfinished = connection.execute(
             """
-            SELECT count(*) FROM (
-                SELECT FROM boundary_publication_generation_members
-                WHERE generation_id = %s AND snapshot_status = 'pending'
-                LIMIT %s) AS waiting
+            UPDATE boundary_publication_generation_members
+            SET status = 'unavailable', snapshot_status = 'unavailable',
+                army_status = 'unavailable', updated_at = clock_timestamp()
+            WHERE generation_id = %s AND snapshot_status = 'pending'
             """,
-            (generation_id, MAX_UNFINISHED + 1),
-        ).fetchone()[0]
-        if 0 < waiting <= MAX_UNFINISHED:
-            unfinished = connection.execute(
-                """
-                UPDATE boundary_publication_generation_members
-                SET status = 'unavailable', snapshot_status = 'unavailable',
-                    army_status = 'unavailable', updated_at = clock_timestamp()
-                WHERE generation_id = %s AND snapshot_status = 'pending'
-                """,
-                (generation_id,),
-            ).rowcount
+            (generation_id,),
+        ).rowcount
     if failed or unfinished:
         print(json.dumps({
             "event": "board_members_settled", "boundary_at": boundary_at.isoformat(),

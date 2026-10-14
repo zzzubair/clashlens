@@ -100,6 +100,9 @@ def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime)
 # the build. Above the transactions that can write member results at once:
 # 12 worker lanes, their maintenance and the late-battle sweep.
 OPEN_GENERATION_TAIL = 100
+# A caller limiting its wait waits this long for it: on 14 Oct 2026 the last
+# 95 day results gave up after 250 ms and came back 37 to 99 s later.
+TAIL_LOCK_WAIT = "5s"
 
 
 def lock_boundary_members(
@@ -169,6 +172,8 @@ def lock_boundary_members(
     if held and open_generation:
         return True
     if not (open_generation and busy):
+        if open_generation and wait is not None:
+            wait = TAIL_LOCK_WAIT
         lock_boundary_publication(connection, boundary_at, wait)
         return False
     with lock_wait(connection, wait):
@@ -178,22 +183,18 @@ def lock_boundary_members(
     return True
 
 
-def is_open_generation(row: Any) -> bool:
-    """Whether a generation row's (snapshot_state, army_state,
-    correction_state, snapshot_manifest_id, army_manifest_id) is open."""
-    return row is not None and (
-        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
-    ) == ("pending", "pending", "none", None, None)
-
-
 def require_open_generation(row: Any, boundary_at: datetime) -> None:
-    """Under the shared lock, refuse a generation that is not open.
+    """Under the shared lock, refuse a generation row's (snapshot_state,
+    army_state, correction_state, snapshot_manifest_id, army_manifest_id)
+    that is not open.
 
     The lock is shared only while it is open, so this guards against a
     change made without the full lock: LockNotAvailable rolls the work back
     to retry, rather than writing to a frozen generation.
     """
-    if not is_open_generation(row):
+    if row is None or (
+        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
+    ) != ("pending", "pending", "none", None, None):
         raise LockNotAvailable(
             f"Reset {boundary_at.isoformat()} has no open generation for shared results"
         )

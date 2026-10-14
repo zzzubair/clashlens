@@ -11,6 +11,8 @@ against PostgreSQL through to the saved days and the board.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime, timedelta
 
 import psycopg
@@ -393,6 +395,68 @@ def test_a_day_meeting_a_busy_reset_hands_its_lease_back_and_backs_off(
             assert processor.process_job(job_id, owner="free").outcome == "processed"
             assert job()[::3] == ("complete", 1)
             assert _members(database)[1]["#2PP"] == "complete"
+        finally:
+            database.close()
+
+
+def _release_after_a_wait(publisher) -> None:
+    """End ``publisher``'s transaction once another session has waited 1 s
+    for one of its locks, or after 10 s."""
+    for _ in range(500):
+        if publisher.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+            " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+        ).fetchone()[0]:
+            time.sleep(1)
+            break
+        time.sleep(0.02)
+    publisher.commit()
+
+
+def test_the_last_day_waits_out_a_brief_hold_on_the_reset(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, it gave up after 250 ms and came back 30 to 60 s later: on
+    # 14 Oct 2026 the last day saved 2 min 35 s late.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            _calculate(database, processor, "#2PP")
+            with psycopg.connect(connection_info) as publisher:
+                boundary.lock_boundary_publication(publisher, DAY_END)
+                holder = threading.Thread(target=_release_after_a_wait, args=(publisher,))
+                holder.start()
+                outcomes = _calculate(database, processor, LATE)
+                holder.join()
+            assert set(outcomes) == {"processed"}
+            assert _members(database) == (1, {"#2PP": "complete", LATE: "complete"})
+        finally:
+            database.close()
+
+
+def test_the_0530_check_waits_out_a_brief_hold_on_the_reset(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, it waited 50 ms and skipped the Reset: on 14 Oct 2026 it left
+    # no one out.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            _calculate(database, processor, "#2PP")
+            monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(minutes=30))
+            with psycopg.connect(connection_info) as publisher:
+                boundary.lock_boundary_publication(publisher, DAY_END)
+                holder = threading.Thread(target=_release_after_a_wait, args=(publisher,))
+                holder.start()
+                boundary_publication.reevaluate_boundary_publications(database)
+                holder.join()
+            assert _members(database) == (1, {"#2PP": "complete", LATE: "unavailable"})
+            _build(database, processor)
+            assert _board(database) == (1, ["#2PP"])
         finally:
             database.close()
 
