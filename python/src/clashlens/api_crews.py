@@ -281,13 +281,11 @@ def _players(
                {_frozen_trophies_sql("player.id", "%s")},
                {_opening_day_battles_sql("player.id", "%s")},
                EXISTS (
-                   SELECT 1 FROM api_player_daily_logs AS day
+                   SELECT 1 FROM legend_days AS day
                    WHERE day.player_id = player.id
                      AND day.ranked_day_start >= %s
-                     AND (jsonb_array_length(day.battles) > 0
-                          OR NOT day.partial_reasons ? 'not_enrolled')
                      AND NOT EXISTS (
-                         SELECT 1 FROM api_player_daily_logs AS newer
+                         SELECT 1 FROM legend_days AS newer
                          WHERE newer.player_id = day.player_id
                            AND newer.ranked_day_start = day.ranked_day_start
                            AND newer.version > day.version))

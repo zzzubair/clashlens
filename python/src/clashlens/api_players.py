@@ -23,6 +23,7 @@ from .api_db import (
     _start_thread,
     _text,
     _withhold_unsupported_entries,
+    league_now_sql,
 )
 from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
 from .catalog import unit_label
@@ -167,7 +168,8 @@ def get_player_page(
                       AND checked.identity_key = player.normalized_tag
                       AND checked.endpoint = 'profile'
                       AND (checked.last_success_at IS NULL
-                           OR checked.last_not_found_at > checked.last_success_at))
+                           OR checked.last_not_found_at > checked.last_success_at)),
+                   {league_now_sql("player.id")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
@@ -214,7 +216,7 @@ def get_player_page(
                            #>> '{start_baseline_evidence,start_trophies_source}'
                            AS start_trophies_source,
                        daily.published_at
-                FROM api_player_daily_logs AS daily
+                FROM legend_days AS daily
                 LEFT JOIN ranked_day_versions AS ranked_day
                     ON ranked_day.id = daily.ranked_day_version_id
                 WHERE daily.player_id = (
@@ -302,7 +304,7 @@ def get_player_page(
                            ranked_day.input_evidence
                            #>> '{start_baseline_evidence,start_trophies_source}'
                                AS start_trophies_source
-                    FROM api_player_daily_logs AS daily
+                    FROM legend_days AS daily
                     LEFT JOIN ranked_day_versions AS ranked_day
                         ON ranked_day.id = daily.ranked_day_version_id
                     WHERE daily.player_id = (
@@ -400,7 +402,7 @@ def get_player_page(
             "trophies": int(row[4]),
             "season_reset_pending": season_reset_pending,
             "current_league_season_id": _text(row[12]),
-            "eligibility": _text(row[2]),
+            "eligibility": _text(row[17]),
             "active": bool(row[1]),
             "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
             "age_seconds": age_seconds,
@@ -532,7 +534,7 @@ def player_cards(
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
                    net_trophy_change, adjustments, battles, partial_reasons, NULL, NULL
-            FROM api_player_daily_logs
+            FROM legend_days
             WHERE player_id = ANY(%s) AND ranked_day_start = %s
             ORDER BY player_id, version DESC
             """,
@@ -808,11 +810,8 @@ def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
         -- Scalar subqueries stop after one row and cannot become a hashed
         -- EXISTS subplan that reads the entire history table.
         WHERE (player.active
-               OR (SELECT true FROM api_player_daily_logs AS history
-                   WHERE history.player_id = player.id
-                     AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
-                          OR jsonb_array_length(history.battles) > 0)
-                   LIMIT 1)
+               OR (SELECT true FROM legend_days AS history
+                   WHERE history.player_id = player.id LIMIT 1)
                OR (SELECT true FROM player_season_summaries AS history
                    WHERE history.player_id = player.id LIMIT 1)
                OR (SELECT true FROM player_league_history_entries AS history

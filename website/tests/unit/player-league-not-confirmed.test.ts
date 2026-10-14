@@ -7,20 +7,23 @@ import {
   showsCurrentSeason,
 } from "../../app/lib/player-lookup-text";
 
+const NOT_CONFIRMED =
+  "Clash Lens has not confirmed this player was in Legend I this week, so this day may not count.";
+
 const DAY = {
-  net: null,
-  state: "Partial",
-  coverage: "partial",
-  codes: ["missing_start_baseline", "not_enrolled"],
-  attackGain: null,
-  defenseLoss: null,
-  attacks: 0,
-  defenses: 0,
+  net: 40,
+  state: "Complete",
+  confidence: "exact",
+  coverage: "complete",
+  codes: ["league_not_confirmed"],
+  attackGain: 80,
+  defenseLoss: 40,
+  attacks: 8,
+  defenses: 8,
 };
 
 const SEASON_START = Date.parse("2026-09-07T05:00:00Z");
 
-// A day before tracking began: no Reset readings and no battles.
 const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
   const start = SEASON_START + (number - 1) * 86_400_000;
   return {
@@ -38,22 +41,26 @@ const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
   };
 };
 
-describe("days before a late joiner signed up", () => {
-  it("say the player was not enrolled instead of a missing result", () => {
+describe("days in a week whose league is not confirmed", () => {
+  it("say the league is not confirmed and keep their numbers", () => {
     expect(presentDay(DAY, false)).toEqual({
-      status: "Not enrolled",
-      reasons: ["The player had not signed up for this Season yet."],
-      battleNet: null,
+      status: "League not confirmed",
+      reasons: [NOT_CONFIRMED],
+      battleNet: 40,
     });
   });
 
-  it("leave other incomplete days unchanged", () => {
-    expect(presentDay({ ...DAY, codes: ["missing_start_baseline"] }, false).status).toBe(
-      "Uncertain",
-    );
+  it("say so on today's card too, while it is in progress", () => {
+    const today = presentDay({ ...DAY, state: "Live" }, true);
+    expect(today.status).toBe("In progress");
+    expect(today.reasons).toContain(NOT_CONFIRMED);
   });
 
-  it("stay in the history when the player was also not in Legend I", () => {
+  it("leave other days unchanged", () => {
+    expect(presentDay({ ...DAY, codes: [] }, false).status).toBe("Verified");
+  });
+
+  it("keep every day Python sends in the history, battles or not", () => {
     const player = {
       season: {
         id: String(SEASON_START / 1000),
@@ -65,24 +72,22 @@ describe("days before a late joiner signed up", () => {
       },
       currentDay: null,
       recentDays: [
-        emptyDay(3, ["missing_start_baseline", "player_not_eligible", "not_enrolled"]),
+        emptyDay(3, ["missing_start_baseline", "league_not_confirmed"]),
         emptyDay(2, ["missing_start_baseline", "player_not_eligible"]),
       ],
       seasonDays: [],
     } as unknown as PlayerPage;
     const history = selectPlayerHistory(player, Date.parse("2026-09-16T06:00:00Z"));
-    expect(history.map(({ seasonDay }) => seasonDay)).toEqual(["Day 3"]);
-    expect(presentDay(dayEvidence(history[0].day), false).status).toBe("Not enrolled");
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual(["Day 3", "Day 2"]);
+    expect(presentDay(dayEvidence(history[0].day), false).status).toBe(
+      "League not confirmed",
+    );
   });
 
-  it("give a player outside Legend I no current Season when they never played a Legend day", () => {
+  it("give a player outside Legend I a current Season only with a saved Legend day", () => {
     const lookup = { tag: "#L82PYUC9J", state: "not_in_legend" } as const;
-    const notEnrolled = emptyDay(3, ["missing_start_baseline", "not_enrolled"]);
-    const played = { ...emptyDay(4, []), offenseEvents: [{}] } as RankedDaySummary;
-    expect(showsCurrentSeason(lookup, [{ day: notEnrolled }])).toBe(false);
-    expect(showsCurrentSeason(lookup, [{ day: notEnrolled }, { day: played }])).toBe(
-      true,
-    );
+    expect(showsCurrentSeason(lookup, [])).toBe(false);
+    expect(showsCurrentSeason(lookup, [{ day: emptyDay(4, []) }])).toBe(true);
     expect(showsCurrentSeason({ ...lookup, state: "tracking" }, [])).toBe(true);
   });
 });

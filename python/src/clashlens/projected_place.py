@@ -90,7 +90,7 @@ LEFT JOIN LATERAL (
     FROM (
         SELECT DISTINCT ON (recent.ranked_day_start)
                recent.ranked_day_start, recent.attack_count
-        FROM api_player_daily_logs AS recent
+        FROM legend_days AS recent
         WHERE recent.player_id = player.id
           AND recent.ranked_day_start >= %(day_start)s - interval '3 days'
           AND recent.ranked_day_start < %(day_start)s
@@ -108,7 +108,7 @@ LEFT JOIN LATERAL (
                AS attacks,
            COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
                AS defenses
-    FROM api_player_daily_logs AS daily
+    FROM legend_days AS daily
     JOIN ranked_day_versions AS ranked_day ON ranked_day.id = daily.ranked_day_version_id
     WHERE daily.player_id = player.id AND daily.ranked_day_start = %(day_start)s
     ORDER BY daily.version DESC

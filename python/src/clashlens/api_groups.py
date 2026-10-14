@@ -117,7 +117,7 @@ def get_group_comparison(
                    player_id, ranked_day_start, state, coverage, confidence,
                    partial_reasons, net_trophy_change, attack_count,
                    defense_count, battles, attack_gain, defense_loss
-            FROM api_player_daily_logs
+            FROM legend_days
             WHERE player_id = ANY(%s)
               AND ranked_day_start >= %s AND ranked_day_start <= %s
             ORDER BY player_id, ranked_day_start, version DESC

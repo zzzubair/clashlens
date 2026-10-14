@@ -84,17 +84,13 @@ export function playerLookupView(
 /**
  * Whether a player without current results has a current Season to show. A
  * player outside Legend I needs a saved Legend day this Season, so the page
- * never shows them an empty Season.
+ * never shows them an empty Season. Python sends only Legend days.
  */
 export function showsCurrentSeason(
   lookup: PlayerLookup | null,
   history: { day: RankedDaySummary }[],
 ) {
-  return (
-    history.some(({ day }) =>
-      isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
-    ) || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "")
-  );
+  return history.length > 0 || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "");
 }
 
 /**
@@ -177,13 +173,6 @@ const GAP_CODES = new Set([
 // has nothing missing from its number. Python marks this for recent days;
 // saved Season entries carry only their counts, codes and confidence.
 export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
-  // Saved profiles prove the player had not signed up for the Season yet.
-  if (!isCurrentDay && day.codes.includes("not_enrolled"))
-    return {
-      status: "Not enrolled",
-      reasons: [REASON_TEXT.not_enrolled],
-      battleNet: null,
-    };
   const battlesComplete =
     day.battlesComplete ??
     (day.attacks === 8 &&
@@ -197,9 +186,13 @@ export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
     day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)) ||
     (!battlesComplete &&
       (day.coverage !== "complete" || day.codes.some((code) => GAP_CODES.has(code))));
+  // The weekly league record has not confirmed the player was in Legend I
+  // that week: the day may not count, whatever its numbers.
   const status = isCurrentDay
     ? "In progress"
-    : day.net === null || doubtful
+    : day.codes.includes("league_not_confirmed")
+      ? "League not confirmed"
+      : day.net === null || doubtful
       ? "Uncertain"
       : day.state === "Complete" && day.confidence === "exact" && day.codes.length === 0
         ? "Verified"
@@ -295,7 +288,8 @@ const REASON_TEXT: Record<string, string> = {
     "The automatic defense loss at Reset could not be calculated.",
   season_anchor_conflict: "The Season start date could not be confirmed.",
   player_not_eligible: "The player was not in Legend I for all of this day.",
-  not_enrolled: "The player had not signed up for this Season yet.",
+  league_not_confirmed:
+    "Clash Lens has not confirmed this player was in Legend I this week, so this day may not count.",
   shield_sequence_longer_than_two_days:
     "A shield period was longer than expected and could not be explained.",
   malformed_evidence: "Some saved evidence for this day could not be read.",
@@ -356,13 +350,6 @@ export function savedDays(player: PlayerPage) {
   ];
 }
 
-// A saved day is not a Legend day only when saved profiles prove the player
-// had not signed up yet and it has no battles. Not eligible is no such proof:
-// a missing Reset reading alone sets it.
-export function isLegendDay(codes: string[], battles: number) {
-  return battles > 0 || !codes.includes("not_enrolled");
-}
-
 // A finished day's end-of-day trophies: the next day's start, from any saved
 // record of that day, shown in the log or not. Only the latest finished day,
 // ended at the latest Reset, can fall back to its start plus its trophy change
@@ -407,13 +394,7 @@ export function selectPlayerHistory(player: PlayerPage | null, now: number) {
   const seasonDay = (day: RankedDaySummary) =>
     Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
   const days = (player ? savedDays(player) : []).filter(
-    (day) =>
-      seasonDay(day) >= 1 &&
-      seasonDay(day) <= 28 &&
-      (!day.uncertainty.includes("player_not_eligible") ||
-        day.uncertainty.includes("not_enrolled") ||
-        day.offenseEvents.length > 0 ||
-        day.defenseEvents.length > 0),
+    (day) => seasonDay(day) >= 1 && seasonDay(day) <= 28,
   );
   return days
     .filter(

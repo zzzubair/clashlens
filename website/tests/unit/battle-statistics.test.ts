@@ -190,19 +190,16 @@ describe("recorded battle period statistics", () => {
     expect(stats.incomplete).toBe(true);
   });
 
-  it("leaves only battle-free days before sign-up out of every figure", () => {
+  it("counts every saved day in every figure", () => {
     const stats = battleStatistics(
       player([
         day(1, [event("a1", 3, 100, 320, YESTERDAY)]),
         day(2),
-        { ...day(3), uncertainty: ["not_enrolled"] },
-        // Battles keep a day, whatever its eligibility says.
+        { ...day(3), uncertainty: ["league_not_confirmed"] },
         {
           ...day(4, [event("a4", 3, 100, 40, TODAY - 4 * DAY)]),
           uncertainty: ["player_not_eligible"],
         },
-        // A quiet day ended by the official total, with no start reading: not
-        // eligible, but nothing proves the player outside Legend I.
         { ...day(5), uncertainty: ["missing_start_baseline", "player_not_eligible"] },
         { ...day(6), uncertainty: ["player_not_eligible"] },
       ]),
@@ -210,7 +207,7 @@ describe("recorded battle period statistics", () => {
       NOW,
     );
     expect(stats.daysSaved).toBe(6);
-    expect(stats.attack).toMatchObject({ count: 2, trophies: 360, perDay: 72 });
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 360, perDay: 60 });
   });
 
   it("averages every finished day's battles, Uncertain days included", () => {

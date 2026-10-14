@@ -588,20 +588,22 @@ def _repair_key(revision: str, season_id: str, player_id: int) -> str:
 
 
 def _day_counts(connection: Any, start: datetime) -> dict[str, Any]:
-    """Each ended day of the Season: its players' latest saved results by
-    state, and by each reason they give."""
+    """Each ended day of the Season: its players' latest published results
+    by state, and by each reason they give, as every reader sees them: days
+    in weeks below Legend I left out, days in weeks not confirmed counted
+    under league_not_confirmed."""
     days: dict[str, Any] = {}
     for day, state, reasons, count in connection.execute(
         """
         WITH latest AS (
             SELECT DISTINCT ON (player_id, ranked_day_start)
-                   ranked_day_start, state, failure_reasons
-            FROM ranked_day_versions
+                   ranked_day_start, state, partial_reasons
+            FROM legend_days
             WHERE ranked_day_start >= %s AND ranked_day_start < %s
               AND ranked_day_start + interval '1 day' <= clock_timestamp()
             ORDER BY player_id, ranked_day_start, version DESC, id DESC
         )
-        SELECT ranked_day_start, state, failure_reasons, count(*)
+        SELECT ranked_day_start, state, partial_reasons, count(*)
         FROM latest GROUP BY 1, 2, 3
         """,
         (start, start + SEASON_DURATION),

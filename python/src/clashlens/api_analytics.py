@@ -301,7 +301,7 @@ def get_army_analytics(
                 """
                 WITH RECURSIVE day AS (
                     (SELECT season_day_number, ranked_day_start
-                     FROM api_player_daily_logs
+                     FROM legend_days
                      WHERE official_season_id = %(season)s
                        AND state = 'Complete' AND coverage = 'complete'
                        AND season_day_number BETWEEN %(start)s AND %(end)s
@@ -309,7 +309,7 @@ def get_army_analytics(
                     UNION ALL
                     SELECT later.* FROM day CROSS JOIN LATERAL (
                         SELECT season_day_number, ranked_day_start
-                        FROM api_player_daily_logs
+                        FROM legend_days
                         WHERE official_season_id = %(season)s
                           AND state = 'Complete' AND coverage = 'complete'
                           AND season_day_number <= %(end)s

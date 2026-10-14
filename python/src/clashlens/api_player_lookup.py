@@ -12,8 +12,8 @@ def _lookup(
     connection: Any, tag: str, now: datetime | None = None
 ) -> dict[str, Any]:
     row = connection.execute(
-        """
-        SELECT player.id, player.active, player.eligibility_state,
+        f"""
+        SELECT player.id, player.active, {api_db.league_now_sql("player.id")},
                EXISTS (SELECT 1 FROM player_profile_versions AS profile
                        WHERE profile.player_id = player.id),
                player.current_profile_version_id IS NULL
@@ -104,12 +104,12 @@ def _newest_profile(
         SELECT profile.current_league_season_id, profile.eligibility_reason,
                profile.eligibility_state, profile.source_contract_state,
                profile.name, profile.profile_json->'clan'->>'name', profile.trophies,
-               EXISTS (SELECT 1 FROM api_player_daily_logs AS day
+               EXISTS (SELECT 1 FROM legend_days AS day
                        WHERE day.player_id = profile.player_id
                          AND day.ranked_day_start >= %s
                          AND jsonb_array_length(day.battles) > 0
                          AND NOT EXISTS (
-                             SELECT 1 FROM api_player_daily_logs AS newer
+                             SELECT 1 FROM legend_days AS newer
                              WHERE newer.player_id = day.player_id
                                AND newer.ranked_day_start = day.ranked_day_start
                                AND newer.version > day.version)),

@@ -139,14 +139,14 @@ def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -
     # by reading every saved day of the Season with its battles: on 11
     # October 2026 that took the Live Leaderboard past its 10 second limit.
     return f"""({unplayed_profile_sql(profile)} AND (
-        SELECT 1 FROM api_player_daily_logs AS played
+        SELECT 1 FROM legend_days AS played
         WHERE played.player_id = {player_id}
           AND played.ranked_day_start >= {season_start}
           AND played.ranked_day_start < {before}
           AND jsonb_array_length(played.battles) > 0
           -- A battle a newer result moved out of this Season does not count.
           AND NOT EXISTS (
-              SELECT 1 FROM api_player_daily_logs AS newer
+              SELECT 1 FROM legend_days AS newer
               WHERE newer.player_id = played.player_id
                 AND newer.ranked_day_start = played.ranked_day_start
                 AND newer.version > played.version)

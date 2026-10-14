@@ -15,7 +15,7 @@ from psycopg_pool import ConnectionPool
 
 from .army_analytics import with_unnamed_ids
 from .catalog import unit_label
-from .domain import MAX_BATTLE_TROPHIES, SEASON_START_TROPHIES
+from .domain import LEAGUE_NOT_CONFIRMED, MAX_BATTLE_TROPHIES, SEASON_START_TROPHIES
 from .operating import database_pool_health
 from .profile import normalize_player_tag
 from .reconciliation import (
@@ -577,13 +577,24 @@ def _frozen_trophies_sql(player_id: str, reset_at: str) -> str:
     )"""
 
 
-def _opening_day_battles_sql(player_id: str, reset_at: str) -> str:
-    """A Legend I player's recorded net trophy change and battle count on the
-    Legend day starting at ``reset_at``, as a two-item array ([0, 0] with
-    none recorded), or NULL for a player outside Legend I."""
+def league_now_sql(player_id: str) -> str:
+    """SQL for the player's league this week from the weekly league record
+    (the player_leagues_now view), in the words the website reads: eligible
+    (Legend I), ineligible (below Legend I) or uncertain (not confirmed)."""
     return f"""(
-        CASE WHEN (SELECT eligibility_state FROM players
-                   WHERE players.id = {player_id}) = 'eligible'
+        SELECT CASE league WHEN 'legend_i' THEN 'eligible'
+                           WHEN 'below_legend_i' THEN 'ineligible'
+                           ELSE 'uncertain' END
+        FROM player_leagues_now WHERE player_leagues_now.player_id = {player_id}
+    )"""
+
+
+def _opening_day_battles_sql(player_id: str, reset_at: str) -> str:
+    """A player's recorded net trophy change and battle count on the Legend
+    day starting at ``reset_at``, as a two-item array ([0, 0] with none
+    recorded), or NULL for a player the record puts below Legend I."""
+    return f"""(
+        CASE WHEN {league_now_sql(player_id)} <> 'ineligible'
         THEN COALESCE((
             SELECT ARRAY[
                 COALESCE(day_log.net_trophy_change,
@@ -591,7 +602,7 @@ def _opening_day_battles_sql(player_id: str, reset_at: str) -> str:
                 COALESCE(day_log.attack_count, 0)
                     + COALESCE(day_log.defense_count, 0)
             ]
-            FROM api_player_daily_logs AS day_log
+            FROM legend_days AS day_log
             WHERE day_log.player_id = {player_id}
               AND day_log.ranked_day_start = {reset_at}::timestamptz
             ORDER BY day_log.version DESC
@@ -745,8 +756,8 @@ def _screen_daily_log_with_events(
 
 
 # Missing trophy and profile readings, the battle log check after Reset that
-# a day in progress cannot have yet, and the automatic defense loss do not
-# change what the recorded battles add up to.
+# a day in progress cannot have yet, the automatic defense loss and an
+# unconfirmed league do not change what the recorded battles add up to.
 _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
     {
         "missing_start_baseline",
@@ -757,6 +768,7 @@ _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
         "missing_end_battle_log_baseline",
         "automatic_defense_basis_unavailable",
         "player_not_eligible",
+        LEAGUE_NOT_CONFIRMED,
     }
 )
 

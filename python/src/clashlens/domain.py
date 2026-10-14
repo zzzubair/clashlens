@@ -24,6 +24,10 @@ CHAIN_BREAK_REASONS = frozenset({
     "attack_count_exceeds_eight", "defense_count_exceeds_eight",
     "not_enrolled", "player_not_eligible",
 })
+# The reason the legend_days view (migration 0119) adds to a day whose week
+# the weekly league record has not decided as Legend I: unknown, or not
+# decided yet. Every reader shows such a day as "League not confirmed".
+LEAGUE_NOT_CONFIRMED = "league_not_confirmed"
 # No new-day attack can start in the first minutes after the Reset, so a
 # battle reported in the first five minutes finished a previous-day attack.
 # The attacker's report is stamped when the attack ends, often after the

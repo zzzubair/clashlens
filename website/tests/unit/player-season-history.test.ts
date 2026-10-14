@@ -311,7 +311,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("averages over quiet and unproven days, but not days before sign-up", async () => {
+  it("averages over every saved day, quiet and unproven ones too", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(
       {
@@ -319,9 +319,8 @@ describe("past-Season view", () => {
         getPlayerSeasons: vi.fn().mockResolvedValue([]),
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
-          daysObserved: 6,
+          daysObserved: 5,
           dailyEntries: [
-            { ...quiet, dayNumber: 23, flags: ["not_enrolled"] },
             DAY,
             { ...DAY, dayNumber: 25, flags: ["player_not_eligible"] },
             { ...DAY, dayNumber: 26 },

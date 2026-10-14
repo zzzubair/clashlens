@@ -31,11 +31,10 @@ _WEEK_DAYS = 7
 # Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
-       player.normalized_tag, daily.ranked_day_start, daily.battles,
-       daily.partial_reasons
+       player.normalized_tag, daily.ranked_day_start, daily.battles
 FROM crew_players AS place
 JOIN players AS player ON player.id = place.player_id
-JOIN api_player_daily_logs AS daily ON daily.player_id = place.player_id
+JOIN legend_days AS daily ON daily.player_id = place.player_id
 WHERE place.crew_id = %(crew)s
   AND daily.ranked_day_start >= %(first)s
   AND daily.ranked_day_start <= %(today)s
@@ -66,11 +65,7 @@ ORDER BY entry.position
 
 class _Day:
     def __init__(self, row: Any) -> None:
-        reasons = [reason for reason in row[3] or [] if isinstance(reason, str)]
         self.offense, self.defense = _screen_events(row[2])
-        # The player page's rule: a day is a Legend day unless it has no
-        # battles and saved profiles prove the player had not signed up yet.
-        self.legend = bool(self.offense or self.defense) or "not_enrolled" not in reasons
 
 
 def _events(
@@ -193,7 +188,7 @@ def get_crew_boards(
     streak_rows = []
     for tag in players:
         days = saved.get(tag, {})
-        legend = [days[start] for start in window if start in days and days[start].legend]
+        legend = [days[start] for start in window if start in days]
         for side, listed in averages.items():
             if period == "today":
                 values = _average_row(legend, side, today, now)

@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from discord.utils import escape_markdown, escape_mentions
 
-from clashlens.domain import ranked_day_for
+from clashlens.domain import LEAGUE_NOT_CONFIRMED, ranked_day_for
 from clashlens.reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 # Discord shows at most 25 dropdown entries, 100 characters per entry label
@@ -557,6 +557,9 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
         lines.append(f"`{label}` {shown or '–'}")
     if not complete:
         lines.append("-# Some of today's battles may be missing. The day on Clash Lens says why.")
+    if LEAGUE_NOT_CONFIRMED in day["uncertainty_reasons"]:
+        lines.append("-# League not confirmed: Clash Lens has not yet confirmed this player "
+                     "is in Legend I this week.")
     return "\n".join(lines)
 
 
@@ -694,6 +697,8 @@ def _day_status(day: Mapping[str, Any]) -> str:
         not day["battles_complete"]
         and (coverage != "complete" or any(code in _GAP_CODES for code in codes))
     )
+    if LEAGUE_NOT_CONFIRMED in codes:
+        return "League not confirmed"
     if day["net_trophy_change"] is None or doubtful:
         return "Uncertain"
     if day["state"] == "Complete" and day["confidence"] == "exact" and not codes:
@@ -720,11 +725,6 @@ def summary_day(
     day = days.get(reset - timedelta(days=1))
     if day is None:
         return {"tag": page["tag"], "name": page["name"], "finished": False} if unfinished else None
-    codes = day["uncertainty_reasons"]
-    battles = len(day["offense_events"]) + len(day["defense_events"])
-    # The page's own rule for a day that is not a Legend day.
-    if not battles and ("not_enrolled" in codes or "player_not_eligible" in codes):
-        return None
     if day["state"] == "Live":
         return {"tag": page["tag"], "name": page["name"], "finished": False}
     automatic = _adjustment(day, "automatic_defense")
@@ -769,6 +769,11 @@ def _summary_card(site: Site, day: Mapping[str, Any], key: str, colour: int) -> 
         f"({_known(day['attack_gain'], signed)}) · {defenses}"
     )
     lines.append(f"Daily board place **{_known(day['place'], number)}**")
+    if day["status"] == "League not confirmed":
+        lines.append(
+            "-# League not confirmed: Clash Lens has not yet confirmed this player was in "
+            "Legend I this week, so this day may not count."
+        )
     if day["status"] == "Uncertain":
         lines.append(
             "-# Uncertain: some of this day's battles or readings may be missing, so these "

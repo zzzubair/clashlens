@@ -36,7 +36,6 @@ import {
   dayEvidence,
   dayReasons,
   explainsNoResults,
-  isLegendDay,
   liveDay,
   legendDayKey,
   liveDayNotice,
@@ -933,13 +932,7 @@ function SeasonFinish({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
-    perDay: per(
-      trophies,
-      summary.daysObserved -
-        summary.dailyEntries.filter(
-          (day) => !isLegendDay(day.flags, (day.attacks ?? 0) + (day.defenses ?? 0)),
-        ).length,
-    ),
+    perDay: per(trophies, summary.daysObserved),
     perBattle: per(trophies, count),
   });
   return (

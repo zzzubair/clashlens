@@ -3,7 +3,7 @@
 One independently readable ``player_season_summaries`` record per
 (player, season) holds typed season totals plus up to 28 compact daily
 trophy entries. Projection reads the latest published
-``api_player_daily_logs`` version per day and joins only that log's exact
+``legend_days`` version per day and joins only that log's exact
 ``ranked_day_version_id`` for starting trophies, end-of-day trophies
 (``final_trophies_before_reset``), and reconciliation cross-checks. It never
 independently picks a newer ranked-day version. Unknown stays NULL; no
@@ -184,7 +184,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         + """
         FROM (
             SELECT DISTINCT ON (ranked_day_start) *
-            FROM api_player_daily_logs
+            FROM legend_days
             WHERE player_id = %s AND official_season_id = %s
             ORDER BY ranked_day_start, version DESC
         ) AS latest_days
@@ -621,7 +621,7 @@ def _season_completed(
     """
     now_utc = now.astimezone(UTC)
     history = connection.execute(
-        "SELECT 1 FROM api_player_daily_logs WHERE official_season_id = %s LIMIT 1",
+        "SELECT 1 FROM legend_days WHERE official_season_id = %s LIMIT 1",
         (season_id,),
     ).fetchone()
     if history is None:
@@ -646,7 +646,7 @@ def _season_completed(
             return True, ""
     boundary = connection.execute(
         """
-        SELECT 1 FROM api_player_daily_logs
+        SELECT 1 FROM legend_days
         WHERE official_season_id = %s
           AND season_day_number = 28
           AND state = 'Complete'
@@ -725,7 +725,7 @@ def materialize_completed_seasons(
         int(row[0])
         for row in connection.execute(
             """
-            SELECT DISTINCT player_id FROM api_player_daily_logs
+            SELECT DISTINCT player_id FROM legend_days
             WHERE official_season_id = %s AND player_id > %s
             ORDER BY player_id
             LIMIT %s

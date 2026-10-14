@@ -229,7 +229,7 @@ class Summaries:
             rows = connection.execute(
                 """
                 SELECT player.normalized_tag, daily.version, ranked.final_trophies_before_reset
-                FROM api_player_daily_logs AS daily
+                FROM legend_days AS daily
                 JOIN players AS player ON player.id = daily.player_id
                 JOIN ranked_day_versions AS ranked ON ranked.id = daily.ranked_day_version_id
                 WHERE player.normalized_tag = ANY(%s::text[]) AND daily.ranked_day_start = %s

@@ -122,7 +122,7 @@ FROM players AS player
 JOIN LATERAL (
     SELECT attack_count, attack_gain, defense_count, defense_loss,
            defense_three_star_count, ranked_day_version_id
-    FROM api_player_daily_logs AS daily
+    FROM legend_days AS daily
     WHERE daily.player_id = player.id
       AND daily.ranked_day_start = %(day_start)s
     ORDER BY daily.version DESC
@@ -152,7 +152,7 @@ FROM players AS player
 # Each player's newest published log of the Legend day %(day_start)s.
 _NEWEST_LOGS_SQL = """
 SELECT DISTINCT ON (daily.player_id) daily.player_id, daily.id
-FROM api_player_daily_logs AS daily
+FROM legend_days AS daily
 WHERE daily.ranked_day_start = %(day_start)s
 ORDER BY daily.player_id, daily.version DESC
 """
@@ -162,7 +162,7 @@ _LOG_REPORTS_SQL = """
 SELECT daily.id, event ->> 'lens', event ->> 'battle_identity',
        (event ->> 'battle_timestamp')::timestamptz,
        event ->> 'trophy_change' <> '0'
-FROM api_player_daily_logs AS daily
+FROM legend_days AS daily
 CROSS JOIN LATERAL jsonb_array_elements(CASE jsonb_typeof(daily.battles)
                                         WHEN 'array' THEN daily.battles
                                         ELSE '[]' END) AS event
@@ -190,7 +190,7 @@ FROM (
     SELECT DISTINCT ON (daily.player_id)
            daily.ranked_day_version_id, daily.defense_count,
            daily.defense_three_star_count, daily.defense_loss
-    FROM api_player_daily_logs AS daily
+    FROM legend_days AS daily
     WHERE daily.ranked_day_start = %s
     ORDER BY daily.player_id, daily.version DESC
 ) AS day
@@ -209,7 +209,7 @@ SELECT DISTINCT ON (daily.player_id)
        ranked_day.start_trophies,
        COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0),
        daily.state, daily.partial_reasons
-FROM api_player_daily_logs AS daily
+FROM legend_days AS daily
 JOIN players AS player ON player.id = daily.player_id
 LEFT JOIN ranked_day_versions AS ranked_day
     ON ranked_day.id = daily.ranked_day_version_id
@@ -1083,7 +1083,7 @@ def get_player_armies(
                   AND (
                       SELECT daily.state = 'Complete'
                              AND daily.coverage = 'complete'
-                      FROM api_player_daily_logs AS daily
+                      FROM legend_days AS daily
                       WHERE daily.player_id = %s
                         AND daily.ranked_day_start = day.ranked_day_start
                       ORDER BY daily.version DESC
