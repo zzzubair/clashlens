@@ -18,6 +18,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 from clashlens import (
+    board_deadline,
     boundary,
     boundary_publication,
     domain_repair,
@@ -413,6 +414,9 @@ def test_campaign_hold_defers_only_affected_artifacts(
     )
     # A clock set before the boards were made: the hourly wait isn't tested here.
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
+    # These Resets are weeks old: hold back 06:00, when a repair stops holding
+    # a Reset's first board.
+    monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(days=36500))
     # The player's two saved days list the Resets ending them, not the third.
     held, held_next, free = START + 5 * DAY, START + 6 * DAY, START + 7 * DAY
     with _campaign_database(database_url) as (connection_info, worker):
@@ -432,10 +436,12 @@ def test_campaign_hold_defers_only_affected_artifacts(
         domain_repair.activate(worker, SEASON, now=NOW)
 
         def builds() -> list[datetime]:
+            # A build starts with the board's inputs frozen; the army's freeze
+            # once the board publishes.
             with psycopg.connect(connection_info) as connection:
                 return [row[0] for row in connection.execute(
                     "SELECT DISTINCT boundary_at FROM boundary_publication_generations"
-                    " WHERE army_manifest_id IS NOT NULL ORDER BY 1"
+                    " WHERE snapshot_manifest_id IS NOT NULL ORDER BY 1"
                 ).fetchall()]
 
         for boundary_at, member in itertools.product((held, held_next, free), (player, opponent)):
@@ -451,6 +457,12 @@ def test_campaign_hold_defers_only_affected_artifacts(
         boundary_publication.reevaluate_boundary_publications(worker)
         assert builds() == [held, held_next, free]
 
+        # Each board publishes, and its army's inputs freeze.
+        with worker.pool.connection() as connection:
+            connection.execute(
+                "UPDATE boundary_publication_generations SET snapshot_state = 'published'"
+            )
+        boundary_publication.reevaluate_boundary_publications(worker)
         # Once published, a rebuilt day result reaches the first Reset, and a
         # decode job queued before the campaign, finishing now, the other two.
         # The free Reset starts its correction at once; each held Reset keeps

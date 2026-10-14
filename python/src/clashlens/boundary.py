@@ -464,7 +464,7 @@ def _supersede_generation(
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int
 ) -> None:
-    # A repair holds no Reset's first board past the hard deadline.
+    # A repair holds no Reset's first board and army results past 06:00.
     if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
         return
     _inherit_deferred_army_successor_snapshot(database, 
