@@ -44,7 +44,7 @@ from .collector import (
 )
 from .collector_db import CollectorDatabase
 from .spool import SpoolError
-from .worker import StageMetrics
+from .stage_metrics import StageMetrics
 
 UPLOADS_AT_ONCE = 16
 DATABASE_CONNECTIONS = 4
