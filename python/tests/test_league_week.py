@@ -93,9 +93,20 @@ CASES = {
     ),
     "a Legend I answer between the two keeps them apart": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
-            *LAST_WEEK, DROP[1], answer(at(W2, 0, 2), 34, L1, SEASON_0), DROP[2])),
+            *LAST_WEEK, DROP[1], answer(W2 + LEAGUE_DISPLAY_WINDOW / 2, 34, L1, SEASON_0), DROP[2])),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
          W2: Unknown()},
+    ),
+    # 62 players dropped on 12 October 2026 were read in Legend I naming
+    # Season 0 up to 12 hours after the Reset, then in Legend II.
+    "a Season 0 Legend I answer after the window against a pair is a conflict": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            *LAST_WEEK, answer(at(W2, 0, 0.06), 51, L1, SEASON_0),
+            answer(at(W2, 0, 8), 52, L1, SEASON_0), answer(at(W2, 0, 14), 53, L2, SEASON_0),
+            answer(at(W2, 0, 15), 54, L2, SEASON_0))),
+        {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
+         W2: Unknown((Claim(at(W2, 0, 8), 52, ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I),
+                      Claim(at(W2, 0, 14), 53, ProofKind.UNCONFIRMED_PAIR, League.BELOW, 54)))},
     ),
     "one response saved twice is one answer, not a pair": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
@@ -190,7 +201,8 @@ CASES = {
     ),
     "in the window after an unknown week, no answer counts": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
-            answer(at(W2, 0, 0.33), 161, L2, ACCEPTED), answer(at(W2, 0, 2), 162, L1, ACCEPTED))),
+            answer(at(W2, 0, 0.33), 161, L2, ACCEPTED),
+            answer(W2 + LEAGUE_DISPLAY_WINDOW / 2, 162, L1, ACCEPTED))),
         {W2: Unknown()},
     ),
     "a promoted player read in the window after a week below counts at once": (

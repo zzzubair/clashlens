@@ -34,11 +34,19 @@ _MONDAY = datetime(2026, 10, 12, 5, tzinfo=UTC)
 RULE_VERSION = 1
 
 # The game keeps showing a player's old league for a while after a Monday
-# Reset. An answer read this long after the Reset always shows the week's
-# own league. One read earlier counts only when it shows a league other than
-# last week's decided one, because the late display only ever shows the old
-# league; when last week is unknown, it does not count.
-LEAGUE_DISPLAY_WINDOW = timedelta(hours=3)
+# Reset. An answer read earlier than this after the Reset counts only when it
+# shows a league other than last week's decided one, because the late display
+# only ever shows the old league; when last week is unknown, it does not count.
+# Measured on the copy of 14 October 2026 for the 12 October Reset: the 1,898
+# players who dropped with an accepted Reset reading were last read in Legend
+# I at most 23.5 minutes after it and first in Legend II by 37.6 minutes; one
+# hour leaves 60% more, as only one mid-Season Monday has been measured. The
+# 62 whose Reset reading named Season 0 were still read in Legend I naming
+# Season 0 up to 12 hours later and first in Legend II 12 to 24 hours after
+# it; no window short of the whole day covers them, so a week where such an
+# answer comes after the window has unconfirmed evidence for both leagues
+# and stays unknown.
+LEAGUE_DISPLAY_WINDOW = timedelta(hours=1)
 
 # Every table holding league evidence. Migration 0115 gives each one a
 # trigger that marks the (player, week) it is about; a test checks the two
