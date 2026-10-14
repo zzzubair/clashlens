@@ -26,7 +26,7 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                        - min(COALESCE(observation.created_at, job.created_at))
                          FILTER (WHERE (job.status <> 'pending' OR job.due_at <= clock_timestamp())
                                    AND NOT COALESCE(
-                                       job.work_type IN ('build_snapshot', 'build_army_analytics')
+                                       job.work_type IN ('build_snapshot', 'build_analytics', 'build_army_analytics')
                                        AND job.input_json->>'boundary_at' < %(hold)s::text,
                                        false)))) AS waiting_age
             FROM python_processing_jobs AS job

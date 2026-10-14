@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from psycopg.errors import LockNotAvailable, QueryCanceled
@@ -95,16 +96,19 @@ def reevaluate_boundary_publications(database) -> int:
                     SELECT boundary_at
                     FROM boundary_publication_corrections
                     WHERE state IN ('queued', 'pending_inputs')
-                    ORDER BY 1
+                    ORDER BY 1 DESC
                     """
                 ).fetchall()
             ]
         # One Reset per transaction: a freeze takes minutes, and holding
         # every Reset's lock until the last one finished blocked them all.
-        # A Reset that needed work only after the read above waits for the
-        # next pass.
-        handled = 0
+        # A Reset that needed work only after the read above, or that a long
+        # pass leaves, the newest first, waits for the next pass: a pass
+        # longer than the worker's 60-minute health limit gets it killed.
+        handled, started = 0, monotonic()
         for boundary_at in boundaries:
+            if monotonic() - started > PASS_SECONDS:
+                break
             try:
                 with connection.transaction():
                     handled += _reevaluate_boundary(database, connection, boundary_at)
@@ -113,8 +117,8 @@ def reevaluate_boundary_publications(database) -> int:
                 # result that shares it; the next pass checks this Reset.
                 continue
             except QueryCanceled:
-                # A freeze past the worker's 15-minute statement limit fails
-                # each pass; it is logged, and later Resets are still checked.
+                # Past the worker's 15-minute statement limit; a freeze saves
+                # its own (freeze_boundary_manifest). Later Resets are checked.
                 print(json.dumps({"event": "boundary_publication_check_cancelled",
                                   "boundary_at": boundary_at.isoformat()}), flush=True)
         return handled
@@ -122,6 +126,8 @@ def reevaluate_boundary_publications(database) -> int:
 
 # How long a pass waits for a Reset's full lock before leaving it to the next.
 REEVALUATION_LOCK_WAIT = "50ms"
+# After this long a pass starts no further Reset: a 15-minute freeze still fits.
+PASS_SECONDS = 1800
 
 
 def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> int:

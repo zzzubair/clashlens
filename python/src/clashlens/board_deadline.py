@@ -22,12 +22,15 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .boundary_manifest import retry_wait
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
+from .domain_repair import boundary_held
+from .past_reset_pacing import past_reset_build_waits
 
 BOARD_DEADLINE = timedelta(minutes=30)
 MAX_UNFINISHED = 50
@@ -133,9 +136,13 @@ def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: in
     """Queue again, under a new key, the failed board build or statistics job
     a generation still waits for: one error failed it for good, and the next
     job met the failed one's key. Each retry waits twice as long as the one
-    before, from a minute to at most an hour."""
+    before, from a minute to at most an hour. Like any build, none is queued
+    while a repair holds the Reset, or for a past Reset in the quiet window."""
+    if (boundary_held(connection, boundary_at) and not overdue(connection, boundary_at)
+            or past_reset_build_waits(connection, boundary_at)):
+        return
     connection.execute(
-        """
+        f"""
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json, state,
             due_at, parser_version, processing_version, domain_rule_version,
@@ -143,8 +150,7 @@ def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: in
         SELECT NULL, job.work_type,
                split_part(job.deduplication_key, ':retry:', 1) || ':retry:' || job.id,
                job.input_json, 'pending',
-               job.updated_at + least(interval '1 hour',
-                   interval '1 minute' * 2 ^ (count(*) OVER () - 1)),
+               job.updated_at + {retry_wait("count(*) OVER ()")},
                %s, %s, %s, %s, job.priority
         FROM boundary_publication_generations AS generation
         JOIN python_processing_jobs_worker AS job
@@ -153,6 +159,8 @@ def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: in
              WHEN 'ready' THEN 'build_snapshot' WHEN 'building' THEN 'build_analytics' END
          AND job.input_json ->> 'boundary_at' = %s
          AND job.input_json ->> 'generation' = generation.generation::text
+         -- Not a freeze's failure: a build reruns from its frozen inputs.
+         AND job.input_json ? 'manifest_id'
         WHERE generation.id = %s
         ON CONFLICT (deduplication_key) DO NOTHING
         """,

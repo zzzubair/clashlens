@@ -559,7 +559,8 @@ def _try_enqueue_boundary_artifacts(
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="snapshot"
         )
-        assert manifest is not None
+        if manifest is None:
+            return
         connection.execute(
             """
             INSERT INTO python_processing_jobs_worker (
@@ -611,7 +612,8 @@ def _try_enqueue_boundary_artifacts(
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="army"
         )
-        assert manifest is not None
+        if manifest is None:
+            return
         key = base = f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}"
         # A build that gave up while members were still pending runs again,
         # under a new key, once they have all settled; it stays failed.

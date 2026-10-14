@@ -32,6 +32,7 @@ from clashlens import (
     api_leaderboard,
     board_deadline,
     boundary,
+    boundary_manifest,
     boundary_publication,
     past_reset_pacing,
     queue_refresh,
@@ -39,6 +40,7 @@ from clashlens import (
     snapshots,
 )
 from clashlens.api_db import ApiDatabase
+from clashlens.collector_metrics import health_metrics
 from clashlens.db import WORKER_STATEMENT_TIMEOUT_SECONDS, Database
 
 PLAYERS = ("#2PP", "#8PP")
@@ -443,6 +445,124 @@ def test_a_battle_log_job_leaves_the_army_freeze_to_the_background_check(
             frozen_by_the_job = army_frozen()
             boundary_publication.reevaluate_boundary_publications(database)
             assert [frozen_by_the_job, army_frozen()] == [False, True]
+        finally:
+            database.close()
+
+
+def test_a_failed_build_runs_again_only_once_a_repair_lets_it(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, it ran again while the repair held its Reset.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(days=36500))
+    run, faults = snapshots.complete_snapshot, [ValueError("a build fault")]
+    reset = f"{DAY_END:%Y-%m-%dT%H:%M:%SZ}"
+
+    def faulty(database, claim):
+        if faults and claim.input_json["boundary_at"] == reset:
+            raise faults.pop()
+        return run(database, claim)
+
+    monkeypatch.setattr(snapshots, "complete_snapshot", faulty)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            boundary_publication.reevaluate_boundary_publications(database)
+            for build in _waiting(database, ["build_snapshot"]):
+                processor.process_job(build, owner="build")
+            assert faults == []
+            _repair_lists(connection_info, "active")
+            boundary_publication.reevaluate_boundary_publications(database)
+            with database.pool.connection() as connection:
+                held = connection.execute(
+                    "SELECT id FROM python_processing_jobs WHERE status = 'pending'"
+                    " AND work_type = 'build_snapshot' AND input_json ->> 'boundary_at' = %s",
+                    (reset,),
+                ).fetchall()
+                connection.execute("UPDATE domain_repair_items SET state = 'done'")
+            boundary_publication.reevaluate_boundary_publications(database)
+            for job_id in _waiting(database, BUILDS):
+                _due_now(database, job_id)
+            _build(database, processor)
+            assert (held, _board(database)) == ([], (1, list(PLAYERS)))
+        finally:
+            database.close()
+
+
+def test_a_past_resets_statistics_wait_out_the_quiet_window(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, only its board and army builds waited; its statistics ran.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            boundary_publication.reevaluate_boundary_publications(database)
+            for build in _waiting(database, ["build_snapshot"]):
+                assert processor.process_job(build, owner="build").outcome == "processed"
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
+                    " membership_captured_at) VALUES (%s, '{}', clock_timestamp())",
+                    (DAY_END + timedelta(days=1),),
+                )
+            claimed = []
+            for hour, minute in ((4, 31), (7, 0)):
+                at = (DAY_END + timedelta(days=1)).replace(hour=hour, minute=minute)
+                monkeypatch.setattr(past_reset_pacing, "_now", lambda _connection, at=at: at)
+                claim = database.claim_job(owner="statistics", work_types=["build_analytics"])
+                claimed.append(claim and claim.work_type)
+            assert claimed == [None, "build_analytics"]
+        finally:
+            database.close()
+
+
+def test_an_army_freeze_past_the_query_limit_waits_before_trying_again(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, every background pass tried it again, 15 minutes each time,
+    # and only a log line said so.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    army_rows, tries = boundary_manifest._army_rows, []
+
+    def slow_once(connection, members, generation):
+        if generation[0] != DAY_END:
+            return army_rows(connection, members, generation)
+        tries.append(generation[1])
+        if len(tries) == 1:
+            connection.execute("SET LOCAL statement_timeout = '50ms'")
+            connection.execute("SELECT pg_sleep(1)")
+        return army_rows(connection, members, generation)
+
+    monkeypatch.setattr(boundary_manifest, "_army_rows", slow_once)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            _build(database, processor)
+            boundary_publication.reevaluate_boundary_publications(database)
+            with database.pool.connection() as connection:
+                # The alert check's failed-work count, which raises its alerts.
+                alerted = health_metrics(connection)["failed_processing"]
+                failed = connection.execute(
+                    "UPDATE python_processing_jobs SET updated_at = updated_at"
+                    " - interval '1 minute' WHERE failure_category = 'freeze_timed_out'"
+                    " RETURNING work_type, input_json ->> 'generation'"
+                ).fetchall()
+            waited = list(tries)
+            # A minute later it tries again, and the army results publish.
+            _build(database, processor)
+            assert ([tuple(map(text, row)) for row in failed], alerted, waited, tries) == (
+                [("build_army_analytics", "1")], 1, [1], [1, 1])
+            assert _board(database) == (1, list(PLAYERS))
         finally:
             database.close()
 
