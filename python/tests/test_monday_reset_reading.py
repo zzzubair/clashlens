@@ -1,12 +1,14 @@
 """A Monday day whose Reset reading fits but a later reading does not.
 
-On 12 October 2026 four players' Sunday ended below 5,000 only after its
-automatic defense loss, so the weekly raise took them back to 5,000. Each
-Reset reading, taken before the loss, showed the day's end before it and fit;
-a reading about 05:15 then showed one missing defense's share of the loss
-taken, which fits no way the rule allows, so the day is Inconsistent. Its
+On 12 October 2026 four players' Sunday, their first played day of the
+Season, was charged as an ordinary day for (8 - defenses) missing defenses,
+ending below 5,000, so the weekly raise took them back to 5,000. Each Reset
+reading, taken before the loss, showed the day's end before it and fit; a
+reading about 05:15 then showed one missing defense's share of the loss
+taken, which fit no way the rule allowed, so the day was Inconsistent. Its
 saved numbers must still add up, or the database rejects the day and the
-Reset's board waits for it.
+Reset's board waits for it. A first Legend day is charged for (attacks -
+defenses): three of the four had one more attack than defenses.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from clashlens.reading_rule import Reading
 from clashlens.reconciliation import (
     BattleContribution,
     PreviousRankedDay,
+    ReconciliationResult,
     reconcile_ranked_day,
 )
 
@@ -33,36 +36,56 @@ def _battles(lens: str, amounts: tuple[int, ...]) -> tuple[BattleContribution, .
     )
 
 
-@pytest.mark.parametrize(
-    ("attacks", "defenses", "reset_reading", "later_reading"),
-    [
-        # Player 41426: 6 defenses lose 183, so 2 missing cost 30 each.
-        ((31, 40, 2, 31, 40, 40), (40, 40, 40, 40, 0, 23), 5001, 4971),
-        # Player 39803153: 3 defenses lose 61, so 5 missing cost 20 each.
-        ((26, 40, 29, 40), (30, 31, 0), 5074, 5054),
-        # Player 29465: 1 defense loses 30, so 7 missing cost 30 each.
-        ((40, 1), (30,), 5011, 4981),
-        # Player 32707: 3 defenses lose 102, so 5 missing cost 34 each.
-        ((19, 40, 40, 40), (40, 31, 31), 5037, 5003),
-    ],
-)
-def test_monday_day_contradicted_after_a_fitting_reset_reading_still_adds_up(
-    attacks: tuple[int, ...], defenses: tuple[int, ...],
-    reset_reading: int, later_reading: int,
-) -> None:
-    # The Season rule starts the day at 5,000; the day before had no battles.
-    # The Reset reading is the day's end before its automatic loss.
+# The four players' Sundays: attacks, defenses, the Reset reading and the
+# 05:15 reading.
+SUNDAYS = [
+    # Player 41426: 6 defenses lose 183, an average of 30.
+    ((31, 40, 2, 31, 40, 40), (40, 40, 40, 40, 0, 23), 5001, 4971),
+    # Player 39803153: 3 defenses lose 61, an average of 20.
+    ((26, 40, 29, 40), (30, 31, 0), 5074, 5054),
+    # Player 29465: 1 defense loses 30.
+    ((40, 1), (30,), 5011, 4981),
+    # Player 32707: 3 defenses lose 102, an average of 34.
+    ((19, 40, 40, 40), (40, 31, 31), 5037, 5003),
+]
+
+
+def _sunday(attacks: tuple[int, ...], defenses: tuple[int, ...], reset_reading: int,
+            later_reading: int, *, first: bool) -> ReconciliationResult:
+    """The day from 5,000 after a day with no battles: by the Season rule,
+    the player's first Legend day, or from its Reset reading."""
     assert reset_reading == 5000 + sum(attacks) - sum(defenses)
-    result = reconcile_ranked_day(_input(
+    return reconcile_ranked_day(_input(
         start_trophies=5000,
         next_start_trophies=reset_reading,
         boundary_kind="weekly",
         previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
         contributions=_battles("offense", attacks) + _battles("defense", defenses),
-        start_baseline_evidence={"start_trophies_source": "season_rule"},
+        start_baseline_evidence={"start_trophies_source": "season_rule"} if first else {},
         end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
         readings=(Reading(DAY.end + timedelta(minutes=15), later_reading),),
     ))
+
+
+def test_a_first_played_day_loses_its_attacks_less_its_defenses() -> None:
+    # One share for one attack more than defenses, as the 05:15 readings
+    # showed. Player 41426's 6 attacks and 6 defenses lose nothing by the
+    # rule, yet its reading showed 30 taken: still Inconsistent.
+    results = [_sunday(*sunday, first=True) for sunday in SUNDAYS]
+
+    assert [(result.state, result.automatic_defense_loss) for result in results] == [
+        ("Inconsistent", 0), ("Complete", 20), ("Complete", 30), ("Complete", 34)]
+    assert [result.final_trophies_before_reset for result in results] == [5001, 5054, 4981, 5003]
+
+
+@pytest.mark.parametrize(("attacks", "defenses", "reset_reading", "later_reading"), SUNDAYS)
+def test_monday_day_contradicted_after_a_fitting_reset_reading_still_adds_up(
+    attacks: tuple[int, ...], defenses: tuple[int, ...],
+    reset_reading: int, later_reading: int,
+) -> None:
+    # As ordinary days, each is charged for (8 - defenses), ends below 5,000,
+    # and its 05:15 reading fits no way the rule allows.
+    result = _sunday(attacks, defenses, reset_reading, later_reading, first=False)
 
     final = result.final_trophies_before_reset
     assert final is not None and final < 5000 < reset_reading

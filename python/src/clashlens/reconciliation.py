@@ -419,10 +419,11 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # What a reading may show from the end Reset on: the day's end before its loss, or
         # after it raised to 5,000 on a Monday or reset to it at a Season's end, either of
         # which can land after the Reset; the official Season-end total shows only the end.
+        possible = loss_rule.possible_loss(data, attack_count, defense_count, defense_loss)
         rule: dict[str, Any] = {
             "end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
             "loss_candidates": () if official_end and automatic_loss else
-            loss_rule.loss_candidates(data, automatic_loss, automatic_state, defense_count),
+            loss_rule.loss_candidates(automatic_loss, automatic_state, possible),
             "loss_certain": automatic_state == "calculated" and bool(automatic_loss) and not official_end,
             "day_effects": () if official_end else _effects(contributions),
             "new_day_effects": () if official_end else _effects(
@@ -443,11 +444,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
-        zero_defense_loss = loss_rule.zero_defense_loss(data, defense_count)
-        if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
-                verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
-                and final_trophies - zero_defense_loss <= 5000):
-            automatic_loss, automatic_state, final_trophies = zero_defense_loss, "calculated", final_trophies - zero_defense_loss
+        if verdict is not None and verdict.outcome == "verified" and possible and (
+                verdict.loss == possible and data.boundary_kind == "weekly"
+                and final_trophies - possible <= 5000):
+            automatic_loss, automatic_state, final_trophies = possible, "calculated", final_trophies - possible
             net_trophy_change, boundary_adjustment, boundary_type = final_trophies - start_trophies, 5000 - final_trophies, "weekly_reset"
             expected_next, end_hidden_by_reset = 5000, True
         if end_available and data.next_start_trophies is not None:
@@ -464,15 +464,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             verdict = None
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
-            if zero_defense_loss and verdict.loss == zero_defense_loss:
+            if possible and verdict.loss == possible:
                 # The game can charge a day with no used defense slots the
                 # automatic loss for all 8, or charge it nothing; its battles
                 # do not say which. On 6 October 2026, 3 such days lost
                 # exactly this (304, 272 and 248) and 86 kept their trophies.
                 # Only a reading showing the charge takes it.
-                automatic_loss = zero_defense_loss
+                automatic_loss = possible
                 automatic_state = "calculated"
-                final_trophies -= zero_defense_loss
+                final_trophies -= possible
                 net_trophy_change = final_trophies - start_trophies
                 expected_next = final_trophies + boundary_adjustment
             if automatic_loss in rule["loss_candidates"] and not verdict.loss:
