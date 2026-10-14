@@ -57,38 +57,25 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
         try:
             _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(api)
-            account = store.account(DISCORD_ID)
-            assert account is not None
             commands = Commands(
                 store, Site("https://clashlens.test"), now=lambda: day_3 - timedelta(minutes=1)
             )
-            full = commands.stats(account, FULL)
-            late = commands.stats(account, LATE)
+            full = commands.stats(DISCORD_ID, "drift", FULL)
+            late = commands.stats(DISCORD_ID, "drift", LATE)
         finally:
             api.close()
             owner.close()
 
     assert board is not None
     assert {entry["tag"]: entry["trophies"] for entry in board["entries"]}[FULL] == 5060
-    reset = int(day_3.timestamp())
-    assert full.body.splitlines() == [
-        f"Season from <t:{int(SEASON.timestamp())}:D> · Legend day 2 of 28",
-        "5,000 → 5,060 (+60)",
-        "",
-        "**Attacks** 7 · hit rate 71% (5 three-stars) · +36 per attack",
-        "**Defenses** 16 · held 94% (15 not tripled) · −12 per defense",
-        "",
-        f"Reset <t:{reset}:t> (<t:{reset}:R>)",
+    # 5 three-stars in 7 attacks, 1 of 16 defenses tripled.
+    assert full.cards[0].parts[1].splitlines()[:3] == [
+        "**Season Stats**",
+        "Attack hit rate: 71%",
+        "Defenses held: 94%",
     ]
-    assert late.body.splitlines()[1:5] == [
-        "Unavailable → 4,920",
-        "",
-        (
-            "**Attacks** Unavailable · hit rate Unavailable (Unavailable three-stars) · "
-            "Unavailable per attack"
-        ),
-        (
-            "**Defenses** Unavailable · held Unavailable (Unavailable not tripled) · "
-            "Unavailable per defense"
-        ),
+    assert late.cards[0].parts[1].splitlines()[:3] == [
+        "**Season Stats**",
+        "Attack hit rate: Unavailable",
+        "Defenses held: Unavailable",
     ]

@@ -15,6 +15,7 @@ from typing import Any
 
 from clashlens import (
     api_accounts,
+    api_discord_alerts,
     api_leaderboard,
     api_player_lookup,
     api_players,
@@ -24,6 +25,8 @@ from clashlens.api_db import (
     ApiDatabase,
 )
 from clashlens.domain import SEASON_START_TROPHIES
+
+from . import replies
 
 # The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
@@ -74,6 +77,22 @@ def _linked_players(
 
 
 
+def link_colours(connection: Any, account_id: int) -> dict[str, int]:
+    """Each of the account's verified players' colour, by the order they were
+    linked, so a player keeps its colour in every message."""
+    rows = connection.execute(
+        """
+        SELECT player.normalized_tag
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        WHERE link.account_id = %s
+        ORDER BY link.verified_at, link.player_id
+        """,
+        (account_id,),
+    ).fetchall()
+    return replies.colours([str(row[0]) for row in rows])
+
+
 class _OneConnection:
     """The API database with every read on one open connection, so the
     website's own page read shares that connection's snapshot."""
@@ -98,6 +117,17 @@ class Store:
     def account(self, discord_id: str) -> AccountContext | None:
         """The Clash Lens account this Discord user connected, if any."""
         return api_accounts.resolve_account(self.database, "discord", discord_id)
+
+    def alert_switches(self, account: AccountContext) -> list[dict[str, Any]]:
+        """Each verified player's attack alert and Legend day summary switch,
+        read with the website's Discord alerts page's own code."""
+        return api_discord_alerts.get_attack_alerts(self.database, account.internal_id)[
+            "players"
+        ]
+
+    def colours(self, account: AccountContext) -> dict[str, int]:
+        with self.database.pool.connection() as connection:
+            return link_colours(connection, account.internal_id)
 
     def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
         """Each verified player's card, read with the website's own code, and

@@ -32,7 +32,7 @@ from test_reset_scenarios_postgres import (
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger
-from bot.replies import Reply, Site
+from bot.replies import PLAYER_COLOURS, Reply, Site
 from bot.store import Store
 from clashlens import api_accounts, api_discord_alerts
 from clashlens.api_db import ApiDatabase, RequestBinding
@@ -207,10 +207,8 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             story.run_worker()
             sent = [asyncio.run(loop.tick()) for _ in range(3)]
 
-            account = store.account(DISCORD_ID)
-            assert account is not None
             stats = Commands(store, SITE, now=lambda: day_3 - timedelta(minutes=1)).stats(
-                account, attacker)
+                DISCORD_ID, "drift", attacker)
         finally:
             api.close()
             owner.close()
@@ -219,21 +217,40 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     stars, destruction = RESULTS[30]
     stranger_stars, stranger_destruction = RESULTS[20]
     assert len(discord.sent) == 3
-    assert discord.sent[0][1].title == f"Attack alerts are on for {NAME} {DEFENDER}"
+    assert discord.sent[0][1].text.splitlines()[:2] == [
+        "### Attack alerts are on", f"{NAME} {DEFENDER}"
+    ]
     alerts = [reply for _, reply in discord.sent[1:]]
     assert {user for user, _ in discord.sent} == {DISCORD_ID}
-    assert {reply.title for reply in alerts} == {f"{NAME} {DEFENDER} was attacked"}
-    assert sorted(reply.body.splitlines() for reply in alerts) == sorted([
+    assert {reply.text.splitlines()[0] for reply in alerts} == {f"### {NAME} was attacked"}
+    assert sorted(reply.cards[0].parts[1].splitlines() for reply in alerts) == sorted([
         [
-            f"{NAME} {attacker}: {stars}★ · {destruction}% · −30 trophies",
-            f"{NAME}'s hit rate in this attack's Season: 75%",
+            f"**{NAME}** {attacker}",
+            f"{'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%  ·  **−30** trophies",
+            f"-# {NAME}'s hit rate in this attack's Season: 75%",
         ],
         [
-            f"Opponent {stranger}: {stranger_stars}★ · {stranger_destruction}% · −20 trophies",
-            "Opponent's hit rate in this attack's Season: not tracked yet",
+            f"**Opponent** {stranger}",
+            (
+                f"{'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  "
+                f"{stranger_destruction}%  ·  **−20** trophies"
+            ),
+            "-# Opponent's hit rate in this attack's Season: not tracked yet",
         ],
     ])
-    assert "hit rate 75% (3 three-stars)" in stats.body
+    # Every message about the account's first linked player has its colour,
+    # and each alert opens its battle on that Legend day.
+    assert {card.colour for _, reply in discord.sent for card in reply.cards} == {
+        PLAYER_COLOURS[0]
+    }
+    assert all(
+        reply.cards[0].button is not None
+        and reply.cards[0].button.url.startswith(
+            f"https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
+        )
+        for reply in alerts
+    )
+    assert "Attack hit rate: 75%" in stats.text
     assert not any(reply.private for reply in alerts)
 
 
@@ -318,7 +335,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     assert [(player["tag"], player["on"]) for player in shown["players"]] == [
         ("#2PP", True), ("#8QQ", False)]
     assert cleared["undelivered"] is None
-    assert discord.sent[0][1].body.splitlines()[0].endswith(": 1★ · 33% · −16 trophies")
+    assert "★☆☆  ·  33%  ·  **−16** trophies" in discord.sent[0][1].text.splitlines()
 
 
 def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
@@ -377,10 +394,11 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
     assert (refused, still_on, reconnected, confirmed) == ([0, 0], 0, 200, [2, 0])
     assert shown is not None and (shown["tag"], shown["reason"]) == ("#2PP", "no_shared_server")
     assert cleared is None
-    assert [reply.title for _, reply in discord.sent] == [
-        "Attack alerts are on for Unnamed #2PP",
-        "Unnamed #2PP was attacked",
+    assert [reply.text.splitlines()[0] for _, reply in discord.sent] == [
+        "### Attack alerts are on",
+        "### Unnamed was attacked",
     ]
+    assert all("#2PP" in reply.text for _, reply in discord.sent)
 
 
 def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(

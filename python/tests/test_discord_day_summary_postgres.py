@@ -25,7 +25,7 @@ from test_reset_scenarios_postgres import (
     defenses,
 )
 
-from bot.replies import Reply
+from bot.replies import PLAYER_COLOURS, Reply
 from bot.store import Store
 from bot.summaries import Summaries, SummaryLoop
 from clashlens import api_discord_alerts, reconciliation_db
@@ -163,37 +163,46 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
     # LATE's Day 2 has no start reading, so it has no trophy numbers and is
     # left off the board, as on the player page.
     assert places == {FULL: 1}
-    assert day_3_dms[0][1].body.split("\n\n") == [
+    cards = day_3_dms[0][1].cards
+    assert [card.parts[0] for card in cards] == [
         "\n".join([
-            f"**{NAME} {FULL}** · Verified",
+            f"**{NAME}** {FULL} · Verified",
             "5,070 → 5,060 (−10)",
             "Attacks 3 (+100) · Defenses 8 (−110)",
-            f"Daily board place 1 · [Day on Clash Lens]({link.format('2PP')})",
+            "Daily board place **1**",
         ]),
         "\n".join([
-            f"**{NAME} {LATE}** · Uncertain",
+            f"**{NAME}** {LATE} · Uncertain",
             "Trophies unavailable",
             "Attacks 2 (+80) · Defenses 8 (−160)",
-            ("Uncertain: some of this day's battles or readings may be missing, so these "
+            "Daily board place **Unavailable**",
+            ("-# Uncertain: some of this day's battles or readings may be missing, so these "
              "numbers may be off. The day on Clash Lens says why."),
-            f"Daily board place Unavailable · [Day on Clash Lens]({link.format('8PP')})",
         ]),
-        "Places are from the Daily board at the 05:00 UTC Reset.",
     ]
+    assert [card.button.url for card in cards if card.button] == [
+        link.format("2PP"), link.format("8PP")
+    ]
+    # Each player's card in the colour of the order they were linked.
+    assert [card.colour for card in cards] == [PLAYER_COLOURS[0], PLAYER_COLOURS[1]]
+    assert day_3_dms[0][1].footer == "Places are from the Daily board at the 05:00 UTC Reset."
     assert [link.label for link in day_3_dms[0][1].links] == ["Summary settings"]
 
     assert [(player["tag"], player["on"], player["summary_on"])
             for player in settings["players"]] == [(FULL, True, True), (LATE, False, False)]
     assert day_4_sent == 1
     assert [reply.title for _, reply in day_4_dms] == ["Legend day summary · Wed 7 Oct"]
-    assert day_4_dms[0][1].body.split("\n\n")[0] == "\n".join([
-        f"**{NAME} {FULL}** · Verified",
+    assert day_4_dms[0][1].cards[0].parts[0] == "\n".join([
+        f"**{NAME}** {FULL} · Verified",
         "5,060 → 5,140 (+80)",
         "Attacks 8 (+320) · Defenses 8 (−240)",
-        ("Daily board place 1 · [Day on Clash Lens](https://clashlens.test/players/%232PP"
-         "?day=2026-10-07#legend-day-2026-10-07)"),
+        "Daily board place **1**",
     ])
-    assert LATE not in day_4_dms[0][1].body
+    assert day_4_dms[0][1].cards[0].button is not None
+    assert day_4_dms[0][1].cards[0].button.url == (
+        "https://clashlens.test/players/%232PP?day=2026-10-07#legend-day-2026-10-07"
+    )
+    assert LATE not in day_4_dms[0][1].text
 
     assert (day_5_sent, len(fifth.tries), fifth.sent) == (0, 1, [])
     assert logged == [(day_3, "sent"), (day_4, "sent"), (day_5, "failed")]
@@ -317,17 +326,18 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
     ]
     link = "https://clashlens.test/players/%23{}?day=2026-09-27#legend-day-2026-09-27"
     place = {tag: before.get(tag, "Unavailable") for tag in (RAISED, KNOWN_START)}
-    blocks = discord.sent[0][1].body.split("\n\n")
+    cards = discord.sent[0][1].cards
     assert [
-        (lines[0].split(" · ")[0], lines[1], lines[-1])
-        for lines in (block.split("\n") for block in blocks[:2])
+        (lines[0].split(" · ")[0], lines[1], lines[-1], card.button and card.button.url)
+        for card in cards[:2]
+        for lines in [card.parts[0].split("\n")]
     ] == [
-        (f"**{NAME} {RAISED}**", "5,140 → 4,940 (−200, +60 weekly reset)",
-         f"Daily board place {place[RAISED]} · [Day on Clash Lens]({link.format('8PP')})"),
-        (f"**{NAME} {KNOWN_START}**", "5,400 → Unavailable (+80)",
-         f"Daily board place {place[KNOWN_START]} · [Day on Clash Lens]({link.format('PPP')})"),
+        (f"**{NAME}** {RAISED}", "5,140 → 4,940 (−200, +60 weekly reset)",
+         f"Daily board place **{place[RAISED]}**", link.format("8PP")),
+        (f"**{NAME}** {KNOWN_START}", "5,400 → Unavailable (+80)",
+         f"Daily board place **{place[KNOWN_START]}**", link.format("PPP")),
     ]
-    assert blocks[2:] == [
+    assert [card.parts for card in cards[2:]] == [(
         f"Not finished yet: {NAME} {WAITING}. Their day shows on Clash Lens once it is saved.",
-        "Places are from the Daily board at the 05:00 UTC Reset.",
-    ]
+    )]
+    assert discord.sent[0][1].footer == "Places are from the Daily board at the 05:00 UTC Reset."

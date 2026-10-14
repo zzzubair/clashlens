@@ -1,14 +1,21 @@
 # Discord bot
 
-The Clash Lens Discord bot complements the website with three slash commands:
-`/help`, `/link` (a pointer to the website's Discord alerts page, where Discord
-is connected and attack alerts are turned on) and `/stats` (this Season so far
-for any tracked player, or the person's default account). Its code is in
+The Clash Lens Discord bot complements the website with four slash commands:
+`/help`, `/link` (the person's linked accounts and their default account),
+`/alerts` (each linked account's attack alert and Legend day summary switch)
+and `/stats` (today and this Season so far for any tracked player, or the
+person's default account). Its code is in
 [`python/src/bot`](../python/src/bot). People use it mostly in a direct
-message (DM) with the bot, and also in servers. `/stats` needs the person's
-Discord account connected to their Clash Lens account on the website.
-Connecting Discord and choosing the default account happen on the
-website, never in the bot. The default account is the one marked Default on
+message (DM) with the bot, and also in servers. `/stats` with a player tag or
+name works for anyone. `/stats` with no player shows the person's default
+account when their Discord account is connected to Clash Lens and has a linked
+account; otherwise it asks for a player tag or name, never offering sign-up or
+linking. `/link` and `/alerts` need the person's Discord account connected to
+their Clash Lens account on the website, and otherwise offer "Sign up with
+Discord" (or, for an existing account, "Connect Discord"). Signing up,
+connecting Discord, linking accounts, choosing the default account and
+turning alerts on or off happen on the website, never
+in the bot. The default account is the one marked Default on
 the Clasher's account page; until they choose, it is their first linked
 account. Every reply is a normal message anyone can forward;
 only the not-connected pointer and plain errors are private to the person.
@@ -37,12 +44,25 @@ only the not-connected pointer and plain errors are private to the person.
   Without it the bot stops at startup and its log names the missing setting.
 - Memory is capped at 384 MiB and CPU at half a core.
 
-## Reset time in replies
+## How messages look
 
-Only `/stats` replies, which show Legend data, include the next Reset as a
-Discord timestamp, which each viewer sees in their own local time. Errors,
-instructions, `/help`, `/link` and the "which player?" prompt have no Reset line
-on purpose.
+Every message is laid out in Discord's cards ("components v2"): text in one or
+more blocks with a coloured edge, with link buttons. Messages about one of the
+Clasher's own linked accounts (attack alerts, the alerts-on message, that
+account's card in a Legend day summary, and `/stats` for it) use that
+account's colour, set by the order the accounts were linked, so an account
+keeps its colour everywhere. Everything else uses Clash Lens yellow, except
+the grey card in a Legend day summary naming the players whose day is not
+finished yet. `/stats`
+ends with when the player's profile was last read ("Updated N min ago"); no
+other message has that line. `/stats` shows a square for each of today's
+recorded battles, and dark squares with how many are left only while the
+player is tracked in Legend I and every battle so far is recorded, as the
+player page checks it; with today not saved yet it says so, and with a battle
+that may be missing it points to the day on Clash Lens. A `/stats` reply that
+shows a status word
+instead of numbers also shows the next Reset as a Discord timestamp, which
+each viewer sees in their own local time.
 
 ## Legend day summary
 
@@ -112,22 +132,23 @@ Nothing below has been done yet. Do the steps in order.
    ```sh
    podman exec clashlens-discord-bot python -m bot register
    ```
-   It prints `registered 3 commands: help, link, stats`. Commands appear only
+   It prints `registered 4 commands: alerts, help, link, stats`. Commands appear only
    where the app is installed, so nobody else sees them yet.
 6. **Test in a DM.** Open the install link from the Installation page, choose
    "Add to My Apps", then DM the bot:
-   - `/help` before connecting: says "not connected yet".
-   - `/link`: shows the website buttons. Connect Discord on the website, run
-     `/link` again: says you are connected and points to the website.
+   - `/help` before connecting: says the account isn't connected yet.
+   - `/link` and `/alerts`: offer "Sign up with Discord". Connect Discord on
+     the website, run them again: they list your linked accounts and their
+     alert switches, with a button to change them on the website.
    - With two or more players, press Make default on one of them on the
      website's account page, then run `/stats` with no player.
    - `/stats` with a tag and with a name: a normal message you can forward.
 7. **Test in a test server.** Install the app to a private test server ("Add to
    Server"). Run `/stats`: everyone in the channel sees it. Have a second,
-   unconnected account run `/stats`: only they see the connect pointer.
+   unconnected account run `/link`: only they see the sign-up message.
 8. **Test attack alerts.** Before announcing alerts, turn attack alerts on for
    a test player on the website's Discord alerts page. A DM saying "Attack
-   alerts are on for …" should arrive; then, after that player's next real
+   alerts are on" should arrive; then, after that player's next real
    defense, the attack alert DM should arrive too.
 9. **Test the Legend day summary.** With a test player verified, Discord
    connected and the player's summary turned on on the website's Discord
@@ -141,6 +162,6 @@ run `./ops up`; the token file can stay. To stop it at once without `up`:
 
 ## Changing the commands
 
-Command names and descriptions are in `replies.COMMANDS`, the linking rule is
-`needs_link` in `discord_app.py`, and which replies stay private is
-`Reply.private` in `replies.py`. Re-run step 5 after changing names or options.
+Command names and descriptions are in `replies.COMMANDS`, what each command
+answers someone not connected is in `commands.py`, and which replies stay
+private is `Reply.private` in `replies.py`. Re-run step 5 after changing names or options.
