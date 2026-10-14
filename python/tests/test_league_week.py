@@ -48,6 +48,11 @@ def claim(answer: Answer, kind: ProofKind, second: int | None = None) -> Claim:
     return Claim(answer.read_at, answer.response_id, kind, answer.league, second)
 
 
+def carried(week: datetime, league: League) -> Claim:
+    """The week before ``week``'s decided league, carried into it."""
+    return Claim(week - timedelta(days=7), None, ProofKind.PREVIOUS_WEEK, league)
+
+
 # A Legend II answer naming Season 0 read hours after the 12 October 2026
 # Reset, for a player still in Legend I with battles that day.
 GLITCH = answer(at(W2, 0, 6), 21, L2, SEASON_0)
@@ -68,10 +73,42 @@ CASES = {
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
          W2: LegendI(Entry.STAYED, battle(at(W2), 501))},
     ),
-    "a lone lower league answer naming Season 0 proves nothing": (
+    # The owner's rule of 14 October 2026: a league carries forward until
+    # evidence shows a change, and only a guarded pair proves a drop.
+    "a lone lower league answer naming Season 0 after a Legend I week: still Legend I": (
         SeasonEvidence(SEASON, League.UNKNOWN, (*LAST_WEEK, GLITCH)),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown()},
+         W2: LegendI(Entry.STAYED, carried(W2, League.LEGEND_I))},
+    ),
+    "a lone lower league answer after the window after a below week: still below": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W1, 6, 1), 221, L2, ACCEPTED), answer(at(W2, 2, 1), 222, L2, SEASON_0))),
+        {W1: Below(Claim(at(W1, 6, 1), 221, ProofKind.ACCEPTED_ANSWER, League.BELOW)),
+         W2: Below(carried(W2, League.BELOW))},
+    ),
+    # #V02JGRJC: proven below the week of 5 October 2026, then one Legend II
+    # answer naming Season 0 at 05:16 on 12 October, inside the window.
+    "a lone lower league answer in the window after a below week: still below": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W1, 6, 1), 231, L2, ACCEPTED), answer(at(W2, 0, 0.27), 232, L2, SEASON_0))),
+        {W1: Below(Claim(at(W1, 6, 1), 231, ProofKind.ACCEPTED_ANSWER, League.BELOW)),
+         W2: Below(carried(W2, League.BELOW))},
+    ),
+    # Promoted at the Monday Reset, never battles: the Reset reading still
+    # shows Legend II; the first Legend I answer after the window decides.
+    "a below week, then a Legend I answer naming Season 0 after the window: promoted": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W1, 6, 1), 241, L2, ACCEPTED), answer(at(W2, 0, 0.06), 242, L2, ACCEPTED),
+            answer(at(W2, 0, 1.5), 243, L1, SEASON_0))),
+        {W1: Below(Claim(at(W1, 6, 1), 241, ProofKind.ACCEPTED_ANSWER, League.BELOW)),
+         W2: LegendI(Entry.PROMOTED,
+                     Claim(at(W2, 0, 1.5), 243, ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I))},
+    ),
+    "a week with no evidence breaks the carry": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W1, 6, 1), 251, L2, ACCEPTED), answer(at(W3, 2, 1), 252, L2, SEASON_0))),
+        {W1: Below(Claim(at(W1, 6, 1), 251, ProofKind.ACCEPTED_ANSWER, League.BELOW)),
+         W3: Unknown()},
     ),
     "an accepted Legend I answer outweighs a pair naming Season 0": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
@@ -89,31 +126,48 @@ CASES = {
     "a response that saved no answer between the two keeps them apart": (
         SeasonEvidence(SEASON, League.UNKNOWN, (*LAST_WEEK, *DROP), (at(W2, 0, 2),)),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown()},
+         W2: LegendI(Entry.STAYED, carried(W2, League.LEGEND_I))},
     ),
     "a Legend I answer between the two keeps them apart": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
             *LAST_WEEK, DROP[1], answer(W2 + LEAGUE_DISPLAY_WINDOW / 2, 34, L1, SEASON_0), DROP[2])),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown()},
+         W2: LegendI(Entry.STAYED, carried(W2, League.LEGEND_I))},
     ),
     # 62 players dropped on 12 October 2026 were read in Legend I naming
     # Season 0 up to 12 hours after the Reset, then in Legend II.
-    "a Season 0 Legend I answer after the window against a pair is a conflict": (
+    "a Season 0 Legend I answer before a lower one is set aside: the pair proves the drop": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
             *LAST_WEEK, answer(at(W2, 0, 0.06), 51, L1, SEASON_0),
             answer(at(W2, 0, 8), 52, L1, SEASON_0), answer(at(W2, 0, 14), 53, L2, SEASON_0),
             answer(at(W2, 0, 15), 54, L2, SEASON_0))),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown((Claim(at(W2, 0, 8), 52, ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I),
-                      Claim(at(W2, 0, 14), 53, ProofKind.UNCONFIRMED_PAIR, League.BELOW, 54)))},
+         W2: Below(Claim(at(W2, 0, 14), 53, ProofKind.UNCONFIRMED_PAIR, League.BELOW, 54))},
+    ),
+    "a set-aside Legend I answer still keeps two lower answers apart": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W2, 1), 261, L2, SEASON_0), answer(at(W2, 2), 262, L1, SEASON_0),
+            answer(at(W2, 3), 263, L2, SEASON_0))),
+        {W2: Unknown()},
+    ),
+    "a Season 0 Legend I answer after the week's last lower one counts": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W2, 1), 271, L2, SEASON_0), answer(at(W2, 2), 272, L1, SEASON_0))),
+        {W2: LegendI(Entry.FIRST_SEEN,
+                     Claim(at(W2, 2), 272, ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I))},
+    ),
+    "an accepted Legend I answer is not set aside by a later lower one": (
+        SeasonEvidence(SEASON, League.UNKNOWN, (
+            answer(at(W2, 1), 281, L1, ACCEPTED), answer(at(W2, 2), 282, L2, SEASON_0))),
+        {W2: LegendI(Entry.FIRST_SEEN,
+                     Claim(at(W2, 1), 281, ProofKind.ACCEPTED_ANSWER, League.LEGEND_I))},
     ),
     "one response saved twice is one answer, not a pair": (
         SeasonEvidence(SEASON, League.UNKNOWN, (
             *LAST_WEEK, answer(at(W2, 1, 1), 35, L2, SEASON_0),
             answer(at(W2, 1, 1, ) + timedelta(seconds=1), 35, L2, SEASON_0))),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown()},
+         W2: LegendI(Entry.STAYED, carried(W2, League.LEGEND_I))},
     ),
     "a Legend I answer naming Season 0, not signed up yet, is Legend I": (
         SeasonEvidence(SEASON, League.UNKNOWN, (answer(at(W1, 2, 1), 51, L1, SEASON_0),)),
@@ -197,7 +251,7 @@ CASES = {
     "in the window, an answer showing last week's league does not count": (
         SeasonEvidence(SEASON, League.UNKNOWN, (*LAST_WEEK, DROP[0])),
         {W1: LegendI(Entry.SEASON_START, claim(LAST_WEEK[0], ProofKind.ACCEPTED_ANSWER)),
-         W2: Unknown()},
+         W2: LegendI(Entry.STAYED, carried(W2, League.LEGEND_I))},
     ),
     "in the window after an unknown week, no answer counts": (
         SeasonEvidence(SEASON, League.UNKNOWN, (

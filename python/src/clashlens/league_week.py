@@ -43,9 +43,9 @@ RULE_VERSION = 1
 # hour leaves 60% more, as only one mid-Season Monday has been measured. The
 # 62 whose Reset reading named Season 0 were still read in Legend I naming
 # Season 0 up to 12 hours later and first in Legend II 12 to 24 hours after
-# it; no window short of the whole day covers them, so a week where such an
-# answer comes after the window has unconfirmed evidence for both leagues
-# and stays unknown.
+# it; no window short of the whole day covers them, so a Legend I answer
+# naming Season 0 read before a lower one the same week is set aside instead
+# (decide_season).
 LEAGUE_DISPLAY_WINDOW = timedelta(hours=1)
 
 # Every table holding league evidence. Migration 0115 gives each one a
@@ -79,11 +79,15 @@ class Entry(StrEnum):
 
 class Strength(IntEnum):
     NONE = 0
+    # The week before's decided league: a league carries forward until the
+    # week's own evidence shows a change (the owner's rule of 14 October
+    # 2026), so any claim from the week outweighs it.
+    CARRIED = 1
     # A Legend I answer naming Season 0 (not signed up yet), or two lower
     # league answers naming Season 0 from separate responses.
-    UNCONFIRMED = 1
-    ACCEPTED = 2  # an answer whose Season passed the parser's check
-    OFFICIAL = 3  # a Legend battle that week, or the game's league history
+    UNCONFIRMED = 2
+    ACCEPTED = 3  # an answer whose Season passed the parser's check
+    OFFICIAL = 4  # a Legend battle that week, or the game's league history
 
 
 class ProofKind(StrEnum):
@@ -92,6 +96,7 @@ class ProofKind(StrEnum):
     ACCEPTED_ANSWER = "accepted_answer"
     UNCONFIRMED_ANSWER = "unconfirmed_answer"
     UNCONFIRMED_PAIR = "unconfirmed_pair"
+    PREVIOUS_WEEK = "previous_week"
 
 
 _STRENGTH = {
@@ -100,6 +105,7 @@ _STRENGTH = {
     ProofKind.ACCEPTED_ANSWER: Strength.ACCEPTED,
     ProofKind.UNCONFIRMED_ANSWER: Strength.UNCONFIRMED,
     ProofKind.UNCONFIRMED_PAIR: Strength.UNCONFIRMED,
+    ProofKind.PREVIOUS_WEEK: Strength.CARRIED,
 }
 
 
@@ -108,10 +114,11 @@ class Claim:
     """One piece of evidence naming a week's league. Claims order by time,
     then source, so the same evidence always names the same proof.
     ``source_id`` is the response of an answer, the battle, or the league
-    history row; ``second_id`` the second response of a pair."""
+    history row, and None for the week before, read at its Monday Reset;
+    ``second_id`` the second response of a pair."""
 
     at: datetime
-    source_id: int
+    source_id: int | None
     kind: ProofKind
     league: League
     second_id: int | None = None
@@ -201,11 +208,16 @@ def decide_season(evidence: SeasonEvidence) -> dict[datetime, Decision]:
       week before's decided one, never when that week is unknown.
     - Claims: a Legend battle and a league history row are official; a
       counted accepted answer names its league; a counted Legend I answer
-      naming Season 0 is unconfirmed Legend I. A counted lower league answer
+      naming Season 0 is unconfirmed Legend I, unless a lower league answer
+      is read after it that week: leagues change only at a Monday Reset, so
+      it was the game's display catching up. A counted lower league answer
       naming Season 0 claims below, unconfirmed, only with the week's next or
       previous answer from another response, also a counted lower league
       one, and no successful profile response read between the two that
       saved no answer (it may have shown Legend I). Alone it claims nothing.
+    - The week before's decided league, Legend I or below, is carried
+      forward as the weakest claim: it decides only a week whose own
+      evidence claims nothing.
     - The strongest claims decide. When they name both leagues the week is
       unknown with that conflict.
     """
@@ -221,6 +233,8 @@ def decide_season(evidence: SeasonEvidence) -> dict[datetime, Decision]:
             before = League.UNKNOWN
             continue
         claims = [*official, *_answer_claims(in_week, week, before, evidence.unsaved)]
+        if before is not League.UNKNOWN:
+            claims.append(Claim(week - WEEK, None, ProofKind.PREVIOUS_WEEK, before))
         decision = _decide(claims, _entry(index, before, legend_i_earlier))
         decisions[week] = decision
         before = league_of(decision)
@@ -256,8 +270,9 @@ def _answer_claims(
             claims.add(Claim(answer.read_at, answer.response_id,
                              ProofKind.ACCEPTED_ANSWER, answer.league))
         elif answer.legend_i:
-            claims.add(Claim(answer.read_at, answer.response_id,
-                             ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I))
+            if all(later.legend_i for later in answers[index + 1:]):
+                claims.add(Claim(answer.read_at, answer.response_id,
+                                 ProofKind.UNCONFIRMED_ANSWER, League.LEGEND_I))
         else:
             for other in _neighbours(answers, index):
                 first, second = sorted((answer, other))
@@ -289,7 +304,8 @@ def _decide(claims: Sequence[Claim], entry: Entry) -> Decision:
     rival = next((claim for claim in strongest if claim.league is not proof.league), None)
     if rival is not None:
         return Unknown((proof, rival) if proof.league is League.LEGEND_I else (rival, proof))
-    against = min((claim for claim in claims if claim.league is not proof.league),
+    against = min((claim for claim in claims if claim.league is not proof.league
+                   and claim.kind is not ProofKind.PREVIOUS_WEEK),
                   key=lambda claim: (-claim.strength, claim), default=None)
     if proof.league is League.LEGEND_I:
         return LegendI(entry, proof, against)
