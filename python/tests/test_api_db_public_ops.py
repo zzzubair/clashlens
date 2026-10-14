@@ -1290,3 +1290,65 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
             assert size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
         finally:
             database.close()
+
+
+def test_player_page_shows_the_newest_copy_of_each_of_the_latest_28_days(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            today = ranked_day_for(NOW).start
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE player_id = %s",
+                    (player_id,),
+                )
+                # Thirty days, each saved three times; only the newest copy
+                # carries the day's own attack gain.
+                for day_number in range(1, 31):
+                    start = today - timedelta(days=30 - day_number)
+                    for version in (1, 2, 3):
+                        connection.execute(
+                            """
+                            INSERT INTO api_player_daily_logs (
+                                player_id, ranked_day_start, ranked_day_end,
+                                official_season_id, season_day_number, version,
+                                state, coverage, confidence, attack_count,
+                                attack_three_star_count, attack_gain, defense_count,
+                                defense_three_star_count, defense_loss,
+                                net_trophy_change, adjustments, battles,
+                                partial_reasons, published_at
+                            ) VALUES (
+                                %s, %s, %s, 'current-season', %s, %s, 'Complete',
+                                'complete', 'exact', 1, 0, %s, 0, 0, 0, NULL,
+                                '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s
+                            )
+                            """,
+                            (player_id, start, start + timedelta(days=1),
+                             (day_number - 1) % 28 + 1, version,
+                             day_number if version == 3 else 0, NOW),
+                        )
+                connection.commit()
+
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
+
+            assert player is not None
+            days = {
+                day["ranked_day_start"]: day["attack_gain"]
+                for day in player["screen_ready"]["days"]
+            }
+            assert days == {
+                (today - timedelta(days=30 - day_number)).isoformat(): day_number
+                for day_number in range(30, 2, -1)
+            }
+        finally:
+            database.close()

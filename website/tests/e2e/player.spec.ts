@@ -575,6 +575,110 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   expect(documents).toEqual([]);
 });
 
+// React leaves a folded day's battles as the server sent them while the page
+// starts up, and draws them itself once the day opens or a Refresh changes them.
+test("a folded Legend day keeps every battle as the page starts and after a Refresh", async ({
+  browser,
+}) => {
+  const battles = "details.legend-day:not([open]) .battle-slot[id]";
+  const noScript = await browser.newContext({ javaScriptEnabled: false });
+  let sent: string[];
+  try {
+    const page = await noScript.newPage();
+    await page.goto("/players/%232PP");
+    sent = await page.locator(battles).evaluateAll((rows) => rows.map((row) => row.id));
+  } finally {
+    await noScript.close();
+  }
+  expect(sent.length).toBeGreaterThan(0);
+  // Times change from UTC to the browser's own zone once the page has started.
+  const context = await browser.newContext({ timezoneId: "Asia/Tokyo" });
+  try {
+    const page = await context.newPage();
+    await refuseRefreshes(page);
+    await page.goto("/players/%232PP");
+    await expect(page.locator("time.local-time").first()).not.toContainText("UTC");
+    expect(
+      await page.locator(battles).evaluateAll((rows) => rows.map((row) => row.id)),
+    ).toEqual(sent);
+
+    // A completed Refresh adds an attack to a folded day.
+    const saved = await page.request.get("/players/%232PP.data");
+    const later = decodePageData(await saved.text());
+    const player = pagePlayer(later);
+    const older = player.recentDays.find(
+      (day) => day.period !== player.currentDay!.period,
+    )!;
+    for (const day of [...player.recentDays, ...player.seasonDays]) {
+      if (day.period !== older.period) continue;
+      day.offenseEvents.unshift({
+        battleId: "after-refresh",
+        battleTimestamp: new Date().toISOString(),
+        opponent: { tag: "#PYLR", name: "After Refresh" },
+        destructionPercentage: 100,
+        stars: 3,
+        trophyChange: 40,
+        perspectiveDisagreement: false,
+      });
+    }
+    await page.route("**/players/%232PP.data*", (route) =>
+      route.fulfill({
+        contentType: saved.headers()["content-type"],
+        body: encodePageData(later),
+      }),
+    );
+    const work = {
+      kind: "refresh-work",
+      workId: randomUUID(),
+      tag: player.tag,
+      state: "queued",
+      progressPercent: 0,
+      message: "Queued.",
+      publishedAt: null,
+    };
+    await page.route("**/resources/players/*/refresh*", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({
+            status: 202,
+            contentType: "text/x-script",
+            headers: { "X-Remix-Response": "yes" },
+            body: encodePageData({ data: work }),
+          })
+        : route.fulfill({
+            json: {
+              ...work,
+              kind: "refresh-status",
+              state: "complete",
+              progressPercent: 100,
+              message: "Complete.",
+              publishedAt: new Date().toISOString(),
+              player: { ...player, currentDay: null, recentDays: [], seasonDays: [] },
+            },
+          }),
+    );
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(
+      page.locator("details.legend-day:not([open]) .battle-slot-attack", {
+        hasText: "After Refresh",
+      }),
+    ).toHaveCount(1);
+
+    const folded = page
+      .locator("details.legend-day:not([open])")
+      .filter({
+        has: page.getByRole("button", { name: "Show army", includeHidden: true }),
+      })
+      .first();
+    const day = page.locator(`[id="${await folded.getAttribute("id")}"]`);
+    await day.locator("summary").click();
+    await day.getByRole("button", { name: "Show army" }).first().click();
+    await expect(day.getByRole("button", { name: "Hide army" })).toBeVisible();
+    await expect(day.locator(".battle-slot[id]")).not.toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
 // Opens a battle link as a fresh page load, the way a Discord button does. The
 // server's page shows `served`; every later read of the page data gets `later`.
 async function openBattleLink(

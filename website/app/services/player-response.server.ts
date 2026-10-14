@@ -467,6 +467,17 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
   calculateStartingTrophies(player.seasonDays, player.profile);
   calculateStartingTrophies(player.recentDays, player.profile);
   if (player.currentDay) calculateStartingTrophies([player.currentDay], player.profile);
+  // Most days are in two or three lists. A day that came out the same in each
+  // is one object, so the page data carries it once instead of once per list.
+  const shared = new Map<string, RankedDaySummary>();
+  const share = (day: RankedDaySummary) => {
+    const key = JSON.stringify(day);
+    if (!shared.has(key)) shared.set(key, day);
+    return shared.get(key)!;
+  };
+  player.recentDays = player.recentDays.map(share);
+  player.seasonDays = player.seasonDays.map(share);
+  if (player.currentDay) player.currentDay = share(player.currentDay);
   return player;
 }
 

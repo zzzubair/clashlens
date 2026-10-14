@@ -192,38 +192,41 @@ def get_player_page(
             _text(row[12]), int(row[4]), row[13], row[14], now
         )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
+        # The newest copy of each of the 28 latest days. The days come from the
+        # index alone, so older copies and their battles are never read.
         daily_rows = connection.execute(
             """
-            SELECT ranked_day_start, ranked_day_end, official_season_id,
-                   season_day_number, version, state, coverage, confidence,
-                   attack_count, attack_three_star_count, attack_gain,
-                   defense_count, defense_three_star_count, defense_loss,
-                   net_trophy_change, adjustments, battles, partial_reasons,
-                   start_trophies, start_trophies_source, published_at
-            FROM (
-                SELECT DISTINCT ON (daily.ranked_day_start)
-                       daily.ranked_day_start, daily.ranked_day_end,
-                       daily.official_season_id, daily.season_day_number,
-                       daily.version, daily.state, daily.coverage, daily.confidence,
-                       daily.attack_count, daily.attack_three_star_count,
-                       daily.attack_gain, daily.defense_count,
-                       daily.defense_three_star_count, daily.defense_loss,
-                       daily.net_trophy_change, daily.adjustments, daily.battles,
-                       daily.partial_reasons, ranked_day.start_trophies,
-                       ranked_day.input_evidence
-                           #>> '{start_baseline_evidence,start_trophies_source}'
-                           AS start_trophies_source,
-                       daily.published_at
-                FROM api_player_daily_logs AS daily
-                LEFT JOIN ranked_day_versions AS ranked_day
-                    ON ranked_day.id = daily.ranked_day_version_id
-                WHERE daily.player_id = (
-                    SELECT id FROM players WHERE normalized_tag = %s
-                )
-                ORDER BY daily.ranked_day_start DESC, daily.version DESC
-            ) AS current_days
-            ORDER BY ranked_day_start DESC
-            LIMIT 28
+            SELECT daily.ranked_day_start, daily.ranked_day_end,
+                   daily.official_season_id, daily.season_day_number,
+                   daily.version, daily.state, daily.coverage, daily.confidence,
+                   daily.attack_count, daily.attack_three_star_count,
+                   daily.attack_gain, daily.defense_count,
+                   daily.defense_three_star_count, daily.defense_loss,
+                   daily.net_trophy_change, daily.adjustments, daily.battles,
+                   daily.partial_reasons, ranked_day.start_trophies,
+                   ranked_day.input_evidence
+                       #>> '{start_baseline_evidence,start_trophies_source}'
+                       AS start_trophies_source,
+                   daily.published_at
+            FROM players AS player
+            CROSS JOIN LATERAL (
+                SELECT DISTINCT saved.ranked_day_start
+                FROM api_player_daily_logs AS saved
+                WHERE saved.player_id = player.id
+                ORDER BY saved.ranked_day_start DESC
+                LIMIT 28
+            ) AS day
+            CROSS JOIN LATERAL (
+                SELECT * FROM api_player_daily_logs AS saved
+                WHERE saved.player_id = player.id
+                  AND saved.ranked_day_start = day.ranked_day_start
+                ORDER BY saved.version DESC
+                LIMIT 1
+            ) AS daily
+            LEFT JOIN ranked_day_versions AS ranked_day
+                ON ranked_day.id = daily.ranked_day_version_id
+            WHERE player.normalized_tag = %s
+            ORDER BY daily.ranked_day_start DESC
             """,
             (normalized_tag,),
         ).fetchall()
