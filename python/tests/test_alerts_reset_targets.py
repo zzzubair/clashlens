@@ -125,6 +125,32 @@ def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
     assert "recovered at 2026-10-08T06:26:00+00:00" in posts(rt, "not readable")[-1]
 
 
+def test_a_board_that_left_out_over_50_players_alerts_until_rebuilt(rt) -> None:
+    # Before, once the 06:00 board showed, nothing said it left anyone out.
+    reset = at(rt, 6, 1)
+    rt.served = reset
+    rt.reset = f"{reset} 13251 13251 {reset + 3600} {reset + 3660} 0 0 {reset} 51"
+    assert rt.run() == 0
+    [alert] = posts(rt, "without more than 50 players")
+    assert "the 2026-10-08 05:00 UTC board left out 51 players" in alert
+    # It keeps warning the next day, while that board still leaves them out.
+    rt.now += 86400
+    rt.served = reset + 86400
+    rt.reset = f"{reset + 86400} 13251 13251 {reset + 86700} {reset + 86760} 0 0 {reset} 51"
+    assert rt.run() == 0
+    # A probe that could not count them leaves it open.
+    rt.reset = f"{reset + 86400} 13251 13251 {reset + 86700} {reset + 86760} 0 0 0 -1"
+    assert rt.run() == 0
+    assert len(posts(rt, "without more than 50 players")) == 1
+    # The rebuilt board has all but 50 of them: it recovers 15 minutes on.
+    rt.reset = f"{reset + 86400} 13251 13251 {reset + 86700} {reset + 86760} 0 0 0 0"
+    assert rt.run() == 0
+    rt.now += 900
+    assert rt.run() == 0
+    assert "recovered at 2026-10-09T06:01:00+00:00" in (
+        posts(rt, "without more than 50 players")[-1])
+
+
 @pytest.mark.parametrize(
     ("website", "board_page"),
     [

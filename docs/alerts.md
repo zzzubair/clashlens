@@ -218,8 +218,18 @@ use the [operating notes](operating.md#respond-to-alerts).
 
   The check enters the private worker container, whose database role writes
   each Reset's record (below), and prints only the Reset, its member count,
-  how many members' Reset collection ended, and when the inputs froze and the
-  website first showed the board.
+  how many members' Reset collection ended, when the inputs froze and the
+  website first showed the board, how many of its newest board's members wait
+  for a result or failed for good, and the left-out count below.
+- **A Reset's Daily board published without more than 50 players whose day
+  result was unfinished**: at 06:00 UTC the board publishes without every
+  member still unfinished (`board_deadline.py`), so more than 50 left out
+  means something bigger is broken. It names the newest such Reset and how
+  many it left out, and keeps alerting, on later days too, until a rebuilt
+  board of that Reset has all but 50 of them. Members whose Reset reading
+  failed are not counted. It covers every Reset's newest frozen board: 18 ms
+  over 14 Resets' 622 boards on 14 Oct 2026. A count that cannot be read in
+  5 seconds leaves it unknown, so an open alert stays open.
 
   Each Reset's record is one row of `reset_acceptance_records`: members
   captured; when their Reset readings were all collected and all processed,

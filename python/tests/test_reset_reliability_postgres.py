@@ -26,9 +26,11 @@ from test_reconciliation_postgres import (
     _profile,
     _seed_reset_collection_identity,
 )
+from test_reset_acceptance_postgres import _as_worker
 from test_reset_scenarios_postgres import _tag
 
 from clashlens import (
+    alerts,
     api_leaderboard,
     board_deadline,
     boundary,
@@ -257,13 +259,24 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
 
 
 def test_at_0600_the_board_publishes_without_every_unfinished_player(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, tmp_path, capsys
 ) -> None:
-    # Before, more than 50 unfinished kept it waiting for good.
+    # Before, more than 50 unfinished kept it waiting for good, and once it
+    # published without them no alert said so.
     late = [f"#{_tag(number)}" for number in range(1, 52)]
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
+        (tmp_path / "url").write_text(_as_worker(connection_info))
+        monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(tmp_path / "url"))
+
+        def left_out() -> list[int]:
+            """What the alert check reads: the newest Reset whose board left
+            out over 50 unfinished players, and how many."""
+            capsys.readouterr()
+            alerts.reset_probe("0", "0")
+            return [int(value) for value in capsys.readouterr().out.split()[7:]]
+
         try:
             _swept(connection_info, archive_server, processor, ("#2PP", *late))
             _calculate(database, processor, "#2PP")
@@ -273,12 +286,16 @@ def test_at_0600_the_board_publishes_without_every_unfinished_player(
                 1, {"#2PP": "complete", **dict.fromkeys(late, "unavailable")})
             _build(database, processor)
             assert _board(database) == (1, ["#2PP"])
+            assert left_out() == [int(DAY_END.timestamp()), 51]
 
             # Their days save later, and the board is rebuilt with them.
             for tag in late:
                 assert set(_calculate(database, processor, tag)) == {"processed"}
             _build(database, processor)
             assert sorted(_board(database)[1]) == sorted(["#2PP", *late])
+            # The alert moves on to the Reset before, whose board left them
+            # out too and was never rebuilt: their days before never saved.
+            assert left_out() == [int(DAY_START.timestamp()), 51]
         finally:
             database.close()
 
