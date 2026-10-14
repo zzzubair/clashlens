@@ -432,7 +432,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 )
             )
 
-            quality_row = connection.execute(
+            # A coordinated board counts its exclusions from its frozen
+            # inputs below. This scan of every player's profile history,
+            # 66.5 s of the 14 Oct 2026 board's build, is for a direct one.
+            quality_row = None if generation_row is not None else connection.execute(
                 f"""
                 WITH known_players AS (
                     SELECT id
@@ -537,11 +540,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                           AND any_source_state = 'conflict'
                     )
                 FROM classified
-                WHERE (%s::bigint IS NULL OR id IN (
-                    SELECT player_id
-                    FROM boundary_publication_generation_members
-                    WHERE generation_id = %s
-                ))
                 """,
                 (
                     boundary_at,
@@ -554,11 +552,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     PROFILE_FRESHNESS_SECONDS,
                     boundary_at,
                     PROFILE_FRESHNESS_SECONDS,
-                    generation_row[0] if generation_row is not None else None,
-                    generation_row[0] if generation_row is not None else None,
                 ),
             ).fetchone()
-            assert quality_row is not None
             if generation_row is not None:
                 manifest_quality = connection.execute(
                     """
@@ -616,6 +611,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ),
                 }
             else:
+                assert quality_row is not None
                 quality = {
                     "eligible_population_count": int(quality_row[0]),
                     "included_entry_count": int(quality_row[1]),
