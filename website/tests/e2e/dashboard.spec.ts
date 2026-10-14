@@ -155,6 +155,37 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     ]);
   errors.splice(logged);
 
+  // Bases you attacked's day button reads an earlier day and comes back to
+  // today, without leaving the page. On Day 1 there is no earlier day. Quick
+  // clicks read only the day the clicking stops on.
+  const bases = page.getByRole("region", { name: "Bases you attacked", exact: true });
+  const earlier = bases.getByRole("button", { name: "Earlier Legend day" });
+  const later = bases.getByRole("button", { name: "Later Legend day" });
+  await expect(bases).toContainText("· today");
+  if (await earlier.isEnabled()) {
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const day = /\/bases\?day=(\d+)/.exec(request.url())?.[1];
+      if (day) asked.push(day);
+    });
+    // Browser time stands still for both clicks, however slow the runner,
+    // then moves past the pause before a read.
+    await page.clock.install();
+    await page.clock.pauseAt(Date.now() + 5_000);
+    await earlier.click();
+    const twice = await earlier.isEnabled();
+    if (twice) await earlier.click();
+    await page.clock.runFor(1_000);
+    await page.clock.resume();
+    await expect(bases).not.toContainText("· today");
+    await expect(bases).not.toContainText("Loading Day");
+    await expect(bases).not.toContainText("couldn't be read");
+    expect(asked).toHaveLength(1);
+    await later.click();
+    if (twice) await later.click();
+    await expect(bases).toContainText("· today");
+  }
+
   // A card setting saves at once: the Goal becomes Top 50.
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await page.getByRole("button", { name: "Goal settings" }).click();

@@ -73,6 +73,8 @@ from .api_leaderboard import LiveBoardCache
 from .domain import (
     CHAIN_BREAK_REASONS,
     MAX_BATTLE_TROPHIES,
+    RANKED_DAY_DURATION,
+    SEASON_DURATION,
     allocate_trophies,
     ranked_day_for,
 )
@@ -94,6 +96,14 @@ SIMILAR_TROPHIES = 20
 SIMILAR_MOST_TROPHIES = 300
 SIMILAR_DEFENSES = 200
 SIMILAR_FEWEST_DEFENSES = 50
+# An earlier Legend day's comparison is read again once this old, so a
+# repaired day shows through; at most a Season's days are kept.
+PAST_DAY_SECONDS = 3600
+# One earlier day's comparison is read at a time, as a first read reads
+# every saved day (4.1 s on production on 14 October 2026); a request that
+# waits longer than this for its turn is refused as busy, unless its day
+# was read meanwhile.
+PAST_DAY_WAIT_SECONDS = 8
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
 MAX_ARMY_DAYS = 28
@@ -166,6 +176,29 @@ _LOGS_A_READ = 2000
 # median attack length (analytics.latest_trophy_changes).
 _DEFENSE_REPORT_TO_END = timedelta(seconds=155)
 
+# Every player's defenses, held defenses and trophies lost on defense in
+# their latest log of the Legend day %s, with that day's start trophies:
+# 11,666 players in 2.8 s on 13 October 2026 and 4.1 s on 14 October, most
+# of it reading the whole table from disk. No index helps: going player by
+# player took 5.2 s, as about 11,700 saved days are read either way. So
+# DashboardBoard.past_day keeps it an hour and runs one such read at a time.
+_PAST_DAY_SQL = """
+SELECT ranked_day.start_trophies, day.defense_count,
+       day.defense_count - COALESCE(day.defense_three_star_count, 0),
+       day.defense_loss
+FROM (
+    SELECT DISTINCT ON (daily.player_id)
+           daily.ranked_day_version_id, daily.defense_count,
+           daily.defense_three_star_count, daily.defense_loss
+    FROM api_player_daily_logs AS daily
+    WHERE daily.ranked_day_start = %s
+    ORDER BY daily.player_id, daily.version DESC
+) AS day
+JOIN ranked_day_versions AS ranked_day
+    ON ranked_day.id = day.ranked_day_version_id
+WHERE day.defense_count > 0 AND ranked_day.start_trophies IS NOT NULL
+"""
+
 # Each player's latest log for one Legend day, with the day's start trophies
 # and its "no opponent, no battle" defense slots, which the game counts as
 # used.
@@ -187,6 +220,30 @@ ORDER BY daily.player_id, daily.version DESC
 
 
 @dataclass(frozen=True)
+class _Similar:
+    """One Legend day's defenses by day start trophies, for comparing bases."""
+
+    # Distinct day start trophies, ascending, and the defenses, held defenses
+    # and trophies lost on defense of players who started below each (one
+    # more entry than starts).
+    starts: list[int]
+    defenses_below: list[int]
+    held_below: list[int]
+    lost_below: list[int]
+
+
+def _similar(by_start: dict[int, list[int]]) -> _Similar:
+    """``by_start`` maps day start trophies to [defenses, held, lost]."""
+    starts = sorted(by_start)
+    defenses_below, held_below, lost_below = [0], [0], [0]
+    for value in starts:
+        defenses_below.append(defenses_below[-1] + by_start[value][0])
+        held_below.append(held_below[-1] + by_start[value][1])
+        lost_below.append(lost_below[-1] + by_start[value][2])
+    return _Similar(starts, defenses_below, held_below, lost_below)
+
+
+@dataclass(frozen=True)
 class _Board:
     day_start: datetime
     computed_at: datetime
@@ -196,13 +253,7 @@ class _Board:
     worst_ends: list[int]
     held: int
     defenses: int
-    # Distinct day start trophies, ascending, and the defenses, held defenses
-    # and trophies lost on defense of players who started below each (one
-    # more entry than starts).
-    starts: list[int]
-    defenses_below: list[int]
-    held_below: list[int]
-    lost_below: list[int]
+    similar: _Similar
     # tag -> (trophies now, open attacks, open defenses), for the projection.
     slots_left: dict[str, tuple[int, int, int]]
 
@@ -273,12 +324,6 @@ def _read_board(
                 tally[0] += int(defended)
                 tally[1] += int(defended) - int(tripled or 0)
                 tally[2] += int(lost)
-    starts = sorted(by_start)
-    defenses_below, held_below, lost_below = [0], [0], [0]
-    for value in starts:
-        defenses_below.append(defenses_below[-1] + by_start[value][0])
-        held_below.append(held_below[-1] + by_start[value][1])
-        lost_below.append(lost_below[-1] + by_start[value][2])
     return _Board(
         day_start=day_start,
         computed_at=now,
@@ -287,10 +332,7 @@ def _read_board(
         worst_ends=sorted(worst for _, worst in ends.values()),
         held=held,
         defenses=defenses,
-        starts=starts,
-        defenses_below=defenses_below,
-        held_below=held_below,
-        lost_below=lost_below,
+        similar=_similar(by_start),
         slots_left=slots_left,
     ), slots
 
@@ -399,6 +441,10 @@ def _in_child_process(function: Callable[..., Any], *args: Any, **kwargs: Any) -
         raise
 
 
+class PastDayBusy(Exception):
+    """Another earlier Legend day's comparison is being read."""
+
+
 class DashboardBoard:
     """The board for rank ranges and held share, read in the background at
     most once every ``seconds``, one read at a time, so no request waits for
@@ -434,6 +480,9 @@ class DashboardBoard:
         self._projecting = False
         # Published log -> its battles, for the projection's equal-trophy order.
         self._reports: dict[int, _Reports] = {}
+        # Earlier Legend day start -> (when read, its comparison).
+        self._past: dict[datetime, tuple[float, _Similar]] = {}
+        self._past_read = Lock()
 
     def current(
         self, database: ApiDatabase, now: datetime, *, wait: float = 0
@@ -551,6 +600,52 @@ class DashboardBoard:
             )
             return None
 
+    def past_day(self, database: ApiDatabase, day_start: datetime) -> _Similar:
+        """An earlier Legend day's defenses for comparing bases, read once
+        an hour at most: every player's with a saved day, as a finished day
+        has no Live Leaderboard. One read runs at a time, whatever the day,
+        so they hold one database connection between them; others wait
+        without one, and PastDayBusy after PAST_DAY_WAIT_SECONDS unless
+        their day was read meanwhile."""
+
+        def kept() -> _Similar | None:
+            with self._lock:
+                read = self._past.get(day_start)
+            if read is None or self._clock() >= read[0] + PAST_DAY_SECONDS:
+                return None
+            return read[1]
+
+        similar = kept()
+        if similar is not None:
+            return similar
+        if not self._past_read.acquire(timeout=PAST_DAY_WAIT_SECONDS):
+            similar = kept()
+            if similar is not None:
+                return similar
+            raise PastDayBusy
+        try:
+            # Another request may have read it while this one waited.
+            similar = kept()
+            if similar is not None:
+                return similar
+            by_start: dict[int, list[int]] = {}
+            with database.pool.connection() as connection:
+                rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
+            for start, defended, held, lost in rows:
+                tally = by_start.setdefault(int(start), [0, 0, 0])
+                tally[0] += int(defended)
+                tally[1] += int(held)
+                tally[2] += int(lost or 0)
+            similar = _similar(by_start)
+            with self._lock:
+                self._past[day_start] = (self._clock(), similar)
+                # Only a Season's worth, the newest.
+                for old in sorted(self._past)[:-(SEASON_DURATION // RANKED_DAY_DURATION)]:
+                    del self._past[old]
+            return similar
+        finally:
+            self._past_read.release()
+
     def projection(
         self, now: datetime, tag: str, *, wait: float = 0
     ) -> _Projection | None:
@@ -606,8 +701,8 @@ def projected_rank(
     return min(outer["worst"], max(outer["best"], middle))
 
 
-def similar_held(board: _Board, trophies: int | None) -> dict[str, int] | None:
-    """Today's held and all defenses, and the trophies those defenses lost,
+def similar_held(board: _Similar, trophies: int | None) -> dict[str, int] | None:
+    """The day's held and all defenses, and the trophies those defenses lost,
     of players whose day started within 20 trophies of ``trophies``, widened
     evenly until there are 200 defenses but never past 300. None under 50
     defenses there, or when ``trophies`` is unknown."""
@@ -687,6 +782,73 @@ def _iso(value: datetime | None) -> str | None:
     return None if value is None else value.astimezone(UTC).isoformat()
 
 
+def _opponents(
+    connection: Any,
+    tag: str,
+    own: tuple[Any, ...] | None,
+    day_start: datetime,
+    compare: Callable[[int | None], dict[str, int] | None],
+) -> list[dict[str, Any]]:
+    """The bases ``tag`` attacked in ``own``, its latest log of the Legend
+    day ``day_start``, in the order they happened: each with its defenses
+    that day and ``compare``'s comparison for its Reset trophies."""
+    attacks, _ = _screen_events(None if own is None else own[5])
+    attacks = sorted(attacks[:_MAX_OPPONENTS], key=lambda event: event["battle_timestamp"])
+    opponent_tags = sorted({event["opponent"]["tag"] for event in attacks})
+    opponent_rows = {
+        _text(row[0]): row
+        for row in connection.execute(
+            _DAY_LOGS_SQL, {"tags": opponent_tags, "day_start": day_start}
+        ).fetchall()
+    } if opponent_tags else {}
+
+    opponents = []
+    for attack in attacks:
+        opponent_tag = attack["opponent"]["tag"]
+        row = opponent_rows.get(opponent_tag)
+        _, defended = _screen_events(None if row is None else row[5])
+        defenses = [
+            {
+                "stars": event["stars"],
+                "trophy_change": event["trophy_change"],
+                "yours": event["opponent"]["tag"] == tag,
+                "at": event["battle_timestamp"],
+            }
+            for event in defended
+        ]
+        if not any(defense["yours"] for defense in defenses):
+            # This attack is in your log but not yet in theirs. A defense
+            # loses what the attack won, except a 0-star one, which loses 0.
+            defenses.append({
+                "stars": attack["stars"],
+                "trophy_change": -attack["trophy_change"] if attack["stars"] else 0,
+                "yours": True,
+                "at": attack["battle_timestamp"],
+            })
+        defenses.sort(key=lambda defense: defense["at"])
+        reset_trophies = None if row is None or row[7] is None else int(row[7])
+        opponents.append(
+            {
+                "tag": opponent_tag,
+                "name": attack["opponent"]["name"],
+                "reset_trophies": reset_trophies,
+                "hit": {
+                    "stars": attack["stars"],
+                    "destruction_percentage": attack["destruction_percentage"],
+                    "trophy_change": attack["trophy_change"],
+                    "battle_timestamp": attack["battle_timestamp"],
+                },
+                "defenses": [
+                    {key: defense[key] for key in ("stars", "trophy_change", "yours")}
+                    for defense in defenses
+                ],
+                "observed_at": None if row is None else _iso(row[6]),
+                "legends_held": compare(reset_trophies),
+            }
+        )
+    return opponents
+
+
 def get_player_today(
     database: ApiDatabase,
     board_cache: DashboardBoard,
@@ -737,62 +899,14 @@ def get_player_today(
                 ),
                 None,
             )
-        attacks, _ = _screen_events(None if today is None else today[5])
-        # In the order they happened.
-        attacks = sorted(attacks[:_MAX_OPPONENTS], key=lambda event: event["battle_timestamp"])
-        opponent_tags = sorted({event["opponent"]["tag"] for event in attacks})
-        opponent_rows = {
-            _text(row[0]): row
-            for row in connection.execute(
-                _DAY_LOGS_SQL, {"tags": opponent_tags, "day_start": day.start}
-            ).fetchall()
-        } if opponent_tags else {}
-
-    opponents = []
-    for attack in attacks:
-        opponent_tag = attack["opponent"]["tag"]
-        row = opponent_rows.get(opponent_tag)
-        _, defended = _screen_events(None if row is None else row[5])
-        defenses = [
-            {
-                "stars": event["stars"],
-                "trophy_change": event["trophy_change"],
-                "yours": event["opponent"]["tag"] == tag,
-                "at": event["battle_timestamp"],
-            }
-            for event in defended
-        ]
-        if not any(defense["yours"] for defense in defenses):
-            # This attack is in your log but not yet in theirs. A defense
-            # loses what the attack won, except a 0-star one, which loses 0.
-            defenses.append({
-                "stars": attack["stars"],
-                "trophy_change": -attack["trophy_change"] if attack["stars"] else 0,
-                "yours": True,
-                "at": attack["battle_timestamp"],
-            })
-        defenses.sort(key=lambda defense: defense["at"])
-        reset_trophies = None if row is None or row[7] is None else int(row[7])
-        opponents.append(
-            {
-                "tag": opponent_tag,
-                "name": attack["opponent"]["name"],
-                "reset_trophies": reset_trophies,
-                "hit": {
-                    "stars": attack["stars"],
-                    "destruction_percentage": attack["destruction_percentage"],
-                    "trophy_change": attack["trophy_change"],
-                    "battle_timestamp": attack["battle_timestamp"],
-                },
-                "defenses": [
-                    {key: defense[key] for key in ("stars", "trophy_change", "yours")}
-                    for defense in defenses
-                ],
-                "observed_at": None if row is None else _iso(row[6]),
-                "legends_held": None
-                if board is None
-                else similar_held(board, reset_trophies),
-            }
+        opponents = _opponents(
+            connection,
+            tag,
+            today,
+            day.start,
+            lambda trophies: None
+            if board is None
+            else similar_held(board.similar, trophies),
         )
 
     open_defenses, auto_each = _automatic_defense(
@@ -801,6 +915,7 @@ def get_player_today(
     return {
         "tag": tag,
         "ranked_day_start": _iso(day.start),
+        "season_day_number": day.day_number,
         "board_computed_at": None if board is None else _iso(board.computed_at),
         "rank_range": None if board is None else rank_range(board, tag),
         "projected_rank": None if board is None else projected_rank(board, projection, tag),
@@ -813,6 +928,51 @@ def get_player_today(
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
         "opponents": None if today is None else opponents,
+    }
+
+
+def get_player_bases(
+    database: ApiDatabase,
+    board_cache: DashboardBoard,
+    tag: str,
+    *,
+    day_number: int,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Bases you attacked on an earlier Legend day of this Season, Day
+    ``day_number``, as today's read shows them for today, or None for an
+    unknown tag. Each base is compared with every player's defenses that day
+    at similar trophies. ``opponents`` is None when the player has no log
+    that day. Raises ValueError for a day that is not an earlier one."""
+    today = ranked_day_for(now)
+    if not 1 <= day_number < today.day_number:
+        raise ValueError("not an earlier Legend day of this Season")
+    day_start = today.start - (today.day_number - day_number) * RANKED_DAY_DURATION
+    similar = board_cache.past_day(database, day_start)
+    with database.pool.connection() as connection:
+        if connection.execute(
+            "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
+        ).fetchone() is None:
+            return None
+        own = next(
+            iter(
+                connection.execute(
+                    _DAY_LOGS_SQL, {"tags": [tag], "day_start": day_start}
+                ).fetchall()
+            ),
+            None,
+        )
+        opponents = None
+        if own is not None:
+            opponents = _opponents(
+                connection, tag, own, day_start,
+                lambda trophies: similar_held(similar, trophies),
+            )
+    return {
+        "tag": tag,
+        "season_day_number": day_number,
+        "ranked_day_start": _iso(day_start),
+        "opponents": opponents,
     }
 
 

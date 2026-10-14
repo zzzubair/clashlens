@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -6,6 +7,7 @@ import {
   baseStrength,
   trophiesGivenUp,
 } from "../lib/dashboard";
+import type { PastBases } from "../lib/dashboard-cards";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, updatedAgo } from "./DashboardParts";
 import { signed, starText, timeFormatter } from "./LegendClock";
@@ -26,6 +28,97 @@ const STRENGTH_ORDER: BaseStrength[] = [
 ];
 /** A Legend day has 8 attacks. */
 const ATTACKS = 8;
+/** An earlier day is read once clicking stops this long, not each day passed. */
+const BASES_PAUSE_MS = 400;
+
+export interface BasesResponse {
+  bases: PastBases | null;
+}
+
+export function basesPath(tag: string, day: number): string {
+  return `/resources/players/${encodeURIComponent(tag)}/bases?day=${day}`;
+}
+
+/**
+ * The earlier Legend day chosen on Bases you attacked and each earlier day
+ * read for `tag`, kept while its account tab is shown: null when it could not
+ * be read. The dashboard holds them, as its follow-up reads build the card
+ * again.
+ */
+export function useBasesDay(tag: string) {
+  // The earlier day chosen; null for today, whichever day today is.
+  const [chosen, setChosen] = useState<number | null>(null);
+  const [read, setRead] = useState<Map<number, PastBases | null>>(new Map());
+  // Days whose read is on its way: a day has one read at a time.
+  const asking = useRef(new Set<number>());
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(pause.current), []);
+  return {
+    chosen,
+    read,
+    choose(next: number | null) {
+      setChosen(next);
+      clearTimeout(pause.current);
+      if (next === null || read.get(next) || asking.current.has(next)) return;
+      // A failed read is asked again.
+      setRead((old) => {
+        const kept = new Map(old);
+        kept.delete(next);
+        return kept;
+      });
+      pause.current = setTimeout(() => {
+        asking.current.add(next);
+        // Not a router fetcher: its failed read would replace the whole page with an error.
+        void fetch(basesPath(tag, next), { headers: { Accept: "application/json" } })
+          .then((response) => response.json() as Promise<BasesResponse>)
+          .then(({ bases }) => bases ?? null)
+          .catch(() => null)
+          .then((bases) => {
+            asking.current.delete(next);
+            setRead((old) => new Map(old).set(next, bases));
+          });
+      }, BASES_PAUSE_MS);
+    },
+  };
+}
+
+export type BasesDay = ReturnType<typeof useBasesDay>;
+
+/** ‹ Day 9 ›: steps through this Season's Legend days up to today. */
+function DayStepper({
+  day,
+  today,
+  choose,
+}: {
+  day: number;
+  today: number;
+  choose: (day: number) => void;
+}) {
+  return (
+    <span className="dash-switch bases-day" role="group" aria-label="Legend day">
+      <button
+        type="button"
+        aria-label="Earlier Legend day"
+        disabled={day <= 1}
+        onClick={() => choose(day - 1)}
+      >
+        ‹
+      </button>
+      <span className="bases-day-label" aria-live="polite">
+        Day {day}
+        {day === today ? <span className="dash-muted"> · today</span> : null}
+      </span>
+      <button
+        type="button"
+        aria-label="Later Legend day"
+        disabled={day >= today}
+        onClick={() => choose(day + 1)}
+      >
+        ›
+      </button>
+    </span>
+  );
+}
 
 function heldShare(defenses: OpponentRow["defenses"]): number {
   if (defenses.length === 0) return 0;
@@ -58,7 +151,8 @@ function trophiesLine(row: OpponentRow): string {
 }
 
 /**
- * Card 3: one row per attack today, hardest bases first. Held % mode compares
+ * Card 3: one row per attack today, hardest bases first, and with the day
+ * button the same for an earlier Legend day of this Season. Held % mode compares
  * the base's held share today with today's among tracked Legend players at
  * similar trophies, and shows "–" when there are too few of them. Trophies
  * mode compares the trophies it gave up a defense with what those players
@@ -67,12 +161,17 @@ function trophiesLine(row: OpponentRow): string {
  * Colours follow the attacker: green is good for you, red is bad.
  */
 export function OpponentsCard({
-  rows,
+  dayNumber,
+  days,
+  rows: todayRows,
   timeZone,
   mode = "held",
   nowMs = null,
   comparedAtMs = null,
 }: {
+  /** Today's Legend day; null hides the day button. */
+  dayNumber: number | null;
+  days: BasesDay;
   rows: OpponentRow[] | null;
   timeZone: string;
   mode?: BasesMode;
@@ -82,29 +181,68 @@ export function OpponentsCard({
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
+  const { chosen, read } = days;
+  const earlier = chosen !== null && dayNumber !== null && chosen < dayNumber;
+  const day = earlier ? chosen : dayNumber;
+  // Undefined while it loads.
+  const past = earlier ? read.get(chosen) : undefined;
+  const loading = earlier && !read.has(chosen);
+  const rows = earlier ? (past?.rows ?? null) : todayRows;
+  const when = earlier ? "that day" : "today";
   // The oldest opponent or comparison read, so the card never looks newer than it is.
-  const observed = (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
-  if (rows?.length && comparedAtMs !== null) observed.push(comparedAtMs);
+  const observed = earlier ? [] : (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
+  if (!earlier && rows?.length && comparedAtMs !== null) observed.push(comparedAtMs);
+  const updated = observed.length ? updatedAgo(Math.min(...observed), nowMs) : null;
   const head = (
     <CardHead
       title={
         <>
           {"Bases you attacked "}
           <small className="dash-muted">
-            {rows ? `· today · ${rows.length} of ${ATTACKS}` : "· today"}
+            {/* Without the day button, the title says which day. */}
+            {[
+              ...(day === null ? ["today"] : []),
+              ...(rows && !loading ? [`${rows.length} of ${ATTACKS}`] : []),
+            ]
+              .map((part) => `· ${part}`)
+              .join(" ")}
           </small>
         </>
       }
-      meta={observed.length ? updatedAgo(Math.min(...observed), nowMs) : null}
+      meta={
+        day !== null && dayNumber !== null ? (
+          <span className="bases-day-meta">
+            {updated ? <span>{updated}</span> : null}
+            <DayStepper
+              day={day}
+              today={dayNumber}
+              choose={(next) => days.choose(next === dayNumber ? null : next)}
+            />
+          </span>
+        ) : (
+          updated
+        )
+      }
     />
   );
-  if (!rows?.length)
+  const note = loading
+    ? `Loading Day ${day}…`
+    : earlier && past === null
+      ? `Day ${day}'s bases couldn't be read. Try again in a minute.`
+      : !rows
+        ? earlier
+          ? `Day ${day}'s battles aren't saved.`
+          : "Today's battles aren't saved yet."
+        : rows.length === 0
+          ? earlier
+            ? `No attacks on Day ${day}.`
+            : "No attacks yet today."
+          : null;
+  if (note !== null || !rows)
     return (
       <>
         {head}
-        <CardNote>
-          {rows ? "No attacks yet today." : "Today's battles aren't saved yet."}
-        </CardNote>
+        <CardNote>{note}</CardNote>
       </>
     );
   // Hardest first within each strength: held most, or gave up least a defense.
@@ -126,8 +264,8 @@ export function OpponentsCard({
         <div className="opponents-head" aria-hidden="true">
           <span>Player · trophies at Reset</span>
           <span>Your hit</span>
-          <span>Their defenses today</span>
-          <span>Base strength · vs Legends at similar trophies today</span>
+          <span>Their defenses {when}</span>
+          <span>Base strength · vs Legends at similar trophies {when}</span>
           <span />
         </div>
         {sorted.map(({ row, strength }, index) => {
@@ -177,7 +315,9 @@ export function OpponentsCard({
               </ol>
               <div className="opponents-strength">
                 <span className={`dash-strength dash-strength-${strength}`}>
-                  {STRENGTH_LABELS[strength]}
+                  {earlier && strength === "early"
+                    ? "Too few"
+                    : STRENGTH_LABELS[strength]}
                 </span>
                 <span className="dash-muted">
                   {mode === "held"

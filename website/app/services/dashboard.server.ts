@@ -26,6 +26,7 @@ import {
   type GoalData,
   type GroupRow,
   type GroupWatchData,
+  type PastBases,
   type RivalRow,
   type RivalsData,
   type SeasonData,
@@ -55,6 +56,8 @@ import {
 
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
+  /** Today's Legend day of the Season; null from a data service before it was sent. */
+  dayNumber: number | null;
   rankRange: RankRange | null;
   /** The place the player is projected to finish on; null before it can be worked out. */
   projectedRank: number | null;
@@ -138,6 +141,17 @@ function legendsHeld(value: unknown): LegendsHeld {
   };
 }
 
+function dayNumber(value: unknown): number {
+  const day = count(value, 28);
+  if (day < 1) malformed();
+  return day;
+}
+
+function opponents(value: unknown): OpponentRow[] {
+  if (!Array.isArray(value)) malformed();
+  return value.slice(0, 8).map(opponent);
+}
+
 /** `waitForBoard` asks Python to wait a few seconds for the shared board's read under way. */
 export async function getPlayerToday(
   tag: string,
@@ -156,6 +170,7 @@ export async function getPlayerToday(
   const pending = payload.projected_rank_pending ?? false;
   if (typeof pending !== "boolean") malformed();
   return {
+    dayNumber: nullable(payload.season_day_number ?? null, dayNumber),
     rankRange: nullable(range, (item) => {
       if (!isRecord(item)) malformed();
       const best = count(item.best);
@@ -171,12 +186,34 @@ export async function getPlayerToday(
     projectedRankPending: pending,
     openDefenses: nullable(payload.open_defenses, (item) => count(item, 8)),
     automaticDefenseEach: nullable(payload.automatic_defense_each, (item) => count(item)),
-    opponents: nullable(payload.opponents, (items) => {
-      if (!Array.isArray(items)) malformed();
-      return items.slice(0, 8).map(opponent);
-    }),
+    opponents: nullable(payload.opponents, opponents),
     boardComputedAtMs: nullable(payload.board_computed_at, time),
   };
+}
+
+/**
+ * A first read of an earlier day takes about 4 s, after any other day's read
+ * the private API is running (it runs one at a time, up to 8 s).
+ */
+const BASES_TIMEOUT_MS = 15_000;
+
+/** Day `day` of this Season's bases, from GET /v1/players/{tag}/bases?day=. */
+export async function getPlayerBases(tag: string, day: number): Promise<PastBases> {
+  if (!isCanonicalPlayerTag(tag) || !Number.isInteger(day) || day < 1 || day > 28)
+    throw new PythonApiError(422, { error: "invalid_request" });
+  const payload = await requestJson<unknown>(
+    `/v1/players/${encodeURIComponent(tag)}/bases?day=${day}`,
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    BASES_TIMEOUT_MS,
+  );
+  if (!isRecord(payload) || payload.tag !== tag || payload.season_day_number !== day)
+    malformed();
+  return { dayNumber: day, rows: nullable(payload.opponents, opponents) };
 }
 
 /** What the card reads need to know about the signed-in user. */
@@ -805,6 +842,7 @@ export function readCards(
       const read = await today();
       if (read === null) return null;
       return {
+        dayNumber: read.dayNumber,
         rows: read.opponents,
         comparedAtMs: read.boardComputedAtMs,
         ...waiting(read),

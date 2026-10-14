@@ -443,6 +443,26 @@ def create_app(
             raise ApiError(404, "player_not_found")
         return JSONResponse(content=_json_safe(result))
 
+    @app.get("/v1/players/{tag}/bases")
+    def player_bases(
+        tag: str, request: Request, day: int = Query(ge=1, le=28)
+    ) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if not dashboard_enabled:
+            raise ApiError(404, "dashboard_disabled")
+        try:
+            result = api_dashboard.get_player_bases(
+                production_database, dashboard_board, _safe_tag(tag),
+                day_number=day, now=current_time(),
+            )
+        except ValueError:
+            raise ApiError(422, "invalid_request") from None
+        except api_dashboard.PastDayBusy:
+            raise ApiError(503, "busy") from None
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(content=_json_safe(result))
+
     @app.get("/v1/players/{tag}/armies")
     def player_armies(
         tag: str,

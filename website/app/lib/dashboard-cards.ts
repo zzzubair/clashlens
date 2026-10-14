@@ -439,12 +439,21 @@ export interface LegendDayData {
 }
 
 export interface BasesData {
+  /** Today's Legend day of the Season; null when unknown, which hides the day button. */
+  dayNumber: number | null;
   /** Null until the player's battles for today are saved. */
   rows: OpponentRow[] | null;
   /** When the comparisons with Legends at similar trophies were read; null without them. */
   comparedAtMs: number | null;
   /** Read before the shared board: the page asks again for the comparisons. */
   boardPending?: true;
+}
+
+/** Bases you attacked on an earlier Legend day of this Season. */
+export interface PastBases {
+  dayNumber: number;
+  /** Null when the player's battles that day aren't saved. */
+  rows: OpponentRow[] | null;
 }
 
 /** The army cards' first read: the last 7 finished days. */
