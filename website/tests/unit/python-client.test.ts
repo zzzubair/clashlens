@@ -1035,6 +1035,56 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
+  it("maps army types' average trophies and refuses a malformed one", async () => {
+    const [unit] = armyAnalyticsPayload().rows;
+    const payload = (miss: unknown) => ({
+      ...armyAnalyticsPayload(),
+      rows: [
+        {
+          ...unit,
+          key: "army-type:3",
+          average_trophies: 40,
+          average_miss_trophies: null,
+        },
+        {
+          ...unit,
+          key: "army-type:4",
+          average_trophies: 36.6,
+          average_miss_trophies: miss,
+        },
+      ],
+    });
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(payload(fetchMock.mock.calls.length > 1 ? "26" : 26.3)),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    const query = new URLSearchParams({ season: "current", category: "army-types" });
+    const mapped = await createPythonClient().getArmyAnalytics(query);
+    expect(
+      mapped.rows.map(({ averageTrophies, averageMissTrophies }) => [
+        averageTrophies,
+        averageMissTrophies,
+      ]),
+    ).toEqual([
+      [40, null],
+      [36.6, 26.3],
+    ]);
+    await expect(createPythonClient().getArmyAnalytics(query)).rejects.toMatchObject({
+      status: 502,
+    });
+  });
+
   it("maps a whole-season army summary without day ranges or population filters", async () => {
     const payload = {
       ...armyAnalyticsPayload(),

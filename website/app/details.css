@@ -926,6 +926,30 @@
   .analytics-page .analytics-results-table [data-column="usage-count"] {
     flex-basis: 9rem;
   }
+  /* Armies add Avg. trophies after 3-star; the first four still fit. */
+  .analytics-page .analytics-results-table [data-column="average-trophies"] {
+    flex-basis: 5.75rem;
+    order: 2;
+  }
+  .analytics-page .analytics-results-table th[data-column="average-trophies"],
+  .analytics-page
+    .analytics-results-table
+    th[data-column="average-trophies"]
+    .analytics-sort-button {
+    overflow-wrap: normal;
+    padding-inline: 0.4rem;
+  }
+  .analytics-page
+    .analytics-results-table:has([data-column="average-trophies"])
+    :is([data-column="usage-rate"], [data-column="three-star-rate"]) {
+    flex-basis: 5rem;
+  }
+  .analytics-page
+    .analytics-results-table:has([data-column="average-trophies"])
+    tr
+    > th:first-child {
+    flex-basis: clamp(4.5rem, 100vw - 2rem - 2px - 15.75rem, 9rem);
+  }
   .analytics-page .analytics-results-table td[colspan] {
     flex: 1 0 auto;
     max-width: calc(100vw - 2rem - 2px);

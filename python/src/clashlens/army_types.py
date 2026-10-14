@@ -304,32 +304,42 @@ def _facts(lens: str) -> str:
 
 # The Armies page counts attacks only.
 _FACTS = _facts("offense")
-# Per lens: the counts table, its battle column, its counted-days table, and
-# how many recent days are counted whatever their Season.
+# Per lens: the counts table, its battle column, its counted-days table, how
+# many recent days are counted whatever their Season, and its trophies column.
 _COUNTS = {
     "offense": ("army_package_day_counts", "attacks", "army_type_counted_days",
-                OFFENSE_CARD_DAYS),
+                OFFENSE_CARD_DAYS, "trophies"),
     "defense": ("army_package_defense_day_counts", "defenses",
-                "army_type_defense_counted_days", DEFENSE_CARD_DAYS),
+                "army_type_defense_counted_days", DEFENSE_CARD_DAYS, "trophies_lost"),
 }
+# Every 3-star wins these; a miss wins fewer.
+THREE_STAR_TROPHIES = allocate_trophies(3, 100).attacker_gain
+# Joins a battle's stars and destruction to the trophies it moved (_trophies).
+_TROPHIES_JOIN = """
+    LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
+        AS moved (stars, destruction, trophies)
+      ON moved.stars = fact.stars
+     AND moved.destruction = fact.destruction_percentage"""
 
 
-def _defender_losses() -> tuple[list[int], list[int], list[int]]:
-    """Trophies a defender loses for each possible stars and destruction."""
+def _trophies(lens: str) -> tuple[list[int], list[int], list[int]]:
+    """Trophies an attacker wins, or a defender loses, for each possible
+    stars and destruction, from the game's Legend trophy table."""
     rows = []
     for stars in range(4):
         for destruction in range(101):
             try:
-                loss = allocate_trophies(stars, destruction).defender_loss
+                allocation = allocate_trophies(stars, destruction)
             except DomainRuleError:
                 continue
-            rows.append((stars, destruction, loss))
+            rows.append((stars, destruction, allocation.attacker_gain
+                         if lens == "offense" else allocation.defender_loss))
     return ([row[0] for row in rows], [row[1] for row in rows],
             [row[2] for row in rows])
 
 
 def _count_day(connection: Any, lens: str) -> dict[str, Any] | None:
-    counts_table, battles, counted_table, recent_days = _COUNTS[lens]
+    counts_table, battles, counted_table, recent_days, trophies = _COUNTS[lens]
     day = connection.execute(
         f"""
         SELECT day.ranked_day_start, day.official_season_id,
@@ -357,31 +367,22 @@ def _count_day(connection: Any, lens: str) -> dict[str, Any] | None:
         connection.execute(
             f"DELETE FROM {table} WHERE ranked_day_start = %s", (ranked_day_start,)
         )
-    # Defenses also save the trophies they lost.
-    lost, loss_sum, loss_join, loss_params = "", "", "", []
-    if lens == "defense":
-        lost, loss_sum = ", trophies_lost", ", COALESCE(sum(loss.trophies), 0)"
-        loss_join = """
-        LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
-            AS loss (stars, destruction, trophies)
-          ON loss.stars = fact.stars
-         AND loss.destruction = fact.destruction_percentage"""
-        loss_params = list(_defender_losses())
+    # Attacks save the trophies they won, defenses the trophies they lost.
     inserted = connection.execute(
         f"""
         INSERT INTO {counts_table} (
             ranked_day_start, population_player_id, exact_army_id,
-            {battles}, one_star, two_star, three_star, destruction{lost}
+            {battles}, one_star, two_star, three_star, destruction, {trophies}
         )
         SELECT ranked_day_start, population_player_id, exact_army_id, count(*),
                count(*) FILTER (WHERE fact.stars = 1),
                count(*) FILTER (WHERE fact.stars = 2),
                count(*) FILTER (WHERE fact.stars = 3),
-               sum(destruction_percentage){loss_sum}
-        FROM ({_facts(lens)}) AS fact{loss_join}
+               sum(destruction_percentage), COALESCE(sum(moved.trophies), 0)
+        FROM ({_facts(lens)}) AS fact{_TROPHIES_JOIN}
         GROUP BY 1, 2, 3
         """,
-        (season_id, [int(day_number)], *loss_params),
+        (season_id, [int(day_number)], *_trophies(lens)),
     ).rowcount
     connection.execute(
         f"INSERT INTO {counted_table} (ranked_day_start, fact_input_hash) VALUES (%s, %s)",
@@ -409,7 +410,7 @@ def read_type_rows(
     ``boards`` (each day's board by ``ranked_day_start``, lowest and highest
     rank) selects each day's players from that day's board instead of
     ``member_ids``. Rows are (type id, attacks, one-star, two-star,
-    three-star, destruction), by type id.
+    three-star, destruction, trophies won), by type id.
     """
     counted = {
         row[0]
@@ -443,7 +444,7 @@ def read_type_rows(
         parts.append(
             f"""
             SELECT population_player_id, exact_army_id, attacks, one_star,
-                   two_star, three_star, destruction
+                   two_star, three_star, destruction, trophies
             FROM army_package_day_counts
             WHERE ranked_day_start = ANY(%s::timestamptz[])
               AND {members.format("")}
@@ -457,12 +458,13 @@ def read_type_rows(
             fact_filter, filters = "fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range]
         parts.append(
             f"""
-            SELECT population_player_id, exact_army_id, 1, (stars = 1)::int,
-                   (stars = 2)::int, (stars = 3)::int, destruction_percentage
-            FROM ({_FACTS} AND {fact_filter}) AS fact
+            SELECT population_player_id, exact_army_id, 1, (fact.stars = 1)::int,
+                   (fact.stars = 2)::int, (fact.stars = 3)::int,
+                   destruction_percentage, COALESCE(moved.trophies, 0)
+            FROM ({_FACTS} AND {fact_filter}) AS fact{_TROPHIES_JOIN}
             """
         )
-        params += [season_id, fact_days, *filters]
+        params += [season_id, fact_days, *filters, *_trophies("offense")]
     totals: dict[int, list[int]] = {}
     for type_id, troops, unnamed, *counts in connection.execute(
         f"""
@@ -470,10 +472,10 @@ def read_type_rows(
                     ELSE label.type_id END,
                decode.home_troops, decode.unresolved_components,
                sum(attacks), sum(one_star), sum(two_star), sum(three_star),
-               sum(destruction)
+               sum(destruction), sum(trophies)
         FROM ({" UNION ALL ".join(parts)}) AS source (
             population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction)
+            three_star, destruction, trophies)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
         LEFT JOIN battle_army_decodes AS decode ON decode.id = -source.exact_army_id
@@ -485,7 +487,7 @@ def read_type_rows(
             type_id = classify(army_analytics.with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
-        total = totals.setdefault(type_id or OTHER, [0] * 5)
+        total = totals.setdefault(type_id or OTHER, [0] * 6)
         for index, value in enumerate(counts):
             total[index] += int(value)
     return [(type_id, *total) for type_id, total in sorted(totals.items())]
@@ -542,7 +544,7 @@ def read_day_totals(
     days, from the saved counts: [attacks, three-star attacks], or
     [defenses, three-star defenses, trophies lost], by day and type id.
     """
-    counts_table, battles, _counted, _recent = _COUNTS[lens]
+    counts_table, battles, _counted, _recent, _trophies_column = _COUNTS[lens]
     lost = ", sum(saved.trophies_lost)" if lens == "defense" else ""
     totals: dict[datetime, dict[int, list[int]]] = {day: {} for day in days}
     for day, type_id, troops, unnamed, *counts in connection.execute(
@@ -598,6 +600,7 @@ def type_result(
         "usage-rate": "usage_rate", "usage-count": "usage_count",
         "three-star-rate": "three_star_rate", "average-stars": "average_stars",
         "average-destruction": "average_destruction",
+        "average-trophies": "average_trophies",
     }[selection.sort]
     result_rows = sorted(
         type_result_rows(rows, total), key=lambda row: (-row[sort_field], row["type_id"])
@@ -631,7 +634,7 @@ def all_counted(
 ) -> bool:
     """Whether every given (day start, completed-day marker) day has saved
     counts for ``lens`` made from that marker."""
-    _table, _battles, counted_table, _recent = _COUNTS[lens]
+    _table, _battles, counted_table, _recent, _trophies_column = _COUNTS[lens]
     counted = connection.execute(
         f"""
         SELECT count(*) FROM {counted_table} AS counted
@@ -655,7 +658,7 @@ def rules_ready(connection: Any) -> bool:
 def type_result_rows(rows: list[tuple[int, ...]], total_attacks: int) -> list[dict[str, Any]]:
     """Armies page rows, one per type, in the shape the unit rows use."""
     result = []
-    for type_id, attacks, one, two, three, destruction in rows:
+    for type_id, attacks, one, two, three, destruction, trophies in rows:
         star_counts = [attacks - one - two - three, one, two, three]
         star_rates = [count / attacks if attacks else 0 for count in star_counts]
         result.append({
@@ -666,6 +669,10 @@ def type_result_rows(rows: list[tuple[int, ...]], total_attacks: int) -> list[di
             "three_star_rate": star_rates[3],
             "average_stars": (one + 2 * two + 3 * three) / attacks if attacks else 0,
             "average_destruction": destruction / attacks if attacks else 0,
+            "average_trophies": trophies / attacks if attacks else 0,
+            # What a miss wins on average, None without a miss.
+            "average_miss_trophies": (trophies - THREE_STAR_TROPHIES * three)
+            / (attacks - three) if attacks > three else None,
             "unknown_excluded_attacks": 0,
         })
     return result

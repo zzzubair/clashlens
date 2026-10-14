@@ -64,6 +64,8 @@ def test_public_army_selection_accepts_settled_filters() -> None:
         {"population": "trophies-5000"},
         {"category": "exact-armies"},
         {"sort": "hit-rate"},
+        # Only army types have average trophies.
+        {"sort": "average-trophies"},
     ],
 )
 def test_public_army_selection_rejects_unsettled_or_invalid_values(

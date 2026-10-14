@@ -212,6 +212,9 @@ export interface ArmyAnalytics {
     threeStarRate?: number;
     averageStars?: number;
     averageDestruction?: number;
+    /** Armies only: trophies an attack won, and a non-3-star attack (null without one). */
+    averageTrophies?: number;
+    averageMissTrophies?: number | null;
     unknownExcludedAttacks?: number;
   }>;
 }

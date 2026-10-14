@@ -33,6 +33,8 @@ SORTS = frozenset(
         "three-star-rate",
         "average-stars",
         "average-destruction",
+        # Army types only.
+        "average-trophies",
     }
 )
 TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000})
@@ -121,6 +123,8 @@ class ArmyAnalyticsSelection:
             raise ValueError("unsupported army analytics selection")
         if category == army_types.CATEGORY and lens != "offense":
             raise ValueError("army types count attacks only")
+        if sort == "average-trophies" and category != army_types.CATEGORY:
+            raise ValueError("only army types have average trophies")
         if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", season):
             raise ValueError("invalid season")
         if not 1 <= start_day <= end_day <= 28:
