@@ -265,12 +265,13 @@ def judge(
     # is stale: it neither confirms nor contradicts, and the battles count
     # in their own day. Of 514 readings from 5 to 13 October lacking a
     # battle, the player's own log already listed it in 487. Before the
-    # Reset no loss or raise had landed.
+    # Reset no loss or raise had landed. A value the timeline reached only
+    # with an attack's credit lagging as well is not one it showed.
     before_reset = {"loss_candidates": (), "floor": None, "reset": False}
     if stale and any(
         (earlier := judge(replace(reading, read_at=effect.lands_from - _JUST_BEFORE), stale=False,
                           **(ledger | (before_reset if ended else {})))) is not None
-        and earlier.matched
+        and earlier.matched and not earlier.lagged
         for effects, ended in ((day_effects, True), (new_day_effects, False))
         for effect in effects if effect.change and UNTIMED < effect.lands_from and effect.lands_until <= at
     ):

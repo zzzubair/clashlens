@@ -130,6 +130,11 @@ def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> N
     # One equal to no point of the timeline still contradicts.
     assert verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(26), 5945),
                    new_day=new_day).outcome == "contradicted"
+    # So does 5,920, the 5,975 before a -15 defense at 10:00 only with both
+    # attacks' credits lagging as well.
+    defended = (*day, Effect("defense-2", -15, RESET - timedelta(hours=19)))
+    assert verdict(Reading(at(2), 5920, reset_reading=True), day=defended,
+                   end=5960).outcome == "contradicted"
 
 
 def test_a_defense_can_show_from_its_stamp() -> None:
