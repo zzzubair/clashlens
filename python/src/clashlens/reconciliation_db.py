@@ -254,7 +254,7 @@ def recalculate_ranked_day(
     if start_baseline is None:
         start_baseline = first_battle_log.season_rule_start(
             connection, player_id, ranked_day.start,
-            complete=start_battle_log_observation_id is not None,
+            complete=start_battle_log_observation_id is not None, day_start=True,
         )
     # Within the Season, a player who has not played yet ends the day at
     # 5,000 too, once a battle log saved after the day shows no battle of it.

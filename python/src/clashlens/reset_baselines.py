@@ -1353,7 +1353,23 @@ def _unplayed(
               AND profile.source_contract_state = 'accepted'
               AND profile.trophies <> %(start)s
               AND COALESCE(effect.observed_at, profile.observed_at) < %(before)s
-        ) AND NOT EXISTS (
+        )
+        """,
+        {"player": player_id, "profile": profile_id,
+         "season": day.official_season_id,
+         "start": SEASON_START_TROPHIES, "before": read_at,
+         "ended_day": boundary_at - RANKED_DAY_DURATION},
+    ).fetchone()[0]) and not played_before(connection, player_id, day.season_start, read_at)
+
+
+def played_before(
+    connection: Any, player_id: int, season_start: datetime, before: datetime
+) -> bool:
+    """Whether the player fought a Legend battle, attack or defense, of the
+    Season starting at ``season_start`` before ``before``."""
+    return bool(connection.execute(
+        """
+        SELECT EXISTS (
             -- The battle index holds each day's battles by attacker, so it
             -- finds the player's attacks of each day directly.
             SELECT 1 FROM legend_battles AS battle
@@ -1361,7 +1377,7 @@ def _unplayed(
             WHERE battle.attacker_player_id = %(player)s
               AND battle.ranked_day_start >= %(season_start)s
               AND evidence.battle_timestamp < %(before)s
-        ) AND NOT EXISTS (
+        ) OR EXISTS (
             -- A defense is found only by reading a day's battles in that
             -- index, so each day up to the reading, as no battle's day starts
             -- after it was fought, is its own lookup: LIMIT 1 keeps the days
@@ -1384,11 +1400,7 @@ def _unplayed(
             ) AS defense
         )
         """,
-        {"player": player_id, "profile": profile_id,
-         "season": day.official_season_id,
-         "start": SEASON_START_TROPHIES, "before": read_at,
-         "season_start": day.season_start,
-         "ended_day": boundary_at - RANKED_DAY_DURATION},
+        {"player": player_id, "before": before, "season_start": season_start},
     ).fetchone()[0])
 
 
