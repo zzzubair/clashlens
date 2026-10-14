@@ -951,9 +951,8 @@
     display: none;
   }
 
-  /* The right column wraps past 60%, so a long Trophies line never squeezes the name. */
   .opponents-row {
-    grid-template-columns: minmax(0, 1fr) fit-content(60%);
+    grid-template-columns: minmax(0, 1fr) auto;
     row-gap: 0.5rem;
   }
 
@@ -1007,6 +1006,12 @@
 
   .legend-day-battles {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Your hit sets the right column's width and the strength line wraps under
+     it, so a long Trophies line never squeezes the name. */
+  .opponents-strength {
+    contain: inline-size;
   }
 
   .dash-star-boxes {
