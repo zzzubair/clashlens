@@ -331,81 +331,37 @@ def load_season(
     connection: Any, player_id: int, season_start: datetime, now: datetime
 ) -> SeasonEvidence:
     """One player's league evidence for one Season, read with the
-    connection's current snapshot."""
+    connection's current snapshot. A week with a Legend battle or Legend I
+    league history is Legend I whatever its Legend I answers say, so its
+    answers are read only when one of them shows a lower league: those can
+    be evidence against it. Tracked players' many answers are mostly in such
+    weeks."""
     season_end = season_start + SEASON_DURATION
     before = connection.execute(
         "SELECT league FROM player_league_weeks WHERE player_id = %s AND week_start = %s",
         (player_id, season_start - WEEK),
     ).fetchone()
-    answers: list[Answer] = []
-    unsaved: list[datetime] = []
-    for kind, at, response_id, legend_i, accepted in connection.execute(
-        """
-        WITH observed AS (
-            SELECT id, response_completed_at, http_status
-            FROM collector_observations
-            WHERE player_id = %(player)s AND endpoint = 'profile'
-              AND response_completed_at >= %(start)s AND response_completed_at < %(end)s
-        ), reading AS (
-            SELECT seen.observation_id, seen.observed_at AS read_at,
-                   version.eligibility_state, version.source_contract_state
-            FROM observed
-            JOIN player_profile_effects AS seen ON seen.observation_id = observed.id
-            JOIN player_profile_versions AS version ON version.id = seen.profile_version_id
-            UNION ALL
-            -- Profiles saved before sightings were, with none since.
-            SELECT version.observation_id, version.observed_at,
-                   version.eligibility_state, version.source_contract_state
-            FROM observed
-            JOIN player_profile_versions AS version ON version.observation_id = observed.id
-            WHERE NOT EXISTS (SELECT 1 FROM player_profile_effects AS seen
-                              WHERE seen.profile_version_id = version.id)
-        )
-        SELECT 'answer', read_at, observation_id, eligibility_state = 'eligible',
-               source_contract_state = 'accepted'
-        FROM reading
-        WHERE eligibility_state IN ('eligible', 'ineligible')
-        UNION ALL
-        SELECT 'unsaved', response_completed_at, id, NULL, NULL
-        FROM observed
-        WHERE http_status BETWEEN 200 AND 299
-          AND NOT EXISTS (SELECT 1 FROM player_profile_effects AS seen
-                          WHERE seen.observation_id = observed.id)
-          AND NOT EXISTS (SELECT 1 FROM player_profile_versions AS version
-                          WHERE version.observation_id = observed.id)
-        """,
-        {"player": player_id, "start": season_start, "end": season_end},
-    ).fetchall():
-        if kind == "answer":
-            answers.append(Answer(at, int(response_id), bool(legend_i), bool(accepted)))
-        else:
-            unsaved.append(at)
     official: dict[datetime, list[Claim]] = {}
     weeks = [season_start + index * WEEK for index in range(SEASON_DURATION // WEEK)
              if season_start + index * WEEK <= now]
-    # The battle index holds each day's battles by attacker, then defender,
-    # so each day and side is its own lookup; a week stops at its first day
-    # with a battle.
+    # Each week's first battle, attack or defense, by day then id. Migration
+    # 0115's index finds defenses; without it each day's lookup read every
+    # battle of the day.
     for week, day, battle_id in connection.execute(
         """
-        SELECT week.start, first.day, first.id
+        SELECT week.start, first.ranked_day_start, first.id
         FROM unnest(%(weeks)s::timestamptz[]) AS week (start)
         CROSS JOIN LATERAL (
-            SELECT day.start AS day, battle.id
-            FROM generate_series(week.start, week.start + interval '6 days',
-                                 interval '1 day') AS day (start)
-            CROSS JOIN LATERAL (
-                SELECT min(side.id) AS id FROM (
-                    SELECT id FROM legend_battles
-                    WHERE ranked_day_start = day.start AND attacker_player_id = %(player)s
-                    UNION ALL
-                    SELECT id FROM legend_battles
-                    WHERE ranked_day_start = day.start AND defender_player_id = %(player)s
-                ) AS side
-            ) AS battle
-            WHERE battle.id IS NOT NULL
-            ORDER BY day.start
-            LIMIT 1
+            (SELECT ranked_day_start, id FROM legend_battles
+             WHERE attacker_player_id = %(player)s AND ranked_day_start >= week.start
+               AND ranked_day_start < week.start + interval '7 days'
+             ORDER BY ranked_day_start, id LIMIT 1)
+            UNION ALL
+            (SELECT ranked_day_start, id FROM legend_battles
+             WHERE defender_player_id = %(player)s AND ranked_day_start >= week.start
+               AND ranked_day_start < week.start + interval '7 days'
+             ORDER BY ranked_day_start, id LIMIT 1)
+            ORDER BY 1, 2 LIMIT 1
         ) AS first
         """,
         {"weeks": weeks, "player": player_id},
@@ -422,6 +378,52 @@ def load_season(
         claimed = history_claim(int(row_id), str(label), tier_id)
         if claimed is not None and season_start <= claimed[0] < season_end:
             official.setdefault(claimed[0], []).append(claimed[1])
+    # Migration 0115's partial index holds only lower league profiles.
+    lower = {week_start(at) for (at,) in connection.execute(
+        """
+        SELECT seen.observed_at
+        FROM player_profile_versions AS version
+        JOIN player_profile_effects AS seen ON seen.profile_version_id = version.id
+        WHERE version.player_id = %(player)s AND version.eligibility_state = 'ineligible'
+          AND seen.observed_at >= %(start)s AND seen.observed_at < %(end)s
+        """,
+        {"player": player_id, "start": season_start, "end": season_end},
+    ).fetchall()}
+    read = [week for week in weeks if week in lower or all(
+        claim.league is not League.LEGEND_I for claim in official.get(week, ()))]
+    answers: list[Answer] = []
+    unsaved: list[datetime] = []
+    for kind, at, response_id, legend_i, accepted in connection.execute(
+        """
+        WITH observed AS (
+            SELECT observed.id, observed.response_completed_at, observed.http_status
+            FROM unnest(%(weeks)s::timestamptz[]) AS week (start)
+            JOIN collector_observations AS observed
+              ON observed.player_id = %(player)s AND observed.endpoint = 'profile'
+             AND observed.response_completed_at >= week.start
+             AND observed.response_completed_at < week.start + interval '7 days'
+        )
+        SELECT 'answer', seen.observed_at, seen.observation_id,
+               version.eligibility_state = 'eligible', version.source_contract_state = 'accepted'
+        FROM observed
+        JOIN player_profile_effects AS seen ON seen.observation_id = observed.id
+        JOIN player_profile_versions AS version ON version.id = seen.profile_version_id
+        WHERE version.eligibility_state IN ('eligible', 'ineligible')
+        UNION ALL
+        SELECT 'unsaved', response_completed_at, id, NULL, NULL
+        FROM observed
+        WHERE http_status BETWEEN 200 AND 299
+          AND NOT EXISTS (SELECT 1 FROM player_profile_effects AS seen
+                          WHERE seen.observation_id = observed.id)
+          AND NOT EXISTS (SELECT 1 FROM player_profile_versions AS version
+                          WHERE version.observation_id = observed.id)
+        """,
+        {"player": player_id, "weeks": read},
+    ).fetchall() if read else ():
+        if kind == "answer":
+            answers.append(Answer(at, int(response_id), bool(legend_i), bool(accepted)))
+        else:
+            unsaved.append(at)
     return SeasonEvidence(
         season_start, League(before[0]) if before else League.UNKNOWN,
         tuple(answers), tuple(unsaved),
