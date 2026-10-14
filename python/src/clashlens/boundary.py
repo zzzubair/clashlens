@@ -462,7 +462,7 @@ def _supersede_generation(
 
 
 def _try_enqueue_boundary_artifacts(
-    database, connection: Any, *, boundary_at: datetime, generation_id: int
+    database, connection: Any, *, boundary_at: datetime, generation_id: int, army: bool = False
 ) -> None:
     # A repair holds no Reset's first board and army results past 06:00.
     if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
@@ -553,7 +553,7 @@ def _try_enqueue_boundary_artifacts(
                 generation=generation_number,
             )
             _try_enqueue_boundary_artifacts(
-                database, connection, boundary_at=boundary_at, generation_id=new_id
+                database, connection, boundary_at=boundary_at, generation_id=new_id, army=army
             )
             return
         manifest = _freeze_boundary_manifest(database, 
@@ -597,7 +597,8 @@ def _try_enqueue_boundary_artifacts(
     # The army's inputs freeze in a later transaction, once the board's build
     # has published it, whether or not its statistics ever do. Frozen with
     # the board's, on 14 Oct 2026 they took 2 min 58 s, growing each Season
-    # day, and the board's build job stayed unseen until they finished.
+    # day, and the board's build job stayed unseen until they finished. Only
+    # the background check (``army``) freezes them, never a job's response slot.
     board_first = (
         not affected_artifacts or "snapshot" in affected_artifacts
     ) and _text_value(snapshot_state) == "ready"
@@ -605,7 +606,7 @@ def _try_enqueue_boundary_artifacts(
         army_pending == 0
         and _text_value(army_state) == "ready"
         and (not affected_artifacts or "army" in affected_artifacts)
-        and not board_first
+        and army and not board_first
     ):
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="army"

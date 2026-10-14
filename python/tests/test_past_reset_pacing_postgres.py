@@ -248,6 +248,19 @@ def test_past_reset_correction_waits_out_the_quiet_window(
             database.close()
 
 
+def _board_built(connection, boundary_at: datetime) -> None:
+    """Leave the Reset's newest board as its build does: published, its
+    statistics to follow."""
+    connection.execute(
+        """
+        UPDATE boundary_publication_generations SET snapshot_state = 'building'
+        WHERE boundary_at = %s AND snapshot_state = 'ready'
+        """,
+        (boundary_at,),
+    )
+    connection.commit()
+
+
 def _build_jobs(connection, boundary_at: datetime, generation: int) -> list[str]:
     key = boundary_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     return sorted(
@@ -322,8 +335,19 @@ def test_past_reset_build_ready_in_the_quiet_window_starts_after_it(
 
                 clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
                 boundary_publication.reevaluate_boundary_publications(database)
-                # The army's build follows once the board publishes.
                 assert _build_jobs(connection, PAST, 2) == ["build_snapshot"]
+
+                # Its board built, the army's build waits out the next window.
+                _board_built(connection, PAST)
+                clock.now = datetime(2026, 8, 12, 4, 31, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _build_jobs(connection, PAST, 2) == ["build_snapshot"]
+                clock.now = datetime(2026, 8, 12, 7, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _build_jobs(connection, PAST, 2) == [
+                    "build_army_analytics",
+                    "build_snapshot",
+                ]
         finally:
             database.close()
 
@@ -340,8 +364,13 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 for boundary_at in (PAST, LIVE):
                     _created(connection, boundary_at, NOON - timedelta(hours=10))
                 _record(database, connection, player_id, PAST, 2)
-                # The army's build follows once the board publishes.
-                assert _build_jobs(connection, PAST, 2) == ["build_snapshot"]
+                # Its board built, the army's build is queued before the window.
+                _board_built(connection, PAST)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _build_jobs(connection, PAST, 2) == [
+                    "build_army_analytics",
+                    "build_snapshot",
+                ]
                 clock.now = datetime(2026, 8, 11, 4, 31, tzinfo=UTC)
                 _record(database, connection, player_id, LIVE, 2)
                 connection.commit()
@@ -370,13 +399,10 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                         )
                 return sorted(jobs)
 
-            def both(boundary_text: str) -> list[tuple[str, int, str]]:
-                return [(boundary_text, generation, "build_snapshot") for generation in (1, 2)]
-
             live = LIVE.strftime("%Y-%m-%dT%H:%M:%SZ")
             past = PAST.strftime("%Y-%m-%dT%H:%M:%SZ")
             # The first and corrected builds of the newest Reset still start.
-            assert claimed() == both(live)
+            assert claimed() == [(live, 1, "build_snapshot"), (live, 2, "build_snapshot")]
             with database.pool.connection() as connection:
                 attempts = connection.execute(
                     """
@@ -387,10 +413,14 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 ).fetchall()
             assert [(str(state), count) for state, count in attempts] == [
                 ("pending", 0)
-            ] * 2
+            ] * 3
 
             clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
-            assert claimed() == both(past)
+            assert claimed() == [
+                (past, 1, "build_snapshot"),
+                (past, 2, "build_army_analytics"),
+                (past, 2, "build_snapshot"),
+            ]
         finally:
             database.close()
 

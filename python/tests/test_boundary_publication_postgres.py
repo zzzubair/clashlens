@@ -92,7 +92,7 @@ def _board_published(database: Database, connection, generation: int = 1) -> Non
         "UPDATE boundary_publication_generations SET snapshot_state = 'published'"
         " WHERE generation = %s RETURNING id", (generation,)).fetchone()[0]
     boundary._try_enqueue_boundary_artifacts(
-        database, connection, boundary_at=BOUNDARY, generation_id=generation_id)
+        database, connection, boundary_at=BOUNDARY, generation_id=generation_id, army=True)
 
 
 def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
@@ -475,7 +475,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     )
                     == "published"
                 )
-                boundary._try_enqueue_boundary_artifacts(database, connection, boundary_at=BOUNDARY, generation_id=int(generation[0]))
+                boundary._try_enqueue_boundary_artifacts(database, connection, boundary_at=BOUNDARY, generation_id=int(generation[0]), army=True)
                 army_job_id = int(
                     connection.execute(
                         "SELECT id FROM python_processing_jobs WHERE work_type = 'build_army_analytics'"

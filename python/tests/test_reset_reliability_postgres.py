@@ -410,6 +410,43 @@ def test_army_results_publish_while_the_boards_statistics_keep_failing(
             database.close()
 
 
+def test_a_battle_log_job_leaves_the_army_freeze_to_the_background_check(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, a battle log saving an army for the ended day froze the army's
+    # inputs in its own job: 3 to 9 minutes of a response slot.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            boundary_publication.reevaluate_boundary_publications(database)
+            for build in _waiting(database, ["build_snapshot"]):
+                assert processor.process_job(build, owner="build").outcome == "processed"
+
+            def army_frozen() -> bool:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT army_manifest_id IS NOT NULL FROM boundary_publication_generations"
+                        " WHERE boundary_at = %s",
+                        (DAY_END,),
+                    ).fetchone()[0]
+
+            _observation, job = store_observation(
+                connection_info, archive_server, occurrence_key="late-attack",
+                endpoint="battle_log", body=_attack(DAY_END - timedelta(minutes=10)),
+                observed_at=DAY_END + timedelta(minutes=40), normalized_tag="#2PP",
+            )
+            assert processor.process_job(job, owner="battle-log").outcome == "processed"
+            frozen_by_the_job = army_frozen()
+            boundary_publication.reevaluate_boundary_publications(database)
+            assert [frozen_by_the_job, army_frozen()] == [False, True]
+        finally:
+            database.close()
+
+
 def _repair_lists(connection_info: str, state: str) -> None:
     """A Season repair in ``state`` that lists DAY_END's Reset, not yet done."""
     with psycopg.connect(connection_info) as connection:

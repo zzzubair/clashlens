@@ -503,6 +503,7 @@ def test_army_correction_during_publication_keeps_each_frozen_battle(
                     frozen["decode_ids"][0],
                 )
             ]
+            boundary_publication.reevaluate_boundary_publications(processor.database)
             [(correction_job, correction_input)] = jobs("build_army_analytics")
             assert correction_input["generation"] == army_input["generation"] + 1
             assert (

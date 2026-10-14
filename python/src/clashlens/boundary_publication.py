@@ -195,6 +195,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
             connection,
             boundary_at=boundary_at,
             generation_id=int(generation_id),
+            army=True,
         )
         board_deadline.retry_failed_build(connection, boundary_at, int(generation_id))
     corrections = connection.execute(
@@ -211,13 +212,13 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
         if correction_waits(connection, boundary_at):
             continue
         _maybe_emit_boundary_signal(
-            database, connection, generation_id=int(source_generation_id)
+            database, connection, generation_id=int(source_generation_id), army=True
         )
     return len(generations) + len(corrections)
 
 
 def _maybe_emit_boundary_signal(
-    database: Database, connection: Any, generation_id: int
+    database: Database, connection: Any, generation_id: int, army: bool = False
 ) -> None:
     boundary_row = connection.execute(
         "SELECT boundary_at FROM boundary_publication_generations WHERE id = %s",
@@ -499,7 +500,7 @@ def _maybe_emit_boundary_signal(
                 (new_id, queued[0]),
             )
             boundary._try_enqueue_boundary_artifacts(
-                database, connection, boundary_at=row[0], generation_id=new_id
+                database, connection, boundary_at=row[0], generation_id=new_id, army=army
             )
 
 
