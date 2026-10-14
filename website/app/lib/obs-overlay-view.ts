@@ -593,17 +593,14 @@ export function mountOverlay(
       if (!first && !prev.demo && prev.tag === cfg.tag && data?.name) startDemo();
       else if (!prev.demo || first || prev.tag !== cfg.tag) {
         if (prev.tag !== cfg.tag) data = null;
-        const start = () => {
-          if (cfg.demo) startDemo();
+        const tag = cfg.tag;
+        const start = (d: View | null) => {
+          if (tag !== cfg.tag || !cfg.demo) return;
+          if (d) data = d;
+          startDemo();
         };
-        if (cfg.tag)
-          readPlayer(cfg.tag)
-            .then(
-              (d) => (data = d),
-              () => {},
-            )
-            .finally(start);
-        else start();
+        if (tag) readPlayer(tag).then(start, () => start(null));
+        else start(null);
       } else render();
       return;
     }

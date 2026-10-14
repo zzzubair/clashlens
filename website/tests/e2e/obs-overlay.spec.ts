@@ -157,7 +157,15 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
   expect(oversized.ok()).toBeTruthy();
   await page.reload();
   await expect(page.getByLabel("Width")).toHaveValue("1280");
-  await expect.poll(settingsOf).toMatchObject({ w: "1280", h: "720" });
+  await expect.poll(settingsOf).toMatchObject({ w: "1280", h: "720", text: "light" });
+
+  // Signed out in the meantime, a change is not saved, and the page says so.
+  await page.context().clearCookies();
+  await page.locator(".obs-seg label", { hasText: "Dark" }).click();
+  await expect(page.locator(".obs-saved")).toHaveText(
+    "Not saved. Check your connection.",
+  );
+  expect((await settingsOf()).text).toBe("light");
 
   await obs.close();
   expectNoPageErrors(errors);

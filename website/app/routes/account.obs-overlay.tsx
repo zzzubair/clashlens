@@ -391,12 +391,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         while (latest.current.json !== lastSaved.current) {
           const next = latest.current;
           setSaved({ text: "Saving…", ok: false });
-          const res = await post({
+          await post<{ version: number }>({
             intent: "save",
             tag: next.tag ?? "",
             settings: JSON.stringify(next.settings),
           });
-          if (!res.ok) throw new Error(String(res.status));
           lastSaved.current = next.json;
         }
         setSaved({
@@ -523,9 +522,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     )
       return;
     try {
-      const res = await post({ intent: "new-link", replaces: link });
-      if (!res.ok) throw new Error(String(res.status));
-      const made = (await res.json()) as { link: string };
+      const made = await post<{ link: string }>({ intent: "new-link", replaces: link });
       setLink(made.link);
       setSaved({
         text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
@@ -1050,10 +1047,15 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
   return items.map((item, index) => <li key={index}>{item}</li>);
 }
 
-function post(values: Record<string, string>): Promise<Response> {
-  return fetch(SAVE, {
+/** The save route's own JSON answer. Anything else throws, a redirect to sign
+ * in included. */
+async function post<T>(values: Record<string, string>): Promise<T> {
+  const res = await fetch(SAVE, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
+    redirect: "manual",
   });
+  if (!res.ok) throw new Error(String(res.status));
+  return (await res.json()) as T;
 }
