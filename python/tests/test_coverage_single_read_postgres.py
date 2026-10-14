@@ -276,5 +276,5 @@ def test_day_coverage_never_reads_the_unused_occurrence_table(
         for log in coverage
     ] == [(4, 4, False, True), (6, 6, False, True), (6, 6, False, True)]
     scans = _scans(plan)
-    assert "battle_log_observation_rows" not in {relation for _, relation in scans}
     assert ("Seq Scan", "battle_evidence") not in scans
+    assert "battle_log_observation_rows" not in {relation for _, relation in scans}
