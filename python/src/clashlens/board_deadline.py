@@ -12,7 +12,8 @@ something bigger is broken: the board keeps waiting, and the alert check
 says how many (``alerts``), until ``HARD_DEADLINE``, when every member still
 waiting is Unavailable (owner decision, 14 Oct 2026). When such a member's
 day saves later, it changes the member as any new result does, which starts
-a correction, and the board is rebuilt with it.
+a correction, and the board is rebuilt with it. A board build or statistics
+job that fails runs again (``retry_failed_build``).
 """
 
 from __future__ import annotations
@@ -20,6 +21,13 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from .db import (
+    ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 
 BOARD_DEADLINE = timedelta(minutes=30)
 MAX_UNFINISHED = 50
@@ -117,3 +125,36 @@ def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id
             "event": "board_members_settled", "boundary_at": boundary_at.isoformat(),
             "generation_id": generation_id, "failed": failed, "unfinished": unfinished,
         }), flush=True)
+
+
+def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: int) -> None:
+    """Queue again, under a new key, the failed board build or statistics job
+    a generation still waits for: one error failed it for good, and the next
+    job met the failed one's key. Each retry waits twice as long as the one
+    before, from a minute to at most an hour."""
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs_worker (
+            observation_id, work_type, deduplication_key, input_json, state,
+            due_at, parser_version, processing_version, domain_rule_version,
+            analytics_rule_version, priority)
+        SELECT NULL, job.work_type,
+               split_part(job.deduplication_key, ':retry:', 1) || ':retry:' || job.id,
+               job.input_json, 'pending',
+               job.updated_at + least(interval '1 hour',
+                   interval '1 minute' * 2 ^ (count(*) OVER () - 1)),
+               %s, %s, %s, %s, job.priority
+        FROM boundary_publication_generations AS generation
+        JOIN python_processing_jobs_worker AS job
+          ON job.state = 'failed'
+         AND job.work_type = CASE generation.snapshot_state
+             WHEN 'ready' THEN 'build_snapshot' WHEN 'building' THEN 'build_analytics' END
+         AND job.input_json ->> 'boundary_at' = %s
+         AND job.input_json ->> 'generation' = generation.generation::text
+        WHERE generation.id = %s
+        ON CONFLICT (deduplication_key) DO NOTHING
+        """,
+        (DEFAULT_PARSER_VERSION, PROCESSING_VERSION, DOMAIN_RULE_VERSION,
+         ANALYTICS_RULE_VERSION, f"{boundary_at.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
+         generation_id),
+    )
