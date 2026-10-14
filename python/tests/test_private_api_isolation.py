@@ -311,6 +311,9 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("POST", "/v1/account/default-player", {"tag": other["tag"]}),
             ("GET", "/v1/account/discord-alerts", None),
             ("POST", "/v1/account/discord-alerts", {"tag": other["tag"], "on": True}),
+            ("GET", "/v1/account/obs-overlay", None),
+            ("POST", "/v1/account/obs-overlay", {"tag": other["tag"], "settings": {}}),
+            ("POST", "/v1/account/obs-overlay/link", {"replaces": "a" * 22}),
             ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
             ("GET", f"/v1/account/exports/{uuid4()}", None),
         ]
@@ -380,3 +383,25 @@ def test_attack_alerts_are_only_ever_for_the_accounts_own_verified_players(accou
     for account in owners:
         alerts = call(client, account, "GET", "/v1/account/discord-alerts").json()
         assert alerts["players"] == [] and alerts["undelivered"] is None
+
+
+def test_an_overlay_only_ever_shows_the_accounts_own_verified_player(accounts):
+    client, owners = accounts
+    owner, other = owners
+    theirs = call(client, other, "GET", "/v1/account/obs-overlay").json()
+    for tag in (owner["tag"], other["tag"]):
+        refused = call(
+            client, owner, "POST", "/v1/account/obs-overlay", {"tag": tag, "settings": {}}
+        )
+        assert refused.status_code == 404
+        assert refused.json() == {"error": "player_not_verified"}
+    # Another account's link cannot be replaced, and reading it by its
+    # private link gives only what the overlay shows.
+    call(client, owner, "POST", "/v1/account/obs-overlay/link", {"replaces": theirs["link"]})
+    target = f"/v1/overlays/{theirs['link']}"
+    shown = client.get(target, headers=signed_headers(target))
+    assert shown.json() == {
+        "kind": "obs-overlay-link", "settings": theirs["settings"], "version": 1, "tag": None,
+    }
+    unknown = f"/v1/overlays/{'b' * 22}"
+    assert client.get(unknown, headers=signed_headers(unknown)).status_code == 404

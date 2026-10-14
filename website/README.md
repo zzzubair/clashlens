@@ -570,7 +570,11 @@ by Google Fonts, split into Latin and Latin Extended so a browser only downloads
 the part a page needs: 12 KB for Lilita One and 75 KB for Nunito, which is one
 variable file covering weights 400 to 900. Other scripts fall back to the system
 font. Their SIL Open Font Licences are in `public/fonts/OFL-LilitaOne.txt` and
-`public/fonts/OFL-Nunito.txt`. The fonts are served by the site itself and add no
+`public/fonts/OFL-Nunito.txt`. The OBS overlay's other font choices, used only by
+its setup page and the overlay itself, are Inter (Clean), Barlow Condensed
+(Esports), Rajdhani (Tech) and Bungee with Rubik for smaller text (Arcade):
+Latin-only WOFF2 files, 206 KB in all, with their licences in the matching
+`public/fonts/OFL-*.txt` files. The fonts are served by the site itself and add no
 application or build dependency.
 
 ## Game art and brand icons
@@ -589,8 +593,9 @@ letters fit inside the centre circle Android never crops. They were rendered
 from the SVGs with headless Chrome, each drawn at its exact size, with no
 transparency. `public/images/og-clashlens.png` is the
 1200 × 630 link preview image used by player pages, built from the wordmark.
-All are served by the existing static-file handler, with no API calls or database
-queries.
+`public/images/mark-cl-block.svg`, an unchanged copy of the CL mark, is the OBS
+overlay's Powered by clashlens.net mark. All are served by the existing
+static-file handler, with no API calls or database queries.
 
 `public/images/legend-league.webp` is the Legend I tier badge from the official
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved

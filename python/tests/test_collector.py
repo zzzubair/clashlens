@@ -214,7 +214,7 @@ class _Store:
 
 
 def _collector(spool: _Spool, store: _Store, client: _Client) -> Collector:
-    return Collector(
+    collector = Collector(
         database=store,
         spool=spool,
         archive=None,
@@ -233,6 +233,8 @@ def _collector(spool: _Spool, store: _Store, client: _Client) -> Collector:
         collector_version="test",
         max_body_bytes=4 << 20,
     )
+    collector.overlay_players = list  # No overlay is open.
+    return collector
 
 
 def test_reset_pair_is_reserved_then_fetched_profile_first_then_handed_off() -> None:

@@ -354,3 +354,12 @@ it("forbids framing on pages, route data, files, refusals and bad requests", asy
     expect(response.headers.get("x-frame-options")).toBe("DENY");
   }
 });
+
+it("lets only the OBS overlay's preview show inside a Clash Lens page", async () => {
+  const url = `http://127.0.0.1:${port}`;
+  const preview = await fetch(`${url}/account/obs-overlay/preview?p=2PP`);
+  expect(preview.headers.get("content-security-policy")).toBe("frame-ancestors 'self'");
+  expect(preview.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+  const overlay = await fetch(`${url}/o/AAAAAAAAAAAAAAAAAAAAAA`);
+  expect(overlay.headers.get("x-frame-options")).toBe("DENY");
+});

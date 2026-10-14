@@ -6,6 +6,7 @@ import {
   useLoaderData,
   useRouteLoaderData,
   useLocation,
+  useMatches,
   type LoaderFunctionArgs,
   type ShouldRevalidateFunctionArgs,
   Links,
@@ -115,7 +116,33 @@ export function meta() {
   return [{ title: "Clash Lens" }];
 }
 
+/** A route handle for a page shown on its own, with no site around it and a
+ * see-through background: the OBS overlay. */
+export interface BareHandle {
+  bare: true;
+}
+
+function useBarePage(): boolean {
+  return useMatches().some((match) => (match.handle as BareHandle | undefined)?.bare);
+}
+
 export function Layout({ children }: { children: ReactNode }) {
+  if (useBarePage()) {
+    return (
+      <html lang="en" className="obs-page">
+        <head>
+          <meta charSet="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <Meta />
+          <Links />
+        </head>
+        <body>
+          {children}
+          <Scripts />
+        </body>
+      </html>
+    );
+  }
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -162,6 +189,7 @@ export function Layout({ children }: { children: ReactNode }) {
 export default function App() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
+  const bare = useBarePage();
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
   usePreloadInlineAnswerCode();
@@ -171,6 +199,7 @@ export default function App() {
     }
     previousPath.current = location.pathname;
   }, [location.pathname, location.hash]);
+  if (bare) return <Outlet />;
   return (
     <>
       <SiteHeader data={data} />

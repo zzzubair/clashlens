@@ -64,6 +64,7 @@ _PUBLIC_OPERATIONS = frozenset(
         "analytics.read",
         "crews.view",
         "leaderboards.read",
+        "overlay.read",
         "player.read",
         "refresh.status",
         "refresh.submit",
@@ -1199,6 +1200,9 @@ def create_app(
         current_time=current_time,
         enabled=dashboard_enabled,
     )
+    from .api_overlays import register_overlay_routes
+
+    register_overlay_routes(app, database=production_database)
     return app
 
 

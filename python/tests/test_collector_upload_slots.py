@@ -59,6 +59,44 @@ def test_regular_checks_in_flight_follow_the_configured_parallelism(
     assert claims[: len(first_claims)] == first_claims
 
 
+def test_an_open_overlays_player_is_claimed_before_the_rest() -> None:
+    """Players an open OBS overlay shows are claimed first, 30 seconds after
+    their last check; one who finished the Legend day keeps the 8-minute check."""
+    spool = _Spool()
+    collector = _collector(spool, _Store(spool), _Client(spool))
+    collector.regular_parallelism = 4
+    collector.overlay_players = lambda: [(7, "#OPEN"), (8, "#DONE")]  # type: ignore[method-assign]
+    finished = {"#DONE"}
+    collector.battle_logs.finished_recheck_at = (  # type: ignore[method-assign]
+        lambda tag, **_kwargs: datetime.now(UTC) if tag in finished else None
+    )
+    claims: list[dict[str, object]] = []
+    stop = asyncio.Event()
+
+    def claim_due_players(limit: int, now: datetime, **kwargs: object) -> list[CollectorWork]:
+        claims.append({"limit": limit, **kwargs})
+        if kwargs.get("only"):
+            assert kwargs["due_by"] == now + timedelta(seconds=60)
+            return [CollectorWork(7, "#OPEN", now)]
+        stop.set()
+        return []
+
+    async def collect_player(_work: CollectorWork, *, lane: str) -> list[str]:
+        await stop.wait()
+        return ["recorded"]
+
+    collector.database.regular_admission_open = lambda _now: True  # type: ignore[attr-defined]
+    collector.database.claim_due_players = claim_due_players  # type: ignore[attr-defined]
+    collector.collect_player = collect_player  # type: ignore[method-assign]
+
+    asyncio.run(collector._regular_loop(stop, 0.01))
+
+    assert claims[0] == {"limit": 4, "only": [7], "due_by": claims[0]["due_by"]}
+    # It is a repeat check, so it takes the quarter kept for them, and the
+    # other 3 slots go to the regular queue.
+    assert claims[1] == {"limit": 3}
+
+
 def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -> None:
     spool = _Spool()
     store = _Store(spool)

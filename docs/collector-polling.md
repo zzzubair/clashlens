@@ -407,6 +407,21 @@ players are checked later than 90 seconds, still oldest first within each
 group, and the due queue does not empty.
 Per-key limits stay in force and regular work never uses the interactive key.
 
+### Players on an open OBS overlay
+
+A Clasher's OBS overlay link asks the website for its settings every 3
+seconds, and the website marks the link seen in `obs_overlays.last_seen_at` at
+most once a minute. Every 10 seconds the collector reads the active players of
+links seen in the last 5 minutes. Before the usual groups, it claims those of
+them last claimed at least 30 seconds ago, so they jump the queue and are
+checked about every 30 seconds instead of every 90 to 110. They count as
+repeat checks against the quarter reserved for repeats. A player who has
+[finished for the day](#finished-for-the-day) is left out and keeps the
+8-minute check. Five minutes after OBS closes, the player returns to the usual
+queue. Each open overlay adds about 2 checks a minute, about 2.5 requests a minute, so
+100 open at once would take about 4 of the 150 requests a second. A failed read
+of the list skips the jump for that pass and changes nothing else.
+
 ### Battle log only when it can have changed
 
 A battle shows on the defender's profile at once: trophies lost or, for a

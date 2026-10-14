@@ -201,6 +201,9 @@ export default function UserRoute() {
             <Link className="button button-secondary" to="/account/discord-alerts">
               Discord alerts
             </Link>
+            <Link className="button button-secondary" to="/account/obs-overlay">
+              OBS overlay
+            </Link>
           </p>
         ) : null}
       </section>
