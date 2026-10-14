@@ -789,12 +789,21 @@ The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
 
 To recalculate only the players a rule change can affect, add
-`--players promoted` to each of the three commands. It takes the players
+`--players day-1-or-unplayed` to each of the three commands. It takes the
+players with saved days of the Season whose Day 1 was saved Inconsistent,
+the only Day 1 results the official Season-end total check (#441) can
+change, and those whose newest profile shows Legend I at 5,000 (accepted,
+or naming Season 0 before sign-up) with no Legend battle of the Season
+saved, whose days rank at 5,000 with no battles once that rule is deployed.
+If PR #451 (never-played players ranked at 5,000) has not deployed when
+this repair runs, run the scoped repair again after it deploys, so this
+group is recalculated under that rule; its new rule revision gives it a
+fresh receipt. `--players promoted` instead takes the players
 with saved days of the Season whose newest saved day starting at a
 mid-Season Monday Reset has no Reset reading to start it and is not
 Complete: players promoted into Legend I there, whose days start at 5,000
 once the promotion rule (rule revision 2026-10-14-monday-promotion) is
-deployed; about 1,730 players for 12 October 2026. It chooses the players when its
+deployed; about 1,730 players for 12 October 2026. Either way, it chooses the players when its
 first `queue` runs and saves that list on its receipt, so a player whose
 days change meanwhile stays in it; `preview` shows how many (`players`)
 before anything is queued. Each chosen player's job

@@ -1172,13 +1172,16 @@ def _partial_monday(connection, player: int, monday: datetime) -> None:
     )
 
 
+@pytest.mark.parametrize("group", ["day_1_inconsistent", "unplayed_at_5000", "promoted"])
 def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affects(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, group: str
 ) -> None:
-    """One player whose second Monday was saved Partial with no Reset
-    reading to start it, as a promotion into Legend I left it, and one
-    ordinary player, whose Monday is Complete and whose Tuesday is Partial
-    the same way, each have saved days. The scoped repair previews one
+    """One player whose Day 1 was saved Inconsistent, or who sits at 5,000 in
+    Legend I with no Legend battle this Season, and one ordinary player each
+    have two saved days; or one player whose second Monday was saved Partial
+    with no Reset reading to start it, as a promotion into Legend I left it,
+    and one ordinary player, whose Monday is Complete and whose Tuesday is
+    Partial the same way, each have four. The scoped repair previews one
     player, queues one job, and running it recalculates that player's days
     oldest first while the ordinary player's saved days stay as they were.
     The full repair of the same rules still has both players to
@@ -1188,9 +1191,9 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
 
     from clashlens import reconciliation_db
 
-    scope = "promoted"
+    scope = "promoted" if group == "promoted" else "day-1-or-unplayed"
     monday = START + 7 * DAY
-    days = [START, START + DAY, monday, monday + DAY]
+    days = [START, START + DAY] + ([monday, monday + DAY] if group == "promoted" else [])
     calculated: list[tuple[int, datetime]] = []
     recalculate = reconciliation_db.recalculate_ranked_day
     monkeypatch.setattr(
@@ -1209,8 +1212,34 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
                         connection, player, number, start, start + DAY, season=SEASON
                     )
                     _log(connection, player, number, version_id, start, season=SEASON)
-            _partial_monday(connection, affected, monday)
-            _partial_monday(connection, ordinary, monday + DAY)
+                if group == "unplayed_at_5000":
+                    connection.execute(
+                        """
+                        INSERT INTO player_profile_versions (
+                            player_id, observation_id, normalized_tag, endpoint_version,
+                            schema_version, parser_version, observed_at,
+                            source_http_status, name, trophies, league_tier_id,
+                            league_tier_name, eligibility_state, profile_json
+                        ) SELECT id, id, normalized_tag, 'profile-v1', 'profile-schema-v1',
+                                 'profile-parser-v1', %s, 200, 'Player', 5000, 105000036,
+                                 'Legend I', 'eligible', '{}'::jsonb
+                        FROM players WHERE id = %s
+                        """,
+                        (START + DAY + timedelta(hours=1), player),
+                    )
+            if group == "day_1_inconsistent":
+                connection.execute(
+                    "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                    " confidence = 'uncertain'"
+                    " WHERE player_id = %s AND ranked_day_start = %s",
+                    (affected, START),
+                )
+            elif group == "unplayed_at_5000":
+                # Also at 5,000, but with a Legend battle this Season.
+                _report(connection, ordinary, _player(connection, "#2RR"), START)
+            else:
+                _partial_monday(connection, affected, monday)
+                _partial_monday(connection, ordinary, monday + DAY)
             untouched = connection.execute(
                 "SELECT id, version, state FROM ranked_day_versions"
                 " WHERE player_id = %s ORDER BY id",
@@ -1252,49 +1281,61 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
     assert (full["scope"], full["players"], full["left_to_queue"]) == (None, 2, 2)
 
 
-def test_scoped_season_repair_keeps_its_players_after_their_monday_is_saved_again(
-    database_url: str,
+@pytest.mark.parametrize("scope", ["day-1-or-unplayed", "promoted"])
+def test_scoped_season_repair_keeps_its_players_after_their_day_is_saved_again(
+    database_url: str, scope: str
 ) -> None:
-    """A player whose second Monday was saved Partial with no Reset reading
-    to start it is chosen when the scoped repair first queues. A recheck
-    then saves a newer Complete Monday and the scheduled compaction deletes
-    the Partial one, so choosing again would leave the player out. The
-    repair still counts that player and their unfinished job, and does not
-    move on to the boards."""
+    """A player whose Day 1 was saved Inconsistent, or whose second Monday
+    was saved Partial with no Reset reading to start it, is chosen when the
+    scoped repair first queues. A recheck then saves a newer version of that
+    day and the scheduled compaction deletes the old one, so choosing again
+    would leave the player out. The repair still counts that player and
+    their unfinished job, and does not move on to the boards."""
     from test_player_season_summaries_postgres import _log, _ranked
 
-    scope = "promoted"
     monday = START + 7 * DAY
+    number, chosen = (8, monday) if scope == "promoted" else (1, START)
     with _campaign_database(database_url) as (connection_info, worker):
         with _owner(connection_info) as connection:
             affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
             for player in (affected, ordinary):
-                for number, start in ((1, START), (8, monday)):
+                for day_number, start in ((1, START), (8, monday)):
                     version_id = _ranked(
-                        connection, player, number, start, start + DAY, season=SEASON
+                        connection, player, day_number, start, start + DAY, season=SEASON
                     )
-                    _log(connection, player, number, version_id, start, season=SEASON)
-            _partial_monday(connection, affected, monday)
+                    _log(connection, player, day_number, version_id, start, season=SEASON)
+            if scope == "promoted":
+                _partial_monday(connection, affected, monday)
+            else:
+                connection.execute(
+                    "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                    " confidence = 'uncertain'"
+                    " WHERE player_id = %s AND ranked_day_start = %s",
+                    (affected, START),
+                )
 
         queued = domain_repair.season_repair(
             worker, SEASON, "queue", max_jobs=100, scope=scope
         )
         with _owner(connection_info) as connection:
-            partial = connection.execute(
+            old = connection.execute(
                 "SELECT id FROM ranked_day_versions"
                 " WHERE player_id = %s AND ranked_day_start = %s",
-                (affected, monday),
+                (affected, chosen),
             ).fetchone()[0]
-            _ranked(connection, affected, 8, monday, monday + DAY, season=SEASON, version=2)
+            _ranked(connection, affected, number, chosen, chosen + DAY, season=SEASON,
+                    version=2)
             connection.execute(
                 "DELETE FROM api_player_daily_logs WHERE ranked_day_version_id = %s",
-                (partial,),
+                (old,),
             )
             connection.execute(
-                "DELETE FROM ranked_day_versions WHERE id = %s", (partial,)
+                "DELETE FROM ranked_day_versions WHERE id = %s", (old,)
             )
         with worker.pool.connection() as connection:
-            chosen_now = domain_repair._scoped_players(connection, START)
+            choose = (domain_repair._promoted_players if scope == "promoted"
+                      else domain_repair._scoped_players)
+            chosen_now = choose(connection, START)
         receipt = domain_repair.season_repair(
             worker, SEASON, "receipt", max_jobs=100, scope=scope
         )

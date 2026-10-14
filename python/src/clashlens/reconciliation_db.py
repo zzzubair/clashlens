@@ -241,8 +241,9 @@ def recalculate_ranked_day(
         is not None
         else None
     )
-    # A player first tracked after the day's start has no Reset battle log;
-    # their first saved one can prove the day's battles instead.
+    # A player first tracked or promoted after the day's start has no Reset
+    # battle log; their first one saved since can prove the day's battles
+    # instead.
     if start_battle_log_observation_id is None and (
         first_log := first_battle_log.coverage_start(
             database, connection, player_id, ranked_day

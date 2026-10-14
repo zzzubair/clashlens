@@ -722,10 +722,12 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     (["--repair", "queue"], None),
     (["--repair", "queue", "--boards", "queue", "--season", "1791176400"], None),
     (["--repair", "queue", "--armies", "queue", "--season", "1791176400"], None),
-    (["--repair", "preview", "--players", "promoted", "--season", "1791176400"],
+    (["--repair", "preview", "--players", "day-1-or-unplayed", "--season", "1791176400"],
      "preview"),
-    (["--boards", "queue", "--players", "promoted", "--season", "1791176400"],
+    (["--boards", "queue", "--players", "day-1-or-unplayed", "--season", "1791176400"],
      None),
+    (["--repair", "queue", "--players", "promoted", "--season", "1791176400"],
+     "queue"),
 ])
 def test_season_repair_needs_a_season_and_runs_alone(
     monkeypatch, extra: list[str], action: str | None
@@ -746,7 +748,7 @@ def test_season_repair_needs_a_season_and_runs_alone(
         assert calls == []
     else:
         assert main(arguments) == 0
-        scope = "promoted" if "--players" in extra else None
+        scope = extra[extra.index("--players") + 1] if "--players" in extra else None
         assert calls == [("1791176400", action, 100, scope)]
 
 

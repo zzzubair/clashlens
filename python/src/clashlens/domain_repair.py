@@ -27,7 +27,7 @@ how a saved day or board comes out, then run it once:
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
 rule change can affect, chosen when its first queue runs
-(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
+(``_scoped_players``, ``_promoted_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -88,6 +88,7 @@ from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     TROPHY_ALLOCATION_RULE_VERSION,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
@@ -96,7 +97,7 @@ from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 # The rules saved days and Daily boards come out by; see season_repair.
 DAY_RULES_REVISION = "2026-10-14-monday-promotion"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
-REPAIR_SCOPES = ("promoted",)
+REPAIR_SCOPES = ("day-1-or-unplayed", "promoted")
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
@@ -131,6 +132,8 @@ def season_repair(
         ).fetchone()
         if scope and receipt is not None:
             players = [int(player) for player in receipt[5]]
+        elif scope == "promoted":
+            players = _promoted_players(connection, start)
         elif scope:
             players = _scoped_players(connection, start)
         else:
@@ -251,6 +254,54 @@ def season_repair(
 
 
 def _scoped_players(connection: Any, start: datetime) -> list[int]:
+    """The players with saved days of the Season whose results the 11 October
+    2026 day rules can change: those whose Day 1 was saved Inconsistent,
+    the only Day 1 results judging a Day 1 reading against the official
+    Season-end total can change, and those whose newest profile shows
+    Legend I at 5,000, accepted or naming Season 0 (sent before sign-up),
+    with no Legend battle of the Season saved, whose days rank at 5,000 with
+    no battles."""
+    return [
+        int(row[0]) for row in connection.execute(
+            """
+            WITH saved AS (
+                SELECT DISTINCT player_id FROM ranked_day_versions
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+            ), played AS (
+                SELECT attacker_player_id AS player_id FROM legend_battles
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                UNION
+                SELECT defender_player_id FROM legend_battles
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+            )
+            SELECT saved.player_id FROM saved
+            JOIN players AS player ON player.id = saved.player_id
+            WHERE (
+                SELECT day.state FROM ranked_day_versions AS day
+                WHERE day.player_id = saved.player_id
+                  AND day.ranked_day_start = %(start)s
+                ORDER BY day.version DESC, day.id DESC LIMIT 1
+            ) = 'Inconsistent'
+               OR saved.player_id NOT IN (SELECT player_id FROM played) AND EXISTS (
+                SELECT 1 FROM (
+                    SELECT * FROM player_profile_versions AS profile
+                    WHERE profile.normalized_tag = player.normalized_tag
+                    ORDER BY profile.observed_at DESC, profile.id DESC LIMIT 1
+                ) AS newest
+                WHERE newest.eligibility_state = 'eligible'
+                  AND newest.trophies = %(trophies)s
+                  AND (newest.source_contract_state = 'accepted'
+                       OR newest.current_league_season_id = '0')
+            )
+            ORDER BY saved.player_id
+            """,
+            {"start": start, "end": start + SEASON_DURATION,
+             "trophies": SEASON_START_TROPHIES},
+        ).fetchall()
+    ]
+
+
+def _promoted_players(connection: Any, start: datetime) -> list[int]:
     """The players with saved days of the Season whose results the 14 October
     2026 promotion rule can change: those with a newest saved day starting
     at a mid-Season Monday Reset, where the game promotes Legend II's top
