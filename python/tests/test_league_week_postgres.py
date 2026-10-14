@@ -1,13 +1,14 @@
 """End-to-end: the weekly league record decided from saved game data.
 
 The collector's saved responses for a 12 October 2026-like Monday go
-through the real worker into PostgreSQL; then the worker's maintenance timer
+through the real worker into PostgreSQL; then the worker's league week thread
 decides each player's weeks. Stage 1 records the weeks and changes no day or
 board, so these tests check the records. See docs/testing.md.
 """
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -88,10 +89,15 @@ IDLE, PROMOTED, STALE = "#LPP", "#QPP", "#GPP"
 
 
 def _decide(connection_info: str, monkeypatch) -> None:
-    """The worker's maintenance timer, run as the worker's database login
-    until no week is left to decide, on Wednesday 14 October 2026."""
+    """The worker's league week thread, started by its maintenance timer and
+    run as the worker's database login until no week is left to decide, on
+    Wednesday 14 October 2026. It takes one mark a batch and one batch a
+    call, so it must keep deciding on its own after the timer's one run."""
     monkeypatch.setattr(league_week, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
     monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+    monkeypatch.setattr(league_week, "IDLE_SECONDS", 0.05)
+    monkeypatch.setattr(league_week, "BATCH", 1)
+    monkeypatch.setattr(league_week, "TICK_SECONDS", 0.0)
     # The twice-daily re-check follows the real clock; it is not under test.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     options = conninfo_to_dict(connection_info).get("options", "")
@@ -99,13 +105,13 @@ def _decide(connection_info: str, monkeypatch) -> None:
         connection_info, options=f"{options} -c role=clashlens_python_worker"))
     maintenance = worker.TimedMaintenance(database, StageMetrics())
     try:
-        for _ in range(20):
-            maintenance.next_reevaluation_at = float("-inf")
-            maintenance.run_due()
+        maintenance.run_due()
+        for _ in range(600):
             with psycopg.connect(connection_info) as connection:
                 if not connection.execute("SELECT count(*) FROM league_week_dirty").fetchone()[0]:
                     return
-        raise AssertionError("the maintenance timer left weeks undecided")
+            time.sleep(0.05)
+        raise AssertionError("the league week thread left weeks undecided")
     finally:
         maintenance.close()
         database.close()
