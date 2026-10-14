@@ -573,6 +573,23 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Daily Legend log");
   });
 
+  it("says when a linked ended-Season day's battles are no longer on the page", async () => {
+    const client = newSeasonClient();
+    const player: PlayerPage = await client.getPlayer();
+    client.getPlayer.mockResolvedValue({
+      ...player,
+      recentDays: player.recentDays.filter(
+        ({ period }) => !period.startsWith("2026-10-03"),
+      ),
+    });
+    const html = await loadAndRender(client, null, "2026-10-03");
+    expect(html).toContain("Battles on 3 Oct 2026");
+    expect(html).toContain(
+      "Attacks and defenses from this day are no longer shown here.",
+    );
+    expect(html).not.toContain("battle-slot");
+  });
+
   it("shows no battles for a linked ended-Season day the Season table lacks", async () => {
     const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
     expect(html).not.toContain("Battles on");

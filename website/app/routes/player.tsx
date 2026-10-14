@@ -404,14 +404,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ? legendDayKey(player.currentDay.period)
       : null);
   // An ended Season's linked day shows its battles below the Season's days.
-  const pastDay =
-    player &&
-    data.historical?.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay)
-      ? savedDays(player).find((day) => legendDayKey(day.period) === selectedDay)
-      : undefined;
+  const pastDayKey = data.historical?.dailyEntries.some(
+    (day) => legendDayKey(day.period) === selectedDay,
+  )
+    ? selectedDay
+    : null;
+  const pastDay = player
+    ? savedDays(player).find((day) => legendDayKey(day.period) === pastDayKey)
+    : undefined;
   const linkedBattle = (
     <LinkedBattle
-      day={selectedDay}
       days={
         data.selectedSeason === null
           ? history.map(({ day }) => day)
@@ -609,7 +611,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             summary={data.historical}
             error={data.historicalError}
             menu={seasonMenu(current !== null)}
-            day={pastDay}
+            day={pastDayKey}
+            battles={pastDay}
             units={player?.armyUnits ?? {}}
           />
         ) : current ? (
@@ -736,7 +739,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           summary={data.historical}
           error={data.historicalError}
           menu={seasonMenu(true)}
-          day={pastDay}
+          day={pastDayKey}
+          battles={pastDay}
           units={trackedPlayer.armyUnits ?? {}}
         />
       ) : (
@@ -849,13 +853,15 @@ function SelectedSeason({
   error,
   menu,
   day,
+  battles,
   units,
 }: {
   seasonId: string;
   summary: HistoricalSeasonSummary | null;
   error: WebsiteErrorResponse | null;
   menu: React.ReactNode;
-  day: RankedDaySummary | undefined;
+  day: string | null;
+  battles: RankedDaySummary | undefined;
   units: ArmyUnitNames;
 }) {
   if (summary !== null) {
@@ -867,19 +873,27 @@ function SelectedSeason({
         ) : null}
         {day ? (
           <section className="data-section" aria-labelledby="day-battles-title">
-            <h2 id="day-battles-title">Battles on {legendDayDate(day.period)}</h2>
-            <div className="battle-columns">
-              {(["Attacks", "Defenses"] as const).map((title) => (
-                <BattleColumn
-                  key={title}
-                  title={title}
-                  events={title === "Attacks" ? day.offenseEvents : day.defenseEvents}
-                  day={legendDayKey(day.period)}
-                  dayLabel={legendDayDate(day.period)}
-                  units={units}
-                />
-              ))}
-            </div>
+            <h2 id="day-battles-title">Battles on {legendDayDate(day)}</h2>
+            {battles ? (
+              <div className="battle-columns">
+                {(["Attacks", "Defenses"] as const).map((title) => (
+                  <BattleColumn
+                    key={title}
+                    title={title}
+                    events={
+                      title === "Attacks" ? battles.offenseEvents : battles.defenseEvents
+                    }
+                    day={day}
+                    dayLabel={legendDayDate(day)}
+                    units={units}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="section-note">
+                Attacks and defenses from this day are no longer shown here.
+              </p>
+            )}
           </section>
         ) : null}
       </>

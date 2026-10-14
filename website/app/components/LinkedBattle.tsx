@@ -3,7 +3,6 @@ import { useLocation, useRevalidator } from "react-router";
 
 import type { RankedDaySummary } from "../lib/contracts";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 // Two minutes of checks, one every five seconds.
 const CHECKS = 24;
 const CHECK_EVERY_MS = 5_000;
@@ -15,13 +14,7 @@ const CHECK_EVERY_MS = 5_000;
  * show the battle it reads the player again every five seconds for two minutes
  * and says so. `days` are the days whose battles the page shows.
  */
-export function LinkedBattle({
-  days,
-  day,
-}: {
-  days: RankedDaySummary[];
-  day: string | null;
-}) {
+export function LinkedBattle({ days }: { days: RankedDaySummary[] }) {
   const location = useLocation();
   const revalidator = useRevalidator();
   // The server never sees the #battle- part, so it is read after hydration.
@@ -35,9 +28,7 @@ export function LinkedBattle({
         (event) => event.battleId === battleId,
       ),
     );
-  // Only a battle from today's or yesterday's Legend day can still be arriving.
-  const recent = day === null || Date.parse(`${day}T05:00:00Z`) > Date.now() - 2 * DAY_MS;
-  const waiting = battleId !== null && !shown && recent && checksLeft > 0;
+  const waiting = battleId !== null && !shown && checksLeft > 0;
 
   useEffect(() => {
     if (!waiting) return;
@@ -91,13 +82,12 @@ export function LinkedBattle({
   if (battleId === null || shown) return null;
   return (
     <aside className="notice" role="status">
-      {waiting
-        ? "Still adding this battle to the Legend log. This page checks again every few seconds."
-        : "This battle isn't on this page."}
-      {!waiting && recent ? (
+      {waiting ? (
+        "Still adding this battle to the Legend log. This page checks again every few seconds."
+      ) : (
         <>
-          {" "}
-          A battle from the last few minutes can take a little longer.{" "}
+          This battle isn't on this page. A battle from the last few minutes can take a
+          little longer.{" "}
           <button
             type="button"
             className="button secondary"
@@ -109,7 +99,7 @@ export function LinkedBattle({
             Check again
           </button>
         </>
-      ) : null}
+      )}
     </aside>
   );
 }

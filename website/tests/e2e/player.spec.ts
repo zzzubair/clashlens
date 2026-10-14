@@ -690,14 +690,13 @@ for (const [device, size] of [
             { timeout: 15_000 },
           )
           .toBe(1);
-        await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
         await expectUsableLayout(page);
+        await page.getByRole("button", { name: "Check again" }).click();
+        await expect(page.getByText("Still adding this battle")).toBeVisible();
 
-        // Only today's and yesterday's battles can still be arriving.
+        // An older day's battle gets the same checks: a late report can still add it.
         await page.goto("/players/%232PP?day=2026-10-06#battle-not-saved");
-        await expect(missing).toBeVisible();
-        await expect(page.getByText("Still adding this battle")).toHaveCount(0);
-        await expect(page.getByRole("button", { name: "Check again" })).toHaveCount(0);
+        await expect(page.getByText("Still adding this battle")).toBeVisible();
       });
 
       test("a last-day battle linked after its Season ended opens in that Season", async ({
@@ -727,6 +726,16 @@ for (const [device, size] of [
         await expect(page.locator('[aria-current="date"]')).toHaveCount(1);
         await expect(page.getByText("Daily Legend log")).toHaveCount(0);
         await expect(page).toHaveURL(new URL(link, page.url()).href);
+        await expectUsableLayout(page);
+
+        // A day of that Season whose battles the page no longer has says so.
+        await page.goto("/players/%232PP?day=2026-08-10#battle-not-saved");
+        await expect(
+          page.getByRole("heading", { name: "Battles on 10 Aug 2026" }),
+        ).toBeVisible();
+        await expect(
+          page.getByText("Attacks and defenses from this day are no longer shown here."),
+        ).toBeVisible();
         await expectUsableLayout(page);
       });
     });
