@@ -20,11 +20,20 @@ from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
 from .analytics import latest_trophy_changes, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
-from .db import Database, _text_value
+from .db import (
+    ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    Database,
+    _text_value,
+)
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_START_TROPHIES,
@@ -48,6 +57,16 @@ _RANKED_SNAPSHOT_STATUSES = {
     "Inconsistent": "inconsistent",
     "Malformed": "malformed",
 }
+
+
+# A failed freeze's build, saved by freeze_boundary_manifest.
+FREEZE_TIMED_OUT = "freeze_timed_out"
+
+
+def retry_wait(failures: str) -> str:
+    """SQL for how long Reset work waits after ``failures`` failed tries: a
+    minute, then twice as long after each further one, at most an hour."""
+    return f"least(interval '1 hour', interval '1 minute' * 2 ^ ({failures} - 1))"
 
 
 def freeze_boundary_manifest(
@@ -87,6 +106,52 @@ def freeze_boundary_manifest(
     ).fetchone()
     if generation is None:
         return None
+    # On a freeze past the worker's 15-minute query limit, every background
+    # pass tried again: 15 minutes each, and four in one pass outlasted the
+    # worker's 60-minute health limit. The failure is saved as its build's,
+    # which the alert check reports, and the next try waits as a failed
+    # build's rerun does (board_deadline.retry_failed_build).
+    work_type = "build_snapshot" if artifact_kind == "snapshot" else "build_army_analytics"
+    failed = (work_type, Jsonb({
+        "boundary_at": f"{generation[0].astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
+        "generation": int(generation[1])}))
+    if connection.execute(
+        f"""
+        SELECT max(updated_at) + {retry_wait("count(*)")} > clock_timestamp()
+        FROM python_processing_jobs_worker
+        WHERE state = 'failed' AND failure_category = '{FREEZE_TIMED_OUT}'
+          AND work_type = %s AND input_json = %s
+        """,
+        failed,
+    ).fetchone()[0]:
+        return None
+    try:
+        with connection.transaction():
+            return _freeze(connection, generation_id, artifact_kind, generation)
+    except QueryCanceled:
+        connection.execute(
+            f"""
+            INSERT INTO python_processing_jobs_worker (
+                work_type, input_json, deduplication_key, state, due_at,
+                parser_version, processing_version, domain_rule_version,
+                analytics_rule_version, outcome, failure_category, failure_detail,
+                completed_at)
+            VALUES (%s, %s, %s || clock_timestamp(), 'failed', clock_timestamp(),
+                    %s, %s, %s, %s, 'durable_failure', '{FREEZE_TIMED_OUT}',
+                    'freezing its inputs ran past the 15-minute query limit',
+                    clock_timestamp())
+            """,
+            (*failed, f"{work_type}:freeze:{generation_id}:",
+             DEFAULT_PARSER_VERSION, PROCESSING_VERSION, DOMAIN_RULE_VERSION,
+             ANALYTICS_RULE_VERSION if artifact_kind == "snapshot"
+             else ARMY_ANALYTICS_RULE_VERSION),
+        )
+        return None
+
+
+def _freeze(
+    connection: Any, generation_id: int, artifact_kind: str, generation: Any
+) -> tuple[int, str]:
     members = connection.execute(
         """
         SELECT player_id, ranked_day_version_id, ranked_day_input_hash,

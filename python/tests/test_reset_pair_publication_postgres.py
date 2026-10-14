@@ -23,7 +23,7 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import reconciliation_db, reset_baselines
+from clashlens import boundary_publication, reconciliation_db, reset_baselines
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
@@ -225,6 +225,8 @@ def test_reset_pair_with_production_parser_versions_publishes_army_day(
             _process_snapshot_and_analytics(
                 connection_info, database, processor, snapshot, owner_prefix="snapshot"
             )
+            # The army's inputs freeze at the next publication check.
+            boundary_publication.reevaluate_boundary_publications(database)
             army_job = next_job("build_army_analytics", boundary)
             assert army_job is not None, "no army analytics job was queued"
             army = processor.process_job(army_job, owner="army")

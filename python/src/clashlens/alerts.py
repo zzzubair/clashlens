@@ -92,6 +92,13 @@ CONDITIONS = {
         "Early warning: the Reset is behind its 05:30 UTC board target",
         "./ops queue-status, then ./ops logs worker",
     ),
+    "left_out": (
+        (
+            "A Reset's Daily board published without more than 50 players whose day"
+            " result was unfinished, and has not been rebuilt with them"
+        ),
+        "./ops queue-status, then ./ops logs worker",
+    ),
     "completeness": (
         (
             "Over 10 players who battled in Legend I today or yesterday are still"
@@ -381,7 +388,10 @@ def reset_probe(served: str, read_at: str) -> None:
     ended, when its board's inputs froze and it was first readable, and its
     newest board's members waiting for a result and failed for good, or 0.
     ``served`` is the Reset of the board the website's public page showed at
-    ``read_at``, both 0 when it showed none or could not be read.
+    ``read_at``, both 0 when it showed none or could not be read. Then the
+    newest Reset whose newest frozen board left out more than
+    ``BOARD_MAX_UNFINISHED`` members, and how many, both 0 for none, the
+    count -1 when it could not be read.
     """
     import psycopg
 
@@ -399,7 +409,7 @@ def reset_probe(served: str, read_at: str) -> None:
         # The newest board's members still without a result, and those whose
         # day calculation failed for good (board_deadline), so an alert says
         # what the board waits for; a slow count leaves them unknown, as 0.
-        waiting = (0, 0)
+        waiting, left_out = (0, 0), (0, -1)
         try:
             connection.execute("SET statement_timeout = '5s'")
             waiting = record and connection.execute(
@@ -413,10 +423,38 @@ def reset_probe(served: str, read_at: str) -> None:
                 """,
                 (record["boundary_at"],),
             ).fetchone()
+            # Members the deadline left out unfinished (board_deadline), not
+            # those whose Reset reading failed, until a rebuilt board has
+            # them. 18 ms over 14 Resets' 622 boards on 14 Oct 2026.
+            left_out = connection.execute(
+                """
+                SELECT extract(epoch FROM generation.boundary_at)::bigint, left_out.count
+                FROM (
+                    SELECT DISTINCT ON (boundary_at) id, boundary_at
+                    FROM boundary_publication_generations
+                    WHERE snapshot_manifest_id IS NOT NULL
+                    ORDER BY boundary_at DESC, generation DESC
+                ) AS generation
+                CROSS JOIN LATERAL (
+                    SELECT count(*) FROM boundary_publication_generation_members AS member
+                    WHERE member.generation_id = generation.id
+                      AND member.status = 'unavailable'
+                      AND member.snapshot_status = 'unavailable'
+                      AND NOT EXISTS (
+                          SELECT FROM reset_baseline_evidence AS reading
+                          WHERE reading.player_id = member.player_id
+                            AND reading.boundary_at = generation.boundary_at
+                            AND reading.state = 'failed')
+                ) AS left_out
+                WHERE left_out.count > %s
+                ORDER BY generation.boundary_at DESC LIMIT 1
+                """,
+                (BOARD_MAX_UNFINISHED,),
+            ).fetchone() or (0, 0)
         except psycopg.Error:
             connection.rollback()
     if record is None:
-        print(0, 0, 0, 0, 0, 0, 0)
+        print(0, 0, 0, 0, 0, 0, 0, *left_out)
         return
     epoch = lambda value: 0 if value is None else int(value.timestamp())
     print(
@@ -426,6 +464,7 @@ def reset_probe(served: str, read_at: str) -> None:
         epoch(record["inputs_frozen_at"]),
         epoch(record["readable_at"]),
         *waiting,
+        *left_out,
     )
 
 
@@ -976,6 +1015,7 @@ def observe(
         "Reset progress",
     )
     findings["reset"], late = reset_stages(record, served, metrics, state, now)
+    findings["left_out"] = left_out_warning(record, state)
     if publication is not None:
         findings["publication"] = publication[0] > 0 or late
     elif late:
@@ -1104,7 +1144,8 @@ def reset_stages(
         waiting, failed = (list(record[5:7]) + [0, 0])[:2]
         if waiting:
             blocked.append(f"the board waits for {waiting:,} players' day results" + (
-                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30"
+                f", more than the {BOARD_MAX_UNFINISHED} it may publish without at 05:30;"
+                " at 06:00 it publishes without them all"
                 if waiting > BOARD_MAX_UNFINISHED else ""))
         if failed:
             blocked.append(f"{failed:,} players' day calculations failed for good")
@@ -1149,6 +1190,23 @@ def reset_stages(
     if reasons:
         state.setdefault("details", {})["reset"] = "Now: " + "; ".join(reasons)
     return (True if reasons else (None if unknown else False)), late
+
+
+def left_out_warning(record: list[int] | None, state: dict) -> bool | None:
+    """Alert while a Reset's newest board left out more than
+    ``BOARD_MAX_UNFINISHED`` players whose day was unfinished: past 06:00
+    the board publishes without them all (board_deadline). ``record`` is the
+    Reset probe's output; an older probe's, without the count, is unknown."""
+    if record is None or len(record) < 9 or record[8] < 0:
+        return None
+    reset, count = record[7:9]
+    if count <= BOARD_MAX_UNFINISHED:
+        return False
+    state.setdefault("details", {})["left_out"] = (
+        f"Now: the {datetime.fromtimestamp(reset, UTC):%Y-%m-%d} 05:00 UTC board left"
+        f" out {count:,} players"
+    )
+    return True
 
 
 def early_warning(metrics: dict, state: dict, clock: str) -> bool | None:

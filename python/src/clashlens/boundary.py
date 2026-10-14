@@ -8,7 +8,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair
+from . import battle_day_repair, board_deadline
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
@@ -100,6 +100,9 @@ def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime)
 # the build. Above the transactions that can write member results at once:
 # 12 worker lanes, their maintenance and the late-battle sweep.
 OPEN_GENERATION_TAIL = 100
+# A caller limiting its wait waits this long for it: on 14 Oct 2026 the last
+# 95 day results gave up after 250 ms and came back 37 to 99 s later.
+TAIL_LOCK_WAIT = "5s"
 
 
 def lock_boundary_members(
@@ -169,6 +172,8 @@ def lock_boundary_members(
     if held and open_generation:
         return True
     if not (open_generation and busy):
+        if open_generation and wait is not None:
+            wait = TAIL_LOCK_WAIT
         lock_boundary_publication(connection, boundary_at, wait)
         return False
     with lock_wait(connection, wait):
@@ -178,22 +183,18 @@ def lock_boundary_members(
     return True
 
 
-def is_open_generation(row: Any) -> bool:
-    """Whether a generation row's (snapshot_state, army_state,
-    correction_state, snapshot_manifest_id, army_manifest_id) is open."""
-    return row is not None and (
-        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
-    ) == ("pending", "pending", "none", None, None)
-
-
 def require_open_generation(row: Any, boundary_at: datetime) -> None:
-    """Under the shared lock, refuse a generation that is not open.
+    """Under the shared lock, refuse a generation row's (snapshot_state,
+    army_state, correction_state, snapshot_manifest_id, army_manifest_id)
+    that is not open.
 
     The lock is shared only while it is open, so this guards against a
     change made without the full lock: LockNotAvailable rolls the work back
     to retry, rather than writing to a frozen generation.
     """
-    if not is_open_generation(row):
+    if row is None or (
+        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
+    ) != ("pending", "pending", "none", None, None):
         raise LockNotAvailable(
             f"Reset {boundary_at.isoformat()} has no open generation for shared results"
         )
@@ -461,9 +462,10 @@ def _supersede_generation(
 
 
 def _try_enqueue_boundary_artifacts(
-    database, connection: Any, *, boundary_at: datetime, generation_id: int
+    database, connection: Any, *, boundary_at: datetime, generation_id: int, army: bool = False
 ) -> None:
-    if boundary_held(connection, boundary_at):
+    # A repair holds no Reset's first board and army results past 06:00.
+    if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
         return
     _inherit_deferred_army_successor_snapshot(database, 
         connection, generation_id=generation_id
@@ -551,13 +553,14 @@ def _try_enqueue_boundary_artifacts(
                 generation=generation_number,
             )
             _try_enqueue_boundary_artifacts(
-                database, connection, boundary_at=boundary_at, generation_id=new_id
+                database, connection, boundary_at=boundary_at, generation_id=new_id, army=army
             )
             return
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="snapshot"
         )
-        assert manifest is not None
+        if manifest is None:
+            return
         connection.execute(
             """
             INSERT INTO python_processing_jobs_worker (
@@ -588,20 +591,29 @@ def _try_enqueue_boundary_artifacts(
                 else ended_day_priority(boundary_at - timedelta(days=1)),
             ),
         )
-    army = connection.execute(
-        "SELECT army_state, army_manifest_id FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
+    army_state, snapshot_state = connection.execute(
+        "SELECT army_state, snapshot_state FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
         (generation_id,),
     ).fetchone()
+    # The army's inputs freeze in a later transaction, once the board's build
+    # has published it, whether or not its statistics ever do. Frozen with
+    # the board's, on 14 Oct 2026 they took 2 min 58 s, growing each Season
+    # day, and the board's build job stayed unseen until they finished. Only
+    # the background check (``army``) freezes them, never a job's response slot.
+    board_first = (
+        not affected_artifacts or "snapshot" in affected_artifacts
+    ) and _text_value(snapshot_state) == "ready"
     if (
         army_pending == 0
-        and army is not None
-        and _text_value(army[0]) == "ready"
+        and _text_value(army_state) == "ready"
         and (not affected_artifacts or "army" in affected_artifacts)
+        and army and not board_first
     ):
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="army"
         )
-        assert manifest is not None
+        if manifest is None:
+            return
         key = base = f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}"
         # A build that gave up while members were still pending runs again,
         # under a new key, once they have all settled; it stays failed.

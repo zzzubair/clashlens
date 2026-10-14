@@ -235,12 +235,12 @@ def _process_snapshot_and_analytics(
             SELECT id, version, input_hash, state
             FROM leaderboard_snapshots
             WHERE snapshot_kind = 'frozen'
-              AND state = 'building'
             ORDER BY version DESC, id DESC
             LIMIT 1
             """,
         ).fetchone()
-        assert snapshot is not None
+        # The build publishes the board; its statistics follow.
+        assert snapshot is not None and text(snapshot[3]) == "published"
         analytics_jobs = connection.execute(
             """
             SELECT id, input_json, deduplication_key, status
@@ -1072,7 +1072,7 @@ def test_daily_board_orders_equal_trophies_by_latest_trophy_change(
     }
 
 
-def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
+def test_snapshot_quality_counts_and_a_replacement_published_whole(
     database_url: str,
     archive_server,
 ) -> None:
@@ -1202,9 +1202,10 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
                     """,
                     (boundary,),
                 ).fetchall()
+            # The replacement publishes whole at the end of its build.
             assert len(candidates) == 2
-            assert text(candidates[0][1]) == "published"
-            assert text(candidates[1][1]) == "building"
+            assert text(candidates[0][1]) == "superseded"
+            assert text(candidates[1][1]) == "published"
             assert candidates[1][2] == old_snapshot[0]
             api = ApiDatabase(connection_info)
             try:
@@ -1213,7 +1214,7 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
                 api.close()
             assert frozen is not None
             assert frozen["boundary_at"] == boundary.isoformat()
-            assert frozen["version"] == old_snapshot[2]
+            assert frozen["version"] == old_snapshot[2] + 1
             assert frozen["entries"]
             with pytest.raises(
                 psycopg.errors.RaiseException,

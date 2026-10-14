@@ -405,7 +405,7 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         url_file.write_text(_as_worker(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
         alerts.reset_probe("0", "0")
-        assert capsys.readouterr().out.split() == ["0"] * 7
+        assert capsys.readouterr().out.split() == ["0"] * 9
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, reset)
@@ -416,6 +416,6 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         )
         assert (boundary, captured, ended, frozen) == (shown, 3, 3, 0)
         assert readable == shown + 1500
-        # No board generation yet: no member waits or failed.
-        assert board == [0, 0]
+        # No board generation yet: no member waits, failed or was left out.
+        assert board == [0, 0, 0, 0]
 

@@ -85,6 +85,16 @@ def _sweep_with_members(connection, player_ids: list[int]) -> int:
     return sweep_id
 
 
+def _board_published(database: Database, connection, generation: int = 1) -> None:
+    """The generation's board and statistics publish, and the publication
+    check freezes its army's inputs, which wait for them."""
+    generation_id = connection.execute(
+        "UPDATE boundary_publication_generations SET snapshot_state = 'published'"
+        " WHERE generation = %s RETURNING id", (generation,)).fetchone()[0]
+    boundary._try_enqueue_boundary_artifacts(
+        database, connection, boundary_at=BOUNDARY, generation_id=generation_id, army=True)
+
+
 def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
     database_url: str,
 ) -> None:
@@ -411,11 +421,12 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     ranked_day_version_id=players[-1][1],
                     ranked_day_input_hash="a" * 64,
                 )
+                # The army's inputs wait for the board and its statistics.
                 assert (
                     connection.execute(
                         "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_army_analytics'"
                     ).fetchone()[0]
-                    == 1
+                    == 0
                 )
                 snapshot_due_at = connection.execute(
                     "SELECT due_at FROM python_processing_jobs WHERE work_type = 'build_snapshot'"
@@ -464,6 +475,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     )
                     == "published"
                 )
+                boundary._try_enqueue_boundary_artifacts(database, connection, boundary_at=BOUNDARY, generation_id=int(generation[0]), army=True)
                 army_job_id = int(
                     connection.execute(
                         "SELECT id FROM python_processing_jobs WHERE work_type = 'build_army_analytics'"
@@ -553,6 +565,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     ).fetchone()[0]
                     == 2
                 )
+                _board_published(database, connection, 2)
                 stale_army_job = connection.execute(
                     """
                     SELECT id
@@ -594,13 +607,14 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     connection, "#DECODE1", 1, "a" * 64
                 )
                 _sweep_with_members(connection, [player_id])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
                     ranked_day_version_id=ranked_id,
                     ranked_day_input_hash="a" * 64,
                 )
+                _board_published(database, connection)
                 generation = connection.execute(
                     """
                     SELECT id, snapshot_manifest_id, army_manifest_id
@@ -1335,29 +1349,14 @@ def test_mixed_boundary_last_unavailable_still_enqueues_army(
                     "terminal",
                     "unavailable",
                 ]
-                assert (
-                    connection.execute(
-                        """
-                    SELECT count(*)
-                    FROM python_processing_jobs
-                    WHERE work_type = 'build_army_analytics'
-                      AND input_json->>'generation' = '1'
-                    """
-                    ).fetchone()[0]
-                    == 1
-                )
-                assert (
-                    text(
-                        connection.execute(
-                            """
-                        SELECT snapshot_state
-                        FROM boundary_publication_generations
-                        WHERE generation = 1
-                        """
-                        ).fetchone()[0]
-                    )
-                    == "ready"
-                )
+                assert text(connection.execute(
+                    "SELECT snapshot_state FROM boundary_publication_generations"
+                    " WHERE generation = 1").fetchone()[0]) == "ready"
+                _board_published(database, connection)
+                assert connection.execute(
+                    "SELECT count(*) FROM python_processing_jobs"
+                    " WHERE work_type = 'build_army_analytics'"
+                    " AND input_json->>'generation' = '1'").fetchone()[0] == 1
         finally:
             database.close()
 
@@ -1387,6 +1386,7 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                         player_id=player_id,
                         state="failed",
                     )
+                _board_published(database, connection)
                 connection.commit()
 
             store_observation(

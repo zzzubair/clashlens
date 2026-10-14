@@ -432,7 +432,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 )
             )
 
-            quality_row = connection.execute(
+            # A coordinated board counts its exclusions from its frozen
+            # inputs below. This scan of every player's profile history,
+            # 66.5 s of the 14 Oct 2026 board's build, is for a direct one.
+            quality_row = None if generation_row is not None else connection.execute(
                 f"""
                 WITH known_players AS (
                     SELECT id
@@ -537,11 +540,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                           AND any_source_state = 'conflict'
                     )
                 FROM classified
-                WHERE (%s::bigint IS NULL OR id IN (
-                    SELECT player_id
-                    FROM boundary_publication_generation_members
-                    WHERE generation_id = %s
-                ))
                 """,
                 (
                     boundary_at,
@@ -554,11 +552,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     PROFILE_FRESHNESS_SECONDS,
                     boundary_at,
                     PROFILE_FRESHNESS_SECONDS,
-                    generation_row[0] if generation_row is not None else None,
-                    generation_row[0] if generation_row is not None else None,
                 ),
             ).fetchone()
-            assert quality_row is not None
             if generation_row is not None:
                 manifest_quality = connection.execute(
                     """
@@ -616,6 +611,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ),
                 }
             else:
+                assert quality_row is not None
                 quality = {
                     "eligible_population_count": int(quality_row[0]),
                     "included_entry_count": int(quality_row[1]),
@@ -712,7 +708,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     quality=quality,
                     input_hash=input_hash,
                     ordering_rule_version=ordering_rule_version,
-                    publish=False,
+                    publish=True,
                 )
             )
             _publish_snapshot_kind(database, 
@@ -790,11 +786,11 @@ def _publish_snapshot_kind(
     ordering_rule_version: str,
     publish: bool,
 ) -> tuple[int, int]:
-    """Assemble one immutable snapshot version.
+    """Assemble one immutable snapshot version, published when ``publish``.
 
-    Frozen snapshots stop at ``building``. The analytics transaction is the
-    only writer that changes a frozen snapshot to ``published``. Live
-    snapshots keep their independent publication path.
+    A frozen snapshot publishes at the end of its build, its statistics
+    following in their own job (``boundary_publication.complete_analytics``):
+    on 14 Oct 2026 the statistics took 1 min 22 s of the board's wait.
     """
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",

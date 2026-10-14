@@ -157,7 +157,8 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                     """,
                     (generation,),
                 ).fetchall()
-                assert [text(row[1]) for row in manifests] == ["army", "snapshot"]
+                # The army's inputs freeze only once the board publishes.
+                assert [text(row[1]) for row in manifests] == ["snapshot"]
                 before = [
                     tuple(row)
                     for row in connection.execute(
@@ -166,7 +167,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                         FROM boundary_publication_manifest_rows
                         WHERE manifest_id = %s ORDER BY ordinal
                         """,
-                        (manifests[1][0],),
+                        (manifests[0][0],),
                     ).fetchall()
                 ]
                 assert before == sorted(before, key=lambda row: row[0])
@@ -178,10 +179,10 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                             (manifest_id, ordinal, player_id, classification, input_identity)
                         VALUES (%s, 99, %s, 'Complete', '{}')
                         """,
-                        (manifests[1][0], first[0]),
+                        (manifests[0][0], first[0]),
                     )
                 connection.execute("ROLLBACK TO SAVEPOINT manifest_insert_guard")
-                digest = text(manifests[1][2])
+                digest = text(manifests[0][2])
                 connection.execute("SAVEPOINT source_identity_guard")
                 with pytest.raises(Exception, match="source identity"):
                     connection.execute(
@@ -255,7 +256,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                     text(
                         connection.execute(
                             "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
-                            (manifests[1][0],),
+                            (manifests[0][0],),
                         ).fetchone()[0]
                     )
                     == digest
@@ -263,7 +264,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 with pytest.raises(Exception, match="immutable"):
                     connection.execute(
                         "UPDATE boundary_publication_manifests SET digest = %s WHERE id = %s",
-                        ("c" * 64, manifests[1][0]),
+                        ("c" * 64, manifests[0][0]),
                     )
         finally:
             database.close()
@@ -275,7 +276,15 @@ def _freeze_army_inputs(connection_info: str, archive_server, processor):
     Returns a pending-jobs lookup for that Reset and the army job and input.
     """
     jobs = _reconcile_day(connection_info, archive_server, processor)
+    _publish_board(connection_info, processor, jobs)
+    boundary_publication.reevaluate_boundary_publications(processor.database)
     [(army_job, army_input)] = jobs("build_army_analytics")
+    return jobs, army_job, army_input
+
+
+def _publish_board(connection_info: str, processor, jobs) -> None:
+    """Build the Reset's board and its statistics: its army inputs freeze
+    at the next publication check."""
     [(snapshot_job, _input)] = jobs("build_snapshot")
     _process_snapshot_and_analytics(
         connection_info,
@@ -284,7 +293,6 @@ def _freeze_army_inputs(connection_info: str, archive_server, processor):
         snapshot_job,
         owner_prefix="snapshot",
     )
-    return jobs, army_job, army_input
 
 
 def _reconcile_day(connection_info: str, archive_server, processor):
@@ -495,6 +503,7 @@ def test_army_correction_during_publication_keeps_each_frozen_battle(
                     frozen["decode_ids"][0],
                 )
             ]
+            boundary_publication.reevaluate_boundary_publications(processor.database)
             [(correction_job, correction_input)] = jobs("build_army_analytics")
             assert correction_input["generation"] == army_input["generation"] + 1
             assert (
@@ -522,46 +531,11 @@ def test_army_build_leaves_the_generation_unlocked_until_it_publishes(
     # build used to hold that lock for its whole run, so a Reset publication's
     # two builds ran one after the other.
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        pairs = [
-            _store_baseline_pair(
-                connection_info,
-                archive_server,
-                key=key,
-                boundary=day,
-                trophies=trophies,
-                empty_battle_log=empty,
-            )
-            for key, day, trophies, empty in (
-                ("start", DAY_START, 6000, True),
-                ("end", DAY_END, 6040, False),
-            )
-        ]
-        middle = store_observation(
-            connection_info,
-            archive_server,
-            occurrence_key="middle",
-            endpoint="battle_log",
-            body=_battle_log(),
-            observed_at=DAY_START + timedelta(hours=7),
-            normalized_tag="#2PP",
-        )[1]
         database, processor = _processor(connection_info, archive_server)
         try:
-            for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
-                assert processor.process_job(job_id, owner="source").outcome == "processed"
-            with database.pool.connection() as connection:
-                for (job_id,) in connection.execute(
-                    "SELECT id FROM python_processing_jobs"
-                    " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
-                ).fetchall():
-                    assert processor.process_job(job_id, owner="day").outcome == "processed"
-                [(army_job,)] = connection.execute(
-                    "SELECT id FROM python_processing_jobs"
-                    " WHERE work_type = 'build_army_analytics' AND status = 'pending'"
-                    " AND input_json->>'boundary_at' = %s",
-                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
-                ).fetchall()
-
+            _jobs, army_job, _input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
             real_build = army_ingestion._build_army_facts
             locked_during_build = []
 
@@ -1311,6 +1285,7 @@ def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
                 [(old,)] = connection.execute("SELECT id FROM legend_battles").fetchall()
                 target = _merge_into_day_before(connection, old)
             monkeypatch.undo()
+            _publish_board(connection_info, processor, jobs)
             boundary_publication.reevaluate_boundary_publications(database)
             [(army_job, army_input)] = jobs("build_army_analytics")
             with database.pool.connection() as connection:
@@ -1401,6 +1376,7 @@ def test_reevaluation_settles_members_left_pending_on_an_older_reset(
                 assert connection.execute(
                     "SELECT count(*) FROM battle_day_repairs"
                 ).fetchone() == (0,)
+            _publish_board(connection_info, processor, jobs)
             boundary_publication.reevaluate_boundary_publications(database)
             [(army_job, army_input)] = jobs("build_army_analytics")
             with database.pool.connection() as connection:

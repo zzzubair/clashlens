@@ -1311,8 +1311,17 @@ same database statement, no Reset-priority work it could take is waiting: due,
 waiting on its saved response, or with an expired lease. If there is any, the
 same claim uses that order instead. On the other turn it takes its planned
 job. Asking for one particular job by number still takes that job.
-The board maintenance pass waits at most 50 milliseconds for a Reset's lock
-and otherwise tries again on its next pass.
+The board maintenance pass, every 10 seconds, waits at most 50 milliseconds
+for a Reset's lock and otherwise tries again on its next pass; when the
+Reset's board is due to publish without its unfinished members (at 05:30 with
+50 or fewer, at 06:00 with any number), it waits up to 5 seconds (`TAIL_LOCK_WAIT` in
+[`boundary.py`](../python/src/clashlens/boundary.py)). It checks the newest
+Reset first and starts no further Reset after 30 minutes, so one pass stays
+inside the worker's 60-minute health limit. Only this pass freezes a Reset's
+army inputs, never a job. A freeze of a board's or army's inputs that runs
+past the 15-minute statement limit is saved as a failed build, which the alert
+check counts, and is tried again 1 minute later, then twice as long after each
+further timeout, at most an hour apart.
 
 Production runs `CLASHLENS_WORKER_PROCESSES` worker processes, 1 unless set,
 each with its own queue maintenance. If maintenance in another worker process

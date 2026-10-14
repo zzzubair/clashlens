@@ -14,7 +14,12 @@ from domain_test_support import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import api_players, past_reset_pacing, reconciliation_db
+from clashlens import (
+    api_players,
+    boundary_publication,
+    past_reset_pacing,
+    reconciliation_db,
+)
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
@@ -384,6 +389,8 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 "published",
             ]
             assert first_event is None
+            # The army's inputs freeze at the next publication check.
+            boundary_publication.reevaluate_boundary_publications(database)
             with database.pool.connection() as connection:
                 first_army_job = connection.execute(
                     """

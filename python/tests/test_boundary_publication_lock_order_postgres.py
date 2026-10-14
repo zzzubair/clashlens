@@ -14,6 +14,7 @@ from test_army_ingestion_postgres import _live_row, _unswept_battles
 from test_boundary_publication_postgres import (
     BOUNDARY,
     DAY_START,
+    _board_published,
     _player_and_version,
     _sweep_with_members,
 )
@@ -229,6 +230,7 @@ def test_army_build_does_not_deadlock_with_day_result_rebuild(
                         player_id=player_id,
                         state="failed",
                     )
+                _board_published(database, connection)
                 connection.commit()
             store_observation(
                 connection_info,

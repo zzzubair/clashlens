@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
-from psycopg.errors import LockNotAvailable
+from psycopg.errors import LockNotAvailable, QueryCanceled
 from psycopg.types.json import Jsonb
 
 from . import battle, board_deadline, boundary, reset_baselines
@@ -89,22 +90,25 @@ def reevaluate_boundary_publications(database) -> int:
                     """
                     SELECT boundary_at
                     FROM boundary_publication_generations
-                    WHERE snapshot_state IN ('pending', 'ready')
+                    WHERE snapshot_state IN ('pending', 'ready', 'building')
                        OR army_state IN ('pending', 'ready')
                     UNION
                     SELECT boundary_at
                     FROM boundary_publication_corrections
                     WHERE state IN ('queued', 'pending_inputs')
-                    ORDER BY 1
+                    ORDER BY 1 DESC
                     """
                 ).fetchall()
             ]
         # One Reset per transaction: a freeze takes minutes, and holding
         # every Reset's lock until the last one finished blocked them all.
-        # A Reset that needed work only after the read above waits for the
-        # next pass.
-        handled = 0
+        # A Reset that needed work only after the read above, or that a long
+        # pass leaves, the newest first, waits for the next pass: a pass
+        # longer than the worker's 60-minute health limit gets it killed.
+        handled, started = 0, monotonic()
         for boundary_at in boundaries:
+            if monotonic() - started > PASS_SECONDS:
+                break
             try:
                 with connection.transaction():
                     handled += _reevaluate_boundary(database, connection, boundary_at)
@@ -112,20 +116,31 @@ def reevaluate_boundary_publications(database) -> int:
                 # Waiting for the full lock would hold back every member
                 # result that shares it; the next pass checks this Reset.
                 continue
+            except QueryCanceled:
+                # Past the worker's 15-minute statement limit; a freeze saves
+                # its own (freeze_boundary_manifest). Later Resets are checked.
+                print(json.dumps({"event": "boundary_publication_check_cancelled",
+                                  "boundary_at": boundary_at.isoformat()}), flush=True)
         return handled
 
 
 # How long a pass waits for a Reset's full lock before leaving it to the next.
 REEVALUATION_LOCK_WAIT = "50ms"
+# After this long a pass starts no further Reset: a 15-minute freeze still fits.
+PASS_SECONDS = 1800
 
 
 def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> int:
-    boundary.lock_boundary_publication(connection, boundary_at, REEVALUATION_LOCK_WAIT)
+    # Members due to be left out are worth queueing for the lock with their
+    # results: on 14 Oct 2026 this check, waiting 50 ms, missed 05:30.
+    boundary.lock_boundary_publication(connection, boundary_at, (
+        boundary.TAIL_LOCK_WAIT if board_deadline.cut_due(connection, boundary_at)
+        else REEVALUATION_LOCK_WAIT))
     generations = connection.execute(
         """
         SELECT id
         FROM boundary_publication_generations
-        WHERE (snapshot_state IN ('pending', 'ready')
+        WHERE (snapshot_state IN ('pending', 'ready', 'building')
                OR army_state IN ('pending', 'ready'))
           AND boundary_at = %s
         ORDER BY generation
@@ -186,7 +201,9 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
             connection,
             boundary_at=boundary_at,
             generation_id=int(generation_id),
+            army=True,
         )
+        board_deadline.retry_failed_build(connection, boundary_at, int(generation_id))
     corrections = connection.execute(
         """
         SELECT source_generation_id
@@ -201,13 +218,13 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
         if correction_waits(connection, boundary_at):
             continue
         _maybe_emit_boundary_signal(
-            database, connection, generation_id=int(source_generation_id)
+            database, connection, generation_id=int(source_generation_id), army=True
         )
     return len(generations) + len(corrections)
 
 
 def _maybe_emit_boundary_signal(
-    database: Database, connection: Any, generation_id: int
+    database: Database, connection: Any, generation_id: int, army: bool = False
 ) -> None:
     boundary_row = connection.execute(
         "SELECT boundary_at FROM boundary_publication_generations WHERE id = %s",
@@ -489,7 +506,7 @@ def _maybe_emit_boundary_signal(
                 (new_id, queued[0]),
             )
             boundary._try_enqueue_boundary_artifacts(
-                database, connection, boundary_at=row[0], generation_id=new_id
+                database, connection, boundary_at=row[0], generation_id=new_id, army=army
             )
 
 
@@ -633,15 +650,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 (snapshot_id,),
             ).fetchone()
             assert existing_summary_count is not None
-            if _text_value(snapshot[4]) == "published":
-                if tuple(int(value) for value in existing_summary_count) != (
-                    2,
-                    2,
-                    2,
-                ):
-                    raise ValueError(
-                        "published frozen snapshot has incomplete analytics"
-                    )
+            if tuple(int(value) for value in existing_summary_count) == (2, 2, 2):
                 if boundary_generation is not None:
                     _maybe_emit_boundary_signal(
                         database, connection, int(boundary_generation[0])
@@ -650,7 +659,8 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     connection, claim, job, state="complete", outcome="processed"
                 )
                 return
-            if _text_value(snapshot[4]) != "building":
+            # The board's build publishes it, before these statistics.
+            if _text_value(snapshot[4]) not in {"building", "published"}:
                 raise ValueError("frozen snapshot is not available for analytics")
 
             ranked_day = None
@@ -982,7 +992,9 @@ def complete_analytics(database: Database, claim: Claim) -> None:
             assert complete is not None
             if tuple(int(value) for value in complete) != (2, 2, 2):
                 raise ValueError("analytics publication is incomplete")
-            published = connection.execute(
+            # A build queued before boards published at their build's end
+            # left its board building.
+            connection.execute(
                 """
                 UPDATE leaderboard_snapshots
                 SET state = 'published', published_at = clock_timestamp()
@@ -990,8 +1002,6 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 """,
                 (snapshot_id,),
             )
-            if published.rowcount != 1:
-                raise ValueError("frozen snapshot publication fence was lost")
             connection.execute(
                 """
                 UPDATE leaderboard_snapshots

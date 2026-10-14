@@ -100,8 +100,9 @@ Clock rules, all set by `Story`:
   story's days must already have ended. The stories use the Season that
   started on 5 October 2026 and the one before it.
 - **Boards wait for every member.** A story runs weeks after its Resets, so
-  the 05:30 board deadline would pass before the first day saved. `Story`
-  holds the deadline back; a test of the deadline itself sets it (see
+  the 05:30 and 06:00 board deadlines would pass before the first day saved.
+  `Story` holds the 05:30 deadline back, which holds the 06:00 one too; a test
+  of the deadlines themselves sets them (see
   `test_reset_reliability_postgres.py`).
 - **`story.wait(time)` lets time pass for board rebuilds.** A day saved after
   a board's first build joins it at the next rebuild: at most once an hour for
@@ -272,6 +273,19 @@ Every boundary case in section 8 of the three reliability reports of
 |---|---|---|---|
 | A day calculation fails for good and its board member waits forever | O19, F37, S failed day | 12 October and Wednesday stories: on the code before their fixes, their days fail for good and the stories fail | `test_reset_reliability_postgres.py::test_a_day_that_fails_for_good_leaves_the_board_to_publish_without_it` |
 | A job runs out its time limit 3 times | O20, F35 | Not covered as a job failure: known gap in the reports. The 05:30 board deadline publishes without the member | `test_reset_reliability_postgres.py::test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once_done` |
+| More than 50 members unfinished at 06:00 | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_at_0600_the_board_publishes_without_every_unfinished_player`: on the old code the 51 stay pending and nothing builds, and the alert check cannot say the board left them out | `test_alerts_reset_targets.py::test_a_board_that_left_out_over_50_players_alerts_until_rebuilt` |
+| The publication check meets a busy Reset at 05:30 | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_the_0530_check_waits_out_a_brief_hold_on_the_reset`: on the old code the check skips the Reset and the unfinished member stays pending | |
+| The last members' day results meet a busy Reset | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_the_last_day_waits_out_a_brief_hold_on_the_reset`: on the old code the day is handed back | |
+| A board build or its statistics fails once | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_a_board_build_that_fails_once_runs_again_and_publishes`: on the old code no board publishes | |
+| A paused repair holds the Reset past 06:00 | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_a_paused_repair_holds_no_first_board_past_0600`: on the old code no board publishes | |
+| A repair listing a Reset whose correction started before it, past 06:00 | PR 525 review | `test_reset_reliability_postgres.py::test_a_repair_holds_a_correction_started_before_it_past_0600`: on the old code the correction's army inputs freeze while the repair lists the Reset | |
+| A board build fails while a repair holds its Reset, or a past Reset's build crashes in the 04:30-07:00 window | PR 525 review | `test_reset_reliability_postgres.py::test_a_failed_build_runs_again_only_once_a_repair_lets_it` and `test_past_reset_pacing_postgres.py::test_a_past_resets_failed_build_runs_again_after_the_quiet_window`: on the old code it runs again at once | |
+| A past Reset's statistics in the 04:30-07:00 window | PR 525 review | `test_reset_reliability_postgres.py::test_a_past_resets_statistics_wait_out_the_quiet_window`: on the old code they run in the window | |
+| A freeze of a board's or army's inputs runs past the 15-minute limit | PR 525 review | `test_reset_reliability_postgres.py::test_an_army_freeze_past_the_query_limit_waits_before_trying_again`: on the old code every pass tries again and only a log line says so | |
+| The army's inputs freeze with the board's, keeping its build job unseen | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_the_board_publishes_before_its_army_inputs_freeze` | |
+| The army's inputs freeze inside a battle-log job | PR 525 review | `test_reset_reliability_postgres.py::test_a_battle_log_job_leaves_the_army_freeze_to_the_background_check`: on the old code the job freezes them | |
+| The board's statistics keep failing | PR 525 review | `test_reset_reliability_postgres.py::test_army_results_publish_while_the_boards_statistics_keep_failing`: on the old code the army results never publish | |
+| The board waits for statistics no Daily board shows | 14 Oct diagnosis | `test_reset_reliability_postgres.py::test_the_board_is_served_once_built_before_its_statistics` | |
 | An unexpected Python error in one job stops every lane of the worker | O21, S invalid job | Not covered: known gap with a fix proposed in the reports (Opus fix 14). A story for it would fail on today's code | |
 | A job that always times out or finds the Reset busy retries forever | O22 | Backing off is covered; never alerting is not | `test_reset_reliability_postgres.py::test_a_day_meeting_a_busy_reset_hands_its_lease_back_and_backs_off` |
 | A day saved after the board's first build | O18, S frozen generation | 12 October story: Sunday days join the board at the hourly rebuild | `test_boundary_publication_manifests_postgres.py` |

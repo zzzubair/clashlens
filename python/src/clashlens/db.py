@@ -333,7 +333,7 @@ def _supported_claim_filter(
                     )
                 )))
             AND NOT COALESCE(
-                {alias}.work_type IN ('build_snapshot', 'build_army_analytics')
+                {alias}.work_type IN ('build_snapshot', 'build_analytics', 'build_army_analytics')
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
                 false)
             AND NOT (%(operator_build_hold)s

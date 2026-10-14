@@ -432,10 +432,12 @@ def test_campaign_hold_defers_only_affected_artifacts(
         domain_repair.activate(worker, SEASON, now=NOW)
 
         def builds() -> list[datetime]:
+            # A build starts with the board's inputs frozen; the army's freeze
+            # once the board publishes.
             with psycopg.connect(connection_info) as connection:
                 return [row[0] for row in connection.execute(
                     "SELECT DISTINCT boundary_at FROM boundary_publication_generations"
-                    " WHERE army_manifest_id IS NOT NULL ORDER BY 1"
+                    " WHERE snapshot_manifest_id IS NOT NULL ORDER BY 1"
                 ).fetchall()]
 
         for boundary_at, member in itertools.product((held, held_next, free), (player, opponent)):
@@ -444,13 +446,15 @@ def test_campaign_hold_defers_only_affected_artifacts(
                     worker, connection, boundary_at=boundary_at,
                     reset_sweep_id=sweeps[boundary_at], player_id=member, state="failed",
                 )
-        assert builds() == [free]
-        boundary_publication.reevaluate_boundary_publications(worker)
-        assert builds() == [free]
-        _set_publication_items(connection_info, "done")
-        boundary_publication.reevaluate_boundary_publications(worker)
+        # These Resets are weeks past 06:00, so the repair holds no first board.
         assert builds() == [held, held_next, free]
 
+        # Each board publishes, and its army's inputs freeze.
+        with worker.pool.connection() as connection:
+            connection.execute(
+                "UPDATE boundary_publication_generations SET snapshot_state = 'published'"
+            )
+        boundary_publication.reevaluate_boundary_publications(worker)
         # Once published, a rebuilt day result reaches the first Reset, and a
         # decode job queued before the campaign, finishing now, the other two.
         # The free Reset starts its correction at once; each held Reset keeps
