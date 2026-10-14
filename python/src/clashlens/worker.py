@@ -246,7 +246,9 @@ class TimedMaintenance:
 
     Given ``derived_turns``, the publication checks and correction sweep run
     only after taking a derived lane's turn, and stay due without one; queue
-    maintenance does not wait for a turn.
+    maintenance does not wait for a turn. Their first run starts the weekly
+    league record's decider on a thread of its own (``league_week``), which
+    ``close`` stops.
     """
 
     def __init__(self, database: Database, stage_metrics: StageMetrics) -> None:
@@ -256,6 +258,8 @@ class TimedMaintenance:
         self.daily_recheck = queue_refresh.DailyRecheck(database)
         self.next_reevaluation_at = float("-inf")
         self.next_queue_maintenance_at = float("-inf")
+        self.league_weeks: threading.Thread | None = None
+        self.stopping = Event()
         self.permit = (
             MaintenancePermit(database.pool.conninfo)
             if isinstance(database, Database)
@@ -263,6 +267,9 @@ class TimedMaintenance:
         )
 
     def close(self) -> None:
+        self.stopping.set()
+        if self.league_weeks is not None:
+            self.league_weeks.join()
         if self.permit is not None:
             self.permit.close()
 
@@ -282,6 +289,11 @@ class TimedMaintenance:
         ):
             try:
                 self.next_reevaluation_at = current_time + 10
+                if self.league_weeks is None and isinstance(self.database, Database):
+                    self.league_weeks = threading.Thread(
+                        target=league_week.decide_until, args=(self.database, self.stopping),
+                        name="clashlens-worker-league-week", daemon=True)
+                    self.league_weeks.start()
                 self.reevaluate()
                 self.late_battles.run_when_due()
                 self.daily_recheck.run_when_due()
@@ -291,7 +303,6 @@ class TimedMaintenance:
                     projected_place.refresh_remaining_changes(self.database)
                     analytics.refresh_live_attack_tallies(self.database)
                     api_leaderboard.refresh_live_unplayed(self.database)
-                    league_week.decide_due(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
