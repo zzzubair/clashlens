@@ -39,8 +39,9 @@ export function basesPath(tag: string, day: number): string {
 
 /**
  * The earlier Legend day chosen on Bases you attacked and each earlier day
- * read for `tag`, kept while the page is open: null when it could not be
- * read. The dashboard holds them, as its follow-up reads build the card again.
+ * read for `tag`, kept while its account tab is shown: null when it could not
+ * be read. The dashboard holds them, as its follow-up reads build the card
+ * again.
  */
 export function useBasesDay(tag: string) {
   // The earlier day chosen; null for today, whichever day today is.
