@@ -108,6 +108,17 @@ A domain change is complete only when every affected source observation, derived
   continuously tracked players. Actual existence/eligibility remains to be checked.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
 
+### Weekly league record
+
+Stage 1: recorded, not yet used. No day, board, page or count reads it yet.
+
+- Clash Lens records which league each player was in each week, Monday Reset to Monday Reset: Legend I, below Legend I, or league unknown, with the evidence that decided it (`player_league_weeks`, one row per player per week with any evidence, from the week of 5 October 2026). See [`league_week.py`](../python/src/clashlens/league_week.py).
+- Evidence, strongest first. Official: a Legend battle that week, or a league history row. Accepted: a profile whose Season checks pass. Unconfirmed: a Legend I profile naming Season ID `0`, or two profiles below Legend I naming Season ID `0` under the same guards as [Identity and eligibility](#identity-and-eligibility): next to each other among the week's profiles, from different responses, with no profile response between them left unsaved. One such lower-league profile alone proves nothing. The strongest evidence decides; when the strongest pieces name both leagues, the week is unknown, recorded as a conflict. A weaker piece naming the other league is kept as the evidence against, so a battle outweighs an accepted lower-league profile the same week.
+- The game keeps showing the old league for a while after a Monday Reset. A profile read within an hour of the Reset counts only when it shows a league other than the week before's recorded one, never when that week is unknown. On 12 October 2026 the 1,898 players who dropped with an accepted Reset reading were last read in Legend I 23.5 minutes after it at most, and all were read in Legend II by 37.6 minutes. The 62 whose Reset reading named Season ID `0` were still read in Legend I naming Season ID `0` up to 12 hours later; when such a profile comes after the hour, the week has unconfirmed evidence for both leagues and stays unknown.
+- A Legend I week also records how the player entered it: Season start (a Season's first week), stayed (Legend I the week before), promoted (below Legend I the week before), first seen (the week before unknown, no Legend I evidence earlier in the Season), or unknown (Legend I earlier in the Season, then a week with no evidence).
+- New or changed evidence marks its week in the same database transaction (migration 0115), and the worker decides the player's whole Season again within seconds, whatever order the evidence arrived in. Deciding again with nothing new changes nothing. Only the current and previous Season are decided again, since older raw responses are deleted.
+- On a Monday the collector saves each player's first profile read after that window even when it is unchanged, so a player who does not battle still has a profile counting for the new week, from a request already made.
+
 ### Player page freshness
 
 - The player page's Updated time and freshness use the retained last-confirmed
