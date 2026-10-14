@@ -89,10 +89,11 @@ def test_player_promoted_back_into_legend_i_after_a_demotion_this_season(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """RETURNED and UNPROVEN play in Legend I in the Season's first week and
-    are read in Legend II after its second Monday Reset: RETURNED twice,
-    which proves it left Legend I, UNPROVEN once, which proves nothing. Both
-    are read in Legend I again after their first battles on the third Monday,
-    with no Reset reading there. RETURNED, promoted back, starts that Monday
+    are read in Legend II after its second Monday Reset: RETURNED 51 times,
+    as hourly Refresh checks would, which proves it left Legend I, UNPROVEN
+    once, which proves nothing. Both are read in Legend I again after their
+    first battles on the third Monday, with no Reset reading there.
+    RETURNED, promoted back, starts that Monday
     at 5,000 by the Season rule and is Complete on the Tuesday board, losing
     Day 1's charge of 30 at the Reset as a newly promoted player does.
     UNPROVEN's Monday gets no start of 5,000."""
@@ -106,9 +107,9 @@ def test_player_promoted_back_into_legend_i_after_a_demotion_this_season(
         story.reads(first_week + timedelta(hours=3), {RETURNED: 5040, UNPROVEN: 5040}, season)
         for player in story.players.values():
             player.dropped = True
-        story.reads(demoted + timedelta(hours=2), {RETURNED: 4900}, season)
-        story.reads(demoted + timedelta(days=1, hours=2), {RETURNED: 4900, UNPROVEN: 4900},
-                    season)
+        for hour in range(51):
+            story.read(RETURNED, demoted + timedelta(hours=2 + hour), 4900 + hour, season)
+        story.reads(demoted + timedelta(days=1, hours=2), {UNPROVEN: 4900}, season)
         for player in story.players.values():
             player.dropped = False
         story.reads(monday + timedelta(hours=2, minutes=10),

@@ -135,7 +135,7 @@ def promoted(connection: Any, player_id: int, boundary_at: datetime) -> bool:
         return False
     row = connection.execute(
         """
-        SELECT bool_or(read_at < %(reset)s),
+        SELECT max(read_at) FILTER (WHERE read_at < %(reset)s),
                bool_or(read_at >= %(reset)s
                        AND (state = 'accepted' OR season = '0'))
         FROM (
@@ -156,33 +156,27 @@ def promoted(connection: Any, player_id: int, boundary_at: datetime) -> bool:
     ).fetchone()
     if not row[1]:
         return False
-    if row[0]:
-        return _returned(connection, player_id, day.season_start, boundary_at)
+    if row[0] is not None:
+        return _returned(connection, player_id, row[0], boundary_at)
     return not reset_baselines.played_before(
         connection, player_id, day.season_start, boundary_at)
 
 
 def _returned(
-    connection: Any, player_id: int, season_start: datetime, boundary_at: datetime
+    connection: Any, player_id: int, legend_i_at: datetime, boundary_at: datetime
 ) -> bool:
     """Whether the player was below Legend I at the Monday Reset
-    ``boundary_at`` after leaving it earlier in the Season: their newest
-    answers read in the Season before it are lower-league ones after a
-    Legend I one, one of them proves they left (``league_drop``), and they
-    have no Legend battle after that one and before the Reset."""
+    ``boundary_at`` after leaving it earlier in the Season: one of their
+    answers read after their last Legend I one before it, read at
+    ``legend_i_at``, proves they left (``league_drop``), and they have no
+    Legend battle after that one and before the Reset."""
     answers = league_drop.readings(
-        connection, player_id, since=season_start, until=boundary_at,
-        newest_first=True, limit=league_drop._NEWEST,
-    )[::-1]
-    end = first = len(answers)
-    while first and not answers[first - 1].eligible:
-        first -= 1
-    if not first or first == end:
-        return False
+        connection, player_id, since=legend_i_at, until=boundary_at)
+    end = len(answers)
     answers += league_drop.readings(
         connection, player_id, since=boundary_at, limit=league_drop._NEIGHBOURS)
     proof = next((
-        answers[index] for index in range(first, end)
+        answers[index] for index in range(end)
         if league_drop.left_legend_i(connection, player_id, answers, index)
     ), None)
     return proof is not None and not league_drop.battle_after(
