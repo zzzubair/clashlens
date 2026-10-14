@@ -42,24 +42,26 @@ export function LinkedBattle({ days }: { days: RankedDaySummary[] }) {
 
   useEffect(() => {
     if (battleId === null || !shown) return;
-    const battle = document.getElementById(`battle-${battleId}`);
-    if (!battle?.matches(".battle-slot")) return;
+    let battle: HTMLElement | null = null;
     let frame = 0;
     let highlightTimer: ReturnType<typeof setTimeout> | undefined;
     const highlight = () => {
       if (document.hidden) return;
       cancelAnimationFrame(frame);
       clearTimeout(highlightTimer);
-      battle.classList.remove("battle-arrival");
-      const details = battle.closest("details");
+      battle?.classList.remove("battle-arrival");
+      const card = document.getElementById(`battle-${battleId}`);
+      if (!card?.matches(".battle-slot")) return;
+      battle = card;
+      const details = card.closest("details");
       if (details) details.open = true;
-      battle.scrollIntoView({ block: "center", behavior: "instant" });
+      card.scrollIntoView({ block: "center", behavior: "instant" });
       // Let scrolling and layout finish before the two-second highlight starts.
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
-          battle.classList.add("battle-arrival");
+          card.classList.add("battle-arrival");
           highlightTimer = setTimeout(
-            () => battle.classList.remove("battle-arrival"),
+            () => card.classList.remove("battle-arrival"),
             2000,
           );
         });
@@ -75,7 +77,7 @@ export function LinkedBattle({ days }: { days: RankedDaySummary[] }) {
       window.removeEventListener("load", highlight);
       window.removeEventListener("pageshow", highlight);
       document.removeEventListener("visibilitychange", highlight);
-      battle.classList.remove("battle-arrival");
+      battle?.classList.remove("battle-arrival");
     };
   }, [battleId, shown, location.key]);
 

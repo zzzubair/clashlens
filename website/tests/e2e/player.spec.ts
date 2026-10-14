@@ -660,6 +660,15 @@ for (const [device, size] of [
         await expect(slot).toBeInViewport();
         await expect(waiting).toHaveCount(0);
         await expect(page).toHaveURL(new URL(link, page.url()).href);
+
+        // A card replaced later, as when Reset moves its day, is the one highlighted.
+        await expect(slot).not.toHaveClass(/battle-arrival/);
+        await page.evaluate((id) => {
+          const card = document.getElementById(id)!;
+          card.replaceWith(card.cloneNode(true));
+          window.dispatchEvent(new Event("pageshow"));
+        }, `battle-${battle.battleId}`);
+        await expect(slot).toHaveClass(/battle-arrival/);
       });
 
       test("a battle the page never gets is named, not silently missed", async ({
