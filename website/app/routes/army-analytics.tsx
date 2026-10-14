@@ -519,6 +519,8 @@ export default function ArmyAnalyticsRoute() {
     // Switching views starts again from Top 1,000.
     for (const key of ["category", "cc", "offset", "recent", "sample", "population"])
       query.delete(key);
+    if (view !== "army-types" && query.get("sort") === "average-trophies")
+      query.delete("sort");
     query.set("category", view);
     return `?${query}`;
   };

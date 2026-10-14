@@ -484,6 +484,29 @@ describe("army analytics route historical reads", () => {
     const units = await renderArmyRoute("season=current&category=troops");
     expect(units).not.toContain("average-trophies");
     expect(units).not.toContain("Avg. trophies");
+
+    // Leaving Armies drops that sort, this Season or a past one.
+    const unitUsage = (page: string) =>
+      requestFor(
+        page
+          .match(/href="[^"?]*\?([^"]*)"[^>]*><strong>Unit usage</)![1]
+          .replaceAll("&amp;", "&"),
+      );
+    await armyLoader({ request: unitUsage(html), params: {} } as never);
+    const [unitQuery] = getArmyAnalytics.mock.lastCall as [URLSearchParams];
+    expect(unitQuery.get("category")).toBe("troops");
+    expect(unitQuery.get("sort")).toBe("usage-rate");
+    const getArmySeasonSummary = vi.fn().mockResolvedValue({});
+    mocks.createPythonClient.mockReturnValue({ getArmySeasonSummary });
+    const past = await renderArmyRoute(`season=${SEASON}&sort=average-trophies`);
+    await armyLoader({ request: unitUsage(past), params: {} } as never);
+    const [pastSeason, pastQuery] = getArmySeasonSummary.mock.lastCall as [
+      string,
+      URLSearchParams,
+    ];
+    expect(pastSeason).toBe(SEASON);
+    expect(pastQuery.get("category")).toBe("troops");
+    expect(pastQuery.get("sort")).toBe("usage-rate");
   });
 
   it("says Armies are not available for a past Season, staying on Armies", async () => {
