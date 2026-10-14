@@ -246,7 +246,24 @@ def test_bases_read_offers_only_earlier_days_of_this_season(
                 assert len(reads) == 1
                 assert board.past_day(counted, today.start - timedelta(days=1)) is first
                 clock[0] = api_dashboard.PAST_DAY_SECONDS
-                board.past_day(counted, today.start - timedelta(days=1))
+                # An hour on it is read again, here by another request while
+                # this one waits; another day's read then keeps the turn past
+                # the wait, and this one is given that read, not busy.
+                turn = board._past_read
+                meanwhile: list[object] = []
+
+                def wait_too_long(**_kwargs: Any) -> bool:
+                    board._past_read = turn
+                    meanwhile.append(
+                        board.past_day(counted, today.start - timedelta(days=1))
+                    )
+                    return False
+
+                monkeypatch.setattr(
+                    board, "_past_read", SimpleNamespace(acquire=wait_too_long)
+                )
+                again = board.past_day(counted, today.start - timedelta(days=1))
+                assert again is meanwhile[0]
                 for back in range(2, 31):
                     board.past_day(counted, today.start - timedelta(days=back))
         finally:

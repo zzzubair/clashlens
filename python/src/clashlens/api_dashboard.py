@@ -101,7 +101,8 @@ SIMILAR_FEWEST_DEFENSES = 50
 PAST_DAY_SECONDS = 3600
 # One earlier day's comparison is read at a time, as a first read reads
 # every saved day (4.1 s on production on 14 October 2026); a request that
-# waits longer than this for its turn is refused as busy.
+# waits longer than this for its turn is refused as busy, unless its day
+# was read meanwhile.
 PAST_DAY_WAIT_SECONDS = 8
 # The army cards look back at most this many finished Legend days; Armies
 # on offense offers only these.
@@ -604,7 +605,8 @@ class DashboardBoard:
         an hour at most: every player's with a saved day, as a finished day
         has no Live Leaderboard. One read runs at a time, whatever the day,
         so they hold one database connection between them; others wait
-        without one, and PastDayBusy after PAST_DAY_WAIT_SECONDS."""
+        without one, and PastDayBusy after PAST_DAY_WAIT_SECONDS unless
+        their day was read meanwhile."""
 
         def kept() -> _Similar | None:
             with self._lock:
@@ -617,6 +619,9 @@ class DashboardBoard:
         if similar is not None:
             return similar
         if not self._past_read.acquire(timeout=PAST_DAY_WAIT_SECONDS):
+            similar = kept()
+            if similar is not None:
+                return similar
             raise PastDayBusy
         try:
             # Another request may have read it while this one waited.
