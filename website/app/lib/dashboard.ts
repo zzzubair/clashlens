@@ -49,7 +49,7 @@ const CARD_LIST = {
     title: "Bases you attacked",
     size: "l",
     description:
-      "Each base you hit today, and how often it holds against other attackers.",
+      "Each base you hit today, and how many trophies it gives up against other attackers.",
     built: true,
     settings: true,
   },

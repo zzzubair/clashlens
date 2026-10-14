@@ -65,7 +65,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 |---|---|
 | Legend day | Today's trophies, rank and Next Reset range, with your attacks and defenses. |
 | Legend clock | Your attacks and defenses on a 24-hour dial in your time zone. |
-| Bases you attacked | Each base you hit today, and how often it holds against other attackers. |
+| Bases you attacked | Each base you hit today, and how many trophies it gives up against other attackers. |
 | Goal | Pick a rank to finish the Season at, and see the trophies a day you need. |
 | Armies on defense | Which armies attack you, and how your base holds against each. |
 | Rivals watch | The players just above and below you on the live leaderboard. |
