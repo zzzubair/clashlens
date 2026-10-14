@@ -41,6 +41,7 @@ from . import (
     ingestion,
     job_outcomes,
     late_battle_sweep,
+    league_week,
     projected_place,
     queue_refresh,
     reconciliation_db,
@@ -290,6 +291,7 @@ class TimedMaintenance:
                     projected_place.refresh_remaining_changes(self.database)
                     analytics.refresh_live_attack_tallies(self.database)
                     api_leaderboard.refresh_live_unplayed(self.database)
+                    league_week.decide_due(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
