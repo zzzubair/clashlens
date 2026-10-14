@@ -469,8 +469,8 @@ class DashboardBoard:
         self._projecting = False
         # Published log -> its battles, for the projection's equal-trophy order.
         self._reports: dict[int, _Reports] = {}
-        # Earlier Legend day start -> (when read, its comparison).
-        self._past: dict[datetime, tuple[float, _Similar]] = {}
+        # Earlier Legend day start -> [its read's lock, when read, its comparison].
+        self._past: dict[datetime, list[Any]] = {}
 
     def current(
         self, database: ApiDatabase, now: datetime, *, wait: float = 0
@@ -588,29 +588,28 @@ class DashboardBoard:
             )
             return None
 
-    def past_day(self, connection: Any, day_start: datetime) -> _Similar:
+    def past_day(self, database: ApiDatabase, day_start: datetime) -> _Similar:
         """An earlier Legend day's defenses for comparing bases, read once
         an hour at most: every player's with a saved day, as a finished day
-        has no Live Leaderboard."""
+        has no Live Leaderboard. Requests for a day being read wait for that
+        read without a connection."""
         with self._lock:
-            kept = self._past.get(day_start)
-        if kept is not None and self._clock() < kept[0] + PAST_DAY_SECONDS:
-            return kept[1]
-        by_start: dict[int, list[int]] = {}
-        for start, defended, held, lost in connection.execute(
-            _PAST_DAY_SQL, (day_start,)
-        ).fetchall():
-            tally = by_start.setdefault(int(start), [0, 0, 0])
-            tally[0] += int(defended)
-            tally[1] += int(held)
-            tally[2] += int(lost or 0)
-        similar = _similar(by_start)
-        with self._lock:
-            self._past[day_start] = (self._clock(), similar)
+            kept = self._past.setdefault(day_start, [Lock(), float("-inf"), None])
             # Only a Season's worth, the newest.
             for old in sorted(self._past)[:-(SEASON_DURATION // RANKED_DAY_DURATION)]:
                 del self._past[old]
-        return similar
+        with kept[0]:
+            if self._clock() >= kept[1] + PAST_DAY_SECONDS:
+                by_start: dict[int, list[int]] = {}
+                with database.pool.connection() as connection:
+                    rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
+                for start, defended, held, lost in rows:
+                    tally = by_start.setdefault(int(start), [0, 0, 0])
+                    tally[0] += int(defended)
+                    tally[1] += int(held)
+                    tally[2] += int(lost or 0)
+                kept[1], kept[2] = self._clock(), _similar(by_start)
+            return kept[2]
 
     def projection(
         self, now: datetime, tag: str, *, wait: float = 0
@@ -914,6 +913,7 @@ def get_player_bases(
     if not 1 <= day_number < today.day_number:
         raise ValueError("not an earlier Legend day of this Season")
     day_start = today.start - (today.day_number - day_number) * RANKED_DAY_DURATION
+    similar = board_cache.past_day(database, day_start)
     with database.pool.connection() as connection:
         if connection.execute(
             "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
@@ -929,7 +929,6 @@ def get_player_bases(
         )
         opponents = None
         if own is not None:
-            similar = board_cache.past_day(connection, day_start)
             opponents = _opponents(
                 connection, tag, own, day_start,
                 lambda trophies: similar_held(similar, trophies),

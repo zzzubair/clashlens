@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -46,6 +46,8 @@ function useBasesDay(tag: string, today: number | null) {
   // The earlier day chosen; null for today, whichever day today is.
   const [chosen, setChosen] = useState<number | null>(null);
   const [read, setRead] = useState<Map<number, PastBases | null>>(new Map());
+  // Days whose read is on its way: a day has one read at a time.
+  const asking = useRef(new Set<number>());
   const shown = chosen !== null && today !== null && chosen < today ? chosen : today;
   return {
     day: shown,
@@ -53,7 +55,8 @@ function useBasesDay(tag: string, today: number | null) {
     loading: shown !== today && shown !== null && !read.has(shown),
     choose(next: number) {
       setChosen(next === today ? null : next);
-      if (next === today || read.get(next)) return;
+      if (next === today || read.get(next) || asking.current.has(next)) return;
+      asking.current.add(next);
       // A failed read is asked again.
       setRead((old) => {
         const kept = new Map(old);
@@ -65,7 +68,10 @@ function useBasesDay(tag: string, today: number | null) {
         .then((response) => response.json() as Promise<BasesResponse>)
         .then(({ bases }) => bases ?? null)
         .catch(() => null)
-        .then((bases) => setRead((old) => new Map(old).set(next, bases)));
+        .then((bases) => {
+          asking.current.delete(next);
+          setRead((old) => new Map(old).set(next, bases));
+        });
     },
   };
 }

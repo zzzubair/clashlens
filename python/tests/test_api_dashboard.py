@@ -176,7 +176,8 @@ def test_only_a_today_read_that_asks_waits_for_the_board(monkeypatch) -> None:
 
 def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -> None:
     """Bases you attacked's day button: Day 1 up to the day before today,
-    each day's defenses read once an hour at most and a Season's kept."""
+    each day's defenses read by one request at a time, once an hour at most,
+    and a Season's kept."""
     today = ranked_day_for(NOW)
     app = create_app(
         FakeDatabase(),
@@ -195,6 +196,7 @@ def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -
         clock = [0.0]
         board = api_dashboard.DashboardBoard(clock=lambda: clock[0])
         reads: list[object] = []
+        go = Event()
         try:
             for day in (today.day_number, today.day_number + 1, 0):
                 with pytest.raises(ValueError):
@@ -202,11 +204,30 @@ def test_bases_read_offers_only_earlier_days_of_this_season(database_url: str) -
                         database, board, "#2PP", day_number=day, now=NOW
                     )
             with database.pool.connection() as connection:
-                counted = SimpleNamespace(
-                    execute=lambda sql, params: reads.append(params)
-                    or connection.execute(sql, params)
+
+                def execute(sql: str, params: Any) -> Any:
+                    # The first read finishes when the test lets it go.
+                    reads.append(params)
+                    go.wait(10)
+                    return connection.execute(sql, params)
+
+                counted: Any = SimpleNamespace(
+                    pool=SimpleNamespace(
+                        connection=lambda: nullcontext(SimpleNamespace(execute=execute))
+                    )
                 )
-                first = board.past_day(counted, today.start - timedelta(days=1))
+                # Eight requests at once for a day not read yet: one reads
+                # it and the rest wait for its result.
+                with ThreadPoolExecutor(8) as pool:
+                    asked = [
+                        pool.submit(board.past_day, counted, today.start - timedelta(days=1))
+                        for _ in range(8)
+                    ]
+                    time.sleep(0.1)
+                    go.set()
+                    first = asked[0].result(timeout=5)
+                    assert all(each.result(timeout=5) is first for each in asked)
+                assert len(reads) == 1
                 assert board.past_day(counted, today.start - timedelta(days=1)) is first
                 clock[0] = api_dashboard.PAST_DAY_SECONDS
                 board.past_day(counted, today.start - timedelta(days=1))
