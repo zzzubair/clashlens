@@ -16,7 +16,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle, domain, reset_baselines
+from . import battle, domain, league_drop, reset_baselines
 from .analytics import unplayed_profile_sql
 from .battle import ParsedBattleRow
 from .db import (
@@ -55,13 +55,23 @@ def _first_log(connection: Any, player_id: int) -> tuple | None:
 def coverage_start(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay
 ) -> tuple[int, bool] | None:
-    """The player's first saved battle log, when saved on or after the day's
-    start and holding every battle of the day up to when it was saved: its
-    oldest row is from before the day's battles, or it has fewer than 50
-    rows, the whole log the game keeps. Also whether it was saved after the
-    day's last battle, so it holds the whole day."""
-    first = _first_log(connection, player_id)
-    if first is None or first[2] < ranked_day.start:
+    """The player's first battle log saved on or after the day's start, when
+    it holds every battle of the day up to when it was saved: its oldest row
+    is from before the day's battles, or it has fewer than 50 rows, the whole
+    log the game keeps. Also whether it was saved after the day's last
+    battle, so it holds the whole day. A player promoted into Legend I at the
+    Reset may have older logs from a lower league."""
+    first = connection.execute(
+        """
+        SELECT id, observation_id, observed_at, row_count, parser_version
+        FROM battle_log_observations
+        WHERE player_id = %s AND observed_at >= %s
+        ORDER BY observed_at, id
+        LIMIT 1
+        """,
+        (player_id, ranked_day.start),
+    ).fetchone()
+    if first is None:
         return None
     window_start, window_end = domain.battle_window(ranked_day.start)
     if int(first[3]) >= BATTLE_LOG_MAX_ROWS:
@@ -108,17 +118,87 @@ def _first_seen_at_5000(
     return (None, None) if row is None else (int(row[0]), row[1])
 
 
+def promoted(connection: Any, player_id: int, boundary_at: datetime) -> bool:
+    """Whether the player was promoted into Legend I at the Reset
+    ``boundary_at``, so the game starts their day at 5,000: a mid-Season
+    Monday Reset, a Legend I profile, accepted or naming Season 0, read
+    during the day, and either no Legend I profile of theirs read in the
+    Season before it and no Legend battle of theirs in the Season before it,
+    or, back after leaving Legend I earlier in the Season (``_returned``),
+    proof they were below Legend I at it. On 12 October 2026, 1,724 promoted
+    players had no Reset reading to start from, and 1,565 of the 1,567 with
+    one at the next Reset had battles adding up to it from exactly 5,000;
+    most were first read in Legend I after their first battle, above or
+    below 5,000."""
+    day = domain.ranked_day_for(boundary_at)
+    if boundary_at.astimezone(UTC).weekday() != 0 or domain.is_season_boundary(boundary_at):
+        return False
+    row = connection.execute(
+        """
+        SELECT max(read_at) FILTER (WHERE read_at < %(reset)s),
+               bool_or(read_at >= %(reset)s
+                       AND (state = 'accepted' OR season = '0'))
+        FROM (
+            SELECT COALESCE(effect.observed_at, profile.observed_at) AS read_at,
+                   profile.source_contract_state AS state,
+                   profile.current_league_season_id AS season
+            FROM players AS player
+            JOIN player_profile_versions AS profile
+              ON profile.normalized_tag = player.normalized_tag
+            LEFT JOIN player_profile_effects AS effect
+              ON effect.profile_version_id = profile.id
+            WHERE player.id = %(player)s AND profile.eligibility_state = 'eligible'
+        ) AS reading
+        WHERE read_at >= %(season_start)s AND read_at < %(day_end)s
+        """,
+        {"player": player_id, "reset": boundary_at,
+         "season_start": day.season_start, "day_end": day.end},
+    ).fetchone()
+    if not row[1]:
+        return False
+    if row[0] is not None:
+        return _returned(connection, player_id, row[0], boundary_at)
+    return not reset_baselines.played_before(
+        connection, player_id, day.season_start, boundary_at)
+
+
+def _returned(
+    connection: Any, player_id: int, legend_i_at: datetime, boundary_at: datetime
+) -> bool:
+    """Whether the player was below Legend I at the Monday Reset
+    ``boundary_at`` after leaving it earlier in the Season: one of their
+    answers read after their last Legend I one before it, read at
+    ``legend_i_at``, proves they left (``league_drop``), and they have no
+    Legend battle after that one and before the Reset."""
+    answers = league_drop.readings(
+        connection, player_id, since=legend_i_at, until=boundary_at)
+    end = len(answers)
+    answers += league_drop.readings(
+        connection, player_id, since=boundary_at, limit=league_drop._NEIGHBOURS)
+    proof = next((
+        answers[index] for index in range(end)
+        if league_drop.left_legend_i(connection, player_id, answers, index)
+    ), None)
+    return proof is not None and not league_drop.battle_after(
+        connection, player_id, proof.read_at, boundary_at - timedelta(days=1))
+
+
 def season_rule_start(
-    connection: Any, player_id: int, boundary_at: datetime, *, complete: bool
+    connection: Any, player_id: int, boundary_at: datetime, *, complete: bool,
+    day_start: bool = False,
 ) -> dict[str, Any] | None:
     """The 5,000 by the Season rule at the Reset ``boundary_at``, for a
     player with no saved reading from it: on Day 1 once they have an
-    accepted Legend I profile naming the Season, and at any Reset once a
+    accepted Legend I profile naming the Season, at any Reset once a
     Legend I profile at 5,000 read from it in the Season, whatever Season it
-    names, came before their first Legend battle of the Season. ``complete``
-    is whether a battle log proves the day's battles up to the Reset."""
+    names, came before their first Legend battle of the Season, and, as the
+    start of a day (``day_start``), once the player was ``promoted`` into
+    Legend I there. ``complete`` is whether a battle log proves the day's
+    battles up to the Reset."""
+    up = day_start and promoted(connection, player_id, boundary_at)
     if not (
-        domain.is_season_boundary(boundary_at)
+        up
+        or domain.is_season_boundary(boundary_at)
         and reset_baselines._season_rule_holds(connection, player_id, boundary_at)
         or reset_baselines._unplayed(
             connection, player_id, boundary_at,
@@ -137,6 +217,7 @@ def season_rule_start(
             "start_trophies_source": "season_rule",
             "reset_reading": None,
             "battle_log_observation_id": None,
+            **({"promoted_into_legend_i": True} if up else {}),
         },
     }
 

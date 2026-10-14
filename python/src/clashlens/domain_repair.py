@@ -27,7 +27,7 @@ how a saved day or board comes out, then run it once:
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
 rule change can affect, chosen when its first queue runs
-(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
+(``_scoped_players``, ``_promoted_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -95,9 +95,9 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
-DAY_RULES_REVISION = "2026-10-13-weekly-raise-late"
+DAY_RULES_REVISION = "2026-10-14-monday-promotion"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
-REPAIR_SCOPES = ("day-1-or-unplayed",)
+REPAIR_SCOPES = ("day-1-or-unplayed", "promoted")
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
@@ -132,6 +132,8 @@ def season_repair(
         ).fetchone()
         if scope and receipt is not None:
             players = [int(player) for player in receipt[5]]
+        elif scope == "promoted":
+            players = _promoted_players(connection, start)
         elif scope:
             players = _scoped_players(connection, start)
         else:
@@ -295,6 +297,31 @@ def _scoped_players(connection: Any, start: datetime) -> list[int]:
             """,
             {"start": start, "end": start + SEASON_DURATION,
              "trophies": SEASON_START_TROPHIES},
+        ).fetchall()
+    ]
+
+
+def _promoted_players(connection: Any, start: datetime) -> list[int]:
+    """The players with saved days of the Season whose results the 14 October
+    2026 promotion rule can change: those with a newest saved day starting
+    at a mid-Season Monday Reset, where the game promotes Legend II's top
+    players into Legend I at 5,000, saved with no Reset reading to start it
+    and not Complete."""
+    return [
+        int(row[0]) for row in connection.execute(
+            """
+            SELECT DISTINCT newest.player_id FROM (
+                SELECT DISTINCT ON (player_id, ranked_day_start)
+                       player_id, state, start_baseline_id
+                FROM ranked_day_versions
+                WHERE ranked_day_start > %(start)s AND ranked_day_start < %(end)s
+                  AND EXTRACT(ISODOW FROM ranked_day_start AT TIME ZONE 'UTC') = 1
+                ORDER BY player_id, ranked_day_start, version DESC, id DESC
+            ) AS newest
+            WHERE newest.start_baseline_id IS NULL AND newest.state <> 'Complete'
+            ORDER BY newest.player_id
+            """,
+            {"start": start, "end": start + SEASON_DURATION},
         ).fetchall()
     ]
 

@@ -1140,9 +1140,10 @@ def _automatic_defense_adjustment(
     if defense_count == 0 or defense_count >= MAX_DAILY_DEFENSES:
         return None, "not_applicable"
     previous = data.previous_day
-    if data.season_first_day:
-        # Day 1 needs nothing from the previous Season's last day; see
-        # ``automatic_defense_loss``.
+    # Day 1, and a promoted player's first Legend I day, average their own
+    # defenses only: 115 of 119 such 12 October 2026 days lost exactly that.
+    first_day = data.season_first_day or "promoted_into_legend_i" in data.start_baseline_evidence
+    if first_day:
         previous = PreviousRankedDay(True, 0, 0, 0, battles_known=True)
     if (
         previous is None
@@ -1160,7 +1161,7 @@ def _automatic_defense_adjustment(
             previous.observed_defense_count + previous.zero_result_defense_slots
         ),
         previous_defense_loss=previous.observed_defense_loss,
-        season_first_day=data.season_first_day,
+        season_first_day=first_day,
     ), "calculated"
 
 
