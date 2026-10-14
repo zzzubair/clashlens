@@ -6,7 +6,7 @@ The dashboard can be built behind the off switch, but nothing goes live until tr
 
 ## How the page works
 
-- **One page, no tabs.** Big account tabs at the top (name, live trophies, rank, net today); the cards follow the selected account. One layout for all of a user's accounts. Under the tabs, a divider line with "⚙ Customise dashboard" at its right end.
+- **One page, no tabs.** Big account tabs at the top (name, live trophies, rank, net today), each with a Page button on its right edge that opens that player's page; the cards follow the selected account. One layout for all of a user's accounts. Under the tabs, a divider line with "⚙ Customise dashboard" at its right end.
 - **Account not in Legend I:** selecting it replaces the cards with a large message, "Unfortunately, the dashboard is Legend I only. Support for lower leagues is coming in the future!", and hides Customise.
 - **Grid:** 3 columns. Small = 1 column, Medium = 2, Large = a full row. Small and Medium cards are a fixed 360 px tall on desktop and iPad, so every Small or Medium design must fit; Large cards grow. On phones every card is full width, one under another, and height follows content. If card sizes don't fill a row, the space stays empty.
 - **Live or not:** live cards say "updated N min ago" in the top-right corner. A card without it shows finished Legend days and says "Last 7 days" / "Last 3 days", never "finished days". Estimates are labelled "estimate". Ranks are just "Rank".

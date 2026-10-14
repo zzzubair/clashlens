@@ -1264,6 +1264,25 @@ describe("dashboard page", () => {
     expect(html.match(/title="Lens Main"/g)).toHaveLength(1);
   });
 
+  it("puts a Page button on each tab that opens that player's own page", async () => {
+    const html = await renderDashboard({
+      players: [
+        linked(MAIN),
+        linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
+        linked(CHECKING, { name: "Lens New", state: "checking", rank: null }),
+      ],
+    });
+    const pages = [...html.matchAll(/<a [^>]*class="dash-account-page"[^>]*>/g)].map(
+      ([tag]) =>
+        `${/aria-label="([^"]+)"/.exec(tag)![1]} → ${/href="([^"]+)"/.exec(tag)![1]}`,
+    );
+    expect(pages).toEqual([
+      "Lens Main player page → /players/%23LQ2V8PJ0",
+      "Lens Alt player page → /players/%232PP8QLY0",
+      "Lens New player page → /players/%239YJ2C0QL",
+    ]);
+  });
+
   it("puts Customise on the divider above the cards, in the saved order and sizes", async () => {
     const html = await renderDashboard({
       settings: {

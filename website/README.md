@@ -180,8 +180,8 @@ no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
 not signed in see a blurred preview and the sign-in buttons. The card designs
 are in the [dashboard design](../docs/dashboard.md).
 
-Signed-in users get one page: account tabs for their linked players (name,
-trophies, rank, net today), then a divider with "⚙ Customise dashboard" and a
+Signed-in users get one page: account tabs for their linked players, then a
+divider with "⚙ Customise dashboard" and a
 3-column grid of Small (1 column), Medium (2) and Large (full row) cards; empty
 grid slots stay empty. The cards follow the selected tab, and one layout serves
 every account. An account outside Legend I gets the Legend I only message

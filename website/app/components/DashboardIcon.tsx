@@ -76,6 +76,7 @@ const PATHS = {
     <path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9z" />
   ),
   plus: <path d="M12 5v14M5 12h14" />,
+  open: <path d="M7 17 17 7M9 7h8v8" />,
   x: <path d="M6 6l12 12M18 6 6 18" />,
   up: <path d="M12 19V5M6 11l6-6 6 6" />,
   down: <path d="M12 5v14M6 13l6 6 6-6" />,

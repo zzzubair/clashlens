@@ -187,6 +187,54 @@
   color: var(--cl-brand-night);
 }
 
+/* Page sits on the tab's right edge and opens that player's page. */
+.dash-account-tab {
+  display: flex;
+  flex: 0 0 auto;
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.dash-account-tab > .dash-account {
+  border-right-width: 1px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+}
+
+.dash-account-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 3rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--cl-accent);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-left-width: 1px;
+  border-radius: 0 var(--cl-radius) var(--cl-radius) 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.dash-account-page .dash-icon {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.dash-account-page:is(:hover, :focus-visible) {
+  background: var(--cl-action-soft);
+}
+
+.dash-account[aria-current="page"] + .dash-account-page {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border-left-color: rgb(0 0 0 / 0.25);
+}
+
 .dash-account-add {
   flex-direction: row;
   align-items: center;
