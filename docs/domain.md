@@ -161,7 +161,13 @@ A domain change is complete only when every affected source observation, derived
   that Season in the page's Seasons list, dated by its end. That list offers
   only Seasons with Clash Lens days; one known only from the game's league
   history is left out. A link to a day of an ended Season opens that Season
-  with the day marked, or says no Legend log is saved for that date.
+  with the day marked, or says no Legend log is saved for that date. Such a
+  day, like a current-Season day the log leaves out, also shows its attacks and
+  defenses from the saved days the page already loads; when only its Season
+  summary still has the day, it says they are no longer shown here. A link to
+  one battle, `?day=YYYY-MM-DD#battle-ID` as attack alerts send, opens its day
+  with the battle highlighted. Until the page shows the battle, it reads the
+  player again every 5 seconds for 2 minutes, then offers Check again.
 - In a Season's saved-day view, final rank means the official in-game placement from
   Clash of Clans league history, which names a Season by the Reset that ended
   it. Until that placement is saved, show it as not published yet; never fall
