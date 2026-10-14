@@ -436,6 +436,7 @@ def recalculate_ranked_day(
     new_day_contributions: tuple[BattleContribution, ...] = ()
     previous_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
+    day_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
     if now >= ranked_day.end:
@@ -456,6 +457,9 @@ def recalculate_ranked_day(
         )
         first_unshown_report = ranked_day_inputs.load_first_unshown_report(
             connection, player_id, *domain.battle_window(ranked_day.end)
+        )
+        day_unshown_report = ranked_day_inputs.load_first_unshown_report(
+            connection, player_id, *domain.battle_window(ranked_day.start), latest=True
         )
     data = ReconciliationInput(
         ranked_day=ranked_day,
@@ -527,6 +531,7 @@ def recalculate_ranked_day(
         new_day_contributions=new_day_contributions,
         previous_day_contributions=previous_day_contributions,
         first_unshown_report=first_unshown_report,
+        day_unshown_report=day_unshown_report,
         unreadable_from=unreadable_from,
         covered_until=covered_until,
     )

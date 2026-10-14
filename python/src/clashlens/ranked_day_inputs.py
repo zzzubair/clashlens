@@ -681,14 +681,15 @@ def load_readings(
 
 
 def load_first_unshown_report(
-    connection: Any, player_id: int, since: datetime, until: datetime
+    connection: Any, player_id: int, since: datetime, until: datetime, *, latest: bool = False,
 ) -> datetime | None:
-    """The earliest report from ``since`` to ``until`` of a battle of this
-    player that only the opponent has reported so far: a profile read after
-    it may show a battle the player's own logs do not hold yet."""
+    """The earliest report, or the ``latest``, from ``since`` to ``until`` of
+    a battle of this player that only the opponent has reported so far: a
+    profile read after it may show a battle the player's own logs do not
+    hold yet."""
     return connection.execute(
-        """
-        SELECT min(evidence.battle_timestamp)
+        f"""
+        SELECT {"max" if latest else "min"}(evidence.battle_timestamp)
         FROM legend_battles AS battle
         JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
         WHERE (battle.attacker_player_id = %(player)s OR battle.defender_player_id = %(player)s)

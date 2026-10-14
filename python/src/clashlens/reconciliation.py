@@ -177,6 +177,9 @@ class ReconciliationInput:
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
+    # The latest report of a battle of the day only the opponent has
+    # reported: the player's own log may not hold it yet.
+    day_unshown_report: datetime | None = None
     # Whether the day before's automatic loss came off this day's start:
     # None as the day before's result says (``_settled_start``), else the
     # other way (``_other_start``).
@@ -415,6 +418,7 @@ def _reconcile(data: ReconciliationInput) -> ReconciliationResult:
         reset=bool(reset),
         day_effects=_effects(contributions), earlier=_effects(earlier),
         floor=5000 if raised or reset or data.ranked_day.start.weekday() == 0 else None,
+        unshown=data.day_unshown_report,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else (None, None, None)
     automatic_value_known = automatic_state != "unknown"

@@ -840,13 +840,18 @@ def test_a_reading_after_the_days_last_battle_shows_its_end() -> None:
     day_start = RESET - timedelta(days=1)
     evening = Reading(day_start + timedelta(hours=12), 6010)
 
-    def proof(*readings: Reading, pending_loss: int = 0, day=DAY_BATTLES, earlier=()):
+    def proof(*readings: Reading, pending_loss: int = 0, day=DAY_BATTLES, earlier=(),
+              unshown=None):
         return contradiction_during_day(
             readings, day_start=day_start, reset_at=RESET, start=6000,
-            pending_loss=pending_loss, day_effects=day, earlier=earlier,
+            pending_loss=pending_loss, day_effects=day, earlier=earlier, unshown=unshown,
         )[2]
 
     assert proof(evening) == evening
+    # Nor before a battle only the opponent has reported, stamped at 04:55,
+    # could land: the player's own log may not hold it yet.
+    assert proof(evening, unshown=RESET - timedelta(minutes=5)) is None
+    assert proof(evening, unshown=evening.read_at - timedelta(minutes=13)) == evening
     # Not while the defense may still land, nor after a reading that disagrees.
     assert proof(Reading(day_start + timedelta(hours=3, minutes=5), 6010)) is None
     assert proof(Reading(day_start + timedelta(hours=11), 6100), evening) is None

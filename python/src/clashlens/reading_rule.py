@@ -48,6 +48,8 @@ MAX_AMBIGUOUS_BATTLES = 6
 # day before's last attack is reported by 05:05 and lands within
 # BATTLE_LANDING_LAG.
 DAY_READINGS_FROM = timedelta(minutes=15)
+# The game's battles last at most 3 minutes.
+MAX_BATTLE_LENGTH = timedelta(minutes=3)
 _JUST_BEFORE = timedelta(microseconds=1)
 # The landing time of a battle with no report time: taken as shown.
 UNTIMED = datetime.min.replace(tzinfo=UTC)
@@ -441,6 +443,7 @@ def contradiction_during_day(
     earlier: tuple[Effect, ...] = (),
     floor: int | None = None,
     reset: bool = False,
+    unshown: datetime | None = None,
 ) -> tuple[Verdict | None, frozenset[Way] | None, Reading | None]:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
@@ -461,7 +464,10 @@ def contradiction_during_day(
     of the day had landed, so none came after it, and fitting one way only
     among those the trustworthy readings before it leave possible; a
     confirm-only one only when no trustworthy one does (``decide``'s
-    ``proof``)."""
+    ``proof``). A battle of the day stamped at ``unshown`` that only the
+    opponent has reported counts as one of the day's, landing as late as a
+    defense can: the player's own log, which the day is built from, may not
+    hold it yet."""
     judged = [
         item for item in (
             judge(
@@ -481,6 +487,8 @@ def contradiction_during_day(
         (0, False, shown - before) for _, _, shown in settled[-1].ways)
     landed = max((effect.lands_until for effect in day_effects if effect.change or effect.disputed),
                  default=day_start)
+    if unshown is not None:
+        landed = max(landed, unshown + MAX_BATTLE_LENGTH + BATTLE_LANDING_LAG)
 
     def shows_end(item: _Judged) -> bool:
         return item.reading.read_at >= landed and item.matched and not (
