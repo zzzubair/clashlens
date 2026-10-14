@@ -8,11 +8,11 @@
 -- Legend I, below Legend I or unknown, how a Legend I week began, the proof
 -- and the strongest evidence against it. A row changes only when its
 -- decision does; decision_number counts the changes. Measured on the copy of
--- 14 October 2026: 50,215 rows for the weeks of 5 and 12 October, 11 MB with
--- both keys, 224 bytes a row; so about 25,000 rows and 5.6 MB a week, about
--- 290 MB a year if never deleted. The (player, week, league) key is what a
--- saved Legend day will reference in stage 2, so a public day can exist only
--- in a Legend I week.
+-- 14 October 2026: 97,649 rows for the weeks of 7 September to 12 October,
+-- 22 MB with both keys, 234 bytes a row; so about 25,000 rows and 5.9 MB a
+-- week, about 305 MB a year if never deleted. The (player, week, league)
+-- key is what a saved Legend day will reference in stage 2, so a public day
+-- can exist only in a Legend I week.
 --
 -- league_week_dirty: a mark per (player, week) whose evidence changed since
 -- it was last decided. Triggers on every evidence table write the marks in
@@ -30,8 +30,14 @@
 -- whole Season, so the previous Season's earlier weeks are decided too,
 -- from battles and league history only, as raw responses start on 1
 -- October 2026. On that copy: 75,434 marks for 27,351 players, written in
--- 27 seconds while the evidence tables' triggers were being added, so
--- saving profiles and battles waits that long when this migration runs.
+-- 27 seconds while the evidence tables' triggers were being added.
+--
+-- Two indexes let the worker read only the evidence a week needs: lower
+-- league profiles (600 kB, built in 2 to 10 seconds on that copy) and
+-- battles by defender and day (15 MB for 1.4 million battles, 11 bytes a
+-- battle, so about 1 MB a day and 380 MB a year at 92,000 battles a day;
+-- built in 0.5 seconds). Saving profiles and battles waits for the whole
+-- migration, about 30 to 40 seconds on that copy.
 BEGIN;
 
 -- The Monday 05:00 UTC Reset starting the week holding `at`. Monday
