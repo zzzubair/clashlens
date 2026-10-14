@@ -377,6 +377,39 @@ def test_a_board_build_that_fails_once_runs_again_and_publishes(
             database.close()
 
 
+def test_army_results_publish_while_the_boards_statistics_keep_failing(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, the army's inputs froze only once the statistics published, so
+    # statistics failing every time kept the army results back for good.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+
+    def failing(_database, _claim):
+        raise ValueError("a statistics fault")
+
+    monkeypatch.setattr(boundary_publication, "complete_analytics", failing)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            for _ in range(4):
+                boundary_publication.reevaluate_boundary_publications(database)
+                for job_id in _waiting(database, BUILDS):
+                    _due_now(database, job_id)
+                    processor.process_job(job_id, owner=f"build-{job_id}")
+            with database.pool.connection() as connection:
+                states = connection.execute(
+                    "SELECT snapshot_state, army_state FROM boundary_publication_generations"
+                    " WHERE boundary_at = %s",
+                    (DAY_END,),
+                ).fetchall()
+            assert [tuple(map(text, row)) for row in states] == [("building", "published")]
+        finally:
+            database.close()
+
+
 def _repair_lists(connection_info: str, state: str) -> None:
     """A Season repair in ``state`` that lists DAY_END's Reset, not yet done."""
     with psycopg.connect(connection_info) as connection:
