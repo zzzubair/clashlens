@@ -166,3 +166,43 @@ def test_days_judged_against_the_battle_timeline(
     assert _ranked(board) == {NEXT: 5540, EARLY: 5380, FIRST: 5021, LATE: 5013}
     labels = {entry["tag"]: entry["confidence"] for entry in board["entries"]}
     assert labels == dict.fromkeys(story.players, "confirmed")
+
+
+def test_a_loss_that_never_landed_leaves_the_next_day_where_its_readings_show(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """NEVER's Saturday, 10 October, has 6 defenses: its loss is 2 x 30.
+    The Sunday Reset reading at 05:04 shows 4,800, the day's end before the
+    loss, and the loss never lands: every Sunday reading shows the battles
+    from 4,800, and the 04:50 one after the last battle shows 4,800.
+    Started at 4,740 as if charged, each still fits the loss as still to
+    land, and the Monday raise hides the end, so only the 04:50 reading
+    tells. The board shows 4,800, proven, not 4,740."""
+    never = "#YPP"
+    friday, saturday, sunday, monday = day(5), day(6), day(7), day(8)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, never)
+        story.players[never].battles = (
+            attacks(friday, *[30] * 8) + defenses(friday, *[30] * 8)
+            + attacks(saturday, *[10] * 8) + defenses(saturday, *[30] * 6)
+            + attacks(sunday, *[20] * 8) + defenses(sunday, *[20] * 8))
+        story.reset(friday, {never: (4900, SEASON)})
+        story.reset(saturday, {never: (4900, SEASON)})
+        story.reads(saturday + timedelta(hours=10), {never: 4800})
+        story.reset(sunday, {never: (4800, SEASON)})
+        story.reads(sunday + timedelta(minutes=20), {never: 4800})
+        story.reads(sunday + timedelta(hours=10), {never: 4800})
+        story.reads(monday - timedelta(minutes=10), {never: 4800})
+        story.reset(monday, {never: (5000, SEASON)})
+        story.wait(timedelta(hours=1))
+        saturday_saved = story.saved_day(never, saturday)
+        sunday_saved = story.saved_day(never, sunday)
+        board = story.served_board(monday)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saturday_saved["state"], saturday_saved["automatic_loss"]) == ("Complete", 60)
+    assert (sunday_saved["state"], sunday_saved["start"], sunday_saved["end"]) == (
+        "Complete", 4800, 4800)
+    assert _ranked(board) == {never: 4800}
+    assert [entry["confidence"] for entry in board["entries"]] == ["confirmed"]

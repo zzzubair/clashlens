@@ -12,7 +12,11 @@ from datetime import timedelta
 from test_reconciliation import DAY, _input
 
 from clashlens.reading_rule import Reading
-from clashlens.reconciliation import BattleContribution, PreviousRankedDay, reconcile_ranked_day
+from clashlens.reconciliation import (
+    BattleContribution,
+    PreviousRankedDay,
+    reconcile_ranked_day,
+)
 
 SEASON_RULE = {"start_trophies_source": "season_rule"}
 TWO_DEFENSES = (

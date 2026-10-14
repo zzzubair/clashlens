@@ -286,15 +286,23 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     12 minutes after the Reset in 7,532 of 7,541 days (5 to 13 October
     2026), later in 9, and sometimes never: no time shows whether a reading
     came before it. A day that its own readings do not prove from the start
-    the day before's result gives is tried from the other, and takes it only
-    if they prove it there."""
+    the day before's result gives is tried from the other, and takes it if
+    they prove it further there: Complete, or its end proven by a reading.
+    A loss that never landed fits every reading of a day as still to land,
+    so only the day's end can tell."""
     result = _reconcile(data)
     other = _other_start(data)
-    if result.state != "Complete" and other is not None:
-        alternative = _reconcile(replace(data, start_charged=other))
-        if alternative.state == "Complete":
-            return alternative
-    return result
+    if other is None or _proven(result):
+        return result
+    alternative = _reconcile(replace(data, start_charged=other))
+    rank = lambda item: (item.state == "Complete", _proven(item))
+    return alternative if rank(alternative) > rank(result) else result
+
+
+def _proven(result: ReconciliationResult) -> bool:
+    """A Complete day whose end a reading proves exactly, or cleanly before a reset."""
+    return result.state == "Complete" and (
+        result.confidence == "exact" or (result.input_evidence.get("end_reading") or {}).get("clean") is True)
 
 
 def _reconcile(data: ReconciliationInput) -> ReconciliationResult:
