@@ -84,6 +84,7 @@ def test_a_battle_moved_to_another_day_marks_both_weeks(database_url: str) -> No
 
 
 STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH = "#2PP", "#8PP", "#9PP", "#PPP", "#YPP"
+IDLE, PROMOTED, STALE = "#LPP", "#QPP", "#GPP"
 
 
 def _decide(connection_info: str, monkeypatch) -> None:
@@ -144,35 +145,57 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
     still shown in Legend I by the Reset reading, then in Legend II naming
     Season 0 by the settlement check and once more after the display window.
     FAILED's Monday Reset request failed; its battles show later. FIRST_SEEN
-    was promoted at the Reset and first read on Tuesday.
+    was promoted at the Reset and first read on Tuesday. IDLE and PROMOTED
+    never battle: both are read twice in Legend II naming Season 0 on Sunday
+    and once more at 05:16 on Monday, as #V02JGRJC was; PROMOTED was promoted
+    at the Reset and is read in Legend I naming Season 0 at 06:30. STALE
+    played Sunday, then is read in Legend I naming Season 0 at the Reset and
+    at 09:20, then in Legend II at 21:04 and 05:00 Tuesday, as #GQ9QQ0VLJ was.
 
-    Every Legend I week is Legend I, DROPPED's second is below, proven only
-    once its second Legend II answer is saved, and deciding again with
+    Every Legend I week is Legend I and every week below stays below until
+    evidence shows a change (the owner's rule of 14 October 2026): IDLE's
+    lone Monday answer keeps it below; DROPPED is proven below only once its
+    second Legend II answer is saved, and PROMOTED Legend I once its Legend I
+    answer is. STALE's Legend I answers before its Legend II ones are the
+    game's display catching up, so its week is below. Deciding again with
     nothing new changes nothing."""
     sunday, monday, tuesday = day(7), day(8), day(9)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
-                       STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH)
+                       STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH, IDLE, PROMOTED, STALE)
         for tag in (STAYED, FAILED, GLITCH):
             story.players[tag].battles = attacks(sunday, 40, 40) + defenses(sunday, 40) + attacks(
                 monday, 40) + defenses(monday, 30)
         story.players[DROPPED].battles = attacks(sunday, 40) + defenses(sunday, 40, 40)
+        story.players[STALE].battles = attacks(sunday, 40) + defenses(sunday, 40)
         story.players[FIRST_SEEN].battles = attacks(monday + timedelta(hours=3), 40, 40)
         story.reset(sunday, {STAYED: (4920, SEASON), DROPPED: (4960, SEASON),
-                             FAILED: (5100, SEASON), GLITCH: (5100, SEASON)})
+                             FAILED: (5100, SEASON), GLITCH: (5100, SEASON),
+                             STALE: (5100, SEASON)})
+        for tag in (IDLE, PROMOTED):
+            story.players[tag].dropped = True
+            for hours in (2, 3, 24 + 0.27):
+                story.read(tag, sunday + timedelta(hours=hours), 4100)
         story.reset(monday, {STAYED: (5000, SEASON), DROPPED: (4920, SEASON),
-                             FAILED: (None, SEASON), GLITCH: (5140, SEASON)})
+                             FAILED: (None, SEASON), GLITCH: (5140, SEASON),
+                             STALE: (5100, None)})
         story.players[DROPPED].dropped = True
         story.reads(monday + timedelta(minutes=20), {DROPPED: 4920})
         story.players[GLITCH].dropped = True
         story.read(GLITCH, monday + timedelta(hours=6), 5150)
         story.players[GLITCH].dropped = False
         story.reads(monday + timedelta(hours=7), {STAYED: 5010, FAILED: 5150, GLITCH: 5150})
+        story.read(STALE, monday + timedelta(hours=4, minutes=20), 5100, None)
+        story.players[STALE].dropped = True
+        story.read(STALE, monday + timedelta(hours=16, minutes=4), 5100)
+        story.read(STALE, tuesday, 5100)
         story.reads(tuesday + timedelta(hours=1, minutes=25), {FIRST_SEEN: 5080})
         story.run_worker()
         _decide(connection_info, monkeypatch)
         before_pair = _records(connection_info, list(story.players))
         story.reads(monday + timedelta(hours=9), {DROPPED: 4920})
+        story.players[PROMOTED].dropped = False
+        story.read(PROMOTED, monday + timedelta(hours=1, minutes=30), 5000, None)
         story.run_worker()
         _decide(connection_info, monkeypatch)
         decided = _records(connection_info, list(story.players))
@@ -183,21 +206,34 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
         _decide(connection_info, monkeypatch)
         again = _records(connection_info, list(story.players))
 
-    battle = ("legend_i", "stayed", 3, "battle")
+    started = ("legend_i", "season_start", 4, "battle", sunday, None, None, 1)
+    battle = ("legend_i", "stayed", 4, "battle")
+    sunday_pair = ("below_legend_i", None, 2, "unconfirmed_pair", sunday + timedelta(hours=2),
+                   sunday + timedelta(hours=3), None, 1)
+    still_below = ("below_legend_i", None, 1, "previous_week", W1, None, None, 1)
     assert decided == {
-        (STAYED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (STAYED, W1): started,
         (STAYED, W2): (*battle, monday, None, None, 1),
-        (GLITCH, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (GLITCH, W1): started,
         (GLITCH, W2): (*battle, monday, None, None, 1),
-        (FAILED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
+        (FAILED, W1): started,
         (FAILED, W2): (*battle, monday, None, None, 1),
-        (DROPPED, W1): ("legend_i", "season_start", 3, "battle", sunday, None, None, 1),
-        (DROPPED, W2): ("below_legend_i", None, 1, "unconfirmed_pair",
+        (DROPPED, W1): started,
+        (DROPPED, W2): ("below_legend_i", None, 2, "unconfirmed_pair",
                         monday + timedelta(minutes=20), monday + timedelta(hours=9), None, 2),
-        (FIRST_SEEN, W2): ("legend_i", "first_seen", 3, "battle", monday, None, None, 1),
+        (FIRST_SEEN, W2): ("legend_i", "first_seen", 4, "battle", monday, None, None, 1),
+        (IDLE, W1): sunday_pair,
+        (IDLE, W2): still_below,
+        (PROMOTED, W1): sunday_pair,
+        (PROMOTED, W2): ("legend_i", "promoted", 2, "unconfirmed_answer",
+                         monday + timedelta(hours=1, minutes=30), None, None, 2),
+        (STALE, W1): started,
+        (STALE, W2): ("below_legend_i", None, 2, "unconfirmed_pair",
+                      monday + timedelta(hours=16, minutes=4), tuesday, None, 1),
     }
-    # The Reset reading still showed Legend I, inside the display window;
-    # one Legend II answer alone proves nothing.
+    # DROPPED's Reset reading still showed Legend I, inside the display
+    # window; one Legend II answer alone proves no drop, so Legend I carries.
     assert before_pair[DROPPED, W2] == (
-        "unknown", None, 0, None, None, None, None, 1)
+        "legend_i", "stayed", 1, "previous_week", W1, None, None, 1)
+    assert before_pair[PROMOTED, W2] == still_below
     assert again == decided

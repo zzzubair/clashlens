@@ -40,14 +40,17 @@ CREATE TABLE IF NOT EXISTS player_league_weeks (
     league text NOT NULL CHECK (league IN ('legend_i', 'below_legend_i', 'unknown')),
     -- How a Legend I week began at its Monday Reset; decides that Monday's start.
     entry text CHECK (entry IN ('season_start', 'stayed', 'promoted', 'first_seen', 'unknown')),
-    -- 3 a Legend battle or league history, 2 an accepted answer, 1 an answer
-    -- naming Season 0, 0 nothing.
-    strength smallint NOT NULL CHECK (strength BETWEEN 0 AND 3),
+    -- 4 a Legend battle or league history, 3 an accepted answer, 2 an answer
+    -- naming Season 0, 1 the week before's league carried forward, 0 nothing.
+    strength smallint NOT NULL CHECK (strength BETWEEN 0 AND 4),
     unknown_reason text CHECK (unknown_reason IN ('no_evidence', 'conflicting_evidence')),
     -- The earliest strongest evidence for the league, or for Legend I in a
-    -- conflict: an answer's response, a battle, or a league history row.
+    -- conflict: an answer's response, a battle, a league history row, or the
+    -- week before's record, at its Monday Reset, when the week's own
+    -- evidence claims nothing.
     proof_kind text CHECK (proof_kind IN ('battle', 'league_history', 'accepted_answer',
-                                          'unconfirmed_answer', 'unconfirmed_pair')),
+                                          'unconfirmed_answer', 'unconfirmed_pair',
+                                          'previous_week')),
     proof_at timestamptz,
     proof_source_id bigint,
     proof_second_id bigint,
@@ -66,7 +69,10 @@ CREATE TABLE IF NOT EXISTS player_league_weeks (
     CHECK ((strength = 0) = (unknown_reason IS NOT DISTINCT FROM 'no_evidence')),
     CHECK ((proof_kind IS NULL) = (strength = 0)
            AND (proof_kind IS NULL) = (proof_at IS NULL)
-           AND (proof_kind IS NULL) = (proof_source_id IS NULL)),
+           AND (proof_kind IS NULL OR proof_kind = 'previous_week') = (proof_source_id IS NULL)),
+    CHECK ((proof_kind IS NOT DISTINCT FROM 'previous_week') = (strength = 1)
+           AND (proof_kind IS DISTINCT FROM 'previous_week'
+                OR (proof_at = week_start - interval '7 days' AND league <> 'unknown'))),
     CHECK ((proof_kind IS NOT DISTINCT FROM 'unconfirmed_pair') = (proof_second_id IS NOT NULL)),
     CHECK ((against_kind IS NULL) = (against_at IS NULL)
            AND (against_kind IS NULL) = (against_source_id IS NULL)),
