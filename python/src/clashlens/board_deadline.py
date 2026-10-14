@@ -58,6 +58,19 @@ def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool
         waiting <= MAX_UNFINISHED or now >= boundary_at + HARD_DEADLINE)
 
 
+def overdue(connection: Any, boundary_at: datetime) -> bool:
+    """Whether the Reset still has no published board ``HARD_DEADLINE`` after
+    it: nothing may hold the board back then."""
+    return connection.execute(
+        """
+        SELECT clock_timestamp() >= %s AND NOT EXISTS (
+            SELECT FROM boundary_publication_generations
+            WHERE boundary_at = %s AND snapshot_state = 'published')
+        """,
+        (boundary_at + HARD_DEADLINE, boundary_at),
+    ).fetchone()[0]
+
+
 def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id: int) -> None:
     """Under the Reset's full lock, settle ``generation_id``'s waiting members
     as above while its board has not frozen."""

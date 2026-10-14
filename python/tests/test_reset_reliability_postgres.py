@@ -36,6 +36,7 @@ from clashlens import (
     past_reset_pacing,
     queue_refresh,
     reconciliation_db,
+    snapshots,
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.db import WORKER_STATEMENT_TIMEOUT_SECONDS, Database
@@ -335,6 +336,81 @@ def test_the_board_is_served_once_built_before_its_statistics(
                 api.close()
             assert served is not None and served["reset_at"] == DAY_END.isoformat()
             assert sorted(entry["tag"] for entry in served["entries"]) == list(PLAYERS)
+            _build(database, processor)
+            assert _board(database) == (1, list(PLAYERS))
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("failing", ["build_snapshot", "build_analytics"])
+def test_a_board_build_that_fails_once_runs_again_and_publishes(
+    database_url: str, archive_server, monkeypatch, failing: str
+) -> None:
+    # Before, one error failed its job for good, and the next one met the
+    # failed job's key: the board never published.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    module, name = {"build_snapshot": (snapshots, "complete_snapshot"),
+                    "build_analytics": (boundary_publication, "complete_analytics")}[failing]
+    run, faults = getattr(module, name), [ValueError("a build fault")]
+
+    def faulty(database, claim):
+        if faults and claim.input_json.get("boundary_at") == f"{DAY_END:%Y-%m-%dT%H:%M:%SZ}":
+            raise faults.pop()
+        return run(database, claim)
+
+    monkeypatch.setattr(module, name, faulty)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            outcomes = []
+            for _ in range(10):
+                boundary_publication.reevaluate_boundary_publications(database)
+                for job_id in _waiting(database, BUILDS):
+                    _due_now(database, job_id)
+                    outcomes.append(processor.process_job(job_id, owner=f"build-{job_id}").outcome)
+            assert (faults, outcomes.count("failed")) == ([], 1)
+            assert _board(database) == (1, list(PLAYERS))
+        finally:
+            database.close()
+
+
+def test_a_paused_repair_holds_no_first_board_past_0600(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Before, it held the board until someone resumed or ended the repair.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    WITH campaign AS (
+                        INSERT INTO domain_repair_campaigns (
+                            official_season_id, season_start, season_end, write_deadline,
+                            state, target_versions, inventory_cutoff, plan_digest)
+                        VALUES ('repair', %(start)s, %(start)s + interval '28 days',
+                                %(start)s + interval '35 days', 'paused', '{}', %(start)s,
+                                repeat('0', 64))
+                        RETURNING id)
+                    INSERT INTO domain_repair_items (
+                        campaign_id, kind, target_key, reasons, boundary_at)
+                    SELECT id, 'publication', 'reset', ARRAY['payout'], %(reset)s
+                    FROM campaign
+                    """,
+                    {"start": DAY_START - timedelta(days=3), "reset": DAY_END},
+                )
+            _swept(connection_info, archive_server, processor)
+            for tag in PLAYERS:
+                _calculate(database, processor, tag)
+            # Before 06:00 the repair holds it.
+            monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(days=36500))
+            _build(database, processor)
+            assert _waiting(database, BUILDS) == []
+            monkeypatch.setattr(board_deadline, "HARD_DEADLINE", timedelta(hours=1))
             _build(database, processor)
             assert _board(database) == (1, list(PLAYERS))
         finally:

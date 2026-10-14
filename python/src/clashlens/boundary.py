@@ -8,7 +8,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair
+from . import battle_day_repair, board_deadline
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
@@ -464,7 +464,8 @@ def _supersede_generation(
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int
 ) -> None:
-    if boundary_held(connection, boundary_at):
+    # A repair holds no Reset's first board past the hard deadline.
+    if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
         return
     _inherit_deferred_army_successor_snapshot(database, 
         connection, generation_id=generation_id
