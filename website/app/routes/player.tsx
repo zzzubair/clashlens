@@ -423,10 +423,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     ) : null;
   const linkedBattle = (
     <LinkedBattle
-      days={[
-        ...(data.selectedSeason === null ? history.map(({ day }) => day) : []),
-        ...(pastDay ? [pastDay] : []),
-      ]}
+      log={data.selectedSeason === null ? history.map(({ day }) => day) : []}
+      day={pastDay}
     />
   );
   useEffect(() => {

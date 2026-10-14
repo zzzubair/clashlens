@@ -661,12 +661,13 @@ for (const [device, size] of [
         await expect(waiting).toHaveCount(0);
         await expect(page).toHaveURL(new URL(link, page.url()).href);
 
-        // A card replaced later, as when Reset moves its day, is the one highlighted.
+        // A card replaced as the highlight starts, as when Reset moves its day, is
+        // the one highlighted.
         await expect(slot).not.toHaveClass(/battle-arrival/);
         await page.evaluate((id) => {
+          window.dispatchEvent(new Event("pageshow"));
           const card = document.getElementById(id)!;
           card.replaceWith(card.cloneNode(true));
-          window.dispatchEvent(new Event("pageshow"));
         }, `battle-${battle.battleId}`);
         await expect(slot).toHaveClass(/battle-arrival/);
       });
