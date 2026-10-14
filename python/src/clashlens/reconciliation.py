@@ -1135,20 +1135,19 @@ def _effects(
     contributions: Iterable[BattleContribution],
 ) -> tuple[reading_rule.Effect, ...]:
     """Each battle's trophy change for the player and the earliest the
-    profile can show it: an attack from its report, a defense from its
-    report plus its length. A battle with no report time is taken as shown."""
+    profile can show it, its report; a defense can take its length longer.
+    A battle with no report time is taken as shown."""
     effects = []
     for battle in contributions:
         if battle.amount is None:
             continue
-        lands_from = battle.battle_timestamp or datetime.min.replace(tzinfo=UTC)
-        if battle.lens == "defense":
-            lands_from += timedelta(seconds=battle.battle_seconds or 0)
+        defense = battle.lens == "defense"
         effects.append(reading_rule.Effect(
             battle.battle_identity,
-            battle.amount if battle.lens == "offense" else -battle.amount,
-            lands_from,
+            -battle.amount if defense else battle.amount,
+            battle.battle_timestamp or reading_rule.UNTIMED,
             battle.disagreement,
+            timedelta(seconds=battle.battle_seconds or 0) if defense else timedelta(0),
         ))
     return tuple(effects)
 

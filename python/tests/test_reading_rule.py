@@ -98,18 +98,49 @@ def test_a_shortfall_no_attack_gains_explain_stays_a_disagreement() -> None:
 
 def test_only_the_latest_attacks_can_lag() -> None:
     # The profile catches up when the player stops attacking, so it can lack
-    # the +30 attack at 09:00, or both, but not the earlier +20 alone.
-    day = (*DAY_BATTLES, Effect("attack-2", 30, RESET - timedelta(hours=20)))
-    lag_30 = verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(20), 5900),
-                     day=day, end=5970)
-    lag_50 = verdict(Reading(at(2), 5920, reset_reading=True), Reading(at(20), 5900),
-                     day=day, end=5970)
-    earlier = verdict(Reading(at(2), 5950, reset_reading=True), Reading(at(20), 5900),
-                      day=day, end=5970)
+    # the +35 attack at 09:00, or both, but not the earlier +20 alone.
+    day = (*DAY_BATTLES, Effect("attack-2", 35, RESET - timedelta(hours=20)))
+    lag_35 = verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(20), 5905),
+                     day=day, end=5975)
+    lag_55 = verdict(Reading(at(2), 5920, reset_reading=True), Reading(at(20), 5905),
+                     day=day, end=5975)
+    earlier = verdict(Reading(at(2), 5955, reset_reading=True), Reading(at(20), 5905),
+                      day=day, end=5975)
 
-    assert (lag_30.outcome, lag_30.lagged) == ("verified", ("attack-2",))
-    assert (lag_50.outcome, lag_50.lagged) == ("verified", ("attack-1", "attack-2"))
+    assert (lag_35.outcome, lag_35.lagged) == ("verified", ("attack-2",))
+    assert (lag_55.outcome, lag_55.lagged) == ("verified", ("attack-1", "attack-2"))
     assert (earlier.outcome, earlier.residual) == ("contradicted", 50)
+
+
+def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> None:
+    # 5,950 is the total from 07:00 to 08:00, before the defense and the
+    # +35: a profile running late. It neither contradicts nor confirms.
+    day = (*DAY_BATTLES, Effect("attack-2", 35, RESET - timedelta(hours=20)))
+    stale = verdict(Reading(at(2), 5950, reset_reading=True), day=day, end=5975)
+    later = verdict(Reading(at(2), 5950, reset_reading=True), Reading(at(20), 5905),
+                    day=day, end=5975)
+
+    assert stale.outcome == "unverified"
+    assert (later.outcome, later.exact) == ("verified", True)
+    # After a new-day attack of +30 at 05:10 has landed, a 05:26 reading of
+    # the day's end is the same profile running late: the day stays proven.
+    new_day = (Effect("next-attack", 30, at(10)),)
+    assert verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(26), 5940),
+                   new_day=new_day).clean is True
+    # One equal to no point of the timeline still contradicts.
+    assert verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(26), 5945),
+                   new_day=new_day).outcome == "contradicted"
+
+
+def test_a_defense_can_show_from_its_stamp() -> None:
+    # A new-day defense of 30 stamped 05:10 that lasted 150 s: 223 of 231
+    # readings showing a defense before its stamp plus its length came after
+    # the attacker's own report. It may still be missing until 05:22:30.
+    defense = Effect("next-defense", -30, at(10), length=timedelta(seconds=150))
+    reset = Reading(at(2), 5940, reset_reading=True)
+
+    assert verdict(reset, Reading(at(11), 5910), new_day=(defense,)).outcome == "verified"
+    assert verdict(reset, Reading(at(22), 5940), new_day=(defense,)).outcome == "verified"
 
 
 def test_a_clean_reading_after_an_exact_match_still_contradicts_the_day() -> None:

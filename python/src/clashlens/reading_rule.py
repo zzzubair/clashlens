@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from typing import Any
 
@@ -48,21 +48,28 @@ MAX_AMBIGUOUS_BATTLES = 6
 # day before's last attack is reported by 05:05 and lands within
 # BATTLE_LANDING_LAG.
 DAY_READINGS_FROM = timedelta(minutes=15)
+_JUST_BEFORE = timedelta(microseconds=1)
+# The landing time of a battle with no report time: taken as shown.
+UNTIMED = datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)
 class Effect:
-    """One battle's trophy change for the player, and the earliest moment
-    the profile can show it."""
+    """One battle's trophy change for the player, the earliest moment the
+    profile can show it, and how much longer than an attack it can take: a
+    defense can show from its stamp or as late as its length after it. Of
+    231 readings from 5 to 13 October 2026 showing a defense before its
+    stamp plus its length, 223 came after the attacker's own report."""
 
     identity: str
     change: int
     lands_from: datetime
     disputed: bool = False
+    length: timedelta = timedelta(0)
 
     @property
     def lands_until(self) -> datetime:
-        return self.lands_from + BATTLE_LANDING_LAG
+        return self.lands_from + self.length + BATTLE_LANDING_LAG
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,13 +146,19 @@ def judge(
     new_day_effects: Iterable[Effect],
     floor: int | None = None,
     reset: bool = False,
+    stale: bool = True,
 ) -> _Judged | None:
     """Whether one reading equals a value the ledger allows at its time, or
-    ``None`` when it cannot be judged: a disputed battle may be in it, or too
-    many battles may be. ``floor`` is the weekly raise: an ended-day value
+    ``None`` when it cannot be judged: a disputed battle may be in it, too
+    many battles may be, or, unless ``stale`` is false, it fits no value
+    but one a reading taken just before a battle that has landed could
+    show. ``floor`` is the weekly raise: an ended-day value
     below it may also be read raised to it, before any new-day battle; with
     ``reset``, a Season's reset, any ended-day value may be read set to it."""
-    day_effects = tuple(day_effects)
+    day_effects, new_day_effects = tuple(day_effects), tuple(new_day_effects)
+    ledger = {"end_before_loss": end_before_loss, "loss_candidates": loss_candidates,
+              "loss_certain": loss_certain, "day_effects": day_effects,
+              "new_day_effects": new_day_effects, "floor": floor, "reset": reset}
     at = reading.read_at
     base = end_before_loss
     missed: list[str] = []
@@ -244,6 +257,22 @@ def judge(
                 (way_loss, raised, shows(way_run, way_chosen))
                 for way_run, way_chosen, way_loss, raised in found),
         )
+    # A profile can lag its battle log by an hour or more: on 14 October
+    # 2026 #9G29VJ8C9 read 5,013 at 05:26:19, its total at the Reset, after
+    # seven new-day battles its own log listed by 05:19:48. Such a reading
+    # is stale: it neither confirms nor contradicts, and the battles count
+    # in their own day. Of 514 readings from 5 to 13 October lacking a
+    # battle, the player's own log already listed it in 487. Before the
+    # Reset no loss or raise had landed.
+    before_reset = {"loss_candidates": (), "floor": None, "reset": False}
+    if stale and any(
+        (earlier := judge(replace(reading, read_at=effect.lands_from - _JUST_BEFORE), stale=False,
+                          **(ledger | (before_reset if ended else {})))) is not None
+        and earlier.matched
+        for effects, ended in ((day_effects, True), (new_day_effects, False))
+        for effect in effects if effect.change and UNTIMED < effect.lands_from and effect.lands_until <= at
+    ):
+        return None
     # The residual is against the day's end after a certain loss, the value
     # every saved result records as the expected next start.
     expected = base + new_day_change - (
