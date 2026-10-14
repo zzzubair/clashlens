@@ -12,8 +12,7 @@ something bigger is broken: the board keeps waiting, and the alert check
 says how many (``alerts``), until ``HARD_DEADLINE``, when every member still
 waiting is Unavailable (owner decision, 14 Oct 2026). When such a member's
 day saves later, it changes the member as any new result does, which starts
-a correction, and the board is rebuilt with it. A board build or statistics
-job that fails runs again (``retry_failed_build``).
+a correction, and the board is rebuilt with it.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from typing import Any
 from .boundary_manifest import retry_wait
 from .db import (
     ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
@@ -133,11 +133,12 @@ def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id
 
 
 def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: int) -> None:
-    """Queue again, under a new key, the failed board build or statistics job
-    a generation still waits for: one error failed it for good, and the next
-    job met the failed one's key. Each retry waits twice as long as the one
-    before, from a minute to at most an hour. Like any build, none is queued
-    while a repair holds the Reset, or for a past Reset in the quiet window."""
+    """Queue again, under a new key, the failed board build, statistics job
+    or army build a generation still waits for: one error failed it for good,
+    and the next job met the failed one's key. Each retry waits twice as long
+    as the one before, from a minute to at most an hour. Like any build, none
+    is queued while a repair holds the Reset, or for a past Reset in the quiet
+    window."""
     if (boundary_held(connection, boundary_at) and not overdue(connection, boundary_at)
             or past_reset_build_waits(connection, boundary_at)):
         return
@@ -150,13 +151,23 @@ def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: in
         SELECT NULL, job.work_type,
                split_part(job.deduplication_key, ':retry:', 1) || ':retry:' || job.id,
                job.input_json, 'pending',
-               job.updated_at + {retry_wait("count(*) OVER ()")},
-               %s, %s, %s, %s, job.priority
+               job.updated_at + {retry_wait("count(*) OVER (PARTITION BY job.work_type)")},
+               %s, %s, %s,
+               CASE job.work_type WHEN 'build_army_analytics' THEN %s ELSE %s END,
+               job.priority
         FROM boundary_publication_generations AS generation
         JOIN python_processing_jobs_worker AS job
           ON job.state = 'failed'
-         AND job.work_type = CASE generation.snapshot_state
-             WHEN 'ready' THEN 'build_snapshot' WHEN 'building' THEN 'build_analytics' END
+         AND job.work_type IN (
+             CASE generation.snapshot_state
+                 WHEN 'ready' THEN 'build_snapshot' WHEN 'building' THEN 'build_analytics' END,
+             -- A build that gave up on members still pending runs at once
+             -- when they settle (boundary._try_enqueue_boundary_artifacts).
+             CASE WHEN generation.army_state = 'ready' AND NOT EXISTS (
+                 SELECT FROM boundary_publication_generation_members AS member
+                 WHERE member.generation_id = generation.id
+                   AND member.army_status = 'pending')
+             THEN 'build_army_analytics' END)
          AND job.input_json ->> 'boundary_at' = %s
          AND job.input_json ->> 'generation' = generation.generation::text
          -- Not a freeze's failure: a build reruns from its frozen inputs.
@@ -165,6 +176,6 @@ def retry_failed_build(connection: Any, boundary_at: datetime, generation_id: in
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         (DEFAULT_PARSER_VERSION, PROCESSING_VERSION, DOMAIN_RULE_VERSION,
-         ANALYTICS_RULE_VERSION, f"{boundary_at.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
-         generation_id),
+         ARMY_ANALYTICS_RULE_VERSION, ANALYTICS_RULE_VERSION,
+         f"{boundary_at.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}", generation_id),
     )
