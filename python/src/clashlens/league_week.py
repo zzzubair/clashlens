@@ -3,8 +3,9 @@ Monday Reset to Monday Reset, decided from every piece of evidence about the
 week, whatever order it was read or processed in. See docs/domain.md, Weekly
 league record.
 
-Stage 1 of 4: the worker decides and saves the record, but nothing reads it
-yet and no day is recalculated from it.
+The worker decides and saves the record; readers ask it through the
+legend_days and player_leagues_now views (migration 0119). No day is
+recalculated from it yet.
 
 Database triggers (migration 0115) mark a (player, week) in
 ``league_week_dirty`` in the same transaction as any evidence about it, so

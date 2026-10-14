@@ -110,7 +110,7 @@ A domain change is complete only when every affected source observation, derived
 
 ### Weekly league record
 
-Stage 1: recorded, not yet used. No day, board, page or count reads it yet.
+Stage 1 records it; stage 3 makes every reader use it. No day writer or board reads it yet.
 
 - Clash Lens records which league each player was in each week, Monday Reset to Monday Reset: Legend I, below Legend I, or league unknown, with the evidence that decided it (`player_league_weeks`, one row per player per week with any evidence, from the week of 5 October 2026, and for players with evidence in the week of 28 September 2026 from the Season that week ended, so the current Season's first week has a week before it). See [`league_week.py`](../python/src/clashlens/league_week.py).
 - Evidence, strongest first. Official: a Legend battle that week, or a league history row. Accepted: a profile whose Season checks pass. Unconfirmed: a Legend I profile naming Season ID `0`, or two profiles below Legend I naming Season ID `0` under the same guards as [Identity and eligibility](#identity-and-eligibility): next to each other among the week's profiles, from different responses, with no profile response between them left unsaved. One such lower-league profile alone proves nothing. The strongest evidence decides; when the strongest pieces name both leagues, the week is unknown, recorded as a conflict. A weaker piece naming the other league is kept as the evidence against, so a battle outweighs an accepted lower-league profile the same week.
@@ -120,6 +120,7 @@ Stage 1: recorded, not yet used. No day, board, page or count reads it yet.
 - A Legend I week also records how the player entered it: Season start (a Season's first week), stayed (Legend I the week before), promoted (below Legend I the week before), first seen (the week before unknown, no Legend I evidence earlier in the Season), or unknown (Legend I earlier in the Season, then a week with no evidence).
 - New or changed evidence marks its week in the same database transaction (migration 0115), and the worker decides the player's whole Season again within seconds, whatever order the evidence arrived in. Deciding again with nothing new changes nothing. Only the current and previous Season are decided again, since older raw responses are deleted.
 - On a Monday the collector saves each player's first profile read after that window even when it is unchanged, so a player who does not battle still has a profile counting for the new week, from a request already made.
+- Readers (stage 3) ask the record and nothing else. Every page, the Discord bot, group comparisons, Crews, dashboards, army statistics, Season summaries and the Season repair receipt read saved days through the `legend_days` view and a player's league this week through `player_leagues_now` (migration 0119); the data service's database login cannot read saved days any other way. A day in a week recorded below Legend I is left out. A day in a week recorded unknown, or not decided yet, is shown with the reason `league_not_confirmed`, labelled "League not confirmed": the player may well have been in Legend I, so the day is kept but not confirmed. A player whose week is below Legend I is "Not in Legend I"; unknown or not decided yet is unconfirmed.
 
 ### Player page freshness
 

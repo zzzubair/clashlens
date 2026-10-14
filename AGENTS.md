@@ -66,7 +66,8 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Season repair**: the one operator command that recalculates a Season's saved days, Daily boards and Season summaries under the current rules, with a before-and-after receipt.
 - **Board deadline**: 05:30 UTC, when a Reset's Daily board publishes without at most 50 players whose day result is still unfinished, shown as unavailable until their day saves and the board is rebuilt with them.
 - **Overlay link**: the private web address a Clasher pastes into OBS as a browser source to show their overlay; making a new one retires the old one for good.
-- **Weekly league record**: one saved answer per player per week, Monday Reset to Monday Reset, saying Legend I, below Legend I or league unknown, with the evidence that decided it; for now it is recorded but nothing uses it.
+- **Weekly league record**: one saved answer per player per week, Monday Reset to Monday Reset, saying Legend I, below Legend I or league unknown, with the evidence that decided it; every reader asks it which days are Legend days.
+- **League not confirmed**: what a Clasher sees on a Legend day, or a player, whose week the weekly league record has not decided as Legend I yet; the day is kept but may not count.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 
