@@ -182,6 +182,7 @@ story was checked on 12 October 2026:
 | `test_wednesday_reset_with_days_that_once_could_not_save` | PR 414's migration `0092_shield_runs_any_length.sql` (`a104bbc0`) | SHIELD_RUN's third shielded day refused by the database, as on 9 October |
 | `test_weekly_raise_postgres.py` | The late weekly raise fix (13 October 2026), `python/src` | LATE_RAISE's Sunday saved Inconsistent with next start 4,940 instead of Complete at 5,000, as 4,136 Sundays were on 12 October |
 | `test_monday_board_proof_postgres.py` | The Monday board proof fix (14 October 2026), `python/src` | LL02YLGG ranked at its 03:05:53 reading, 5,036, instead of its Complete day's 4,996. With only `boundary_manifest.py` kept, NEVER, EXACT and BELOW stayed uncertain instead of confirmed |
+| `test_day_timeline_postgres.py` | The battle timeline fix (14 October 2026), `python/src` | FIRST's Monday saved a 23 loss, ending at 5,023 instead of 5,046; every Tuesday Inconsistent and the whole board uncertain. NEVER's Sunday saved Complete at 4,740 instead of 4,800, ranked 4,740 uncertain |
 | `test_reset_at_full_size` | PR 467 (`2ec9b97b`) | The Monday Reset read the whole battles table about 734 times (about 100 million rows) instead of under 20; the story took 119 seconds instead of about 90 |
 
 ## Reset cases and their tests
@@ -231,6 +232,10 @@ Every boundary case in section 8 of the three reliability reports of
 | Reset reading rejected (Season 0), so the day starts from the day before's end | F27, S Season 0 | Wednesday story CHAIN_BROKEN, where the day before has no end either | `test_first_battle_log_postgres.py::test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end` |
 | Chain start when the day before is Partial | F28 | Wednesday story CHAIN_BROKEN | |
 | A reading still missing the day before's automatic loss | F26 | Not in a story: needs the game to apply the loss more than 15 minutes late, seen 0 times on 9 October | `test_reading_rule.py::test_a_season_reset_removes_the_day_befores_pending_loss` |
+| A reading lagging the player's own battle log, equal to an earlier total (`#9G29VJ8C9`, 14 October 2026) | Diag 4.1 D | `test_day_timeline_postgres.py` LATE | `test_reading_rule.py::test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside` |
+| A defense shown before its battle ends | Diag 4.1 C | `test_day_timeline_postgres.py` EARLY | `test_reading_rule.py::test_a_defense_can_show_from_its_stamp` |
+| The day before's loss after a day not Complete, or one that never lands | Diag 4.1 A, G2 | `test_day_timeline_postgres.py` NEXT and NEVER | `test_loss_timing.py` |
+| A reading during the day taken before a battle only the opponent has reported could land | Review of PR 524 | Not in a story: stories report both sides of each battle | `test_reading_rule.py::test_a_reading_after_the_days_last_battle_shows_its_end` |
 
 ### Battles, counts and battle logs
 
@@ -238,6 +243,7 @@ Every boundary case in section 8 of the three reliability reports of
 |---|---|---|---|
 | Automatic loss for 1 to 7 defenses | O4, S 1–7 defenses | 12 October story, Wednesday story UNSETTLED_LOSS | `test_reconciliation.py` |
 | Automatic loss when a log gap hides the day before's defenses | F8 | Wednesday story GAP_BEFORE | `test_reconciliation.py::test_incomplete_coverage_keeps_one_to_seven_defense_adjustment_unknown` |
+| First Legend day: charged attacks less defenses, or only what a reading shows with fewer attacks | Diag 4.2 B | `test_day_timeline_postgres.py` FIRST | `test_loss_timing.py`, `test_monday_reset_reading.py::test_a_first_played_day_loses_its_attacks_less_its_defenses` |
 | No defense: charged for all 8 or nothing, as a reading shows | O6, F9, S no defenses | Wednesday story ZERO_CHARGED; Monday story ZERO | `test_reset_reading_before_loss_postgres.py::test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck` |
 | Battle-log gap | O12, F23, S battle logs | Wednesday story GAP_BEFORE, CHAIN_BROKEN | `test_reconciliation.py` |
 | Log gap, but all 8 attacks and 8 defenses recorded | F24, S eight defenses | Wednesday story FULL_WITH_GAP | |

@@ -502,7 +502,9 @@ def _reconcile(data: ReconciliationInput) -> ReconciliationResult:
                 # automatic loss for all 8, or charge it nothing; its battles
                 # do not say which. On 6 October 2026, 3 such days lost
                 # exactly this (304, 272 and 248) and 86 kept their trophies.
-                # Only a reading showing the charge takes it.
+                # A first Legend day after Day 1 with fewer attacks than
+                # defenses is the same (``loss_rule.possible_loss``). Only a
+                # reading showing the charge takes it.
                 automatic_loss = possible
                 automatic_state = "calculated"
                 final_trophies -= possible
