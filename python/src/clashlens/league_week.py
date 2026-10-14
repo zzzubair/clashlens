@@ -3,8 +3,8 @@ Monday Reset to Monday Reset, decided from every piece of evidence about the
 week, whatever order it was read or processed in. See docs/domain.md, Weekly
 league record.
 
-Stage 1 of 4: the worker decides and saves the record, but nothing reads it
-yet and no day is recalculated from it.
+A Legend day exists only in a week the record says was Legend I, and a
+changed decision recalculates the days it affects (``league_days``).
 
 Database triggers (migration 0115) mark a (player, week) in
 ``league_week_dirty`` in the same transaction as any evidence about it, so
@@ -579,6 +579,8 @@ def _decide_batch(database: Any, deadline: float) -> bool:
     """Decide one batch of marked Seasons in one transaction; whether any
     mark was found. Marks are deleted in the transaction reading the
     evidence: evidence committed later leaves a new mark."""
+    from . import league_days
+
     now = _now()
     oldest = ranked_day_for(now).season_start - SEASON_DURATION
     with database.pool.connection() as connection, connection.transaction():
@@ -597,19 +599,24 @@ def _decide_batch(database: Any, deadline: float) -> bool:
         for player_id, season_start in sorted(
             {(int(player), ranked_day_for(week).season_start) for player, week in marked}
         ):
-            _tally["marks"] += connection.execute(
+            sources = [row[0] for row in connection.execute(
                 """
                 DELETE FROM league_week_dirty
                 WHERE player_id = %s AND week_start >= %s AND week_start < %s
+                RETURNING source
                 """,
                 (player_id, season_start, season_start + SEASON_DURATION),
-            ).rowcount
+            ).fetchall()]
+            _tally["marks"] += len(sources)
             if season_start < oldest:
                 _tally["skipped"] += 1
                 continue
             started = monotonic()
-            changed = save_season(connection, player_id, season_start, decide_season(
-                load_season(connection, player_id, season_start, now)))
+            # Seeded weeks' days are the Season repair's to recalculate.
+            changed = league_days.save_season(
+                database, connection, player_id, season_start,
+                decide_season(load_season(connection, player_id, season_start, now)),
+                now, queue_days=set(sources) != {"seed"})
             next_season = season_start + SEASON_DURATION
             if next_season - WEEK in changed and next_season <= now:
                 # The next Season's first week counts its early answers

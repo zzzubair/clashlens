@@ -9,7 +9,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable, QueryCanceled
 from psycopg.types.json import Jsonb
 
-from . import battle, board_deadline, boundary, reset_baselines
+from . import battle, board_deadline, boundary, boundary_members, reset_baselines
 from .analytics import (
     CLASSIFICATION_CONFIDENCE,
     CLASSIFICATION_VERSION,
@@ -414,18 +414,7 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_corrections SET state = 'inheritance' WHERE id = %s",
                 (queued[0],),
             )
-            connection.execute(
-                """
-                INSERT INTO boundary_publication_generation_members
-                    (generation_id, player_id, ranked_day_version_id,
-                     ranked_day_input_hash, status, snapshot_status, army_status)
-                SELECT %s, player_id, ranked_day_version_id,
-                       ranked_day_input_hash, status, snapshot_status, army_status
-                FROM boundary_publication_generation_members
-                WHERE generation_id = %s
-                """,
-                (new_id, generation_id),
-            )
+            boundary_members.copy_members(database, connection, new_id, generation_id, row[0])
             for pending in pending_inputs:
                 pending_version = (
                     pending.get("ranked_day_version_id")
@@ -1187,18 +1176,7 @@ def _queue_boundary_army_correction(
             """,
             (generation_id,),
         )
-        player_ids = [
-            int(row[0])
-            for row in connection.execute(
-                """
-                SELECT player_id
-                FROM boundary_publication_generation_members
-                WHERE generation_id = %s ORDER BY player_id
-                """,
-                (generation_id,),
-            ).fetchall()
-        ]
-        new_id, _new_generation = boundary._create_boundary_generation(
+        new_id, _new_generation = boundary_members.create_generation(
             database,
             connection,
             boundary_at=boundary_at,
@@ -1208,7 +1186,6 @@ def _queue_boundary_army_correction(
                     (generation_id,),
                 ).fetchone()[0]
             ),
-            player_ids=player_ids,
             generation=int(current[3]) + 1,
             supersedes_id=generation_id,
             ordering_rule_version=_text_value(current[4]),

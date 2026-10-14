@@ -7,16 +7,13 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import (
-    first_battle_log,
     job_outcomes,
-    league_drop,
     queue_refresh,
     reset_baselines,
 )
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
-    SEASON_START_TROPHIES,
     DomainRuleError,
     ranked_day_for,
     validate_season_anchor,
@@ -223,19 +220,9 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     "SELECT clashlens_note_promotion_candidate(%s, %s, %s, %s)",
                     (profile.normalized_tag, profile.league_tier_id, profile.trophies, profile.observed_at),
                 )
-            if created_profile:
-                first_battle_log.queue_day_1(connection, player[0], profile_version_id)
             queue_refresh.queue_for_reading(
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
-            if (
-                created_profile
-                and profile.eligibility_state == "eligible"
-                and profile.trophies == SEASON_START_TROPHIES
-            ):
-                first_battle_log.queue_unplayed_days(
-                    connection, player[0], profile.observed_at, observation_id
-                )
             connection.execute(
                 """
                 WITH candidate AS (
@@ -274,19 +261,8 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 """,
                 (fingerprint, player[0], observation_id, player[0]),
             )
-            # Track or stop tracking by the player's newest answers, whatever
-            # order they arrive in (see league_drop).
-            if profile.eligibility_state in {"eligible", "ineligible"}:
-                league_drop.judge(connection, player[0])
-            # A newly discovered player starts inactive while its first profile
-            # is still unknown. Cancel ordinary discovery only after a trusted
-            # profile has classified the player as ineligible; explicit Refresh
-            # and frozen Reset work must continue, and their evidence remains
-            # referenced independently.
-            connection.execute(
-                "SELECT clashlens_cancel_inactive_discovery_work(%s)",
-                (player[0],),
-            )
+            # Tracking follows the weekly league record, decided from this
+            # answer within seconds (``league_days.track``).
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
@@ -382,7 +358,6 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
             anchor_outcome = _record_season_anchor(
                 connection, profile_version_id, profile
             )
-            first_battle_log.queue_day_1(connection, player[0], profile_version_id)
             queue_refresh.queue_for_reading(
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
@@ -390,17 +365,6 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 """
                 WITH candidate AS (
                     SELECT v.id AS profile_version_id, v.observed_at,
-                           v.eligibility_state,
-                           v.eligibility_state IN ('eligible', 'ineligible')
-                           AND NOT EXISTS (
-                               SELECT 1
-                               FROM player_profile_versions AS newer
-                               WHERE newer.player_id = v.player_id
-                                 AND newer.eligibility_state
-                                     IN ('eligible', 'ineligible')
-                                 AND (newer.observed_at, newer.id)
-                                     > (v.observed_at, v.id)
-                           ) AS update_eligibility,
                            v.source_contract_state = 'accepted'
                            AND (
                                p.current_observed_at IS NULL
@@ -418,27 +382,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                     WHERE p.id = %s AND v.id = %s
                 )
                 UPDATE players AS p
-                SET active = CASE
-                        WHEN candidate.update_eligibility
-                             AND candidate.eligibility_state = 'eligible' THEN true
-                        WHEN candidate.update_eligibility
-                             AND candidate.eligibility_state = 'ineligible' THEN false
-                        ELSE p.active
-                    END,
-                    next_due_at = CASE
-                        WHEN candidate.update_eligibility
-                             AND candidate.eligibility_state = 'eligible'
-                            THEN COALESCE(p.next_due_at, clock_timestamp())
-                        WHEN candidate.update_eligibility
-                             AND candidate.eligibility_state = 'ineligible' THEN NULL
-                        ELSE p.next_due_at
-                    END,
-                    eligibility_state = CASE
-                        WHEN candidate.update_eligibility
-                            THEN candidate.eligibility_state
-                        ELSE p.eligibility_state
-                    END,
-                    current_profile_version_id = CASE
+                SET current_profile_version_id = CASE
                         WHEN candidate.update_profile
                             THEN candidate.profile_version_id
                         ELSE p.current_profile_version_id
@@ -449,8 +393,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                     END,
                     updated_at = clock_timestamp()
                 FROM candidate
-                WHERE p.id = %s
-                  AND (candidate.update_eligibility OR candidate.update_profile)
+                WHERE p.id = %s AND candidate.update_profile
                 """,
                 (player[0], profile_version_id, player[0]),
             )

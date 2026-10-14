@@ -13,7 +13,7 @@ from typing import Any
 import psycopg
 from domain_test_support import domain_database, store_observation, text
 
-from clashlens import battle_day_repair, boundary
+from clashlens import battle_day_repair, boundary, boundary_members
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_changes
 from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
@@ -86,12 +86,11 @@ def seed_population(connection_info: str, players: int) -> int:
             """,
             (BOUNDARY, list(range(1, players + 1))),
         ).fetchone()[0]
-        generation_id, _ = boundary._create_boundary_generation(
+        generation_id, _ = boundary_members.create_generation(
             None,
             connection,
             boundary_at=BOUNDARY,
             sweep_id=sweep,
-            player_ids=list(range(1, players + 1)),
             generation=1,
             supersedes_id=None,
         )
@@ -884,12 +883,11 @@ def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]])
             """,
             (DAY_2_RESET, list(range(1, len(readings) + 1))),
         ).fetchone()[0]
-        generation_id, _ = boundary._create_boundary_generation(
+        generation_id, _ = boundary_members.create_generation(
             None,
             connection,
             boundary_at=DAY_2_RESET,
             sweep_id=sweep,
-            player_ids=list(range(1, len(readings) + 1)),
             generation=1,
             supersedes_id=None,
         )

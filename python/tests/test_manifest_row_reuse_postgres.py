@@ -12,7 +12,7 @@ import pytest
 from domain_test_support import domain_database, text
 from test_boundary_manifest_postgres import PLAYERS, per_player_inputs, seed_population
 
-from clashlens import boundary
+from clashlens import boundary, boundary_members
 from clashlens.boundary_manifest import (
     _apply_list_changes,
     _list_changes,
@@ -30,38 +30,20 @@ def _same(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return {**left, "generation": 0} == {**right, "generation": 0}
 
 
-def _correction(
-    connection: Any, source_id: int, generation: int, *, first_player: int = 1
-) -> int:
-    """The next generation of ``source_id``'s Reset, members copied, as a
-    correction makes it, or with members from ``first_player`` on only."""
+def _correction(connection: Any, source_id: int, generation: int) -> int:
+    """The next generation of ``source_id``'s Reset, as a correction makes it."""
     boundary_at, sweep_id = connection.execute(
         "SELECT boundary_at, sweep_id FROM boundary_publication_generations WHERE id = %s",
         (source_id,),
     ).fetchone()
-    generation_id, _ = boundary._create_boundary_generation(
+    generation_id, _ = boundary_members.create_generation(
         None,
         connection,
         boundary_at=boundary_at,
         sweep_id=sweep_id,
-        player_ids=list(range(first_player, PLAYERS + 1)),
         generation=generation,
-        supersedes_id=source_id if first_player == 1 else None,
+        supersedes_id=source_id,
     )
-    if first_player != 1:
-        connection.execute(
-            """
-            UPDATE boundary_publication_generation_members AS member
-            SET ranked_day_version_id = source.ranked_day_version_id,
-                ranked_day_input_hash = source.ranked_day_input_hash,
-                status = source.status, snapshot_status = source.snapshot_status,
-                army_status = source.army_status
-            FROM boundary_publication_generation_members AS source
-            WHERE member.generation_id = %s AND source.generation_id = %s
-              AND source.player_id = member.player_id
-            """,
-            (generation_id, source_id),
-        )
     return generation_id
 
 
@@ -191,14 +173,21 @@ def test_corrections_store_only_changed_rows_and_rebuild_the_full_manifest(
             database.close()
 
 
-def test_a_changed_membership_freezes_a_full_manifest(database_url: str) -> None:
+def test_a_changed_membership_freezes_a_full_manifest(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 _freeze(database, connection, first_id, 1)
-                second_id = _correction(connection, first_id, 2, first_player=2)
+                # Player 1 leaves the board, as one whose week the record
+                # decides was not Legend I does.
+                monkeypatch.setattr(
+                    boundary_members, "board_members",
+                    lambda *_: list(range(2, PLAYERS + 1)))
+                second_id = _correction(connection, first_id, 2)
                 second = _freeze(database, connection, second_id, 2)
             for kind in ("snapshot", "army"):
                 _, base_id, own, rows, rule_versions = second[kind]

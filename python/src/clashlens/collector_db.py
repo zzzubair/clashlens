@@ -1129,7 +1129,7 @@ class CollectorDatabase:
             or league_week.saves_unchanged_answer(connection, handoff, state[2])
         ):
             return False
-        # Discovery reprocesses an unrecognized league; a Refresh re-judges an untracked player's (league_drop).
+        # Discovery reprocesses an unrecognized league; a Refresh re-decides an untracked player's (league_week).
         if work_kind in {"discovery_profile", "live_refresh"} and handoff.endpoint == "profile" and connection.execute(
             "SELECT CASE WHEN %s THEN clashlens_profile_observation_unrecognized(%s) ELSE (SELECT NOT active AND eligibility_state = 'ineligible' FROM players WHERE id = %s) END",
             (work_kind == "discovery_profile", state[2], handoff.player_id),
