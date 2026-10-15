@@ -56,13 +56,16 @@ MAX_BATTLE_LENGTH = timedelta(minutes=3)
 # that allowing it from the report time kept; 120 lost 2 and 60 lost 42.
 # 150 is that 134 with a 16-second margin.
 DEFENSE_SHOWS_EARLY = timedelta(seconds=150)
-# A reading can lack battles its own player's log already listed (``judge``)
-# for at most this long after the oldest of them was reported. Of 496 such
-# readings from 5 to 13 October 2026 the lag was 21 minutes at the median,
-# 62 at the 90th percentile and 850 at most. Longer limits make more days
-# Complete, but in simulated days whose automatic loss differed from the
-# rule, 45 minutes and more made some Complete with the wrong loss; 40 made
-# none. Replaying 5 to 13 October 2026, it keeps 1,216 of the 1,338 days that
+# A reading equal to the total just before one of the player's battles is
+# set aside as stale (``judge``) for at most this long after that battle.
+# Battles reported up to 10 minutes before it (13 for a 3-minute defense)
+# may still be landing then and be missing from the reading too, so a
+# missing battle can be up to about 53 minutes old. Of 496 readings lacking
+# battles their own player's log already listed, from 5 to 13 October 2026
+# the lag was 21 minutes at the median, 62 at the 90th percentile and 850
+# at most. Longer limits make more days Complete, but in simulated days
+# whose automatic loss differed from the rule, 45 minutes and more made some
+# Complete with the wrong loss; 40 made none. Replaying 5 to 13 October 2026, it keeps 1,216 of the 1,338 days that
 # setting a stale reading aside with no limit made Complete.
 STALE_READING_LAG = timedelta(minutes=40)
 _JUST_BEFORE = timedelta(microseconds=1)

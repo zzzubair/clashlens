@@ -146,6 +146,20 @@ def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> N
                    end=5960).outcome == "contradicted"
 
 
+def test_a_stale_reading_counts_40_minutes_from_the_battle_it_matches_up_to() -> None:
+    # 5,940 lacks a -15 defense at 04:30 and a +35 attack at 04:40. It is the
+    # total just before the attack, with the defense still landing, so the
+    # 40 minutes run from 04:40 and the missing defense is 50 minutes old.
+    late = (*DAY_BATTLES, Effect("defense-2", -15, RESET - timedelta(minutes=30)),
+            Effect("attack-2", 35, RESET - timedelta(minutes=20)))
+
+    def read(when: datetime) -> str:
+        return verdict(Reading(when, 5940), day=late, end=5960).outcome
+
+    assert read(at(20)) == "unverified"
+    assert read(at(20) + timedelta(seconds=1)) == "contradicted"
+
+
 def test_a_defense_can_show_up_to_150_seconds_before_it_ends() -> None:
     # A defense of 10 stamped 15:00 that lasted 180 s: from 5 to 13 October
     # 2026 a reading showed one up to 134 s before its stamp plus its length.
