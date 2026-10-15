@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from typing import Any
 
@@ -48,21 +48,49 @@ MAX_AMBIGUOUS_BATTLES = 6
 # day before's last attack is reported by 05:05 and lands within
 # BATTLE_LANDING_LAG.
 DAY_READINGS_FROM = timedelta(minutes=15)
+# The game's battles last at most 3 minutes.
+MAX_BATTLE_LENGTH = timedelta(minutes=3)
+# A defense can show in the defender's profile before its report time plus
+# its length: replaying 13,467 days from 5 to 13 October 2026, a reading
+# showed one up to 134 seconds before. Allowing 135 seconds kept every day
+# that allowing it from the report time kept; 120 lost 2 and 60 lost 42.
+# 150 is that 134 with a 16-second margin.
+DEFENSE_SHOWS_EARLY = timedelta(seconds=150)
+# A reading equal to the total just before one of the player's battles is
+# set aside as stale (``judge``) for at most this long after that battle.
+# Battles reported up to 10 minutes before it (13 for a 3-minute defense)
+# may still be landing then and be missing from the reading too, so a
+# missing battle can be up to about 53 minutes old. Of 496 readings lacking
+# battles their own player's log already listed, from 5 to 13 October 2026
+# the lag was 21 minutes at the median, 62 at the 90th percentile and 850
+# at most. Longer limits make more days Complete, but in simulated days
+# whose automatic loss differed from the rule, 45 minutes and more made some
+# Complete with the wrong loss; 40 made none. Replaying 5 to 13 October 2026, it keeps 1,216 of the 1,338 days that
+# setting a stale reading aside with no limit made Complete.
+STALE_READING_LAG = timedelta(minutes=40)
+_JUST_BEFORE = timedelta(microseconds=1)
+# The landing time of a battle with no report time: taken as shown.
+UNTIMED = datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)
 class Effect:
-    """One battle's trophy change for the player, and the earliest moment
-    the profile can show it."""
+    """One battle's trophy change for the player, the earliest moment the
+    profile can show it, and how much longer than an attack it can take: a
+    defense from ``DEFENSE_SHOWS_EARLY`` before its stamp plus its length
+    to its stamp plus its length. Of 231 readings from 5 to 13 October 2026
+    showing a defense before its stamp plus its length, 223 came after the
+    attacker's own report."""
 
     identity: str
     change: int
     lands_from: datetime
     disputed: bool = False
+    length: timedelta = timedelta(0)
 
     @property
     def lands_until(self) -> datetime:
-        return self.lands_from + BATTLE_LANDING_LAG
+        return self.lands_from + self.length + BATTLE_LANDING_LAG
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,13 +167,19 @@ def judge(
     new_day_effects: Iterable[Effect],
     floor: int | None = None,
     reset: bool = False,
+    stale: bool = True,
 ) -> _Judged | None:
     """Whether one reading equals a value the ledger allows at its time, or
-    ``None`` when it cannot be judged: a disputed battle may be in it, or too
-    many battles may be. ``floor`` is the weekly raise: an ended-day value
+    ``None`` when it cannot be judged: a disputed battle may be in it, too
+    many battles may be, or, unless ``stale`` is false, it fits no value
+    but one a reading taken just before a battle that has landed could
+    show. ``floor`` is the weekly raise: an ended-day value
     below it may also be read raised to it, before any new-day battle; with
     ``reset``, a Season's reset, any ended-day value may be read set to it."""
-    day_effects = tuple(day_effects)
+    day_effects, new_day_effects = tuple(day_effects), tuple(new_day_effects)
+    ledger = {"end_before_loss": end_before_loss, "loss_candidates": loss_candidates,
+              "loss_certain": loss_certain, "day_effects": day_effects,
+              "new_day_effects": new_day_effects, "floor": floor, "reset": reset}
     at = reading.read_at
     base = end_before_loss
     missed: list[str] = []
@@ -244,6 +278,25 @@ def judge(
                 (way_loss, raised, shows(way_run, way_chosen))
                 for way_run, way_chosen, way_loss, raised in found),
         )
+    # A profile can lag its battle log by an hour or more: on 14 October
+    # 2026 #9G29VJ8C9 read 5,013 at 05:26:19, its total at the Reset, after
+    # seven new-day battles its own log listed by 05:19:48. Such a reading
+    # is stale: it neither confirms nor contradicts, and the battles count
+    # in their own day. Of 514 readings from 5 to 13 October lacking a
+    # battle, the player's own log already listed it in 487. Before the
+    # Reset no loss or raise had landed. A value the timeline reached only
+    # with an attack's credit lagging as well is not one it showed, nor one
+    # it left more than ``STALE_READING_LAG`` before.
+    before_reset = {"loss_candidates": (), "floor": None, "reset": False}
+    if stale and any(
+        (earlier := judge(replace(reading, read_at=effect.lands_from - _JUST_BEFORE), stale=False,
+                          **(ledger | (before_reset if ended else {})))) is not None
+        and earlier.matched and not earlier.lagged
+        for effects, ended in ((day_effects, True), (new_day_effects, False))
+        for effect in effects if effect.change and UNTIMED < effect.lands_from and (
+            effect.lands_until <= at <= effect.lands_from + STALE_READING_LAG)
+    ):
+        return None
     # The residual is against the day's end after a certain loss, the value
     # every saved result records as the expected next start.
     expected = base + new_day_change - (
@@ -278,6 +331,7 @@ def decide(
     reset: bool = False,
     history: frozenset[Way] | None = None,
     proof: Reading | None = None,
+    stale: bool = True,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
@@ -307,7 +361,8 @@ def decide(
     reading during the day that shows its end (``contradiction_during_day``):
     equal to the end before the loss, it is a clean match read before the
     loss, beside the confirm-only ones, as it cannot show whether the loss
-    landed; so never on a day whose loss is only possible.
+    landed; so never on a day whose loss is only possible. ``stale`` sets
+    aside a stale reading (``judge``) instead of letting it contradict.
     """
     judged = [
         judged for judged in (
@@ -320,6 +375,7 @@ def decide(
                 new_day_effects=new_day_effects,
                 floor=floor,
                 reset=reset,
+                stale=stale,
             )
             for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
             if reading.read_at >= reset_at
@@ -412,6 +468,8 @@ def contradiction_during_day(
     earlier: tuple[Effect, ...] = (),
     floor: int | None = None,
     reset: bool = False,
+    unshown: datetime | None = None,
+    stale: bool = True,
 ) -> tuple[Verdict | None, frozenset[Way] | None, Reading | None]:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
@@ -432,14 +490,17 @@ def contradiction_during_day(
     of the day had landed, so none came after it, and fitting one way only
     among those the trustworthy readings before it leave possible; a
     confirm-only one only when no trustworthy one does (``decide``'s
-    ``proof``)."""
+    ``proof``). A battle of the day stamped at ``unshown`` that only the
+    opponent has reported counts as one of the day's, landing as late as a
+    defense can: the player's own log, which the day is built from, may not
+    hold it yet. ``stale`` as ``decide``'s."""
     judged = [
         item for item in (
             judge(
                 reading, end_before_loss=start + pending_loss,
                 loss_candidates=(pending_loss,) if pending_loss else (),
                 loss_certain=bool(pending_loss), day_effects=earlier,
-                new_day_effects=day_effects, floor=floor, reset=reset,
+                new_day_effects=day_effects, floor=floor, reset=reset, stale=stale,
             )
             for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
             if day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
@@ -452,6 +513,8 @@ def contradiction_during_day(
         (0, False, shown - before) for _, _, shown in settled[-1].ways)
     landed = max((effect.lands_until for effect in day_effects if effect.change or effect.disputed),
                  default=day_start)
+    if unshown is not None:
+        landed = max(landed, unshown + MAX_BATTLE_LENGTH + BATTLE_LANDING_LAG)
 
     def shows_end(item: _Judged) -> bool:
         return item.reading.read_at >= landed and item.matched and not (

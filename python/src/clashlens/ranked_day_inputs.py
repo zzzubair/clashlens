@@ -8,9 +8,10 @@ from typing import Any
 
 from . import battle, domain, reading_rule
 from .db import PROCESSING_VERSION, Database, _text_value
-from .domain import CHAIN_BREAK_REASONS, RankedDay
+from .domain import CHAIN_BREAK_REASONS, MAX_DAILY_DEFENSES, RankedDay
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
+    DISPUTED_BATTLE_REASONS,
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
@@ -334,7 +335,8 @@ def load_previous_day(
             expected_next_start_trophies,
             failure_reasons,
             COALESCE(automatic_defense_loss, 0),
-            final_trophies_before_reset
+            final_trophies_before_reset,
+            automatic_defense_evidence_state
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -350,26 +352,27 @@ def load_previous_day(
     if previous_row is None:
         return None
     reasons = previous_row[14] if isinstance(previous_row[14], list) else []
-    # Continuous logs, a saved Legend day and no 9th attack or defense: every
-    # battle of that day is known, whether or not its readings were usable.
-    battles_known = bool(previous_row[5]) and _text_value(
-        previous_row[1]
-    ) in {"Complete", "Partial"} and not any(
-        reason in CHAIN_BREAK_REASONS for reason in reasons
+    state = _text_value(previous_row[1])
+    # Continuous logs, a saved Legend day, no 9th attack or defense and no
+    # disputed battle: every battle of that day is known, whether or not its
+    # readings were usable or agreed. Of 564 days this Season whose
+    # automatic loss was unknown, 372 followed an Inconsistent day whose
+    # logs were complete.
+    battles_known = bool(previous_row[5]) and state in {
+        "Complete", "Partial", "Inconsistent"} and not any(
+        reason in CHAIN_BREAK_REASONS or reason in DISPUTED_BATTLE_REASONS
+        for reason in reasons
     )
-    # With no defense slot used, only a reading shows the automatic loss for
-    # all 8 (see ``reconciliation._zero_defense_loss``), so an end no
-    # reading settled cannot start the next day.
-    end_known = battles_known and (
-        _text_value(previous_row[1]) == "Complete"
-        or int(previous_row[3]) + int(previous_row[11]) > 0
-    )
+    # A loss only a reading shows (``loss_rule.possible_losses``), for all 8
+    # slots of a day with none used or on a first Legend day with fewer
+    # attacks than defenses, leaves an end no reading settled unable to start
+    # the next day, as does a reading that disagreed.
+    slots = int(previous_row[3]) + int(previous_row[11])
+    end_known = battles_known and (state == "Complete" or state == "Partial" and 0 < slots and not (
+        slots < MAX_DAILY_DEFENSES and _text_value(previous_row[17]) == "not_applicable"))
     return (
         PreviousRankedDay(
-            complete=(
-                _text_value(previous_row[1]) == "Complete"
-                and bool(previous_row[5])
-            ),
+            complete=state == "Complete" and bool(previous_row[5]),
             observed_defense_count=int(previous_row[3]),
             observed_defense_loss=int(previous_row[4]),
             shield_run_length=(
@@ -381,7 +384,7 @@ def load_previous_day(
             shield_state=_text_value(previous_row[6]),
             version_id=int(previous_row[0]),
             ranked_day_start=ranked_day.start - timedelta(days=1),
-            state=_text_value(previous_row[1]),
+            state=state,
             confidence=_text_value(previous_row[2]),
             input_hash=(
                 _text_value(previous_row[8])
@@ -406,6 +409,32 @@ def load_previous_day(
             battles_known=battles_known,
         )
     )
+
+
+def load_next_day_start(
+    connection: Any, player_id: int, ranked_day: RankedDay, end_baseline_id: int,
+) -> int | None:
+    """The next day's latest saved start, when that day started from this
+    day's end Reset reading and its readings proved it, Complete and exact
+    or its end read cleanly (``reconciliation``'s ``_proven``)."""
+    row = connection.execute(
+        """
+        SELECT start_trophies, state, confidence, start_baseline_id,
+               input_evidence -> 'start_baseline_evidence' ->> 'start_trophies_source',
+               input_evidence -> 'end_reading' ->> 'clean'
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC, id DESC
+        LIMIT 1
+        """,
+        (player_id, ranked_day.end, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if row is None or row[0] is None or _text_value(row[1]) != "Complete" or (
+            row[3] != end_baseline_id or row[4] == "previous_day_end") or not (
+            _text_value(row[2]) == "exact" or row[5] == "true"):
+        return None
+    return int(row[0])
 
 
 def previous_end_start(
@@ -677,27 +706,37 @@ def load_readings(
     ), cut, covered_until
 
 
-def load_first_unshown_report(
-    connection: Any, player_id: int, since: datetime, until: datetime
-) -> datetime | None:
-    """The earliest report from ``since`` to ``until`` of a battle of this
-    player that only the opponent has reported so far: a profile read after
-    it may show a battle the player's own logs do not hold yet."""
-    return connection.execute(
+def load_unshown_reports(
+    connection: Any, player_id: int, ranked_day: RankedDay,
+) -> tuple[datetime | None, datetime | None]:
+    """The latest report in the day's battle window, and the earliest in the
+    next day's, of a battle of this player that only the opponent has
+    reported so far: a profile read after it may show a battle the player's
+    own logs do not hold yet.
+
+    Each report is saved under the battle day of its own timestamp
+    (``battle.py``), so only those two days' battles are read: with no index
+    on the defender, each day read costs about 650 pages. On production on
+    14 October 2026, for one player's 12 October, this read 1,822 pages,
+    where a lookup per window, each over 3 days, read 2,330 and 2,419."""
+    since, next_from = domain.battle_window(ranked_day.start)[0], domain.battle_window(ranked_day.end)[0]
+    row = connection.execute(
         """
-        SELECT min(evidence.battle_timestamp)
+        SELECT max(evidence.battle_timestamp) FILTER (WHERE evidence.battle_timestamp < %(next)s),
+               min(evidence.battle_timestamp) FILTER (WHERE evidence.battle_timestamp >= %(next)s)
         FROM legend_battles AS battle
         JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
         WHERE (battle.attacker_player_id = %(player)s OR battle.defender_player_id = %(player)s)
-          AND battle.ranked_day_start > %(since)s - interval '2 days'
-          AND battle.ranked_day_start < %(until)s
+          AND battle.ranked_day_start IN (%(day)s, %(next_day)s)
           AND evidence.battle_timestamp >= %(since)s
-          AND evidence.battle_timestamp < %(until)s
+          AND evidence.battle_timestamp < %(next)s + interval '1 day'
           AND NOT EXISTS (SELECT 1 FROM battle_evidence AS own
               WHERE own.battle_id = battle.id AND own.reporting_player_id = %(player)s)
         """,
-        {"since": since, "player": player_id, "until": until},
-    ).fetchone()[0]
+        {"since": since, "next": next_from, "player": player_id,
+         "day": ranked_day.start, "next_day": ranked_day.end},
+    ).fetchone()
+    return row[0], row[1]
 
 
 def load_first_reports(

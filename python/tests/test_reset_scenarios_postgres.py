@@ -446,12 +446,16 @@ def test_monday_reset_of_12_october_2026(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """Both players had not played this Season and sat at 5,000, so the
-    Season rule started their Sunday (Day 7). Each Sunday ended below 5,000
-    only after its automatic defense loss, and the Monday raise took them
-    back to 5,000. The Reset reading, taken before the loss, fitted; a 05:15
-    reading showed one missing defense's share taken and fitted nothing, so
-    the day is Inconsistent. It must still save, and the Monday board must
-    publish with both of them on it. A steady player shares the board, and
+    Season rule started their Sunday (Day 7), their first Legend day. Its
+    Reset reading came before the automatic defense loss. The game charges a
+    first Legend day for (attacks - defenses) missing defenses: P39803153's
+    05:15 reading shows 1 x 20 taken, so its day is Complete. P41426's 6
+    attacks and 6 defenses owe nothing, yet its 05:15 reading shows 30 taken
+    and fits nothing (3 of 1,250 such days from 6 to 13 October 2026 lost
+    something), so its day is Inconsistent. Charged for (8 - defenses), as
+    until 14 October 2026, each ended below 5,000 and the Monday raise took
+    it back, which the next story keeps. Each must still save, and the
+    Monday board must publish with both of them on it. A steady player shares the board, and
     their Armies on defense card compares their Sunday with every tracked
     player's. The Armies view shows each army's average trophies an attack
     for the board's players."""
@@ -459,13 +463,13 @@ def test_monday_reset_of_12_october_2026(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        P41426, P39803153, STEADY)
-        # 6 defenses lose 183, so 2 missing cost 30 each; the day ends at
-        # 5,001 before the loss and 4,941 after it.
+        # 6 attacks and 6 defenses: the day owes nothing and ends at 5,001.
         story.players[P41426].battles = (
             attacks(sunday, 31, 40, 2, 31, 40, 40)
             + defenses(sunday, 40, 40, 40, 40, 0, 23, army=THROWER)
         )
-        # 3 defenses lose 61, so 5 missing cost 20 each: 5,074 then 4,974.
+        # 4 attacks and 3 defenses losing 61: 1 missing at 20, so 5,074
+        # then 5,054.
         # Its first two attacks were by Thrower.
         story.players[P39803153].battles = (
             attacks(sunday, 26, 40, army=THROWER)
@@ -509,13 +513,13 @@ def test_monday_reset_of_12_october_2026(
 
     assert unfinished == []
     assert days[P41426] == {
-        "state": "Inconsistent", "start": 5000, "end": 4941, "next_start": 5000,
-        "automatic_loss": 60, "raise": 59, "attacks": 6, "defenses": 6,
+        "state": "Inconsistent", "start": 5000, "end": 5001, "next_start": 5001,
+        "automatic_loss": 0, "raise": 0, "attacks": 6, "defenses": 6,
         "residual": 0,
     }
     assert days[P39803153] == {
-        "state": "Inconsistent", "start": 5000, "end": 4974, "next_start": 5000,
-        "automatic_loss": 100, "raise": 26, "attacks": 4, "defenses": 3,
+        "state": "Complete", "start": 5000, "end": 5054, "next_start": 5054,
+        "automatic_loss": 20, "raise": 0, "attacks": 4, "defenses": 3,
         "residual": 0,
     }
     assert days[STEADY] == {
@@ -523,7 +527,7 @@ def test_monday_reset_of_12_october_2026(
         "automatic_loss": None, "raise": 0, "attacks": 8, "defenses": 8,
         "residual": 0,
     }
-    assert members == {P41426: "inconsistent", P39803153: "inconsistent",
+    assert members == {P41426: "inconsistent", P39803153: "complete",
                        STEADY: "complete"}
     assert board is not None and board["boundary_at"] == monday.isoformat()
     assert [(entry["tag"], entry["trophies"]) for entry in board["entries"]] == [
@@ -546,6 +550,51 @@ def test_monday_reset_of_12_october_2026(
         (row["label"], row["usage_count"], row["average_trophies"])
         for row in army_types_view["rows"]
     ] == [("Other", 16, 573 / 16), ("Thrower", 2, 33.0)]
+
+
+AFTER_LOSS = "#2PP"
+
+
+def test_monday_reset_of_a_sunday_below_5000_only_after_its_loss(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The 12 October 2026 case on an ordinary Sunday: the day ends at 5,010
+    before its automatic loss and 4,836 after it, and the Monday raise
+    takes it to 5,000. The Reset reading, taken before the loss, fits; a
+    05:15 reading fits nothing, so the day is Inconsistent. It must still
+    save, its next start 5,000, and the Monday board must publish with it."""
+    saturday, sunday, monday = day(6), day(7), day(8)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, AFTER_LOSS)
+        # From 5,100 Saturday ends at 4,940. Sunday's 2 defenses lose 50, so
+        # its 6 missing cost floor(290 / 10) = 29 each.
+        story.players[AFTER_LOSS].battles = (
+            _saturday(saturday) + attacks(sunday, 40, 40, 40) + defenses(sunday, 30, 20))
+        story.reset(saturday, {AFTER_LOSS: (5100, SEASON)})
+        story.reset(sunday, {AFTER_LOSS: (4940, SEASON)})
+        # The collector reads active players during the day; the board adds
+        # the battles after this reading to it.
+        story.read(AFTER_LOSS, sunday + timedelta(hours=1, minutes=20), 4940 - 30 + 40)
+        story.run_worker()
+        story.reset(monday, {AFTER_LOSS: (5010, SEASON)}, run=False)
+        story.read(AFTER_LOSS, monday + timedelta(minutes=15), 4980)
+        story.read(AFTER_LOSS, monday + timedelta(minutes=20))
+        story.run_worker()
+        saved = story.saved_day(AFTER_LOSS, sunday)
+        story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
+        members = story.board_members(monday)
+        board = story.served_board()
+
+    assert unfinished == []
+    assert saved == {
+        "state": "Inconsistent", "start": 4940, "end": 4836, "next_start": 5000,
+        "automatic_loss": 174, "raise": 164, "attacks": 3, "defenses": 2, "residual": 0,
+    }
+    assert members == {AFTER_LOSS: "inconsistent"}
+    assert board is not None
+    assert [(entry["tag"], entry["trophies"]) for entry in board["entries"]] == [
+        (AFTER_LOSS, 5010)]
 
 
 def _saturday(start: datetime) -> list[Battle]:

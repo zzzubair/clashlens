@@ -1373,7 +1373,8 @@ def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() 
     equal = _season_day_1((11, 15, 28, 24), (15, 40, 15, 40), None, 4968)
     # #QL89G8V2V: 1 attack for 21, 7 defenses for 189: the 05:00 reading was
     # 4,832 and 05:09:25 read 4,805, floor(189 / 7) for the one missing defense.
-    fewer_attacks = _season_day_1((21,), (40, 26, 25, 30, 28, 21, 19), None, 4832)
+    fewer_attacks = _season_day_1((21,), (40, 26, 25, 30, 28, 21, 19), None, 4832, readings=(
+        reading_rule.Reading(datetime(2026, 10, 6, 5, 9, 25, tzinfo=UTC), 4805),))
 
     assert more_attacks.automatic_defense_loss == 62
     assert more_attacks.final_trophies_before_reset == 4960
@@ -1383,10 +1384,9 @@ def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() 
     assert equal.automatic_defense_evidence_state == "confirmed"
     assert equal.final_trophies_before_reset == 4968
     assert (equal.state, equal.confidence) == ("Complete", "exact")
-    assert fewer_attacks.automatic_defense_loss == 27
-    assert fewer_attacks.final_trophies_before_reset == 4805
-    assert fewer_attacks.unsettled_automatic_loss == 27
-    assert (fewer_attacks.state, fewer_attacks.confidence) == ("Complete", "inferred")
+    # With fewer attacks the loss is (8 - defenses) or nothing: the reading shows which.
+    assert (fewer_attacks.automatic_defense_loss, fewer_attacks.final_trophies_before_reset) == (27, 4805)
+    assert (fewer_attacks.state, fewer_attacks.confidence) == ("Complete", "exact")
     # Any other day keeps 8 - defenses, whatever the attacks.
     ordinary = reconcile_ranked_day(
         _input(contributions=(*_attacks(20, 20), *_defenses(10, 10)), next_start_trophies=5960)

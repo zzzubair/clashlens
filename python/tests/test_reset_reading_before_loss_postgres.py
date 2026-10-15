@@ -220,7 +220,8 @@ def test_recheck_refreshes_saved_days_until_one_stays_the_same(
 ) -> None:
     # Day B's Reset reading misses its attack gain. Day C, 8 defenses, then
     # starts too low and is Inconsistent though its own end reading is right;
-    # day D, 1 defense, has no automatic loss without a complete day C.
+    # day D, 1 defense, averages its automatic loss with day C's 8 defenses,
+    # all known though day C's readings disagree.
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -253,9 +254,9 @@ def test_recheck_refreshes_saved_days_until_one_stays_the_same(
         _day_end_recheck(connection_info, archive_server)
         day_c_row, day_d_row = _latest_days(connection_info, (DAY_C, DAY_D))
 
-    assert before == ["Inconsistent", "Partial"]
-    # Day C's next start stays the same but it is now complete, so day D can
-    # take its automatic loss.
+    assert before == ["Inconsistent", "Complete"]
+    # Day C's next start stays the same but it is now complete; day D,
+    # calculated again with it, stays the same.
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_c, end_c)
     assert day_d_row[:7] == (
         "Complete", "exact", end_c, end_d, end_d, 7 * LOSS, "confirmed",

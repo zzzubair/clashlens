@@ -176,12 +176,14 @@ story was checked on 12 October 2026:
 
 | Story | Fix reversed | What failed on the old code |
 |---|---|---|
-| `test_monday_reset_of_12_october_2026` | PR 469 (`b8948e97`) | Both players' Sunday days refused by the database: "violates check constraint ranked_day_versions_formula_v2_check", the 12 October error |
+| `test_monday_reset_of_12_october_2026` | PR 469 (`b8948e97`) | Both players' Sunday days refused by the database: "violates check constraint ranked_day_versions_formula_v2_check", the 12 October error. Since the first Legend day rule (14 October 2026) neither Sunday ends below 5,000, so it passes with PR 469 reversed; the next story keeps the case |
+| `test_monday_reset_of_a_sunday_below_5000_only_after_its_loss` | PR 469 (`b8948e97`), checked 14 October 2026 | AFTER_LOSS's Sunday never saved, its Monday board member failed, and serving the board raised "TypeError: int() argument must be ... not 'NoneType'" |
 | `test_monday_reset_with_sundays_ending_around_5000` | PRs 460 then 447 (`1258ae09`, `e00964df`) | IN_FLIGHT ranked at 4,940, counting an attack that ended after 05:00, instead of 4,900. With PR 460 alone reversed the story passes: that case is PR 447's |
 | `test_season_end_reset_and_its_first_day` | PR 441 (`18495dd4`), `reconciliation.py` and `reconciliation_db.py` | DISAGREES's Day 1 saved Inconsistent instead of Complete |
 | `test_wednesday_reset_with_days_that_once_could_not_save` | PR 414's migration `0092_shield_runs_any_length.sql` (`a104bbc0`) | SHIELD_RUN's third shielded day refused by the database, as on 9 October |
 | `test_weekly_raise_postgres.py` | The late weekly raise fix (13 October 2026), `python/src` | LATE_RAISE's Sunday saved Inconsistent with next start 4,940 instead of Complete at 5,000, as 4,136 Sundays were on 12 October |
 | `test_monday_board_proof_postgres.py` | The Monday board proof fix (14 October 2026), `python/src` | LL02YLGG ranked at its 03:05:53 reading, 5,036, instead of its Complete day's 4,996. With only `boundary_manifest.py` kept, NEVER, EXACT and BELOW stayed uncertain instead of confirmed |
+| `test_day_timeline_postgres.py` | The battle timeline fix (14 October 2026), `python/src` | FIRST's Monday saved a 23 loss, ending at 5,023 instead of 5,046; every Tuesday Inconsistent and the whole board uncertain. NEVER's Sunday saved Complete at 4,740 instead of 4,800, ranked 4,740 uncertain. With the fixes of PR 526's review reversed (15 October 2026): NEVER's Saturday kept its 60 loss, ending at 4,740 while Sunday started at 4,800 |
 | `test_reset_at_full_size` | PR 467 (`2ec9b97b`) | The Monday Reset read the whole battles table about 734 times (about 100 million rows) instead of under 20; the story took 119 seconds instead of about 90 |
 
 ## Reset cases and their tests
@@ -197,7 +199,7 @@ Every boundary case in section 8 of the three reliability reports of
 |---|---|---|---|
 | Day ends below 5,000 and is raised to 5,000 | O1, F1, S Monday | Monday story RAISED | `test_reconciliation.py` |
 | Day ends at exactly 5,000 | F2, S Monday | Monday story EXACT | |
-| Below 5,000 only after the automatic loss; the Reset reading fits and a later one contradicts (12 October) | O1, O7, F3, F4, S early Monday | 12 October story, both real players | `test_monday_reset_reading.py` (4 real players, calculation only); `test_reset_reading_before_loss_postgres.py::test_monday_day_contradicted_after_a_fitting_reset_reading_is_saved` |
+| Below 5,000 only after the automatic loss; the Reset reading fits and a later one contradicts (12 October) | O1, O7, F3, F4, S early Monday | Monday story AFTER_LOSS; the 12 October story's real players are first Legend days, no longer below 5,000 | `test_monday_reset_reading.py` (4 real players, calculation only); `test_reset_reading_before_loss_postgres.py::test_monday_day_contradicted_after_a_fitting_reset_reading_is_saved` |
 | Reset reading taken before the raise landed (12 October 2026) | F5 | Monday story UNRAISED; `test_weekly_raise_postgres.py`: Sunday Complete and proven on the board, even when the last reading before the Reset lacked a late attack's gain, Monday starts at 5,000, a Sunday with no battle that the reading shows charged ends after the charge, a reading unraised again after the raise still contradicts, and the full Season repair mends a Sunday and Monday saved before the fix, their board totals confirmed | `test_reading_rule.py::test_the_weekly_raise_can_land_after_the_reset_reading`; `test_monday_reset_reading.py` |
 | No defense on a Monday; the raise hides the charge, unless a reading before the raise landed shows it | O6, F10, S no defenses | Monday story ZERO | `test_reset_reading_before_loss_postgres.py::test_monday_charge_read_before_the_raise_starts_no_next_day` |
 | Reset reading taken before the automatic loss, on a Monday | O5 | Monday story UNSETTLED | |
@@ -231,6 +233,10 @@ Every boundary case in section 8 of the three reliability reports of
 | Reset reading rejected (Season 0), so the day starts from the day before's end | F27, S Season 0 | Wednesday story CHAIN_BROKEN, where the day before has no end either | `test_first_battle_log_postgres.py::test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end` |
 | Chain start when the day before is Partial | F28 | Wednesday story CHAIN_BROKEN | |
 | A reading still missing the day before's automatic loss | F26 | Not in a story: needs the game to apply the loss more than 15 minutes late, seen 0 times on 9 October | `test_reading_rule.py::test_a_season_reset_removes_the_day_befores_pending_loss` |
+| A reading lagging the player's own battle log, equal to an earlier total (`#9G29VJ8C9`, 14 October 2026) | Diag 4.1 D | `test_day_timeline_postgres.py` LATE | `test_reading_rule.py::test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside` |
+| A defense shown before its battle ends | Diag 4.1 C | `test_day_timeline_postgres.py` EARLY | `test_reading_rule.py::test_a_defense_can_show_up_to_150_seconds_before_it_ends` |
+| The day before's loss after a day not Complete, or one that never lands | Diag 4.1 A, G2 | `test_day_timeline_postgres.py` NEXT and NEVER, with the nightly check finding NEVER's Sunday where its Saturday says | `test_loss_timing.py` |
+| A reading during the day taken before a battle only the opponent has reported could land | Review of PR 524 | Not in a story: stories report both sides of each battle | `test_reading_rule.py::test_a_reading_after_the_days_last_battle_shows_its_end` |
 
 ### Battles, counts and battle logs
 
@@ -238,6 +244,7 @@ Every boundary case in section 8 of the three reliability reports of
 |---|---|---|---|
 | Automatic loss for 1 to 7 defenses | O4, S 1–7 defenses | 12 October story, Wednesday story UNSETTLED_LOSS | `test_reconciliation.py` |
 | Automatic loss when a log gap hides the day before's defenses | F8 | Wednesday story GAP_BEFORE | `test_reconciliation.py::test_incomplete_coverage_keeps_one_to_seven_defense_adjustment_unknown` |
+| First Legend day: charged attacks less defenses, or only what a reading shows with fewer attacks | Diag 4.2 B | `test_day_timeline_postgres.py` FIRST | `test_loss_timing.py`, `test_monday_reset_reading.py::test_a_first_played_day_loses_its_attacks_less_its_defenses` |
 | No defense: charged for all 8 or nothing, as a reading shows | O6, F9, S no defenses | Wednesday story ZERO_CHARGED; Monday story ZERO | `test_reset_reading_before_loss_postgres.py::test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck` |
 | Battle-log gap | O12, F23, S battle logs | Wednesday story GAP_BEFORE, CHAIN_BROKEN | `test_reconciliation.py` |
 | Log gap, but all 8 attacks and 8 defenses recorded | F24, S eight defenses | Wednesday story FULL_WITH_GAP | |

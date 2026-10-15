@@ -760,7 +760,7 @@ def _automatic_defense(
     season_first_day: bool,
 ) -> tuple[int | None, int | None]:
     """Open defense slots at Reset and the game's loss for each, as the worker
-    charges it (reconciliation.automatic_defense_loss). The loss is None
+    charges it (loss_rule.automatic_defense_loss). The loss is None
     unless both days' battles are known."""
     if today is None:
         return None, None
