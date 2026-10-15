@@ -144,7 +144,7 @@ describe("Discord attack alerts settings", () => {
     expect(rows[1]).toContain(">Off<");
     expect(rows[1]).toContain("No alerts for Nightfall.");
     expect(rows[1]).toContain('aria-label="Turn on attack alerts for Nightfall #8QQ"');
-    expect(html).toContain("was attacked");
+    expect(html).toContain("🛡️ Wanderer −24 🏆");
     expect(html).not.toContain("wasn&#x27;t delivered");
     expect(html).not.toContain("Reconnect Discord");
   });

@@ -90,18 +90,22 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
         assert outage.value.retry_after == wait
 
 
-def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
+def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification() -> None:
+    """The message's own text, all a phone's notification shows, is the
+    defender and the trophies lost, with a right-to-left name kept from
+    moving the number; the box below names the attacker without pinging
+    anyone, in the defender's colour, with a button to the battle."""
     client = FakeClient(None)
     reply = attack_alert(
         SITE,
         {
             "defender_tag": "#2PP",
-            "defender_name": "Wanderer",
+            "defender_name": "صقر الشمال",
             "attacker_tag": "#8QQ",
             "attacker_name": "@everyone *Drift*",
-            "stars": 3,
-            "destruction_percentage": 100,
-            "trophies_lost": 0,
+            "stars": 2,
+            "destruction_percentage": 88,
+            "trophies_lost": 24,
             "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
             "battle_id": 41,
             "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC),
@@ -110,22 +114,20 @@ def test_an_alert_names_the_defender_and_cannot_ping_anyone() -> None:
         PLAYER_COLOURS[1],
     )
     asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
-    items = list(client.sent[0]["view"].walk_children())
-    text = "\n".join(item.content for item in items if isinstance(item, discord.ui.TextDisplay))
-    assert text.splitlines() == [
-        "### Wanderer was attacked",
-        f"-# #2PP · <t:{int(datetime(2026, 10, 12, 6, tzinfo=UTC).timestamp())}:t>",
-        "**@\u200beveryone \\*Drift\\*** #8QQ",
-        "★★★  ·  100%  ·  **0** trophies",
-        "-# @\u200beveryone \\*Drift\\*'s hit rate in this attack's Season: Unavailable",
-        "-# [Alert settings](https://clashlens.test/account/discord-alerts)",
+    message = client.sent[0]
+    assert message["content"] == "🛡️ \u2068صقر الشمال\u2069  −24 🏆"
+    [box] = message["embeds"]
+    assert box.description.splitlines() == [
+        "**\u2068@\u200beveryone \\*Drift\\*\u2069** #8QQ",
+        "★★☆  ·  88%",
+        "-# Season hit rate **Unavailable**",
     ]
-    # The defender's colour, and a button to the battle highlighted on its Legend day.
-    assert [
-        item.accent_colour for item in items if isinstance(item, discord.ui.Container)
-    ] == [PLAYER_COLOURS[1]]
-    assert [item.url for item in items if isinstance(item, discord.ui.Button)] == [
-        "https://clashlens.test/players/%232PP?day=2026-10-12#battle-41"
+    assert (box.colour.value, box.footer.text, box.timestamp) == (
+        PLAYER_COLOURS[1], "صقر الشمال #2PP", datetime(2026, 10, 12, 6, tzinfo=UTC)
+    )
+    assert [item.url for item in message["view"].children] == [
+        "https://clashlens.test/players/%232PP?day=2026-10-12#battle-41",
+        "https://clashlens.test/account/discord-alerts",
     ]
 
 
@@ -359,7 +361,7 @@ def test_an_alert_rates_the_attacker_as_of_when_it_is_written() -> None:
 
     loop = AlertLoop(ResetRound(reset), SlowDiscord(), SITE, now=lambda: moment[0])
     assert asyncio.run(loop.tick()) == 2
-    assert "-# Drift's hit rate in this attack's Season: 60%" in sent[1].text.splitlines()
+    assert "-# Season hit rate **60%**" in sent[1].text.splitlines()
 
 
 def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:

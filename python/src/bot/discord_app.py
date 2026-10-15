@@ -2,7 +2,9 @@
 
 It registers the slash commands, decides who sees a reply, runs the database
 reads off the event loop, and turns a `Reply` into a Discord message laid out
-in Discord's cards (its "components v2"), with buttons.
+in Discord's cards (its "components v2"), with buttons; an attack alert uses
+Discord's older layout instead, the only one that can carry the line a
+phone's notification shows.
 
 Who sees a reply: every reply is a normal message anyone in the conversation
 can see and forward. Only the not-connected pointer and plain errors meant for
@@ -70,6 +72,24 @@ def lay_out(view: discord.ui.LayoutView, reply: Reply) -> None:
         view.add_item(discord.ui.TextDisplay(f"-# {reply.footer}"))
     if reply.links:
         view.add_item(discord.ui.ActionRow(*(_button(link) for link in reply.links)))
+
+
+def lay_out_notice(reply: Reply) -> dict[str, Any]:
+    """`reply` in Discord's older layout, the only one whose message can
+    carry the line a phone's notification shows: `notice`, then each card as
+    a box with its coloured edge, the last ending in `footer` and the time
+    `at`, then every button."""
+    embeds = [
+        discord.Embed(description="\n\n".join(card.parts), colour=card.colour)
+        for card in reply.cards
+    ]
+    if reply.footer:
+        embeds[-1].set_footer(text=reply.footer)
+    embeds[-1].timestamp = reply.at
+    view = discord.ui.View(timeout=None)
+    for link in (*(card.button for card in reply.cards if card.button), *reply.links):
+        view.add_item(_button(link))
+    return {"content": reply.notice, "embeds": embeds, "view": view}
 
 
 def _button(link: replies.Link) -> discord.ui.Button[Any]:
@@ -426,14 +446,18 @@ class DiscordMessenger:
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
     ) -> None:
-        view = discord.ui.LayoutView(timeout=None)
-        lay_out(view, reply)
+        if reply.notice:
+            message = lay_out_notice(reply)
+        else:
+            view = discord.ui.LayoutView(timeout=None)
+            lay_out(view, reply)
+            message = {"view": view}
         http = self.client.http
         http.max_ratelimit_timeout = time_left
         self._sending += 1
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
-            await channel.send(view=view, nonce=nonce)
+            await channel.send(**message, nonce=nonce)
         except asyncio.CancelledError:
             http._global_over.set()
             raise

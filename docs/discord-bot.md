@@ -46,8 +46,17 @@ only the not-connected pointer and plain errors are private to the person.
 
 ## How messages look
 
-Every message is laid out in Discord's cards ("components v2"): text in one or
-more blocks with a coloured edge, with link buttons. Messages about one of the
+Every message but an attack alert is laid out in Discord's cards ("components
+v2"): text in one or more blocks with a coloured edge, with link buttons. A
+message in that layout cannot carry the line a phone's notification shows, so
+the notification would be blank. An attack alert therefore uses Discord's
+older layout: one line, all the notification shows, with the defending player
+and the trophies lost ("🛡️ Wanderer −24 🏆"), then a box with the attacker and
+their tag, the stars and destruction, and the attacker's hit rate in the
+battle's Season, ending with the defender's tag and the battle's time, then
+Open battle and Alert settings buttons. Each name in it is wrapped in Unicode
+isolation marks, so a name written right to left cannot move the numbers
+beside it. Messages about one of the
 Clasher's own linked accounts (attack alerts, the alerts-on message, that
 account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account

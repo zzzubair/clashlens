@@ -350,12 +350,14 @@ function AttackAlertSwitches({
           </ul>
           <figure className="attack-alert-example">
             <figcaption className="form-help">
-              An attack alert looks like this:
+              An attack alert looks like this. Your phone&apos;s notification shows its
+              first line:
             </figcaption>
+            <strong>{`🛡️ ${example ? (example.name ?? "Unnamed") : "Wanderer"} −24 🏆`}</strong>
             <div className="attack-alert-message">
-              <strong>{example ? label(example) : "Wanderer #2PP"} was attacked</strong>
-              <span>Drift #9RR: 2★ · 87% · −24 trophies</span>
-              <span>Drift&apos;s hit rate in this attack&apos;s Season: 62%</span>
+              <strong>Drift #9RR</strong>
+              <span>★★☆ · 87%</span>
+              <span>Season hit rate 62%</span>
             </div>
           </figure>
         </>

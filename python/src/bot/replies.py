@@ -94,12 +94,19 @@ class Reply:
     # and plain errors meant for them. Every other reply is a normal message
     # anyone in the conversation can see and forward.
     private: bool = False
+    # The one line a phone's notification shows. Discord's cards cannot carry
+    # it, so a reply with one goes in Discord's older layout: this line, then
+    # each card as a box, the last ending in `footer` as plain text and the
+    # time `at`, then the buttons.
+    notice: str | None = None
+    at: datetime | None = None
 
     @property
     def text(self) -> str:
         """All of the reply's words, in order."""
         return "\n\n".join(
-            [*filter(None, [self.title]), *(part for card in self.cards for part in card.parts),
+            [*filter(None, [self.notice, self.title]),
+             *(part for card in self.cards for part in card.parts),
              *filter(None, [self.footer])]
         )
 
@@ -141,6 +148,12 @@ def safe(text: str | None) -> str:
     if not text:
         return "Unnamed"
     return escape_mentions(escape_markdown(" ".join(text.split())))
+
+
+def isolated(text: str) -> str:
+    """`text` kept apart from the words around it, so a name written right to
+    left cannot move the numbers beside it."""
+    return f"\u2068{text}\u2069"
 
 
 def number(value: int) -> str:
@@ -596,9 +609,12 @@ def stats_reply(
 def attack_alert(
     site: Site, alert: Mapping[str, Any], attacker_hit_rate: str, colour: int
 ) -> Reply:
-    """The DM sent when one of the person's players is attacked, named by the
-    defending player since an account can have several."""
-    attacker = safe(alert["attacker_name"])
+    """The DM sent when one of the person's players is attacked. Its first
+    line, all a phone's notification shows, is the defending player, named
+    since an account can have several, and the trophies lost; the box below
+    has the attacker, the stars and destruction, and the attacker's hit rate
+    in the battle's Season."""
+    attacker = isolated(safe(alert["attacker_name"]))
     lost = alert["trophies_lost"]
     stars = "★" * alert["stars"] + "☆" * (3 - alert["stars"])
     return Reply(
@@ -606,26 +622,28 @@ def attack_alert(
             Card(
                 (
                     (
-                        f"### {safe(alert['defender_name'])} was attacked\n"
-                        f"-# {alert['defender_tag']} · {discord_time(alert['saved_at'], 't')}"
-                    ),
-                    (
                         f"**{attacker}** {alert['attacker_tag']}\n"
-                        f"{stars}  ·  {alert['destruction_percentage']}%  ·  "
-                        f"**{f'−{number(lost)}' if lost else '0'}** trophies\n"
-                        f"-# {attacker}'s hit rate in this attack's Season: {attacker_hit_rate}"
+                        f"{stars}  ·  {alert['destruction_percentage']}%\n"
+                        f"-# Season hit rate **{attacker_hit_rate}**"
                     ),
                 ),
                 colour,
-                Link(
-                    "Open battle",
-                    site.battle(
-                        alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"]
-                    ),
-                ),
             ),
         ),
-        footer=f"[Alert settings]({site.url(DISCORD_ALERTS)})",
+        notice=(
+            f"🛡️ {isolated(safe(alert['defender_name']))}  "
+            f"{f'−{number(lost)}' if lost else '0'} 🏆"
+        ),
+        # A box's small print shows no markup, so the name is not escaped.
+        footer=f"{' '.join((alert['defender_name'] or 'Unnamed').split())} {alert['defender_tag']}",
+        at=alert["saved_at"],
+        links=(
+            Link(
+                "Open battle",
+                site.battle(alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"]),
+            ),
+            Link("Alert settings", site.url(DISCORD_ALERTS)),
+        ),
     )
 
 

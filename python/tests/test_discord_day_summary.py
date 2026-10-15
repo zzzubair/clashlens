@@ -358,7 +358,7 @@ def test_slow_summary_dms_do_not_delay_an_attack_alert() -> None:
         discord.release.set()
         return alert_sent, during, await sending
 
-    alert = "### Wanderer was attacked"
+    alert = "🛡️ \u2068Wanderer\u2069  −24 🏆"
     assert asyncio.run(scenario()) == (1, [alert], 3)
     assert discord.sent == [alert, "one", "two", "three"]
     assert log.finished == [(7, "sent")]
