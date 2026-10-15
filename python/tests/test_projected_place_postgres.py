@@ -18,6 +18,7 @@ from test_reset_scenarios_postgres import SEASON, Battle, _story, attacks, day, 
 
 from clashlens import api_dashboard, projected_place, queue_refresh, worker
 from clashlens.api_db import ApiDatabase
+from clashlens.stage_metrics import StageMetrics
 
 DONE, CHASER = "#2PP", "#8PP"
 EXAMPLE, TODAY = day(3), day(4)
@@ -77,7 +78,7 @@ def _save_examples(connection_info: str, archive_server, monkeypatch) -> None:
     # 07:00 UTC it would queue the nightly re-check, left waiting here.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     database, _ = _processor(connection_info, archive_server)
-    maintenance = worker.TimedMaintenance(database, worker.StageMetrics())
+    maintenance = worker.TimedMaintenance(database, StageMetrics())
     try:
         maintenance.run_due()
     finally:
