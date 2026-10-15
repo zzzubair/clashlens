@@ -222,20 +222,20 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     ]
     alerts = [reply for _, reply in discord.sent[1:]]
     assert {user for user, _ in discord.sent} == {DISCORD_ID}
-    assert {reply.text.splitlines()[0] for reply in alerts} == {f"### {NAME} was attacked"}
-    assert sorted(reply.cards[0].parts[1].splitlines() for reply in alerts) == sorted([
+    assert sorted(
+        [reply.notice, *reply.cards[0].parts[0].splitlines()] for reply in alerts
+    ) == sorted([
         [
-            f"**{NAME}** {attacker}",
-            f"{'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%  ·  **−30** trophies",
-            f"-# {NAME}'s hit rate in this attack's Season: 75%",
+            f"🛡️ \u2068{NAME}\u2069  −30 🏆",
+            f"**\u2068{NAME}\u2069** {attacker}",
+            f"{'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%",
+            "-# Season hit rate **75%**",
         ],
         [
-            f"**Opponent** {stranger}",
-            (
-                f"{'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  "
-                f"{stranger_destruction}%  ·  **−20** trophies"
-            ),
-            "-# Opponent's hit rate in this attack's Season: not tracked yet",
+            f"🛡️ \u2068{NAME}\u2069  −20 🏆",
+            f"**\u2068Opponent\u2069** {stranger}",
+            f"{'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  {stranger_destruction}%",
+            "-# Season hit rate **not tracked yet**",
         ],
     ])
     # Every message about the account's first linked player has its colour,
@@ -244,8 +244,7 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
         PLAYER_COLOURS[0]
     }
     assert all(
-        reply.cards[0].button is not None
-        and reply.cards[0].button.url.startswith(
+        reply.links[0].url.startswith(
             f"https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
         )
         for reply in alerts
@@ -335,7 +334,8 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     assert [(player["tag"], player["on"]) for player in shown["players"]] == [
         ("#2PP", True), ("#8QQ", False)]
     assert cleared["undelivered"] is None
-    assert "★☆☆  ·  33%  ·  **−16** trophies" in discord.sent[0][1].text.splitlines()
+    assert discord.sent[0][1].notice == "🛡️ \u2068Unnamed\u2069  −16 🏆"
+    assert "★☆☆  ·  33%" in discord.sent[0][1].text.splitlines()
 
 
 def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
@@ -396,7 +396,7 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
     assert cleared is None
     assert [reply.text.splitlines()[0] for _, reply in discord.sent] == [
         "### Attack alerts are on",
-        "### Unnamed was attacked",
+        "🛡️ \u2068Unnamed\u2069  −16 🏆",
     ]
     assert all("#2PP" in reply.text for _, reply in discord.sent)
 
