@@ -11,9 +11,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, legend_i_week, store_observation, text
 
-from clashlens import battle_day_repair, boundary
+from clashlens import battle_day_repair, boundary, boundary_members
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_changes
 from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
@@ -86,12 +86,11 @@ def seed_population(connection_info: str, players: int) -> int:
             """,
             (BOUNDARY, list(range(1, players + 1))),
         ).fetchone()[0]
-        generation_id, _ = boundary._create_boundary_generation(
+        generation_id, _ = boundary_members.create_generation(
             None,
             connection,
             boundary_at=BOUNDARY,
             sweep_id=sweep,
-            player_ids=list(range(1, players + 1)),
             generation=1,
             supersedes_id=None,
         )
@@ -875,6 +874,7 @@ def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]])
                 " OVERRIDING SYSTEM VALUE VALUES (%s, %s, true)",
                 (index, tag),
             )
+        legend_i_week(connection, list(range(1, len(readings) + 1)), _october(5, 5))
         sweep = connection.execute(
             """
             INSERT INTO collector_reset_sweeps
@@ -884,12 +884,11 @@ def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]])
             """,
             (DAY_2_RESET, list(range(1, len(readings) + 1))),
         ).fetchone()[0]
-        generation_id, _ = boundary._create_boundary_generation(
+        generation_id, _ = boundary_members.create_generation(
             None,
             connection,
             boundary_at=DAY_2_RESET,
             sweep_id=sweep,
-            player_ids=list(range(1, len(readings) + 1)),
             generation=1,
             supersedes_id=None,
         )
@@ -1007,7 +1006,7 @@ def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_p
                 "generation": 1,
                 "profile_not_found": 1,
                 "late_battles": 0,
-                "reordered": False,
+                "reordered": False, "members_changed": 0,
             }
             reports = [
                 boundary.queue_board_rebuilds(database, season, queue=queue)
@@ -1268,7 +1267,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
-                    "reordered": False,
+                    "reordered": False, "members_changed": 0,
                     "correction": "queued",
                 }
             ]
@@ -1492,7 +1491,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
-                    "reordered": False,
+                    "reordered": False, "members_changed": 0,
                     "correction": "not_queued",
                 }
             ]

@@ -6,7 +6,7 @@ from threading import Event, Semaphore
 
 import pytest
 
-import clashlens.worker as worker_module
+from clashlens.stage_metrics import StageMetrics
 from clashlens.worker import (
     ProcessResult,
     TimedMaintenance,
@@ -102,7 +102,7 @@ class QueueOnlyDatabase:
 
 def _held_maintenance() -> tuple[TimedMaintenance, HeldSweep, QueueOnlyDatabase]:
     database = QueueOnlyDatabase()
-    maintenance = TimedMaintenance(database, worker_module.StageMetrics())  # type: ignore[arg-type]
+    maintenance = TimedMaintenance(database, StageMetrics())  # type: ignore[arg-type]
     sweep = HeldSweep()
     maintenance.late_battles = sweep  # type: ignore[assignment]
     return maintenance, sweep, database

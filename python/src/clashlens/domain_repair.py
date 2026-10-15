@@ -8,12 +8,17 @@ how a saved day or board comes out, then run it once:
 - ``preview`` writes nothing: the Season's saved days by state and reason,
   its published boards, and how many players are left to recalculate.
 - ``queue`` saves that as the repair's receipt the first time, then repairs
-  in order, at most ``max_jobs`` per run, at backfill priority: first the
-  saved evidence days are built from (``battle_day_repair.enqueue_rebuilds``
-  and ``reset_baselines.repair_current_season_reset_baselines``, each for
-  this Season only); then, once every such repair has finished and none has
-  failed, each player's saved days of the Season, oldest first in one job,
-  each later day starting where the day before now ends;
+  in order, at most ``max_jobs`` per run, at backfill priority: first, once
+  the weekly league record has decided every week of the Season with new
+  evidence, the public days saved before their weeks were decided
+  (``league_days.settle``); then the saved evidence days are built from
+  (``battle_day_repair.enqueue_rebuilds`` and
+  ``reset_baselines.repair_current_season_reset_baselines``, each for this
+  Season only); then, once every such repair has finished and none has
+  failed, every day of the Season of each player with a saved day or a
+  Legend I week in it (in a Season before the record, each player's saved
+  days), oldest first in one job, each later day starting where the day
+  before now ends;
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
   entries the rules now change (``boundary.queue_board_rebuilds``); then,
@@ -27,7 +32,7 @@ how a saved day or board comes out, then run it once:
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
 rule change can affect, chosen when its first queue runs
-(``_scoped_players``, ``_promoted_players``) and kept on its own receipt, so the full repair of the same revision still
+(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -97,9 +102,9 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
-DAY_RULES_REVISION = "2026-10-14-reading-during-day"
+DAY_RULES_REVISION = "2026-10-15-league-week"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
-REPAIR_SCOPES = ("day-1-or-unplayed", "promoted")
+REPAIR_SCOPES = ("day-1-or-unplayed",)
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
@@ -108,7 +113,7 @@ def season_repair(
     scope: str | None = None,
 ) -> dict[str, Any]:
     """Run one Season repair action; see the module notes."""
-    from . import battle_day_repair, boundary
+    from . import battle_day_repair, boundary, league_days
 
     start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(start):
@@ -134,19 +139,22 @@ def season_repair(
         ).fetchone()
         if scope and receipt is not None:
             players = [int(player) for player in receipt[5]]
-        elif scope == "promoted":
-            players = _promoted_players(connection, start)
         elif scope:
             players = _scoped_players(connection, start)
         else:
             players = [
                 int(row[0]) for row in connection.execute(
                     """
-                    SELECT DISTINCT player_id FROM ranked_day_versions
-                    WHERE ranked_day_start >= %s AND ranked_day_start < %s
+                    SELECT player_id FROM ranked_day_versions
+                    WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                    UNION
+                    SELECT player_id FROM player_league_weeks
+                    WHERE league = 'legend_i'
+                      AND week_start >= %(recorded)s AND week_start < %(end)s
                     ORDER BY player_id
                     """,
-                    (start, start + SEASON_DURATION),
+                    {"start": start, "end": start + SEASON_DURATION,
+                     "recorded": max(start, league_days.RECORDED_FROM)},
                 ).fetchall()
             ]
         through = int(receipt[2]) if receipt is not None else 0
@@ -202,6 +210,26 @@ def season_repair(
                 (season_id, revision, Jsonb(_day_counts(connection, start)),
                  Jsonb(_board_counts(connection, start)), players if scope else None),
             )
+    with database.pool.connection() as connection, connection.transaction():
+        # A Season before the record is calculated without it. Evidence
+        # marked since the repair began is new: the decider recalculates the
+        # days its decisions change, so only older marks are waited for, and
+        # none of a player it set aside (league_week._decide_batch).
+        undecided = connection.execute(
+            """
+            SELECT count(*) FROM league_week_dirty
+            WHERE week_start >= %s AND week_start < %s AND failed_at IS NULL
+              AND marked_at < (SELECT started_at FROM season_repairs
+                               WHERE official_season_id = %s AND rule_revision = %s)
+            """,
+            (max(start, league_days.RECORDED_FROM), start + SEASON_DURATION,
+             season_id, revision),
+        ).fetchone()[0]
+        settled = {} if undecided else league_days.settle(database, connection, start, max_jobs)
+    if undecided or settled["players_settled"]:
+        # Days are recalculated by the decided weeks: a week not Legend I
+        # keeps no public day.
+        return {**report, "phase": "league", "undecided_weeks": int(undecided), **settled}
     inputs = _repair_inputs(database, season_id, start, max_jobs)
     if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
         # Days wait for every repair of their evidence; a failed one holds
@@ -299,31 +327,6 @@ def _scoped_players(connection: Any, start: datetime) -> list[int]:
             """,
             {"start": start, "end": start + SEASON_DURATION,
              "trophies": SEASON_START_TROPHIES},
-        ).fetchall()
-    ]
-
-
-def _promoted_players(connection: Any, start: datetime) -> list[int]:
-    """The players with saved days of the Season whose results the 14 October
-    2026 promotion rule can change: those with a newest saved day starting
-    at a mid-Season Monday Reset, where the game promotes Legend II's top
-    players into Legend I at 5,000, saved with no Reset reading to start it
-    and not Complete."""
-    return [
-        int(row[0]) for row in connection.execute(
-            """
-            SELECT DISTINCT newest.player_id FROM (
-                SELECT DISTINCT ON (player_id, ranked_day_start)
-                       player_id, state, start_baseline_id
-                FROM ranked_day_versions
-                WHERE ranked_day_start > %(start)s AND ranked_day_start < %(end)s
-                  AND EXTRACT(ISODOW FROM ranked_day_start AT TIME ZONE 'UTC') = 1
-                ORDER BY player_id, ranked_day_start, version DESC, id DESC
-            ) AS newest
-            WHERE newest.start_baseline_id IS NULL AND newest.state <> 'Complete'
-            ORDER BY newest.player_id
-            """,
-            {"start": start, "end": start + SEASON_DURATION},
         ).fetchall()
     ]
 
@@ -534,25 +537,37 @@ def _queue_days(
     database: Database, season_id: str, revision: str, start: datetime,
     players: list[int],
 ) -> None:
-    """Queue one job per player recalculating their saved days of the Season
-    from the first, oldest first, and note the last player queued."""
-    from . import first_battle_log
+    """Queue one job per player recalculating their days of the Season from
+    their first saved day or Legend I week, oldest first, and note the last
+    player queued. From the record on, that is every day through the
+    current one, saved or not: a Legend I week has a Legend day each day.
+    Before it, the saved days only."""
+    from . import first_battle_log, league_days
 
     with database.pool.connection() as connection, connection.transaction():
         _guard_days(connection, season_id)
+        today = domain.ranked_day_for(datetime.now(UTC)).start
+        recorded = start >= league_days.RECORDED_FROM
         for player, first_day in connection.execute(
             """
-            SELECT player_id, min(ranked_day_start) FROM ranked_day_versions
-            WHERE player_id = ANY(%s)
-              AND ranked_day_start >= %s AND ranked_day_start < %s
-            GROUP BY player_id ORDER BY player_id
+            SELECT player_id, min(day) FROM (
+                SELECT player_id, ranked_day_start AS day FROM ranked_day_versions
+                WHERE player_id = ANY(%(players)s)
+                  AND ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                UNION ALL
+                SELECT player_id, week_start FROM player_league_weeks
+                WHERE player_id = ANY(%(players)s) AND league = 'legend_i'
+                  AND week_start >= %(start)s AND week_start < %(end)s
+            ) AS first GROUP BY player_id ORDER BY player_id
             """,
-            (players, start, start + SEASON_DURATION),
+            {"players": players, "start": start, "end": start + SEASON_DURATION},
         ).fetchall():
             first_battle_log._queue(
                 connection, int(player), first_day, None,
                 key=_repair_key(revision, season_id, int(player)), trigger="season_repair",
-                priority=PYTHON_BACKFILL_PRIORITY,
+                priority=PYTHON_BACKFILL_PRIORITY, every_day=recorded,
+                last_day=max(first_day, min(today, start + SEASON_DURATION - RANKED_DAY_DURATION))
+                if recorded else None,
             )
         connection.execute(
             """

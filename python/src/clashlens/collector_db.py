@@ -19,6 +19,7 @@ from . import (
     collector_metrics,
     collector_reset,
     collector_uploads,
+    league_week,
     queue_refresh,
 )
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
@@ -1114,21 +1115,21 @@ class CollectorDatabase:
         self, connection: Any, handoff: ResponseHandoff,
         state: tuple[Any, ...] | None, work_kind: str | None, saved: bool,
     ) -> bool:
-        # Reset and settlement checks need their own proof even when the used fields match the
-        # previous poll. Ordinary unchanged responses compact to state: no observation, job, or upload.
-        # state[4] is the field fingerprint; rows upgraded before the
-        # column existed hold the old byte hash there, so matching the
-        # response hash also counts as unchanged. state[2] must name a
-        # live observation: pruning can NULL it, and a work endpoint
-        # marked observed with no observation can never complete.
+        # Reset and settlement checks, and a Monday's first answer after the league display window
+        # (league_week), need their own proof even when the used fields match the previous poll.
+        # Ordinary unchanged responses compact to state: no observation, job, or upload. state[4] is
+        # the field fingerprint; rows upgraded before the column existed hold the old byte hash, so
+        # matching the response hash also counts as unchanged. state[2] must name a live observation:
+        # pruning can NULL it, and a work endpoint marked observed with no observation never completes.
         if (
             state is None
             or state[2] is None
             or state[4] not in (handoff.content_fingerprint, handoff.response_hash)
             or work_kind in {"reset_baseline", "reset_settlement"}
+            or league_week.saves_unchanged_answer(connection, handoff, state[2])
         ):
             return False
-        # Discovery reprocesses an unrecognized league; a Refresh re-judges an untracked player's (league_drop).
+        # Discovery reprocesses an unrecognized league; a Refresh re-decides an untracked player's (league_week).
         if work_kind in {"discovery_profile", "live_refresh"} and handoff.endpoint == "profile" and connection.execute(
             "SELECT CASE WHEN %s THEN clashlens_profile_observation_unrecognized(%s) ELSE (SELECT NOT active AND eligibility_state = 'ineligible' FROM players WHERE id = %s) END",
             (work_kind == "discovery_profile", state[2], handoff.player_id),

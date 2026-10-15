@@ -741,7 +741,17 @@ evidence repairs still unfinished or failed (`inputs`, as `receipt` shows them
 too). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
 most `--max-jobs` (default 100) jobs at backfill priority, and says which in
-`phase`: `inputs`, repairs of the evidence days are built from (the
+`phase`: `league`, until the weekly league record has decided every week of
+the Season with evidence saved before the repair began (`undecided_weeks`,
+which the worker clears within minutes; a player it set aside is not waited
+for), then, for at most `--max-jobs` players a run, deleting each
+public day saved in a week not Legend I and naming the week of each other
+one saved before (`public_days_deleted`, `public_days_named`), until none is
+left; once the repair is past this step, the two database rules migration
+0118 added can be checked against every saved day with
+`ALTER TABLE api_player_daily_logs VALIDATE CONSTRAINT
+api_player_daily_logs_legend_i_week` and the same for
+`api_player_daily_logs_names_week`; `inputs`, repairs of the evidence days are built from (the
 Season's battles moved day, one job per player, and its Reset pairs left
 partial, at most `--max-jobs` pairs each queuing at most one job; no other
 Season's days change), until every such repair reaching a day of the
@@ -756,7 +766,8 @@ is left Live, as after its retry, even after
 the finished retry job is cleaned up 48 hours later; `preview` and `receipt`
 list the same failures, including a player's failed moved-battle rebuild from
 another Season that holds back this Season's); `days`, one job
-per player recalculating every saved day in the Season's 28 days, oldest
+per player with a saved day or a Legend I week in the Season, recalculating
+every day of it from the first through the current day, oldest
 first, even one saved before its Season was known, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
@@ -801,12 +812,7 @@ saved, whose days rank at 5,000 with no battles once that rule is deployed.
 If PR #451 (never-played players ranked at 5,000) has not deployed when
 this repair runs, run the scoped repair again after it deploys, so this
 group is recalculated under that rule; its new rule revision gives it a
-fresh receipt. `--players promoted` instead takes the players
-with saved days of the Season whose newest saved day starting at a
-mid-Season Monday Reset has no Reset reading to start it and is not
-Complete: players promoted into Legend I there, whose days start at 5,000
-once the promotion rule (rule revision 2026-10-14-monday-promotion) is
-deployed; about 1,730 players for 12 October 2026. Either way, it chooses the players when its
+fresh receipt. It chooses the players when its
 first `queue` runs and saves that list on its receipt, so a player whose
 days change meanwhile stays in it; `preview` shows how many (`players`)
 before anything is queued. Each chosen player's job
@@ -984,6 +990,13 @@ be processed, accept the job with the owner's agreement:
 previews, and the same with `--apply` records it. The job, its attempts and its
 saved response stay; the record keeps who accepted it, when and why, and
 `./ops failed-items` shows it as `accepted`. Otherwise escalate.
+
+The count also holds each player the weekly league record set aside because
+deciding their league failed (worker log `"event": "league_week", "status":
+"set_aside"`, with the player's id); the rest are decided as usual. New
+evidence about the player tries again. To try again by hand once the cause is
+fixed, clear the failure: `UPDATE league_week_dirty SET failed_at = NULL
+WHERE player_id = ID`.
 
 **Recovered:** 24 hours and 15 minutes after the newest permanent failure. The
 alert means a new permanent failure in the last 24 hours; its recovery means no new one for

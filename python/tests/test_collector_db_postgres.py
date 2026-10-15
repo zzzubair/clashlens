@@ -910,7 +910,7 @@ def test_reset_baseline_stores_unchanged_fields_as_boundary_evidence(
 def test_refresh_saves_an_unchanged_profile_for_the_worker_to_judge_again(
     database_url: str,
 ) -> None:
-    """A Refresh re-judges an untracked player's league (league_drop), so it
+    """A Refresh re-decides an untracked player's league (league_week), so it
     saves the profile even when the fields match the last one."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _player(connection_info)

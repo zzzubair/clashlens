@@ -50,6 +50,7 @@ from .operating import (
     write_private_snapshot,
 )
 from .profile import normalize_player_tag
+from .stage_metrics import StageMetrics
 from .uploader import UploaderProcess
 from .verification import (
     OfficialVerificationClient,
@@ -64,7 +65,6 @@ from .worker import (
     MAX_WORKER_POOL_SIZE,
     ObservationProcessor,
     ProcessResult,
-    StageMetrics,
     TimedMaintenance,
     process_concurrently,
     process_until_stopped,

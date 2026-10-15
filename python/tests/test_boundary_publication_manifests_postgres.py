@@ -16,7 +16,13 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import army_ingestion, boundary, boundary_publication, past_reset_pacing
+from clashlens import (
+    army_ingestion,
+    boundary,
+    boundary_members,
+    boundary_publication,
+    past_reset_pacing,
+)
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -201,11 +207,11 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 next_sweep = _sweep_with_members(
                     connection, [first[0]], next_boundary
                 )
-                next_generation, _ = boundary._create_boundary_generation(database, 
+                next_generation, _ = boundary_members.create_generation(
+                    database,
                     connection,
                     boundary_at=next_boundary,
                     sweep_id=next_sweep,
-                    player_ids=[first[0]],
                     generation=1,
                     supersedes_id=None,
                 )

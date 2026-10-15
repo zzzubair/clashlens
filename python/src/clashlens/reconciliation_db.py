@@ -12,7 +12,8 @@ from . import (
     boundary,
     domain,
     first_battle_log,
-    league_drop,
+    league_days,
+    league_week,
     ranked_day_inputs,
     reading_rule,
     reconcile_pass,
@@ -78,8 +79,8 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     str(claim.input_json["last_ranked_day_start"])
                 )
                 day_starts.add(last_day)
-                # Days a player was wrongly left untracked, saved or not
-                # (``league_drop.judge``).
+                # Every day of a range, saved or not, as when the league
+                # record changes a week (``league_days``).
                 if claim.input_json.get("every_day"):
                     day_starts.update(
                         day_start + timedelta(days=offset)
@@ -214,18 +215,21 @@ def recalculate_ranked_day(
     ).fetchone()
     if player is None:
         raise ValueError(f"unknown reconciliation player id {player_id}")
+    league = league_days.day_league(connection, player_id, ranked_day)
+    if not league.legend_day:
+        # A week below Legend I, or not known, has no Legend day: deciding
+        # it so deleted any public copy (``league_days.save_season``).
+        return False
 
-    start_baseline = reset_baselines._load_reset_baseline(database, 
-        connection,
-        player_id,
-        ranked_day.start,
-        processing_version,
+    start_baseline = reset_baselines._load_reset_baseline(
+        database, connection, player_id, ranked_day.start, processing_version,
+        season_rule=league.starts_at_5000,
     )
-    end_baseline = reset_baselines._load_reset_baseline(database, 
-        connection,
-        player_id,
-        ranked_day.end,
-        processing_version,
+    # A Season's last day ends where the next Season's first starts.
+    end_baseline = reset_baselines._load_reset_baseline(
+        database, connection, player_id, ranked_day.end, processing_version,
+        season_rule=ranked_day.end == ranked_day.season_end
+        and league.following is league_week.League.LEGEND_I,
     )
     start_battle_log_observation_id = (
         int(start_baseline["evidence"]["battle_log_observation_id"])
@@ -255,8 +259,14 @@ def recalculate_ranked_day(
     if start_baseline is None:
         start_baseline = first_battle_log.season_rule_start(
             connection, player_id, ranked_day.start,
-            complete=start_battle_log_observation_id is not None, day_start=True,
+            complete=start_battle_log_observation_id is not None,
+            at_5000=league.starts_at_5000,
         )
+    if start_baseline is not None and league.promoted:
+        # Promoted at this Monday Reset: no Legend day before this one, so
+        # its automatic defense loss follows the Season's Day 1 rule.
+        start_baseline = {**start_baseline, "evidence": {
+            **start_baseline["evidence"], "promoted_into_legend_i": True}}
     # Within the Season, a player who has not played yet ends the day at
     # 5,000 too, once a battle log saved after the day shows no battle of it.
     if end_baseline is None and ranked_day.end <= now and (
@@ -268,7 +278,7 @@ def recalculate_ranked_day(
     ).fetchone()[0]:
         end_baseline = first_battle_log.season_rule_start(
             connection, player_id, ranked_day.end,
-            complete=end_battle_log_observation_id is not None,
+            complete=end_battle_log_observation_id is not None, at_5000=False,
         )
     coverage = ranked_day_inputs.load_coverage(
         database,
@@ -281,7 +291,10 @@ def recalculate_ranked_day(
     contributions = ranked_day_inputs.load_contributions(
         connection, player_id, ranked_day
     )
-    previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
+    previous = (
+        ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
+        if league.after_legend_day else None
+    )
     zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
         ranked_day_inputs.load_zero_result_slots(connection, coverage)
         | ranked_day_inputs.load_late_zero_result_slots(
@@ -334,33 +347,16 @@ def recalculate_ranked_day(
     # A player ranked below 10,000 at a weekly Monday Reset drops to Legend
     # II there: by league history, 478 to 1,053 of the previous Season's
     # survivors alone on each such Monday from 17 August to 21 September
-    # 2026. Profiles still show Legend I for about 13 minutes after the
-    # Reset, so a Reset reading taken before a profile showing the lower
-    # league is that player's last Legend I total: no raise to 5,000 follows
-    # it, and the day it starts is not a Legend I day. Legend I has no
-    # weekly official total to check it against. Without a Reset reading,
-    # any such profile read from the Reset counts.
-    if boundary_kind == "weekly" and _dropped_after_reading(
-        connection, player_id, end_baseline, ranked_day.end
-    ):
+    # 2026. No raise to 5,000 follows their last day, whose Reset reading,
+    # taken while profiles still show Legend I, is their last Legend I
+    # total. Legend I has no weekly official total to check it against.
+    if boundary_kind == "weekly" and league.dropped:
         boundary_kind = None
         if end_baseline is not None:
             end_baseline = {
                 **end_baseline,
                 "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
             }
-    start_dropped = (
-        (start_baseline is None
-         or start_baseline["eligibility_state"] in {None, "eligible"})
-        and ranked_day.start.weekday() == 0
-        and season_day is not None
-        and season_day.day_number > 1
-        and _dropped_after_reading(
-            connection, player_id, start_baseline, ranked_day.start
-        )
-    )
-    if start_dropped and start_baseline is not None:
-        start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
     # A profile read on a Season's first day before the game's reset to 5,000
     # lands still shows the previous Season's total: the official one, when
     # league history saved it, which the day before's calculated end can
@@ -378,12 +374,11 @@ def recalculate_ranked_day(
     # starts from the day before's calculated end once that day's battles are
     # all known: the ledger's own arithmetic, shown as calculated until a
     # reading confirms it. On 7 October 2026, 3,574 days had every battle and
-    # no start for this reason alone. A Season's Day 1 keeps the Season rule.
+    # no start for this reason alone. A Season's Day 1 keeps the Season rule,
+    # and a promoted player's Monday its 5,000.
     if (
         (start_baseline is None or start_baseline["trophies"] is None)
-        and (start_baseline is None
-             or start_baseline["eligibility_state"] in {None, "eligible"})
-        and not start_dropped
+        and league.chains
         and previous is not None
         and previous.expected_next_start is not None
         and season_day is not None
@@ -401,25 +396,6 @@ def recalculate_ranked_day(
                 if contribution.source_rule_version is not None
             }
         )
-    )
-    baseline_eligibility = tuple(
-        value
-        for value in (
-            start_baseline.get("eligibility_state")
-            if start_baseline is not None
-            else None,
-            end_baseline.get("eligibility_state")
-            if end_baseline is not None
-            else None,
-        )
-        if value is not None
-    )
-    # An ended day with no Reset reading at either end is a Legend I day only
-    # for a player wrongly left untracked (``league_drop.in_legend_i``).
-    player_eligible = all(
-        value == "eligible" for value in baseline_eligibility
-    ) if baseline_eligibility else now >= ranked_day.end and league_drop.in_legend_i(
-        connection, player_id, ranked_day
     )
     malformed_evidence = any(
         observation.malformed_row_count > 0 for observation in coverage
@@ -503,7 +479,6 @@ def recalculate_ranked_day(
             if end_baseline is not None
             else False
         ),
-        player_eligible=player_eligible,
         perspective_disagreement=perspective_disagreement,
         malformed_evidence=malformed_evidence,
         unclassified_evidence=unclassified_evidence,
@@ -818,34 +793,6 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
     return None if row is None or row[0] is None else int(row[0])
 
 
-def _dropped_after_reading(
-    connection: Any, player_id: int, baseline: dict[str, Any] | None,
-    reset: datetime,
-) -> bool:
-    """Whether a profile read after this Reset reading, or after ``reset``
-    without one, and before the next Reset, shows a league below Legend I:
-    the player dropped at ``reset``."""
-    reading_at = (
-        baseline["evidence"].get("profile", {}).get("observed_at")
-        if baseline is not None
-        else None
-    )
-    return _dropped_from_legend_i(
-        connection, player_id,
-        datetime.fromisoformat(reading_at) if reading_at is not None else reset,
-        until=reset + timedelta(days=1),
-    )
-
-
-def _dropped_from_legend_i(
-    connection: Any, player_id: int, since: datetime, until: datetime
-) -> bool:
-    """Whether a profile of the player read from ``since`` and before
-    ``until`` proves they left Legend I, by the rule in ``league_drop``.
-    Each reading counts at its own time; a saved profile can be read again."""
-    return league_drop.dropped_between(connection, player_id, since, until)
-
-
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
     """The confirmed anchor row and the day's Season identity counted from it
     in 28-day steps; no identity without an anchor or with an off-phase one."""
@@ -1049,6 +996,11 @@ def _publish_player_daily_log(
         defense_loss,
         result.net_trophy_change,
     )
+    # A public day names its Legend I week's record row (migration 0118).
+    week = (
+        (league_week.week_start(ranked_day_start), league_week.League.LEGEND_I.value)
+        if ranked_day_start >= league_days.RECORDED_FROM else (None, None)
+    )
     if getattr(database, "_supports_coordinator_contract", False):
         connection.execute(
             """
@@ -1058,8 +1010,9 @@ def _publish_player_daily_log(
                 official_season_id, season_day_number, confidence,
                 attack_count, attack_three_star_count, attack_gain,
                 defense_count, defense_three_star_count, defense_loss,
-                net_trophy_change
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                net_trophy_change, week_start, league
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s)
             ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
             """,
             (
@@ -1067,6 +1020,7 @@ def _publish_player_daily_log(
                 ranked_day_start,
                 ranked_day_version_id,
                 *daily_log_values[2:],
+                *week,
             ),
         )
     else:
@@ -1078,11 +1032,12 @@ def _publish_player_daily_log(
                 official_season_id, season_day_number, confidence,
                 attack_count, attack_three_star_count, attack_gain,
                 defense_count, defense_three_star_count, defense_loss,
-                net_trophy_change
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                net_trophy_change, week_start, league
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s)
             ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
             """,
-            daily_log_values,
+            (*daily_log_values, *week),
         )
     # Refresh the compact historical summary in the same transaction:
     # a late correction updates an already-summarized season, and a

@@ -117,18 +117,20 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
 
 def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
     """A profile or battle log read at ``at`` can judge the newest ended day,
-    and its own day once that has ended, when it is processed late."""
+    and its own day once that has ended, when it is processed late. So can
+    one naming the Season of a day saved before any profile named it, as a
+    first battle log processed before the first profile saves Day 1."""
     rows = connection.execute(
         """
         (SELECT ranked_day_start FROM ranked_day_versions
          WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-           AND official_season_id IN (%(season)s, %(previous)s)
+           AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
            AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
          ORDER BY ranked_day_start DESC LIMIT 1)
         UNION
         SELECT ranked_day_start FROM ranked_day_versions
         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-          AND official_season_id IN (%(season)s, %(previous)s)
+          AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
           AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
           AND ranked_day_end <= clock_timestamp()
         """,
