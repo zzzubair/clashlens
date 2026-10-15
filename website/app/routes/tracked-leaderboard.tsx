@@ -11,6 +11,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
@@ -216,6 +217,7 @@ export default function TrackedLeaderboardRoute() {
   const navigation = useNavigation();
   const backState = useBackState("Rankings");
   const selectedRow = useRef<HTMLTableRowElement>(null);
+  const rankInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (focusTag && selectedRow.current) {
       selectedRow.current.focus({ preventScroll: true });
@@ -315,13 +317,20 @@ export default function TrackedLeaderboardRoute() {
       {error ? <ErrorNotice error={error} /> : null}
 
       {view === "live" ? (
-        <section className="leaderboard-search" aria-label="Find your rank">
+        <section
+          className="leaderboard-search"
+          aria-label="Find your rank"
+          onKeyDown={(event) =>
+            moveFocusWithArrows(event, ".rank-search-results a", rankInput.current)
+          }
+        >
           <Form method="get" role="search" aria-label="Find your leaderboard rank">
             <input type="hidden" name="view" value="live" />
             <input type="hidden" name="page" value="1" />
             <label htmlFor="rank-query">Find your rank</label>
             <div className="rank-search-controls">
               <input
+                ref={rankInput}
                 id="rank-query"
                 type="search"
                 name="q"
@@ -431,6 +440,7 @@ export default function TrackedLeaderboardRoute() {
                 className="table-wrap tracked-leaderboard-viewport"
                 role="region"
                 tabIndex={0}
+                onKeyDown={(event) => moveFocusWithArrows(event, ".leaderboard-row")}
               >
                 <table
                   aria-label={view === "daily" ? "Daily leaderboard" : "Live Leaderboard"}

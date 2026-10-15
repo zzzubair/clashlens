@@ -438,6 +438,8 @@ body:has(.home-page) .site-brand {
 
 .leaderboard-row {
   position: relative;
+  /* Rows reached with the arrow keys stay clear of the sticky header. */
+  scroll-margin-block: 5rem;
   /* Safari before 2026 ignores position on table rows; the transform keeps each
      row's full-row link inside its row instead of covering the top of the page. */
   transform: translate(0);

@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
@@ -138,7 +139,12 @@ export default function Home() {
             className="search-form"
             onSubmit={suggestions.dismiss}
             onKeyDown={(event) => {
-              if (event.key === "Escape") suggestions.dismiss();
+              if (event.key === "Escape") {
+                suggestions.dismiss();
+                inputRef.current?.focus();
+              } else {
+                moveFocusWithArrows(event, ".search-suggestion", inputRef.current);
+              }
             }}
             onBlur={(event) => {
               if (!event.currentTarget.contains(event.relatedTarget))
@@ -181,8 +187,8 @@ export default function Home() {
               </button>
             </div>
             <span className="sr-only" id="search-keyboard-help">
-              Suggestions appear below as you type. Press Tab to reach them, or Escape to
-              dismiss.
+              Suggestions appear below as you type. Press the Down arrow or Tab to reach
+              them, or Escape to dismiss.
             </span>
             {suggestions.open ? (
               <SearchSuggestions
@@ -381,7 +387,10 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   const backState = useBackState("Home");
   return (
-    <div className="table-wrap">
+    <div
+      className="table-wrap"
+      onKeyDown={(event) => moveFocusWithArrows(event, ".leaderboard-row")}
+    >
       <table aria-label="Latest saved standings" className="data-table leaderboard-table">
         <caption className="sr-only">Tracked players in rank order</caption>
         <thead>

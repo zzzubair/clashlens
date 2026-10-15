@@ -4,6 +4,7 @@ import { Link, useFetcher, useNavigate } from "react-router";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../routes/player-search";
+import { moveFocusWithArrows } from "./ArrowKeys";
 
 const SEARCH_DEBOUNCE_MS = 180;
 
@@ -253,6 +254,8 @@ export function HeaderSearch() {
             if (event.key === "Escape") {
               event.preventDefault();
               collapse(true);
+            } else {
+              moveFocusWithArrows(event, ".search-suggestion", inputRef.current);
             }
           }}
           onBlur={(event) => {
@@ -303,8 +306,8 @@ export function HeaderSearch() {
               </button>
             </div>
             <span className="sr-only" id="header-search-help">
-              Suggestions appear below as you type. Press Tab to reach them, or Escape to
-              close the search.
+              Suggestions appear below as you type. Press the Down arrow or Tab to reach
+              them, or Escape to close the search.
             </span>
             {suggestions.open ? (
               <SearchSuggestions

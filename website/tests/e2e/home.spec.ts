@@ -422,3 +422,56 @@ test("the error page header has the search and jumps to an exact tag", async ({
     page.getByRole("heading", { name: "Synthetic Clasher 001" }),
   ).toBeVisible();
 });
+
+test("arrow keys move through search suggestions and the Rankings box", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const input = page.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
+  });
+  await input.fill("Synthetic Clasher 00");
+  const suggestions = page.locator(".search-suggestion");
+  await expect(suggestions.nth(1)).toBeVisible();
+  await input.press("ArrowDown");
+  await expect(suggestions.first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(suggestions.nth(1)).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(input).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const href = await suggestions.first().getAttribute("href");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+
+  await page.goto("/");
+  const links = page.getByTestId("tracked-player-row").locator(".player-name");
+  // Retries until the page's scripts are running and handle the arrow keys.
+  await expect(async () => {
+    await links.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(links.nth(1)).toBeFocused({ timeout: 1_000 });
+  }).toPass();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowUp");
+  await expect(links.nth(1)).toBeFocused();
+  const rowHref = await links.nth(1).getAttribute("href");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${rowHref}$`));
+});
+
+test("arrow keys reach the header search suggestions", async ({ page }) => {
+  await page.goto("/blog");
+  const input = await openHeaderSearch(page, () =>
+    page.getByRole("button", { name: "Search players" }).click(),
+  );
+  await input.fill("Synthetic Clasher 001");
+  const suggestion = page.locator(".search-suggestion").first();
+  await expect(suggestion).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(suggestion).toBeFocused();
+  const href = await suggestion.getAttribute("href");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+});
