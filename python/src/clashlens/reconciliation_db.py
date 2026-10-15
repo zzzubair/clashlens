@@ -457,12 +457,8 @@ def recalculate_ranked_day(
         previous_day_contributions = ranked_day_inputs.load_contributions(
             connection, player_id, ranked_day_for(ranked_day.start - timedelta(days=1))
         )
-        first_unshown_report = ranked_day_inputs.load_first_unshown_report(
-            connection, player_id, *domain.battle_window(ranked_day.end)
-        )
-        day_unshown_report = ranked_day_inputs.load_first_unshown_report(
-            connection, player_id, *domain.battle_window(ranked_day.start), latest=True
-        )
+        day_unshown_report, first_unshown_report = ranked_day_inputs.load_unshown_reports(
+            connection, player_id, ranked_day)
         if end_baseline is not None and end_baseline["id"] is not None:
             next_day_start = ranked_day_inputs.load_next_day_start(
                 connection, player_id, ranked_day, int(end_baseline["id"]))

@@ -706,28 +706,37 @@ def load_readings(
     ), cut, covered_until
 
 
-def load_first_unshown_report(
-    connection: Any, player_id: int, since: datetime, until: datetime, *, latest: bool = False,
-) -> datetime | None:
-    """The earliest report, or the ``latest``, from ``since`` to ``until`` of
-    a battle of this player that only the opponent has reported so far: a
-    profile read after it may show a battle the player's own logs do not
-    hold yet."""
-    return connection.execute(
-        f"""
-        SELECT {"max" if latest else "min"}(evidence.battle_timestamp)
+def load_unshown_reports(
+    connection: Any, player_id: int, ranked_day: RankedDay,
+) -> tuple[datetime | None, datetime | None]:
+    """The latest report in the day's battle window, and the earliest in the
+    next day's, of a battle of this player that only the opponent has
+    reported so far: a profile read after it may show a battle the player's
+    own logs do not hold yet.
+
+    Each report is saved under the battle day of its own timestamp
+    (``battle.py``), so only those two days' battles are read: with no index
+    on the defender, each day read costs about 650 pages. On production on
+    14 October 2026, for one player's 12 October, this read 1,822 pages,
+    where a lookup per window, each over 3 days, read 2,330 and 2,419."""
+    since, next_from = domain.battle_window(ranked_day.start)[0], domain.battle_window(ranked_day.end)[0]
+    row = connection.execute(
+        """
+        SELECT max(evidence.battle_timestamp) FILTER (WHERE evidence.battle_timestamp < %(next)s),
+               min(evidence.battle_timestamp) FILTER (WHERE evidence.battle_timestamp >= %(next)s)
         FROM legend_battles AS battle
         JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
         WHERE (battle.attacker_player_id = %(player)s OR battle.defender_player_id = %(player)s)
-          AND battle.ranked_day_start > %(since)s - interval '2 days'
-          AND battle.ranked_day_start < %(until)s
+          AND battle.ranked_day_start IN (%(day)s, %(next_day)s)
           AND evidence.battle_timestamp >= %(since)s
-          AND evidence.battle_timestamp < %(until)s
+          AND evidence.battle_timestamp < %(next)s + interval '1 day'
           AND NOT EXISTS (SELECT 1 FROM battle_evidence AS own
               WHERE own.battle_id = battle.id AND own.reporting_player_id = %(player)s)
         """,
-        {"since": since, "player": player_id, "until": until},
-    ).fetchone()[0]
+        {"since": since, "next": next_from, "player": player_id,
+         "day": ranked_day.start, "next_day": ranked_day.end},
+    ).fetchone()
+    return row[0], row[1]
 
 
 def load_first_reports(
