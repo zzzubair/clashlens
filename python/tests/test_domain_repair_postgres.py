@@ -13,7 +13,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, legend_i_week, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
@@ -931,15 +931,19 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
                 """,
                 (moved, opponent, day3, day2, evidence_id),
             )
-            # Day 3 still shows the battle that moved to day 2.
-            for day, battles in (
-                (day2, []), (day3, [{"source_evidence_id": evidence_id}]), (october, []),
+            # Day 3 still shows the battle that moved to day 2. The October
+            # day names its Legend I week.
+            legend_i_week(connection, [moved], END)
+            for day, battles, week in (
+                (day2, [], None), (day3, [{"source_evidence_id": evidence_id}], None),
+                (october, [], END),
             ):
                 connection.execute(
                     "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
-                    " version, state, coverage, battles, official_season_id)"
-                    " VALUES (%s, %s, 1, 'Complete', 'complete', %s, 'unknown')",
-                    (moved, day, Jsonb(battles)),
+                    " version, state, coverage, battles, official_season_id, week_start,"
+                    " league) VALUES (%s, %s, 1, 'Complete', 'complete', %s, 'unknown', %s,"
+                    " %s)",
+                    (moved, day, Jsonb(battles), week, week and "legend_i"),
                 )
             connection.execute(
                 "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
@@ -958,6 +962,53 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
             database.close()
 
     assert calculated == ([day2, day3, day4] if scoped else [day2, day3, october])
+
+
+def test_season_repair_deletes_public_days_saved_in_weeks_not_legend_i(
+    database_url: str,
+) -> None:
+    """Public days saved before migration 0118 name no week. Once the record
+    has decided the Season, the repair, as the worker, deletes each one in a
+    week below Legend I or not known and names the week of each other, so
+    the migration's two rules then hold for every saved day."""
+    monday = END + 7 * DAY
+    days = [monday - DAY, monday, monday + DAY]
+    rules = ("api_player_daily_logs_legend_i_week", "api_player_daily_logs_names_week")
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            # Saved before the migration ran.
+            connection.execute(f"ALTER TABLE api_player_daily_logs DROP CONSTRAINT {rules[1]}")
+            stayed, dropped, unknown = (_player(connection, tag) for tag in ("#2PP", "#8PP", "#9PP"))
+            legend_i_week(connection, [stayed, dropped, unknown], END)
+            legend_i_week(connection, [stayed], monday)
+            connection.execute(
+                "INSERT INTO player_league_weeks (player_id, week_start, league, strength,"
+                " proof_kind, proof_at, proof_source_id, rule_version)"
+                " VALUES (%s, %s, 'below_legend_i', 3, 'accepted_answer', %s, 0, 1)",
+                (dropped, monday, monday),
+            )
+            for player, day in itertools.product((stayed, dropped, unknown), days):
+                connection.execute(
+                    "INSERT INTO api_player_daily_logs (player_id, ranked_day_start, version,"
+                    " state, coverage, battles, official_season_id)"
+                    " VALUES (%s, %s, 1, 'Complete', 'complete', '[]', %s)",
+                    (player, day, NEXT_SEASON),
+                )
+            connection.execute((Path(__file__).parents[2] / "deploy/migrations"
+                                / "0118_legend_days_in_legend_i_weeks.sql").read_text())
+        report = domain_repair.season_repair(worker, NEXT_SEASON, "queue", max_jobs=100)
+        with _owner(connection_info) as connection:
+            for rule in rules:
+                connection.execute(f"ALTER TABLE api_player_daily_logs VALIDATE CONSTRAINT {rule}")
+            kept = connection.execute(
+                "SELECT player_id, ranked_day_start, week_start FROM api_player_daily_logs"
+                " ORDER BY 1, 2"
+            ).fetchall()
+
+    assert (report["phase"], report["public_days_deleted"], report["public_days_named"]) == (
+        "league", 4, 5)
+    assert kept == [(stayed, day, END if day < monday else monday) for day in days] + [
+        (player, days[0], END) for player in (dropped, unknown)]
 
 
 def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_again(

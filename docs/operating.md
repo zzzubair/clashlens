@@ -747,7 +747,7 @@ within minutes), then, for at most `--max-jobs` players a run, deleting each
 public day saved in a week not Legend I and naming the week of each other
 one saved before (`public_days_deleted`, `public_days_named`), until none is
 left; once the repair is past this step, the two database rules migration
-0117 added can be checked against every saved day with
+0118 added can be checked against every saved day with
 `ALTER TABLE api_player_daily_logs VALIDATE CONSTRAINT
 api_player_daily_logs_legend_i_week` and the same for
 `api_player_daily_logs_names_week`; `inputs`, repairs of the evidence days are built from (the

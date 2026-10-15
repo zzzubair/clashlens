@@ -1005,7 +1005,7 @@ def _publish_player_daily_log(
         defense_loss,
         result.net_trophy_change,
     )
-    # A public day names its Legend I week's record row (migration 0117).
+    # A public day names its Legend I week's record row (migration 0118).
     week = (
         (league_week.week_start(ranked_day_start), league_week.League.LEGEND_I.value)
         if ranked_day_start >= league_days.RECORDED_FROM else (None, None)

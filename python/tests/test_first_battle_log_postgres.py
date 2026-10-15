@@ -14,7 +14,12 @@ from datetime import datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, repair_season, store_observation
+from domain_test_support import (
+    domain_database,
+    record_seasons_to,
+    repair_season,
+    store_observation,
+)
 from test_reconciliation_postgres import BATTLE_FIXTURE, _profile
 from test_reset_settlement_state_postgres import (
     BOUNDARIES,
@@ -32,6 +37,13 @@ from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 DAY_1 = BOUNDARIES["season"]
 DAY_2 = DAY_1 + timedelta(days=1)
+
+
+@pytest.fixture(autouse=True)
+def _recorded(monkeypatch) -> None:
+    """The weekly league record decides these Seasons, as it does every
+    Season from 5 October 2026."""
+    record_seasons_to(monkeypatch, DAY_1 + timedelta(days=28))
 WIN = allocate_trophies(3, 100).attacker_gain
 LOSS = allocate_trophies(2, 60).defender_loss
 

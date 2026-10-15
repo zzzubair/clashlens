@@ -14,7 +14,12 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation
+from domain_test_support import (
+    as_api_role,
+    domain_database,
+    record_seasons_to,
+    store_observation,
+)
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
     DAY_END,
@@ -23,10 +28,13 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import api_players, reconciliation_db, reset_baselines
+from clashlens import api_players, league_week, reconciliation_db, reset_baselines
 from clashlens.api_db import ApiDatabase
 
 TAG = "#2PP"
+# The player's own days: the weekly league record proves their Legend
+# battle opponents Legend I too, so they have days of their own.
+OWN_DAYS = f"player_id = (SELECT id FROM players WHERE normalized_tag = '{TAG}')"
 # The fixture profiles report the Season that ends at the August 10 Reset.
 BOUNDARIES = {
     "ordinary": DAY_END,
@@ -34,6 +42,13 @@ BOUNDARIES = {
     "season": datetime(2026, 8, 10, 5, tzinfo=UTC),
     "season_day_2": datetime(2026, 8, 11, 5, tzinfo=UTC),
 }
+
+
+@pytest.fixture(autouse=True)
+def _recorded(monkeypatch) -> None:
+    """The weekly league record decides these Seasons, as it does every
+    Season from 5 October 2026."""
+    record_seasons_to(monkeypatch, BOUNDARIES["season"] + timedelta(days=28))
 
 
 def _eight_defenses() -> bytes:
@@ -108,6 +123,10 @@ def _process(connection_info, archive_server, jobs) -> None:
                     " AND work_type = 'reconcile_ranked_day' ORDER BY id LIMIT 1"
                 ).fetchone()
             if pending is None:
+                # The worker's league week thread decides the weeks the
+                # work marked, queueing the days a decision changes.
+                if league_week.decide_due(database):
+                    continue
                 return
             processor.process_job(int(pending[0]), owner="reconcile")
     finally:
@@ -167,11 +186,11 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
             assert processor.process_job(job, owner="opening") is not None
         finally:
             database.close()
-        days = _rows(connection_info, """
+        days = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    official_season_id, season_day_number, start_trophies,
                    next_start_trophies
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")
         evidence = _rows(connection_info, """
             SELECT DISTINCT ON (boundary_at) state,
                    profile_observation_id IS NOT NULL
@@ -235,12 +254,12 @@ def test_rejected_reset_profile_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = _rows(connection_info, """
+        days = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies,
                    input_evidence -> 'start_baseline_evidence',
                    input_evidence -> 'end_baseline_evidence'
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")
         kept = _rows(connection_info, """
             SELECT profile.source_contract_state, profile.trophies
             FROM reset_baseline_evidence AS evidence
@@ -306,11 +325,11 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
+        days = {row[0]: row[1:] for row in _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies, attack_count,
                    defense_count, attack_gain, observed_defense_loss
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")}
         evidence = _rows(connection_info, f"""
             SELECT evidence.profile_valid, evidence.failure_reasons,
                    profile.source_contract_state, profile.trophies
@@ -359,21 +378,21 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
+        days = {row[0]: row[1:] for row in _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")}
         current = _rows(connection_info, CURRENT_PROFILE)
     assert days[DAY_END - timedelta(days=1)] == (6000, None)
     assert days[DAY_END][0] is None
     assert current == [(4900, "accepted")]
 
 
-DAY_ROWS = """
+DAY_ROWS = f"""
     SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state, confidence,
            start_trophies, next_start_trophies,
            input_evidence -> 'start_baseline_evidence' ->> 'start_trophies_source'
-    FROM ranked_day_versions ORDER BY ranked_day_start, version DESC"""
+    FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC"""
 
 
 @pytest.mark.parametrize("later_tier,login_day", [
@@ -913,8 +932,8 @@ def test_official_total_recalculates_a_last_day_saved_under_older_rules(
         )[0][0]
         with psycopg.connect(connection_info) as connection:
             current = connection.execute(
-                "SELECT state, next_start_trophies FROM ranked_day_versions"
-                " WHERE ranked_day_start = %s AND reconciliation_rule_version = %s"
+                f"SELECT state, next_start_trophies FROM ranked_day_versions WHERE {OWN_DAYS}"
+                " AND ranked_day_start = %s AND reconciliation_rule_version = %s"
                 " ORDER BY version DESC LIMIT 1",
                 (last_day, RECONCILIATION_RULE_VERSION),
             ).fetchone()
@@ -989,8 +1008,8 @@ def test_official_total_leaves_an_older_seasons_last_day_as_saved(
     ]
     final = 6000 + WIN - 8 * LOSS
     saved = (
-        "SELECT id, state, next_start_trophies FROM ranked_day_versions"
-        f" WHERE ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
+        f"SELECT id, state, next_start_trophies FROM ranked_day_versions WHERE {OWN_DAYS}"
+        f" AND ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
     )
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
@@ -1087,7 +1106,7 @@ def test_day_1_is_judged_with_the_official_total_of_the_season_before(
         day_1 = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) start_trophies,
                    input_evidence -> 'start_baseline_evidence' ->> 'official_final_trophies'
-            FROM ranked_day_versions WHERE ranked_day_start = '{boundary.isoformat()}'
+            FROM ranked_day_versions WHERE {OWN_DAYS} AND ranked_day_start = '{boundary.isoformat()}'
             ORDER BY ranked_day_start, version DESC""")
 
     assert day_1 == [(5000, "5965")]

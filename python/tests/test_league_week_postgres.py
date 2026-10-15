@@ -169,6 +169,7 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH, IDLE, PROMOTED, STALE)
+        story.decides = False
         for tag in (STAYED, FAILED, GLITCH):
             story.players[tag].battles = attacks(sunday, 40, 40) + defenses(sunday, 40) + attacks(
                 monday, 40) + defenses(monday, 30)

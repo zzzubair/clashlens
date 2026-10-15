@@ -30,6 +30,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import league_days
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -39,14 +40,13 @@ from .db import (
     _text_value,
 )
 from .domain import RANKED_DAY_DURATION
-from .league_days import RECORDED_FROM
 from .league_week import week_start
 
 
 def board_members(connection: Any, boundary_at: datetime, swept: list[int]) -> list[int]:
     """The board's members now: see the module notes."""
     day = boundary_at - RANKED_DAY_DURATION
-    if day < RECORDED_FROM:
+    if day < league_days.RECORDED_FROM:
         return sorted(set(swept))
     return [int(row[0]) for row in connection.execute(
         """
@@ -71,7 +71,7 @@ def joins_late(boundary_at: datetime) -> bool:
     """Whether a player whose ended day is saved after the board's members
     were taken joins it: from the record on, a saved day is in a Legend I
     week, so its player is a member."""
-    return boundary_at - RANKED_DAY_DURATION >= RECORDED_FROM
+    return boundary_at - RANKED_DAY_DURATION >= league_days.RECORDED_FROM
 
 
 def _population_hash(player_ids: list[int]) -> str:
@@ -286,7 +286,7 @@ def leagues(connection: Any, boundary_at: datetime, player_ids: list[int]) -> di
     record; empty before it. A member whose week left Legend I after the
     members were taken ranks on no board (``boundary_manifest``)."""
     day = boundary_at - RANKED_DAY_DURATION
-    if day < RECORDED_FROM:
+    if day < league_days.RECORDED_FROM:
         return {}
     found = dict(connection.execute(
         """
@@ -300,40 +300,38 @@ def leagues(connection: Any, boundary_at: datetime, player_ids: list[int]) -> di
 
 def leave(database: Database, connection: Any, player_id: int, days: list[datetime]) -> None:
     """The player's week holding ``days`` left Legend I: take them off the
-    board of each Reset ending one. A generation's members never change, so
-    a board not frozen yet stops waiting for their day and ranks them
-    nowhere (``leagues``), and a frozen one gets a queued correction, whose
-    replacement takes the members again. Resets with no board yet need
-    nothing. The caller holds the player's week rows. A Reset whose lock is
-    busy, as for the minutes a board's freeze holds it, raises
-    LockNotAvailable after ``RESET_LOCK_WAIT``: the decider's maintenance
-    turn never waits on a board, and decides the batch again a minute later
-    (``league_week.decide_due``)."""
-    from .boundary import _try_enqueue_boundary_artifacts, lock_boundary_publication
+    board of each Reset ending one where they are a member. A generation's
+    members never change, so a board not frozen yet stops waiting for their
+    day and ranks them nowhere (``leagues``), and a frozen one gets a queued
+    correction, whose replacement takes the members again. The caller holds
+    the player's week rows. The Reset's lock is taken as a day result takes
+    it (``boundary.lock_boundary_members``), shared while many members wait,
+    so this never waits behind them; a Reset busy past ``RESET_LOCK_WAIT``,
+    as while its board freezes, raises LockNotAvailable, and the decider
+    decides the batch again a minute later (``league_week.decide_due``)."""
+    from .boundary import _try_enqueue_boundary_artifacts, lock_boundary_members
 
+    # The Reset's newest generation, and the player's member row in it.
+    newest = """
+        SELECT generation.id, generation.snapshot_manifest_id,
+               generation.army_manifest_id, member.status
+        FROM boundary_publication_generations AS generation
+        LEFT JOIN boundary_publication_generation_members AS member
+          ON member.generation_id = generation.id AND member.player_id = %s
+        WHERE generation.boundary_at = %s AND generation.snapshot_state <> 'superseded'
+          AND generation.army_state <> 'superseded'
+        ORDER BY generation.generation DESC LIMIT 1
+    """
     for day in sorted(set(days)):
         boundary_at = day + RANKED_DAY_DURATION
-        if not connection.execute(
-            "SELECT 1 FROM boundary_publication_generations WHERE boundary_at = %s LIMIT 1",
-            (boundary_at,),
-        ).fetchone():
+        current = connection.execute(newest, (player_id, boundary_at)).fetchone()
+        if current is None or current[3] is None:
             continue
-        lock_boundary_publication(connection, boundary_at, wait=RESET_LOCK_WAIT)
+        shared = lock_boundary_members(connection, boundary_at, RESET_LOCK_WAIT)
         current = connection.execute(
-            """
-            SELECT generation.id, generation.snapshot_manifest_id,
-                   generation.army_manifest_id, member.status
-            FROM boundary_publication_generations AS generation
-            JOIN boundary_publication_generation_members AS member
-              ON member.generation_id = generation.id AND member.player_id = %s
-            WHERE generation.boundary_at = %s AND generation.snapshot_state <> 'superseded'
-              AND generation.army_state <> 'superseded'
-            ORDER BY generation.generation DESC LIMIT 1
-            FOR UPDATE OF generation
-            """,
-            (player_id, boundary_at),
+            newest + ("" if shared else " FOR UPDATE OF generation"), (player_id, boundary_at)
         ).fetchone()
-        if current is None:
+        if current is None or current[3] is None:
             continue
         if current[1] is None and current[2] is None:
             if _text_value(current[3]) == "pending":
@@ -346,6 +344,7 @@ def leave(database: Database, connection: Any, player_id: int, days: list[dateti
                     """,
                     (current[0], player_id),
                 )
+            if not shared:
                 _try_enqueue_boundary_artifacts(
                     database, connection, boundary_at=boundary_at, generation_id=int(current[0]))
             continue

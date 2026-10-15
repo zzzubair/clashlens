@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0118.
+-- Clash Lens deployment migration 0120.
 -- The weekly league record, stage 4: tracking and Daily board membership
 -- follow the record (python/src/clashlens/league_days.py track,
 -- boundary_members.py), so the battle log's re-check of players stopped by
@@ -11,5 +11,5 @@
 -- transaction: ./ops sends it to psql one statement at a time.
 DROP INDEX CONCURRENTLY IF EXISTS ranked_day_versions_not_eligible;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (118)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (120)
 ON CONFLICT (version) DO NOTHING;
