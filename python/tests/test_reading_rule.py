@@ -113,15 +113,23 @@ def test_only_the_latest_attacks_can_lag() -> None:
 
 
 def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> None:
-    # 5,950 is the total from 07:00 to 08:00, before the defense and the
-    # +35: a profile running late. It neither contradicts nor confirms.
-    day = (*DAY_BATTLES, Effect("attack-2", 35, RESET - timedelta(hours=20)))
-    stale = verdict(Reading(at(2), 5950, reset_reading=True), day=day, end=5975)
-    later = verdict(Reading(at(2), 5950, reset_reading=True), Reading(at(20), 5905),
-                    day=day, end=5975)
+    # 5,940 is the total before a -15 defense at 04:30 and a +35 attack at
+    # 04:40, both landed by 05:02: a profile running late. It neither
+    # contradicts nor confirms.
+    late = (*DAY_BATTLES, Effect("defense-2", -15, RESET - timedelta(minutes=30)),
+            Effect("attack-2", 35, RESET - timedelta(minutes=20)))
+    stale = verdict(Reading(at(2), 5940, reset_reading=True), day=late, end=5960)
+    later = verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(20), 5890),
+                    day=late, end=5960)
 
     assert stale.outcome == "unverified"
     assert (later.outcome, later.exact) == ("verified", True)
+    # The same battles an hour earlier left 5,940 more than 40 minutes
+    # before: no profile is taken to lag that long, so the reading contradicts.
+    hour_earlier = (*DAY_BATTLES, *(replace(effect, lands_from=effect.lands_from - timedelta(hours=1))
+                                    for effect in late[2:]))
+    assert verdict(Reading(at(2), 5940, reset_reading=True), day=hour_earlier,
+                   end=5960).outcome == "contradicted"
     # After a new-day attack of +30 at 05:10 has landed, a 05:26 reading of
     # the day's end is the same profile running late: the day stays proven.
     new_day = (Effect("next-attack", 30, at(10)),)
@@ -130,22 +138,33 @@ def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> N
     # One equal to no point of the timeline still contradicts.
     assert verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(26), 5945),
                    new_day=new_day).outcome == "contradicted"
-    # So does 5,920, the 5,975 before a -15 defense at 10:00 only with both
+    # So does 5,920, the 5,975 before a -15 defense at 04:30 only with both
     # attacks' credits lagging as well.
-    defended = (*day, Effect("defense-2", -15, RESET - timedelta(hours=19)))
+    defended = (*DAY_BATTLES, Effect("attack-2", 35, RESET - timedelta(minutes=40)),
+                Effect("defense-2", -15, RESET - timedelta(minutes=30)))
     assert verdict(Reading(at(2), 5920, reset_reading=True), day=defended,
                    end=5960).outcome == "contradicted"
 
 
-def test_a_defense_can_show_from_its_stamp() -> None:
-    # A new-day defense of 30 stamped 05:10 that lasted 150 s: 223 of 231
-    # readings showing a defense before its stamp plus its length came after
-    # the attacker's own report. It may still be missing until 05:22:30.
-    defense = Effect("next-defense", -30, at(10), length=timedelta(seconds=150))
-    reset = Reading(at(2), 5940, reset_reading=True)
+def test_a_defense_can_show_up_to_150_seconds_before_it_ends() -> None:
+    # A defense of 10 stamped 15:00 that lasted 180 s: from 5 to 13 October
+    # 2026 a reading showed one up to 134 s before its stamp plus its length.
+    # Read at 15:00:46 the profile may show it; at 15:00:20, 160 s before,
+    # it cannot yet.
+    stamp = test_reconciliation.DAY.start + timedelta(hours=10)
 
-    assert verdict(reset, Reading(at(11), 5910), new_day=(defense,)).outcome == "verified"
-    assert verdict(reset, Reading(at(22), 5940), new_day=(defense,)).outcome == "verified"
+    def read_after(seconds: int):
+        return reconcile_ranked_day(test_reconciliation._input(
+            contributions=(
+                BattleContribution("attack-1", "offense", 20,
+                                   battle_timestamp=stamp - timedelta(hours=8)),
+                BattleContribution("defense-1", "defense", 10, battle_timestamp=stamp,
+                                   battle_seconds=180),
+            ),
+            readings=(Reading(stamp + timedelta(seconds=seconds), 6010),)))
+
+    assert read_after(46).state == "Complete"
+    assert read_after(20).state == "Inconsistent"
 
 
 def test_a_clean_reading_after_an_exact_match_still_contradicts_the_day() -> None:

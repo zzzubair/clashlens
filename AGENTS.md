@@ -66,8 +66,8 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Season repair**: the one operator command that recalculates a Season's saved days, Daily boards and Season summaries under the current rules, with a before-and-after receipt.
 - **Board deadline**: 05:30 UTC, when a Reset's Daily board publishes without at most 50 players whose day result is still unfinished, and 06:00 UTC, when it publishes without every one still unfinished; each is shown as unavailable until their day saves and the board is rebuilt with them.
 - **Overlay link**: the private web address a Clasher pastes into OBS as a browser source to show their overlay; making a new one retires the old one for good.
-- **First Legend day**: a player's first Legend day of the Season (Day 1, a promoted player's Monday, or the first day a player sitting at 5,000 plays), whose automatic defense loss counts only attacks less defenses.
-- **Stale reading**: a profile reading equal to an earlier point of the player's own battles because the profile lags its battle log; it neither confirms nor contradicts the day.
+- **First Legend day**: a player's first Legend day of the Season (Day 1, a promoted player's Monday, or the first day a player sitting at 5,000 plays), whose automatic defense loss counts only attacks less defenses, or, with fewer attacks than defenses, only what a reading shows.
+- **Stale reading**: a profile reading equal to a point of the player's own battles at most 40 minutes earlier because the profile lags its battle log; set aside only when nothing else fits, it neither confirms nor contradicts the day.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 

@@ -139,6 +139,15 @@ def queue_for_reading(connection: Any, player_id: int, evidence: str, at: dateti
         _queue_day(connection, player_id, day_start, f"reconcile:{evidence}:{player_id}")
 
 
+def queue_for_next_day_start(connection: Any, player_id: int, day_start: datetime,
+                             version_id: int) -> None:
+    """A day saved proven from the other start (``reconciliation``'s
+    ``reconcile_ranked_day``) says how the day before's automatic loss went
+    (``loss_rule.next_day_landing``): queue the day before once for it."""
+    _queue_day(connection, player_id, day_start - timedelta(days=1),
+               f"reconcile:next-day-start:{player_id}:{version_id}", "next_day_start")
+
+
 def queue_for_check(connection: Any, check: Any) -> None:
     """A successful unchanged battle-log check (``collector_db``) saves no log
     yet covers each profile read since the last check and the latest Reset:

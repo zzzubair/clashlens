@@ -13,6 +13,7 @@ from . import (
     domain,
     first_battle_log,
     league_drop,
+    queue_refresh,
     ranked_day_inputs,
     reading_rule,
     reconcile_pass,
@@ -439,6 +440,7 @@ def recalculate_ranked_day(
     day_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
+    next_day_start: int | None = None
     if now >= ranked_day.end:
         readings, unreadable_from, covered_until = ranked_day_inputs.load_readings(
             database, connection, player_id, ranked_day,
@@ -461,6 +463,9 @@ def recalculate_ranked_day(
         day_unshown_report = ranked_day_inputs.load_first_unshown_report(
             connection, player_id, *domain.battle_window(ranked_day.start), latest=True
         )
+        if end_baseline is not None and end_baseline["id"] is not None:
+            next_day_start = ranked_day_inputs.load_next_day_start(
+                connection, player_id, ranked_day, int(end_baseline["id"]))
     data = ReconciliationInput(
         ranked_day=ranked_day,
         now=now,
@@ -534,6 +539,7 @@ def recalculate_ranked_day(
         day_unshown_report=day_unshown_report,
         unreadable_from=unreadable_from,
         covered_until=covered_until,
+        next_day_start=next_day_start,
     )
     result = reconcile_ranked_day(data)
     result_data = {
@@ -783,6 +789,8 @@ def recalculate_ranked_day(
     )
     if result.state == "Live" or now < ranked_day.end + DAY_END_RECALCULATION_DELAY:
         _enqueue_day_end_reconciliation(connection, player_id, ranked_day)
+    if "start_automatic_loss_charged" in result.formula_components:
+        queue_refresh.queue_for_next_day_start(connection, player_id, ranked_day.start, version_id)
     if existing is None:
         # A reset sweep is the sole source of expected population.
         # No population-wide job is created for an uncoordinated

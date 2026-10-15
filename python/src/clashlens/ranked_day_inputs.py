@@ -363,7 +363,7 @@ def load_previous_day(
         reason in CHAIN_BREAK_REASONS or reason in DISPUTED_BATTLE_REASONS
         for reason in reasons
     )
-    # A loss only a reading shows (``loss_rule.possible_loss``), for all 8
+    # A loss only a reading shows (``loss_rule.possible_losses``), for all 8
     # slots of a day with none used or on a first Legend day with fewer
     # attacks than defenses, leaves an end no reading settled unable to start
     # the next day, as does a reading that disagreed.
@@ -409,6 +409,32 @@ def load_previous_day(
             battles_known=battles_known,
         )
     )
+
+
+def load_next_day_start(
+    connection: Any, player_id: int, ranked_day: RankedDay, end_baseline_id: int,
+) -> int | None:
+    """The next day's latest saved start, when that day started from this
+    day's end Reset reading and its readings proved it, Complete and exact
+    or its end read cleanly (``reconciliation``'s ``_proven``)."""
+    row = connection.execute(
+        """
+        SELECT start_trophies, state, confidence, start_baseline_id,
+               input_evidence -> 'start_baseline_evidence' ->> 'start_trophies_source',
+               input_evidence -> 'end_reading' ->> 'clean'
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC, id DESC
+        LIMIT 1
+        """,
+        (player_id, ranked_day.end, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if row is None or row[0] is None or _text_value(row[1]) != "Complete" or (
+            row[3] != end_baseline_id or row[4] == "previous_day_end") or not (
+            _text_value(row[2]) == "exact" or row[5] == "true"):
+        return None
+    return int(row[0])
 
 
 def previous_end_start(

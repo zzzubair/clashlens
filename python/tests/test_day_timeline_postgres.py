@@ -4,7 +4,7 @@ From 5 to 13 October 2026, 1,410 days were saved Inconsistent by a reading
 during the day and 1,297 by a reading from the next Reset on, though both
 players' logs agreed on 18,140 of their 18,142 battles. The readings were
 late or early, not wrong: a profile can lag its battle log by an hour, and
-show a defense from its stamp. A player's first Legend day was charged an
+show a defense up to 150 seconds before it ends. A player's first Legend day was charged an
 automatic loss the game never took. A day after one saved Inconsistent
 ignored that day's loss. See docs/testing.md.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 import test_reset_scenarios_postgres as scenarios
 from domain_test_support import domain_database
 from test_reset_scenarios_postgres import (
@@ -24,6 +25,8 @@ from test_reset_scenarios_postgres import (
     day,
     defenses,
 )
+
+from clashlens import reconcile_pass
 
 LATE, FIRST, NEXT, EARLY = "#2PP", "#8PP", "#9PP", "#PPP"
 
@@ -90,8 +93,8 @@ def test_days_judged_against_the_battle_timeline(
     not 5,520.
 
     EARLY's 13 October has a reading at 06:31:00 already showing a defense
-    stamped 06:30:00 that lasted 150 s: a profile can show a defense from its
-    stamp."""
+    stamped 06:30:00 that lasted 150 s: a profile can show a defense up to 150
+    seconds before it ends."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, LATE, FIRST, NEXT, EARLY)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=5, seconds=23))
@@ -177,7 +180,9 @@ def test_a_loss_that_never_landed_leaves_the_next_day_where_its_readings_show(
     from 4,800, and the 04:50 one after the last battle shows 4,800.
     Started at 4,740 as if charged, each still fits the loss as still to
     land, and the Monday raise hides the end, so only the 04:50 reading
-    tells. The board shows 4,800, proven, not 4,740."""
+    tells. The board shows 4,800, proven, not 4,740, and Saturday, which
+    took its loss to land after its Reset reading, records it never did:
+    it ends at 4,800, and Sunday starts where it says."""
     never = "#YPP"
     friday, saturday, sunday, monday = day(5), day(6), day(7), day(8)
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -199,10 +204,18 @@ def test_a_loss_that_never_landed_leaves_the_next_day_where_its_readings_show(
         sunday_saved = story.saved_day(never, sunday)
         board = story.served_board(monday)
         unfinished = story.unfinished_jobs()
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (never,)).fetchone()[0]
+            findings, judged, _ = reconcile_pass.judge(connection, sunday, [player_id])
 
     assert unfinished == []
-    assert (saturday_saved["state"], saturday_saved["automatic_loss"]) == ("Complete", 60)
+    assert (saturday_saved["state"], saturday_saved["automatic_loss"], saturday_saved["end"],
+            saturday_saved["next_start"]) == ("Complete", 0, 4800, 4800)
     assert (sunday_saved["state"], sunday_saved["start"], sunday_saved["end"]) == (
         "Complete", 4800, 4800)
     assert _ranked(board) == {never: 4800}
     assert [entry["confidence"] for entry in board["entries"]] == ["confirmed"]
+    # The nightly check finds Sunday's start where Saturday says it is.
+    assert (player_id, "chain") in judged
+    assert [finding for finding in findings if finding.check == "chain"] == []
