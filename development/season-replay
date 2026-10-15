@@ -174,6 +174,20 @@ start_worker() {
   echo $! > worker.pid
 }
 
+release_armies() {
+  # A copy without decoded armies can never decode a rebuilt board member's
+  # attacks, so that board's army records, and every later rebuild of the
+  # Reset, would wait for ever. The metrics never read army records.
+  psql_run -d "$DB" -v season_start="'$SEASON_START'" <<'SQL'
+UPDATE boundary_publication_generation_members AS member
+SET army_status = 'unavailable', updated_at = clock_timestamp()
+FROM boundary_publication_generations AS generation
+WHERE generation.id = member.generation_id AND generation.boundary_at > :season_start
+  AND member.army_status = 'pending' AND member.snapshot_status <> 'pending'
+  AND NOT EXISTS (SELECT FROM battle_army_decodes);
+SQL
+}
+
 repair() {
   local report deadline=$((SECONDS + DRAIN_HOURS * 3600))
   while ((SECONDS < deadline)); do
@@ -183,6 +197,7 @@ repair() {
     grep -q '"refused"' <<<"$report" && die "repair refused: $report"
     grep -Eq '"phase": "(inputs|days)"' <<<"$report" || rm -f boards-held
     grep -q '"phase": "done"' <<<"$report" && return
+    release_armies
     kill -0 "$(cat worker.pid)" || die "the worker stopped; see worker.log"
     sleep 60
   done
@@ -209,6 +224,7 @@ SQL
 )
     printf '%s left %s\n' "$(date -u +%FT%TZ)" "$left" >> drain.log
     if ((left == 0)); then ((++quiet >= 3)) && return; else quiet=0; fi
+    release_armies
     kill -0 "$(cat worker.pid)" || die "the worker stopped; see worker.log"
     sleep 30
   done

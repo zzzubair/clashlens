@@ -245,7 +245,15 @@ jobs a minute. Never analyze or vacuum that table in a replay copy.
 - The running Legend day: its day-end jobs wait for the next Reset, which
   the copy never sees, so `park` sets them aside and its days stay Live.
 - The worker's database permissions: it connects as the database owner.
-- Army statistics, unless the copy holds the army tables' data.
+- When clock-driven work runs. The worker runs it by the replay machine's
+  clock, not the copy's: on 14 October 2026 the night recheck of every
+  active player's last two ended days, 21,706 recalculations, ran from 00:12
+  to 03:00 during the replay, and the drain waited for it.
+- Army statistics. The copy of 14 October 2026 holds no decoded armies, so
+  a rebuilt board's member whose attacks are not decoded would hold that
+  board's army records, and every later rebuild of its Reset, for ever.
+  The replay marks such a member's army unavailable instead; the metrics
+  never read army records.
 
 **How to trust a result.** `metrics-before.tsv` should match production at
 the time of the copy. A replay of `main` should match `metrics-before.tsv`
