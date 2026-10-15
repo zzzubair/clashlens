@@ -16,8 +16,9 @@ how a saved day or board comes out, then run it once:
   ``reset_baselines.repair_current_season_reset_baselines``, each for this
   Season only); then, once every such repair has finished and none has
   failed, every day of the Season of each player with a saved day or a
-  Legend I week in it, oldest first in one job, each later day starting
-  where the day before now ends;
+  Legend I week in it (in a Season before the record, each player's saved
+  days), oldest first in one job, each later day starting where the day
+  before now ends;
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
   entries the rules now change (``boundary.queue_board_rebuilds``); then,
@@ -149,10 +150,11 @@ def season_repair(
                     UNION
                     SELECT player_id FROM player_league_weeks
                     WHERE league = 'legend_i'
-                      AND week_start >= %(start)s AND week_start < %(end)s
+                      AND week_start >= %(recorded)s AND week_start < %(end)s
                     ORDER BY player_id
                     """,
-                    {"start": start, "end": start + SEASON_DURATION},
+                    {"start": start, "end": start + SEASON_DURATION,
+                     "recorded": max(start, league_days.RECORDED_FROM)},
                 ).fetchall()
             ]
         through = int(receipt[2]) if receipt is not None else 0
@@ -209,12 +211,13 @@ def season_repair(
                  Jsonb(_board_counts(connection, start)), players if scope else None),
             )
     with database.pool.connection() as connection, connection.transaction():
+        # A Season before the record is calculated without it.
         undecided = connection.execute(
             "SELECT count(*) FROM league_week_dirty WHERE week_start >= %s AND week_start < %s",
-            (start, start + SEASON_DURATION),
+            (max(start, league_days.RECORDED_FROM), start + SEASON_DURATION),
         ).fetchone()[0]
         settled = {} if undecided else league_days.settle(database, connection, start, max_jobs)
-    if undecided or settled["players"]:
+    if undecided or settled["players_settled"]:
         # Days are recalculated by the decided weeks: a week not Legend I
         # keeps no public day.
         return {**report, "phase": "league", "undecided_weeks": int(undecided), **settled}
@@ -525,14 +528,17 @@ def _queue_days(
     database: Database, season_id: str, revision: str, start: datetime,
     players: list[int],
 ) -> None:
-    """Queue one job per player recalculating every day of the Season from
-    their first saved day or Legend I week, oldest first, through the
-    current day, and note the last player queued."""
-    from . import first_battle_log
+    """Queue one job per player recalculating their days of the Season from
+    their first saved day or Legend I week, oldest first, and note the last
+    player queued. From the record on, that is every day through the
+    current one, saved or not: a Legend I week has a Legend day each day.
+    Before it, the saved days only."""
+    from . import first_battle_log, league_days
 
     with database.pool.connection() as connection, connection.transaction():
         _guard_days(connection, season_id)
         today = domain.ranked_day_for(datetime.now(UTC)).start
+        recorded = start >= league_days.RECORDED_FROM
         for player, first_day in connection.execute(
             """
             SELECT player_id, min(day) FROM (
@@ -550,8 +556,9 @@ def _queue_days(
             first_battle_log._queue(
                 connection, int(player), first_day, None,
                 key=_repair_key(revision, season_id, int(player)), trigger="season_repair",
-                priority=PYTHON_BACKFILL_PRIORITY, every_day=True,
-                last_day=max(first_day, min(today, start + SEASON_DURATION - RANKED_DAY_DURATION)),
+                priority=PYTHON_BACKFILL_PRIORITY, every_day=recorded,
+                last_day=max(first_day, min(today, start + SEASON_DURATION - RANKED_DAY_DURATION))
+                if recorded else None,
             )
         connection.execute(
             """

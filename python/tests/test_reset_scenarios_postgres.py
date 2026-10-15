@@ -163,6 +163,9 @@ class Story:
     monkeypatch: object
     players: dict[str, Player] = field(default_factory=dict)
     elapsed: timedelta = timedelta(0)
+    # Whether the worker decides the weekly league record as it runs, as
+    # production's does; a story about the decisions makes them itself.
+    decides: bool = True
 
     def __post_init__(self) -> None:
         # The story's clock: the database's, plus the time the story waited.
@@ -294,7 +297,8 @@ class Story:
         database, processor = _processor(self.connection_info, self.archive_server)
         try:
             for _ in range(20):
-                league_week.decide_due(database)
+                if self.decides:
+                    league_week.decide_due(database)
                 boundary_publication.reevaluate_boundary_publications(database)
                 processed = processor.process_until_idle(owner="story", max_jobs=10_000)
                 boundary_publication.reevaluate_boundary_publications(database)
@@ -306,7 +310,7 @@ class Story:
                           AND due_at > now()
                         """
                     ).rowcount
-                    undecided = connection.execute(
+                    undecided = self.decides and connection.execute(
                         "SELECT count(*) FROM league_week_dirty").fetchone()[0]
                 if not processed and not waiting and not undecided:
                     return

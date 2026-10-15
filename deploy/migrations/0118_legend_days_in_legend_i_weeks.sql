@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0117.
+-- Clash Lens deployment migration 0118.
 -- The weekly league record, stage 2: a public Legend day exists only in a
 -- week the record says was Legend I (python/src/clashlens/league_days.py,
 -- docs/domain.md, Weekly league record).
@@ -43,6 +43,6 @@ ALTER TABLE api_player_daily_logs
 -- The worker deletes a week's public days when it leaves Legend I.
 GRANT DELETE ON TABLE api_player_daily_logs TO clashlens_python_worker;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (117)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (118)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

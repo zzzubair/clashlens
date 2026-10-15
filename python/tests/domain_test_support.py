@@ -14,8 +14,8 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
-from clashlens import army_ingestion, boundary_publication
-from clashlens.domain import ranked_day_for
+from clashlens import army_ingestion, boundary_publication, league_week
+from clashlens.domain import is_season_boundary, ranked_day_for
 
 
 def text(value: Any) -> Any:
@@ -204,11 +204,44 @@ def domain_database(
             admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
+def legend_i_week(connection: psycopg.Connection[Any], player_ids: list[int],
+                  week_start: datetime) -> None:
+    """Record the players' week from ``week_start`` as Legend I, proven by an
+    accepted answer at its Monday Reset, as the weekly league record's
+    decider would: from 5 October 2026 a Legend day and a Daily board member
+    need it (league_days, boundary_members)."""
+    connection.execute(
+        """
+        INSERT INTO player_league_weeks (
+            player_id, week_start, league, entry, strength, proof_kind, proof_at,
+            proof_source_id, rule_version)
+        SELECT player_id, %s, 'legend_i', %s, 3, 'accepted_answer', %s, 0, %s
+        FROM unnest(%s::bigint[]) AS player (player_id)
+        """,
+        (week_start, "season_start" if is_season_boundary(week_start) else "stayed",
+         week_start, league_week.RULE_VERSION, player_ids),
+    )
+
+
+def record_seasons_to(monkeypatch: Any, season_end: datetime) -> None:
+    """Let the weekly league record decide the two Seasons ending at
+    ``season_end`` from their starts, as it decides every Season from 5
+    October 2026, with its clock on the later one's last day: their Legend
+    days, Season starts and ends then follow its decisions."""
+    from clashlens import league_days
+
+    monkeypatch.setattr(league_days, "RECORDED_FROM", season_end - timedelta(days=56))
+    monkeypatch.setattr(league_week, "_now", lambda: season_end - timedelta(hours=1))
+    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+
+
 def repair_season(
     connection_info: str, season: str, *, max_jobs: int = 100
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The Season repair's preview, then its queue run past the evidence
-    repairs it does first: (preview, the first report queueing days)."""
+    """The Season repair's preview, then its queue run past the league
+    record's step and the evidence repairs it does first: (preview, the
+    first report queueing days). The worker's league week thread decides
+    the marked weeks meanwhile."""
     from clashlens.db import Database
     from clashlens.domain_repair import season_repair
 
@@ -217,7 +250,9 @@ def repair_season(
         preview = season_repair(database, season, "preview", max_jobs=max_jobs)
         for _ in range(10):
             queued = season_repair(database, season, "queue", max_jobs=max_jobs)
-            if queued.get("phase") != "inputs":
+            while queued.get("phase") == "league" and league_week.decide_due(database):
+                pass
+            if queued.get("phase") not in {"inputs", "league"}:
                 return preview, queued
         raise AssertionError("the evidence repairs did not finish")
     finally:

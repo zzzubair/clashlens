@@ -24,9 +24,13 @@ from .db import PYTHON_BACKFILL_PRIORITY
 from .domain import RankedDay
 from .league_week import WEEK, Decision, Entry, League, LegendI, Unknown, league_of
 
-# The first Season the record decides from its start. A day before it is
-# a Legend I day, as every tracked player's day was then: its Season's first
-# day starts at 5,000, and no week ends in a drop.
+# The first Season the record decides from its start. It decides no week
+# before it, so a day before it is calculated as a Legend I day whose
+# Season's first day starts at 5,000 and whose week ends in no drop, though
+# hundreds of players dropped each Monday then. Those Seasons take no new
+# evidence (corrections stop a week after a Season ends), so their days are
+# calculated again only by a Season repair run for one, which would count
+# such drops wrongly.
 RECORDED_FROM = datetime(2026, 10, 5, 5, tzinfo=UTC)
 _STARTS_AT_5000 = frozenset({Entry.SEASON_START, Entry.PROMOTED, Entry.FIRST_SEEN})
 
@@ -219,16 +223,18 @@ def _queue_week(
 ) -> None:
     """Queue the started days a changed decision about ``week`` affects:
     every day of the week when its league changed, and the Sunday before
-    too when it moved into or out of below Legend I, as that Sunday's end
-    gets the weekly raise only for a player staying in Legend I; only its
-    Monday when only how it began changed."""
+    too when that changes how the Sunday ends: within a Season, when the
+    week moved into or out of below Legend I, as only a player staying in
+    Legend I gets the weekly raise; at a Season's start, when it moved into
+    or out of Legend I, as only a player in Legend I the next Season ends
+    the last day by the Season rule. Only its Monday when only how it began
+    changed."""
     from .first_battle_log import _queue
 
     if before[0] is not after[0]:
         first, last = week, week + WEEK - timedelta(days=1)
-        if (before[0] is League.BELOW) is not (after[0] is League.BELOW) and not (
-            domain.is_season_boundary(week)
-        ):
+        ends_sunday = League.LEGEND_I if domain.is_season_boundary(week) else League.BELOW
+        if (before[0] is ends_sunday) is not (after[0] is ends_sunday):
             first -= timedelta(days=1)
     else:
         first = last = week
@@ -295,7 +301,7 @@ def settle(
     """For the Season repair, once every week of the Season is decided: the
     public days of at most ``limit`` players saved before their weeks were.
     Each in a week not Legend I is deleted (``withdraw``); each other names
-    its week (migration 0117). How many players, deleted and named."""
+    its week (migration 0118). How many players, deleted and named."""
     start = max(season_start, RECORDED_FROM)
     end = season_start + domain.SEASON_DURATION
     players = [int(row[0]) for row in connection.execute(
@@ -335,5 +341,5 @@ def settle(
             """,
             (player_id, start, end),
         ).rowcount
-    return {"players": len(players), "public_days_deleted": deleted,
+    return {"players_settled": len(players), "public_days_deleted": deleted,
             "public_days_named": named}

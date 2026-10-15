@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, legend_i_week, store_observation, text
 
 from clashlens import battle_day_repair, boundary, boundary_members
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_changes
@@ -874,6 +874,7 @@ def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]])
                 " OVERRIDING SYSTEM VALUE VALUES (%s, %s, true)",
                 (index, tag),
             )
+        legend_i_week(connection, list(range(1, len(readings) + 1)), _october(5, 5))
         sweep = connection.execute(
             """
             INSERT INTO collector_reset_sweeps
