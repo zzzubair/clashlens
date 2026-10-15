@@ -17,6 +17,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
 
 from clashlens import league_week, queue_refresh, worker
+from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.stage_metrics import StageMetrics
 
@@ -244,3 +245,69 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
         "legend_i", "stayed", 1, "previous_week", W1, None, None, 1)
     assert before_pair[PROMOTED, W2] == still_below
     assert again == decided
+
+
+def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
+    database_url: str, monkeypatch
+) -> None:
+    """One player whose decision fails must not stop the rest, which used to
+    retry the same batch every minute with only a log line to show for it.
+    BROKEN is set aside: their marks stay, marked failed, and the failed-work
+    count the alert reads counts them, while FINE is decided. New evidence
+    about BROKEN tries again."""
+    broken_tag, fine_tag = "#2PP", "#8PP"
+    original = league_week.load_season
+    broken: list[int] = []
+
+    def load(connection, player_id, season_start, now):
+        if player_id in broken:
+            raise ValueError("unreadable evidence")
+        return original(connection, player_id, season_start, now)
+
+    monkeypatch.setattr(league_week, "load_season", load)
+    monkeypatch.setattr(league_week, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
+    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+    with domain_database(database_url) as connection_info:
+        options = conninfo_to_dict(connection_info).get("options", "")
+        as_role = {role: make_conninfo(connection_info, options=f"{options} -c role={role}")
+                   for role in ("clashlens_python_worker", "clashlens_collector")}
+
+        def mark(*player_ids: int) -> None:
+            with psycopg.connect(connection_info) as connection:
+                for player_id in player_ids:
+                    connection.execute(
+                        "INSERT INTO league_week_dirty (player_id, week_start, source)"
+                        " VALUES (%s, %s, 'profile')", (player_id, W2))
+
+        def decide() -> tuple[dict[str, bool], int]:
+            database = Database(as_role["clashlens_python_worker"])
+            try:
+                while league_week.decide_due(database):
+                    pass
+            finally:
+                database.close()
+            collector = CollectorDatabase(as_role["clashlens_collector"])
+            try:
+                failed = collector.health_metrics()["failed_processing"]
+            finally:
+                collector.close()
+            with psycopg.connect(connection_info) as connection:
+                return dict(connection.execute(
+                    "SELECT player.normalized_tag, mark.failed_at IS NOT NULL"
+                    " FROM league_week_dirty AS mark"
+                    " JOIN players AS player ON player.id = mark.player_id").fetchall()), failed
+
+        with psycopg.connect(connection_info) as connection:
+            broken.append(connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (broken_tag,)
+            ).fetchone()[0])
+            fine = connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id", (fine_tag,)
+            ).fetchone()[0]
+        mark(broken[0], fine)
+        set_aside = decide()
+        mark(broken.pop())
+        tried_again = decide()
+
+    assert set_aside == ({broken_tag: True}, 1)
+    assert tried_again == ({}, 0)

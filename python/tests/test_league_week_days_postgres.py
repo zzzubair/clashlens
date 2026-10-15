@@ -14,12 +14,14 @@ See docs/testing.md.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 import psycopg
 from domain_test_support import domain_database, text
+from test_collector_db_postgres import _handoff
 from test_reset_scenarios_postgres import (
     SEASON,
     Player,
@@ -31,6 +33,9 @@ from test_reset_scenarios_postgres import (
     defenses,
     multiplayer,
 )
+
+from clashlens.collector_db import CollectorDatabase
+from clashlens.collector_uploads import claim_upload, complete_upload
 
 
 @dataclass
@@ -294,3 +299,101 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     assert _ranked(tuesday_board) == {
         STEADY_3: 5420, STEADY_2: 5320, STEADY_1: 5220, FAILED: 5060, FAILED_TWICE: 5060,
         PROMOTED: 5050, IDLE_PROMOTED: 5000}
+
+
+KEPT = "#VPP"
+
+
+def _tracked(connection_info: str, tag: str) -> bool:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT active FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
+
+
+def _saved_again(connection_info: str, tag: str, body: bytes, at: datetime) -> int | None:
+    """The collector's save of a profile answer read at ``at``, the same as
+    the player's last saved one, through its own save and upload path: the
+    new response's id, or None when it was not saved."""
+    digest = hashlib.sha256(body).hexdigest()
+    with psycopg.connect(connection_info) as connection:
+        player_id, last_id, last_at = connection.execute(
+            "SELECT player_id, id, response_completed_at FROM collector_observations"
+            " WHERE normalized_tag = %s AND endpoint = 'profile' ORDER BY id DESC LIMIT 1",
+            (tag,),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO collector_response_state (
+                scope, identity_key, endpoint, player_id, normalized_tag,
+                last_response_hash, last_content_fingerprint, last_occurrence_key,
+                last_applied_occurrence_key, last_seen_at, last_observation_id,
+                last_success_at
+            ) VALUES ('player', %s, 'profile', %s, %s, %s, %s, 'last', 'last', %s, %s, %s)
+            """,
+            (tag, player_id, tag, digest, digest, last_at, last_id, last_at),
+        )
+    database = CollectorDatabase(connection_info)
+    try:
+        saved = database.record_response(replace(
+            _handoff(occurrence_key=f"{tag}-again", response_hash=digest,
+                     player_id=player_id, tag=tag, completed_at=at),
+            byte_size=len(body)))
+        # The uploader stores it in the archive, where it already is.
+        claim = claim_upload(database, owner="uploader")
+        assert claim is not None and claim.response_hash == digest
+        complete_upload(database, claim, archive_reference=f"s3://evidence/sha256/"
+                        f"{digest[:2]}/{digest}", archive_instance_id="fixture-instance")
+    finally:
+        database.close()
+    return saved.observation_id
+
+
+def test_a_false_lower_answer_saved_again_after_the_display_window_keeps_tracking(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """KEPT plays Legend I through Sunday 11 October 2026. At Monday's 05:20
+    check the game shows them in Legend II naming Season 0 by mistake, and at
+    06:02 the collector saves that unchanged answer again, the first after
+    the league display window. The two answers stopped tracking them, so
+    polling them, until a battle check put them back (the 12 October
+    failure). They battle from 13:30 and are shown in Legend I again at
+    22:00. They stay tracked, and Monday is their Legend day, ranked on
+    Tuesday's board."""
+    saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
+    again_at = monday + timedelta(hours=1, minutes=2)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch, {KEPT: Climber(KEPT)})
+        kept = story.players[KEPT]
+        # Sunday from 5,140 and Monday from 13:30: 8 attacks of 40 and 8
+        # defenses of 30, Monday ending 80 up.
+        kept.battles = _saturday(saturday) + attacks(sunday, *[40] * 6) + defenses(
+            sunday, *[30] * 8) + attacks(monday + timedelta(hours=8), *[40] * 8) + defenses(
+            monday + timedelta(hours=8), *[30] * 8)
+        story.reset(saturday, {KEPT: (5300, SEASON)})
+        story.reset(sunday, {KEPT: (5140, SEASON)})
+        story.reads(monday - timedelta(minutes=10), {KEPT: 5140})
+        story.reset(monday, {KEPT: (5140, SEASON)})
+        kept.dropped = True
+        story.read(KEPT, monday + timedelta(minutes=20), 5140, None)
+        story.run_worker()
+        tracked = [_tracked(connection_info, KEPT)]
+        saved = _saved_again(connection_info, KEPT, kept.profile(5140, None), again_at)
+        story.clock = max(story.clock, again_at)
+        story.run_worker()
+        tracked.append(_tracked(connection_info, KEPT))
+        kept.dropped = False
+        story.reads(monday + timedelta(hours=17), {KEPT: 5220})
+        story.reads(tuesday - timedelta(minutes=10), {KEPT: 5220})
+        story.reset(tuesday, {KEPT: (5220, SEASON)})
+        story.reads(tuesday + timedelta(minutes=20), {KEPT: 5220})
+        story.wait(timedelta(hours=1))
+        tracked.append(_tracked(connection_info, KEPT))
+        monday_day = _public_days(connection_info, KEPT).get(monday)
+        tuesday_board = story.served_board(tuesday)
+        unfinished = story.unfinished_jobs()
+
+    assert saved is not None
+    assert tracked == [True, True, True]
+    assert unfinished == []
+    assert monday_day == {"state": "Complete", "reasons": [], "attacks": 8, "defenses": 8}
+    assert _ranked(tuesday_board) == {KEPT: 5220}

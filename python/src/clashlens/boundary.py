@@ -701,7 +701,7 @@ def _record_boundary_generation(
     shared = lock_boundary_members(connection, boundary_at, reset_lock_wait)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
-    if player_id not in member_ids and not boundary_members.joins_late(boundary_at):
+    if not boundary_members.board_members(connection, boundary_at, member_ids, only=player_id):
         return True
     current = connection.execute(
         """

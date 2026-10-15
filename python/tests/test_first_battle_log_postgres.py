@@ -241,7 +241,9 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     assert opponent[:3] == ("Complete", "exact", 5000)
     assert opponent[3] == 5000 + WIN and opponent[4] is True
     assert opponent[5] == []
-    assert not_in_season is None
+    # The crawl import's Day 2 Legend battle proves its week Legend I (the
+    # weekly league record), so its Day 1 is a Legend day, at 5,000.
+    assert not_in_season[2] == 5000
     assert day_1_joiner[:4] == ("Complete", "exact", 5000, 5000 + 2 * WIN)
     # The backfill lists the Day 1 joiner and the opponent, not the crawl
     # import.
@@ -390,10 +392,12 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     assert before[0] == "Partial" and before[3] is None
     assert (unchanged[0], unchanged[3]) == ("Partial", None)
     assert "automatic_defense_basis_unavailable" in before[5]
-    # Each player with a saved day of the Season is recalculated once.
-    assert (preview["players"], preview["left_to_queue"]) == (2, 2)
-    assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 2, 0)
-    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 2)
+    # Each player with a saved day of the Season is recalculated once: the
+    # two Day 1 joiners and the 3 opponents their Legend battles prove in
+    # Legend I (the weekly league record), so with Legend days of their own.
+    assert (preview["players"], preview["left_to_queue"]) == (5, 5)
+    assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 5, 0)
+    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 5)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "exact", 5000, ending)
 
@@ -435,8 +439,10 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
             job_id, player_id = connection.execute(
                 "UPDATE python_processing_jobs SET status = 'failed',"
                 " failure_category = 'invalid_work_input'"
-                " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
-                " RETURNING id, (input_json ->> 'player_id')::bigint"
+                " WHERE deduplication_key LIKE 'reconcile:season-repair:%%'"
+                " AND input_json ->> 'player_id' = (SELECT id::text FROM players"
+                " WHERE normalized_tag = %s)"
+                " RETURNING id, (input_json ->> 'player_id')::bigint", (TAG,),
             ).fetchone()
         database = Database(connection_info)
         try:
@@ -456,17 +462,18 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
 
     assert (before[0], before[3]) == ("Partial", None)
     assert "battle_log_overlap_gap" in before[5]
-    assert (preview["players"], preview["left_to_queue"], preview["failed"]) == (1, 1, 0)
-    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    # The player and the 2 opponents their Legend battles prove in Legend I.
+    assert (preview["players"], preview["left_to_queue"], preview["failed"]) == (3, 3, 0)
+    assert (queued["queued"], queued["left_to_queue"]) == (3, 0)
     # A failed recalculation is kept and listed, not queued again.
-    assert (failed["left_to_queue"], failed["unfinished"], failed["failed"]) == (0, 0, 1)
+    assert (failed["left_to_queue"], failed["unfinished"], failed["failed"]) == (0, 2, 1)
     assert failed["failed_blockers"] == [{
         "job_id": job_id, "player_id": player_id,
         "failure_category": "invalid_work_input",
     }]
     # The receipt keeps the day as it was before the repair.
     day_1 = DAY_1.isoformat()
-    assert failed["days"]["before"][day_1]["states"] == {"Partial": 1}
+    assert failed["days"]["before"][day_1]["states"] == {"Partial": 3}
     assert "battle_log_overlap_gap" in failed["days"]["before"][day_1]["reasons"]
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "exact", 5000, ending)

@@ -211,10 +211,19 @@ def season_repair(
                  Jsonb(_board_counts(connection, start)), players if scope else None),
             )
     with database.pool.connection() as connection, connection.transaction():
-        # A Season before the record is calculated without it.
+        # A Season before the record is calculated without it. Evidence
+        # marked since the repair began is new: the decider recalculates the
+        # days its decisions change, so only older marks are waited for, and
+        # none of a player it set aside (league_week._decide_batch).
         undecided = connection.execute(
-            "SELECT count(*) FROM league_week_dirty WHERE week_start >= %s AND week_start < %s",
-            (max(start, league_days.RECORDED_FROM), start + SEASON_DURATION),
+            """
+            SELECT count(*) FROM league_week_dirty
+            WHERE week_start >= %s AND week_start < %s AND failed_at IS NULL
+              AND marked_at < (SELECT started_at FROM season_repairs
+                               WHERE official_season_id = %s AND rule_revision = %s)
+            """,
+            (max(start, league_days.RECORDED_FROM), start + SEASON_DURATION,
+             season_id, revision),
         ).fetchone()[0]
         settled = {} if undecided else league_days.settle(database, connection, start, max_jobs)
     if undecided or settled["players_settled"]:

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, legend_i_week, store_observation, text
 from psycopg.types.json import Jsonb
 from test_reconciliation import _input
 from test_reconciliation_postgres import (
@@ -32,6 +32,7 @@ from clashlens.db import (
     PROCESSING_VERSION,
 )
 from clashlens.domain import ranked_day_for
+from clashlens.league_week import week_start
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.reconciliation import (
     BattleContribution,
@@ -998,6 +999,9 @@ def test_republication_finishes_ended_days_left_live(
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
+                # The weekly league record has the player in Legend I.
+                for week in {week_start(day.start) for day in (earlier, yesterday, today)}:
+                    legend_i_week(connection, [player_id], week)
                 connection.execute(
                     """
                     UPDATE legend_season_anchors
@@ -1172,6 +1176,8 @@ def test_day_saved_live_is_finished_after_its_reset_without_a_reading(
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
+                for week in {week_start(day.start) for day in (older, earlier, today)}:
+                    legend_i_week(connection, [player_id], week)
 
                 def calculate(day, now=None) -> None:
                     with monkeypatch.context() as patch:
