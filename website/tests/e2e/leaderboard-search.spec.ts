@@ -152,3 +152,30 @@ test.describe("on a touch phone with worst-case players", () => {
     });
   }
 });
+
+test("arrow keys move through rank search results and the board", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live&page=1&q=Synthetic");
+  const results = page.locator(".rank-search-results a");
+  await expect(results.nth(1)).toBeVisible();
+  // Retries until the page's scripts are running and handle the arrow keys.
+  await expect(async () => {
+    await page.getByRole("searchbox", { name: "Find your rank" }).press("ArrowDown");
+    await expect(results.first()).toBeFocused({ timeout: 1_000 });
+  }).toPass();
+  await page.keyboard.press("ArrowDown");
+  await expect(results.nth(1)).toBeFocused();
+
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  const links = page.locator(".leaderboard-row .player-name");
+  await expect(async () => {
+    await page.getByRole("region", { name: "Live leaderboard table" }).focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(links.first()).toBeFocused({ timeout: 1_000 });
+  }).toPass();
+  for (let step = 0; step < 30; step += 1) await page.keyboard.press("ArrowDown");
+  await expect(links.nth(30)).toBeFocused();
+  await expect(links.nth(30)).toBeInViewport();
+  const href = await links.nth(30).getAttribute("href");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+});

@@ -63,7 +63,3 @@
   background: var(--cl-action-soft);
   border-block: 2px solid var(--cl-action-text);
 }
-
-.leaderboard-row[data-selected="true"] {
-  scroll-margin-block: 5rem;
-}
