@@ -77,19 +77,21 @@ def lay_out(view: discord.ui.LayoutView, reply: Reply) -> None:
 def lay_out_notice(reply: Reply) -> dict[str, Any]:
     """`reply` in Discord's older layout, the only one whose message can
     carry the line a phone's notification shows: `notice`, then each card as
-    a box with its coloured edge, the last ending in `footer` and the time
-    `at`, then every button."""
+    a box with its coloured edge, the first topped by `title` in small bold,
+    which keeps a large first line in the box from leaving a gap, and the
+    last ending in `footer` as small print, then any buttons."""
     embeds = [
         discord.Embed(description="\n\n".join(card.parts), colour=card.colour)
         for card in reply.cards
     ]
+    if reply.title:
+        embeds[0].set_author(name=reply.title)
     if reply.footer:
-        embeds[-1].set_footer(text=reply.footer)
-    embeds[-1].timestamp = reply.at
+        embeds[-1].description += f"\n-# {reply.footer}"
     view = discord.ui.View(timeout=None)
     for link in (*(card.button for card in reply.cards if card.button), *reply.links):
         view.add_item(_button(link))
-    return {"content": reply.notice, "embeds": embeds, "view": view}
+    return {"content": reply.notice, "embeds": embeds, **({"view": view} if view.children else {})}
 
 
 def _button(link: replies.Link) -> discord.ui.Button[Any]:

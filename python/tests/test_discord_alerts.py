@@ -93,8 +93,10 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
 def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification() -> None:
     """The message's own text, all a phone's notification shows, is the
     defender and the trophies lost, with a right-to-left name kept from
-    moving the number; the box below names the attacker without pinging
-    anyone, in the defender's colour, with a button to the battle."""
+    moving the number; the box below, in the defender's colour, is topped by
+    the attacker's name, then the stars and destruction, the attacker's
+    stats by icon and clan without pinging anyone, then links to the battle
+    and alert settings in place of buttons."""
     client = FakeClient(None)
     reply = attack_alert(
         SITE,
@@ -102,7 +104,7 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
             "defender_tag": "#2PP",
             "defender_name": "صقر الشمال",
             "attacker_tag": "#8QQ",
-            "attacker_name": "@everyone *Drift*",
+            "attacker_name": "@everyone  *Drift*",
             "stars": 2,
             "destruction_percentage": 88,
             "trophies_lost": 24,
@@ -110,25 +112,47 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
             "battle_id": 41,
             "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC),
         },
-        "Unavailable",
+        {"clan": "@here _Night_", "rank": 1204, "start_trophies": 5312, "hit_rate": "62%"},
         PLAYER_COLOURS[1],
     )
     asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
     message = client.sent[0]
     assert message["content"] == "🛡️ \u2068صقر الشمال\u2069  −24 🏆"
     [box] = message["embeds"]
+    assert box.author.name == "\u2068@everyone *Drift*\u2069"
     assert box.description.splitlines() == [
-        "**\u2068@\u200beveryone \\*Drift\\*\u2069** #8QQ",
-        "★★☆  ·  88%",
-        "-# Season hit rate **Unavailable**",
+        "# ★★☆  ·  88%",
+        "-# Attacker stats",
+        "🏆 **5,312**   🌍 **#1,204**   🎯 **62%**",
+        "-# Clan \u2068@\u200bhere \\_Night\\_\u2069",
+        (
+            "-# [Open battle](https://clashlens.test/players/%232PP?day=2026-10-12#battle-41)"
+            "  ·  [Alert settings](https://clashlens.test/account/discord-alerts)"
+        ),
     ]
-    assert (box.colour.value, box.footer.text, box.timestamp) == (
-        PLAYER_COLOURS[1], "صقر الشمال #2PP", datetime(2026, 10, 12, 6, tzinfo=UTC)
-    )
-    assert [item.url for item in message["view"].children] == [
-        "https://clashlens.test/players/%232PP?day=2026-10-12#battle-41",
-        "https://clashlens.test/account/discord-alerts",
-    ]
+    assert box.colour.value == PLAYER_COLOURS[1]
+    assert "view" not in message
+
+
+def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
+    """An attacker off the leaderboard shows no rank, and one Clash Lens has
+    not tracked shows that in place of their stats; neither shows a clan
+    they are not in."""
+    def stats(attacker: dict) -> list[str]:
+        alert = {"defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
+                 "attacker_name": "Drift", "stars": 0, "destruction_percentage": 42,
+                 "trophies_lost": 0, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+                 "battle_id": 41, "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC)}
+        reply = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0])
+        assert reply.notice == "🛡️ \u2068Wanderer\u2069  0 🏆"
+        return reply.cards[0].parts[0].splitlines()[1:]
+
+    assert stats({"clan": None, "rank": None, "start_trophies": 5203,
+                  "hit_rate": "Unavailable"}) == [
+        "-# Attacker stats", "🏆 **5,203**   🎯 **Unavailable**"]
+    assert stats({"clan": None, "rank": None, "start_trophies": None,
+                  "hit_rate": "not tracked yet"}) == [
+        "-# Attacker stats", "Not tracked by Clash Lens yet"]
 
 
 def _json(payload: dict, status: int = 200, **headers: str) -> web.Response:
@@ -287,9 +311,9 @@ def test_an_alert_rates_the_attacker_over_the_attacks_season() -> None:
     season = ranked_day_for(datetime(2026, 10, 13, 12, tzinfo=UTC)).season_start
     alerts = AlertStore(None, SeasonPages(season))  # type: ignore[arg-type]
     last_day = season - timedelta(days=1)
-    assert alerts.hit_rate("#8QQ", last_day, season + timedelta(minutes=2)) == "75%"
-    assert alerts.hit_rate("#8QQ", season, season - timedelta(seconds=1)) == "100%"
-    assert alerts.hit_rate("#8QQ", season, season + timedelta(hours=1)) == "100%"
+    assert alerts.attacker("#8QQ", last_day, season + timedelta(minutes=2))["hit_rate"] == "75%"
+    assert alerts.attacker("#8QQ", season, season - timedelta(seconds=1))["hit_rate"] == "100%"
+    assert alerts.attacker("#8QQ", season, season + timedelta(hours=1))["hit_rate"] == "100%"
 
 
 class ResetRound(AlertStore):
@@ -361,19 +385,20 @@ def test_an_alert_rates_the_attacker_as_of_when_it_is_written() -> None:
 
     loop = AlertLoop(ResetRound(reset), SlowDiscord(), SITE, now=lambda: moment[0])
     assert asyncio.run(loop.tick()) == 2
-    assert "-# Season hit rate **60%**" in sent[1].text.splitlines()
+    assert "🎯 **60%**" in sent[1].text.splitlines()
 
 
 def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:
     """An attacker Clash Lens never read, or read with no days saved, is not
     tracked yet. One with days saved whose rate cannot be worked out now, as
     while today's result awaits publishing with no earlier Season on record,
-    is unavailable."""
+    is unavailable. The attacker's clan, live rank and trophies at the
+    battle's Reset come from the same page read."""
     day = datetime(2026, 10, 13, 5, tzinfo=UTC)
 
     def rate(page: dict | None) -> str:
         store = SimpleNamespace(player_page=lambda _tag, _now: page)
-        return AlertStore(None, store).hit_rate("#8QQ", day, day)  # type: ignore[arg-type]
+        return AlertStore(None, store).attacker("#8QQ", day, day)["hit_rate"]  # type: ignore[arg-type]
 
     saved = {"ranked_day_start": day.isoformat(), "attack_count": 4,
              "attack_three_star_count": 3}
@@ -383,3 +408,9 @@ def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:
         "not tracked yet")
     assert rate({"screen_ready": {"season": None, "season_day_starts": [day.isoformat()],
                                   "days": [saved]}}) == "Unavailable"
+    page = {"clan": "Night", "rank": 9,
+            "screen_ready": {"season": None, "season_day_starts": [day.isoformat()],
+                             "days": [{**saved, "start_trophies": 5312}]}}
+    store = SimpleNamespace(player_page=lambda _tag, _now: page)
+    assert AlertStore(None, store).attacker("#8QQ", day, day) == {  # type: ignore[arg-type]
+        "clan": "Night", "rank": 9, "start_trophies": 5312, "hit_rate": "Unavailable"}
