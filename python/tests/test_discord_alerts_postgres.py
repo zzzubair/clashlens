@@ -151,13 +151,14 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     """DEFENDER's alerts go on after Clash Lens saved their Day 1 defense, so
     the bot confirms that, then only the Day 3 defenses saved later send a
     DM each, once however often the loop looks. The attacker's hit rate is
-    the one /stats shows for them; an attacker Clash Lens never read is
-    named as DEFENDER's log names them, with no hit rate tracked yet."""
+    the one /stats shows for them, with their live rank and clan; an
+    attacker Clash Lens never read is named as DEFENDER's log names them,
+    and not tracked yet."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
     # The fixture names each log row's opponent by its place in the log, so
     # DEFENDER's second defense is by the player tagged _tag(2), and the
     # third by _tag(3), whose profile Clash Lens never read.
-    attacker, stranger = f"#{_tag(2)}", f"#{_tag(3)}"
+    attacker = f"#{_tag(2)}"
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (DEFENDER, attacker)})
@@ -223,19 +224,22 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     alerts = [reply for _, reply in discord.sent[1:]]
     assert {user for user, _ in discord.sent} == {DISCORD_ID}
     assert sorted(
-        [reply.notice, *reply.cards[0].parts[0].splitlines()] for reply in alerts
+        [reply.notice, reply.title, *reply.cards[0].parts[0].splitlines()] for reply in alerts
     ) == sorted([
         [
             f"🛡️ \u2068{NAME}\u2069  −30 🏆",
-            f"**\u2068{NAME}\u2069** {attacker}",
-            f"{'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%",
-            "-# Season hit rate **75%**",
+            f"\u2068{NAME}\u2069",
+            f"# {'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%",
+            "-# Attacker stats",
+            "🌍 **#1**   🎯 **75%**",
+            "-# Clan \u2068Synthetic Clan\u2069",
         ],
         [
             f"🛡️ \u2068{NAME}\u2069  −20 🏆",
-            f"**\u2068Opponent\u2069** {stranger}",
-            f"{'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  {stranger_destruction}%",
-            "-# Season hit rate **not tracked yet**",
+            "\u2068Opponent\u2069",
+            f"# {'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  {stranger_destruction}%",
+            "-# Attacker stats",
+            "Not tracked by Clash Lens yet",
         ],
     ])
     # Every message about the account's first linked player has its colour,
@@ -244,8 +248,8 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
         PLAYER_COLOURS[0]
     }
     assert all(
-        reply.links[0].url.startswith(
-            f"https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
+        reply.footer.startswith(
+            f"[Open battle](https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
         )
         for reply in alerts
     )
@@ -335,7 +339,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
         ("#2PP", True), ("#8QQ", False)]
     assert cleared["undelivered"] is None
     assert discord.sent[0][1].notice == "🛡️ \u2068Unnamed\u2069  −16 🏆"
-    assert "★☆☆  ·  33%" in discord.sent[0][1].text.splitlines()
+    assert "# ★☆☆  ·  33%" in discord.sent[0][1].text.splitlines()
 
 
 def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
@@ -398,7 +402,8 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
         "### Attack alerts are on",
         "🛡️ \u2068Unnamed\u2069  −16 🏆",
     ]
-    assert all("#2PP" in reply.text for _, reply in discord.sent)
+    assert "#2PP" in discord.sent[0][1].text
+    assert "%232PP" in discord.sent[1][1].footer
 
 
 def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(

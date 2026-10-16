@@ -314,8 +314,8 @@ class _OneAttack:
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": RESET,
                  "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0]}]
 
-    def hit_rate(self, *_read: object) -> str:
-        return "Unavailable"
+    def attacker(self, *_read: object) -> dict:
+        return {"clan": None, "rank": None, "start_trophies": None, "hit_rate": "Unavailable"}
 
     def claim(self, _delivery: object) -> int:
         self.logged = True

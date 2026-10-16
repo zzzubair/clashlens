@@ -355,9 +355,11 @@ function AttackAlertSwitches({
             </figcaption>
             <strong>{`🛡️ ${example ? (example.name ?? "Unnamed") : "Wanderer"} −24 🏆`}</strong>
             <div className="attack-alert-message">
-              <strong>Drift #9RR</strong>
-              <span>★★☆ · 87%</span>
-              <span>Season hit rate 62%</span>
+              <strong>Drift</strong>
+              <strong className="attack-alert-result">★★☆ · 87%</strong>
+              <small>Attacker stats</small>
+              <span>🏆 5,312 · 🌍 #1,204 · 🎯 62%</span>
+              <small>Open battle · Alert settings</small>
             </div>
           </figure>
         </>

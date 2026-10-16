@@ -223,19 +223,29 @@ class AlertStore:
                 "tag",
             )
 
-    def hit_rate(self, tag: str, battle_day: datetime, now: datetime) -> str:
-        """The player's hit rate in the Season of a battle on the Legend day
-        starting `battle_day`, so far at `now`, or at that Season's end once
-        it is over, read as /stats reads it; "not tracked yet" when Clash Lens
-        has saved none of their days, "Unavailable" when those it has saved
-        cannot give it."""
+    def attacker(self, tag: str, battle_day: datetime, now: datetime) -> dict[str, Any]:
+        """The player's clan, trophies at the start of the battle's Legend
+        day, live rank and hit rate in the Season of a battle on the Legend
+        day starting `battle_day`, so far at `now`, or at that Season's end
+        once it is over, read as /stats reads it. Each is None when unknown;
+        the hit rate is "not tracked yet" when Clash Lens has saved none of
+        their days, "Unavailable" when those it has saved cannot give it."""
         season = ranked_day_for(battle_day)
         at = min(max(now, season.season_start), season.season_end - timedelta(microseconds=1))
-        page = self.store.player_page(tag, at)
-        if page is None or not page.get("screen_ready", {}).get("days"):
-            return "not tracked yet"
+        page = self.store.player_page(tag, at) or {}
+        found = {"clan": page.get("clan"), "rank": page.get("rank"), "start_trophies": None}
+        if not page.get("screen_ready", {}).get("days"):
+            return {**found, "hit_rate": "not tracked yet"}
+        found["start_trophies"] = next(
+            (
+                day.get("start_trophies")
+                for day in page["screen_ready"]["days"]
+                if datetime.fromisoformat(day["ranked_day_start"]) == battle_day
+            ),
+            None,
+        )
         days = replies.season_days(page)
-        return "Unavailable" if days is None else replies.hit_rate(days)
+        return {**found, "hit_rate": "Unavailable" if days is None else replies.hit_rate(days)}
 
     def claim(self, delivery: Delivery) -> int | None:
         """Log a DM as being sent while it is still due; returns its log id,
@@ -297,7 +307,7 @@ class AlertLoop:
         self.alerts = alerts
         self.messenger = messenger
         self.site = site
-        # How far into the battle's Season the attacker's hit rate goes.
+        # How far into the battle's Season the attacker's details go.
         self.now = now
         self._pruned_at: float | None = None
         # Claimed DMs Discord could not take yet, waiting for their next try.
@@ -345,8 +355,8 @@ class AlertLoop:
                 )
             )
         for alert in await asyncio.to_thread(self.alerts.due):
-            rate = await asyncio.to_thread(
-                self.alerts.hit_rate, alert["attacker_tag"], alert["ranked_day_start"], self.now()
+            attacker = await asyncio.to_thread(
+                self.alerts.attacker, alert["attacker_tag"], alert["ranked_day_start"], self.now()
             )
             sent += await self._claim(
                 Delivery(
@@ -355,7 +365,7 @@ class AlertLoop:
                     alert["discord_user_id"],
                     alert["battle_id"],
                     alert["saved_at"],
-                    replies.attack_alert(self.site, alert, rate, alert["colour"]),
+                    replies.attack_alert(self.site, alert, attacker, alert["colour"]),
                 )
             )
         return sent

@@ -80,7 +80,8 @@ class Card:
 @dataclass(frozen=True, slots=True)
 class Reply:
     cards: tuple[Card, ...]
-    # A heading above the cards, and small text below them.
+    # A heading above the cards, the first box's top line in Discord's older
+    # layout, and small text below them.
     title: str | None = None
     footer: str | None = None
     # Buttons below everything.
@@ -96,10 +97,8 @@ class Reply:
     private: bool = False
     # The one line a phone's notification shows. Discord's cards cannot carry
     # it, so a reply with one goes in Discord's older layout: this line, then
-    # each card as a box, the last ending in `footer` as plain text and the
-    # time `at`, then the buttons.
+    # each card as a box, the last ending in `footer`, then the buttons.
     notice: str | None = None
-    at: datetime | None = None
 
     @property
     def text(self) -> str:
@@ -607,43 +606,43 @@ def stats_reply(
 
 
 def attack_alert(
-    site: Site, alert: Mapping[str, Any], attacker_hit_rate: str, colour: int
+    site: Site, alert: Mapping[str, Any], attacker: Mapping[str, Any], colour: int
 ) -> Reply:
     """The DM sent when one of the person's players is attacked. Its first
     line, all a phone's notification shows, is the defending player, named
-    since an account can have several, and the trophies lost; the box below
-    has the attacker, the stars and destruction, and the attacker's hit rate
-    in the battle's Season."""
-    attacker = isolated(safe(alert["attacker_name"]))
+    since an account can have several, and the trophies lost. The box below
+    is headed by the attacker; the stars and destruction come first and
+    largest, then, under "Attacker stats", their trophies at the Reset, live
+    rank and hit rate in the battle's Season, each known one by its icon,
+    then their clan, then links to the battle and alert settings."""
     lost = alert["trophies_lost"]
     stars = "★" * alert["stars"] + "☆" * (3 - alert["stars"])
+    lines = [f"# {stars}  ·  {alert['destruction_percentage']}%", "-# Attacker stats"]
+    if attacker["hit_rate"] == "not tracked yet":
+        lines.append("Not tracked by Clash Lens yet")
+    else:
+        stats = [
+            (icon, value)
+            for icon, value in (
+                ("🏆", attacker["start_trophies"] and number(attacker["start_trophies"])),
+                ("🌍", attacker["rank"] and f"#{number(attacker['rank'])}"),
+                ("🎯", attacker["hit_rate"]),
+            )
+            if value
+        ]
+        lines.append("   ".join(f"{icon} **{value}**" for icon, value in stats))
+    if attacker["clan"]:
+        lines.append(f"-# Clan {isolated(safe(attacker['clan']))}")
+    battle = site.battle(alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"])
     return Reply(
-        (
-            Card(
-                (
-                    (
-                        f"**{attacker}** {alert['attacker_tag']}\n"
-                        f"{stars}  ·  {alert['destruction_percentage']}%\n"
-                        f"-# Season hit rate **{attacker_hit_rate}**"
-                    ),
-                ),
-                colour,
-            ),
-        ),
+        (Card(("\n".join(lines),), colour),),
+        # The box's top line shows no markup, so the name is not escaped.
+        title=isolated(" ".join((alert["attacker_name"] or "Unnamed").split())),
         notice=(
             f"🛡️ {isolated(safe(alert['defender_name']))}  "
             f"{f'−{number(lost)}' if lost else '0'} 🏆"
         ),
-        # A box's small print shows no markup, so the name is not escaped.
-        footer=f"{' '.join((alert['defender_name'] or 'Unnamed').split())} {alert['defender_tag']}",
-        at=alert["saved_at"],
-        links=(
-            Link(
-                "Open battle",
-                site.battle(alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"]),
-            ),
-            Link("Alert settings", site.url(DISCORD_ALERTS)),
-        ),
+        footer=f"[Open battle]({battle})  ·  [Alert settings]({site.url(DISCORD_ALERTS)})",
     )
 
 

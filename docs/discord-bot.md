@@ -51,10 +51,15 @@ v2"): text in one or more blocks with a coloured edge, with link buttons. A
 message in that layout cannot carry the line a phone's notification shows, so
 the notification would be blank. An attack alert therefore uses Discord's
 older layout: one line, all the notification shows, with the defending player
-and the trophies lost ("🛡️ Wanderer −24 🏆"), then a box with the attacker and
-their tag, the stars and destruction, and the attacker's hit rate in the
-battle's Season, ending with the defender's tag and the battle's time, then
-Open battle and Alert settings buttons. Each name in it is wrapped in Unicode
+and the trophies lost ("🛡️ Wanderer −24 🏆"), then a box topped by the
+attacker's name in small bold, then the stars and destruction as a heading,
+then, under a small "Attacker stats" label, the attacker's trophies at the
+Reset (🏆), live rank (🌍) and hit rate in the battle's Season (🎯), each
+left out when unknown, or "Not tracked by Clash Lens yet", then their clan
+and Open battle and Alert settings as small links. The name sits in the
+box's top line because a heading after any other line leaves a gap above it,
+and the stats use icons rather than Discord's columns because phones stack
+columns one under another. Each name in it is wrapped in Unicode
 isolation marks, so a name written right to left cannot move the numbers
 beside it. Messages about one of the
 Clasher's own linked accounts (attack alerts, the alerts-on message, that
