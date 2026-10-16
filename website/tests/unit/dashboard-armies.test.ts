@@ -87,7 +87,11 @@ async function render(element: ReturnType<typeof createElement>) {
     .replace(/\s+/g, " ");
 }
 
-async function read(payload: object, lens: "offense" | "defense", days: number) {
+async function read(
+  payload: object,
+  lens: "offense" | "defense",
+  days: number | "season",
+) {
   mocks.requestJson.mockResolvedValueOnce(payload);
   return getPlayerArmies(TAG, lens, days);
 }
@@ -241,6 +245,41 @@ describe("Armies on offense", () => {
     expect(plain).not.toContain("of attacks");
     expect(plain).not.toContain("All attacks");
   });
+
+  it("shows this Season's finished days when asked for the Season", async () => {
+    // On Day 25: the Season's 24 finished days, 2 of them with army records.
+    const armies = await read(
+      { ...OFFENSE, days: 24, season: true },
+      "offense",
+      "season",
+    );
+    expect(mocks.requestJson).toHaveBeenCalledWith(
+      `/v1/players/${encodeURIComponent(TAG)}/armies?lens=offense&days=season`,
+      "GET",
+      undefined,
+      undefined,
+    );
+    const plain = await render(
+      createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies } }),
+    );
+    expect(plain).toContain("Armies on offense 3 days 7 days Season");
+    expect(plain).toContain("Whole Season · 24 days · 2 with army data · 1 attack");
+
+    // A Season read must say it is one, and cannot cover a whole 28 days
+    // while the Season is still running.
+    for (const payload of [
+      { ...OFFENSE, days: 24 },
+      { ...OFFENSE, days: 28, season: true },
+    ]) {
+      mocks.requestJson.mockResolvedValueOnce(payload);
+      await expect(getPlayerArmies(TAG, "offense", "season")).rejects.toMatchObject({
+        status: 502,
+      });
+    }
+    await expect(getPlayerArmies(TAG, "defense", "season")).rejects.toMatchObject({
+      status: 422,
+    });
+  });
 });
 
 describe("army card switches", () => {
@@ -297,10 +336,16 @@ describe("army card switches", () => {
       (await status("/resources/players/%232PP/armies?lens=defense&days=3")).data,
     ).toEqual({ armies: null });
 
-    // Attacks offer 3 or 7 days only; defenses 1 to 28.
+    mocks.requestJson.mockResolvedValueOnce({ ...OFFENSE, days: 24, season: true });
+    expect(
+      await status("/resources/players/%232PP/armies?lens=offense&days=season"),
+    ).toMatchObject({ status: 200, data: { armies: { days: 24, season: true } } });
+
+    // Attacks offer 3 days, 7 days or the Season only; defenses 1 to 28 days.
     for (const query of [
       "lens=offense&days=5",
       "lens=defense&days=29",
+      "lens=defense&days=season",
       "lens=army&days=3",
     ])
       expect((await status(`/resources/players/%232PP/armies?${query}`)).status).toBe(

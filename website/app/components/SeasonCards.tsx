@@ -34,6 +34,8 @@ const DAYS_OPTIONS = [
   ["7", "7 days"],
 ] as const;
 type DaysOption = (typeof DAYS_OPTIONS)[number][0];
+const OFFENSE_DAYS_OPTIONS = [...DAYS_OPTIONS, ["season", "Season"]] as const;
+type OffenseDaysOption = (typeof OFFENSE_DAYS_OPTIONS)[number][0];
 
 const FIRST_DAY_NOTE = "Results start after the Season's first Reset.";
 
@@ -508,27 +510,36 @@ const STAR_CLASSES = ["stars-3", "stars-2", "stars-1", "stars-0"] as const;
 
 /** Card: how often you triple, and what the misses cost. */
 export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
-  const [days, setDays] = useState<DaysOption>("7");
-  const size = Number(days);
+  const [days, setDays] = useState<OffenseDaysOption>("7");
+  const season = days === "season";
+  const size = season ? SEASON_DAYS : Number(days);
   const stats = offenseConsistency(data, size);
   return (
     <>
       <CardHead
         title="Offense consistency"
         meta={
-          <Switch label="Days" value={days} onChange={setDays} options={DAYS_OPTIONS} />
+          <Switch
+            label="Days"
+            value={days}
+            onChange={setDays}
+            options={OFFENSE_DAYS_OPTIONS}
+          />
         }
       />
       {stats === null ? (
         <CardNote>
-          {data.today !== null && data.today > 1
-            ? `No results saved for the last ${size} days yet.`
-            : FIRST_DAY_NOTE}
+          {data.today === null || data.today < 2
+            ? FIRST_DAY_NOTE
+            : season
+              ? "No results saved this Season yet."
+              : `No results saved for the last ${size} days yet.`}
         </CardNote>
       ) : (
         <>
           <p className="dash-muted dash-card-sub">
-            {lastDaysLabel(size, stats.window.span)} · {stats.attacks} attacks
+            {lastDaysLabel(season ? "season" : size, stats.window.span)} · {stats.attacks}{" "}
+            attacks
           </p>
           <div className="consistency-rate">
             <b className="form-big">{percent(stats.triples / stats.slots)}</b>
@@ -571,7 +582,7 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
           </dl>
           <div className="consistency-days">
             <span className="dash-muted">Triples each day, out of {DAILY_BATTLES}</span>
-            <ol>
+            <ol className={season ? "is-season" : undefined}>
               {stats.perDay.map((day) => (
                 <li
                   key={day.day}

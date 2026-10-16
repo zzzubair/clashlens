@@ -29,7 +29,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const query = new URL(request.url).searchParams;
   const tag = normalizePlayerTag(params.tag);
   const lens = query.get("lens");
-  const days = Number(query.get("days"));
+  const days = query.get("days") === "season" ? "season" : Number(query.get("days"));
   if (!tag || (lens !== "offense" && lens !== "defense") || !isArmyDays(days, lens))
     return data<ArmiesResponse>({ armies: null }, { status: 400, headers: NO_STORE });
 

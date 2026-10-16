@@ -38,7 +38,8 @@ import type {
   ArmyOutcome,
   PlayerArmies,
 } from "../lib/dashboard-armies";
-import { ARMY_DEFAULT_DAYS, isArmyDays } from "../lib/dashboard-armies";
+import type { ArmyDays } from "../lib/dashboard-armies";
+import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
 import { getGroupComparison } from "./group-comparison.server";
 import {
@@ -914,7 +915,7 @@ function outcome(value: unknown): ArmyOutcome {
 export async function getPlayerArmies(
   tag: string,
   lens: ArmyLens,
-  days: number,
+  days: ArmyDays,
 ): Promise<PlayerArmies> {
   if (!isCanonicalPlayerTag(tag) || !isArmyDays(days, lens))
     throw new PythonApiError(422, { error: "invalid_request" });
@@ -928,16 +929,23 @@ export async function getPlayerArmies(
     !isRecord(payload) ||
     payload.tag !== tag ||
     payload.lens !== lens ||
-    payload.days !== days ||
+    !(days === "season"
+      ? payload.season === true &&
+        isInteger(payload.days) &&
+        payload.days >= 0 &&
+        payload.days < ARMY_MAX_DAYS
+      : payload.days === days) ||
     !Array.isArray(payload.covered_days) ||
     !Array.isArray(payload.rows) ||
     !isRecord(payload.total)
   )
     malformed();
+  const span = payload.days as number;
   return {
     lens,
-    days,
-    coveredDays: payload.covered_days.slice(0, days).map(time),
+    days: span,
+    season: days === "season",
+    coveredDays: payload.covered_days.slice(0, span).map(time),
     rows: payload.rows.slice(0, 64).map((row) => {
       if (!isRecord(row) || !isInteger(row.type_id) || !isString(row.name)) malformed();
       return {

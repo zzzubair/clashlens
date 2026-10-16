@@ -468,12 +468,16 @@ def create_app(
         tag: str,
         request: Request,
         lens: Literal["offense", "defense"] = Query(),
-        days: int = Query(ge=1, le=api_dashboard.MAX_ARMY_DAYS),
+        days: int | Literal["season"] = Query(),
     ) -> JSONResponse:
         _authorize(request, "player.read", production_database)
         if not dashboard_enabled:
             raise ApiError(404, "dashboard_disabled")
-        if lens == "offense" and days not in api_dashboard.OFFENSE_ARMY_DAYS:
+        allowed = (
+            days in api_dashboard.OFFENSE_ARMY_DAYS if lens == "offense"
+            else days != "season" and 1 <= days <= api_dashboard.MAX_ARMY_DAYS
+        )
+        if not allowed:
             raise ApiError(422, "invalid_request")
         result = api_dashboard.get_player_armies(
             production_database, dashboard_army_days, _safe_tag(tag),

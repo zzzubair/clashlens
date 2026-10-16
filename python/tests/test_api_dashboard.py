@@ -273,7 +273,7 @@ def test_bases_read_offers_only_earlier_days_of_this_season(
     assert min(board._past) == today.start - timedelta(days=28)
 
 
-def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
+def test_armies_read_offers_attacks_3_7_days_or_season_and_defenses_1_to_28(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -291,8 +291,11 @@ def test_armies_read_offers_attacks_3_or_7_days_and_defenses_1_to_28(
             ("lens=offense&days=7", 200),
             ("lens=offense&days=5", 422),
             ("lens=offense&days=28", 422),
+            ("lens=offense&days=season", 200),
             ("lens=defense&days=5", 200),
             ("lens=defense&days=28", 200),
+            ("lens=defense&days=29", 422),
+            ("lens=defense&days=season", 422),
         ):
             target = f"/v1/players/%232PP/armies?{query}"
             response = client.get(target, headers=_signed_headers(target))

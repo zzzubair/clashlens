@@ -6,8 +6,11 @@
 
 export type ArmyLens = "offense" | "defense";
 
-/** The card switches; Armies on defense also takes any 1–28 days. */
-export const ARMY_DAY_CHOICES = [3, 7] as const;
+/** The last N finished Legend days, or "season" for this Season's finished days. */
+export type ArmyDays = number | "season";
+
+/** Armies on offense's switch; Armies on defense takes any 1–28 days instead. */
+export const ARMY_DAY_CHOICES = [3, 7, "season"] as const;
 export const ARMY_DEFAULT_DAYS = 7;
 export const ARMY_MAX_DAYS = 28;
 
@@ -34,7 +37,9 @@ export interface ArmyRow extends ArmyOutcome {
 
 export interface PlayerArmies {
   lens: ArmyLens;
+  /** Finished Legend days in the window; with `season`, this Season's so far. */
   days: number;
+  season: boolean;
   /** Finished Legend days in the window with this player's army records, Unix milliseconds. */
   coveredDays: number[];
   /** Named army types only, costliest first on defense, most used first on attack. */
@@ -45,10 +50,13 @@ export interface PlayerArmies {
   legendsTotal: ArmyOutcome | null;
 }
 
-export function isArmyDays(value: number, lens: ArmyLens): boolean {
+export function isArmyDays(value: ArmyDays, lens: ArmyLens): boolean {
   return lens === "defense"
-    ? Number.isInteger(value) && value >= 1 && value <= ARMY_MAX_DAYS
-    : (ARMY_DAY_CHOICES as readonly number[]).includes(value);
+    ? typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= 1 &&
+        value <= ARMY_MAX_DAYS
+    : (ARMY_DAY_CHOICES as readonly ArmyDays[]).includes(value);
 }
 
 /** Share of battles not tripled, 0–100, or null with no battles. */
@@ -72,7 +80,8 @@ export function averageTrophies(outcome: ArmyOutcome): number | null {
 
 /** "Last 7 days", naming the days without army records when some are missing. */
 export function armyWindowLabel(armies: PlayerArmies): string {
-  const label = `Last ${armies.days} day${armies.days === 1 ? "" : "s"}`;
+  const days = `${armies.days} day${armies.days === 1 ? "" : "s"}`;
+  const label = armies.season ? `Whole Season · ${days}` : `Last ${days}`;
   const covered = armies.coveredDays.length;
   return covered === armies.days ? label : `${label} · ${covered} with army data`;
 }

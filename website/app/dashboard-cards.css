@@ -946,6 +946,12 @@
   list-style: none;
 }
 
+/* A whole Season: seven boxes a row. */
+.consistency-days ol.is-season {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
 .consistency-days li {
   flex: 1;
   color: var(--cl-muted);
