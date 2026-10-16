@@ -35,10 +35,11 @@ export function updatedAgo(
   return `updated ${Math.floor(minutes / 60)} h ago`;
 }
 
-/** "Last 7 days", or how many days the Season has had so far. */
-export function lastDaysLabel(asked: number, span: number): string {
-  if (span < asked)
-    return `Last ${span} day${span === 1 ? "" : "s"} · only ${span} so far this Season`;
+/** "Last 7 days", "Whole Season · 11 days", or how many days the Season has had so far. */
+export function lastDaysLabel(asked: number | "season", span: number): string {
+  const days = `${span} day${span === 1 ? "" : "s"}`;
+  if (asked === "season") return `Whole Season · ${days}`;
+  if (span < asked) return `Last ${days} · only ${span} so far this Season`;
   return `Last ${asked} days`;
 }
 

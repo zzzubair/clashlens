@@ -29,11 +29,11 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Cutoffs | Trophies at each Top line, live and on the last Reset board | Exists | |
 | Season graph | Trophies and rank at each Reset this Season; best rank; last Season's official finish | Exists | Use the official finish, never a tracked-only rank. |
 | Recent form | Each finished day's net, offense and defense, triples and held defenses | Exists | |
-| Offense consistency | Your attacks (stars, trophies) over the last 3 or 7 days | Exists | |
+| Offense consistency | Your attacks (stars, trophies) over the last 3 or 7 days or this Season's finished days | Exists | |
 | Group watch | Your groups in the order you made them | Exists | `/v1/account/groups` returns each group's `created_at`; the card shows the oldest first. |
 | | Group comparison over the last 7 days | Exists | `/v1/account/groups/{id}/comparison?days=7`. |
 | | Each member's whole-Season numbers | Exists | The comparison only offers 3, 7 or 14 days, so Whole Season reads `/v1/players/{tag}` (this Season's finished days) for each member and you: up to 21 reads. |
-| Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Exists | `/v1/players/{tag}/armies?lens=offense` returns your attacks per type (counts saved since #458) and every tracked player's per type, from the saved daily counts per army (`army_package_day_counts`) the Armies page also adds up. |
+| Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Exists | `/v1/players/{tag}/armies?lens=offense` returns your attacks per type over `days=3`, `days=7` or `days=season` (this Season's finished days) (counts saved since #458) and every tracked player's per type, from the saved daily counts per army (`army_package_day_counts`) the Armies page also adds up. |
 
 ## Shared
 

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
 import type {
+  ArmyDays,
   ArmyLens,
   ArmyOutcome,
   ArmyRow,
@@ -25,13 +26,14 @@ const DAY_OPTIONS = [
   ["3", "3 days"],
   ["7", "7 days"],
 ] as const;
+const OFFENSE_DAY_OPTIONS = [...DAY_OPTIONS, ["season", "Season"]] as const;
 const DEFENSE_DAY_OPTIONS = [...DAY_OPTIONS, ["custom", "Custom"]] as const;
 
 export interface ArmiesResponse {
   armies: PlayerArmies | null;
 }
 
-export function armiesPath(tag: string, lens: ArmyLens, days: number): string {
+export function armiesPath(tag: string, lens: ArmyLens, days: ArmyDays): string {
   return `/resources/players/${encodeURIComponent(tag)}/armies?lens=${lens}&days=${days}`;
 }
 
@@ -39,7 +41,7 @@ export function armiesPath(tag: string, lens: ArmyLens, days: number): string {
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
   // The chosen days and their numbers: null when they could not be read,
   // undefined while they load.
-  const [chosen, setChosen] = useState<{ days: number; armies?: PlayerArmies | null }>({
+  const [chosen, setChosen] = useState<{ days: ArmyDays; armies?: PlayerArmies | null }>({
     days: initial.days,
     armies: initial,
   });
@@ -52,7 +54,7 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
     // While the chosen days load, the numbers already shown stay, faded.
     armies: loading ? shown : (chosen.armies ?? null),
     loading,
-    choose(days: number) {
+    choose(days: ArmyDays) {
       const ask = ++asked.current;
       if (!loading) setShown(chosen.armies ?? null);
       if (days === initial.days) {
@@ -110,32 +112,32 @@ function emptyText(armies: PlayerArmies | null, noun: string): string | null {
   return null;
 }
 
-/** 3 days / 7 days, and on Armies on defense a Custom 1–28 days. */
+/** 3 days / 7 days, then Season on Armies on offense or Custom 1–28 days on defense. */
 function DaySwitch({
   days,
   choose,
   custom,
 }: {
-  days: number;
-  choose: (days: number) => void;
+  days: ArmyDays;
+  choose: (days: ArmyDays) => void;
   custom: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(days);
-  const value = days === 3 || days === 7 ? String(days) : "custom";
+  const [draft, setDraft] = useState(days === "season" ? 7 : days);
+  const value = days === 3 || days === 7 || days === "season" ? String(days) : "custom";
   return (
     <span className="army-switch">
       <Switch
         label="Days"
-        options={custom ? DEFENSE_DAY_OPTIONS : DAY_OPTIONS}
+        options={custom ? DEFENSE_DAY_OPTIONS : OFFENSE_DAY_OPTIONS}
         value={value}
         onChange={(option) => {
           if (option === "custom") {
-            setDraft(days);
+            if (days !== "season") setDraft(days);
             setOpen(!open);
           } else {
             setOpen(false);
-            choose(Number(option));
+            choose(option === "season" ? option : Number(option));
           }
         }}
       />
@@ -239,8 +241,8 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
 
 /**
  * Armies on offense: the user's hit rate (share of attacks tripled) with
- * each army type over the last 3 or 7 finished days, beside everyone's with
- * that army. A one-army player sees the two numbers big.
+ * each army type over the last 3 or 7 finished days or this Season's, beside
+ * everyone's with that army. A one-army player sees the two numbers big.
  */
 export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("offense", data);

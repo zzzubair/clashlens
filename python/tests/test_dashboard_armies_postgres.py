@@ -30,7 +30,7 @@ NEXT_DAY = DAY_START + timedelta(days=1)
 NOW = DAY_START + timedelta(days=2, hours=7)
 
 
-def _read(client: TestClient, tag: str, lens: str, days: int) -> dict:
+def _read(client: TestClient, tag: str, lens: str, days: int | str) -> dict:
     target = f"/v1/players/{tag.replace('#', '%23')}/armies?lens={lens}&days={days}"
     response = client.get(target, headers=_signed_headers(target))
     assert response.status_code == 200, response.text
@@ -189,6 +189,12 @@ def test_army_cards_from_saved_battles_to_the_api(
                     ("Thrower", 1, 0, 10, {"battles": 3, "three_stars": 2}),
                     ("Hydra", 1, 0, 26, {"battles": 1, "three_stars": 0}),
                 ]
+                # This Season: on Day 25, its 24 finished days, the same two
+                # with army records.
+                season = _read(client, "#2PP", "offense", "season")
+                assert (season["days"], season["season"]) == (24, True)
+                assert season["covered_days"] == offense["covered_days"]
+                assert _rows(season) == _rows(offense)
 
                 # A day rebuilt after a new Season has begun: #9PP's Hydra
                 # two-star becomes a triple. A read under way when it lands
@@ -292,7 +298,10 @@ def test_army_cards_from_saved_battles_to_the_api(
 
                 target = "/v1/players/%23QQQ/armies?lens=defense&days=3"
                 assert client.get(target, headers=_signed_headers(target)).status_code == 404
-                for query in ("lens=army&days=3", "lens=defense&days=29", "lens=offense"):
+                for query in (
+                    "lens=army&days=3", "lens=defense&days=29", "lens=offense",
+                    "lens=defense&days=season",
+                ):
                     target = f"/v1/players/%232PP/armies?{query}"
                     response = client.get(target, headers=_signed_headers(target))
                     assert response.status_code == 422, query

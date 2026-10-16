@@ -127,6 +127,18 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     (await shown.jsonValue()).filter((text) => text.includes("aren't available")),
   ).toEqual([]);
 
+  // The two offense cards also show the whole Season so far.
+  for (const card of ["Armies on offense", "Offense consistency"]) {
+    const region = page.getByRole("region", { name: card, exact: true });
+    await region.getByRole("button", { name: "Season" }).click();
+    await expect(region.getByRole("button", { name: "Season" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(region.locator("[aria-busy=true]")).toHaveCount(0);
+    await expect(region).not.toContainText(/aren't available|could not be loaded/);
+  }
+
   // A day switch whose read fails on the way, a dropped connection or a 502
   // from the server in front of the website, says so in that card alone.
   const armiesRead = /\/resources\/players\/[^/]+\/armies\?/;

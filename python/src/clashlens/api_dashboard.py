@@ -65,7 +65,7 @@ from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, Thread
-from typing import Any
+from typing import Any, Literal
 
 from . import army_types, projected_place
 from .api_db import ApiDatabase, _screen_events, _text
@@ -105,9 +105,9 @@ PAST_DAY_SECONDS = 3600
 # was read meanwhile.
 PAST_DAY_WAIT_SECONDS = 8
 # The army cards look back at most this many finished Legend days; Armies
-# on offense offers only these.
+# on offense offers only these, "season" being this Season's finished days.
 MAX_ARMY_DAYS = 28
-OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS)
+OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS, "season")
 # The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
@@ -1038,12 +1038,12 @@ def get_player_armies(
     tag: str,
     *,
     lens: str,
-    days: int,
+    days: int | Literal["season"],
     now: datetime,
 ) -> dict[str, Any] | None:
     """One player's attacks or defenses per army type over the last ``days``
-    finished Legend days, beside every tracked player's with each type; None
-    for an unknown tag.
+    finished Legend days, or with "season" this Season's finished days,
+    beside every tracked player's with each type; None for an unknown tag.
 
     Only days whose army records are complete, for attacks also counted by
     the worker, and whose newest saved daily log for this player is Complete
@@ -1057,8 +1057,10 @@ def get_player_armies(
     every covered day for that day's build; until then ``legends_total`` and
     each defense row's ``legends`` are None.
     """
-    today = ranked_day_for(now).start
-    window = [today - timedelta(days=offset) for offset in range(days, 0, -1)]
+    ranked_day = ranked_day_for(now)
+    today = ranked_day.start
+    span = ranked_day.day_number - 1 if days == "season" else days
+    window = [today - timedelta(days=offset) for offset in range(span, 0, -1)]
     mine: _Totals = {}
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -1141,7 +1143,8 @@ def get_player_armies(
     result = {
         "tag": tag,
         "lens": lens,
-        "days": days,
+        "days": span,
+        **({"season": True} if days == "season" else {}),
         "covered_days": [_iso(day[0]) for day in covered],
         "rows": rows,
         "total": outcome(

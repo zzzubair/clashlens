@@ -252,7 +252,7 @@ complete, and a finished Season's records are deleted 7 days after it ends, so
 early in a Season, or for a player tracked only lately, a long window covers
 fewer days and the card says how many have army data. A defense's army type is the attacker's army.
 Armies on offense shows your hit rate with each army type, up to 3 and then
-Other armies, for 3 or 7 days, beside every tracked Legend player's hit rate
+Other armies, for 3 days, 7 days or this Season's finished days (`days=season`), beside every tracked Legend player's hit rate
 with that army in grey, from the worker's saved attack counts for each day
 (about 35,000 rows a day), kept in the API's memory until the day is counted
 again, so only a day not yet seen is read. Armies on defense also takes a
