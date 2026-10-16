@@ -16,6 +16,7 @@ import { ArmyPortraits } from "../components/ArmyPortraits";
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { FoldedBattles } from "../components/FoldedBattles";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
@@ -1288,7 +1289,7 @@ function LegendDay({
       ) : (
         <DayStatusNote status={status} reasons={reasons} />
       )}
-      <div className="battle-columns">
+      <FoldedBattles open={openDay === dayKey} day={day}>
         <BattleColumn
           title="Attacks"
           events={day.offenseEvents}
@@ -1303,7 +1304,7 @@ function LegendDay({
           dayLabel={dayLabel}
           units={player.armyUnits ?? {}}
         />
-      </div>
+      </FoldedBattles>
     </details>
   );
 }

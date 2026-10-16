@@ -193,6 +193,10 @@ describe("calculated starting trophies on the player page", () => {
         expected,
         olderExpected,
       ]);
+      // Each day reads the same in both lists, so the page data carries it once.
+      player.recentDays.forEach((value, index) =>
+        expect(value).toBe(player.seasonDays[index]),
+      );
       const calculated =
         expected !== null && !["stored", "season-rule"].includes(variant);
       expect(player.currentDay?.startTrophiesCalculation?.trophies).toBe(
