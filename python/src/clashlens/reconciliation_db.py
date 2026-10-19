@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -221,6 +222,14 @@ def recalculate_ranked_day(
         # A week below Legend I, or not known, has no Legend day: deciding
         # it so deleted any public copy (``league_days.save_season``).
         return False
+    if league.entry is league_week.Entry.FIRST_SEEN and first_battle_log.coverage_start(
+        database, connection, player_id, ranked_day
+    ) is None:
+        # A player found later in the week may have been in Legend I for
+        # weeks: only a first battle log reaching back past the Monday's
+        # start, with no Legend battle of the week before, shows they came
+        # up at the Reset and began at 5,000.
+        league = replace(league, entry=league_week.Entry.UNKNOWN)
 
     start_baseline = reset_baselines._load_reset_baseline(
         database, connection, player_id, ranked_day.start, processing_version,

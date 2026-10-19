@@ -397,3 +397,33 @@ def test_a_false_lower_answer_saved_again_after_the_display_window_keeps_trackin
     assert unfinished == []
     assert monday_day == {"state": "Complete", "reasons": [], "attacks": 8, "defenses": 8}
     assert _ranked(tuesday_board) == {KEPT: 5220}
+
+
+def test_a_legend_i_player_found_on_thursday_gets_no_monday_from_5000(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Clash Lens first reads FOUND_LATE on Thursday 15 October at 07:25.
+    In Legend I for weeks, it began Monday at 5,600 and fought 8 attacks
+    and 8 defenses each day, so its 50-row battle log reaches back only to
+    Monday 05:30 and shows no Legend battle of the week before. It may have
+    been promoted at the Monday Reset or been in Legend I all along, so its
+    Monday must not start at 5,000 by the Season rule, 600 short; first read
+    on Tuesday, a promoted player's log reaches back past the Monday's start
+    (FIRST_SEEN above)."""
+    found_late = "#VPP"
+    monday, thursday = day(8), day(11)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch, {found_late: Player(found_late)})
+        story.players[found_late].battles = [
+            battle for start in (monday, day(9), day(10))
+            for battle in attacks(start, *[40] * 8) + defenses(start, *[30] * 8)
+        ] + attacks(thursday, 40) + defenses(thursday, 30)
+        story.reads(thursday + timedelta(hours=2, minutes=25), {found_late: 5850})
+        story.run_worker()
+        story.wait(timedelta(hours=1))
+        saved = story.saved_day(found_late, monday)
+        public = _public_days(connection_info, found_late)
+
+    assert (saved["state"], saved["start"], saved["attacks"], saved["defenses"]) == (
+        "Partial", None, 8, 8)
+    assert public[monday]["reasons"] == ["missing_start_baseline", "missing_end_baseline"]
