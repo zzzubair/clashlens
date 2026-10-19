@@ -1006,7 +1006,7 @@ def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_p
                 "generation": 1,
                 "profile_not_found": 1,
                 "late_battles": 0,
-                "reordered": False,
+                "reordered": False, "members_changed": 0,
             }
             reports = [
                 boundary.queue_board_rebuilds(database, season, queue=queue)
@@ -1267,7 +1267,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
-                    "reordered": False,
+                    "reordered": False, "members_changed": 0,
                     "correction": "queued",
                 }
             ]
@@ -1491,7 +1491,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
-                    "reordered": False,
+                    "reordered": False, "members_changed": 0,
                     "correction": "not_queued",
                 }
             ]

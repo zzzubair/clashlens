@@ -112,7 +112,7 @@ def _version(connection: psycopg.Connection, tag: str, start: datetime) -> int:
     ).fetchone()[0]
 
 
-def _plant(connection_info: str) -> None:
+def _plant(connection_info: str) -> str:
     """One error per check the worker's own recalculation cannot make."""
     with psycopg.connect(connection_info) as connection:
         # A start that does not add up to the day's end.
@@ -168,6 +168,12 @@ def _plant(connection_info: str) -> None:
         connection.execute(
             "UPDATE legend_battles SET disagreement_state = 'agreed',"
             " disagreement_fields = '{}' WHERE id = %s", (battle,))
+        # Its defender's Day 2 is saved too, as they fought Legend battles,
+        # and the recount now finds a defense their saved day lacks.
+        copied = text(connection.execute(
+            "SELECT player.normalized_tag FROM legend_battles AS battle"
+            " JOIN players AS player ON player.id = battle.defender_player_id"
+            " WHERE battle.id = %s", (battle,)).fetchone()[0])
         # One of Day 3's attacks against a tracked player whose own report of
         # it is missing.
         connection.execute(
@@ -202,6 +208,7 @@ def _plant(connection_info: str) -> None:
         connection.execute(
             "UPDATE ranked_day_versions SET attack_count = attack_count + 1 WHERE id = %s",
             (_version(connection, STUCK, day(1)),))
+    return copied
 
 
 def _queued(connection_info: str) -> list[tuple[str, str, int, str]]:
@@ -326,7 +333,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         story.wait(timedelta(hours=1))
         board_before = story.served_board(day(3))
         late_before = story.saved_day(LATE, day(2))
-        _plant(connection_info)
+        copied = _plant(connection_info)
 
         # No pass starts work from 03:50 to 07:00 UTC, and a step not saved
         # by 03:58 keeps nothing: one queued at 03:49 and run at 03:50, and
@@ -391,17 +398,20 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert slow == (1, None, set(), [])
     assert late_before["defenses"] == 7 and late_before["automatic_loss"] == 30
     assert _ranked(board_before)[LATE] == 5030
-    # Days 1 to 3, 3 players a step: 7 players on Day 1, then 8.
-    assert (first_steps, again) == (9, 0)
+    # Days 1 to 3, 3 players a step. The story's 42 opponents fought Legend
+    # battles, so the league record puts them in Legend I and their days
+    # are saved and judged too: 50 players on Days 1 and 2, then 37.
+    assert (first_steps, again) == (47, 0)
     planted = {("ledger", LEDGER, 1), ("chain", CHAIN, 2), ("copies", COPIES, 2),
                ("copies", COPIES, 3), ("board", BOARD, 2), ("recount", STUCK, 1)}
-    assert first == planted | {("recount", LATE, 2), ("missing_day", JOINED, 2)}
+    assert first == planted | {("recount", LATE, 2), ("recount", copied, 2),
+                               ("missing_day", JOINED, 2)}
     # Oldest day first, 2 a pass, at backfill priority.
     assert first_queued == [(LATE, "reconcile_pass", 25, "pending"),
                             (STUCK, "reconcile_pass", 25, "pending")]
     assert [row[:3] for row in second_queued] == [
         (LATE, "reconcile_pass", 25), (JOINED, "reconcile_pass", 25),
-        (STUCK, "reconcile_pass", 25)]
+        (copied, "reconcile_pass", 25), (STUCK, "reconcile_pass", 25)]
     assert late_fixed["defenses"] == 8 and late_fixed["automatic_loss"] is None
     assert joined_saved
     # LATE's old board row now disagrees with its recalculated day; STUCK's
@@ -413,8 +423,8 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert last == planted - {("board", BOARD, 2)}
     assert unfinished == []
     assert line.startswith(
-        "Clash Lens nightly re-check, last 24 hours: 9 new problems (recount 2, chain 1,"
-        " ledger 1, battle copies 2, missing days 1, board rows 2); 3 recalculations"
+        "Clash Lens nightly re-check, last 24 hours: 10 new problems (recount 3, chain 1,"
+        " ledger 1, battle copies 2, missing days 1, board rows 2); 4 recalculations"
         " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
         " failed recalculation.")
     assert repaired == (True, True)

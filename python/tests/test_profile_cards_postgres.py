@@ -132,6 +132,8 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                     FROM player_profile_versions WHERE normalized_tag = '#YQ2'
                     """
                 )
+                # The weekly league record has decided it.
+                connection.execute("DELETE FROM league_week_dirty")
 
             cards = api_accounts.get_public_user(database, "groupowner", now=NOW)[
                 "verified_players"
@@ -228,6 +230,7 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                     WHERE parser_version = 'electro-test'
                     """
                 )
+                connection.execute("DELETE FROM league_week_dirty")
             cards = api_accounts.get_public_user(database, "groupowner", now=NOW)[
                 "verified_players"
             ]

@@ -26,6 +26,8 @@ from threading import Event
 from time import monotonic
 from typing import Any
 
+from psycopg import errors
+
 from .domain import SEASON_DURATION, ranked_day_for
 from .profile import LEGEND_I_TIER_ID, RECOGNIZED_NON_LEGEND_TIERS_V1
 
@@ -490,6 +492,31 @@ WHERE (week.league, week.entry, week.strength, week.unknown_reason, week.proof_k
 """
 
 
+# A saved week is updated only where its decision changed: an upsert locks
+# every row it meets as if its league changed, and a day being calculated
+# reads its week's row (league_days.day_league), so it would wait for the
+# decider's whole batch. An update locks only the rows it changes, and keeps
+# them readable by day calculations while their league stays.
+_UPDATE = """
+UPDATE player_league_weeks AS week
+SET league = %(league)s, entry = %(entry)s, strength = %(strength)s,
+    unknown_reason = %(unknown_reason)s, proof_kind = %(proof_kind)s,
+    proof_at = %(proof_at)s, proof_source_id = %(proof_source_id)s,
+    proof_second_id = %(proof_second_id)s, against_kind = %(against_kind)s,
+    against_at = %(against_at)s, against_source_id = %(against_source_id)s,
+    rule_version = %(rule_version)s,
+    decision_number = week.decision_number + 1, decided_at = clock_timestamp()
+WHERE player_id = %(player)s AND week_start = %(week)s
+  AND (league, entry, strength, unknown_reason, proof_kind, proof_at, proof_source_id,
+       proof_second_id, against_kind, against_at, against_source_id, rule_version)
+      IS DISTINCT FROM
+      (%(league)s, %(entry)s, %(strength)s, %(unknown_reason)s, %(proof_kind)s,
+       %(proof_at)s::timestamptz, %(proof_source_id)s::bigint, %(proof_second_id)s::bigint,
+       %(against_kind)s, %(against_at)s::timestamptz, %(against_source_id)s::bigint,
+       %(rule_version)s)
+"""
+
+
 def save_season(
     connection: Any, player_id: int, season_start: datetime,
     decisions: Mapping[datetime, Decision],
@@ -505,7 +532,7 @@ def save_season(
     ).fetchall()}
     return {
         week for week in sorted(stored | set(decisions))
-        if connection.execute(_SAVE, {
+        if connection.execute(_UPDATE if week in stored else _SAVE, {
             "player": player_id, "week": week, "rule_version": RULE_VERSION,
             **_columns(decisions.get(week, Unknown())),
         }).rowcount
@@ -561,6 +588,7 @@ def decide_due(database: Any) -> bool:
             with database.pool.connection() as connection:
                 waiting, oldest = connection.execute(
                     "SELECT count(*), min(marked_at) FROM league_week_dirty"
+                    " WHERE failed_at IS NULL"
                 ).fetchone()
             print(json.dumps({
                 "event": "league_week", **_tally, "seconds": round(_tally["seconds"], 1),
@@ -578,9 +606,13 @@ def decide_due(database: Any) -> bool:
 def _decide_batch(database: Any, deadline: float) -> bool:
     """Decide one batch of marked Seasons in one transaction; whether any
     mark was found. Marks are deleted in the transaction reading the
-    evidence: evidence committed later leaves a new mark."""
-    from . import league_days
+    evidence: evidence committed later leaves a new mark.
 
+    Each player is decided on their own, so one cannot stop the rest. A
+    player whose lock is busy, as a Reset's board's while it freezes, keeps
+    their marks for the next batch. One whose decision fails any other way
+    is set aside: their marks stay, marked failed, until new evidence marks
+    them again, and the failed-work alert counts them (collector_metrics)."""
     now = _now()
     oldest = ranked_day_for(now).season_start - SEASON_DURATION
     with database.pool.connection() as connection, connection.transaction():
@@ -591,7 +623,8 @@ def _decide_batch(database: Any, deadline: float) -> bool:
         marked = connection.execute(
             """
             SELECT DISTINCT player_id, week_start FROM (
-                SELECT player_id, week_start FROM league_week_dirty ORDER BY id LIMIT %s
+                SELECT player_id, week_start FROM league_week_dirty WHERE failed_at IS NULL
+                ORDER BY id LIMIT %s
             ) AS mark
             """,
             (BATCH,),
@@ -599,39 +632,65 @@ def _decide_batch(database: Any, deadline: float) -> bool:
         for player_id, season_start in sorted(
             {(int(player), ranked_day_for(week).season_start) for player, week in marked}
         ):
-            sources = [row[0] for row in connection.execute(
-                """
-                DELETE FROM league_week_dirty
-                WHERE player_id = %s AND week_start >= %s AND week_start < %s
-                RETURNING source
-                """,
-                (player_id, season_start, season_start + SEASON_DURATION),
-            ).fetchall()]
-            _tally["marks"] += len(sources)
-            if season_start < oldest:
-                _tally["skipped"] += 1
-                continue
-            started = monotonic()
-            # Seeded weeks' days are the Season repair's to recalculate.
-            changed = league_days.save_season(
-                database, connection, player_id, season_start,
-                decide_season(load_season(connection, player_id, season_start, now)),
-                now, queue_days=set(sources) != {"seed"})
-            next_season = season_start + SEASON_DURATION
-            if next_season - WEEK in changed and next_season <= now:
-                # The next Season's first week counts its early answers
-                # against this Season's last.
+            try:
+                with connection.transaction():
+                    _decide_player(database, connection, player_id, season_start, now, oldest)
+            except (errors.LockNotAvailable, errors.TransactionRollback, errors.QueryCanceled):
+                pass
+            except Exception as error:  # noqa: BLE001 - set aside, the rest proceed
                 connection.execute(
-                    "INSERT INTO league_week_dirty (player_id, week_start, source)"
-                    " VALUES (%s, %s, 'decision')",
-                    (player_id, next_season),
+                    """
+                    UPDATE league_week_dirty SET failed_at = clock_timestamp()
+                    WHERE player_id = %s AND week_start >= %s AND week_start < %s
+                      AND failed_at IS NULL
+                    """,
+                    (player_id, season_start, season_start + SEASON_DURATION),
                 )
-            _tally["decided"] += 1
-            _tally["changed"] += len(changed)
-            _tally["seconds"] += monotonic() - started
+                print(json.dumps({"event": "league_week", "status": "set_aside",
+                                  "player_id": player_id, "error": type(error).__name__}),
+                      flush=True)
             if monotonic() >= deadline:
                 break
         return bool(marked)
+
+
+def _decide_player(
+    database: Any, connection: Any, player_id: int, season_start: datetime, now: datetime,
+    oldest: datetime,
+) -> None:
+    """Decide one marked player's Season, deleting its marks."""
+    from . import league_days
+
+    sources = [row[0] for row in connection.execute(
+        """
+        DELETE FROM league_week_dirty
+        WHERE player_id = %s AND week_start >= %s AND week_start < %s
+        RETURNING source
+        """,
+        (player_id, season_start, season_start + SEASON_DURATION),
+    ).fetchall()]
+    _tally["marks"] += len(sources)
+    if season_start < oldest:
+        _tally["skipped"] += 1
+        return
+    started = monotonic()
+    # Seeded weeks' days are the Season repair's to recalculate.
+    changed = league_days.save_season(
+        database, connection, player_id, season_start,
+        decide_season(load_season(connection, player_id, season_start, now)),
+        now, queue_days=set(sources) != {"seed"})
+    next_season = season_start + SEASON_DURATION
+    if next_season - WEEK in changed and next_season <= now:
+        # The next Season's first week counts its early answers
+        # against this Season's last.
+        connection.execute(
+            "INSERT INTO league_week_dirty (player_id, week_start, source)"
+            " VALUES (%s, %s, 'decision')",
+            (player_id, next_season),
+        )
+    _tally["decided"] += 1
+    _tally["changed"] += len(changed)
+    _tally["seconds"] += monotonic() - started
 
 
 def saves_unchanged_answer(connection: Any, answer: Any, last_saved_id: int) -> bool:

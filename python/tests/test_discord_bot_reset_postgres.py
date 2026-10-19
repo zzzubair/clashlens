@@ -23,8 +23,10 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
 ) -> None:
     """The first two days of the Season that started on 5 October 2026, asked
     a minute before the Day 3 Reset. FULL was tracked from Day 1, so /stats
-    totals both days. Clash Lens first saw LATE at the Day 3 Reset, so their
-    Day 1 was never saved: their totals are Unavailable, not Day 2's alone."""
+    totals both days. Clash Lens first saw LATE at the Day 3 Reset; their
+    battle log then holds every battle of the Season, and its Legend battles
+    put the week in Legend I, so both days are saved from it and /stats
+    totals them: Day 1 had no battle."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
@@ -74,8 +76,9 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
         "Attack hit rate: 71%",
         "Defenses held: 94%",
     ]
+    # 2 three-stars in 2 attacks, none of 8 defenses tripled.
     assert late.cards[0].parts[1].splitlines()[:3] == [
         "**Season Stats**",
-        "Attack hit rate: Unavailable",
-        "Defenses held: Unavailable",
+        "Attack hit rate: 100%",
+        "Defenses held: 100%",
     ]

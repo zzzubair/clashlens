@@ -16,7 +16,9 @@ def _lookup(
         SELECT player.id, player.active, player.eligibility_state,
                EXISTS (SELECT 1 FROM player_profile_versions AS profile
                        WHERE profile.player_id = player.id),
-               player.current_profile_version_id IS NULL
+               player.current_profile_version_id IS NULL,
+               EXISTS (SELECT 1 FROM league_week_dirty AS mark
+                       WHERE mark.player_id = player.id AND mark.failed_at IS NULL)
         FROM players AS player
         WHERE player.normalized_tag = %s
         """,
@@ -24,8 +26,12 @@ def _lookup(
     ).fetchone()
     state = "unknown"
     if row is not None:
-        player_id, active, eligibility, confirmed, no_current_profile = row
-        if active:
+        player_id, active, eligibility, confirmed, no_current_profile, deciding = row
+        if not active and confirmed and deciding:
+            # The weekly league record decides within seconds whether a
+            # player whose profile was just saved is tracked.
+            state = "checking"
+        elif active:
             why = _why_no_results(connection, player_id, tag, now or datetime.now(UTC))
             # A newest rejected profile is explained even after accepted ones.
             if no_current_profile or why.get("reason", "pending") != "pending":

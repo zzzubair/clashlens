@@ -4,8 +4,9 @@ A board ranks the Legend day that ended at its Reset. Its members are the
 players swept at the Reset, tracked as the record had it, unless the record
 decided their ended day's week below Legend I or unknown, and the players
 whose ended day's week it decided Legend I with that day's result saved
-since, never one still Live, so a board never waits for a player its Reset
-did not sweep (``board_members``). A Monday's board ranks Sunday, whose week
+since, never one still Live, read at or before the Reset, as a board ranks
+a player by their last reading before it, so a board never waits for a
+player its Reset did not sweep (``board_members``). A Monday's board ranks Sunday, whose week
 was decided days earlier, so no board waits for a new week's decisions; a
 swept player whose week is not decided yet stays a member, so a board never
 loses its players while the record catches up. Before the record
@@ -43,9 +44,14 @@ from .domain import RANKED_DAY_DURATION
 from .league_week import week_start
 
 
-def board_members(connection: Any, boundary_at: datetime, swept: list[int]) -> list[int]:
-    """The board's members now: see the module notes."""
+def board_members(
+    connection: Any, boundary_at: datetime, swept: list[int], only: int | None = None
+) -> list[int]:
+    """The board's members now, or with ``only`` whether that player is one:
+    see the module notes."""
     day = boundary_at - RANKED_DAY_DURATION
+    if only is not None:
+        swept = [only] if only in swept else []
     if day < league_days.RECORDED_FROM:
         return sorted(set(swept))
     return [int(row[0]) for row in connection.execute(
@@ -56,14 +62,21 @@ def board_members(connection: Any, boundary_at: datetime, swept: list[int]) -> l
         WHERE week.league IS NULL OR week.league = 'legend_i'
         UNION
         SELECT week.player_id FROM player_league_weeks AS week
+        JOIN players AS player ON player.id = week.player_id
         WHERE week.week_start = %(week)s AND week.league = 'legend_i'
+          {only}
           AND EXISTS (
               SELECT 1 FROM api_player_daily_logs AS day
               WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
                 AND day.state <> 'Live')
+          AND EXISTS (
+              SELECT 1 FROM player_profile_versions AS version
+              WHERE version.normalized_tag = player.normalized_tag
+                AND version.observed_at <= %(reset)s)
         ORDER BY 1
-        """,
-        {"week": week_start(day), "swept": swept, "day": day},
+        """.format(only="" if only is None else "AND week.player_id = %(only)s"),
+        {"week": week_start(day), "swept": swept, "day": day, "reset": boundary_at,
+         "only": only},
     ).fetchall()]
 
 

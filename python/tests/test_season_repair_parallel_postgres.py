@@ -96,14 +96,17 @@ def test_season_repair_jobs_for_two_players_finish_side_by_side(
                 return season_repair(database, str(int(season.timestamp())), action, max_jobs=100)
 
             repair("preview")
-            assert repair("queue")["queued"] == 2
+            # The two and the 28 opponents of their Legend battles, tracked
+            # by the record (test_weekly_raise_postgres).
+            assert repair("queue")["queued"] == 30
             with database.pool.connection() as connection:
-                # The second job waits until the first has stopped mid-way.
+                # The second job waits until the first has stopped mid-way,
+                # the opponents' until both have run.
                 connection.execute(
                     "UPDATE python_processing_jobs SET due_at = now() + interval '1 day'"
                     " WHERE deduplication_key LIKE 'reconcile:season-repair:%%'"
-                    "   AND (input_json ->> 'player_id')::bigint = %s",
-                    (second,),
+                    "   AND (input_json ->> 'player_id')::bigint <> %s",
+                    (first,),
                 )
             results = {}
             lane = threading.Thread(target=lambda: results.update(
@@ -120,6 +123,10 @@ def test_season_repair_jobs_for_two_players_finish_side_by_side(
             results["second"] = second_lane.process_once(owner="lane-2", lease_seconds=120)
             go_on.set()
             lane.join(60)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = now()"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'")
             phases = []
             for _ in range(10):
                 phases.append(repair("queue")["phase"])

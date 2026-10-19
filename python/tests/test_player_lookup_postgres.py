@@ -7,7 +7,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import store_observation
+from domain_test_support import decide_leagues, store_observation
 from psycopg.conninfo import make_conninfo
 from test_api_db_public_ops import (
     NOW,
@@ -110,6 +110,9 @@ def test_first_profile_retains_real_identity_and_uses_existing_eligibility(
             )
             result = processor.process_once(owner="lookup-test")
             assert result is not None and result.outcome == "processed"
+            # Until the weekly league record decides, the page keeps checking.
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
+            decide_leagues(worker, NOW)
             lookup = api_player_lookup.get_lookup(database, "#2PP")
             assert lookup["state"] == state
             if not active:
@@ -196,7 +199,10 @@ def test_a_profile_processed_while_the_lookup_reads_is_never_a_failed_check(
                 lookup = api_player_lookup._lookup(
                     ProcessedAfterFirstRead(connection), "#2PP"
                 )
-            assert lookup["state"] == state
+            # Still checking until the weekly league record decides.
+            assert lookup["state"] == "checking"
+            decide_leagues(worker, NOW)
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == state
         finally:
             worker.close()
             database.close()
@@ -259,6 +265,8 @@ def test_name_results_only_include_active_or_historical_players(database_url):
                 connection.execute(
                     "UPDATE players SET active = false, eligibility_state = 'ineligible' WHERE normalized_tag IN ('#8PY', '#2PY')"
                 )
+                # As the weekly league record decided them.
+                connection.execute("DELETE FROM league_week_dirty")
                 connection.execute(
                     "DELETE FROM api_player_daily_logs WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')"
                 )
@@ -646,6 +654,7 @@ def _process_profile(info, archive_server, processor, key, **changes) -> None:
     )
     result = processor.process_job(job, owner="lookup-test")
     assert result is not None and result.outcome == "processed"
+    decide_leagues(processor.database, NOW)
 
 
 def _claim(info) -> list:
@@ -701,16 +710,23 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             assert on_board()
             assert "reason" not in submit(database)
 
+            season_start = ranked_day_for(datetime.now(UTC)).season_start
+
             def publish_day(version: int, battles: str) -> str:
                 with database.pool.connection() as connection:
+                    # A public day of this Season names its Legend I week;
+                    # the week's own row is left out here.
+                    connection.execute("SET LOCAL session_replication_role = replica")
                     connection.execute(
                         """
                         INSERT INTO api_player_daily_logs (
-                            player_id, ranked_day_start, version, state, coverage, battles
+                            player_id, ranked_day_start, version, state, coverage, battles,
+                            week_start, league
                         )
-                        SELECT id, %s, %s, 'Live', 'partial', %s FROM players
+                        SELECT id, %s, %s, 'Live', 'partial', %s,
+                               clashlens_week_start(%s), 'legend_i' FROM players
                         """,
-                        (ranked_day_for(datetime.now(UTC)).season_start, version, battles),
+                        (season_start, version, battles, season_start),
                     )
                 return api_player_lookup.get_lookup(database, "#2PP").get("reason")
 

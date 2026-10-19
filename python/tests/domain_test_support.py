@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 import psycopg
@@ -233,6 +234,16 @@ def record_seasons_to(monkeypatch: Any, season_end: datetime) -> None:
     monkeypatch.setattr(league_days, "RECORDED_FROM", season_end - timedelta(days=56))
     monkeypatch.setattr(league_week, "_now", lambda: season_end - timedelta(hours=1))
     monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+
+
+def decide_leagues(database: Any, at: datetime) -> None:
+    """Decide every marked week, as the worker's league week thread does
+    within seconds of the evidence, with its clock at ``at``: whether a
+    player is tracked follows the decision."""
+    with patch.object(league_week, "_now", lambda: at), \
+            patch.object(league_week, "_retry_at", float("-inf")):
+        while league_week.decide_due(database):
+            pass
 
 
 def repair_season(

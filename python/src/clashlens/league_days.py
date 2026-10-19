@@ -22,7 +22,16 @@ from typing import Any
 from . import domain, league_week
 from .db import PYTHON_BACKFILL_PRIORITY
 from .domain import RankedDay
-from .league_week import WEEK, Decision, Entry, League, LegendI, Unknown, league_of
+from .league_week import (
+    WEEK,
+    Decision,
+    Entry,
+    League,
+    LegendI,
+    Strength,
+    Unknown,
+    league_of,
+)
 
 # The first Season the record decides from its start. It decides no week
 # before it, so a day before it is calculated as a Legend I day whose
@@ -115,11 +124,14 @@ def save_season(
     database: Any, connection: Any, player_id: int, season_start: datetime,
     decisions: Mapping[datetime, Decision], now: datetime, *, queue_days: bool,
 ) -> set[datetime]:
-    """``league_week.save_season``, keeping days in step: lock the Season's
-    weeks, so a day being saved finishes first and none starts, delete the
-    public days of each week leaving Legend I (the database refuses the new
-    decision while they exist), then save, then, with ``queue_days``, queue
-    the days each changed league or entry affects."""
+    """``league_week.save_season``, keeping days in step: lock each week
+    leaving Legend I, so a day being saved in it finishes first and none
+    starts, delete its public days (the database refuses the new decision
+    while they exist), then save, then, with ``queue_days``, queue the days
+    each changed league or entry affects. No other week is locked against
+    day calculations, so a Reset's days never wait for a decision that
+    keeps their week's league. Only the decider writes the record, one batch
+    at a time, so the weeks read stay as read."""
     end = season_start + domain.SEASON_DURATION
     before = {
         row[0]: (League(row[1]), row[2])
@@ -127,7 +139,6 @@ def save_season(
             """
             SELECT week_start, league, entry FROM player_league_weeks
             WHERE player_id = %s AND week_start >= %s AND week_start < %s
-            FOR UPDATE
             """,
             (player_id, season_start, end),
         ).fetchall()
@@ -140,6 +151,13 @@ def save_season(
     leaving = sorted(
         week for week, (league, _) in after.items()
         if league is not League.LEGEND_I and before.get(week, (None,))[0] is not league
+    )
+    connection.execute(
+        """
+        SELECT 1 FROM player_league_weeks
+        WHERE player_id = %s AND week_start = ANY(%s) FOR UPDATE
+        """,
+        (player_id, leaving),
     )
     withdraw(database, connection, player_id, leaving)
     changed = league_week.save_season(connection, player_id, season_start, decisions)
@@ -163,19 +181,24 @@ def save_season(
 
 def track(connection: Any, player_id: int, now: datetime) -> None:
     """Track the player while the record says they are in Legend I this
-    week, or this week is not known after a Legend I week, as a lower-league
-    answer that proves nothing leaves them tracked, or their newest saved
-    answer shows Legend I, so a player just promoted is polled at once.
+    week, or, after a Legend I week, this week is not known or below only by
+    lower-league answers naming Season 0, or their newest saved answer shows
+    Legend I, so a player just promoted is polled at once. Lower-league
+    answers naming Season 0 may be the game's mistake, as one shown at a
+    Monday's settlement check and saved again after the league display
+    window: polling goes on until an accepted answer, a battle or the league
+    history settles the week.
     Otherwise stop tracking them and cancel their ordinary discovery work,
-    as for any player found below Legend I."""
+    as for any player found below Legend I; one who never gave a recognised
+    league answer stays of unknown eligibility, so is asked again."""
     week = league_week.week_start(now)
-    leagues = dict(connection.execute(
+    weeks = {row[0]: (row[1], row[2]) for row in connection.execute(
         """
-        SELECT week_start, league FROM player_league_weeks
+        SELECT week_start, league, strength FROM player_league_weeks
         WHERE player_id = %s AND week_start = ANY(%s)
         """,
         (player_id, [week - WEEK, week]),
-    ).fetchall())
+    ).fetchall()}
     newest = connection.execute(
         """
         SELECT version.eligibility_state
@@ -192,10 +215,12 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
         """,
         (player_id,),
     ).fetchone()
-    this = leagues.get(week, League.UNKNOWN.value)
+    this, strength = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
+    unsettled = this == League.UNKNOWN.value or (
+        this == League.BELOW.value and strength < Strength.ACCEPTED)
     tracked = (
         this == League.LEGEND_I.value
-        or this == League.UNKNOWN.value and leagues.get(week - WEEK) == League.LEGEND_I.value
+        or unsettled and weeks.get(week - WEEK, (None,))[0] == League.LEGEND_I.value
         or newest is not None and newest[0] == "eligible"
     )
     connection.execute(
@@ -210,8 +235,8 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
           AND (active, eligibility_state, next_due_at IS NOT NULL)
               IS DISTINCT FROM (%(tracked)s, %(state)s, %(tracked)s)
         """,
-        {"tracked": tracked, "state": "eligible" if tracked else "ineligible",
-         "player": player_id},
+        {"tracked": tracked, "player": player_id,
+         "state": "eligible" if tracked else "ineligible" if newest else "unknown"},
     )
     if not tracked:
         connection.execute("SELECT clashlens_cancel_inactive_discovery_work(%s)", (player_id,))
@@ -319,7 +344,7 @@ def settle(
             SELECT week_start FROM player_league_weeks
             WHERE player_id = %s AND week_start >= %s AND week_start < %s
               AND league = 'legend_i'
-            FOR UPDATE
+            FOR KEY SHARE
             """,
             (player_id, start, end),
         ).fetchall()}

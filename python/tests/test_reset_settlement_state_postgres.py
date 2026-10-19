@@ -34,7 +34,8 @@ from clashlens.api_db import ApiDatabase
 TAG = "#2PP"
 # The player's own days: the weekly league record proves their Legend
 # battle opponents Legend I too, so they have days of their own.
-OWN_DAYS = f"player_id = (SELECT id FROM players WHERE normalized_tag = '{TAG}')"
+OWN_ID = f"SELECT id FROM players WHERE normalized_tag = '{TAG}'"
+OWN_DAYS = f"player_id = ({OWN_ID})"
 # The fixture profiles report the Season that ends at the August 10 Reset.
 BOUNDARIES = {
     "ordinary": DAY_END,
@@ -149,8 +150,11 @@ OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
 
 
 @pytest.mark.parametrize("kind,season_id,trophies,start", [
-    # An old Season with no new-Season Legend I profile gives no start.
-    ("season", OLD_SEASON, 6400, None),
+    # A Legend I player read at the Season-opening Reset still showing the
+    # old Season stays Legend I: the record carries the week before's league
+    # until an answer read an hour after the Reset counts. The Season rule
+    # gives the start.
+    ("season", OLD_SEASON, 6400, 5000),
     ("season", NEW_SEASON, 5000, 5000),
     # A new-Season Legend I reading that is not 5,000 starts at 5,000 by the
     # Season rule.
@@ -383,8 +387,9 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
                    start_trophies, next_start_trophies
             FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")}
         current = _rows(connection_info, CURRENT_PROFILE)
-    assert days[DAY_END - timedelta(days=1)] == (6000, None)
-    assert days[DAY_END][0] is None
+    # Accepted answers in Legend I and Legend II in one week leave its
+    # league not confirmed (the record): neither day is a Legend day.
+    assert days == {}
     assert current == [(4900, "accepted")]
 
 
@@ -398,11 +403,14 @@ DAY_ROWS = f"""
 @pytest.mark.parametrize("later_tier,login_day", [
     ("Legend I", 3), ("Legend I", 10), ("Legend II", 3), (None, 3),
 ])
-def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears(
+def test_season_opening_reading_of_the_old_season_starts_day_1_at_5000(
     database_url: str, archive_server, later_tier: str | None, login_day: int
 ) -> None:
     # The Season-opening Reset still reads the old Season's 6,400. On a later
     # day the player logs in: still in Legend I, demoted, or never seen again.
+    # The weekly league record carries a Legend I player into the new Season
+    # until an answer counting for it shows otherwise (the owner's rule of 14
+    # October 2026), so Day 1 starts at 5,000 by the Season rule at once.
     boundary = BOUNDARIES["season"]
     old_reading = _season_profile(6400, OLD_SEASON)
     later = old_reading
@@ -448,14 +456,14 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
             page = api_players.get_player_page(api, TAG, now=login, freshness_seconds=900)
         finally:
             api.close()
-        opening_day = next(
+        opening_day = next((
             day for day in page["screen_ready"]["days"]
             if day["ranked_day_start"] == boundary.isoformat()
-        )
+        ), None)
         # Finished jobs are deleted after 48 hours; the next Reset still does
-        # not rebuild the Season again.
+        # not recalculate the days again.
         rebuilds = ("SELECT count(*) FROM python_processing_jobs"
-                    " WHERE deduplication_key LIKE 'reconcile:season-rule:%'")
+                    " WHERE deduplication_key LIKE 'reconcile:league-week:%'")
         built = _rows(connection_info, rebuilds)[0][0]
         with psycopg.connect(connection_info, autocommit=True) as connection:
             connection.execute(
@@ -468,23 +476,29 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         ))
         rebuilt_again = _rows(connection_info, rebuilds)[0][0]
     day_28, day_1 = boundary - timedelta(days=1), boundary
-    # Until then September's last day has no end and Day 1 no start.
-    assert before[day_28][0] == "Partial" and before[day_28][3] is None
-    assert before[day_1][2] is None
-    if later_tier == "Legend I":
+    # Before the login, September's last day ends and Day 1 starts at 5,000.
+    assert before[day_28][:4] == ("Complete", "inferred", 6400, 5000)
+    assert before[day_1][2] == 5000 and before[day_1][4] == "season_rule"
+    if later_tier == "Legend II":
+        # Legend II naming the new Season: the week is below Legend I, so Day
+        # 1 is no Legend day, and September's last day ends without the
+        # Season rule.
+        assert after[day_28][3] is None
+        assert opening_day is None
+        # The opening week is decided Legend I, then below: its days are
+        # queued for each, as the week before's are for its first decision.
+        assert (built, rebuilt_again) == (3, 0)
+    else:
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
         # The login day's Reset saves an empty battle log and 5,000, so Day 1
-        # ends there too.
-        assert after[day_1][2:] == (5000, 5000, "season_rule")
-        assert (built, rebuilt_again) == (1, 0)
+        # ends there too. Never seen again, the player reads the old
+        # Season's 6,400, which gives no total, so Day 1's end waits.
+        assert after[day_1][2:] == (5000, 5000 if later_tier else None, "season_rule")
+        # Each week's first decision queues its days once: the week before
+        # the Season's, the opening week's and, by Day 10, the second's.
+        assert (built, rebuilt_again) == (2 if login_day < 8 else 3, 0)
         assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
             5000, "season_rule"
-        )
-    else:
-        assert after[day_28][3] is None and after[day_1][2] is None
-        assert (built, rebuilt_again) == (0, 0)
-        assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
-            None, None
         )
 
 
@@ -640,7 +654,9 @@ def test_last_season_day_ends_at_the_official_total(
             )])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
-    assert before[:2] == (last_day, "Partial")
+    # Until a later answer counts, the record carries Legend I into the new
+    # Season, so the Season rule ends the day before the official total.
+    assert before[:2] == (last_day, "Complete")
     assert after[:2] == (last_day, state)
     if state == "Complete":
         assert after[2:5] == ("exact", 6000, final)
@@ -799,7 +815,7 @@ def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
             connection_info,
             "SELECT count(*) FROM python_processing_jobs"
             " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
-            " AND status::text = 'complete'",
+            f" AND status::text = 'complete' AND input_json ->> 'player_id' = ({OWN_ID})::text",
         )[0][0]
 
     assert (before[1], before[4]) == ("Complete", 5000)

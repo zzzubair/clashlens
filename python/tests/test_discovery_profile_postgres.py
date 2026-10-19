@@ -8,7 +8,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import decide_leagues, domain_database, store_observation, text
 from test_domain_processing_postgres import _processor
 
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
@@ -379,6 +379,7 @@ def test_ineligible_profile_cancels_only_ordinary_discovery_and_keeps_evidence(
         try:
             result = processor.process_job(job_id, owner="inactive-profile-worker")
             assert result is not None and result.outcome == "processed"
+            decide_leagues(database, OBSERVED_AT)
             with database.pool.connection() as connection:
                 player = connection.execute(
                     """SELECT active, eligibility_state, next_due_at

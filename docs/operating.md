@@ -742,8 +742,9 @@ too). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
 most `--max-jobs` (default 100) jobs at backfill priority, and says which in
 `phase`: `league`, until the weekly league record has decided every week of
-the Season with new evidence (`undecided_weeks`, which the worker clears
-within minutes), then, for at most `--max-jobs` players a run, deleting each
+the Season with evidence saved before the repair began (`undecided_weeks`,
+which the worker clears within minutes; a player it set aside is not waited
+for), then, for at most `--max-jobs` players a run, deleting each
 public day saved in a week not Legend I and naming the week of each other
 one saved before (`public_days_deleted`, `public_days_named`), until none is
 left; once the repair is past this step, the two database rules migration
@@ -989,6 +990,13 @@ be processed, accept the job with the owner's agreement:
 previews, and the same with `--apply` records it. The job, its attempts and its
 saved response stay; the record keeps who accepted it, when and why, and
 `./ops failed-items` shows it as `accepted`. Otherwise escalate.
+
+The count also holds each player the weekly league record set aside because
+deciding their league failed (worker log `"event": "league_week", "status":
+"set_aside"`, with the player's id); the rest are decided as usual. New
+evidence about the player tries again. To try again by hand once the cause is
+fixed, clear the failure: `UPDATE league_week_dirty SET failed_at = NULL
+WHERE player_id = ID`.
 
 **Recovered:** 24 hours and 15 minutes after the newest permanent failure. The
 alert means a new permanent failure in the last 24 hours; its recovery means no new one for

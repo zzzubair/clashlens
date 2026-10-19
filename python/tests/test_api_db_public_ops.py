@@ -149,6 +149,8 @@ def seed_profile(
             """,
             (player_id,),
         )
+        # The weekly league record has decided the profile's week.
+        connection.execute("DELETE FROM league_week_dirty WHERE player_id = %s", (player_id,))
         connection.commit()
 
 

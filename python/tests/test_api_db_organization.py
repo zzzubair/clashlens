@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from domain_test_support import store_observation
+from domain_test_support import decide_leagues, store_observation
 from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
 from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
@@ -627,6 +627,7 @@ def test_confirmed_players_join_with_their_name(
             )
             result = processor.process_once(owner="group-test")
             assert result is not None and result.outcome == "processed"
+            decide_leagues(worker, observed_at)
 
         try:
             owner_id = create_owner(database)
