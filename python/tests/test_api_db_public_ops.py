@@ -149,8 +149,10 @@ def seed_profile(
             """,
             (player_id,),
         )
-        # The weekly league record has decided the profile's week.
-        connection.execute("DELETE FROM league_week_dirty WHERE player_id = %s", (player_id,))
+        # The weekly league record, where the schema has it, has decided the
+        # profile's week.
+        if connection.execute("SELECT to_regclass('league_week_dirty')").fetchone()[0]:
+            connection.execute("DELETE FROM league_week_dirty WHERE player_id = %s", (player_id,))
         connection.commit()
 
 

@@ -762,9 +762,9 @@ def recalculate_ranked_day(
         _enqueue_day_end_reconciliation(connection, player_id, ranked_day)
     if "start_automatic_loss_charged" in result.formula_components:
         queue_refresh.queue_for_next_day_start(connection, player_id, ranked_day.start, version_id)
-    if start_baseline is not None and start_baseline["evidence"].get(
-        "start_trophies_source"
-    ) == "season_rule":
+    if not league.starts_at_5000 and start_baseline is not None and start_baseline[
+        "evidence"
+    ].get("start_trophies_source") == "season_rule":
         queue_refresh.queue_for_season_rule_start(
             connection, player_id, ranked_day.start, version_id)
     if existing is None:

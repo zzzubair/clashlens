@@ -253,13 +253,20 @@ def _queue_week(
     Legend I gets the weekly raise; at a Season's start, when it moved into
     or out of Legend I, as only a player in Legend I the next Season ends
     the last day by the Season rule. Only its Monday when only how it began
-    changed."""
+    changed. A week out of Legend I before and after has no day saved, and a
+    Sunday not a Legend day has none to change: each lower-league player
+    with evidence in a new week would otherwise queue a job at Reset
+    priority on Monday for nothing."""
     from .first_battle_log import _queue
 
     if before[0] is not after[0]:
         first, last = week, week + WEEK - timedelta(days=1)
+        if League.LEGEND_I not in (before[0], after[0]):
+            last = week - timedelta(days=1)
         ends_sunday = League.LEGEND_I if domain.is_season_boundary(week) else League.BELOW
-        if (before[0] is ends_sunday) is not (after[0] is ends_sunday):
+        if (before[0] is ends_sunday) is not (after[0] is ends_sunday) and day_league(
+            connection, player_id, domain.ranked_day_for(week - timedelta(days=1))
+        ).legend_day:
             first -= timedelta(days=1)
     else:
         first = last = week

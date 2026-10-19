@@ -28,6 +28,7 @@ from typing import Any
 
 from psycopg import errors
 
+from .db import RESET_LOCK_WAIT
 from .domain import SEASON_DURATION, ranked_day_for
 from .profile import LEGEND_I_TIER_ID, RECOGNIZED_NON_LEGEND_TIERS_V1
 
@@ -620,6 +621,9 @@ def _decide_batch(database: Any, deadline: float) -> bool:
             "SELECT pg_try_advisory_xact_lock(hashtextextended('league-week-decider', 0))"
         ).fetchone()[0]:
             return False
+        # A player whose week or Reset a day calculation holds is tried in
+        # a later batch, so the batch's locks are not held while it waits.
+        connection.execute("SELECT set_config('lock_timeout', %s, true)", (RESET_LOCK_WAIT,))
         marked = connection.execute(
             """
             SELECT DISTINCT player_id, week_start FROM (
@@ -674,11 +678,13 @@ def _decide_player(
         _tally["skipped"] += 1
         return
     started = monotonic()
-    # Seeded weeks' days are the Season repair's to recalculate.
+    # Seeded weeks' days are the Season repair's to recalculate, with those
+    # of live evidence marked before the seed's first decision: queueing
+    # every week of every tracked player at deploy would flood the queue.
     changed = league_days.save_season(
         database, connection, player_id, season_start,
         decide_season(load_season(connection, player_id, season_start, now)),
-        now, queue_days=set(sources) != {"seed"})
+        now, queue_days="seed" not in sources)
     next_season = season_start + SEASON_DURATION
     if next_season - WEEK in changed and next_season <= now:
         # The next Season's first week counts its early answers

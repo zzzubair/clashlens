@@ -199,6 +199,11 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
         story.read(STALE, tuesday, 5100)
         story.reads(tuesday + timedelta(hours=1, minutes=25), {FIRST_SEEN: 5080})
         story.run_worker()
+        # The deploy's seed marked GLITCH's Season too (migration 0115).
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO league_week_dirty (player_id, week_start, source)"
+                " SELECT id, %s, 'seed' FROM players WHERE normalized_tag = %s", (W1, GLITCH))
         _decide(connection_info, monkeypatch)
         before_pair = _records(connection_info, list(story.players))
         story.reads(monday + timedelta(hours=9), {DROPPED: 4920})
@@ -213,6 +218,12 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
                 " SELECT player_id, week_start, 'seed' FROM player_league_weeks")
         _decide(connection_info, monkeypatch)
         again = _records(connection_info, list(story.players))
+        with psycopg.connect(connection_info) as connection:
+            queued = {text(tag) for (tag,) in connection.execute(
+                "SELECT DISTINCT player.normalized_tag FROM python_processing_jobs AS job"
+                " JOIN players AS player"
+                "   ON job.deduplication_key LIKE 'reconcile:league-week:' || player.id || ':%'"
+            ).fetchall()} & set(story.players)
 
     started = ("legend_i", "season_start", 4, "battle", sunday, None, None, 1)
     battle = ("legend_i", "stayed", 4, "battle")
@@ -245,6 +256,9 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
         "legend_i", "stayed", 1, "previous_week", W1, None, None, 1)
     assert before_pair[PROMOTED, W2] == still_below
     assert again == decided
+    # Decisions queue the days they change. IDLE's weeks were never Legend
+    # I, so it has none; the Season repair recalculates the seeded GLITCH's.
+    assert queued == {STAYED, FAILED, DROPPED, FIRST_SEEN, PROMOTED, STALE}
 
 
 def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
@@ -254,7 +268,8 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
     retry the same batch every minute with only a log line to show for it.
     BROKEN is set aside: their marks stay, marked failed, and the failed-work
     count the alert reads counts them, while FINE is decided. New evidence
-    about BROKEN tries again."""
+    about BROKEN tries again. A decider that stops deciding counts too, once
+    a mark has waited 30 minutes: no new week then has a league."""
     broken_tag, fine_tag = "#2PP", "#8PP"
     original = league_week.load_season
     broken: list[int] = []
@@ -308,6 +323,17 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
         set_aside = decide()
         mark(broken.pop())
         tried_again = decide()
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO league_week_dirty (player_id, week_start, source, marked_at)"
+                " VALUES (%s, %s, 'profile', clock_timestamp() - interval '31 minutes')",
+                (fine, W2))
+        collector = CollectorDatabase(as_role["clashlens_collector"])
+        try:
+            stalled = collector.health_metrics()["failed_processing"]
+        finally:
+            collector.close()
 
     assert set_aside == ({broken_tag: True}, 1)
     assert tried_again == ({}, 0)
+    assert stalled == 1
