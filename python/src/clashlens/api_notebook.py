@@ -10,9 +10,11 @@ player ran one base.
 A base is Active while some player runs it today or has it picked for a
 later day. Its saved status follows the latest picks: Active while some
 player runs it from their latest pick on, and once that stops, Retired if
-it ran or back to To try if it never did. To try and Retired are otherwise
-the Clasher's own choice. A base up today shows Active whatever is saved,
-so the label changes at the Reset with nothing run then.
+it ran or back to To try if it never did. A change that puts a To try base
+on a day it ran makes it Retired, and one that takes a Retired base off its
+last day run sends it back to To try. To try and Retired are otherwise the
+Clasher's own choice. A base up today shows Active whatever is saved, so
+the label changes at the Reset with nothing run then.
 
 A base's record adds up the worker's per-day defense counts
 (army_package_defense_day_counts, migration 0106) for the days and players
@@ -264,23 +266,29 @@ class _Notebook:
             for base_id, (status, _) in self.statuses().items()
         }
 
-    def settle(self) -> None:
+    def settle(self, put_on: list[int], taken_off: list[int]) -> None:
         """Active for every base some player runs from their latest pick on;
         one no longer run that way turns Retired if it ran, or back to To try
-        if it never did."""
+        if it never did. Of the rest, a To try base ``put_on`` a day that ran
+        turns Retired, and a Retired one ``taken_off`` a day that no longer
+        ran goes back to To try."""
         picks = self.picks().values()
         running = [base for base in map(latest_base, picks) if base is not None]
         ran = [base for mine in picks for *_, base in runs(mine, self.today)]
         self.connection.execute(
             """
             UPDATE notebook_bases
-            SET status = CASE WHEN id = ANY(%s) THEN 'active'
-                              WHEN id = ANY(%s) THEN 'retired' ELSE 'to_try' END,
+            SET status = CASE WHEN id = ANY(%(running)s) THEN 'active'
+                              WHEN id = ANY(%(ran)s) THEN 'retired' ELSE 'to_try' END,
                 status_at = clock_timestamp()
-            WHERE account_id = %s AND season_id = %s
-              AND (status = 'active') <> (id = ANY(%s))
+            WHERE account_id = %(account)s AND season_id = %(season)s
+              AND ((status = 'active') <> (id = ANY(%(running)s))
+                   OR (status = 'to_try' AND id = ANY(%(put_on)s) AND id = ANY(%(ran)s))
+                   OR (status = 'retired' AND id = ANY(%(taken_off)s)
+                       AND NOT id = ANY(%(ran)s)))
             """,
-            (running, ran, self.account_id, self.season_id, running),
+            {"running": running, "ran": ran, "account": self.account_id,
+             "season": self.season_id, "put_on": put_on, "taken_off": taken_off},
         )
 
 
@@ -626,14 +634,13 @@ def save(
             if body.undo is None:
                 raise ApiError(422, "undo_required")
             _undo(notebook, body.undo, pick)
-        notebook.settle()
-        if body.action == "pick" and base_id is not None:
-            # A To try base put on a day it no longer runs from has been tried.
-            connection.execute(
-                "UPDATE notebook_bases SET status = 'retired', status_at = clock_timestamp()"
-                " WHERE id = %s AND status = 'to_try'",
-                (base_id,),
-            )
+        put_on = (
+            [base_id] if base_id is not None and (body.action == "pick" or status == "active")
+            else []
+        )
+        notebook.settle(put_on, [
+            old for _, old in touched.values() if old is not None and old not in put_on
+        ])
         if status is not None and status != "active":
             connection.execute(
                 "UPDATE notebook_bases SET status = %s, status_at = clock_timestamp()"

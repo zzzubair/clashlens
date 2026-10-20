@@ -151,6 +151,15 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 clock[0] = day(28) + timedelta(hours=7)
                 last_day = refused(action="status", base=ring, status="retired")
                 clock[0] = noon
+                # Zig, made Active on ALT from today while ALT has Ring from
+                # tomorrow, runs on Day 5 only, so it is Retired from Day 6.
+                # Fixing Day 5 back to Spiral leaves it never run: To try.
+                zig = save(action="add", name="Zig", status="to_try")["base"]
+                save(action="status", base=zig, status="active", tag=ALT, day=5)
+                clock[0] = day(6) + timedelta(hours=7)
+                zig_ran = notebook()
+                clock[0] = noon
+                unrun = save(action="pick", tag=ALT, day=5, base=spiral)
 
                 # Undo puts back a base's old name and link, but not a note
                 # saved since.
@@ -228,6 +237,9 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert after_undo["bases"] == before_retire["bases"]
     assert after_undo["players"] == before_retire["players"]
     assert last_day == (422, "runs_until_season_end")
+    assert {base["id"]: base["status"] for base in zig_ran["bases"]}[zig] == "retired"
+    assert {item["base"]: item["status"] for item in unrun["changed"]} == {
+        zig: "to_try", spiral: "active"}
 
     bases = {base["id"]: base for base in renamed_back["bases"]}
     box_page = renamed_back["base"]
@@ -237,7 +249,7 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     players = {player["tag"]: player for player in after_delete["players"]}
     assert [(run["from"], run["to"], run["base"]) for run in players[MAIN]["runs"]] == [
         (2, 3, ring), (5, 5, ring)]
-    assert {base["id"] for base in after_delete["bases"]} == {ring, spiral, hex_}
+    assert {base["id"] for base in after_delete["bases"]} == {ring, spiral, hex_, zig}
     assert put_back == kept
     for key in ("bases", "players", "base"):
         assert restored[key] == renamed_back[key]
