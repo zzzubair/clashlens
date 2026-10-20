@@ -910,7 +910,7 @@ test("season navigation clears refresh state for the same player", async ({ page
   manual = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.getByRole("region", { name: "Player refresh" });
-  await expect(refresh).toBeVisible();
+  await expect(refresh).toContainText(/Refreshing…|Updated\./);
 
   await page.getByRole("combobox", { name: "Season", exact: true }).selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);

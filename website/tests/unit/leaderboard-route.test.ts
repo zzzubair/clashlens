@@ -393,6 +393,11 @@ it.each([
 it.each([
   ["q=%232pp", "#2PP isn&#x27;t on this board.", '<a href="/players/%232PP">Open their'],
   ["q=Nova", "No players on this board match “Nova”.", "Enter a full #tag"],
+  [
+    "q=%23ZZZZZZZZ",
+    "No players on this board match “#ZZZZZZZZ”. #ZZZZZZZZ is not a Clash of Clans player tag.",
+    "Tags use only 0, 2, 8, 9",
+  ],
 ])(
   "offers a next step when a board search for %s finds nobody",
   async (q, text, next) => {

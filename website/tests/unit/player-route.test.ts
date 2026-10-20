@@ -1204,7 +1204,7 @@ describe("player day honesty", () => {
     expect(today).toContain("<span>0 from battles</span>");
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
-    expect(today).toContain('aria-label="Attack 1 not played yet"');
+    expect(today.match(/label="(Attack|Defense) \d not recorded yet"/g)).toHaveLength(16);
     expect(today).toContain('aria-hidden="true">—</span>');
     expect(today.match(/>(—|Not recorded)</g)).toEqual(Array(16).fill(">—<"));
     expect(html).toContain('id="legend-day-2026-10-03" open=""');

@@ -1336,7 +1336,7 @@ function BattleColumn({
   day: string;
   dayLabel: string;
   units: ArmyUnitNames;
-  /** Today's slots are not played yet, not missing. */
+  /** Today's empty slots are not recorded yet, not missing. */
   live?: boolean;
 }) {
   // Each army stays one tap away, so the battle's result leads the card.
@@ -1424,7 +1424,7 @@ function BattleColumn({
             </li>
           ) : (
             <li
-              aria-label={`${title.slice(0, -1)} ${index + 1} ${live ? "not played yet" : "not recorded"}`}
+              aria-label={`${title.slice(0, -1)} ${index + 1} ${live ? "not recorded yet" : "not recorded"}`}
               className="battle-slot battle-slot-empty"
               key={`empty-${index}`}
             >

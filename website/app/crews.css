@@ -526,7 +526,7 @@
 }
 
 .crew-link-button {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0.35rem 0;
   color: var(--cl-action-text);
   font: inherit;

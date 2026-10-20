@@ -1202,7 +1202,7 @@
   font-weight: 800;
 }
 .season-menu .filter-field select {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0.5rem 0.65rem;
   background-color: var(--cl-panel);
   border-width: 2px;

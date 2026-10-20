@@ -21,9 +21,10 @@ without a button or sign-in. The existing interactive collector retains the
 profile, battle log and league history; existing profile processing activates
 eligible Legend I players. Progress waits for processed evidence. Official
 not-found, temporary failure and uncertain eligibility have distinct messages.
-Known real players reuse their eligibility result on visits. Failed checks and
-tags reported as not found offer a retry with the existing 30-second minimum
-interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
+Known real players reuse their eligibility result on visits. Failed checks offer
+a retry with the existing 30-second minimum interval. A tag reported as not found
+offers a search box holding that tag instead, so a typo can be fixed rather than
+the same tag checked again. Starting a check shares Refresh's six-per-minute allowance and unchanged
 address handling. With JavaScript enabled, the page checks progress once a second
 for up to 60 seconds, then explains that the check may still be running. A result
 that arrives after that limit still replaces the waiting message. The Check
@@ -169,7 +170,9 @@ means both API responses were saved, not that the worker has processed them, so
 processing that takes longer than about 8 seconds appears only after the next
 Refresh or page load.
 
-The page says "Updated." only when the current Refresh reports complete. A
+A Refresh shows in place: while it runs, the Refresh button reads Refreshing…
+and can't be pressed, and nothing on the page moves. Only screen readers hear
+"Refreshing…" and, when the current Refresh reports complete, "Updated.". A
 started Refresh that fails, becomes unavailable or can't be checked says it
 couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
