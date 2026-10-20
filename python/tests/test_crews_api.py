@@ -32,6 +32,7 @@ ROUTES = [
     ("POST", f"/v1/account/crews/{CREW}/invites", {}),
     ("DELETE", f"/v1/account/crews/{CREW}/invites/{CREW}", None),
     ("GET", f"/v1/account/crew-invites/{CODE}", None),
+    ("GET", f"/v1/crew-invites/{CODE}", None),
     ("POST", f"/v1/account/crew-invites/{CODE}/accept", {"tags": ["#2PP"]}),
 ]
 
@@ -218,6 +219,50 @@ def test_anyone_can_view_a_crew_but_not_who_runs_it(served) -> None:
         "kind": "player-crews", "tag": "#8PY", "crews": [{"crew_id": crew_id, "name": "Owls"}],
     }
     assert crews_of("#9QQ") == {"kind": "player-crews", "tag": "#9QQ", "crews": []}
+
+
+def test_an_invite_shows_its_crew_before_sign_in(served) -> None:
+    site, client = served
+    for name, tags in (("akira", ["#2PP"]), ("bea", ["#8PY"])):
+        site.account(name)
+        for tag in tags:
+            site.link(name, tag)
+    crew_id = call(
+        client, "akira", "POST", "/v1/account/crews", {"name": "Owls", "size": 2, "tags": ["#2PP"]}
+    ).json()["crew_id"]
+    code = call(client, "akira", "POST", f"/v1/account/crews/{crew_id}/invites", {}).json()[
+        "code"
+    ]
+
+    preview = call(client, None, "GET", f"/v1/crew-invites/{code}")
+    assert preview.status_code == 200
+    body = preview.json()
+    assert (body["state"], body["crew_id"], body["name"], body["owner_display_name"]) == (
+        "ok", crew_id, "Owls", "Akira",
+    )
+    assert (body["used"], body["size"], body["in_crew"], body["accounts"]) == (1, 2, False, [])
+    assert "subject-" not in preview.text
+    # Signed in, the same address knows the clasher.
+    mine = call(client, "akira", "GET", f"/v1/crew-invites/{code}").json()
+    assert mine["in_crew"] is True and mine["crew_count"] == 1
+
+    call(client, "bea", "POST", f"/v1/account/crew-invites/{code}/accept", {"tags": ["#8PY"]})
+    assert call(client, None, "GET", f"/v1/crew-invites/{code}").json()["state"] == "full"
+
+    invite_id = call(client, "akira", "GET", f"/v1/account/crews/{crew_id}").json()["invites"][0][
+        "invite_id"
+    ]
+    call(client, "akira", "DELETE", f"/v1/account/crews/{crew_id}/invites/{invite_id}")
+    for viewer in (None, "bea"):
+        ended = call(client, viewer, "GET", f"/v1/crew-invites/{code}").json()
+        assert (ended["state"], ended["crew_id"], ended["name"]) == ("ended", crew_id, "Owls")
+        assert "owner_display_name" not in ended and ended["accounts"] == []
+
+    unknown = call(client, None, "GET", f"/v1/crew-invites/{'B' * 22}").json()
+    assert unknown == {
+        "kind": "crew-invite", "state": "invalid", "in_crew": False, "crew_count": 0, "accounts": []
+    }
+    assert call(client, None, "GET", "/v1/crew-invites/short").status_code == 422
 
 
 def test_a_crew_view_reads_the_crew_at_one_moment(served, monkeypatch) -> None:
