@@ -158,11 +158,6 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 clock[0] = noon
                 undone = save(action="undo", undo=retired["undo"])
                 after_undo = notebook()
-                # Day 28 has no tomorrow this Season, so Ring, up then,
-                # cannot stop.
-                clock[0] = day(28) + timedelta(hours=7)
-                last_day = refused(action="status", base=ring, status="retired")
-                clock[0] = noon
                 # Zig, made Active on ALT from today while ALT has Ring from
                 # tomorrow, runs on Day 5 only, so it is Retired from Day 6.
                 # Fixing Day 5 back to Spiral leaves it never run: To try.
@@ -194,6 +189,18 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 save(action="undo", undo=deleted["undo"])
                 restored = notebook(base=box)
                 put_back = stored(box)
+
+                # Monday, Day 8, an hour after the Reset, before the new
+                # week's league record is written: the week follows the one
+                # before, so both players still run Ring, a save rewrites no
+                # status and a base can be set.
+                clock[0] = day(8) + timedelta(hours=1)
+                monday = notebook()
+                codes = (ring, box, spiral, hex_, zig)
+                monday_before = [stored(code)[3] for code in codes]
+                save(action="edit", base=ring, note="Monday")
+                monday_after = [stored(code)[3] for code in codes]
+                save(action="pick", tag=MAIN, day=8, base=ring)
         finally:
             owner.close()
             api.close()
@@ -253,7 +260,6 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert undone["undo"] is None
     assert after_undo["bases"] == before_retire["bases"]
     assert after_undo["players"] == before_retire["players"]
-    assert last_day == (422, "runs_until_season_end")
     assert {base["id"]: base["status"] for base in zig_ran["bases"]}[zig] == "retired"
     assert {item["base"]: item["status"] for item in unrun["changed"]} == {
         zig: "to_try", spiral: "active"}
@@ -271,6 +277,12 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert put_back == kept
     for key in ("bases", "players", "base"):
         assert restored[key] == renamed_back[key]
+
+    players = {player["tag"]: player for player in monday["players"]}
+    assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, ring)
+    assert players[MAIN]["legend_days"][-2:] == [8, 9]
+    assert {base["id"]: base["status"] for base in monday["bases"]}[ring] == "active"
+    assert monday_after == monday_before
 
 
 def test_on_day_28_picks_stop_at_day_28(database_url: str) -> None:
@@ -303,7 +315,11 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     set on Day 6 but not on Day 8, today or tomorrow. Ring, picked on
     Saturday, Day 6, runs only to Sunday, Day 7: today it is in no run, MAIN
     has no base and Ring shows Retired, last run on Day 7. It counts only
-    Saturday's and Sunday's defenses, not Monday's."""
+    Saturday's and Sunday's defenses, not Monday's. MAIN is back in Legend I
+    from the Monday Reset of 19 October, Day 15: on Day 16 it has no base
+    until one is picked, and fixing Day 7 to Box changes Day 7 only. Day
+    28's week has no record yet, so it follows Day 15's: Box, picked then,
+    runs until the Season ends and cannot stop."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {MAIN: Climber(MAIN)})
@@ -328,6 +344,10 @@ def test_bases_are_set_and_counted_on_legend_days_only(
         story.reset(tuesday, {MAIN: (4940, SEASON)})
         noon = tuesday + timedelta(hours=7)
         story.count_armies(noon)
+        # Read in Legend I at 5,000 an hour after the Reset of Day 15.
+        player.legend_ii = False
+        story.reads(day(15) + timedelta(hours=1, minutes=10), {MAIN: 5000})
+        story.run_worker()
         unfinished = story.unfinished_jobs()
 
         owner = ApiDatabase(connection_info)
@@ -357,26 +377,41 @@ def test_bases_are_set_and_counted_on_legend_days_only(
                 clock[0] = saturday + timedelta(hours=7)
                 picked = write(action="pick", tag=MAIN, day=6, base=ring)
                 clock[0] = noon
-                dropped = call(client, "sloothy", "GET", NOTEBOOK).json()
+                seen = call(client, "sloothy", "GET", NOTEBOOK).json()
+                clock[0] = day(16) + timedelta(hours=7)
+                back = call(client, "sloothy", "GET", NOTEBOOK).json()
+                box = write(action="add", name="Box", status="to_try")[1]["base"]
+                fixed = write(action="pick", tag=MAIN, day=7, base=box)
+                fixed_seen = call(client, "sloothy", "GET", NOTEBOOK).json()
                 # Clearing a day needs no Legend day.
                 cleared = write(action="pick", tag=MAIN, day=9, base=None)
-                seen = call(client, "sloothy", "GET", NOTEBOOK).json()
+                clock[0] = day(28) + timedelta(hours=7)
+                last_pick = write(action="pick", tag=MAIN, day=28, base=box)
+                last_day = write(action="status", base=box, status="retired")
         finally:
             owner.close()
             api.close()
 
     assert unfinished == []
     assert refused == [(422, {"error": "not_legend_day"})] * 4
-    assert (picked[0], cleared[0]) == (200, 200)
+    assert (picked[0], fixed[0], cleared[0], last_pick[0]) == (200, 200, 200, 200)
+    assert last_day == (422, {"error": "runs_until_season_end"})
     main = seen["players"][0]
     assert main["legend_days"] == [1, 2, 3, 4, 5, 6, 7]
-    assert [(run["from"], run["to"]) for run in main["runs"]] == [(6, 7)]
-    assert (dropped["players"][0]["runs"], dropped["players"][0]["current"]) == (
-        main["runs"], None)
-    assert [(base["status"], base["last_ran_day"]) for base in dropped["bases"]] == [
+    assert ([(run["from"], run["to"]) for run in main["runs"]], main["current"]) == (
+        [(6, 7)], None)
+    assert [(base["status"], base["last_ran_day"]) for base in seen["bases"]] == [
         ("retired", 7)]
     # Saturday's 8 defenses of 30 (two stars each) and Sunday's 8: 16
     # defenses, none tripled, 480 trophies lost, on 2 Legend days.
     ring_record = _record(2, 16, [0, 0, 16, 0], 480)
     assert main["runs"][0]["record"] == ring_record
     assert seen["bases"][0]["record"] == ring_record
+
+    main = back["players"][0]
+    assert main["legend_days"] == [1, 2, 3, 4, 5, 6, 7, 15, 16, 17]
+    assert ([(run["from"], run["to"], run["base"]) for run in main["runs"]],
+            main["current"]) == ([(6, 7, ring)], None)
+    main = fixed_seen["players"][0]
+    assert ([(run["from"], run["to"], run["base"]) for run in main["runs"]],
+            main["current"]) == ([(6, 6, ring), (7, 7, box)], None)

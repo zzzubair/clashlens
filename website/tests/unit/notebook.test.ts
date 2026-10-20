@@ -17,6 +17,7 @@ import {
 } from "../../app/components/NotebookParts";
 import {
   baseInitials,
+  baseOnDay,
   basesNear,
   libraryView,
   matchName,
@@ -195,9 +196,14 @@ describe("run strip", () => {
     expect(sameUntil(player, 1, 16)).toBe(2);
     const cleared = { ...player, picks: [...player.picks, { day: 12, base: null }] };
     expect(sameUntil(cleared, 12, 16)).toBe(16);
-    // Out of Legend League from Day 12: Day 9's base stops at Day 11.
-    const dropped = { ...player, legendDays: player.legendDays.slice(0, 11) };
-    expect(sameUntil(dropped, 9, 16)).toBe(11);
+    // Out of Legend League on Days 12 and 13: Day 9's base stops at Day 11
+    // and is gone when they are back.
+    const gap = {
+      ...player,
+      legendDays: player.legendDays.filter((day) => day < 12 || day > 13),
+    };
+    expect(sameUntil(gap, 9, 16)).toBe(11);
+    expect(baseOnDay(gap, 14)).toBeNull();
   });
 
   it("offers the base said for a day first when fixing it", () => {
@@ -315,6 +321,31 @@ describe("Legend days only", () => {
     );
     expect(on).toContain(">Change<");
     expect(on).not.toContain(LEGEND_ONLY);
+  });
+
+  it("asks an account back in Legend League with no base to pick one", async () => {
+    // Back from Day 15: Day 7's base stopped at Day 8.
+    const back = { ...dropped, legendDays: [...DAYS.slice(0, 7), 15, 16, 17] };
+    const mid = { ...notebook, season: { ...notebook.season, today: 16, tomorrow: 17 } };
+    const row = (player: NotebookPlayer) =>
+      render(
+        createElement(AccountRow, {
+          notebook: mid,
+          player,
+          onChange: () => {},
+          onAdd: () => {},
+          onDays: () => {},
+        }),
+      );
+    const html = await row(back);
+    expect(html.match(/class="button"/g)).toHaveLength(1);
+    expect(html).toContain('class="button">Pick a base<');
+    expect(html).not.toContain(">Change<");
+    expect(html).not.toContain("Add your base");
+    // An account that never ran a base adds its first one.
+    const first = await row({ ...back, runs: [], picks: [] });
+    expect(first.match(/class="button"/g)).toHaveLength(1);
+    expect(first).toContain('class="button">Add your base<');
   });
 
   it("lists every day, newest first, with days off Legend League shut", async () => {

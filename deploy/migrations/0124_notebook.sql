@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS notebook_bases (
     name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60),
     note text NOT NULL DEFAULT '' CHECK (char_length(note) <= 1000),
     base_link text CHECK (char_length(base_link) BETWEEN 1 AND 300),
-    -- Active while any of the account's players runs it from its latest
-    -- pick on; To try or Retired otherwise.
+    -- Active while one of the account's players runs it from tomorrow, on a
+    -- Legend day. Otherwise To try or Retired as the Clasher sets it; when a
+    -- change stops it, or puts it on or takes it off a day, Retired if it
+    -- ran and To try if it never did (api_notebook.py).
     status text NOT NULL CHECK (status IN ('active', 'to_try', 'retired')),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     -- When its status last changed, for the Library's Recent order.
@@ -36,8 +38,9 @@ CREATE TABLE IF NOT EXISTS notebook_bases (
 CREATE INDEX IF NOT EXISTS notebook_bases_notebook
     ON notebook_bases (account_id, season_id);
 
--- A player's base from a Legend day on, until their next pick: so one base
--- per player per Legend day, and carrying a base forward needs no daily job.
+-- A player's base from a Legend day on, until their next pick or the first
+-- day they are out of Legend League: so one base per player per Legend day,
+-- and carrying a base forward needs no daily job.
 CREATE TABLE IF NOT EXISTS notebook_day_picks (
     account_id bigint NOT NULL REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
     player_id bigint NOT NULL REFERENCES players (id) ON DELETE CASCADE,

@@ -384,10 +384,15 @@ export function baseLine(base: NotebookBase, today: number): string {
   return `${when} · ${heldText(base.record)}`;
 }
 
-/** The base a player ran on `day`: their latest pick on or before it. */
+/** The base a player ran on `day`: their latest pick on or before it, which
+ * stops at the first day they are out of Legend League. */
 export function baseOnDay(player: NotebookPlayer, day: number): string | null {
   let base: string | null = null;
-  for (const pick of player.picks) if (pick.day <= day) base = pick.base;
+  for (let at = 1; at <= day; at += 1) {
+    const pick = player.picks.find((item) => item.day === at);
+    if (pick) base = pick.base;
+    if (!isLegendDay(player, at)) base = null;
+  }
   return base;
 }
 

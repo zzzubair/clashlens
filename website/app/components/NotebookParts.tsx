@@ -1018,6 +1018,8 @@ export function AccountRow({
   const next = player.next;
   const settable = canSet(notebook, player);
   const fixable = player.legendDays.some((day) => day <= today);
+  // Back in Legend League with no base: picking one is the next step.
+  const pickNext = settable && !run && !next?.base && player.runs.length > 0;
   return (
     <article className="nb-account">
       <div className="nb-account-head">
@@ -1054,8 +1056,12 @@ export function AccountRow({
             </button>
           ) : null}
           {settable ? (
-            <button type="button" className="button secondary" onClick={onChange}>
-              Change
+            <button
+              type="button"
+              className={pickNext ? "button" : "button secondary"}
+              onClick={onChange}
+            >
+              {pickNext ? "Pick a base" : "Change"}
             </button>
           ) : null}
           {fixable ? (

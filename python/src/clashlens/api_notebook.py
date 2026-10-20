@@ -4,10 +4,9 @@ A Clasher keeps bases in the notebook's Library, each with an ID like
 B-7K3QX9, and says which base each of their verified players ran from which
 Legend day: a day pick. A player's base on any day is their latest pick on
 or before it, so a base carries forward until the next pick, and one player
-can never run two bases on one Legend day. A run is a stretch of Legend
-days one player ran one base: it stops at a day the player is out of Legend
-League, and a pick carried past such days starts a new run when they are
-back.
+can never run two bases on one Legend day. A pick stops at the first day
+the player is out of Legend League, so a player back in it has no base
+until a new pick. A run is a stretch of Legend days one player ran one base.
 
 A base is Active while some player runs it today or has it picked for a
 later day. Its saved status follows the picks: Active while some player
@@ -20,13 +19,14 @@ no player runs from tomorrow, as after its player left Legend League, shows
 Retired or To try, so the label changes at the Reset with nothing run then.
 
 A base can be set only on a player's Legend days: days in a week the
-weekly league record (league_week) says was Legend I. A week not decided
-yet that starts tomorrow follows this week's answer. A base's record adds
-up the worker's per-day defense counts (army_package_defense_day_counts,
-migration 0106) for the Legend days and players it ran on, read live, so it
-grows as each finished Legend day is counted, about 30 minutes after the
-Reset. Held means the attacker did not get 3 stars. Nothing here runs at
-the Reset or in the worker.
+weekly league record (league_week) says was Legend I. This week and
+tomorrow's, until the record decides them, follow the week before, as Daily
+boards and tracking assume a week carries on until decided. A base's
+record adds up the worker's per-day defense counts
+(army_package_defense_day_counts, migration 0106) for the Legend days and
+players it ran on, read live, so it grows as each finished Legend day is
+counted, about 30 minutes after the Reset. Held means the attacker did not
+get 3 stars. Nothing here runs at the Reset or in the worker.
 
 Every write but Undo returns what undoes it: the picks and statuses it
 changed, a base it made, an edited base's old name and link, or a deleted
@@ -50,7 +50,7 @@ from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
 from .domain import RANKED_DAY_DURATION, ranked_day_for
-from .league_week import week_start
+from .league_week import WEEK, week_start
 
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -114,14 +114,16 @@ def runs(
 ) -> list[tuple[int, int, int]]:
     """Each stretch of ``legend`` days 1 to ``last_day`` on one base, as
     (first day, last day, base), from the day picks {day: base or None for
-    no base}. Days before the first pick, with no base or not in ``legend``
-    are in no run; a pick carries across days not in ``legend``."""
+    no base}. A pick stops at the first day not in ``legend``; days before
+    the first pick or with no base are in no run."""
     result: list[tuple[int, int, int]] = []
     base: int | None = None
     for day in range(1, last_day + 1):
         if day in picks:
             base = picks[day]
-        if base is None or day not in legend:
+        if day not in legend:
+            base = None
+        if base is None:
             continue
         if result and result[-1][2] == base and result[-1][1] == day - 1:
             result[-1] = (result[-1][0], day, base)
@@ -130,15 +132,10 @@ def runs(
     return result
 
 
-def latest_base(picks: dict[int, int | None]) -> int | None:
-    """The base a player runs from their latest pick on, or None."""
-    return picks[max(picks)] if picks else None
-
-
-def base_on(picks: dict[int, int | None], day: int) -> int | None:
-    """The base a player runs on ``day``: their latest pick on or before it."""
-    days = [picked for picked in picks if picked <= day]
-    return picks[max(days)] if days else None
+def base_on(picks: dict[int, int | None], day: int, legend: set[int]) -> int | None:
+    """The base a player runs on ``day``: the run that reaches it, if any."""
+    found = runs(picks, day, legend)
+    return found[-1][2] if found and found[-1][1] == day else None
 
 
 def _record() -> dict[str, Any]:
@@ -259,8 +256,8 @@ class _Notebook:
 
     def legend_days(self) -> dict[int, set[int]]:
         """Each player's Legend days this Season up to tomorrow: days in a
-        week the weekly league record says was Legend I. Tomorrow in a week
-        not decided yet follows this week."""
+        week the weekly league record says was Legend I. This week or
+        tomorrow's, while it has no record, follows the week before."""
         weeks: dict[tuple[int, datetime], bool] = {
             (int(player_id), start): league == "legend_i"
             for player_id, start, league in self.connection.execute(
@@ -268,7 +265,7 @@ class _Notebook:
                 SELECT player_id, week_start, league FROM player_league_weeks
                 WHERE player_id = ANY(%s) AND week_start >= %s AND week_start < %s
                 """,
-                (list(self.player_ids.values()), week_start(self.season_start),
+                (list(self.player_ids.values()), week_start(self.season_start) - WEEK,
                  self.season_end),
             ).fetchall()
         }
@@ -277,10 +274,9 @@ class _Notebook:
         for player_id in self.player_ids.values():
             result[player_id] = set()
             for day in range(1, self.tomorrow + 1):
-                start = self.day_start(day)
-                week = week_start(start)
-                if day > self.today and (player_id, week) not in weeks:
-                    week = this_week
+                week = week_start(self.day_start(day))
+                while week >= this_week and (player_id, week) not in weeks:
+                    week -= WEEK
                 if weeks.get((player_id, week), False):
                     result[player_id].add(day)
         return result
@@ -307,8 +303,8 @@ class _Notebook:
 
         def up(day: int) -> set[int]:
             return {
-                base for player_id, mine in picks.items() if day in legend[player_id]
-                if (base := base_on(mine, day)) is not None
+                base for player_id, mine in picks.items()
+                if (base := base_on(mine, day, legend[player_id])) is not None
             }
 
         ran = {
@@ -454,9 +450,7 @@ def get_notebook(
             player_runs.append(
                 {"from": first, "to": last, "base": codes[base_id], "record": record}
             )
-        current = (
-            base_on(mine, notebook.today) if notebook.today in legend[player_id] else None
-        )
+        current = base_on(mine, notebook.today, legend[player_id])
         players.append({
             "tag": tag,
             "name": name,
@@ -674,13 +668,14 @@ def save(
                 # of it for tomorrow goes when another base is up today, so
                 # that one carries on; otherwise tomorrow has no base. Day 28
                 # has no tomorrow this Season, so a base up then runs on.
+                legend = notebook.legend_days()
                 for player_id, mine in notebook.picks().items():
-                    if latest_base(mine) != base_id:
+                    if base_on(mine, notebook.tomorrow, legend[player_id]) != base_id:
                         continue
                     if notebook.tomorrow == notebook.today:
                         raise ApiError(422, "runs_until_season_end")
                     pick(player_id, notebook.tomorrow, None,
-                         drop=base_on(mine, notebook.today) != base_id)
+                         drop=base_on(mine, notebook.today, legend[player_id]) != base_id)
         elif body.action in {"edit", "delete"}:
             base_id = _base(notebook, body.base)
             saved = connection.execute(
