@@ -581,13 +581,12 @@ def read_type_rows(
             """
         )
         params += [season_id, fact_days, *filters, *_trophies("offense")]
-    totals: dict[tuple[int, int], list[int]] = {}
-    for type_id, variant_id, troops, unnamed, heroes, *counts in connection.execute(
+    rows = connection.execute(
         f"""
         SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
                     ELSE label.type_id END,
                COALESCE(label.variant_id, {OTHER_VARIANT}),
-               decode.home_troops, decode.unresolved_components, decode.heroes,
+               CASE WHEN source.exact_army_id < 0 THEN -source.exact_army_id END,
                sum(attacks), sum(one_star), sum(two_star), sum(three_star),
                sum(destruction), sum(trophies)
         FROM ({" UNION ALL ".join(parts)}) AS source (
@@ -595,15 +594,29 @@ def read_type_rows(
             three_star, destruction, trophies)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
-        LEFT JOIN battle_army_decodes AS decode ON decode.id = -source.exact_army_id
-        GROUP BY 1, 2, 3, 4, 5
+        GROUP BY 1, 2, 3
         """,
         params,
-    ).fetchall():
-        if troops is not None:
-            army = army_analytics.with_unnamed_ids({
-                "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
-            })
+    ).fetchall()
+    # An older partly read army has no distinct army: its saved decode is
+    # read once, after the totals, so the totals never join the decodes.
+    partial_ids = [row[2] for row in rows if row[2] is not None]
+    partial = {
+        decode_id: army_analytics.with_unnamed_ids({
+            "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
+        })
+        for decode_id, troops, unnamed, heroes in connection.execute(
+            """
+            SELECT id, home_troops, unresolved_components, heroes
+            FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
+            """,
+            (partial_ids,),
+        ).fetchall()
+    } if partial_ids else {}
+    totals: dict[tuple[int, int], list[int]] = {}
+    for type_id, variant_id, decode_id, *counts in rows:
+        if decode_id in partial:
+            army = partial[decode_id]
             type_id = classify(army["home_troops"])
             variant_id = variant(type_id, army["heroes"] or [])
         total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
