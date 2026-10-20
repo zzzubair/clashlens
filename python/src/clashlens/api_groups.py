@@ -221,6 +221,8 @@ def _window(
     net = 0
     counted_days = 0
     counted_attacks = 0
+    played_net = 0
+    played_days = 0
     for start in day_starts:
         row = logs.get((player_id, start))
         if row is None:
@@ -253,6 +255,9 @@ def _window(
             net += day_net
             counted_days += 1
             counted_attacks += len(offense_events)
+            if offense_events or defense_events:
+                played_net += day_net
+                played_days += 1
         attack["days"] += bool(offense_events)
         defense["days"] += bool(defense_events)
         for event in offense_events:
@@ -274,7 +279,7 @@ def _window(
         "counted_days": counted_days,
         "counted_attacks": counted_attacks,
         "net": net if counted_days else None,
-        "net_per_day": round(net / counted_days, 2) if counted_days else None,
+        "net_per_day": round(played_net / played_days, 2) if played_days else None,
         "attack": attack,
         "defense": defense,
     }

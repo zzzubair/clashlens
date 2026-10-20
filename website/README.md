@@ -132,9 +132,8 @@ saved finishes from January 2025 up to the Season that ended on 7 September
 2026, newest first, with three columns:
 Season, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
-28-day Seasons are named by their dates, Reset to Reset, such as
-13 Jul – 10 Aug 2026; one without a saved start shows only its closing Reset,
-and older calendar-month results keep their month label. Saved in-game Legend I history wins for each Season,
+28-day Seasons are named by their first and last Legend days, such as
+13 Jul – 9 Aug 2026, and older calendar-month results keep their month label. Saved in-game Legend I history wins for each Season,
 even when a trophy count or rank is missing: those cells say "Not recorded"
 instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
 in-game row and gets one linked credit line. This table needs JavaScript and

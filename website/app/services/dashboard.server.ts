@@ -18,6 +18,7 @@ import {
   DAILY_BATTLES,
   GOAL_PACE_DAYS,
   SEASON_START_TROPHIES,
+  netPerDay,
   rate,
   type CardDataMap,
   type CardReads,
@@ -762,7 +763,7 @@ async function groupWatchData(
         name: page.profile.name || tag,
         you: tag === selected,
         trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-        gain: rate(season.days, (day) => day.net),
+        gain: netPerDay(season.days),
         hitRate: rate(
           season.days,
           (day) => day.triples,

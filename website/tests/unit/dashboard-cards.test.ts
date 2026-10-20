@@ -860,10 +860,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       /background:rgb\(224 49 49\)[^>]*><button[^>]*aria-label="Day 6: \+2"/,
     );
 
-    // Recent form: Days 2–8, six of them saved, the shield day counting as 0.
+    // Recent form: Days 2–8, six of them saved; the total counts the shield
+    // day as 0, and the 230 is averaged over the 5 days with battles.
     const form = text(cards["recent-form"]!);
     expect(form).toContain("Last 7 days · Days 2–8 · 6 of 7 recorded");
-    expect(form).toContain("Trophies a day +38.3 +230 total");
+    expect(form).toContain("Trophies a day +46.0 +230 total");
     expect(form).toContain("Attack +37.8 per attack · 78% tripled");
     expect(form).toContain("Defense −32.0 per defense · 50% held");
     expect(form).toContain("Compares with the 7 days before from Day 15.");
@@ -1079,7 +1080,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cards["season-graph"]).not.toContain('aria-label="Day 6:');
     const form = text(cards["recent-form"]!);
     expect(form).toContain("Last 7 days · Days 2–8 · 5 of 7 recorded");
-    expect(form).toContain("Trophies a day +45.6 +228 total");
+    expect(form).toContain("Trophies a day +57.0 +228 total");
     // Day 6's attacks may be missing, so its slots are not counted as misses.
     const offense = text(cards["offense-consistency"]!);
     expect(offense).toContain("Last 7 days · 32 attacks");
@@ -1268,7 +1269,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const group = text(cards["group-watch"]!);
     expect(group).toContain("Whole Season · 8 days");
     expect(group).toContain("1. Tundra 5,375 +128 100% +320 −192");
-    expect(group).toContain("2. Lens Main 5,370 +39 77% +302 −256");
+    expect(group).toContain("2. Lens Main 5,370 +46 77% +302 −256");
   });
 
   it("shows one card as unavailable when only its reads fail", async () => {

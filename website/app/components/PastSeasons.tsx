@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { Await } from "react-router";
 
 import type { PastSeasonFinish } from "../lib/contracts";
-import { dateRange } from "../lib/season-end";
+import { seasonRange } from "../lib/season-end";
 
 const endFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -101,10 +101,7 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
 
 export function pastSeasonLabel(finish: PastSeasonFinish): string {
   if (finish.seasonStart !== null && finish.seasonEnd !== null) {
-    return dateRange(new Date(finish.seasonStart), new Date(finish.seasonEnd));
-  }
-  if (finish.seasonEnd !== null) {
-    return endFormatter.format(new Date(finish.seasonEnd)).replace("Sept", "Sep");
+    return seasonRange(new Date(finish.seasonStart), new Date(finish.seasonEnd));
   }
   return monthFormatter
     .format(new Date(`${finish.seasonId}-01T00:00:00Z`))

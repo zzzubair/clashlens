@@ -1,5 +1,5 @@
 import { seasonStartAt } from "../components/SeasonReread";
-import type { PlayerPage, RankedBattleEvent, RankedDaySummary } from "./contracts";
+import type { PlayerPage, RankedBattleEvent } from "./contracts";
 
 export type BattlePeriod = "7" | "14" | "season";
 const DAY_MS = 86_400_000;
@@ -53,16 +53,17 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
   );
   const side = (key: "offenseEvents" | "defenseEvents") => {
     const events = new Map<string, RankedBattleEvent>();
-    const played = new Set<RankedDaySummary>();
-    for (const saved of days.values()) {
+    let played = 0;
+    for (const [, saved] of [...days].sort(([a], [b]) => a - b)) {
+      const before = events.size;
       for (const event of saved[key]) {
         const time = Date.parse(event.battleTimestamp);
-        if (time < start || time > now) continue;
+        if (time < start || time > now || events.has(event.battleId)) continue;
         events.set(event.battleId, event);
-        played.add(saved);
       }
+      if (events.size > before) played++;
     }
-    return summarize([...events.values()], played.size);
+    return summarize([...events.values()], played);
   };
   return {
     start,

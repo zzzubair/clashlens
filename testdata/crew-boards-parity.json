@@ -1,5 +1,5 @@
 {
-  "about": "Saved Legend days for two players on Day 25 of the Season that started 2026-07-13 05:00 UTC, with hand-worked totals. The website's Season summary (battleStatistics) and the Python crew boards must both give these. 'week' is the last 7 finished days, 2026-07-30 to 2026-08-05. #2PP: the 2026-07-12 day is last Season's; a4 is saved on two days and counts once; a3 belongs to 2026-07-30 but was played before that day's Reset, so only the Season counts it; 2026-08-02 is a Legend day without battles, so per-day averages leave it out like a shielded day; 'days' counts only the days with a battle on that side; 2026-08-03 is not (not signed up yet); today's battles never count.",
+  "about": "Saved Legend days for two players on Day 25 of the Season that started 2026-07-13 05:00 UTC, with hand-worked totals. The website's Season summary (battleStatistics) and the Python crew boards must both give these. 'week' is the last 7 finished days, 2026-07-30 to 2026-08-05. #2PP: the 2026-07-12 day is last Season's; a4 is saved on three days and counts once, on the first, so the 2026-08-01 log, which holds only a4, is not a played day; a3 belongs to 2026-07-30 but was played before that day's Reset, so only the Season counts it; 2026-08-02 is a Legend day without battles, so per-day averages leave it out like a shielded day; 'days' counts only the days with a battle on that side; 2026-08-03 is not (not signed up yet); today's battles never count.",
   "now": "2026-08-06T12:00:00Z",
   "season_start": "2026-07-13T05:00:00Z",
   "season_day": 25,
@@ -39,6 +39,13 @@
           "battles": [
             {"lens": "offense", "battle_id": "a4", "battle_timestamp": "2026-07-30T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
             {"lens": "offense", "battle_id": "a5", "battle_timestamp": "2026-07-31T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 1, "destruction_percentage": 52, "trophy_change": 10}
+          ]
+        },
+        {
+          "start": "2026-08-01T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a4", "battle_timestamp": "2026-07-30T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40}
           ]
         },
         {"start": "2026-08-02T05:00:00Z", "partial_reasons": ["missing_battle_log"], "battles": []},

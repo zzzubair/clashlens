@@ -51,19 +51,24 @@ const SEASON_DATE = new Intl.DateTimeFormat("en-GB", {
 });
 
 /**
- * A Season named by its dates, Reset to Reset, such as "7 Sep – 5 Oct 2026",
- * or "29 Dec 2025 – 26 Jan 2026" across a new year. `season` is its first
+ * A Season named by its first and last Legend days, such as "7 Sep – 4 Oct 2026",
+ * or "29 Dec 2025 – 25 Jan 2026" across a new year. `season` is its first
  * Reset in Unix seconds, as Season IDs are.
  */
 export function seasonDates(season: string | number): string {
   const start = new Date(Number(season) * 1000);
   const end = new Date(start.getTime() + 28 * 86_400_000);
-  return Number.isNaN(end.getTime()) ? "Past Season" : dateRange(start, end);
+  return Number.isNaN(end.getTime()) ? "Past Season" : seasonRange(start, end);
 }
 
-/** Two dates as a range, the year on the first only when it differs. */
-export function dateRange(start: Date, end: Date): string {
+/**
+ * The Season from the Reset `start` to the Reset `end`, named by its first and
+ * last Legend days so two Seasons never share a date; the year shows on the
+ * first day only when it differs.
+ */
+export function seasonRange(start: Date, end: Date): string {
+  const last = new Date(end.getTime() - 86_400_000);
   const first =
-    start.getUTCFullYear() === end.getUTCFullYear() ? SEASON_DAY : SEASON_DATE;
-  return `${first.format(start)} – ${SEASON_DATE.format(end)}`.replaceAll("Sept", "Sep");
+    start.getUTCFullYear() === last.getUTCFullYear() ? SEASON_DAY : SEASON_DATE;
+  return `${first.format(start)} – ${SEASON_DATE.format(last)}`.replaceAll("Sept", "Sep");
 }

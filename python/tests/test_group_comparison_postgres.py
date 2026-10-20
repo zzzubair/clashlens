@@ -385,12 +385,13 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 ("partial", 10),
                 ("correcting", 40),
             ]
+            # The +20 day had no battles, so the average a day leaves it out.
             assert (
                 leader["counted_days"],
                 leader["counted_attacks"],
                 leader["net"],
                 leader["net_per_day"],
-            ) == (2, 2, 60, 30)
+            ) == (2, 2, 60, 40)
             assert leader["today"] == {
                 "net": 64,
                 "gained": 80,
@@ -428,6 +429,8 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "net": 5,
             }
             assert players["#8PY"]["counted_days"] == 2
+            # Counted days without a single battle give no average a day, not 0.
+            assert players["#8PY"]["net_per_day"] is None
             own = players["#YQ"]
             assert (own["you"], own["in_group"], own["vs_group"]) == (True, False, 85)
             # No result is not a zero result.

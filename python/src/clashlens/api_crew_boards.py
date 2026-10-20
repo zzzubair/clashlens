@@ -82,12 +82,21 @@ def _events(
 
 def _average_row(days: list[_Day], side: str, start: datetime, now: datetime) -> dict[str, Any]:
     """The side's totals, averaged over the days with a battle on that side:
-    shielded or unplayed days don't pull the average down."""
-    played = [_events([day], side, start, now) for day in days]
-    events = {event["battle_id"]: event for day in played for event in day}
+    shielded or unplayed days don't pull the average down. Each battle counts
+    once, on the first of ``days`` that holds it."""
+    events: dict[str, dict[str, Any]] = {}
+    played = 0
+    for day in days:
+        new = {
+            event["battle_id"]: event
+            for event in _events([day], side, start, now)
+            if event["battle_id"] not in events
+        }
+        events.update(new)
+        played += bool(new)
     return {
         "total": sum(abs(event["trophy_change"]) for event in events.values()),
-        "days": sum(1 for day in played if day),
+        "days": played,
         "battles": len(events),
     }
 
