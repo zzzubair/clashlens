@@ -15,7 +15,7 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
     "Checking this tag with Clash of Clans. Legend I players start tracking automatically.",
   tracking: "Now tracking in Legend I. The first results are being prepared.",
   not_found:
-    "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
+    "Player not found. Clash of Clans has no player with this tag. Check it for typos and search again.",
   not_in_legend: "This player is not in Legend I.",
   uncertain:
     "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",

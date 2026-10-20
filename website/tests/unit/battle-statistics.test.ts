@@ -148,17 +148,34 @@ describe("recorded battle period statistics", () => {
     expect(stats.daysExpected).toBe(7);
   });
 
-  it("counts nothing for zero battles but still averages over the finished day", () => {
+  it("counts nothing and gives no average for a finished day without battles", () => {
     const stats = battleStatistics(player([day(1)]), "season", NOW);
     for (const side of [stats.attack, stats.defense]) {
       expect(side).toMatchObject({
         count: 0,
         stars: [0, 0, 0, 0],
         trophies: 0,
-        perDay: 0,
+        perDay: null,
         perBattle: null,
       });
     }
+  });
+
+  it("averages per day over played days only, as the owner asked", () => {
+    // 7 finished days: 5 played for 56 each, one unplayed and one shielded,
+    // so attacks are 280 over 5 days, 56 a day, not 40. The shielded day had
+    // attacks but no defenses, so defenses average over the other 4.
+    const played = [1, 2, 3, 5, 6].map((offset) =>
+      day(
+        offset,
+        [event(`a${offset}`, 3, 100, 56, TODAY - offset * DAY)],
+        offset === 6 ? [] : [event(`d${offset}`, 1, 40, -20, TODAY - offset * DAY)],
+      ),
+    );
+    const stats = battleStatistics(player([...played, day(4), day(7)]), "7", NOW);
+    expect(stats.daysSaved).toBe(7);
+    expect(stats.attack).toMatchObject({ count: 5, trophies: 280, perDay: 56 });
+    expect(stats.defense).toMatchObject({ count: 4, trophies: 80, perDay: 20 });
   });
 
   it("starts a new Season with no finished days and keeps the last Season out", () => {
@@ -190,7 +207,7 @@ describe("recorded battle period statistics", () => {
     expect(stats.incomplete).toBe(true);
   });
 
-  it("leaves only battle-free days before sign-up out of every figure", () => {
+  it("leaves battle-free days before sign-up out of every figure", () => {
     const stats = battleStatistics(
       player([
         day(1, [event("a1", 3, 100, 320, YESTERDAY)]),
@@ -210,18 +227,23 @@ describe("recorded battle period statistics", () => {
       NOW,
     );
     expect(stats.daysSaved).toBe(6);
-    expect(stats.attack).toMatchObject({ count: 2, trophies: 360, perDay: 72 });
+    // Per day counts only the 2 days with an attack.
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 360, perDay: 180 });
   });
 
-  it("averages every finished day's battles, Uncertain days included", () => {
+  it("averages every played day's battles, Uncertain days included", () => {
     const saved = player([
       day(1, [event("a1", 3, 100, 40, YESTERDAY)]),
       { ...day(2, [event("a2", 1, 50, 10, TODAY - 2 * DAY)]), trophyChange: null },
       day(3),
     ]);
     const stats = battleStatistics(saved, "7", NOW);
-    expect(stats.attack).toMatchObject({ count: 2, trophies: 50, perBattle: 25 });
-    expect(stats.attack.perDay).toBeCloseTo(50 / 3);
+    expect(stats.attack).toMatchObject({
+      count: 2,
+      trophies: 50,
+      perBattle: 25,
+      perDay: 25,
+    });
   });
 
   it("renders one summary with dates and unavailable rates and averages", () => {
@@ -276,9 +298,9 @@ describe("recorded battle period statistics", () => {
     expect(html).toMatch(
       /Defenses<\/th><td>1<\/td><td>1<\/td><td>0<\/td><td>0<\/td><td>0</,
     );
-    // Per day divides by every finished day: day 2, with none, counts too.
-    expect(html).toMatch(/Offense per day<\/dt><dd>\+30</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-20</);
+    // Per day divides by played days only: day 2, with none, is left out.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+60</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-40</);
     expect(html).toContain("<dt>Per attack</dt><dd>+30.0</dd>");
     expect(html).toContain("<dt>Per defense</dt><dd>-40.0</dd>");
   });

@@ -86,10 +86,13 @@ def _events(
 
 
 def _average_row(days: list[_Day], side: str, start: datetime, now: datetime) -> dict[str, Any]:
-    events = _events(days, side, start, now)
+    """The side's totals, averaged over the days with a battle on that side:
+    shielded or unplayed days don't pull the average down."""
+    played = [_events([day], side, start, now) for day in days]
+    events = {event["battle_id"]: event for day in played for event in day}
     return {
-        "total": sum(abs(event["trophy_change"]) for event in events),
-        "days": len(days),
+        "total": sum(abs(event["trophy_change"]) for event in events.values()),
+        "days": sum(1 for day in played if day),
         "battles": len(events),
     }
 
@@ -195,12 +198,9 @@ def get_crew_boards(
         days = saved.get(tag, {})
         legend = [days[start] for start in window if start in days and days[start].legend]
         for side, listed in averages.items():
-            if period == "today":
-                values = _average_row(legend, side, today, now)
-                if values["battles"]:
-                    listed.append(entry(tag, **values))
-            elif legend:
-                listed.append(entry(tag, **_average_row(legend, side, window[0], now)))
+            values = _average_row(legend, side, window[0] if window else today, now)
+            if values["battles"]:
+                listed.append(entry(tag, **values))
         streak_days = [days[start] for start in streak_window if start in days]
         attacks = _events(streak_days, "offense", streak_window[0], now) if streak_days else []
         if attacks:
@@ -219,7 +219,6 @@ def get_crew_boards(
         averages["defense"], key=lambda row: (-per_day(row), -row["days"], *name_key(row))
     )
     streak_rows.sort(key=lambda row: (-row["best"], not row["going"], *name_key(row)))
-    quiet = "no_days_in_period"
     return {
         "kind": "crew-boards",
         "crew_id": crew_id,
@@ -232,13 +231,13 @@ def get_crew_boards(
             "live": board(live_rows, "not_on_live_board"),
             "top": board(top_rows, "no_reset_reading"),
             "attackers": board(
-                attackers, "no_attacks_today" if period == "today" else quiet
+                attackers, "no_attacks_today" if period == "today" else "no_attacks_in_period"
             ),
             "best_defenders": board(
-                best, "no_defenses_today" if period == "today" else quiet
+                best, "no_defenses_today" if period == "today" else "no_defenses_in_period"
             ),
             "worst_defenders": board(
-                worst, "no_defenses_today" if period == "today" else quiet
+                worst, "no_defenses_today" if period == "today" else "no_defenses_in_period"
             ),
             "streaks": board(
                 streak_rows, "no_attacks_today" if period == "today" else "no_attacks_in_period"

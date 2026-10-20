@@ -188,7 +188,7 @@ export default function AccountSetupRoute() {
     }
     if (normalizeDisplayName(values.displayName) === null) {
       errors.displayName =
-        "Display name must be 1–80 characters and must not contain control characters.";
+        "Display name must be 1–80 characters, with no line breaks or hidden characters.";
     } else if (isInappropriateName(values.displayName)) {
       errors.displayName = "Choose a different display name.";
     }

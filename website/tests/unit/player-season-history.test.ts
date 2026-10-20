@@ -114,7 +114,7 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
-const CURRENT_LINK = '<option value="">Current Season</option>';
+const CURRENT_LINK = '<option value="">This Season · 5 Oct – 2 Nov 2026</option>';
 
 // The names in the Season menu, or none when there is no menu.
 function seasonOptions(html: string) {
@@ -311,7 +311,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("averages over quiet and unproven days, but not days before sign-up", async () => {
+  it("averages over played days only, leaving out quiet days and days before sign-up", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(
       {
@@ -336,9 +336,10 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    // 1,600 attack trophies and 1,300 defense trophies over 5 Legend days, 2 quiet.
-    expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
+    // 1,600 attack trophies and 1,300 defense trophies over the 3 played
+    // days; the 3 quiet days, before sign-up or not, are left out.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+533</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-433</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
   });
 
@@ -416,7 +417,7 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Partial Season history");
   });
 
-  it("keeps Current Season when the Season list fails", async () => {
+  it("keeps the current Season when the Season list fails", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -435,14 +436,15 @@ describe("past-Season view", () => {
     ["the summary is missing", vi.fn(missing)],
     ["no summary or error came back", vi.fn().mockResolvedValue(null)],
   ])(
-    "keeps Current Season with an unavailable profile when %s",
+    "keeps the current Season with an unavailable profile when %s",
     async (_, getPlayerSeason) => {
       const html = await loadAndRender(
         { getPlayer: vi.fn(missing), getPlayerSeasons: vi.fn(failed), getPlayerSeason },
         SEASON,
       );
-      expect(html).toContain(CURRENT_LINK);
-      expect(html).toContain("Results for 5 Oct 2026 are unavailable.");
+      // Without a saved profile the page has no time to date this Season by.
+      expect(html).toContain('<option value="">This Season</option>');
+      expect(html).toContain("Results for 7 Sep – 5 Oct 2026 are unavailable.");
       expect(html).not.toContain("Saved Legend history");
     },
   );
@@ -466,11 +468,13 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(seasonOptions(recoveredHtml)).toEqual(player ? ["Current Season"] : []);
+      expect(seasonOptions(recoveredHtml)).toEqual(
+        player ? ["This Season · 5 Oct – 2 Nov 2026"] : [],
+      );
     },
   );
 
-  it("offers only Current Season on the current page when the list is empty", async () => {
+  it("offers only the current Season on the current page when the list is empty", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -479,7 +483,7 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(seasonOptions(html)).toEqual(["Current Season"]);
+    expect(seasonOptions(html)).toEqual(["This Season · 5 Oct – 2 Nov 2026"]);
   });
 
   // Day 1 of the Season starting 5 Oct, after the September Season ended.
@@ -531,13 +535,17 @@ describe("past-Season view", () => {
     expect(current).toContain("Day 1");
     for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
       expect(current).not.toContain(hidden);
-    expect(current).toMatch(/Season\s+Current Season\s+5 Oct 2026/);
+    expect(current).toMatch(
+      /Season\s+This Season · 5 Oct – 2 Nov 2026\s+7 Sep – 5 Oct 2026/,
+    );
     expect(current).not.toContain("7 Sep 2026");
 
     const past = await loadAndRender(client, SEASON);
     for (const number of [24, 25, 26, 27, 28])
       expect(past).toContain(`<summary>${number}<span class="day-mark`);
-    expect(past).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
+    expect(past).toContain(
+      `<option value="${SEASON}" selected="">7 Sep – 5 Oct 2026</option>`,
+    );
   });
 
   // A client whose player has one saved attack on the ended Season's last day.
@@ -572,7 +580,9 @@ describe("past-Season view", () => {
     expect(html).toContain(
       '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
     );
-    expect(html).toContain(`<option value="${SEASON}" selected="">5 Oct 2026</option>`);
+    expect(html).toContain(
+      `<option value="${SEASON}" selected="">7 Sep – 5 Oct 2026</option>`,
+    );
     expect(html).toContain("Battles on 4 Oct 2026");
     expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
     expect(html).toContain("/players/%239GJ?day=2026-10-04#battle-last-day-attack");

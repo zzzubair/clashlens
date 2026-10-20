@@ -123,6 +123,11 @@
 .player-page .player-actions > .notice {
   flex-basis: 100%;
 }
+.player-page .player-refresh-status p {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
 .player-page .player-actions > a {
   display: inline-flex;
   align-items: center;
@@ -947,6 +952,28 @@
   }
 }
 @media (max-width: 42rem) {
+  /* On phones today's day comes before the Season summary: the page becomes
+     one column whose order lifts today's card out of the log. */
+  .player-page:has(> .data-section .legend-day-live) {
+    display: flex;
+    flex-direction: column;
+  }
+  .player-page > .data-section:has(.legend-day-live),
+  .player-page > .data-section .legend-days:has(.legend-day-live) {
+    display: contents;
+  }
+  .player-page:has(> .data-section .legend-day-live)
+    > :is(.season-summary, .season-summary ~ *),
+  .player-page > .data-section:has(.legend-day-live) > *,
+  .player-page .legend-days:has(.legend-day-live) > * {
+    order: 1;
+  }
+  .player-page .legend-days:has(.legend-day-live) > * + * {
+    margin-top: 0.65rem;
+  }
+  .player-page .legend-days > .legend-day:has(.legend-day-live) {
+    order: 0;
+  }
   .player-page .battle-columns {
     grid-template-columns: 1fr;
   }

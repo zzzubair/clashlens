@@ -415,7 +415,9 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("Thrower 6 / 12 50.0%");
     expect(text).not.toContain("not which army is best");
     // Unreadable attacks are a row of their own, not excluded.
-    expect(text).toContain("Records included 12 Every attack, Unreadable included");
+    expect(text).toContain(
+      "Records included 12 Every attack, including ones whose army could not be read",
+    );
     expect(text).toContain("Records excluded 0");
     expect(text).toContain("Unreadable 2 / 12 16.7%");
     expect(html).toContain(
@@ -948,14 +950,14 @@ describe("army analytics attacks and season picker", () => {
     // The first season: nothing to pick but the current one.
     const first = picker(await renderArmyRoute("season=current"));
     expect(first.match(/<option/g)).toHaveLength(1);
-    expect(first).toContain(">Current Season</option>");
+    expect(first).toContain(">This Season · 10 Aug – 7 Sep 2026</option>");
 
     // A later season lists each finished season the API reports.
     getArmySeasons.mockResolvedValue([SEASON]);
     const later = picker(await renderArmyRoute("season=current"));
     expect(later.match(/<option/g)).toHaveLength(2);
-    // Named by the day it ended.
-    expect(later).toContain(`value="${SEASON}">30 Aug 2026</option>`);
+    // Named by its dates, Reset to Reset.
+    expect(later).toContain(`value="${SEASON}">2 Aug – 30 Aug 2026</option>`);
 
     // A failed list still leaves the current season to pick.
     getArmySeasons.mockRejectedValue(new Error("boom"));

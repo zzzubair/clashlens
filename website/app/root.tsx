@@ -289,7 +289,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
         <h1>{isNotFound ? "Page not found" : "The page could not be loaded"}</h1>
         <p>
           {isNotFound
-            ? "This route does not exist."
+            ? "This page doesn't exist."
             : "The website returned a safe error. Saved data is not changed by this page error."}
         </p>
         <p className="hero-actions">

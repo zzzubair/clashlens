@@ -187,11 +187,14 @@ def test_averages_match_the_player_page_on_hand_worked_days(site: Site) -> None:
                 row["tag"]: {key: row[key] for key in ("total", "days", "battles")}
                 for row in result["boards"][board]["rows"]
             } == {tag: values[side] for tag, values in expected.items()}, (period, board)
-        # 105 over 2 days beats 240 over 5; losing 10 over 2 days is the best
-        # defense and 92 over 5 the worst.
-        assert rows(result["boards"]["attackers"], "you") == [
-            ("#8PY", False), ("#2PP", True),
-        ]
+        # Over the Season 240 over 4 played days beats 105 over 2, but over
+        # the week 105 over 2 beats 130 over 3; losing 10 on 1 day is the best
+        # defense and 92 over 3 (72 over 2) the worst.
+        assert rows(result["boards"]["attackers"], "you") == (
+            [("#2PP", True), ("#8PY", False)]
+            if period == "season"
+            else [("#8PY", False), ("#2PP", True)]
+        )
         assert rows(result["boards"]["best_defenders"]) == [("#8PY",), ("#2PP",)]
         assert rows(result["boards"]["worst_defenders"]) == [("#2PP",), ("#8PY",)]
         assert missing(result["boards"]["attackers"]) == [
@@ -341,7 +344,7 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
         ("#PPP", "not_in_legend"),
     ]
     assert missing(result["boards"]["attackers"])[:2] == [
-        ("#2PP", "no_days_in_period"), ("#8PY", "no_days_in_period"),
+        ("#2PP", "no_attacks_in_period"), ("#8PY", "no_attacks_in_period"),
     ]
     assert missing(result["boards"]["top"])[:2] == [
         ("#2PP", "no_reset_reading"), ("#8PY", "no_reset_reading"),
@@ -358,14 +361,15 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
     ]
 
     # Day 2: the week so far is Day 1 alone, and last Season's days never
-    # count, so the week and the Season agree.
+    # count, so the week and the Season agree. #2PP only defended, so it has
+    # no attack average.
     day_two = day_one + DAY
     for period in ("season", "week"):
         result = boards(site, crew_id, period, day_two)
         assert result["window_days"] == [day_one.replace(hour=5).isoformat()]
-        assert rows(result["boards"]["attackers"], "total", "days") == [
-            ("#8PY", 40, 1), ("#2PP", 0, 1),
-        ]
+        assert rows(result["boards"]["attackers"], "total", "days") == [("#8PY", 40, 1)]
+        assert missing(result["boards"]["attackers"])[0] == ("#2PP", "no_attacks_in_period")
+        assert rows(result["boards"]["best_defenders"], "total", "days") == [("#2PP", 10, 1)]
         assert rows(result["boards"]["streaks"], "best", "attacks") == [("#8PY", 1, 1)]
 
 

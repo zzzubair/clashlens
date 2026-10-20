@@ -254,8 +254,8 @@ export interface CrewBoards {
 const MISSING_REASONS: Record<string, string> = {
   not_in_legend: "Not in Legend League",
   no_battles_this_season: "No Legend battles this Season",
-  no_days_in_period: "No Legend days in this period",
   no_attacks_in_period: "No attacks in this period",
+  no_defenses_in_period: "No defenses in this period",
   no_attacks_today: "No attacks yet today",
   no_defenses_today: "No defenses yet today",
   no_reset_reading: "No Reset reading yet",

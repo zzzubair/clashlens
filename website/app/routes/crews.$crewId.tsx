@@ -124,6 +124,7 @@ export default function CrewRoute() {
             {open > 0 ? (
               <CrewInvite
                 crewName={crew.name}
+                canEdit={myRole !== "member"}
                 idempotencyKey={idempotencyKey}
                 answer={answer ?? null}
               />

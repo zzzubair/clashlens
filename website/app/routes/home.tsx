@@ -21,7 +21,7 @@ import {
   OLD_UPDATE_SECONDS,
   useServerTime,
 } from "../components/Provenance";
-import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
   SearchResponse,
@@ -344,7 +344,7 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
     return (
       <section>
         <h3>No players or profiles found</h3>
-        <p>Enter a full #tag to look up anyone.</p>
+        <p>{noMatchHint(search.query)}</p>
       </section>
     );
   }

@@ -97,7 +97,7 @@ it("disables the search button and marks results busy while a search loads", asy
     leaderboard: null,
     query: "Nova",
     error: null,
-    search: { exactTag: null, users: [], results: [] },
+    search: { query: "Nova", exactTag: null, users: [], results: [] },
   };
   const idle = await renderHome(data, "?q=Nova");
   expect(idle).toContain('<button type="submit">Search</button>');
@@ -134,8 +134,20 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
     ),
   );
   expect(dropdown).toContain(
-    "No saved players or profiles found. Enter a full #tag to look up anyone.",
+    "No players or profiles found. <!-- -->Enter a full #tag to look up anyone.",
   );
+});
+
+it("says a complete #tag with letters the game never uses is not a tag", async () => {
+  const query = "#ZZZZZZZZ";
+  const html = await renderHome(
+    { leaderboard: null, query, error: null, search: { ...search, query } },
+    "?q=%23ZZZZZZZZ",
+  );
+  expect(html).toContain(
+    "<p>#ZZZZZZZZ is not a Clash of Clans player tag. Tags use only 0, 2, 8, 9 and the letters P, Y, L, Q, G, R, J, C, U and V.</p>",
+  );
+  expect(html).not.toContain("Enter a full #tag");
 });
 
 it("shows the tagline and explains a logout the server could not record", async () => {

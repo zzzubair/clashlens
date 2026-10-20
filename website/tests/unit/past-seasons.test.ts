@@ -194,7 +194,7 @@ describe("past Seasons on the player page", () => {
       '<th scope="col">Final trophies</th>',
     ]);
     // Seasons after 7 Sep 2026 are not listed.
-    expect(html).not.toContain("5 Oct 2026");
+    expect(pastSeasons).not.toContain("5 Oct 2026");
     expect(html).not.toContain("5,437");
     expect(html).toMatch(
       /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,

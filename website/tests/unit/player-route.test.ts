@@ -546,6 +546,9 @@ describe("automatic tag lookup", () => {
       expect(html).toContain('<select name="season"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
+      // A tag the game does not know gets a box to fix it, not the same check again.
+      expect(html.includes("Search for the right tag")).toBe(state === "not_found");
+      expect(html.includes("?retry=1")).toBe(state === "failed");
     },
   );
 
@@ -1204,9 +1207,11 @@ describe("player day honesty", () => {
     expect(today).toContain("<span>0 from battles</span>");
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
-    expect(today).toContain('aria-label="Attack 1 not recorded"');
-    expect(today).toContain('aria-hidden="true">Not recorded</span>');
-    expect(today.match(/>Not recorded</g)).toHaveLength(16);
+    // Today's empty slots are not played yet, not missing.
+    expect(today).toContain('aria-label="Attack 1 not played yet"');
+    expect(today).toContain('aria-hidden="true">—</span>');
+    expect(today.match(/>—</g)).toHaveLength(16);
+    expect(today).not.toContain(">Not recorded<");
     expect(html).toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };

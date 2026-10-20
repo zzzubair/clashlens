@@ -1,5 +1,5 @@
 {
-  "about": "Saved Legend days for two players on Day 25 of the Season that started 2026-07-13 05:00 UTC, with hand-worked totals. The website's Season summary (battleStatistics) and the Python crew boards must both give these. 'week' is the last 7 finished days, 2026-07-30 to 2026-08-05. #2PP: the 2026-07-12 day is last Season's; a4 is saved on two days and counts once; a3 belongs to 2026-07-30 but was played before that day's Reset, so only the Season counts it; 2026-08-02 is a Legend day without battles; 2026-08-03 is not (not signed up yet); today's battles never count.",
+  "about": "Saved Legend days for two players on Day 25 of the Season that started 2026-07-13 05:00 UTC, with hand-worked totals. The website's Season summary (battleStatistics) and the Python crew boards must both give these. 'week' is the last 7 finished days, 2026-07-30 to 2026-08-05. #2PP: the 2026-07-12 day is last Season's; a4 is saved on two days and counts once; a3 belongs to 2026-07-30 but was played before that day's Reset, so only the Season counts it; 2026-08-02 is a Legend day without battles, so per-day averages leave it out like a shielded day; 'days' counts only the days with a battle on that side; 2026-08-03 is not (not signed up yet); today's battles never count.",
   "now": "2026-08-06T12:00:00Z",
   "season_start": "2026-07-13T05:00:00Z",
   "season_day": 25,
@@ -62,8 +62,8 @@
         }
       ],
       "expected": {
-        "season": {"attack": {"total": 240, "days": 5, "battles": 7}, "defense": {"total": 92, "days": 5, "battles": 3}},
-        "week": {"attack": {"total": 130, "days": 4, "battles": 4}, "defense": {"total": 72, "days": 4, "battles": 2}}
+        "season": {"attack": {"total": 240, "days": 4, "battles": 7}, "defense": {"total": 92, "days": 3, "battles": 3}},
+        "week": {"attack": {"total": 130, "days": 3, "battles": 4}, "defense": {"total": 72, "days": 2, "battles": 2}}
       }
     },
     {
@@ -87,8 +87,8 @@
         }
       ],
       "expected": {
-        "season": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 2, "battles": 1}},
-        "week": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 2, "battles": 1}}
+        "season": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 1, "battles": 1}},
+        "week": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 1, "battles": 1}}
       }
     }
   ]
