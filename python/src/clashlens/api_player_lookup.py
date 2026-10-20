@@ -99,11 +99,13 @@ def _newest_profile(
     connection: Any, player_id: int, now: datetime | None = None
 ) -> Any:
     """The player's newest processed profile, read without accepting it."""
+    # The battle check runs on the one newest profile. Inside the profile
+    # search the planner can read every player's Season days for it instead.
     return connection.execute(
         """
         SELECT profile.current_league_season_id, profile.eligibility_reason,
                profile.eligibility_state, profile.source_contract_state,
-               profile.name, profile.profile_json->'clan'->>'name', profile.trophies,
+               profile.name, profile.clan_name, profile.trophies,
                EXISTS (SELECT 1 FROM api_player_daily_logs AS day
                        WHERE day.player_id = profile.player_id
                          AND day.ranked_day_start >= %s
@@ -114,14 +116,22 @@ def _newest_profile(
                                AND newer.ranked_day_start = day.ranked_day_start
                                AND newer.version > day.version)),
                profile.league_tier_name
-        FROM player_profile_versions AS profile
-        CROSS JOIN LATERAL (
-            SELECT max(observed_at) AS observed_at FROM player_profile_effects
-            WHERE profile_version_id = profile.id
-        ) AS effect
-        WHERE profile.player_id = %s
-        ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC, profile.id DESC
-        LIMIT 1
+        FROM (
+            SELECT profile.player_id, profile.current_league_season_id,
+                   profile.eligibility_reason, profile.eligibility_state,
+                   profile.source_contract_state, profile.name,
+                   profile.profile_json->'clan'->>'name' AS clan_name,
+                   profile.trophies, profile.league_tier_name
+            FROM player_profile_versions AS profile
+            CROSS JOIN LATERAL (
+                SELECT max(observed_at) AS observed_at FROM player_profile_effects
+                WHERE profile_version_id = profile.id
+            ) AS effect
+            WHERE profile.player_id = %s
+            ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
+                     profile.id DESC
+            LIMIT 1
+        ) AS profile
         """,
         (ranked_day_for(now or datetime.now(UTC)).season_start, player_id),
     ).fetchone()
