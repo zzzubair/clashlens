@@ -179,7 +179,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (normalizedName === null) {
       return reply(400, {
         fieldErrors: {
-          name: "Watchlist name must be 1–80 characters and must not contain control characters.",
+          name: "Watchlist name must be 1–80 characters, with no line breaks or hidden characters.",
         },
       });
     }
