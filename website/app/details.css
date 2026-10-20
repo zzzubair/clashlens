@@ -123,6 +123,14 @@
 .player-page .player-actions > .notice {
   flex-basis: 100%;
 }
+/* After "Player not found": a short search box holding the tag. */
+.player-page .tag-search-again {
+  max-width: 30rem;
+}
+.player-page .tag-search-again button {
+  flex: none;
+  min-width: max-content;
+}
 .player-page .player-refresh-status p {
   margin: 0;
   color: var(--cl-muted);
@@ -970,6 +978,10 @@
   }
   .player-page .legend-days:has(.legend-day-live) > * + * {
     margin-top: 0.65rem;
+  }
+  /* The log loses its own box here, so its heading keeps the section gap. */
+  .player-page > .data-section:has(.legend-day-live) > h2 {
+    margin-top: 1.65rem;
   }
   .player-page .legend-days > .legend-day:has(.legend-day-live) {
     order: 0;
