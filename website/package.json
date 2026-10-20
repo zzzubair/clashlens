@@ -25,7 +25,7 @@
     "@react-router/node": "8.3.0",
     "@react-router/serve": "8.3.0",
     "isbot": "5.1.32",
-    "markdown-it": "15.0.2",
+    "markdown-it": "15.0.3",
     "openid-client": "6.8.4",
     "posthog-js": "1.434.17",
     "react": "19.2.8",
