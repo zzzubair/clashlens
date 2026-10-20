@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { data, Link, redirect, useLoaderData, useNavigate } from "react-router";
+import {
+  data,
+  Link,
+  redirect,
+  useLoaderData,
+  useNavigate,
+  useOutletContext,
+} from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   BaseTile,
   recordLine,
-  SaveNotice,
   Sheet,
   StatusSheet,
   statusText,
-  useNotebookSave,
   type Saver,
 } from "../components/NotebookParts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -98,7 +103,7 @@ export default function NotebookBaseRoute() {
 }
 
 function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }) {
-  const saver = useNotebookSave(notebook);
+  const saver = useOutletContext<Saver>();
   const [open, setOpen] = useState<"status" | "edit" | null>(null);
   const detail = notebook.base;
   const lost = averageLost(base.record);
@@ -196,7 +201,6 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           onClose={() => setOpen(null)}
         />
       ) : null}
-      <SaveNotice saver={saver} />
     </>
   );
 }
@@ -214,7 +218,8 @@ function Stars({ record }: { record: BaseRecord }) {
   );
 }
 
-/** The base's note, saved as the Clasher types. */
+/** The base's note, saved as the Clasher types, when the box loses focus,
+ * and when the page closes. */
 function NoteBox({
   base,
   note,
@@ -225,17 +230,27 @@ function NoteBox({
   saver: Saver;
 }) {
   const [text, setText] = useState(note);
-  const [state, setState] = useState<"saved" | "typing" | null>(null);
+  const [saved, setSaved] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  const last = useRef(note);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  useEffect(() => {
-    if (state === "typing" && !saver.busy && last.current === text) setState("saved");
-  }, [saver.busy, state, text]);
+  // Typed but not yet sent.
+  const waiting = useRef<string | null>(null);
+  const flush = useRef(() => {});
+  flush.current = () => {
+    window.clearTimeout(timer.current);
+    const value = waiting.current;
+    if (value === null) return;
+    waiting.current = null;
+    // Called only once the save succeeded.
+    saver.save({ action: "edit", base: base.id, note: value }, () => {
+      if (waiting.current === null) setSaved(true);
+      return null;
+    });
+  };
+  useEffect(() => () => flush.current(), []);
   return (
     <div className="form-field nb-note">
       <label htmlFor="nb-note">
-        Note <span className="nb-saved">{state === "saved" ? "Saved" : ""}</span>
+        Note <span className="nb-saved">{saved ? "Saved" : ""}</span>
       </label>
       <textarea
         id="nb-note"
@@ -244,15 +259,13 @@ function NoteBox({
         rows={3}
         placeholder="Clan Castle troops, traps, anything"
         onChange={(event) => {
-          const value = event.target.value;
-          setText(value);
-          setState("typing");
+          waiting.current = event.target.value;
+          setText(event.target.value);
+          setSaved(false);
           window.clearTimeout(timer.current);
-          timer.current = window.setTimeout(() => {
-            last.current = value;
-            saver.save({ action: "edit", base: base.id, note: value });
-          }, NOTE_WAIT_MS);
+          timer.current = window.setTimeout(() => flush.current(), NOTE_WAIT_MS);
         }}
+        onBlur={() => flush.current()}
       />
     </div>
   );
@@ -341,7 +354,10 @@ function EditSheet({
               type="button"
               className="button danger-button"
               onClick={() => {
-                saver.save({ action: "delete", base: base.id });
+                saver.save({ action: "delete", base: base.id }, () => ({
+                  text: `${base.name} deleted.`,
+                  actions: [],
+                }));
                 void navigate("/notebook");
               }}
             >

@@ -14,6 +14,7 @@ const REFUSALS = new Set([
   "player_required",
   "player_not_verified",
   "base_not_found",
+  "runs_until_season_end",
 ]);
 
 /**

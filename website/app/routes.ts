@@ -1,4 +1,4 @@
-import { index, route } from "@react-router/dev/routes";
+import { index, layout, route } from "@react-router/dev/routes";
 import type { RouteConfig } from "@react-router/dev/routes";
 
 export default [
@@ -44,9 +44,11 @@ export default [
   route("account/watchlists/add/:tag", "routes/account.groups.add.tsx"),
   route("account/watchlists/:groupId", "routes/account.groups.$groupId.tsx"),
   route("account/groups/*", "routes/account.groups.redirect.ts"),
-  route("notebook", "routes/notebook.tsx"),
+  layout("routes/notebook.layout.tsx", [
+    route("notebook", "routes/notebook.tsx"),
+    route("notebook/bases/:code", "routes/notebook.base.tsx"),
+  ]),
   route("notebook/save", "routes/notebook.save.ts"),
-  route("notebook/bases/:code", "routes/notebook.base.tsx"),
   route("crews", "routes/crews.tsx"),
   route("crews/new", "routes/crews.new.tsx"),
   route("crews/:crewId", "routes/crews.$crewId.tsx"),

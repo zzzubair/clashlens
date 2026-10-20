@@ -6,7 +6,14 @@ from __future__ import annotations
 import pytest
 
 from clashlens.api import ApiError
-from clashlens.api_notebook import clean_link, latest_base, new_code, parse_code, runs
+from clashlens.api_notebook import (
+    base_on,
+    clean_link,
+    latest_base,
+    new_code,
+    parse_code,
+    runs,
+)
 
 RING, BOX, FORT = 1, 2, 3
 
@@ -32,6 +39,9 @@ def test_picking_the_same_base_again_keeps_one_run() -> None:
 def test_a_pick_from_tomorrow_is_in_no_run_yet() -> None:
     assert runs({1: RING, 17: BOX}, 16) == [(1, 16, RING)]
     assert latest_base({1: RING, 17: BOX}) == BOX
+    # Ring is still the base today.
+    assert base_on({1: RING, 17: BOX}, 16) == RING
+    assert base_on({3: RING}, 2) is None
 
 
 def test_base_ids_are_short_and_never_use_letters_that_look_like_digits() -> None:

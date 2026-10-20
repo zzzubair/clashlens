@@ -5,6 +5,7 @@ worker turns them into Legend days and counts each finished day's defenses,
 and a Clasher then says through the private API which base each player ran
 on which day. The notebook reads every number from those counts: held,
 star counts and trophies lost, for each run, each base and each player.
+Statuses follow the days each base is up, and Undo puts back each change.
 See docs/testing.md.
 """
 
@@ -25,6 +26,7 @@ from clashlens.api_db import ApiDatabase
 
 MAIN, ALT = "#2PP", "#8PP"
 NOTEBOOK = "/v1/account/notebook"
+LINK = "https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAAKgAAAAJ"
 
 
 def test_both_notebook_routes_are_missing_while_the_dashboard_is_off() -> None:
@@ -74,10 +76,18 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
             _account(owner, "google", "subject-other", "other")
             _verify(owner, me, MAIN)
             _verify(owner, me, ALT)
+            clock = [noon]
             app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
-                             clock=lambda: NOW_SECONDS, now=lambda: noon,
+                             clock=lambda: NOW_SECONDS, now=lambda: clock[0],
                              dashboard_enabled=True)
             with TestClient(app) as client:
+
+                def stored(code: str) -> tuple:
+                    with owner.pool.connection() as connection:
+                        return connection.execute(
+                            "SELECT name, note, base_link, status, created_at, status_at,"
+                            " updated_at FROM notebook_bases WHERE code = %s", (code,),
+                        ).fetchone()
 
                 def save(**change) -> dict:
                     response = call(client, "sloothy", "POST", NOTEBOOK, change)
@@ -120,15 +130,43 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 ]
                 theirs = call(client, "other", "GET", f"{NOTEBOOK}?base={ring}")
 
-                # Retiring Ring stops it on both players from tomorrow; ALT
-                # carries Spiral on. Undo puts every pick and status back.
+                # Hex, picked on MAIN from tomorrow, is swapped back to Ring
+                # before it ever ran.
+                hexed = save(action="add", name="Hex", status="active", tag=MAIN, day=6)
+                swapped = save(action="status", base=ring, status="active", tag=MAIN, day=6)
+                before_retire = notebook()
+                # Retiring Ring stops it on both players from tomorrow: MAIN
+                # has no base then, and ALT carries Spiral on. Ring is still
+                # up today, so it shows Active until the Reset. Undo puts
+                # every pick and status back.
                 retired = save(action="status", base=ring, status="retired")
                 after_retire = notebook()
+                clock[0] = day(6) + timedelta(hours=7)
+                next_day = notebook()
+                clock[0] = noon
                 undone = save(action="undo", undo=retired["undo"])
                 after_undo = notebook()
-                # Deleting Box leaves Day 4 on MAIN with no base.
-                save(action="delete", base=box)
+                # Day 28 has no tomorrow this Season, so Ring, up then,
+                # cannot stop.
+                clock[0] = day(28) + timedelta(hours=7)
+                last_day = refused(action="status", base=ring, status="retired")
+                clock[0] = noon
+
+                # Undo puts back a base's old name and link, but not a note
+                # saved since.
+                save(action="edit", base=box, link=LINK)
+                edited = save(action="edit", base=box, name="Box v2", link="")
+                save(action="edit", base=box, note="Spring traps by the TH")
+                save(action="undo", undo=edited["undo"])
+                renamed_back = notebook(base=box)
+                kept = stored(box)
+                # Deleting Box leaves Day 4 on MAIN with no base; Undo puts
+                # Box back as it was, on its days.
+                deleted = save(action="delete", base=box)
                 after_delete = notebook()
+                save(action="undo", undo=deleted["undo"])
+                restored = notebook(base=box)
+                put_back = stored(box)
         finally:
             owner.close()
             api.close()
@@ -145,9 +183,9 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     bases = {base["id"]: base for base in seen["bases"]}
     assert bases[ring]["name"] == "Ring"
     assert {code: base["status"] for code, base in bases.items()} == {
-        # Ring is MAIN's base from today and ALT's from tomorrow; Box and
-        # Spiral ran and were swapped out.
-        ring: "active", box: "retired", spiral: "retired",
+        # Ring is MAIN's base today and ALT's from tomorrow; Spiral is ALT's
+        # today; Box ran on Day 4 and was swapped out.
+        ring: "active", box: "retired", spiral: "active",
     }
     # MAIN's Days 2 and 3 on Ring: 7 defenses, 3 triples; Box's Day 4: 3
     # triples; ALT's Days 3 and 4 on Spiral: 4 defenses, none tripled.
@@ -161,7 +199,7 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert players[MAIN]["runs"][1]["record"] == _record(1, 3, [0, 0, 0, 3], 120)
     assert [(run["from"], run["to"], run["base"]) for run in players[ALT]["runs"]] == [
         (3, 5, spiral)]
-    assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, ring)
+    assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, spiral)
     assert players[ALT]["next"] == {"day": 6, "base": ring}
     # Fixing Day 4 to Box made Box Retired at once: it ran, and MAIN runs
     # Ring again from today.
@@ -174,18 +212,35 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     ]
     assert (theirs.status_code, theirs.json()) == (404, {"error": "base_not_found"})
 
+    hex_ = hexed["base"]
+    assert swapped["changed"] == [{"base": hex_, "status": "to_try"}]
+    assert retired["changed"] == []
     statuses = {base["id"]: base["status"] for base in after_retire["bases"]}
-    assert statuses == {ring: "retired", box: "retired", spiral: "active"}
+    assert statuses == {ring: "active", box: "retired", spiral: "active", hex_: "to_try"}
     players = {player["tag"]: player for player in after_retire["players"]}
+    assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, spiral)
+    assert (players[MAIN]["next"], players[ALT]["next"]) == ({"day": 6, "base": None}, None)
+    statuses = {base["id"]: base["status"] for base in next_day["bases"]}
+    assert statuses == {ring: "retired", box: "retired", spiral: "active", hex_: "to_try"}
+    players = {player["tag"]: player for player in next_day["players"]}
     assert (players[MAIN]["current"], players[ALT]["current"]) == (None, spiral)
     assert undone["undo"] is None
-    assert after_undo["bases"] == seen["bases"]
-    assert after_undo["players"] == seen["players"]
+    assert after_undo["bases"] == before_retire["bases"]
+    assert after_undo["players"] == before_retire["players"]
+    assert last_day == (422, "runs_until_season_end")
+
+    bases = {base["id"]: base for base in renamed_back["bases"]}
+    box_page = renamed_back["base"]
+    assert (bases[box]["name"], box_page["note"], box_page["link"]) == (
+        "Box", "Spring traps by the TH", LINK)
 
     players = {player["tag"]: player for player in after_delete["players"]}
     assert [(run["from"], run["to"], run["base"]) for run in players[MAIN]["runs"]] == [
         (2, 3, ring), (5, 5, ring)]
-    assert {base["id"] for base in after_delete["bases"]} == {ring, spiral}
+    assert {base["id"] for base in after_delete["bases"]} == {ring, spiral, hex_}
+    assert put_back == kept
+    for key in ("bases", "players", "base"):
+        assert restored[key] == renamed_back[key]
 
 
 def test_on_day_28_picks_stop_at_day_28(database_url: str) -> None:

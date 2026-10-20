@@ -318,8 +318,9 @@ an All, Active, To try or Retired filter with counts, and four sorts. A base's
 page at `/notebook/bases/<base ID>` shows how it held (defenses not 3-starred)
 over the counted days it ran, its stars and each account's share, its note
 (saved as you type), its link, and Edit to rename or delete. Every change saves
-at once through `/notebook/save` and offers Undo. Records come from the worker's
-defense counts, so a day counts about 30 minutes after its Reset.
+at once through `/notebook/save` and offers Undo, except the note. Records come
+from the worker's defense counts, so a day counts about 30 minutes after its
+Reset.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the

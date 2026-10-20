@@ -37,7 +37,7 @@ export interface NotebookPlayer {
   name: string | null;
   league: string | null;
   runs: NotebookRun[];
-  /** The base the player runs from their latest pick on. */
+  /** The base the player runs today. */
   current: string | null;
   /** A base picked from tomorrow. */
   next: { day: number; base: string | null } | null;
@@ -53,7 +53,6 @@ export interface NotebookBase {
   lastRanDay: number | null;
   /** The later of when it last ran and when it was added or its status set. */
   recent: string;
-  hasLink: boolean;
   record: BaseRecord;
 }
 
@@ -158,7 +157,7 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
 function parseBase(value: unknown): NotebookBase | null {
   if (!isRecord(value) || !isCode(value.id) || typeof value.name !== "string")
     return null;
-  const { status, added_day: added, last_ran_day: last, recent, has_link: link } = value;
+  const { status, added_day: added, last_ran_day: last, recent } = value;
   const record = parseRecord(value.record);
   if (
     !record ||
@@ -166,8 +165,7 @@ function parseBase(value: unknown): NotebookBase | null {
     !isDay(added) ||
     !(last === null || isDay(last)) ||
     typeof recent !== "string" ||
-    !Number.isFinite(Date.parse(recent)) ||
-    typeof link !== "boolean"
+    !Number.isFinite(Date.parse(recent))
   )
     return null;
   return {
@@ -177,7 +175,6 @@ function parseBase(value: unknown): NotebookBase | null {
     addedDay: added,
     lastRanDay: last,
     recent,
-    hasLink: link,
     record,
   };
 }
@@ -425,13 +422,21 @@ export function basesNear(player: NotebookPlayer, day: number): string[] {
   return [...new Set([...(said ? [said] : []), ...near])].slice(0, 4);
 }
 
+/** The last day, up to `today`, that a player keeps the base (or no base)
+ * they have on `day`. */
+export function sameUntil(player: NotebookPlayer, day: number, today: number): number {
+  const base = baseOnDay(player, day);
+  let last = day;
+  while (last < today && baseOnDay(player, last + 1) === base) last += 1;
+  return last;
+}
+
 /** "Days 9–16", or "Day 9" for one day. */
 export function daysText(from: number, to: number): string {
   return from === to ? `Day ${from}` : `Days ${from}–${to}`;
 }
 
-/** The run a player's day falls in after a change, read from the notebook
- * the page shows next. */
+/** The run a player's day falls in. */
 export function runOn(player: NotebookPlayer, day: number): NotebookRun | null {
   return player.runs.find((run) => run.from <= day && day <= run.to) ?? null;
 }

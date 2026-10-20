@@ -7,9 +7,12 @@ or before it, so a base carries forward until the next pick, and one player
 can never run two bases on one Legend day. A run is a stretch of days one
 player ran one base.
 
-A base is Active while it is some player's base from that player's latest
-pick on; when a change stops it everywhere it turns Retired. To try and
-Retired are otherwise the Clasher's own choice.
+A base is Active while some player runs it today or has it picked for a
+later day. Its saved status follows the latest picks: Active while some
+player runs it from their latest pick on, and once that stops, Retired if
+it ran or back to To try if it never did. To try and Retired are otherwise
+the Clasher's own choice. A base up today shows Active whatever is saved,
+so the label changes at the Reset with nothing run then.
 
 A base's record adds up the worker's per-day defense counts
 (army_package_defense_day_counts, migration 0106) for the days and players
@@ -17,8 +20,9 @@ it ran on, read live, so it grows as each finished Legend day is counted,
 about 30 minutes after the Reset. Held means the attacker did not get 3
 stars. Nothing here runs at the Reset or in the worker.
 
-Every write returns what undoes it: the picks and statuses it changed, and
-for a new base the base itself.
+Every write but Undo returns what undoes it: the picks and statuses it
+changed, a base it made, an edited base's old name and link, or a deleted
+base to put back.
 """
 
 from __future__ import annotations
@@ -119,6 +123,12 @@ def latest_base(picks: dict[int, int | None]) -> int | None:
     return picks[max(picks)] if picks else None
 
 
+def base_on(picks: dict[int, int | None], day: int) -> int | None:
+    """The base a player runs on ``day``: their latest pick on or before it."""
+    days = [picked for picked in picks if picked <= day]
+    return picks[max(days)] if days else None
+
+
 def _record() -> dict[str, Any]:
     return {"days": 0, "defenses": 0, "held": 0, "stars": [0, 0, 0, 0],
             "trophies_lost": 0}
@@ -172,16 +182,16 @@ class _Notebook:
     def bases(self) -> dict[int, dict[str, Any]]:
         return {
             int(row[0]): {
-                "code": _text(row[1]), "name": _text(row[2]), "status": _text(row[3]),
-                "link": None if row[4] is None else _text(row[4]),
-                "note": _text(row[5]), "created_at": row[6], "status_at": row[7],
+                "code": _text(row[1]), "name": _text(row[2]),
+                "link": None if row[3] is None else _text(row[3]),
+                "note": _text(row[4]), "created_at": row[5], "status_at": row[6],
             }
             for row in self.connection.execute(
                 """
-                SELECT id, code, name, status, base_link, note, created_at, status_at
+                SELECT id, code, name, base_link, note, created_at, status_at
                 FROM notebook_bases
                 WHERE account_id = %s AND season_id = %s
-                ORDER BY id
+                ORDER BY created_at, id
                 """,
                 (self.account_id, self.season_id),
             ).fetchall()
@@ -245,21 +255,32 @@ class _Notebook:
             ).fetchall()
         }
 
+    def shown(self) -> dict[int, str]:
+        """Each base's status as the Clasher sees it: Active while some
+        player runs it today, otherwise as saved."""
+        today = {base_on(mine, self.today) for mine in self.picks().values()}
+        return {
+            base_id: "active" if base_id in today else status
+            for base_id, (status, _) in self.statuses().items()
+        }
+
     def settle(self) -> None:
         """Active for every base some player runs from their latest pick on;
-        a base no longer run anywhere turns Retired."""
-        running = {
-            base for base in map(latest_base, self.picks().values()) if base is not None
-        }
+        one no longer run that way turns Retired if it ran, or back to To try
+        if it never did."""
+        picks = self.picks().values()
+        running = [base for base in map(latest_base, picks) if base is not None]
+        ran = [base for mine in picks for *_, base in runs(mine, self.today)]
         self.connection.execute(
             """
             UPDATE notebook_bases
-            SET status = CASE WHEN id = ANY(%s) THEN 'active' ELSE 'retired' END,
+            SET status = CASE WHEN id = ANY(%s) THEN 'active'
+                              WHEN id = ANY(%s) THEN 'retired' ELSE 'to_try' END,
                 status_at = clock_timestamp()
             WHERE account_id = %s AND season_id = %s
               AND (status = 'active') <> (id = ANY(%s))
             """,
-            (list(running), self.account_id, self.season_id, list(running)),
+            (running, ran, self.account_id, self.season_id, running),
         )
 
 
@@ -288,6 +309,33 @@ def _base(notebook: _Notebook, code: str | None) -> int:
     return int(row[0])
 
 
+def _moment(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise ApiError(422, "invalid_request") from None
+
+
+def _edit(
+    connection: Any, base_id: int, name: str | None, link: str | None, note: str | None
+) -> None:
+    """Rename a base, change its base link ("" removes it) or its note; None
+    leaves that as it is."""
+    connection.execute(
+        """
+        UPDATE notebook_bases SET
+            name = COALESCE(%s, name),
+            base_link = CASE WHEN %s THEN %s ELSE base_link END,
+            note = COALESCE(%s, note),
+            updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (None if name is None else clean_name(name), link is not None,
+         None if link is None else clean_link(link),
+         None if note is None else clean_note(note), base_id),
+    )
+
+
 def _pick_day(notebook: _Notebook, day: int | None, *, past: bool) -> int:
     """A Legend day a pick may start on: today or tomorrow, or with ``past``
     any day of the Season up to tomorrow."""
@@ -310,6 +358,7 @@ def get_notebook(
         bases = notebook.bases()
         picks = notebook.picks()
         counted, counts = notebook.counted()
+        shown = notebook.shown()
         detail = _base(notebook, base) if base is not None else None
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
@@ -332,7 +381,7 @@ def get_notebook(
             player_runs.append(
                 {"from": first, "to": last, "base": codes[base_id], "record": record}
             )
-        current = latest_base(mine)
+        current = base_on(mine, notebook.today)
         players.append({
             "tag": tag,
             "name": name,
@@ -366,7 +415,7 @@ def get_notebook(
             {
                 "id": base["code"],
                 "name": base["name"],
-                "status": base["status"],
+                "status": shown[base_id],
                 "added_day": notebook.day_number(base["created_at"]),
                 "last_ran_day": last_ran.get(base_id),
                 # The Library's Recent order: the later of when it last ran and
@@ -376,7 +425,6 @@ def get_notebook(
                     *([notebook.day_start(last_ran[base_id]) + RANKED_DAY_DURATION
                        - timedelta(seconds=1)] if base_id in last_ran else []),
                 ]).isoformat(),
-                "has_link": base["link"] is not None,
                 "record": records[base_id],
             }
             for base_id, base in bases.items()
@@ -411,11 +459,31 @@ class UndoStatus(StrictBody):
     status_at: str = Field(max_length=40)
 
 
+class UndoEdit(StrictBody):
+    base: str = Field(max_length=12)
+    name: str = Field(max_length=200)
+    # "": no base link.
+    link: str = Field(max_length=400)
+
+
+class UndoBase(UndoEdit):
+    season: str = Field(max_length=12)
+    note: str = Field(max_length=2 * MAX_NOTE)
+    status: Status
+    created_at: str = Field(max_length=40)
+    status_at: str = Field(max_length=40)
+    updated_at: str = Field(max_length=40)
+
+
 class Undo(StrictBody):
     picks: list[UndoPick] = Field(default_factory=list, max_length=200)
     statuses: list[UndoStatus] = Field(default_factory=list, max_length=2000)
     # A base the change made, deleted on undo.
     delete: str | None = Field(default=None, max_length=12)
+    # A base's name and link before an edit.
+    edit: UndoEdit | None = None
+    # A base the change deleted, put back before its picks.
+    restore: UndoBase | None = None
 
 
 class NotebookWrite(StrictBody):
@@ -443,6 +511,7 @@ def save(
         )
         notebook = _Notebook(connection, account_id, now)
         before = notebook.statuses()
+        seen_before = notebook.shown()
         touched: dict[tuple[int, int], tuple[bool, int | None]] = {}
 
         def pick(player_id: int, day: int, base_id: int | None, *, drop: bool = False) -> None:
@@ -475,6 +544,8 @@ def save(
             )
 
         made: str | None = None
+        edited: dict[str, str] | None = None
+        gone: dict[str, str] | None = None
         base_id: int | None = None
         status: str | None = None
         if body.action == "add":
@@ -514,36 +585,43 @@ def save(
             if body.status == "active":
                 pick(_player(notebook, body.tag),
                      _pick_day(notebook, body.day, past=False), base_id)
-            elif notebook.tomorrow > notebook.today:
+            else:
                 # Stop it on every player running it, from tomorrow: a pick
-                # of it made for tomorrow goes, so the base before carries on.
+                # of it for tomorrow goes when another base is up today, so
+                # that one carries on; otherwise tomorrow has no base. Day 28
+                # has no tomorrow this Season, so a base up then runs on.
                 for player_id, mine in notebook.picks().items():
-                    if latest_base(mine) == base_id:
-                        pick(player_id, notebook.tomorrow, None,
-                             drop=max(mine) == notebook.tomorrow)
-        elif body.action == "edit":
+                    if latest_base(mine) != base_id:
+                        continue
+                    if notebook.tomorrow == notebook.today:
+                        raise ApiError(422, "runs_until_season_end")
+                    pick(player_id, notebook.tomorrow, None,
+                         drop=base_on(mine, notebook.today) != base_id)
+        elif body.action in {"edit", "delete"}:
             base_id = _base(notebook, body.base)
-            changes = {
-                "name": None if body.name is None else clean_name(body.name),
-                "base_link": None if body.link is None else clean_link(body.link),
-                "note": None if body.note is None else clean_note(body.note),
+            saved = connection.execute(
+                "SELECT code, name, note, base_link, status, created_at, status_at,"
+                " updated_at FROM notebook_bases WHERE id = %s", (base_id,),
+            ).fetchone()
+            # The base as Undo puts it back.
+            kept = {
+                "base": _text(saved[0]), "season": notebook.season_id,
+                "name": _text(saved[1]), "note": _text(saved[2]),
+                "link": "" if saved[3] is None else _text(saved[3]),
+                "status": _text(saved[4]), "created_at": saved[5].isoformat(),
+                "status_at": saved[6].isoformat(), "updated_at": saved[7].isoformat(),
             }
-            connection.execute(
-                """
-                UPDATE notebook_bases SET
-                    name = COALESCE(%s, name),
-                    base_link = CASE WHEN %s THEN %s ELSE base_link END,
-                    note = COALESCE(%s, note),
-                    updated_at = clock_timestamp()
-                WHERE id = %s
-                """,
-                (changes["name"], body.link is not None, changes["base_link"],
-                 changes["note"], base_id),
-            )
-        elif body.action == "delete":
-            base_id = _base(notebook, body.base)
-            # Its days keep their picks, with no base.
-            connection.execute("DELETE FROM notebook_bases WHERE id = %s", (base_id,))
+            if body.action == "edit":
+                edited = {key: kept[key] for key in ("base", "name", "link")}
+                _edit(connection, base_id, body.name, body.link, body.note)
+            else:
+                gone = kept
+                # Its days keep their picks, with no base, until Undo.
+                for player_id, mine in notebook.picks().items():
+                    for day, picked in mine.items():
+                        if picked == base_id:
+                            touched[(player_id, day)] = (True, base_id)
+                connection.execute("DELETE FROM notebook_bases WHERE id = %s", (base_id,))
         else:
             if body.undo is None:
                 raise ApiError(422, "undo_required")
@@ -563,6 +641,7 @@ def save(
                 (status, base_id, status),
             )
         after = notebook.statuses()
+        seen_after = notebook.shown()
         codes = {
             int(row[0]): _text(row[1])
             for row in connection.execute(
@@ -570,18 +649,19 @@ def save(
                 " AND season_id = %s", (account_id, notebook.season_id),
             ).fetchall()
         }
+    if gone is not None and base_id is not None:
+        codes[base_id] = gone["base"]
     tags = {player_id: tag for tag, player_id in notebook.player_ids.items()}
     changed = [
-        {"base": codes[key], "status": after[key][0]}
-        for key in sorted(after) if key in before and before[key][0] != after[key][0]
+        {"base": codes[key], "status": seen_after[key]}
+        for key in sorted(seen_after)
+        if key in seen_before and seen_before[key] != seen_after[key]
     ]
-    undo = {
+    undo = None if body.action == "undo" else {
         "picks": [
             {"tag": tags[player_id], "day": day,
-             "base": None if old is None else codes.get(old), "absent": not existed}
+             "base": None if old is None else codes[old], "absent": not existed}
             for (player_id, day), (existed, old) in sorted(touched.items())
-            # A pick of a base deleted since cannot come back.
-            if old is None or old in codes
         ],
         "statuses": [
             {"base": codes[key], "status": before[key][0],
@@ -589,18 +669,41 @@ def save(
             for key in sorted(before) if key in after and before[key] != after[key]
         ],
         "delete": made,
+        "edit": edited,
+        "restore": gone,
     }
     return {
         "kind": "notebook-saved",
         "base": made or (codes.get(base_id) if base_id is not None else None),
         "changed": changed,
-        "undo": None if body.action in {"delete", "undo", "edit"} else undo,
+        "undo": undo,
     }
 
 
 def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
-    """Put back the picks and statuses a change replaced, and delete the base
-    it made. Every base and player named must still be this account's."""
+    """Put back the base a change deleted, then the picks, statuses, name and
+    link it replaced, and delete the base it made. Every base and player
+    named must still be this account's."""
+    if undo.restore is not None:
+        base = undo.restore
+        # Its days are this Season's, so it only comes back in this notebook.
+        if base.season != notebook.season_id:
+            raise ApiError(422, "invalid_request")
+        row = notebook.connection.execute(
+            """
+            INSERT INTO notebook_bases (code, account_id, season_id, name, note,
+                                        base_link, status, created_at, status_at,
+                                        updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (code) DO NOTHING RETURNING id
+            """,
+            (parse_code(base.base), notebook.account_id, notebook.season_id,
+             clean_name(base.name), clean_note(base.note), clean_link(base.link),
+             base.status, _moment(base.created_at), _moment(base.status_at),
+             _moment(base.updated_at)),
+        ).fetchone()
+        if row is None:
+            raise ApiError(422, "invalid_request")
     for item in undo.picks:
         player_id = _player(notebook, item.tag)
         day = _pick_day(notebook, item.day, past=True)
@@ -613,14 +716,13 @@ def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
             "DELETE FROM notebook_bases WHERE id = %s", (_base(notebook, undo.delete),)
         )
     for item in undo.statuses:
-        try:
-            status_at = datetime.fromisoformat(item.status_at)
-        except ValueError:
-            raise ApiError(422, "invalid_request") from None
         notebook.connection.execute(
             "UPDATE notebook_bases SET status = %s, status_at = %s WHERE id = %s",
-            (item.status, status_at, _base(notebook, item.base)),
+            (item.status, _moment(item.status_at), _base(notebook, item.base)),
         )
+    if undo.edit is not None:
+        _edit(notebook.connection, _base(notebook, undo.edit.base),
+              undo.edit.name, undo.edit.link, None)
 
 
 def register_notebook_routes(

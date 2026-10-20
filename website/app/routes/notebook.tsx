@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { data, Link, redirect, useLoaderData } from "react-router";
+import { data, Link, redirect, useLoaderData, useOutletContext } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
@@ -9,9 +9,8 @@ import {
   Library,
   NewBaseSheet,
   recordLine,
-  SaveNotice,
-  useNotebookSave,
   type NewBasePreset,
+  type Saver,
 } from "../components/NotebookParts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { seasonLabel, type Notebook } from "../lib/notebook";
@@ -75,7 +74,7 @@ export default function NotebookRoute() {
 }
 
 function NotebookPage({ notebook }: { notebook: Notebook }) {
-  const saver = useNotebookSave(notebook);
+  const saver = useOutletContext<Saver>();
   const [open, setOpen] = useState<Open | null>(null);
   const close = () => setOpen(null);
   const { season } = notebook;
@@ -151,7 +150,6 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
           onClose={close}
         />
       ) : null}
-      <SaveNotice saver={saver} />
     </>
   );
 }

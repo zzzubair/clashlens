@@ -7,6 +7,7 @@ import {
   matchName,
   parseChange,
   parseNotebook,
+  sameUntil,
   stripBlocks,
   type NotebookBase,
   type NotebookPlayer,
@@ -50,7 +51,6 @@ function apiNotebook() {
         added_day: 9,
         last_ran_day: 16,
         recent: "2026-10-20T06:00:00Z",
-        has_link: true,
         record: RECORD,
       },
     ],
@@ -72,7 +72,6 @@ function base(
     addedDay: 1,
     lastRanDay: null,
     recent,
-    hasLink: false,
     record: { days: 1, defenses, held, stars: [0, 0, 0, 0], trophiesLost: 0 },
   };
 }
@@ -82,11 +81,7 @@ describe("notebook contract", () => {
     const notebook = parseNotebook(apiNotebook());
     expect(notebook?.season.today).toBe(16);
     expect(notebook?.players[0]?.runs[0]?.record.trophiesLost).toBe(180);
-    expect(notebook?.bases[0]).toMatchObject({
-      id: "B-7K3QX9",
-      hasLink: true,
-      addedDay: 9,
-    });
+    expect(notebook?.bases[0]).toMatchObject({ id: "B-7K3QX9", addedDay: 9 });
   });
 
   it("refuses a notebook with a malformed base ID or day", () => {
@@ -174,6 +169,14 @@ describe("run strip", () => {
       { from: 9, to: 16, base: "B-000002", kind: "now" },
       { from: 17, to: 28, base: null, kind: "next" },
     ]);
+  });
+
+  it("says how long a fixed day's base, or no base, lasts", () => {
+    expect(sameUntil(player, 5, 16)).toBe(8);
+    expect(sameUntil(player, 9, 16)).toBe(16);
+    expect(sameUntil(player, 1, 16)).toBe(2);
+    const cleared = { ...player, picks: [...player.picks, { day: 12, base: null }] };
+    expect(sameUntil(cleared, 12, 16)).toBe(16);
   });
 
   it("offers the base said for a day first when fixing it", () => {

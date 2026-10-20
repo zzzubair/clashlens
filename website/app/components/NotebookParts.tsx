@@ -19,6 +19,7 @@ import {
   matchName,
   playerName,
   runOn,
+  sameUntil,
   SORT_LABEL,
   STATUS_LABEL,
   stripBlocks,
@@ -46,6 +47,7 @@ const ERRORS: Record<string, string> = {
   player_required: "Pick which account.",
   player_not_verified: "That account is no longer linked to you.",
   base_not_found: "That base was deleted. Refresh the page.",
+  runs_until_season_end: "It runs until the Season ends.",
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
@@ -58,13 +60,14 @@ export interface Toast {
 type Describe = (saved: NotebookSaved, notebook: Notebook) => Toast | null;
 
 /** Saves through /notebook/save, then words the result in a toast with Undo
- * once the page has read the notebook again. */
-export function useNotebookSave(notebook: Notebook) {
+ * once the page has read the notebook again. `notebook` is the page's, or
+ * null on a page without one, such as a base just deleted. */
+export function useNotebookSave(notebook: Notebook | null) {
   const fetcher = useFetcher<{ saved?: NotebookSaved; error?: string }>({
     key: "notebook",
   });
   const latest = useRef(notebook);
-  latest.current = notebook;
+  if (notebook) latest.current = notebook;
   const describe = useRef<Describe | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +84,7 @@ export function useNotebookSave(notebook: Notebook) {
     const saved = fetcher.data.saved;
     if (!saved) return;
     setError(null);
-    const shown = describe.current?.(saved, latest.current) ?? null;
+    const shown = (latest.current && describe.current?.(saved, latest.current)) ?? null;
     setToast(
       shown && saved.undo
         ? {
@@ -277,12 +280,16 @@ export function dayOptions(notebook: Notebook): Array<[number, string]> {
     : [[today, `Day ${today} · today`]];
 }
 
-/** Who runs a base now, as "Active · Main". */
+/** Who runs a base, as "Active · Main, Alt from Day 6". */
 export function statusText(base: NotebookBase, notebook: Notebook): string {
   if (base.status !== "active") return STATUS_LABEL[base.status];
-  const on = notebook.players
-    .filter((player) => player.current === base.id)
-    .map(playerName);
+  const on = notebook.players.flatMap((player) =>
+    player.current === base.id
+      ? [playerName(player)]
+      : player.next?.base === base.id
+        ? [`${playerName(player)} from Day ${player.next.day}`]
+        : [],
+  );
   return on.length ? `Active · ${on.join(", ")}` : "Active";
 }
 
@@ -586,10 +593,10 @@ export function FixDaySheet({
     const before = baseOnDay(player, day + 1);
     saver.save({ action: "pick", tag: player.tag, day, base }, (saved, next) => {
       const now = next.players.find((item) => item.tag === player.tag);
-      const run = now ? runOn(now, day) : null;
+      const to = now ? sameUntil(now, day, next.season.today) : day;
       const name = nameOf(next, base);
       const only =
-        run && run.to > day
+        to > day && before !== base
           ? [
               {
                 label: `Only Day ${day}`,
@@ -608,9 +615,7 @@ export function FixDaySheet({
           : [];
       return {
         text: [
-          base
-            ? `${name} on ${who}, ${daysText(day, run?.to ?? day)}.`
-            : `No base on ${who}, Day ${day}.`,
+          `${base ? name : "No base"} on ${who}, ${daysText(day, to)}.`,
           statusNews(saved, next, base ?? undefined),
         ].join(" "),
         actions: only,
@@ -705,7 +710,10 @@ export function NewBaseSheet({
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
   const [status, setStatus] = useState<"to_try" | "active">(preset.status);
-  const [tag, setTag] = useState(preset.tag ?? notebook.players[0]?.tag ?? "");
+  // The account where they started, or the only one; otherwise they choose.
+  const [tag, setTag] = useState(
+    preset.tag ?? (notebook.players.length === 1 ? notebook.players[0]!.tag : ""),
+  );
   const options = dayOptions(notebook);
   const [day, setDay] = useState(preset.day ?? options[options.length - 1]![0]);
   const canRun = notebook.players.length > 0;
@@ -800,7 +808,11 @@ export function NewBaseSheet({
           </fieldset>
         ) : null}
         <p className="nb-hint">Gets its base ID on Save.</p>
-        <button type="submit" className="button" disabled={!name.trim()}>
+        <button
+          type="submit"
+          className="button"
+          disabled={!name.trim() || (status === "active" && canRun && !tag)}
+        >
           Save
         </button>
       </form>
@@ -823,6 +835,10 @@ export function StatusSheet({
   const options = dayOptions(notebook);
   const [day, setDay] = useState(options[options.length - 1]![0]);
   const [choosing, setChoosing] = useState(false);
+  const { today, tomorrow } = notebook.season;
+  const upToday = notebook.players.some((player) => player.current === base.id);
+  const running =
+    upToday || notebook.players.some((player) => player.next?.base === base.id);
 
   function set(status: BaseStatus, player?: NotebookPlayer) {
     const who = player ? playerName(player) : "";
@@ -837,7 +853,7 @@ export function StatusSheet({
         text: [
           status === "active"
             ? `${base.name} is Active on ${who} from Day ${day}.`
-            : `${base.name} is ${STATUS_LABEL[status]}.`,
+            : `${base.name} is ${STATUS_LABEL[status]}${upToday ? ` from Day ${tomorrow}` : ""}.`,
           statusNews(saved, next, base.id),
         ].join(" "),
         actions: [],
@@ -864,12 +880,19 @@ export function StatusSheet({
       />
       {notebook.players.length > 0 ? (
         <div className="nb-from">
-          <span>From</span>
-          <Choice label="From" value={day} onChange={setDay} options={options} />
+          <span>Active from</span>
+          <Choice label="Active from" value={day} onChange={setDay} options={options} />
         </div>
       ) : (
         <p className="nb-hint">Link a player to run a base.</p>
       )}
+      {running ? (
+        <p className="nb-hint">
+          {tomorrow > today
+            ? `To try or Retired stops it from Day ${tomorrow} · tomorrow.`
+            : "It runs until the Season ends."}
+        </p>
+      ) : null}
       {choosing ? (
         <>
           <p className="nb-ask">Active on which account?</p>
@@ -1016,7 +1039,7 @@ export function AccountRow({
             ) : null}
           </p>
         </div>
-        {!player.runs.length && !player.current ? (
+        {!player.runs.length && !player.next?.base ? (
           <button type="button" className="button nb-small" onClick={onAdd}>
             Add your base
           </button>
