@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   data,
   Form,
@@ -412,26 +412,74 @@ function SortHeading({
   );
 }
 
+// A type with variants opens on a tap anywhere on its row; its variant rows
+// follow it, each with its share of the type.
 const ArmyResultRow = memo(function ArmyResultRow({
   row,
   isHistorical,
   trophies,
+  open = false,
+  onToggle,
+  typeLabel,
 }: {
   row: ArmyRow;
   isHistorical: boolean;
   trophies: boolean;
+  open?: boolean;
+  onToggle?: (key: string) => void;
+  typeLabel?: string;
 }) {
+  const variants = row.variants?.length ? row.variants : null;
   return (
-    <tr role="row">
+    <tr
+      role="row"
+      className={
+        variants ? "analytics-type-row" : typeLabel ? "analytics-variant-row" : undefined
+      }
+      data-open={variants ? open : undefined}
+      onClick={variants ? () => onToggle?.(row.key) : undefined}
+    >
       <th scope="row" role="rowheader">
-        {row.label}
+        {variants ? (
+          <button
+            type="button"
+            className="analytics-type-toggle"
+            aria-expanded={open}
+            title={`${open ? "Hide" : "Show"} ${row.label} variants`}
+          >
+            <span className="analytics-type-chevron" aria-hidden="true" />
+            <span>
+              {row.label}
+              <small>
+                {variants.length} {variants.length === 1 ? "variant" : "variants"}
+              </small>
+            </span>
+          </button>
+        ) : (
+          row.label
+        )}
+        {row.usuallyWith?.length ? (
+          <small className="analytics-usually-with">
+            Usually with {row.usuallyWith.join(", ")}
+          </small>
+        ) : null}
       </th>
       {isHistorical ? <td role="cell">{row.quantity?.toLocaleString()}</td> : null}
       <td role="cell" data-column="usage-count">
         {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
       </td>
       <td role="cell" data-column="usage-rate">
-        {formatRate(row.usageRate)}
+        {typeLabel ? (
+          <>
+            <strong className="analytics-star-rate">{formatRate(row.usageRate)}</strong>
+            <span className="analytics-star-count">of {typeLabel}</span>
+            <span className="analytics-share-bar" aria-hidden="true">
+              <span style={{ width: formatRate(row.usageRate) }} />
+            </span>
+          </>
+        ) : (
+          formatRate(row.usageRate)
+        )}
       </td>
       {[1, 2, 3].map((stars) => {
         const count =
@@ -541,6 +589,16 @@ export default function ArmyAnalyticsRoute() {
   const partialArmies = analytics?.armyStates.partial ?? 0;
   const location = useLocation();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
+  const [openTypes, setOpenTypes] = useState<ReadonlySet<string>>(new Set());
+  const toggleType = useCallback(
+    (key: string) =>
+      setOpenTypes((open) => {
+        const next = new Set(open);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      }),
+    [],
+  );
   const [defaultVisit, setDefaultVisit] = useState(location.key);
   // The top-bar link opens the defaults again, sorted by Usage.
   if (!location.search && defaultVisit !== location.key) {
@@ -839,6 +897,12 @@ export default function ArmyAnalyticsRoute() {
               some. Under it is what a miss won on average.
             </p>
           ) : null}
+          {armyTypes && analytics.rows.some((row) => row.variants?.length) ? (
+            <p className="section-note analytics-coverage-note">
+              Tap an army to open its variants: the same army split by its heroes’
+              equipment, each with its share of that army.
+            </p>
+          ) : null}
           <div
             className="table-wrap analytics-table-wrap"
             tabIndex={0}
@@ -871,14 +935,32 @@ export default function ArmyAnalyticsRoute() {
                     </td>
                   </tr>
                 ) : null}
-                {rows.map((row) => (
+                {rows.flatMap((row) => [
                   <ArmyResultRow
                     key={row.key}
                     row={row}
                     isHistorical={isHistorical}
                     trophies={armyTypes}
-                  />
-                ))}
+                    open={openTypes.has(row.key)}
+                    onToggle={toggleType}
+                  />,
+                  ...(row.variants && openTypes.has(row.key)
+                    ? sortedRows(row.variants, tableSort)
+                        // A type's Other stays last.
+                        .sort(
+                          (a, b) => Number(a.variantId === 0) - Number(b.variantId === 0),
+                        )
+                        .map((variant) => (
+                          <ArmyResultRow
+                            key={variant.key}
+                            row={variant}
+                            isHistorical={isHistorical}
+                            trophies={armyTypes}
+                            typeLabel={row.label}
+                          />
+                        ))
+                    : []),
+                ])}
               </tbody>
             </table>
           </div>

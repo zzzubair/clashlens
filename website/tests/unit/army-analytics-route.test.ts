@@ -471,6 +471,26 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("75.0% 3 battles 35.5 misses 22.0 2.75");
     expect(text).toContain("a 3-star wins 40 and a miss still wins some");
 
+    // A type with variants shows, closed, that it opens and how many it has.
+    getArmyAnalytics.mockResolvedValue({
+      ...view("army-types", "usage-rate"),
+      rows: [
+        {
+          ...row("Hydra", 3, 35.5, 22),
+          variants: rows.map((variant, index) => ({
+            ...variant,
+            key: `army-variant:4:${index}`,
+            variantId: index,
+          })),
+        },
+      ],
+    });
+    const closed = await renderArmyRoute("season=current");
+    expect(closed).toContain('aria-expanded="false"');
+    expect(renderedText(closed)).toContain("Hydra 2 variants 4 / 8");
+    expect(renderedText(closed)).toContain("Tap an army to open its variants");
+    expect(closed).not.toContain("analytics-variant-row");
+
     getArmyAnalytics.mockResolvedValue({
       ...view("army-types", "usage-rate"),
       rows: [{ ...row("Dragons", 4, 40, null) }],
