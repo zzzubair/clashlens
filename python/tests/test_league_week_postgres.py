@@ -337,3 +337,96 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
     assert set_aside == ({broken_tag: True}, 1)
     assert tried_again == ({}, 0)
     assert stalled == 1
+
+
+BUSY = [f"#{first}QQ" for first in "289PYLGRJC"]
+LOOKED_UP = "#UQQ"
+
+
+def test_players_whose_lock_is_busy_hold_up_no_one_else(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Ten players read in Legend II twice on Monday leave Legend I that
+    week, and deciding so locks their week, which a day calculation of each
+    is holding, as a Reset's board freezing holds the Reset's lock. A player
+    looked up after them, with a Legend battle and a Legend I profile, must
+    be decided and tracked within seconds all the same. Until 20 October
+    2026 the ten were tried first in every batch, a quarter second each, so
+    the looked-up player waited as long as the lock was held. Once it is
+    free the ten are decided too."""
+    sunday, monday = day(7), day(8)
+    monkeypatch.setattr(league_week, "_busy", {}, raising=False)
+    # The twice-daily re-check follows the real clock; it is not under test.
+    monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *BUSY, LOOKED_UP)
+        for tag in BUSY:
+            story.players[tag].battles = attacks(sunday, 40) + defenses(sunday, 40)
+        story.reads(sunday + timedelta(hours=2), dict.fromkeys(BUSY, 5000))
+        for tag in BUSY:
+            story.players[tag].dropped = True
+        story.reads(monday + timedelta(minutes=20), dict.fromkeys(BUSY, 4960))
+        story.run_worker()
+        story.decides = False
+        story.reads(monday + timedelta(hours=9), dict.fromkeys(BUSY, 4960))
+        story.players[LOOKED_UP].battles = attacks(monday + timedelta(hours=3), 40)
+        story.reads(monday + timedelta(hours=10), {LOOKED_UP: 5040})
+        story.run_worker()
+
+        def waiting() -> set[str]:
+            with psycopg.connect(connection_info) as connection:
+                return {text(tag) for (tag,) in connection.execute(
+                    "SELECT DISTINCT player.normalized_tag FROM league_week_dirty AS mark"
+                    " JOIN players AS player ON player.id = mark.player_id"
+                    " WHERE player.normalized_tag = ANY(%s)", ([*BUSY, LOOKED_UP],)).fetchall()}
+
+        def weeks() -> dict[str, tuple[str, bool]]:
+            with psycopg.connect(connection_info) as connection:
+                return {text(tag): (text(league), active) for tag, league, active in
+                        connection.execute(
+                            "SELECT player.normalized_tag, week.league, player.active"
+                            " FROM player_league_weeks AS week"
+                            " JOIN players AS player ON player.id = week.player_id"
+                            " WHERE week.week_start = %s AND player.normalized_tag = ANY(%s)",
+                            (W2, [*BUSY, LOOKED_UP])).fetchall()}
+
+        before, marked = weeks(), waiting()
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(make_conninfo(
+            connection_info, options=f"{options} -c role=clashlens_python_worker"))
+        maintenance = worker.TimedMaintenance(database, StageMetrics())
+        try:
+            with psycopg.connect(connection_info) as day_calculation:
+                day_calculation.execute(
+                    "SELECT 1 FROM player_league_weeks AS week JOIN players AS player"
+                    " ON player.id = week.player_id"
+                    " WHERE player.normalized_tag = ANY(%s) AND week.week_start = %s"
+                    " FOR KEY SHARE OF week", (BUSY, W2))
+                started = time.monotonic()
+                maintenance.run_due()
+                looked_up_after = None
+                while time.monotonic() < started + 15:
+                    if LOOKED_UP not in waiting():
+                        looked_up_after = time.monotonic() - started
+                        break
+                    time.sleep(0.1)
+                held, during = waiting(), weeks()
+                day_calculation.rollback()
+            for _ in range(300):
+                if not waiting():
+                    break
+                time.sleep(0.1)
+            after, left = weeks(), waiting()
+        finally:
+            maintenance.close()
+            database.close()
+
+    assert before == dict.fromkeys(BUSY, ("legend_i", True))
+    assert marked == {*BUSY, LOOKED_UP}
+    assert looked_up_after is not None and looked_up_after < 10
+    assert held == set(BUSY)
+    assert during == {**before, LOOKED_UP: ("legend_i", True)}
+    # Below Legend I only by answers naming Season 0, so still tracked.
+    assert after == {**dict.fromkeys(BUSY, ("below_legend_i", True)),
+                     LOOKED_UP: ("legend_i", True)}
+    assert left == set()

@@ -548,10 +548,14 @@ def save_season(
 TICK_SECONDS = 2.0
 IDLE_SECONDS = 2.0
 BATCH = 200
+# A player whose lock was busy is skipped for BUSY_SECONDS, then tried after
+# the rest of the batch, so they hold up no one else.
+BUSY_SECONDS = 10.0
 RETRY_SECONDS = 60
 REPORT_SECONDS = 60
 _retry_at = float("-inf")
 _report_at = float("-inf")
+_busy: dict[int, float] = {}
 _tally: dict[str, float] = {"decided": 0, "changed": 0, "marks": 0, "skipped": 0, "seconds": 0.0}
 
 
@@ -611,11 +615,18 @@ def _decide_batch(database: Any, deadline: float) -> bool:
 
     Each player is decided on their own, so one cannot stop the rest. A
     player whose lock is busy, as a Reset's board's while it freezes, keeps
-    their marks for the next batch. One whose decision fails any other way
-    is set aside: their marks stay, marked failed, until new evidence marks
-    them again, and the failed-work alert counts them (collector_metrics)."""
+    their marks, is left out of the batches for ``BUSY_SECONDS``, then is
+    tried after the rest. In a test on 20 October 2026, ten such players at
+    the head of the queue were tried first in every batch, so a player
+    looked up after them waited as long as the lock was held. One whose
+    decision fails any other way is set aside: their marks stay, marked
+    failed, until new evidence marks them again, and the failed-work alert
+    counts them (collector_metrics)."""
     now = _now()
     oldest = ranked_day_for(now).season_start - SEASON_DURATION
+    clock = monotonic()
+    for player in [player for player, due in _busy.items() if due < clock - BUSY_SECONDS]:
+        del _busy[player]
     with database.pool.connection() as connection, connection.transaction():
         if not connection.execute(
             "SELECT pg_try_advisory_xact_lock(hashtextextended('league-week-decider', 0))"
@@ -627,20 +638,23 @@ def _decide_batch(database: Any, deadline: float) -> bool:
         marked = connection.execute(
             """
             SELECT DISTINCT player_id, week_start FROM (
-                SELECT player_id, week_start FROM league_week_dirty WHERE failed_at IS NULL
+                SELECT player_id, week_start FROM league_week_dirty
+                WHERE failed_at IS NULL AND player_id <> ALL(%s)
                 ORDER BY id LIMIT %s
             ) AS mark
             """,
-            (BATCH,),
+            ([player for player, due in _busy.items() if due > clock], BATCH),
         ).fetchall()
         for player_id, season_start in sorted(
-            {(int(player), ranked_day_for(week).season_start) for player, week in marked}
+            {(int(player), ranked_day_for(week).season_start) for player, week in marked},
+            key=lambda pair: (pair[0] in _busy, pair),
         ):
             try:
                 with connection.transaction():
                     _decide_player(database, connection, player_id, season_start, now, oldest)
+                _busy.pop(player_id, None)
             except (errors.LockNotAvailable, errors.TransactionRollback, errors.QueryCanceled):
-                pass
+                _busy[player_id] = monotonic() + BUSY_SECONDS
             except Exception as error:  # noqa: BLE001 - set aside, the rest proceed
                 connection.execute(
                     """

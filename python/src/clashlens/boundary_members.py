@@ -319,9 +319,10 @@ def leave(database: Database, connection: Any, player_id: int, days: list[dateti
     correction, whose replacement takes the members again. The caller holds
     the player's week rows. The Reset's lock is taken as a day result takes
     it (``boundary.lock_boundary_members``), shared while many members wait,
-    so this never waits behind them; a Reset busy past ``RESET_LOCK_WAIT``,
-    as while its board freezes, raises LockNotAvailable, and the decider
-    decides the batch again a minute later (``league_week.decide_due``)."""
+    so this never waits behind them; a Reset busy past ``RESET_LOCK_WAIT``
+    (``TAIL_LOCK_WAIT`` while the last members wait), as while its board
+    freezes, raises LockNotAvailable, and the decider tries the player again
+    after the rest, ``league_week.BUSY_SECONDS`` later."""
     from .boundary import _try_enqueue_boundary_artifacts, lock_boundary_members
 
     # The Reset's newest generation, and the player's member row in it.
