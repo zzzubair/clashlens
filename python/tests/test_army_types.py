@@ -165,3 +165,11 @@ def test_usually_with_counts_an_exact_15_point_lead() -> None:
     assert [(row["label"], row["usually_with"]) for row in hydra["variants"]] == [
         ("Revenge Hydra", ["Ice Block"]), ("Other Hydra", []),
     ]
+
+
+def test_usually_with_tags_tied_on_attacks_come_in_name_order() -> None:
+    # Rage and Freeze on all 3 of a variant's attacks, Rage read first.
+    rows = [(HYDRA, 6, 3, 0, 0, 0, 0, 0), (HYDRA, OTHER_VARIANT, 7, 0, 0, 0, 0, 0)]
+    spells = {(HYDRA, 6): {"spell:2": 3, "spell:5": 3}}
+    [hydra] = type_result_rows(rows, 10, spells)
+    assert hydra["variants"][0]["usually_with"] == ["Freeze", "Rage"]

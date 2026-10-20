@@ -856,7 +856,9 @@ def type_result_rows(
                 "variant_id": variant_id,
                 "usually_with": [
                     unit_label(spell).removesuffix(" Spell")
-                    for spell, count in sorted(carried.items(), key=lambda item: -item[1])
+                    for spell, count in sorted(
+                        carried.items(), key=lambda item: (-item[1], unit_label(item[0]))
+                    )
                     if count * 100 >= TAG_SHARE * attacks
                     and (count * counts[0] - in_type[spell] * attacks) * 100
                     >= TAG_LEAD * attacks * counts[0]
