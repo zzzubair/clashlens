@@ -575,6 +575,14 @@ async function cutoffsData(
   };
 }
 
+/** Trophies a day on each side, over only the days with a battle on that side. */
+function sideAverages(days: SeasonDay[]) {
+  return {
+    offense: rate(days, (day) => (day.attacks ? day.offense : null)),
+    defense: rate(days, (day) => (day.defenses ? day.defense : null)),
+  };
+}
+
 /** Today's totals, or the Season's averages a day, for one rival. */
 function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
   if (page === null) return { hitRate: null, offense: null, defense: null };
@@ -596,8 +604,7 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
       (day) => day.triples,
       (day) => day.attacks,
     ),
-    offense: rate(days, (day) => day.offense),
-    defense: rate(days, (day) => day.defense),
+    ...sideAverages(days),
   };
 }
 
@@ -685,20 +692,16 @@ async function rivalsData(
 }
 
 function comparedRow(player: ComparedPlayer, name: string | null): GroupRow {
-  // The battle totals cover every saved day, not only the days whose result
-  // counts, so a day's averages divide by the saved days.
-  const days = player.days.filter(
-    (day) => day.state !== "missing" && day.state !== "retired",
-  ).length;
+  const { attack, defense } = player;
   return {
     tag: player.tag,
     name: name ?? player.name ?? player.tag,
     you: player.you,
     trophies: player.trophies,
     gain: player.netPerDay,
-    hitRate: player.attack.count ? player.attack.threeStars / player.attack.count : null,
-    offense: days ? player.attack.trophies / days : null,
-    defense: days ? -player.defense.trophies / days : null,
+    hitRate: attack.count ? attack.threeStars / attack.count : null,
+    offense: attack.days ? attack.trophies / attack.days : null,
+    defense: defense.days ? -defense.trophies / defense.days : null,
   };
 }
 
@@ -765,8 +768,7 @@ async function groupWatchData(
           (day) => day.triples,
           (day) => day.attacks,
         ),
-        offense: rate(season.days, (day) => day.offense),
-        defense: rate(season.days, (day) => day.defense),
+        ...sideAverages(season.days),
       },
     ];
   });

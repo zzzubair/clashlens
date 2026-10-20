@@ -109,16 +109,16 @@ The current Season's box counts only finished Legend days, never the day in
 progress; its one short line gives the dates and finished days saved. The box's
 Season menu, in the same bold style as the Analytics filters, lists the current
 Season and each past Season with Clash Lens days and opens the chosen one. Counts,
-stars, hit rate and averages all use every recorded battle of those days,
-leaving out only days without battles that saved profiles prove were before
-the player signed up. Offense per day is trophies gained from attacks divided by the saved
-finished Legend days, battles or not, and defense per day is trophies lost on defense the same
-way; per attack and per defense divide by those days' recorded battles.
+stars, hit rate and averages all use every recorded battle of those days.
+Offense per day is trophies gained from attacks divided by the days with at
+least one recorded attack, and defense per day is trophies lost on defense
+divided by the days with at least one recorded defense, so shielded or unplayed
+days don't pull them down; per attack and per defense divide by the recorded battles.
 Automatic Reset losses are not part of defense averages. Empty samples show
 Unavailable for rates and averages. Partial history and conflicting reports
 are flagged; retained past-Season totals cannot fill missing battle details. A
-past Season's box uses its saved summary, with per-day averages over every
-recorded Legend day, and when coverage is partial it says how many of the 28 days are
+past Season's box uses its saved summary, with per-day averages over the
+recorded days with a battle on that side, and when coverage is partial it says how many of the 28 days are
 recorded. A Season known only from in-game history shows just the rank, which
 reads Not published yet until the game publishes it, and trophies.
 
@@ -129,10 +129,11 @@ are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 The separate Older history table, closed until the visitor opens it, shows
 saved finishes from January 2025 up to the Season that ended on 7 September
 2026, newest first, with three columns:
-Season ended, Global rank and Final trophies. Later Seasons are not listed.
+Season, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
-28-day Seasons are dated by their closing Reset; older calendar-month results
-keep their month label. Saved in-game Legend I history wins for each Season,
+28-day Seasons are named by their dates, Reset to Reset, such as
+13 Jul – 10 Aug 2026; one without a saved start shows only its closing Reset,
+and older calendar-month results keep their month label. Saved in-game Legend I history wins for each Season,
 even when a trophy count or rank is missing: those cells say "Not recorded"
 instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
 in-game row and gets one linked credit line. This table needs JavaScript and

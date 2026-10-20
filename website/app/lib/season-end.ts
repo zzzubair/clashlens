@@ -58,7 +58,11 @@ const SEASON_DATE = new Intl.DateTimeFormat("en-GB", {
 export function seasonDates(season: string | number): string {
   const start = new Date(Number(season) * 1000);
   const end = new Date(start.getTime() + 28 * 86_400_000);
-  if (Number.isNaN(end.getTime())) return "Past Season";
+  return Number.isNaN(end.getTime()) ? "Past Season" : dateRange(start, end);
+}
+
+/** Two dates as a range, the year on the first only when it differs. */
+export function dateRange(start: Date, end: Date): string {
   const first =
     start.getUTCFullYear() === end.getUTCFullYear() ? SEASON_DAY : SEASON_DATE;
   return `${first.format(start)} – ${SEASON_DATE.format(end)}`.replaceAll("Sept", "Sep");

@@ -418,6 +418,8 @@ function leaderboard(query: URLSearchParams) {
 /** The 7 finished days the group comparison covers. */
 const COMPARED_DAYS = Array.from({ length: 7 }, (_, index) => iso(dayStart(2 + index)));
 
+const ATTACKS = { count: 56, stars: 150, destruction: 5000, three_stars: 28 };
+
 /** One player in GET /v1/account/groups/{id}/comparison, as Python sends it. */
 function compared(
   tag: string,
@@ -447,13 +449,14 @@ function compared(
     net: netPerDay * 7,
     net_per_day: netPerDay,
     vs_group: null,
-    attack: { count: 56, stars: 150, destruction: 5000, three_stars: 28, trophies: 1960 },
+    attack: { ...ATTACKS, trophies: 1960, days: 7 },
     defense: {
       count: 56,
       stars: 140,
       destruction: 5000,
       trophies: 1680,
       star_counts: { "0": 0, "1": 0, "2": 0, "3": 0 },
+      days: 7,
     },
     ...changes,
   };
@@ -473,6 +476,7 @@ function comparison() {
       compared(MAIN, "Lens Main", 38, { you: true, in_group: false }),
       compared(AVA, "Ava", 52, { trophies: 5510 }),
       // Battles of a partial day count in the totals but not in its counted days.
+      // Bo attacked on 5 of the 7 days.
       compared(BO, "Bo", 12, {
         day_results: COMPARED_DAYS.map((start, index) =>
           index === 6
@@ -481,6 +485,7 @@ function comparison() {
         ),
         counted_days: 6,
         net: 72,
+        attack: { ...ATTACKS, count: 10, three_stars: 5, trophies: 280, days: 5 },
       }),
       // Another linked account outside the group, and a member who left Legend I.
       compared(ALT, "Lens Alt", 90, { you: true, in_group: false }),
@@ -926,8 +931,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(group).toContain("Last 7 days");
     expect(group).toContain("1. Ava 5,510 +52 50% +280 −240");
     expect(group).toContain("2. Lens Main 5,300 +38");
-    // Bo's battle totals include a partial day, so they divide by all 7 saved days.
-    expect(group).toContain("3. Bo 5,300 +12 50% +280 −240");
+    // Bo's 280 attack trophies over the 5 days with attacks are 56 a day, not 40.
+    expect(group).toContain("3. Bo 5,300 +12 50% +56 −240");
     expect(group).not.toContain("Lens Alt");
     expect(group).not.toContain("Cy");
     expect(cards["group-watch"]).toContain(`href="/account/groups/${CLAN_MATES}"`);
@@ -985,13 +990,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(data.cards["rivals-watch"]?.season?.rows.map((row) => row.rank)).toEqual([
       315, 316, 317, 318, 319, 320, 321,
     ]);
-    // Season averages a day for you: 37 of 48 attacks tripled over 7 saved days.
+    // Season averages a day for you: 37 of 48 attacks tripled, and trophies
+    // over the 6 days with battles, leaving out Day 3's shield day.
     expect(data.cards["rivals-watch"]?.season?.rows[3]).toMatchObject({
       tag: MAIN,
       you: true,
       hitRate: 37 / 48,
-      offense: 1810 / 7,
-      defense: -1536 / 7,
+      offense: 1810 / 6,
+      defense: -1536 / 6,
     });
     expect(data.cards.cutoffs?.reset).toEqual({
       lines: [
@@ -1262,7 +1268,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const group = text(cards["group-watch"]!);
     expect(group).toContain("Whole Season · 8 days");
     expect(group).toContain("1. Tundra 5,375 +128 100% +320 −192");
-    expect(group).toContain("2. Lens Main 5,370 +39 77% +259 −219");
+    expect(group).toContain("2. Lens Main 5,370 +39 77% +302 −256");
   });
 
   it("shows one card as unavailable when only its reads fail", async () => {

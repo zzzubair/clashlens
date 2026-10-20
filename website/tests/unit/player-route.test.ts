@@ -527,7 +527,7 @@ describe("automatic tag lookup", () => {
   });
 
   it.each([
-    ["not_found", "Player not found"],
+    ["not_found", "has no player with this tag. Check it for typos and search again."],
     ["not_in_legend", "This player is not in Legend I."],
     ["uncertain", "Clash Lens tracks Legend League players only."],
     ["failed", "could not finish checking"],
@@ -546,7 +546,6 @@ describe("automatic tag lookup", () => {
       expect(html).toContain('<select name="season"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
-      // A tag the game does not know gets a box to fix it, not the same check again.
       expect(html.includes("Search for the right tag")).toBe(state === "not_found");
       expect(html.includes("?retry=1")).toBe(state === "failed");
     },
@@ -580,9 +579,7 @@ describe("automatic tag lookup", () => {
     );
     expect(html).toMatch(/<h1><bdi>Sloothy<\/bdi><\/h1>/);
     expect(html).toContain(note);
-    expect(html).not.toMatch(
-      /Season summary|Current Season|Current trophies|refresh-form/,
-    );
+    expect(html).not.toMatch(/Season summary|This Season|Current trophies|refresh-form/);
     expect(html).toContain(`<option value="${SEASON}"`);
   });
 
@@ -1207,11 +1204,9 @@ describe("player day honesty", () => {
     expect(today).toContain("<span>0 from battles</span>");
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
-    // Today's empty slots are not played yet, not missing.
     expect(today).toContain('aria-label="Attack 1 not played yet"');
     expect(today).toContain('aria-hidden="true">—</span>');
-    expect(today.match(/>—</g)).toHaveLength(16);
-    expect(today).not.toContain(">Not recorded<");
+    expect(today.match(/>(—|Not recorded)</g)).toEqual(Array(16).fill(">—<"));
     expect(html).toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };

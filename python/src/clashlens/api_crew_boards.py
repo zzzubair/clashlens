@@ -7,11 +7,11 @@ the current Season, so each one starts fresh at the Season's first Reset.
 
 The average boards follow the player page's Season summary
 (``website/app/lib/battle-statistics.ts``): finished Legend days only, each
-recorded battle counted once, trophies divided by the Legend days in the
-window. "Last 7 days" is the last seven finished days of this Season, so it
-is shorter in the first week and empty on Day 1. Streaks count only attacks
-Clash Lens saw, and today's too except over the last seven days. Top players
-is the saved Reset board for today's Reset, in its order.
+recorded battle counted once, trophies divided by the days in the window with
+a battle on that side. "Last 7 days" is the last seven finished days of this
+Season, so it is shorter in the first week and empty on Day 1. Streaks count
+only attacks Clash Lens saw, and today's too except over the last seven days.
+Top players is the saved Reset board for today's Reset, in its order.
 """
 
 from __future__ import annotations
@@ -31,8 +31,7 @@ _WEEK_DAYS = 7
 # Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
-       player.normalized_tag, daily.ranked_day_start, daily.battles,
-       daily.partial_reasons
+       player.normalized_tag, daily.ranked_day_start, daily.battles
 FROM crew_players AS place
 JOIN players AS player ON player.id = place.player_id
 JOIN api_player_daily_logs AS daily ON daily.player_id = place.player_id
@@ -66,11 +65,7 @@ ORDER BY entry.position
 
 class _Day:
     def __init__(self, row: Any) -> None:
-        reasons = [reason for reason in row[3] or [] if isinstance(reason, str)]
         self.offense, self.defense = _screen_events(row[2])
-        # The player page's rule: a day is a Legend day unless it has no
-        # battles and saved profiles prove the player had not signed up yet.
-        self.legend = bool(self.offense or self.defense) or "not_enrolled" not in reasons
 
 
 def _events(
@@ -196,9 +191,9 @@ def get_crew_boards(
     streak_rows = []
     for tag in players:
         days = saved.get(tag, {})
-        legend = [days[start] for start in window if start in days and days[start].legend]
+        window_days = [days[start] for start in window if start in days]
         for side, listed in averages.items():
-            values = _average_row(legend, side, window[0] if window else today, now)
+            values = _average_row(window_days, side, window[0] if window else today, now)
             if values["battles"]:
                 listed.append(entry(tag, **values))
         streak_days = [days[start] for start in streak_window if start in days]

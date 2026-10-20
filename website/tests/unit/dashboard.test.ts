@@ -1377,6 +1377,18 @@ describe("dashboard page", () => {
     expect(html).not.toContain("data-card=");
   });
 
+  it("says a linked tag is unknown to the game without asking for a new search", async () => {
+    const html = await renderDashboard({
+      players: [linked(CHECKING, { name: "Lens New", state: "not_found", rank: null })],
+      selectedTag: CHECKING,
+    });
+    expect(text(html)).toContain(
+      "Lens New Player not found. Clash of Clans has no player with this tag.",
+    );
+    expect(html).not.toContain("search again");
+    expect(html).not.toContain("data-card=");
+  });
+
   it("shows only the linking prompt when no player is linked", async () => {
     const html = await renderDashboard({ players: [], selectedTag: null });
     expect(html).toContain("Link your Clash player");

@@ -407,6 +407,7 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "destruction": 180,
                 "three_stars": 1,
                 "trophies": 56,
+                "days": 1,
             }
             assert leader["defense"] == {
                 "count": 1,
@@ -414,6 +415,7 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "destruction": 45,
                 "trophies": 16,
                 "star_counts": {"0": 0, "1": 1, "2": 0, "3": 0},
+                "days": 1,
             }
             assert leader["trophies"] == 5300 and leader["freshness"] == "fresh"
             # Each pair is compared only on days both have counted, and the

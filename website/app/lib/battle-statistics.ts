@@ -1,6 +1,5 @@
 import { seasonStartAt } from "../components/SeasonReread";
 import type { PlayerPage, RankedBattleEvent, RankedDaySummary } from "./contracts";
-import { isLegendDay } from "./player-lookup-text";
 
 export type BattlePeriod = "7" | "14" | "season";
 const DAY_MS = 86_400_000;
@@ -52,13 +51,10 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
       })
       .map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
-  const legendDays = [...days.values()].filter((day) =>
-    isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
-  );
   const side = (key: "offenseEvents" | "defenseEvents") => {
     const events = new Map<string, RankedBattleEvent>();
     const played = new Set<RankedDaySummary>();
-    for (const saved of legendDays) {
+    for (const saved of days.values()) {
       for (const event of saved[key]) {
         const time = Date.parse(event.battleTimestamp);
         if (time < start || time > now) continue;

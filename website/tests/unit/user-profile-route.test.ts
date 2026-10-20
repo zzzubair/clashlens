@@ -225,6 +225,16 @@ it("shows each linked account as one card linking to its player page", async () 
   );
 });
 
+it("says a linked tag is unknown to the game without asking for a new search", async () => {
+  const lost = { ...data.user.verifiedPlayers[0], state: "not_found", today: null };
+  const html = await renderProfile("", {
+    ...data,
+    user: { ...data.user, verifiedPlayers: [lost] },
+  });
+  expect(html).toContain("Player not found. Clash of Clans has no player with this tag.");
+  expect(html).not.toContain("search again");
+});
+
 it("says a failed profile read could not load instead of showing no linked accounts", async () => {
   const html = await renderProfile("?linked=%232PP", {
     user: null,

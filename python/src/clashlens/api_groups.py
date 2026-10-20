@@ -201,13 +201,21 @@ def _window(
     today_start: datetime,
     retired: set[datetime],
 ) -> dict[str, Any]:
-    attack = {"count": 0, "stars": 0, "destruction": 0, "three_stars": 0, "trophies": 0}
+    attack = {
+        "count": 0,
+        "stars": 0,
+        "destruction": 0,
+        "three_stars": 0,
+        "trophies": 0,
+        "days": 0,
+    }
     defense = {
         "count": 0,
         "stars": 0,
         "destruction": 0,
         "trophies": 0,
         "star_counts": {"0": 0, "1": 0, "2": 0, "3": 0},
+        "days": 0,
     }
     days = []
     net = 0
@@ -245,6 +253,8 @@ def _window(
             net += day_net
             counted_days += 1
             counted_attacks += len(offense_events)
+        attack["days"] += bool(offense_events)
+        defense["days"] += bool(defense_events)
         for event in offense_events:
             attack["count"] += 1
             attack["stars"] += event["stars"]
