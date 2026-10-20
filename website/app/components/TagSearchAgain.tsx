@@ -2,7 +2,7 @@ import { Form } from "react-router";
 
 /**
  * After the game finds no player for a tag, a search box holding that tag, so
- * the Clasher can fix a typo instead of checking the same tag again.
+ * the Clasher can fix a typo; sending the same tag back asks the game again.
  */
 export function TagSearchAgain({ tag }: { tag: string }) {
   return (
@@ -20,6 +20,7 @@ export function TagSearchAgain({ tag }: { tag: string }) {
         />
         <button type="submit">Search</button>
       </div>
+      <input type="hidden" name="recheck" value={tag} />
     </Form>
   );
 }

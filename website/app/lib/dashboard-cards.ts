@@ -168,6 +168,14 @@ export function rate(
   return ratio(over, under);
 }
 
+/** Trophies a day on each side, over only the days with a battle on that side. */
+export function sideAverages(days: SeasonDay[]) {
+  return {
+    offense: rate(days, (day) => (day.attacks ? day.offense : null)),
+    defense: rate(days, (day) => (day.defenses ? day.defense : null)),
+  };
+}
+
 /** Net trophies a day, over only the days with at least one battle. */
 export function netPerDay(days: SeasonDay[]): number | null {
   return rate(days, (day) => (day.attacks || day.defenses ? day.net : null));

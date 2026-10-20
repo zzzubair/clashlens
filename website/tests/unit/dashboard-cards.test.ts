@@ -31,6 +31,7 @@ import {
   isShieldDay,
   offenseConsistency,
   recentForm,
+  sideAverages,
   type CardDataSet,
   type CardReads,
   type GoalData,
@@ -1419,6 +1420,15 @@ describe("dashboard card numbers", () => {
       ["shield", null],
       ["played", 0],
     ]);
+  });
+
+  it("averages each side over only the days with a battle on it", () => {
+    // 280 attack trophies over 7 days, 5 with battles: 56 a day, not 40. The
+    // other 2 lost trophies only to the automatic defense loss.
+    const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
+    const played = [1, 2, 3, 4, 5].map((n) => day(n, 26, { offense: 56, defense: -30 }));
+    const days = [...played, day(6, -40, quiet), day(7, -40, quiet)];
+    expect(sideAverages(days)).toEqual({ offense: 56, defense: -30 });
   });
 
   it("counts every slot of a short day as a miss", () => {

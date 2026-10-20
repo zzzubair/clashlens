@@ -38,11 +38,15 @@ export interface HomeLoaderData {
 }
 
 export async function loader({ request }: LoaderFunctionArgs): Promise<HomeLoaderData> {
-  const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
+  const params = new URL(request.url).searchParams;
+  const rawQuery = params.get("q") ?? "";
   const query = rawQuery.trim();
   const invalidQuery = rawQuery.length > MAX_SEARCH_QUERY_LENGTH;
   const exactTag = invalidQuery ? null : normalizePlayerTag(query);
-  if (exactTag) throw redirect(canonicalPlayerPath(exactTag));
+  if (exactTag) {
+    const retry = params.get("recheck") === exactTag ? "?retry=1" : "";
+    throw redirect(`${canonicalPlayerPath(exactTag)}${retry}`);
+  }
   const client = import("../services/python.server").then(({ createPythonClient }) =>
     createPythonClient(),
   );

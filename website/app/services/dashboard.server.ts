@@ -20,6 +20,7 @@ import {
   SEASON_START_TROPHIES,
   netPerDay,
   rate,
+  sideAverages,
   type CardDataMap,
   type CardReads,
   type ClockData,
@@ -573,14 +574,6 @@ async function cutoffsData(
           you: youSaved,
         }
       : null,
-  };
-}
-
-/** Trophies a day on each side, over only the days with a battle on that side. */
-function sideAverages(days: SeasonDay[]) {
-  return {
-    offense: rate(days, (day) => (day.attacks ? day.offense : null)),
-    defense: rate(days, (day) => (day.defenses ? day.defense : null)),
   };
 }
 

@@ -27,6 +27,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 import { PythonApiError } from "../../app/services/python.server";
 import Home, { loader as homeLoader } from "../../app/routes/home";
 import { SearchSuggestions } from "../../app/components/PlayerSearch";
+import { TagSearchAgain } from "../../app/components/TagSearchAgain";
 
 const search = {
   kind: "player-search",
@@ -462,4 +463,30 @@ it("submitting a normalized exact tag opens its automatic lookup page", async ()
   } catch (response) {
     expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
   }
+});
+
+it("asks the game again when the not-found box sends back the same tag", async () => {
+  const handler = createStaticHandler([
+    { path: "/", Component: () => createElement(TagSearchAgain, { tag: "#LQQP" }) },
+  ]);
+  const context = await handler.query(new Request("https://clashlens.example/"));
+  if (context instanceof Response) throw new Error("unexpected response");
+  const box = renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+      hydrate: false,
+    }),
+  );
+  expect(box).toContain('action="/" method="get"');
+  expect(box).toContain('name="q" value="#LQQP"');
+  expect(box).toContain('<input type="hidden" name="recheck" value="#LQQP"/>');
+  const opens = (search: string) =>
+    homeLoader({
+      request: new Request(`https://clashlens.example/?${search}`),
+    } as never).catch((response: Response) => response.headers.get("Location"));
+  // The box sends what it holds; a fixed typo is a normal search.
+  expect(await opens("q=%23lqqp&recheck=%23LQQP")).toBe("/players/%23LQQP?retry=1");
+  expect(await opens("q=%23LQQG&recheck=%23LQQP")).toBe("/players/%23LQQG");
+  expect(await opens("q=%23LQQP")).toBe("/players/%23LQQP");
 });

@@ -23,8 +23,8 @@ eligible Legend I players. Progress waits for processed evidence. Official
 not-found, temporary failure and uncertain eligibility have distinct messages.
 Known real players reuse their eligibility result on visits. Failed checks offer
 a retry with the existing 30-second minimum interval. A tag reported as not found
-offers a search box holding that tag instead, so a typo can be fixed rather than
-the same tag checked again. Starting a check shares Refresh's six-per-minute allowance and unchanged
+offers a search box holding that tag instead, so a typo can be fixed; sending the
+same tag back asks the game again, with the same minimum interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
 address handling. With JavaScript enabled, the page checks progress once a second
 for up to 60 seconds, then explains that the check may still be running. A result
 that arrives after that limit still replaces the waiting message. The Check
