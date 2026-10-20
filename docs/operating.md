@@ -1129,7 +1129,9 @@ Reset sweeps starting and ending it tracked. Each count is a problem first found
   stars, destruction, army, trophies, gain or loss, or whose second report
   is missing though both players were tracked;
 - **missing days:** a player the Reset ending the day tracked, with no saved
-  day;
+  day, though the weekly league record puts the day's week in Legend I, as
+  the day's calculation asks it: a week below Legend I, unknown or not
+  decided yet has no Legend day to miss;
 - **board rows:** a confirmed Daily board row whose day now has no end or
   another one. Rows not marked confirmed are not checked yet; correcting
   them belongs to later automatic board corrections.

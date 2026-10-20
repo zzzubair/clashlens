@@ -88,10 +88,12 @@ class DayLeague:
         return self.following is League.BELOW
 
 
-def day_league(connection: Any, player_id: int, day: RankedDay) -> DayLeague:
-    """The record's answer for ``day``. Its week's row stays as read until
-    the day's transaction ends: a decision taking the week out of Legend I
-    waits for it, then deletes the day it saved (``save_season``)."""
+def day_league(connection: Any, player_id: int, day: RankedDay, *, lock: bool = True) -> DayLeague:
+    """The record's answer for ``day``. With ``lock``, as the day's
+    calculation asks, its week's row stays as read until the day's
+    transaction ends: a decision taking the week out of Legend I waits for
+    it, then deletes the day it saved (``save_season``). The re-check asks
+    without, in its read-only snapshot (``reconcile_pass``)."""
     week = league_week.week_start(day.start)
     ends_week = day.end.weekday() == 0
     weeks = [start for start in ([week, week + WEEK] if ends_week else [week])
@@ -99,10 +101,10 @@ def day_league(connection: Any, player_id: int, day: RankedDay) -> DayLeague:
     rows = {
         row[0]: (League(row[1]), Entry(row[2]) if row[2] else None)
         for row in connection.execute(
-            """
+            f"""
             SELECT week_start, league, entry FROM player_league_weeks
             WHERE player_id = %s AND week_start = ANY(%s)
-            FOR KEY SHARE
+            {"FOR KEY SHARE" if lock else ""}
             """,
             (player_id, weeks),
         ).fetchall()

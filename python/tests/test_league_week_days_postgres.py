@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 import psycopg
 from domain_test_support import domain_database, store_observation, text
 from test_collector_db_postgres import _handoff
+from test_reconcile_pass_postgres import _open, _queued, _run_pass
 from test_reset_scenarios_postgres import (
     SEASON,
     Player,
@@ -114,7 +115,13 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     06:25, its battle log reaching back to its Monday battles: its Monday
     starts at 5,000. With no reading at or before the Tuesday Reset, the
     Tuesday board has no trophies to rank it by. Three STEADY players stay
-    in Legend I throughout."""
+    in Legend I throughout.
+
+    That night's re-check of the Season's days, with STEADY_1's Monday lost
+    from its page, must find only that Monday missing: until 20 October
+    2026 it expected a day of every player the Tuesday Reset read, so
+    STALE_LATE's Monday was missing too, and its recalculation saved
+    nothing."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     week_before = day(1)
     failed = [FAILED, FAILED_TWICE]
@@ -236,6 +243,19 @@ def test_a_mid_season_monday_moves_players_between_leagues(
         tuesday_board = story.served_board(tuesday)
         unfinished = story.unfinished_jobs()
 
+        # That night's re-check of the Season's days, Monday its last, with
+        # STEADY_1's Monday lost from its page.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_start = %s AND player_id ="
+                " (SELECT id FROM players WHERE normalized_tag = %s)", (monday, STEADY_1))
+        _run_pass(story, monkeypatch, tuesday + timedelta(hours=18))
+        missing = {(tag, number) for check, tag, number in _open(connection_info)
+                   if check == "missing_day"}
+        queued = _queued(connection_info)
+        story.run_worker()
+        rechecked = {tag: _public_days(connection_info, tag) for tag in (STALE_LATE, STEADY_1)}
+
     def days(tag: str, since: datetime, until: datetime) -> dict[datetime, dict[str, object]]:
         return {start: row for start, row in public[tag].items() if since <= start < until}
 
@@ -299,6 +319,15 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     assert _ranked(tuesday_board) == {
         STEADY_3: 5420, STEADY_2: 5320, STEADY_1: 5220, FAILED: 5060, FAILED_TWICE: 5060,
         PROMOTED: 5050, IDLE_PROMOTED: 5000}
+    # The re-check expects a Legend day exactly where the record puts the
+    # week in Legend I, as the day's calculation does: STALE_LATE, read at
+    # the Tuesday Reset but out of Legend I that week, has no Monday to
+    # miss and nothing is queued for it; STEADY_1's lost Monday is missing,
+    # and its recalculation gives the page that Monday back.
+    assert missing == {(STEADY_1, 8)}
+    assert queued == [(STEADY_1, "reconcile_pass", 25, "pending")]
+    assert monday not in rechecked[STALE_LATE]
+    assert rechecked[STEADY_1][monday] == public[STEADY_1][monday]
 
 
 KEPT = "#VPP"

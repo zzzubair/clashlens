@@ -20,7 +20,8 @@ worker's own calculation:
    destruction, army, either player's trophies, gain or loss, or whose
    second report is missing though both players were tracked;
 5. ``missing_day``: a player the Reset sweep ending the day tracked, with no
-   saved day;
+   saved day, though the weekly league record puts the day's week in Legend
+   I: the day's calculation saves one exactly then (``league_days.day_league``);
 6. ``board``: a confirmed Daily board row against its day's end plus its
    automatic loss, less the battles that ended after the Reset. Rows not
    confirmed are left to later board corrections.
@@ -63,7 +64,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, domain, domain_repair, first_battle_log, job_outcomes
+from . import db, domain, domain_repair, first_battle_log, job_outcomes, league_days
 
 WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
@@ -101,7 +102,7 @@ SELECT member FROM (
 WHERE member > %(after)s ORDER BY member LIMIT %(limit)s
 """
 # The batch's players the Reset sweep ending the day tracked: each one's
-# day is saved at that Reset.
+# day is saved at that Reset when it is a Legend day.
 _EXPECTED = """
 SELECT DISTINCT member FROM collector_reset_sweeps AS sweep
 CROSS JOIN LATERAL unnest(sweep.member_ids) AS member
@@ -287,9 +288,11 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
     days: dict[tuple[int, datetime], Any] = {
         (int(row[0]), row[1]): row for row in connection.execute(_DAYS, params)}
     judged = {(player, check) for player in players for check in ("missing_day", "copies")}
+    ranked_day = domain.ranked_day_for(day)
     findings = [Finding("missing_day", int(row[0]))
                 for row in connection.execute(_EXPECTED, params)
-                if (int(row[0]), day) not in days]
+                if (int(row[0]), day) not in days and league_days.day_league(
+                    connection, int(row[0]), ranked_day, lock=False).legend_day]
     recounts = {int(row[0]): tuple(int(value) for value in row[1:])
                 for row in connection.execute(_RECOUNT, params)}
     ends = {}
