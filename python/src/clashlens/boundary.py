@@ -912,11 +912,20 @@ def _record_boundary_generation(
                     UPDATE boundary_publication_corrections
                     SET affected_artifacts = ARRAY(
                             SELECT DISTINCT unnest(affected_artifacts || %s::text[])
-                        ),
-                        pending_inputs = pending_inputs || %s::jsonb
+                        )
                     WHERE id = %s
                     """,
-                    (correction_artifacts, Jsonb([pending_input]), queued[0]),
+                    (correction_artifacts, queued[0]),
+                )
+                # One row per added input: adding to the list itself saved
+                # the whole list again (migration 0122).
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_correction_inputs
+                        (correction_id, input)
+                    VALUES (%s, %s)
+                    """,
+                    (queued[0], Jsonb(pending_input)),
                 )
             return True
         if (
