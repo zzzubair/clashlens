@@ -46,7 +46,7 @@ it("signed out keeps the sign-in control and offers Join Discord in a new tab", 
   expect(nav).not.toContain("account-menu");
 });
 
-it("signed in puts Account and Log out behind the closed account name", async () => {
+it("signed in puts your profile, tools, Settings and Log out behind the account name", async () => {
   const nav = await renderHeader({
     ...SIGNED_OUT,
     loggedIn: true,
@@ -59,7 +59,13 @@ it("signed in puts Account and Log out behind the closed account name", async ()
     /<details class="account-menu"><summary class="nav-link nav-account">[\s\S]*Lens Scout[\s\S]*<\/summary>/,
   );
   const panel = /<ul class="account-menu-panel"[\s\S]*?<\/ul>/.exec(nav)![0];
-  expect(panel).toContain('href="/users/lens_scout" data-discover="true">Account</a>');
+  const links = [...panel.matchAll(/href="([^"]+)" data-discover="true">([^<]+)</g)];
+  expect(links.map(([, href, label]) => [href, label])).toEqual([
+    ["/users/lens_scout", "Your profile"],
+    ["/account/discord-alerts", "Discord alerts"],
+    ["/account/obs-overlay", "Stream overlay"],
+    ["/account/settings", "Settings"],
+  ]);
   expect(panel).toContain('action="/logout"');
   expect(panel).toContain('value="logout-key"');
   expect(panel).toContain(">Log out</button>");

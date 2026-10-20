@@ -370,7 +370,7 @@ describe("logout route", () => {
     } as never);
     expect(isResponse(response)).toBe(true);
     expect((response as Response).status).toBe(302);
-    expect((response as Response).headers.get("Location")).toBe("/");
+    expect((response as Response).headers.get("Location")).toBe("/?saved=logout");
     expect((response as Response).headers.get("Cache-Control")).toBe("no-store");
     const setCookies = (response as Response).headers.getSetCookie();
     expect(setCookies).toHaveLength(1);

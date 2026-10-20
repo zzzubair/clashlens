@@ -234,7 +234,7 @@ export async function completeProviderCallback(
       location:
         transaction.returnPath === "/account/discord-alerts"
           ? transaction.returnPath
-          : "/account/providers",
+          : `/account/settings?saved=${provider}-connected`,
       setCookies: [clearTransactionCookie],
     };
   }
@@ -308,7 +308,7 @@ export async function completeProviderCallback(
   }
   return {
     kind: "redirect",
-    location: "/account/providers",
+    location: `/account/settings?saved=${provider}-disconnected`,
     setCookies: [clearTransactionCookie],
   };
 }

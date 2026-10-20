@@ -1,4 +1,4 @@
-import { data, Link, useActionData, useLoaderData } from "react-router";
+import { data, Link, useActionData, useLoaderData, useSearchParams } from "react-router";
 
 import { type BackHandle, useBackState } from "../components/BackLink";
 import {
@@ -9,6 +9,7 @@ import {
 } from "../components/CrewBoards";
 import { CrewInvite } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { SavedLine } from "../components/SavedLine";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
   BOARD_KEYS,
@@ -84,6 +85,8 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 export default function CrewRoute() {
   const { crew, boards, period, error, idempotencyKey } = useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
+  // Set by joining from an invite link.
+  const joined = useSearchParams()[0].get("saved") === "joined";
   if (crew === null || boards === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
@@ -96,6 +99,7 @@ export default function CrewRoute() {
   const { clashers, myRole } = crew;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+      {joined && myRole !== null ? <SavedLine>You joined {crew.name}.</SavedLine> : null}
       <section className="crew-panel crew-head" aria-labelledby="crew-title">
         <h1 id="crew-title">{crew.name}</h1>
         {clashers === null || myRole === null ? null : (

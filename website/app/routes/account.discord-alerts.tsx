@@ -1,18 +1,21 @@
-import { redirect, useLoaderData } from "react-router";
+import { Form, redirect, useLoaderData, useNavigation } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
-import type { AttackAlerts, UndeliveredReason } from "../lib/discord";
+import { SavedLine } from "../components/SavedLine";
+import type { AttackAlertPlayer, AttackAlerts, UndeliveredReason } from "../lib/discord";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.discord-alerts";
+
+import "../user-profile.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 /** This page; connecting Discord from it comes back here. */
 const PAGE = "/account/discord-alerts";
 
-export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
+export const handle: BackHandle = { back: { to: "/account", label: "Your profile" } };
 
 /** The outcome of the last switch, its player and which switch it was,
- * shown once on that row. */
+ * shown once at the top of the page. */
 type Saved = {
   outcome: "on" | "off" | "failed";
   tag: string;
@@ -156,7 +159,7 @@ const UNDELIVERED_HELP: Record<UndeliveredReason, string> = {
   dms_closed:
     "Your Discord privacy settings block messages from the bot. Check you haven't blocked the Clash Lens bot, then reconnect Discord.",
   unknown_user:
-    "Discord couldn't find the connected Discord account. Unlink Discord in Sign-in connections and link it again.",
+    "Discord couldn't find the connected Discord account. Disconnect Discord in Settings and connect it again.",
   other: "Discord refused the message. Reconnect Discord to try again.",
   unreachable:
     "Clash Lens couldn't get it to Discord in time and stopped trying. The next attack sends a new message.",
@@ -166,12 +169,12 @@ export default function DiscordAlertsRoute() {
   const data = useLoaderData<typeof loader>();
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+      {data.saved ? <SavedNote saved={data.saved} alerts={data.alerts} /> : null}
       <section className="hero" aria-labelledby="discord-alerts-title">
         <h1 id="discord-alerts-title">Discord alerts</h1>
         <p className="lede">
-          Get a Discord message from the Clash Lens bot as soon as Clash Lens saves an
-          attack on one of your players, and a summary of your players&apos; Legend day
-          after each Reset.
+          The Clash Lens bot messages you on Discord when someone attacks your players,
+          and sums up their Legend day after each Reset.
         </p>
       </section>
       {data.error ? (
@@ -180,20 +183,7 @@ export default function DiscordAlertsRoute() {
           <a href={PAGE}>Try again</a>
         </aside>
       ) : data.connected ? (
-        <>
-          <AttackAlertSwitches
-            alerts={data.alerts}
-            saved={data.saved?.kind === "attack" ? data.saved : null}
-            idempotencyKey={data.idempotencyKey}
-          />
-          {data.alerts && data.alerts.players.length > 0 ? (
-            <DaySummarySwitches
-              alerts={data.alerts}
-              saved={data.saved?.kind === "summary" ? data.saved : null}
-              idempotencyKey={data.idempotencyKey}
-            />
-          ) : null}
-        </>
+        <AlertRows alerts={data.alerts} idempotencyKey={data.idempotencyKey} />
       ) : (
         <section className="form-panel stack-form" aria-labelledby="connect-title">
           <h2 id="connect-title">Connect Discord first</h2>
@@ -238,197 +228,153 @@ function ConnectDiscord({
   );
 }
 
-/** What happened to the last switch; only attack alerts send a confirmation. */
+const SWITCH_NAMES = { attack: "Attack alerts", summary: "Daily summary" } as const;
+
+/** What the last switch did, at the top of the page; only attack alerts send
+ * a confirmation. */
 function SavedNote({
-  outcome,
-  confirms = true,
+  saved,
+  alerts,
 }: {
-  outcome: "on" | "off" | "failed";
-  confirms?: boolean;
+  saved: NonNullable<Saved>;
+  alerts: AttackAlerts | null;
 }) {
-  return outcome === "failed" ? (
-    <p className="attack-alert-saved notice notice-unavailable" role="alert">
-      Not saved. Try again.
-    </p>
-  ) : (
-    <p className="attack-alert-saved" role="status">
-      {outcome === "on" && confirms
-        ? "Saved. The bot is sending you a confirmation message on Discord now. If it doesn't arrive, reload this page."
-        : "Saved."}
-    </p>
+  if (saved.outcome === "failed")
+    return <SavedLine failed>Not saved. Try again.</SavedLine>;
+  const player = alerts?.players.find((one) => one.tag === saved.tag);
+  const name = player ? (player.name ?? player.tag) : null;
+  return (
+    <SavedLine>
+      {SWITCH_NAMES[saved.kind]} {saved.outcome}
+      {name === null ? "" : ` for ${name}`}.
+      {saved.outcome === "on" && saved.kind === "attack"
+        ? " The bot is sending you a confirmation message on Discord now. If it doesn't arrive, reload this page."
+        : null}
+    </SavedLine>
   );
 }
 
-/** Per-player switches for a Discord DM each time the player is attacked. */
-function AttackAlertSwitches({
+/** One row per verified player, each with its two switches. */
+function AlertRows({
   alerts,
-  saved,
   idempotencyKey,
 }: {
   alerts: AttackAlerts | null;
-  saved: Saved;
   idempotencyKey: string;
 }) {
-  const label = (player: { tag: string; name: string | null }) =>
-    `${player.name ?? "Unnamed"} ${player.tag}`;
-  const missed = alerts?.undelivered;
-  const missedPlayer = alerts?.players.find((player) => player.tag === missed?.tag);
-  const example = alerts?.players[0];
-  return (
-    <section className="form-panel stack-form" aria-labelledby="alerts-title">
-      <h2 id="alerts-title">Attack alerts</h2>
-      {saved && !alerts?.players.some((player) => player.tag === saved.tag) ? (
-        <SavedNote outcome={saved.outcome} />
-      ) : null}
-      {alerts === null ? (
-        <p className="notice notice-unavailable" role="alert">
-          Attack alerts could not be loaded. <a href={PAGE}>Try again</a>
-        </p>
-      ) : alerts.players.length === 0 ? (
-        <p className="form-help">
-          <a href="/account/verify-player">Link a player</a> to get attack alerts in
-          Discord.
-        </p>
-      ) : (
-        <>
-          <p id="attack-alerts-help" className="form-help">
-            Each player&apos;s alerts are on or off on their own. Turning them on sends
-            you a confirmation message on Discord straight away.
-          </p>
-          {missed ? (
-            <div className="notice notice-unavailable" role="alert">
-              <p>
-                <strong>
-                  A Discord message about{" "}
-                  {missedPlayer ? label(missedPlayer) : missed.tag} wasn&apos;t delivered.
-                </strong>
-              </p>
-              <p>{UNDELIVERED_HELP[missed.reason]}</p>
-              {missed.reason === "unreachable" ? null : (
-                <ConnectDiscord
-                  idempotencyKey={idempotencyKey}
-                  label="Reconnect Discord"
-                />
-              )}
-            </div>
-          ) : null}
-          <ul className="player-link-list" aria-describedby="attack-alerts-help">
-            {alerts.players.map((player) => (
-              <li
-                key={player.tag}
-                className={`attack-alert-row${player.on ? " attack-alert-on" : ""}`}
-              >
-                <div className="attack-alert-state">
-                  <strong>{label(player)}</strong>
-                  <span
-                    className={`state-badge ${player.on ? "state-live" : "state-missing"}`}
-                  >
-                    {player.on ? "✓ On" : "Off"}
-                  </span>
-                  <span className="attack-alert-meaning">
-                    {player.on
-                      ? `You'll get a Discord DM when someone attacks ${player.name ?? player.tag}.`
-                      : `No alerts for ${player.name ?? player.tag}.`}
-                  </span>
-                </div>
-                <form method="post" className="inline-form">
-                  <input type="hidden" name="intent" value="attack-alert" />
-                  <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-                  <input type="hidden" name="tag" value={player.tag} />
-                  <input type="hidden" name="on" value={player.on ? "off" : "on"} />
-                  <button
-                    type="submit"
-                    aria-label={`Turn ${player.on ? "off" : "on"} attack alerts for ${label(player)}`}
-                    className={`button ${player.on ? "button-secondary" : "button-primary"}`}
-                  >
-                    {player.on ? "Turn off" : "Turn on"}
-                  </button>
-                </form>
-                {saved?.tag === player.tag ? <SavedNote outcome={saved.outcome} /> : null}
-              </li>
-            ))}
-          </ul>
-          <figure className="attack-alert-example">
-            <figcaption className="form-help">
-              An attack alert looks like this. Your phone&apos;s notification shows its
-              first line:
-            </figcaption>
-            <strong>{`🛡️ ${example ? (example.name ?? "Unnamed") : "Wanderer"} −24 🏆`}</strong>
-            <div className="attack-alert-message">
-              <strong>Drift</strong>
-              <strong className="attack-alert-result">★★☆ · 87%</strong>
-              <small>Attacker stats</small>
-              <span>🏆 5,312 · 🌍 #1,204 · 🎯 62%</span>
-              <small>Open battle · Alert settings</small>
-            </div>
-          </figure>
-        </>
-      )}
-    </section>
-  );
-}
-
-/** Per-player switches for the Legend day summary, off until turned on and
- * separate from attack alerts. */
-function DaySummarySwitches({
-  alerts,
-  saved,
-  idempotencyKey,
-}: {
-  alerts: AttackAlerts;
-  saved: Saved;
-  idempotencyKey: string;
-}) {
-  const label = (player: { tag: string; name: string | null }) =>
-    `${player.name ?? "Unnamed"} ${player.tag}`;
-  return (
-    <section className="form-panel stack-form" aria-labelledby="summary-title">
-      <h2 id="summary-title">Legend day summary</h2>
-      <p id="day-summary-help" className="form-help">
-        After each Reset&apos;s Daily board is published, the bot sends you one message
-        summing up the Legend day just ended for every player you switched on: starting
-        and end-of-day trophies, attacks, defenses and the player&apos;s place on the
-        Daily board. The summary is off until you turn it on for a player, and each
-        player&apos;s summary is on or off on its own, separately from its attack alerts.
+  if (alerts === null) {
+    return (
+      <p className="notice notice-unavailable" role="alert">
+        Your alerts could not be loaded. <a href={PAGE}>Try again</a>
       </p>
-      <ul className="player-link-list" aria-describedby="day-summary-help">
+    );
+  }
+  if (alerts.players.length === 0) {
+    return (
+      <p className="form-help">
+        <a href="/account/verify-player">Link a player</a> to get alerts in Discord.
+      </p>
+    );
+  }
+  const missed = alerts.undelivered;
+  const missedPlayer = alerts.players.find((player) => player.tag === missed?.tag);
+  const example = alerts.players[0];
+  return (
+    <>
+      {missed ? (
+        <div className="notice notice-unavailable" role="alert">
+          <p>
+            <strong>
+              A Discord message about{" "}
+              {missedPlayer
+                ? `${missedPlayer.name ?? "Unnamed"} ${missedPlayer.tag}`
+                : missed.tag}{" "}
+              wasn&apos;t delivered.
+            </strong>
+          </p>
+          <p>{UNDELIVERED_HELP[missed.reason]}</p>
+          {missed.reason === "unreachable" ? null : (
+            <ConnectDiscord idempotencyKey={idempotencyKey} label="Reconnect Discord" />
+          )}
+        </div>
+      ) : null}
+      <ul className="settings-list">
         {alerts.players.map((player) => (
-          <li
-            key={player.tag}
-            className={`attack-alert-row${player.summaryOn ? " attack-alert-on" : ""}`}
-          >
-            <div className="attack-alert-state">
-              <strong>{label(player)}</strong>
-              <span
-                className={`state-badge ${player.summaryOn ? "state-live" : "state-missing"}`}
-              >
-                {player.summaryOn ? "✓ On" : "Off"}
-              </span>
-              <span className="attack-alert-meaning">
-                {player.summaryOn
-                  ? `${player.name ?? player.tag}'s Legend day is in your summary after each Reset.`
-                  : `${player.name ?? player.tag} is left out of your summary.`}
-              </span>
+          <li key={player.tag} className="settings-row">
+            <div className="settings-label">
+              <span>{player.name ?? "Unnamed"}</span>
+              <p className="form-help player-tag">{player.tag}</p>
             </div>
-            <form method="post" className="inline-form">
-              <input type="hidden" name="intent" value="day-summary" />
-              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-              <input type="hidden" name="tag" value={player.tag} />
-              <input type="hidden" name="on" value={player.summaryOn ? "off" : "on"} />
-              <button
-                type="submit"
-                aria-label={`Turn ${player.summaryOn ? "off" : "on"} the Legend day summary for ${label(player)}`}
-                className={`button ${player.summaryOn ? "button-secondary" : "button-primary"}`}
-              >
-                {player.summaryOn ? "Turn off" : "Turn on"}
-              </button>
-            </form>
-            {saved?.tag === player.tag ? (
-              <SavedNote outcome={saved.outcome} confirms={false} />
-            ) : null}
+            <div className="settings-control">
+              <AlertSwitch
+                player={player}
+                kind="attack"
+                idempotencyKey={idempotencyKey}
+              />
+              <AlertSwitch
+                player={player}
+                kind="summary"
+                idempotencyKey={idempotencyKey}
+              />
+            </div>
           </li>
         ))}
       </ul>
-    </section>
+      <p className="form-help">
+        Attack alerts message you as soon as Clash Lens saves an attack on that player.
+        The daily summary arrives after each Reset&apos;s Daily board is published, with
+        the day&apos;s trophies, attacks, defenses and place.
+      </p>
+      <figure className="attack-alert-example">
+        <figcaption className="form-help">
+          An attack alert looks like this. Your phone&apos;s notification shows its first
+          line:
+        </figcaption>
+        <strong>{`🛡️ ${example.name ?? "Unnamed"} −24 🏆`}</strong>
+        <div className="attack-alert-message">
+          <strong>Drift</strong>
+          <strong className="attack-alert-result">★★☆ · 87%</strong>
+          <small>Attacker stats</small>
+          <span>🏆 5,312 · 🌍 #1,204 · 🎯 62%</span>
+          <small>Open battle · Alert settings</small>
+        </div>
+      </figure>
+    </>
+  );
+}
+
+/** One switch that saves as soon as it is flipped. While the save runs it
+ * already shows where it is going. */
+function AlertSwitch({
+  player,
+  kind,
+  idempotencyKey,
+}: {
+  player: AttackAlertPlayer;
+  kind: "attack" | "summary";
+  idempotencyKey: string;
+}) {
+  const intent = kind === "attack" ? "attack-alert" : "day-summary";
+  const pending = useNavigation().formData;
+  const flipping = pending?.get("intent") === intent && pending.get("tag") === player.tag;
+  const saved = kind === "attack" ? player.on : player.summaryOn;
+  const on = flipping ? pending.get("on") === "on" : saved;
+  return (
+    <Form method="post" className="inline-form" preventScrollReset replace>
+      <input type="hidden" name="intent" value={intent} />
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <input type="hidden" name="tag" value={player.tag} />
+      <input type="hidden" name="on" value={saved ? "off" : "on"} />
+      <button
+        type="submit"
+        role="switch"
+        aria-checked={on}
+        aria-label={`${SWITCH_NAMES[kind]} for ${player.name ?? "Unnamed"} ${player.tag}`}
+        className="switch"
+      >
+        <span className="switch-track" aria-hidden="true" />
+        {SWITCH_NAMES[kind]}
+      </button>
+    </Form>
   );
 }

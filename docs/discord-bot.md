@@ -155,7 +155,7 @@ Nothing below has been done yet. Do the steps in order.
      the website, run them again: they list your linked accounts and their
      alert switches, with a button to change them on the website.
    - With two or more players, press Make default on one of them on the
-     website's account page, then run `/stats` with no player.
+     website's Settings page, then run `/stats` with no player.
    - `/stats` with a tag and with a name: a normal message you can forward.
 7. **Test in a test server.** Install the app to a private test server ("Add to
    Server"). Run `/stats`: everyone in the channel sees it. Have a second,

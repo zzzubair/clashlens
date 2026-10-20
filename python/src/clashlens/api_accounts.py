@@ -1203,6 +1203,56 @@ def set_default_player(
             return result
 
 
+def unlink_player(
+    database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str
+) -> OperationResult:
+    """Unlink one of the account's own verified players: only the link goes.
+    Its crew places go with it, and the migration 0105, 0108 and 0112 triggers
+    forget it as the default player and drop its Discord alerts and summary.
+    The player and its game data stay, and it can be linked again."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            link = connection.execute(
+                """
+                SELECT link.player_id
+                FROM verified_player_links AS link
+                JOIN players AS player ON player.id = link.player_id
+                WHERE player.normalized_tag = %s AND link.account_id = %s
+                """,
+                (normalized_tag, binding.account_id),
+            ).fetchone()
+            if link is None:
+                result = OperationResult(404, {"error": "player_not_verified"})
+            else:
+                # Every crew write holds the crew row first (migration 0095).
+                connection.execute(
+                    """
+                    SELECT 1 FROM crews
+                    WHERE id IN (SELECT crew_id FROM crew_players WHERE player_id = %s)
+                    ORDER BY id
+                    FOR UPDATE
+                    """,
+                    (link[0],),
+                )
+                removed = connection.execute(
+                    """
+                    DELETE FROM verified_player_links
+                    WHERE player_id = %s AND account_id = %s
+                    """,
+                    (link[0], binding.account_id),
+                )
+                result = (
+                    OperationResult(200, {"unlinked": normalized_tag})
+                    if removed.rowcount == 1
+                    else OperationResult(404, {"error": "player_not_verified"})
+                )
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
 def _replace_group_players(
     database: ApiDatabase,
     connection: Any,

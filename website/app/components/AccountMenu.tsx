@@ -1,10 +1,18 @@
 import { useEffect, useRef } from "react";
 import { Form, Link } from "react-router";
 
+/** The account menu's pages, after the profile and before Log out. */
+const MENU_PAGES = [
+  ["/account/discord-alerts", "Discord alerts"],
+  ["/account/obs-overlay", "Stream overlay"],
+  ["/account/settings", "Settings"],
+] as const;
+
 /**
- * The signed-in account name in the header. Clicking it opens a small list
- * with Account and Log out; outside clicks, Escape and tabbing away close it.
- * It is a native disclosure, so it also opens before or without page scripts.
+ * The signed-in account name in the header. Clicking it opens a small list:
+ * your profile, your two tools, Settings and Log out; outside clicks, Escape
+ * and tabbing away close it. It is a native disclosure, so it also opens
+ * before or without page scripts.
  */
 export function AccountMenu({
   label,
@@ -86,9 +94,16 @@ export function AccountMenu({
       <ul className="account-menu-panel">
         <li>
           <Link to={accountPath} onClick={close}>
-            Account
+            Your profile
           </Link>
         </li>
+        {MENU_PAGES.map(([to, label]) => (
+          <li key={to}>
+            <Link to={to} onClick={close}>
+              {label}
+            </Link>
+          </li>
+        ))}
         <li>
           <Form method="post" action="/logout">
             <input type="hidden" name="idempotencyKey" value={logoutIdempotencyKey} />

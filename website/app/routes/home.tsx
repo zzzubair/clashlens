@@ -12,6 +12,7 @@ import {
 import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { SavedLine } from "../components/SavedLine";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
 import { SearchSuggestions, usePlayerSuggestions } from "../components/PlayerSearch";
@@ -77,9 +78,10 @@ export function headers() {
 
 export default function Home() {
   const data = useLoaderData<typeof loader>();
-  // Set by /logout when this browser logged out but the server could not record it.
+  // Set by /logout: logged out, or logged out here but not recorded.
   const [searchParams] = useSearchParams();
   const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
+  const loggedOut = searchParams.get("saved") === "logout";
   const suggestions = usePlayerSuggestions(data.query);
   const { setQuery } = suggestions;
   const searching = useNavigation().state !== "idle";
@@ -114,9 +116,11 @@ export default function Home() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page">
       {logoutUnrecorded ? (
-        <div className="status-banner status-banner-warning" role="status">
+        <SavedLine failed>
           You are logged out on this browser, but Clash Lens could not record it.
-        </div>
+        </SavedLine>
+      ) : loggedOut ? (
+        <SavedLine>You&apos;re logged out.</SavedLine>
       ) : null}
       <section className="home-overview" aria-labelledby="search-title">
         <div className="home-intro">

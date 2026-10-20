@@ -95,7 +95,8 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     await account(mate.page, MATE_TAGS[1]!).check();
     await account(mate.page, MATE_TAGS[2]!).uncheck();
     await mate.page.getByRole("button", { name: "Join with 2 accounts" }).click();
-    await expect(mate.page).toHaveURL(crewPath);
+    await expect(mate.page).toHaveURL(`${crewPath}?saved=joined`);
+    await expect(mate.page.getByRole("status")).toHaveText("You joined Night Owls.");
     await expect(mate.page.getByText("4 of 10 places")).toBeVisible();
 
     // Anyone can look inside, signed out too: from a player's page to the crew

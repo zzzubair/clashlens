@@ -207,8 +207,9 @@ def not_your_menu() -> Reply:
     return say("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher connects Discord to an account they have.
-DISCORD_SETTINGS = "/account/providers"
+# Where a Clasher connects Discord, links and unlinks players, and chooses the
+# default player: the website's Settings page.
+SETTINGS = "/account/settings"
 # Where a Clasher connects Discord and turns attack alerts on or off; /alerts
 # opens it, and a signed-out visitor signs in first and lands there.
 DISCORD_ALERTS = "/account/discord-alerts"
@@ -228,7 +229,7 @@ def _sign_up(site: Site, text: str) -> Card:
 def _connect_instead(site: Site) -> str:
     """The smaller way in for someone with a Clash Lens account already, so
     signing up with Discord never makes them a second account."""
-    return f"Already have a Clash Lens account? [Connect Discord]({site.url(DISCORD_SETTINGS)})"
+    return f"Already have a Clash Lens account? [Connect Discord]({site.url(SETTINGS)})"
 
 
 def not_linked(
@@ -271,7 +272,7 @@ def no_players(site: Site, username: str) -> Reply:
 
 
 def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
-    page = "your Clash Lens page"
+    page = "your Clash Lens settings"
     if username is None:
         you = "You: this Discord account isn't connected to Clash Lens yet."
     else:
@@ -279,7 +280,7 @@ def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
             "1 linked account" if player_count == 1 else f"{player_count} linked accounts"
         )
         you = f"You: connected as @{safe(username)}, {accounts}."
-        page = f"[{page}]({site.user(username)})"
+        page = f"[{page}]({site.url(SETTINGS)})"
     return Reply(
         (
             Card(
@@ -344,10 +345,10 @@ def link_reply(
     )
     return say(
         f"### Your linked accounts\n{lines}",
-        Link("Change linked accounts", site.user(username)),
+        Link("Change linked accounts", site.url(SETTINGS)),
         footer=(
             f"Connected as @{safe(username)}. Choose your default account, "
-            f"the one /stats uses, on your [Clash Lens page]({site.user(username)})."
+            f"the one /stats uses, in your [Clash Lens settings]({site.url(SETTINGS)})."
         ),
     )
 
@@ -475,9 +476,9 @@ def which_player(
     """No player named and no default found: ask with a dropdown of the
     person's own players."""
     return say(
-        "Which linked account? Pick one below, or choose your default account on your "
-        "Clash Lens page.",
-        Link("Choose your default account", site.user(username)),
+        "Which linked account? Pick one below, or choose your default account in your "
+        "Clash Lens settings.",
+        Link("Choose your default account", site.url(SETTINGS)),
         choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
         pick=action,
         placeholder="Which linked account?",

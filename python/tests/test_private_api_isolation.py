@@ -309,6 +309,7 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("DELETE", f"{group_path}/players/{quote(other['tag'])}", None),
             ("GET", f"{group_path}/comparison", None),
             ("POST", "/v1/account/default-player", {"tag": other["tag"]}),
+            ("DELETE", f"/v1/account/players/{quote(other['tag'])}", None),
             ("GET", "/v1/account/discord-alerts", None),
             ("POST", "/v1/account/discord-alerts", {"tag": other["tag"], "on": True}),
             ("GET", "/v1/account/obs-overlay", None),

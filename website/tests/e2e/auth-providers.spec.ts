@@ -55,7 +55,7 @@ test("Discord completes a local sign-in without cloud credentials", async ({ pag
 
   await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
   await expect(
-    page.getByRole("heading", { name: /Create your account|Linked accounts/ }),
+    page.getByRole("heading", { name: /Create your account|Clash players/ }),
   ).toBeVisible();
 });
 
@@ -67,26 +67,30 @@ test("an account can link, use, and unlink a second sign-in provider", async ({
   const accountLabel = (await page.locator(".hero .player-tag").textContent())?.trim();
   expect(accountLabel).toMatch(/^@/);
 
-  await page.goto("/account/providers");
-  const discordRow = page.locator("li").filter({ hasText: "Discord" });
-  await discordRow.getByRole("button", { name: "Link" }).click();
-  await expect(page).toHaveURL(/\/account\/providers$/);
-  await expect(discordRow.getByRole("button", { name: "Unlink" })).toBeVisible();
+  await page.goto("/account/settings");
+  const discordRow = page
+    .locator(".settings-row")
+    .filter({ has: page.getByText("Discord", { exact: true }) });
+  await discordRow.getByRole("button", { name: "Connect" }).click();
+  await expect(page).toHaveURL(/\/account\/settings\?saved=discord-connected$/);
+  await expect(page.getByRole("status")).toHaveText("Discord connected.");
+  await expect(discordRow.getByRole("button", { name: "Disconnect" })).toBeVisible();
 
   await page.locator("details.account-menu > summary").click();
   await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/?saved=logout");
+  await expect(page.getByRole("status")).toHaveText("You're logged out.");
   await signInDiscord(page);
   await expect(page.getByText(accountLabel!, { exact: true })).toBeVisible();
 
-  await page.goto("/account/providers");
-  await discordRow.getByRole("button", { name: "Unlink" }).click();
+  await page.goto("/account/settings");
+  await discordRow.getByRole("button", { name: "Disconnect" }).click();
   await expect(page).toHaveURL(/\/login$/);
 
   await signIn(page);
   await expect(page.getByText(accountLabel!, { exact: true })).toBeVisible();
-  await page.goto("/account/providers");
-  await expect(discordRow.getByRole("button", { name: "Link" })).toBeVisible();
+  await page.goto("/account/settings");
+  await expect(discordRow.getByRole("button", { name: "Connect" })).toBeVisible();
 });
 
 test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer signs in", async ({
@@ -130,7 +134,7 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   // Logging out also ends the copy from before the renewal.
   await accountMenu.click();
   await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/?saved=logout");
   // Wait for the signed-out header so the logout itself has finished.
   await expect(accountMenu).toBeHidden();
   await useLoginIssuedAgo(context, identity, 0, copied);
