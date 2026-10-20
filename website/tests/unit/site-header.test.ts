@@ -71,8 +71,16 @@ it("signed out offers Sign in back to this page and Join Discord in a new tab", 
   expect(header).toContain("opens in a new tab");
   expect(header).not.toContain("account-menu");
   expect(header).not.toContain("Log out");
+});
+
+it("on a sign-in page, Sign in passes on where the Clasher was going", async () => {
   expect(await renderHeader(SIGNED_OUT, "/signup")).toContain(
     'href="/login" data-discover="true">Sign in</a>',
+  );
+  expect(
+    await renderHeader(SIGNED_OUT, "/signup?returnPath=%2Fcrews%2Fjoin%2Fabc"),
+  ).toContain(
+    'href="/login?returnPath=%2Fcrews%2Fjoin%2Fabc" data-discover="true">Sign in</a>',
   );
 });
 

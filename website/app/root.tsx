@@ -254,7 +254,8 @@ function DiscordLink() {
   );
 }
 
-// Sign-in pages already offer both ways in, so they don't come back to themselves.
+// Sign-in pages already offer both ways in, so they pass on where the
+// Clasher was going (their own returnPath) instead of coming back to themselves.
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
 
 // The same top bar on every page, error pages included. Without the root
@@ -262,9 +263,10 @@ const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
 // 64rem the tabs, theme and Discord fold into one Menu, so the bar is one row.
 function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
-  const signIn = SIGN_IN_PAGES.has(location.pathname)
-    ? "/login"
-    : `/login?returnPath=${encodeURIComponent(location.pathname)}`;
+  const back = SIGN_IN_PAGES.has(location.pathname)
+    ? new URLSearchParams(location.search).get("returnPath")
+    : location.pathname;
+  const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
   return (
     <header className="site-header">
       <Link className="site-brand" to="/" aria-label="Clash Lens">
