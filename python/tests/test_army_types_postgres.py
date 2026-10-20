@@ -29,8 +29,10 @@ from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyTypesPreparing
 
-THROWER_CODE = "u9x132-4x7"
-OTHER_THROWER_CODE = "u10x132-2x7"
+# A Duke with Revenge Deck and 2 Ice Blocks; a Duke with Rocket Backpack and
+# an Earthquake.
+THROWER_CODE = "h7p4e60_52u9x132-4x7s2x109"
+OTHER_THROWER_CODE = "h7p4e53_52u10x132-2x7s1x10"
 # 8 Dragons (160) and 6 Dragon Riders (150): Hydra, though neither leads clearly.
 HYDRA_CODE = "u8x8-6x65"
 NOON = datetime(2026, 8, 5, 12, tzinfo=UTC)
@@ -53,6 +55,15 @@ def _types(api: ApiDatabase, population: str = "top-10") -> dict[str, tuple]:
                        row["star_counts"], row["average_destruction"],
                        row["average_trophies"], row["average_miss_trophies"])
         for row in _result(api, population)["rows"]
+    }
+
+
+def _variants(api: ApiDatabase) -> dict[str, list[tuple]]:
+    return {
+        row["label"]: [(variant["label"], variant["usage_count"],
+                        variant["usage_denominator"], variant["usually_with"])
+                       for variant in row["variants"]]
+        for row in _result(api)["rows"] if "variants" in row
     }
 
 
@@ -146,6 +157,13 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 "Thrower": (2, 3, [0, 0, 1, 1], 90.0, 33.0, 26.0),
                 "Hydra": (1, 3, [0, 1, 0, 0], 50.0, 10.0, 10.0),
             }
+            # Each type opens into the variants its attacks used, named by
+            # hero equipment, with the spells each usually carries.
+            variants = {
+                "Thrower": [("Revenge Thrower", 1, 2, ["Ice Block"]),
+                            ("Backpack Thrower", 1, 2, ["Earthquake"])],
+                "Hydra": [("Other Hydra", 1, 1, [])],
+            }
 
             # Nothing is shown until every saved army has its type under
             # these rules, and nothing is counted during the Reset window.
@@ -159,11 +177,13 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
             assert _types(api, "trophies-5000-9000") == expected
+            assert _variants(api) == variants
 
             # Counted: the same numbers, from the saved daily counts.
             army_types.refresh_army_types(database, now=NOON)
             untraced = trace(api.pool)
             assert _types(api) == expected
+            assert _variants(api) == variants
             assert fact_reads == []
             api.pool.connection = untraced
             with database.pool.connection() as connection:
@@ -232,8 +252,13 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                     "SELECT * FROM army_package_day_counts ORDER BY 1, 2, 3"
                 ).fetchall()
             rules, combinations = army_types.RULES_VERSION, army_types.COMBINATIONS
+            listed = army_types.VARIANTS
             monkeypatch.setattr(army_types, "RULES_VERSION", "army-types-test")
             monkeypatch.setattr(army_types, "COMBINATIONS", ())
+            # A variant dropped from the list: past days read it as Other.
+            monkeypatch.setattr(army_types, "VARIANTS", {
+                army_types.THROWER: listed[army_types.THROWER][:3],
+            })
             with pytest.raises(ArmyTypesPreparing):
                 _types(api)
             untraced = trace(database.pool)
@@ -253,14 +278,20 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 "Thrower": expected["Thrower"],
                 "Other": expected["Hydra"],
             }
+            assert _variants(api) == {"Thrower": [("Other Thrower", 2, 2, [])]}
 
             # Rolling back relabels them under the earlier rules again.
             monkeypatch.setattr(army_types, "RULES_VERSION", rules)
             monkeypatch.setattr(army_types, "COMBINATIONS", combinations)
+            monkeypatch.setattr(army_types, "VARIANTS", listed)
             with pytest.raises(ArmyTypesPreparing):
                 _types(api)
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
+            # The partly read Revenge Thrower has no saved equipment to read.
+            assert _variants(api) == {**variants, "Thrower": [
+                ("Backpack Thrower", 1, 2, ["Earthquake"]), ("Other Thrower", 1, 2, []),
+            ]}
 
             # A corrected day changes the evidence hash, even with the same
             # numbers.

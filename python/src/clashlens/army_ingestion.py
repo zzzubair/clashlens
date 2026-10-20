@@ -246,6 +246,14 @@ def _upsert_army_decodes(
                     spell_quantities[fact.typed_id] = (
                         spell_quantities.get(fact.typed_id, 0) + fact.quantity
                     )
+                heroes = [
+                    {
+                        "hero": h.hero_typed_id,
+                        "pet": h.pet_typed_id,
+                        "equipment": list(h.equipment_typed_ids),
+                    }
+                    for h in decoded.heroes
+                ]
                 inserted = connection.execute(
                     """
                     INSERT INTO exact_armies (identity_hash, decoder_version, catalog_version, catalog_hash, home_troops, spells, heroes)
@@ -260,22 +268,13 @@ def _upsert_army_decodes(
                         CATALOG_HASH,
                         Jsonb(sorted(troop_quantities.items())),
                         Jsonb(sorted(spell_quantities.items())),
-                        Jsonb(
-                            [
-                                {
-                                    "hero": h.hero_typed_id,
-                                    "pet": h.pet_typed_id,
-                                    "equipment": list(h.equipment_typed_ids),
-                                }
-                                for h in decoded.heroes
-                            ]
-                        ),
+                        Jsonb(heroes),
                     ),
                 ).fetchone()
                 assert inserted is not None
                 exact_army_id = int(inserted[0])
                 army_types.label_new_army(
-                    connection, exact_army_id, sorted(troop_quantities.items())
+                    connection, exact_army_id, sorted(troop_quantities.items()), heroes
                 )
             else:
                 exact_army_id = int(existing[0])
