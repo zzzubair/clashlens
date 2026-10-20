@@ -16,28 +16,35 @@ from clashlens.api_notebook import (
 )
 
 RING, BOX, FORT = 1, 2, 3
+LEGEND = set(range(1, 29))
 
 
 def test_a_base_carries_forward_until_the_next_pick() -> None:
     # Box from Day 1, Fort on Day 9, Ring from Day 10; today is Day 16.
     picks = {1: BOX, 9: FORT, 10: RING}
-    assert runs(picks, 16) == [(1, 8, BOX), (9, 9, FORT), (10, 16, RING)]
+    assert runs(picks, 16, LEGEND) == [(1, 8, BOX), (9, 9, FORT), (10, 16, RING)]
     assert latest_base(picks) == RING
 
 
 def test_days_before_the_first_pick_or_with_no_base_are_in_no_run() -> None:
     # Ring from Day 3, no base from Day 6, Ring again from Day 8.
-    assert runs({3: RING, 6: None, 8: RING}, 9) == [(3, 5, RING), (8, 9, RING)]
+    assert runs({3: RING, 6: None, 8: RING}, 9, LEGEND) == [(3, 5, RING), (8, 9, RING)]
     assert latest_base({3: RING, 6: None}) is None
     assert latest_base({}) is None
 
 
 def test_picking_the_same_base_again_keeps_one_run() -> None:
-    assert runs({1: RING, 4: RING}, 6) == [(1, 6, RING)]
+    assert runs({1: RING, 4: RING}, 6, LEGEND) == [(1, 6, RING)]
+
+
+def test_a_run_stops_on_days_out_of_legend_league() -> None:
+    # Ring from Day 3; out of Legend League for Days 8 to 14, back from 15.
+    legend = LEGEND - set(range(8, 15))
+    assert runs({3: RING}, 16, legend) == [(3, 7, RING), (15, 16, RING)]
 
 
 def test_a_pick_from_tomorrow_is_in_no_run_yet() -> None:
-    assert runs({1: RING, 17: BOX}, 16) == [(1, 16, RING)]
+    assert runs({1: RING, 17: BOX}, 16, LEGEND) == [(1, 16, RING)]
     assert latest_base({1: RING, 17: BOX}) == BOX
     # Ring is still the base today.
     assert base_on({1: RING, 17: BOX}, 16) == RING

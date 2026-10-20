@@ -4,17 +4,20 @@ A Clasher keeps bases in the notebook's Library, each with an ID like
 B-7K3QX9, and says which base each of their verified players ran from which
 Legend day: a day pick. A player's base on any day is their latest pick on
 or before it, so a base carries forward until the next pick, and one player
-can never run two bases on one Legend day. A run is a stretch of days one
-player ran one base.
+can never run two bases on one Legend day. A run is a stretch of Legend
+days one player ran one base: it stops at a day the player is out of Legend
+League, and a pick carried past such days starts a new run when they are
+back.
 
 A base is Active while some player runs it today or has it picked for a
-later day. Its saved status follows the latest picks: Active while some
-player runs it from their latest pick on, and once that stops, Retired if
-it ran or back to To try if it never did. A change that puts a To try base
-on a day it ran makes it Retired, and one that takes a Retired base off its
-last day run sends it back to To try. To try and Retired are otherwise the
-Clasher's own choice. A base up today shows Active whatever is saved, so
-the label changes at the Reset with nothing run then.
+later day. Its saved status follows the picks: Active while some player
+runs it from tomorrow, and once that stops, Retired if it ran or back to To
+try if it never did. A change that puts a To try base on a day it ran makes
+it Retired, and one that takes a Retired base off its last day run sends it
+back to To try. To try and Retired are otherwise the Clasher's own choice.
+A base up today shows Active whatever is saved, and one saved Active that
+no player runs from tomorrow, as after its player left Legend League, shows
+Retired or To try, so the label changes at the Reset with nothing run then.
 
 A base can be set only on a player's Legend days: days in a week the
 weekly league record (league_week) says was Legend I. A week not decided
@@ -22,9 +25,8 @@ yet that starts tomorrow follows this week's answer. A base's record adds
 up the worker's per-day defense counts (army_package_defense_day_counts,
 migration 0106) for the Legend days and players it ran on, read live, so it
 grows as each finished Legend day is counted, about 30 minutes after the
-Reset; a run carried into weeks below Legend I counts nothing there. Held
-means the attacker did not get 3 stars. Nothing here runs at the Reset or
-in the worker.
+Reset. Held means the attacker did not get 3 stars. Nothing here runs at
+the Reset or in the worker.
 
 Every write but Undo returns what undoes it: the picks and statuses it
 changed, a base it made, an edited base's old name and link, or a deleted
@@ -48,7 +50,6 @@ from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
 from .domain import RANKED_DAY_DURATION, ranked_day_for
-from .league_days import RECORDED_FROM
 from .league_week import week_start
 
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
@@ -108,16 +109,19 @@ def clean_note(value: str) -> str:
     return note
 
 
-def runs(picks: dict[int, int | None], last_day: int) -> list[tuple[int, int, int]]:
-    """Each stretch of days 1 to ``last_day`` on one base, as (first day,
-    last day, base), from the day picks {day: base or None for no base}.
-    Days before the first pick and days with no base are in no run."""
+def runs(
+    picks: dict[int, int | None], last_day: int, legend: set[int]
+) -> list[tuple[int, int, int]]:
+    """Each stretch of ``legend`` days 1 to ``last_day`` on one base, as
+    (first day, last day, base), from the day picks {day: base or None for
+    no base}. Days before the first pick, with no base or not in ``legend``
+    are in no run; a pick carries across days not in ``legend``."""
     result: list[tuple[int, int, int]] = []
     base: int | None = None
     for day in range(1, last_day + 1):
         if day in picks:
             base = picks[day]
-        if base is None:
+        if base is None or day not in legend:
             continue
         if result and result[-1][2] == base and result[-1][1] == day - 1:
             result[-1] = (result[-1][0], day, base)
@@ -256,8 +260,7 @@ class _Notebook:
     def legend_days(self) -> dict[int, set[int]]:
         """Each player's Legend days this Season up to tomorrow: days in a
         week the weekly league record says was Legend I. Tomorrow in a week
-        not decided yet follows this week; days before the record began
-        count as Legend days, as they do for the Legend day calculation."""
+        not decided yet follows this week."""
         weeks: dict[tuple[int, datetime], bool] = {
             (int(player_id), start): league == "legend_i"
             for player_id, start, league in self.connection.execute(
@@ -278,7 +281,7 @@ class _Notebook:
                 week = week_start(start)
                 if day > self.today and (player_id, week) not in weeks:
                     week = this_week
-                if start < RECORDED_FROM or weeks.get((player_id, week), False):
+                if weeks.get((player_id, week), False):
                     result[player_id].add(day)
         return result
 
@@ -296,24 +299,46 @@ class _Notebook:
             ).fetchall()
         }
 
+    def uses(self) -> tuple[set[int], set[int], set[int]]:
+        """The bases some player runs today, the ones some player runs from
+        tomorrow, and the ones that ran up to today, on Legend days only."""
+        legend = self.legend_days()
+        picks = self.picks()
+
+        def up(day: int) -> set[int]:
+            return {
+                base for player_id, mine in picks.items() if day in legend[player_id]
+                if (base := base_on(mine, day)) is not None
+            }
+
+        ran = {
+            base for player_id, mine in picks.items()
+            for *_, base in runs(mine, self.today, legend[player_id])
+        }
+        return up(self.today), up(self.tomorrow), ran
+
     def shown(self) -> dict[int, str]:
         """Each base's status as the Clasher sees it: Active while some
-        player runs it today, otherwise as saved."""
-        today = {base_on(mine, self.today) for mine in self.picks().values()}
-        return {
-            base_id: "active" if base_id in today else status
-            for base_id, (status, _) in self.statuses().items()
-        }
+        player runs it today, otherwise as saved, except that one saved
+        Active that no player runs from tomorrow shows as settle() would
+        save it."""
+        today, running, ran = self.uses()
+        result = {}
+        for base_id, (status, _) in self.statuses().items():
+            if base_id in today:
+                status = "active"
+            elif status == "active" and base_id not in running:
+                status = "retired" if base_id in ran else "to_try"
+            result[base_id] = status
+        return result
 
     def settle(self, put_on: list[int], taken_off: list[int]) -> None:
-        """Active for every base some player runs from their latest pick on;
-        one no longer run that way turns Retired if it ran, or back to To try
-        if it never did. Of the rest, a To try base ``put_on`` a day that ran
+        """Active for every base some player runs from tomorrow; one no
+        longer run then turns Retired if it ran, or back to To try if it
+        never did. Of the rest, a To try base ``put_on`` a day that ran
         turns Retired, and a Retired one ``taken_off`` a day that no longer
         ran goes back to To try."""
-        picks = self.picks().values()
-        running = [base for base in map(latest_base, picks) if base is not None]
-        ran = [base for mine in picks for *_, base in runs(mine, self.today)]
+        _, running, ran = self.uses()
         self.connection.execute(
             """
             UPDATE notebook_bases
@@ -326,7 +351,7 @@ class _Notebook:
                    OR (status = 'retired' AND id = ANY(%(taken_off)s)
                        AND NOT id = ANY(%(ran)s)))
             """,
-            {"running": running, "ran": ran, "account": self.account_id,
+            {"running": list(running), "ran": list(ran), "account": self.account_id,
              "season": self.season_id, "put_on": put_on, "taken_off": taken_off},
         )
 
@@ -416,10 +441,10 @@ def get_notebook(
     for player_id, tag, name, _clan, league in notebook.players:
         mine = picks[player_id]
         player_runs = []
-        for first, last, base_id in runs(mine, notebook.today):
+        for first, last, base_id in runs(mine, notebook.today, legend[player_id]):
             record = _record()
             for day in range(first, last + 1):
-                if day in counted and day in legend[player_id]:
+                if day in counted:
                     _add(record, counts.get((player_id, day)))
                     _add(records[base_id], counts.get((player_id, day)))
                     if base_id == detail:
@@ -429,7 +454,9 @@ def get_notebook(
             player_runs.append(
                 {"from": first, "to": last, "base": codes[base_id], "record": record}
             )
-        current = base_on(mine, notebook.today)
+        current = (
+            base_on(mine, notebook.today) if notebook.today in legend[player_id] else None
+        )
         players.append({
             "tag": tag,
             "name": name,

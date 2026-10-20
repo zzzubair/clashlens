@@ -300,8 +300,10 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     the Monday Reset of 12 October 2026 and plays multiplayer battles on
     Monday, Day 8. Today is Tuesday, Day 9. The weekly league record puts
     Days 1 to 7 in Legend I and the week from Day 8 below it: a base can be
-    set on Day 6 but not on Day 8, today or tomorrow, and Ring, run from Day
-    6, counts only Saturday's and Sunday's defenses, not Monday's."""
+    set on Day 6 but not on Day 8, today or tomorrow. Ring, picked on
+    Saturday, Day 6, runs only to Sunday, Day 7: today it is in no run, MAIN
+    has no base and Ring shows Retired, last run on Day 7. It counts only
+    Saturday's and Sunday's defenses, not Monday's."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {MAIN: Climber(MAIN)})
@@ -333,8 +335,9 @@ def test_bases_are_set_and_counted_on_legend_days_only(
         try:
             me = _account(owner, "google", "subject-sloothy", "sloothy")
             _verify(owner, me, MAIN)
+            clock = [noon]
             app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
-                             clock=lambda: NOW_SECONDS, now=lambda: noon,
+                             clock=lambda: NOW_SECONDS, now=lambda: clock[0],
                              dashboard_enabled=True)
             with TestClient(app) as client:
 
@@ -351,7 +354,10 @@ def test_bases_are_set_and_counted_on_legend_days_only(
                     write(action="pick", tag=MAIN, day=8, base=ring),
                     write(action="status", base=ring, status="active", tag=MAIN, day=9),
                 ]
+                clock[0] = saturday + timedelta(hours=7)
                 picked = write(action="pick", tag=MAIN, day=6, base=ring)
+                clock[0] = noon
+                dropped = call(client, "sloothy", "GET", NOTEBOOK).json()
                 # Clearing a day needs no Legend day.
                 cleared = write(action="pick", tag=MAIN, day=9, base=None)
                 seen = call(client, "sloothy", "GET", NOTEBOOK).json()
@@ -364,7 +370,11 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     assert (picked[0], cleared[0]) == (200, 200)
     main = seen["players"][0]
     assert main["legend_days"] == [1, 2, 3, 4, 5, 6, 7]
-    assert [(run["from"], run["to"]) for run in main["runs"]] == [(6, 8)]
+    assert [(run["from"], run["to"]) for run in main["runs"]] == [(6, 7)]
+    assert (dropped["players"][0]["runs"], dropped["players"][0]["current"]) == (
+        main["runs"], None)
+    assert [(base["status"], base["last_ran_day"]) for base in dropped["bases"]] == [
+        ("retired", 7)]
     # Saturday's 8 defenses of 30 (two stars each) and Sunday's 8: 16
     # defenses, none tripled, 480 trophies lost, on 2 Legend days.
     ring_record = _record(2, 16, [0, 0, 16, 0], 480)

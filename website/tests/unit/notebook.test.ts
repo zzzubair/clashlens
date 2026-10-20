@@ -177,7 +177,7 @@ describe("run strip", () => {
       { day: 3, base: "B-000001" },
       { day: 9, base: "B-000002" },
     ],
-    legendDays: [],
+    legendDays: Array.from({ length: 17 }, (_, index) => index + 1),
   };
 
   it("covers all 28 days: no base, past run, today's run, days to come", () => {
@@ -195,6 +195,9 @@ describe("run strip", () => {
     expect(sameUntil(player, 1, 16)).toBe(2);
     const cleared = { ...player, picks: [...player.picks, { day: 12, base: null }] };
     expect(sameUntil(cleared, 12, 16)).toBe(16);
+    // Out of Legend League from Day 12: Day 9's base stops at Day 11.
+    const dropped = { ...player, legendDays: player.legendDays.slice(0, 11) };
+    expect(sameUntil(dropped, 9, 16)).toBe(11);
   });
 
   it("offers the base said for a day first when fixing it", () => {

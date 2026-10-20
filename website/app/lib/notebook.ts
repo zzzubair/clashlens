@@ -434,11 +434,16 @@ export function basesNear(player: NotebookPlayer, day: number): string[] {
 }
 
 /** The last day, up to `today`, that a player keeps the base (or no base)
- * they have on `day`. */
+ * they have on `day`: it stops before a day that is not their Legend day. */
 export function sameUntil(player: NotebookPlayer, day: number, today: number): number {
   const base = baseOnDay(player, day);
   let last = day;
-  while (last < today && baseOnDay(player, last + 1) === base) last += 1;
+  while (
+    last < today &&
+    isLegendDay(player, last + 1) &&
+    baseOnDay(player, last + 1) === base
+  )
+    last += 1;
   return last;
 }
 
