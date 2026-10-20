@@ -238,7 +238,7 @@ chosen. It reads only the day where clicking stops for 0.4 s, and waits up to
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
-card settings and the group picked on Group watch save at once. A user is on
+card settings and the watchlist picked on the Watchlist card save at once. A user is on
 the default layout (`DEFAULT_LAYOUT` in
 [`dashboard.ts`](app/lib/dashboard.ts)), which follows each release, or on
 their own. Settings are saved in the account's existing 4,096-byte preferences
@@ -294,9 +294,12 @@ tag. Visitors never see which Clash Lens accounts are in it, its invite links,
 or Invite, Members and Edit, and a player's page names the crews that player
 is in, linking to each. Invite on a crew's page makes or reuses the clasher's
 48-hour link and shows it with Copy and Share; a new crew opens with it. The
-link, `/crews/join/<code>`, shows the crew and which of the clasher's linked
-accounts can join, and "Link another account" goes through
-`/account/verify-player?return=/crews/join/<code>` and comes back. Members at
+link, `/crews/join/<code>`, shows the crew to anyone; signed out it says an
+account is needed, with separate Create account and Sign in buttons that come
+back to it. Signed in, it shows which of the clasher's linked accounts can join,
+and "Link another player" goes through
+`/account/verify-player?return=/crews/join/<code>` and comes back. A link that
+was turned off or ran out names its crew; any other says it doesn't work. Members at
 `/crews/<id>/members` lets clashers add or remove their own accounts and leave,
 the owner make or remove admins, and the owner or an admin kick accounts. Edit
 crew at `/crews/<id>/settings` renames, resizes (never below the places in

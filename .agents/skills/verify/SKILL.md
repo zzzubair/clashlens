@@ -127,7 +127,7 @@ const out = process.env.OUT; // the evidence folder, see Evidence
 })().catch((e) => { console.error(e); process.exit(1); });
 ```
 
-- **Sign in** with the fake Google: go to `/login`, click the link `Continue with Google`. A new identity lands on `/account/setup`; fill `Username` and `Display name`, click `Create account`. Each browser context is a fresh visitor. For a second Clash Lens account, rewrite the authorize request's `login_hint` to another `fixture-google-subject-NNNN` (four digits), as `website/tests/e2e/account-isolation.spec.ts` does.
+- **Sign in** with the fake Google: go to `/signup`, click the link `Sign up with Google`. A new identity lands on `/account/setup`; fill `Username` and `Display name`, click `Create account`, which opens `/account/verify-player`. On `/login`, `Sign in with Google` for a new identity shows `No account found` instead. Each browser context is a fresh visitor. For a second Clash Lens account, rewrite the authorize request's `login_hint` to another `fixture-google-subject-NNNN` (four digits), as `website/tests/e2e/account-isolation.spec.ts` does.
 - **Link a player:** on `/account/verify-player`, fill `Player tag` and `API token` with `VERIFY-` plus the tag without `#` (for `#2PP`: `VERIFY-2PP`), click `Link player`. The fake game allows only a few verify calls a second; retry for up to 30 seconds.
 - **Players:** `#2PP` is `Synthetic Clasher 001`. The stack collects for real while it runs, so numbers change between page loads; assert labels and relationships, not exact trophies.
 - **Database side effects** (read-only):
