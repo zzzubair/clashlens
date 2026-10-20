@@ -101,6 +101,7 @@
   box-shadow: var(--cl-card-drop);
 }
 .nb-account-head {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -126,13 +127,27 @@
   font-size: 0.92rem;
   overflow-wrap: anywhere;
 }
+/* Today's base links from the whole head, not just its name. */
+.nb-account-text a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
 .nb-next {
   color: var(--cl-action-text);
   font-weight: 700;
 }
-.nb-page .button.nb-small {
+/* Change and Days: full-size buttons under the strip, side by side. */
+.nb-account-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.nb-account-actions .button {
+  flex: 1 1 0;
   min-height: 2.75rem;
-  padding: 0.4rem 0.85rem;
+}
+.nb-account > .nb-hint {
+  margin: 0;
 }
 
 /* The run strip: 28 equal days, a block per run. */
@@ -176,25 +191,6 @@
 .nb-run-next {
   margin-right: 0;
   border: 1.5px dashed var(--cl-outline);
-}
-.nb-day {
-  grid-row: 1;
-  z-index: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.nb-day:focus-visible {
-  outline-offset: 0;
-}
-@media (hover: hover) and (pointer: fine) {
-  .nb-day:hover {
-    background: rgb(29 20 38 / 0.18);
-  }
 }
 .nb-axis {
   display: flex;
@@ -284,6 +280,23 @@
 }
 :root[data-theme="dark"] .nb-row mark {
   color: var(--cl-brand-night);
+}
+/* The Days list: one full-width row a day. */
+.nb-day-row {
+  min-height: 3rem;
+}
+.nb-day-row:disabled {
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  cursor: default;
+}
+.nb-day-base {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .nb-row-new b {
   color: var(--cl-action-text);
@@ -538,17 +551,12 @@
 .nb-saved {
   color: var(--cl-positive);
 }
-.nb-more-detail {
+.nb-base-part {
   margin-top: 1rem;
-  padding: 0.75rem 0.9rem;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
 }
-.nb-more-detail summary {
-  min-height: 2rem;
-  font-weight: 800;
-  cursor: pointer;
+.nb-base-part h2 {
+  margin: 0;
+  font-size: 1.1rem;
 }
 .nb-stars {
   display: grid;
@@ -583,20 +591,13 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--cl-border);
 }
-.nb-id {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-top: 1.25rem;
+.nb-per-account small {
+  flex-basis: 100%;
   color: var(--cl-muted);
-}
-.nb-id b {
-  color: var(--cl-ink);
-  font-family: var(--cl-font-mono);
-  letter-spacing: 0.04em;
+  font-size: 0.85rem;
 }
 .nb-delete {
   display: grid;
@@ -619,4 +620,7 @@
     opacity: 0;
     transform: translateY(0.5rem);
   }
+}
+.nb-base-part + .nb-note {
+  margin-top: 1rem;
 }

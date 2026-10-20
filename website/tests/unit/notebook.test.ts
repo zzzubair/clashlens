@@ -1,5 +1,20 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 import { describe, expect, it } from "vitest";
 
+import {
+  AccountRow,
+  canSet,
+  DaysSheet,
+  dayOptions,
+  LEGEND_ONLY,
+  RunStrip,
+} from "../../app/components/NotebookParts";
 import {
   baseInitials,
   basesNear,
@@ -9,6 +24,7 @@ import {
   parseNotebook,
   sameUntil,
   stripBlocks,
+  type Notebook,
   type NotebookBase,
   type NotebookPlayer,
 } from "../../app/lib/notebook";
@@ -41,6 +57,7 @@ function apiNotebook() {
         current: "B-7K3QX9",
         next: null,
         picks: [{ day: 9, base: "B-7K3QX9" }],
+        legend_days: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
       },
     ],
     bases: [
@@ -160,6 +177,7 @@ describe("run strip", () => {
       { day: 3, base: "B-000001" },
       { day: 9, base: "B-000002" },
     ],
+    legendDays: [],
   };
 
   it("covers all 28 days: no base, past run, today's run, days to come", () => {
@@ -182,5 +200,136 @@ describe("run strip", () => {
   it("offers the base said for a day first when fixing it", () => {
     expect(basesNear(player, 5)).toEqual(["B-000001", "B-000002"]);
     expect(basesNear(player, 12)).toEqual(["B-000002", "B-000001"]);
+  });
+});
+
+async function render(element: ReturnType<typeof createElement>) {
+  const handler = createStaticHandler([{ path: "/", Component: () => element }]);
+  const context = await handler.query(new Request("http://localhost/"));
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+      hydrate: false,
+    }),
+  );
+}
+
+describe("Legend days only", () => {
+  const EMPTY = {
+    days: 0,
+    defenses: 0,
+    held: 0,
+    stars: [0, 0, 0, 0],
+    trophiesLost: 0,
+  } as const;
+  const DAYS = Array.from({ length: 28 }, (_, index) => index + 1);
+  // The worst case: a different base on every one of the 28 days.
+  const daily: NotebookPlayer = {
+    tag: "#L9L0GJ9LR",
+    name: "curtypie",
+    league: "Legend League",
+    runs: DAYS.map((day) => ({
+      from: day,
+      to: day,
+      base: `B-0000${String(day).padStart(2, "0")}`,
+      record: { ...EMPTY, stars: [0, 0, 0, 0] },
+    })),
+    current: "B-000028",
+    next: null,
+    picks: DAYS.map((day) => ({ day, base: `B-0000${String(day).padStart(2, "0")}` })),
+    legendDays: DAYS,
+  };
+  // Dropped out of Legend League at the Day 8 Reset.
+  const dropped: NotebookPlayer = {
+    ...daily,
+    tag: "#80YJ8Y99R",
+    name: "Sloothyy",
+    runs: daily.runs.slice(0, 7),
+    current: null,
+    picks: daily.picks.slice(0, 7),
+    legendDays: DAYS.slice(0, 7),
+  };
+  const notebook: Notebook = {
+    season: {
+      id: "2026-10",
+      start: "2026-10-06T05:00:00Z",
+      end: "2026-11-03T05:00:00Z",
+      today: 28,
+      tomorrow: 28,
+    },
+    asOfDay: 27,
+    players: [daily, dropped],
+    bases: DAYS.map((day) => ({
+      id: `B-0000${String(day).padStart(2, "0")}`,
+      name: `Base number ${day}`,
+      status: "active",
+      addedDay: day,
+      lastRanDay: day,
+      recent: "2026-10-06T05:00:00Z",
+      record: { ...EMPTY, stars: [0, 0, 0, 0] },
+    })),
+  };
+
+  it("offers only the account's Legend days", () => {
+    const mid = { ...notebook, season: { ...notebook.season, today: 9, tomorrow: 10 } };
+    expect(dayOptions(mid, daily).map(([day]) => day)).toEqual([9, 10]);
+    expect(dayOptions(mid, dropped)).toEqual([]);
+    expect(canSet(mid, dropped)).toBe(false);
+  });
+
+  it("draws 28 one-day runs as a picture with nothing to tap", async () => {
+    const html = await render(createElement(RunStrip, { notebook, player: daily }));
+    expect(html.match(/class="nb-run /g)).toHaveLength(28);
+    expect(html).not.toContain("<button");
+    expect(html).toContain('role="img"');
+    expect(html).toContain("Base number 1 Day 1, Base number 2 Day 2");
+  });
+
+  it("keeps Change and day picks from an account off Legend League", async () => {
+    const off = await render(
+      createElement(AccountRow, {
+        notebook,
+        player: dropped,
+        onChange: () => {},
+        onAdd: () => {},
+        onDays: () => {},
+      }),
+    );
+    expect(off).toContain(LEGEND_ONLY);
+    expect(off).not.toContain(">Change<");
+    // Its Legend days 1 to 7 can still be fixed.
+    expect(off).toContain(">Days<");
+    const on = await render(
+      createElement(AccountRow, {
+        notebook,
+        player: daily,
+        onChange: () => {},
+        onAdd: () => {},
+        onDays: () => {},
+      }),
+    );
+    expect(on).toContain(">Change<");
+    expect(on).not.toContain(LEGEND_ONLY);
+  });
+
+  it("lists every day, newest first, with days off Legend League shut", async () => {
+    const html = await render(
+      createElement(DaysSheet, {
+        notebook,
+        player: dropped,
+        onDay: () => {},
+        onClose: () => {},
+      }),
+    );
+    const rows =
+      html.match(/<button type="button" class="nb-row nb-day-row"[^>]*>/g) ?? [];
+    expect(rows).toHaveLength(28);
+    expect(rows.filter((row) => row.includes("disabled"))).toHaveLength(21);
+    const text = html.replaceAll("<!-- -->", "");
+    expect(text.indexOf("Day 28 · today")).toBeLessThan(text.indexOf("Day 7<"));
+    expect(html).toContain("Not a Legend day");
+    expect(html).toContain("Tue 6 Oct");
   });
 });

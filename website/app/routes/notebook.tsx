@@ -5,6 +5,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import {
   AccountRow,
   ChangeSheet,
+  DaysSheet,
   FixDaySheet,
   Library,
   NewBaseSheet,
@@ -54,6 +55,7 @@ export function headers() {
 
 type Open =
   | { kind: "change"; tag: string }
+  | { kind: "days"; tag: string }
   | { kind: "day"; tag: string; day: number }
   | { kind: "new"; preset: NewBasePreset };
 
@@ -113,7 +115,7 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
                   preset: { status: "active", tag: item.tag, day: season.today },
                 })
               }
-              onDay={(day) => setOpen({ kind: "day", tag: item.tag, day })}
+              onDays={() => setOpen({ kind: "days", tag: item.tag })}
             />
           ))}
         </section>
@@ -131,6 +133,14 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
           onNew={(day) =>
             setOpen({ kind: "new", preset: { status: "active", tag: player.tag, day } })
           }
+        />
+      ) : null}
+      {open?.kind === "days" && player ? (
+        <DaysSheet
+          notebook={notebook}
+          player={player}
+          onDay={(day) => setOpen({ kind: "day", tag: player.tag, day })}
+          onClose={close}
         />
       ) : null}
       {open?.kind === "day" && player ? (

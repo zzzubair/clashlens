@@ -18,8 +18,19 @@ from fastapi.testclient import TestClient
 from test_api_security import FakeDatabase
 from test_crews_api import call
 from test_discord_bot_postgres import _account, _verify
+from test_league_week_days_postgres import Climber
 from test_private_api import NOW_SECONDS, TS_CURRENT
-from test_reset_scenarios_postgres import SEASON, THROWER, _story, day, defenses
+from test_reset_scenarios_postgres import (
+    SEASON,
+    THROWER,
+    Story,
+    _saturday,
+    _story,
+    attacks,
+    day,
+    defenses,
+    multiplayer,
+)
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
@@ -280,3 +291,82 @@ def test_on_day_28_picks_stop_at_day_28(database_url: str) -> None:
             api.close()
     assert (seen["season"]["today"], seen["season"]["tomorrow"]) == (28, 28)
     assert seen["players"] == [] and seen["bases"] == [] and seen["as_of_day"] is None
+
+
+def test_bases_are_set_and_counted_on_legend_days_only(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """MAIN plays Legend I through Sunday, Day 7, then drops to Legend II at
+    the Monday Reset of 12 October 2026 and plays multiplayer battles on
+    Monday, Day 8. Today is Tuesday, Day 9. The weekly league record puts
+    Days 1 to 7 in Legend I and the week from Day 8 below it: a base can be
+    set on Day 6 but not on Day 8, today or tomorrow, and Ring, run from Day
+    6, counts only Saturday's and Sunday's defenses, not Monday's."""
+    saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch, {MAIN: Climber(MAIN)})
+        player = story.players[MAIN]
+        # Saturday: 8 defenses of 30 from 5,300; Sunday: 1 attack of 40 and
+        # 8 defenses of 30, ending at 4,940, below 5,000.
+        player.battles = (_saturday(saturday) + attacks(sunday + timedelta(hours=10), 40)
+                          + defenses(sunday, *[30] * 8))
+        story.reset(saturday, {MAIN: (5300, SEASON)})
+        story.reset(sunday, {MAIN: (5140, SEASON)})
+        story.reads(monday - timedelta(minutes=10), {MAIN: 4940})
+        story.reset(monday, {MAIN: (4940, SEASON)})
+        story.run_worker()
+        # Read in Legend II naming the Season an hour after the Reset; then
+        # multiplayer battles, which the game shows below Legend I.
+        player.legend_ii = True
+        player.battles += multiplayer(monday + timedelta(hours=2), 3)
+        story.reads(monday + timedelta(hours=1), {MAIN: 4940})
+        story.reads(monday + timedelta(hours=9), {MAIN: 4940})
+        story.wait(timedelta(hours=1))
+        story.reads(tuesday - timedelta(minutes=10), {MAIN: 4940})
+        story.reset(tuesday, {MAIN: (4940, SEASON)})
+        noon = tuesday + timedelta(hours=7)
+        story.count_armies(noon)
+        unfinished = story.unfinished_jobs()
+
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            me = _account(owner, "google", "subject-sloothy", "sloothy")
+            _verify(owner, me, MAIN)
+            app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: noon,
+                             dashboard_enabled=True)
+            with TestClient(app) as client:
+
+                def write(**change) -> tuple[int, dict]:
+                    response = call(client, "sloothy", "POST", NOTEBOOK, change)
+                    return response.status_code, response.json()
+
+                refused = [
+                    write(action="add", name="Hex", status="active", tag=MAIN, day=9),
+                    write(action="add", name="Hex", status="active", tag=MAIN, day=10),
+                ]
+                ring = write(action="add", name="Ring", status="to_try")[1]["base"]
+                refused += [
+                    write(action="pick", tag=MAIN, day=8, base=ring),
+                    write(action="status", base=ring, status="active", tag=MAIN, day=9),
+                ]
+                picked = write(action="pick", tag=MAIN, day=6, base=ring)
+                # Clearing a day needs no Legend day.
+                cleared = write(action="pick", tag=MAIN, day=9, base=None)
+                seen = call(client, "sloothy", "GET", NOTEBOOK).json()
+        finally:
+            owner.close()
+            api.close()
+
+    assert unfinished == []
+    assert refused == [(422, {"error": "not_legend_day"})] * 4
+    assert (picked[0], cleared[0]) == (200, 200)
+    main = seen["players"][0]
+    assert main["legend_days"] == [1, 2, 3, 4, 5, 6, 7]
+    assert [(run["from"], run["to"]) for run in main["runs"]] == [(6, 8)]
+    # Saturday's 8 defenses of 30 (two stars each) and Sunday's 8: 16
+    # defenses, none tripled, 480 trophies lost, on 2 Legend days.
+    ring_record = _record(2, 16, [0, 0, 16, 0], 480)
+    assert main["runs"][0]["record"] == ring_record
+    assert seen["bases"][0]["record"] == ring_record

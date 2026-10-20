@@ -43,7 +43,7 @@ Use these exactly.
 - **Variant**: a split of an army type by the hero equipment its attacks used, from a hand-kept list (for example Revenge Hydra), with an army matching none in its type's Other.
 - **Notebook**: a Clasher's private page of the bases their verified accounts ran this Season and how each one held.
 - **Library**: all of a Clasher's bases in their Notebook this Season, each Active, To try or Retired.
-- **Base ID**: the `B-` code with six letters or digits that names one base for support; it never opens the base.
+- **Base ID**: the `B-` code with six letters or digits that names one base for support; Clashers never see it on a page, and it never opens the base.
 - **Day pick**: a Clasher saying which base one account ran from one Legend day on, until the next pick.
 - **Run**: a stretch of Legend days on which one account ran one base.
 - **Held**: a defense on which the attacker did not get 3 stars.
@@ -76,7 +76,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Overlay link**: the private web address a Clasher pastes into OBS as a browser source to show their overlay; making a new one retires the old one for good.
 - **First Legend day**: a player's first Legend day of the Season (Day 1, a promoted player's Monday, or the first day a player sitting at 5,000 plays), whose automatic defense loss counts only attacks less defenses, or, with fewer attacks than defenses, only what a reading shows.
 - **Stale reading**: a profile reading equal to the player's total just before one of their battles, read at most 40 minutes after that battle (so a battle it lacks, reported up to 13 minutes before that one, can be up to about 53 minutes old), because the profile lags its battle log; set aside only when nothing else fits, it neither confirms nor contradicts the day.
-- **Weekly league record**: one saved answer per player per week, Monday Reset to Monday Reset, saying Legend I, below Legend I or league unknown, with the evidence that decided it; for now it is recorded but nothing uses it.
+- **Weekly league record**: one saved answer per player per week, Monday Reset to Monday Reset, saying Legend I, below Legend I or league unknown, with the evidence that decided it; Legend days, Daily board members, tracking and the Notebook follow it.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 

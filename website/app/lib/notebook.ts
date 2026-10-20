@@ -42,6 +42,9 @@ export interface NotebookPlayer {
   /** A base picked from tomorrow. */
   next: { day: number; base: string | null } | null;
   picks: Array<{ day: number; base: string | null }>;
+  /** The days up to tomorrow the player plays in Legend League: the only
+   * days a base can be set on. */
+  legendDays: number[];
 }
 
 export interface NotebookBase {
@@ -127,8 +130,15 @@ function parseRun(value: unknown): NotebookRun | null {
 
 function parsePlayer(value: unknown): NotebookPlayer | null {
   if (!isRecord(value) || typeof value.tag !== "string") return null;
-  const { name, league, runs, current, next, picks } = value;
-  if (!isText(name) || !isText(league) || !Array.isArray(runs) || !Array.isArray(picks))
+  const { name, league, runs, current, next, picks, legend_days: legend } = value;
+  if (
+    !isText(name) ||
+    !isText(league) ||
+    !Array.isArray(runs) ||
+    !Array.isArray(picks) ||
+    !Array.isArray(legend) ||
+    !legend.every(isDay)
+  )
     return null;
   if (current !== null && !isCode(current)) return null;
   if (
@@ -151,6 +161,7 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
     current,
     next: next as NotebookPlayer["next"],
     picks: parsedPicks as NotebookPlayer["picks"],
+    legendDays: legend,
   };
 }
 
@@ -439,4 +450,30 @@ export function daysText(from: number, to: number): string {
 /** The run a player's day falls in. */
 export function runOn(player: NotebookPlayer, day: number): NotebookRun | null {
   return player.runs.find((run) => run.from <= day && day <= run.to) ?? null;
+}
+
+/** Whether a base can be set on the player's ``day``: a Legend day. */
+export function isLegendDay(player: NotebookPlayer, day: number): boolean {
+  return player.legendDays.includes(day);
+}
+
+/** The day's date, as "Tue 20 Oct", for the Season starting at ``start``. */
+export function dayDate(start: string, day: number): string {
+  return new Date(Date.parse(start) + (day - 1) * 86_400_000).toLocaleDateString(
+    "en-GB",
+    {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    },
+  );
+}
+
+/** The players' runs of one base, as "Days 5–9, Day 13". */
+export function baseRuns(player: NotebookPlayer, code: string): string {
+  return player.runs
+    .filter((run) => run.base === code)
+    .map((run) => daysText(run.from, run.to))
+    .join(", ");
 }

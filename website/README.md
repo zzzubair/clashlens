@@ -312,13 +312,18 @@ and admins change settings.
 The Notebook at `/notebook` stays hidden unless `CLASHLENS_NOTEBOOK_ENABLED=true`,
 and needs sign-in. It shows each verified account's base today, its record on
 that run, and a strip of the Season's 28 Legend days with a block per run of one
-base; Change picks the base from today or tomorrow, and tapping a past day fixes
-which base was up then. Below, the Library lists the Season's bases with search,
-an All, Active, To try or Retired filter with counts, and four sorts. A base's
-page at `/notebook/bases/<base ID>` shows how it held (defenses not 3-starred)
-over the counted days it ran, its stars and each account's share, its note
-(saved as you type), its link, and Edit to rename or delete. Every change saves
-at once through `/notebook/save` and offers Undo, except the note. Records come
+base. The strip is a picture only: Change picks the base from today or
+tomorrow, and Days lists every day so far, one full-width row each, to fix
+which base was up then. Each starts from one account and only changes that
+account. Bases can be set only on an account's Legend days (its weekly league
+record says Legend I), and records count only those days' defenses. Below, the
+Library lists the Season's bases with search, an All, Active, To try or Retired
+filter with counts, and four sorts. A base's page at `/notebook/bases/<base ID>`
+shows how it held (defenses not 3-starred) over the counted days it ran, its
+stars, each account's record with the days and dates it ran, its note (saved
+as you type), its link, and Edit to rename or delete. The base ID is for
+support only, so pages never show it beyond the address. Every change saves at
+once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
 Reset.
 

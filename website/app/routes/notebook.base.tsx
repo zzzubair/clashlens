@@ -22,6 +22,8 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   averageLost,
   BASE_ID,
+  baseRuns,
+  dayDate,
   heldText,
   playerName,
   type BaseRecord,
@@ -42,7 +44,8 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
   return [{ title: `${name ?? "Base"} · Notebook · Clash Lens` }];
 }
 
-/** GET /notebook/bases/:code — one base: its record, note, link and ID. */
+/** GET /notebook/bases/:code — one base: its record, note and link. The
+ * base ID is for support, so the page never shows it. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
@@ -92,8 +95,7 @@ export default function NotebookBaseRoute() {
             <ErrorNotice error={error} />
           ) : (
             <p>
-              There's no base {code} in your notebook.{" "}
-              <Link to="/notebook">Notebook</Link>
+              That base isn't in your notebook. <Link to="/notebook">Notebook</Link>
             </p>
           )}
         </>
@@ -158,15 +160,22 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           Edit
         </button>
       </div>
-      <NoteBox key={base.id} base={base} note={detail?.note ?? ""} saver={saver} />
-      <details className="nb-more-detail">
-        <summary>Stars and each account</summary>
+      {/* Every number on the page itself, one section each; the best and
+       * worst armies go in a section after Stars. */}
+      <section className="nb-base-part" aria-labelledby="nb-stars-title">
+        <h2 id="nb-stars-title">Stars</h2>
         <Stars record={base.record} />
+      </section>
+      <section className="nb-base-part" aria-labelledby="nb-each-title">
+        <h2 id="nb-each-title">Each account</h2>
         {detail?.players.length ? (
           <ul className="nb-per-account">
             {detail.players.map((item) => {
               const player = notebook.players.find((one) => one.tag === item.tag);
               const each = averageLost(item.record);
+              const runs = player?.runs.filter((run) => run.base === base.id) ?? [];
+              const first = runs[0]?.from;
+              const last = runs[runs.length - 1]?.to;
               return (
                 <li key={item.tag}>
                   <b>{player ? playerName(player) : item.tag}</b>
@@ -175,6 +184,14 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
                     {each ? ` · ${each} a defense` : ""} · {item.record.days}{" "}
                     {item.record.days === 1 ? "day" : "days"}
                   </span>
+                  {player && first && last ? (
+                    <small>
+                      {baseRuns(player, base.id)} ·{" "}
+                      {first === last
+                        ? dayDate(notebook.season.start, first)
+                        : `${dayDate(notebook.season.start, first)} – ${dayDate(notebook.season.start, last)}`}
+                    </small>
+                  ) : null}
                 </li>
               );
             })}
@@ -183,8 +200,8 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           <p className="nb-hint">No account has run it on a counted day yet.</p>
         )}
         <p className="nb-hint">{recordLine(notebook)}</p>
-      </details>
-      <BaseId code={base.id} />
+      </section>
+      <NoteBox key={base.id} base={base} note={detail?.note ?? ""} saver={saver} />
       {open === "status" ? (
         <StatusSheet
           notebook={notebook}
@@ -268,26 +285,6 @@ function NoteBox({
         onBlur={() => flush.current()}
       />
     </div>
-  );
-}
-
-function BaseId({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <p className="nb-id">
-      <span>
-        Base ID <b>{code}</b>
-      </span>
-      <button
-        type="button"
-        className="nb-chip"
-        onClick={() => {
-          void navigator.clipboard?.writeText(code).then(() => setCopied(true));
-        }}
-      >
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </p>
   );
 }
 

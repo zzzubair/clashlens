@@ -54,6 +54,9 @@ REVOKE ALL ON notebook_bases, notebook_day_picks FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON notebook_bases, notebook_day_picks
     TO clashlens_python_api;
 GRANT USAGE ON SEQUENCE notebook_bases_id_seq TO clashlens_python_api;
+-- Bases are set, and records counted, on Legend days only: days in a week
+-- the weekly league record (0115) says was Legend I.
+GRANT SELECT (player_id, week_start, league) ON player_league_weeks TO clashlens_python_api;
 
 INSERT INTO clash_lens_schema_migrations (version) VALUES (124)
 ON CONFLICT (version) DO NOTHING;

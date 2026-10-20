@@ -13,8 +13,10 @@ import {
   baseInitials,
   baseLine,
   baseOnDay,
+  dayDate,
   daysText,
   heldText,
+  isLegendDay,
   libraryView,
   matchName,
   playerName,
@@ -34,6 +36,7 @@ import {
 } from "../lib/notebook";
 
 const SAVE = "/notebook/save";
+export const LEGEND_ONLY = "Bases can be set on Legend days only.";
 // Rows drawn at first, and added each time the list's end scrolls into view.
 const PAGE_ROWS = 30;
 const TOAST_MS = 8_000;
@@ -48,6 +51,7 @@ const ERRORS: Record<string, string> = {
   player_not_verified: "That account is no longer linked to you.",
   base_not_found: "That base was deleted. Refresh the page.",
   runs_until_season_end: "It runs until the Season ends.",
+  not_legend_day: LEGEND_ONLY,
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
@@ -269,15 +273,21 @@ export function Choice<T extends string | number>({
   );
 }
 
-/** Today or tomorrow, as the Change and status sheets offer them. */
-export function dayOptions(notebook: Notebook): Array<[number, string]> {
+/** Today or tomorrow, as the Change and status sheets offer them; with
+ * ``player``, only those that are the player's Legend days. */
+export function dayOptions(
+  notebook: Notebook,
+  player?: NotebookPlayer,
+): Array<[number, string]> {
   const { today, tomorrow } = notebook.season;
-  return tomorrow > today
-    ? [
-        [today, `Day ${today} · today`],
-        [tomorrow, `Day ${tomorrow} · tomorrow`],
-      ]
-    : [[today, `Day ${today} · today`]];
+  const days: Array<[number, string]> = [[today, `Day ${today} · today`]];
+  if (tomorrow > today) days.push([tomorrow, `Day ${tomorrow} · tomorrow`]);
+  return player ? days.filter(([day]) => isLegendDay(player, day)) : days;
+}
+
+/** Whether a base can be set on the player today or tomorrow. */
+export function canSet(notebook: Notebook, player: NotebookPlayer): boolean {
+  return dayOptions(notebook, player).length > 0;
 }
 
 /** Who runs a base, as "Active · Main, Alt from Day 6". */
@@ -516,8 +526,10 @@ export function ChangeSheet({
   onClose: () => void;
   onNew: (day: number) => void;
 }) {
-  const options = dayOptions(notebook);
-  const [day, setDay] = useState(options[options.length - 1]![0]);
+  const options = dayOptions(notebook, player);
+  const [day, setDay] = useState(
+    options[options.length - 1]?.[0] ?? notebook.season.today,
+  );
   const who = playerName(player);
   return (
     <Sheet
@@ -564,8 +576,7 @@ export function ChangeSheet({
   );
 }
 
-/** Fix a past day: which base was up on that day, for the account whose
- * strip was tapped, with a switch for a wrong tap. */
+/** Fix a past day: which base was up on that day, for one account only. */
 export function FixDaySheet({
   notebook,
   tag,
@@ -579,14 +590,11 @@ export function FixDaySheet({
   saver: Saver;
   onClose: () => void;
 }) {
-  const [shown, setShown] = useState(tag);
   const [searching, setSearching] = useState(false);
-  const player =
-    notebook.players.find((item) => item.tag === shown) ?? notebook.players[0]!;
+  const player = notebook.players.find((item) => item.tag === tag)!;
   const said = baseOnDay(player, day);
   const near = basesNear(player, day);
   const who = playerName(player);
-  const others = notebook.players.length > 1;
 
   function pick(base: string | null) {
     // What ran the next day before this change, for "Only Day N".
@@ -625,20 +633,7 @@ export function FixDaySheet({
   }
 
   return (
-    <Sheet
-      title={`Day ${day} · ${who}`}
-      onClose={onClose}
-      head={
-        others ? (
-          <Choice
-            label="Account"
-            value={shown}
-            onChange={setShown}
-            options={notebook.players.map((item) => [item.tag, playerName(item)])}
-          />
-        ) : null
-      }
-    >
+    <Sheet title={`Day ${day} · ${who}`} onClose={onClose}>
       <p className="nb-ask">Which base was up on {who}?</p>
       {searching ? (
         <PickList notebook={notebook} onPick={(base) => pick(base.id)} autoFocus />
@@ -710,13 +705,20 @@ export function NewBaseSheet({
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
   const [status, setStatus] = useState<"to_try" | "active">(preset.status);
-  // The account where they started, or the only one; otherwise they choose.
+  // Only accounts playing Legend days can run it: the account where they
+  // started, or the only one; otherwise they choose.
+  const runners = notebook.players.filter((item) => canSet(notebook, item));
   const [tag, setTag] = useState(
-    preset.tag ?? (notebook.players.length === 1 ? notebook.players[0]!.tag : ""),
+    preset.tag ?? (runners.length === 1 ? runners[0]!.tag : ""),
   );
-  const options = dayOptions(notebook);
-  const [day, setDay] = useState(preset.day ?? options[options.length - 1]![0]);
-  const canRun = notebook.players.length > 0;
+  const runner = runners.find((item) => item.tag === tag);
+  const options = runner ? dayOptions(notebook, runner) : dayOptions(notebook);
+  const [picked, setDay] = useState(preset.day);
+  const day =
+    options.find(([option]) => option === picked)?.[0] ??
+    options[options.length - 1]?.[0] ??
+    notebook.season.today;
+  const canRun = runners.length > 0;
   const known = notebook.players.find((item) => item.tag === preset.tag);
   return (
     <Sheet
@@ -792,12 +794,12 @@ export function NewBaseSheet({
             {status === "active" ? (
               <div className="nb-active-on">
                 {/* Ask for the account only when where they started didn't say. */}
-                {notebook.players.length > 1 && !known ? (
+                {runners.length > 1 && !known ? (
                   <Choice
                     label="Account"
                     value={tag}
                     onChange={setTag}
-                    options={notebook.players.map((item) => [item.tag, playerName(item)])}
+                    options={runners.map((item) => [item.tag, playerName(item)])}
                   />
                 ) : null}
                 <Choice label="From" value={day} onChange={setDay} options={options} />
@@ -806,12 +808,13 @@ export function NewBaseSheet({
               <p className="nb-hint">To try: saved for later.</p>
             )}
           </fieldset>
-        ) : null}
-        <p className="nb-hint">Gets its base ID on Save.</p>
+        ) : (
+          <p className="nb-hint">{LEGEND_ONLY} Saved as To try.</p>
+        )}
         <button
           type="submit"
           className="button"
-          disabled={!name.trim() || (status === "active" && canRun && !tag)}
+          disabled={!name.trim() || (status === "active" && canRun && !runner)}
         >
           Save
         </button>
@@ -835,6 +838,8 @@ export function StatusSheet({
   const options = dayOptions(notebook);
   const [day, setDay] = useState(options[options.length - 1]![0]);
   const [choosing, setChoosing] = useState(false);
+  // Accounts that play the chosen day in Legend League.
+  const runners = notebook.players.filter((player) => isLegendDay(player, day));
   const { today, tomorrow } = notebook.season;
   const upToday = notebook.players.some((player) => player.current === base.id);
   const running =
@@ -869,7 +874,8 @@ export function StatusSheet({
         value={choosing ? "active" : base.status}
         onChange={(status) => {
           if (status !== "active") return set(status);
-          if (notebook.players.length === 1) return set("active", notebook.players[0]);
+          if (notebook.players.length === 1 && runners.length === 1)
+            return set("active", runners[0]);
           setChoosing(true);
         }}
         options={[
@@ -897,7 +903,7 @@ export function StatusSheet({
         <>
           <p className="nb-ask">Active on which account?</p>
           <ul className="nb-list nb-pick-list">
-            {notebook.players.map((player) => (
+            {runners.map((player) => (
               <li key={player.tag}>
                 <button
                   type="button"
@@ -922,6 +928,9 @@ export function StatusSheet({
               </li>
             ))}
           </ul>
+          {runners.length < notebook.players.length ? (
+            <p className="nb-hint">{LEGEND_ONLY}</p>
+          ) : null}
         </>
       ) : null}
     </Sheet>
@@ -929,16 +938,14 @@ export function StatusSheet({
 }
 
 /** One account's Season on one line: a block per run, today's in orange,
- * earlier ones tan, days to come outlined. Tapping a day up to today fixes
- * it. */
+ * earlier ones tan, days to come outlined. A picture only; days are fixed
+ * from the Days list. */
 export function RunStrip({
   notebook,
   player,
-  onDay,
 }: {
   notebook: Notebook;
   player: NotebookPlayer;
-  onDay: (day: number) => void;
 }) {
   const { today } = notebook.season;
   const blocks = stripBlocks(player, today);
@@ -951,39 +958,35 @@ export function RunStrip({
     <div className="nb-strip-wrap">
       <div
         className="nb-strip"
-        role="group"
+        role="img"
         aria-label={`${who}'s Season: ${summary || "no base picked yet"}. Today is Day ${today}.`}
       >
-        {blocks.map((block) => (
-          <span
-            key={block.from}
-            className={`nb-run nb-run-${block.kind}`}
-            style={
-              {
-                gridColumn: `${block.from} / ${block.to + 1}`,
-                "--nb-days": block.to - block.from + 1,
-              } as CSSProperties
-            }
-            aria-hidden="true"
-          >
-            {/* Short runs show the tile's letters, so neighbours differ. */}
-            {block.base
-              ? block.kind === "now" || block.to - block.from >= 3
-                ? nameOf(notebook, block.base)
-                : baseInitials(nameOf(notebook, block.base))
-              : ""}
-          </span>
-        ))}
-        {Array.from({ length: today }, (_, index) => index + 1).map((day) => (
-          <button
-            key={day}
-            type="button"
-            className="nb-day"
-            style={{ gridColumn: `${day} / ${day + 1}` }}
-            aria-label={`Day ${day}: ${nameOf(notebook, baseOnDay(player, day))}. Change this day`}
-            onClick={() => onDay(day)}
-          />
-        ))}
+        {blocks.map((block) => {
+          const length = block.to - block.from + 1;
+          const name = nameOf(notebook, block.base);
+          return (
+            <span
+              key={block.from}
+              className={`nb-run nb-run-${block.kind}`}
+              style={
+                {
+                  gridColumn: `${block.from} / ${block.to + 1}`,
+                  "--nb-days": length,
+                } as CSSProperties
+              }
+            >
+              {/* Long runs show the name, short ones the tile's letters, one
+               * day nothing: the Days list names every day. */}
+              {block.base
+                ? length >= 4
+                  ? name
+                  : length >= 2
+                    ? baseInitials(name)
+                    : ""
+                : ""}
+            </span>
+          );
+        })}
       </div>
       <div className="nb-axis" aria-hidden="true">
         <span>Day 1</span>
@@ -994,25 +997,27 @@ export function RunStrip({
   );
 }
 
-/** An account's row: today's base and its run's record, Change, and the
- * run strip. */
+/** An account's row: today's base and its run's record, Change and Days,
+ * and the run strip. Bases are set only on the account's Legend days. */
 export function AccountRow({
   notebook,
   player,
   onChange,
   onAdd,
-  onDay,
+  onDays,
 }: {
   notebook: Notebook;
   player: NotebookPlayer;
   onChange: () => void;
   onAdd: () => void;
-  onDay: (day: number) => void;
+  onDays: () => void;
 }) {
   const { today } = notebook.season;
   const run = runOn(player, today);
   const base = notebook.bases.find((item) => item.id === run?.base);
   const next = player.next;
+  const settable = canSet(notebook, player);
+  const fixable = player.legendDays.some((day) => day <= today);
   return (
     <article className="nb-account">
       <div className="nb-account-head">
@@ -1039,17 +1044,80 @@ export function AccountRow({
             ) : null}
           </p>
         </div>
-        {!player.runs.length && !player.next?.base ? (
-          <button type="button" className="button nb-small" onClick={onAdd}>
-            Add your base
-          </button>
-        ) : null}
-        <button type="button" className="button secondary nb-small" onClick={onChange}>
-          Change
-        </button>
       </div>
-      <RunStrip notebook={notebook} player={player} onDay={onDay} />
+      <RunStrip notebook={notebook} player={player} />
+      {settable || fixable ? (
+        <div className="nb-account-actions">
+          {settable && !player.runs.length && !player.next?.base ? (
+            <button type="button" className="button" onClick={onAdd}>
+              Add your base
+            </button>
+          ) : null}
+          {settable ? (
+            <button type="button" className="button secondary" onClick={onChange}>
+              Change
+            </button>
+          ) : null}
+          {fixable ? (
+            <button type="button" className="button secondary" onClick={onDays}>
+              Days
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {!settable ? <p className="nb-hint">{LEGEND_ONLY}</p> : null}
     </article>
+  );
+}
+
+/** Every day of one account's Season so far, newest first, one full-width
+ * row each; a Legend day opens the fix-a-day sheet. */
+export function DaysSheet({
+  notebook,
+  player,
+  onDay,
+  onClose,
+}: {
+  notebook: Notebook;
+  player: NotebookPlayer;
+  onDay: (day: number) => void;
+  onClose: () => void;
+}) {
+  const { today, start } = notebook.season;
+  return (
+    <Sheet title={`${playerName(player)} · days`} onClose={onClose}>
+      <ul className="nb-list nb-days">
+        {Array.from({ length: today }, (_, index) => today - index).map((day) => {
+          const legend = isLegendDay(player, day);
+          const code = baseOnDay(player, day);
+          return (
+            <li key={day}>
+              <button
+                type="button"
+                className="nb-row nb-day-row"
+                disabled={!legend}
+                onClick={() => onDay(day)}
+              >
+                <span className="nb-row-text">
+                  <b>
+                    Day {day}
+                    {day === today ? " · today" : ""}
+                  </b>
+                  <small>{dayDate(start, day)}</small>
+                </span>
+                <span className="nb-day-base">
+                  {legend
+                    ? code
+                      ? nameOf(notebook, code)
+                      : "No base"
+                    : "Not a Legend day"}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </Sheet>
   );
 }
 

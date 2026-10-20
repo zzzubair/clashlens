@@ -16,11 +16,15 @@ last day run sends it back to To try. To try and Retired are otherwise the
 Clasher's own choice. A base up today shows Active whatever is saved, so
 the label changes at the Reset with nothing run then.
 
-A base's record adds up the worker's per-day defense counts
-(army_package_defense_day_counts, migration 0106) for the days and players
-it ran on, read live, so it grows as each finished Legend day is counted,
-about 30 minutes after the Reset. Held means the attacker did not get 3
-stars. Nothing here runs at the Reset or in the worker.
+A base can be set only on a player's Legend days: days in a week the
+weekly league record (league_week) says was Legend I. A week not decided
+yet that starts tomorrow follows this week's answer. A base's record adds
+up the worker's per-day defense counts (army_package_defense_day_counts,
+migration 0106) for the Legend days and players it ran on, read live, so it
+grows as each finished Legend day is counted, about 30 minutes after the
+Reset; a run carried into weeks below Legend I counts nothing there. Held
+means the attacker did not get 3 stars. Nothing here runs at the Reset or
+in the worker.
 
 Every write but Undo returns what undoes it: the picks and statuses it
 changed, a base it made, an edited base's old name and link, or a deleted
@@ -44,6 +48,8 @@ from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .league_days import RECORDED_FROM
+from .league_week import week_start
 
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -247,6 +253,39 @@ class _Notebook:
         }
         return days, counts
 
+    def legend_days(self) -> dict[int, set[int]]:
+        """Each player's Legend days this Season up to tomorrow: days in a
+        week the weekly league record says was Legend I. Tomorrow in a week
+        not decided yet follows this week; days before the record began
+        count as Legend days, as they do for the Legend day calculation."""
+        weeks: dict[tuple[int, datetime], bool] = {
+            (int(player_id), start): league == "legend_i"
+            for player_id, start, league in self.connection.execute(
+                """
+                SELECT player_id, week_start, league FROM player_league_weeks
+                WHERE player_id = ANY(%s) AND week_start >= %s AND week_start < %s
+                """,
+                (list(self.player_ids.values()), week_start(self.season_start),
+                 self.season_end),
+            ).fetchall()
+        }
+        this_week = week_start(self.day_start(self.today))
+        result: dict[int, set[int]] = {}
+        for player_id in self.player_ids.values():
+            result[player_id] = set()
+            for day in range(1, self.tomorrow + 1):
+                start = self.day_start(day)
+                week = week_start(start)
+                if day > self.today and (player_id, week) not in weeks:
+                    week = this_week
+                if start < RECORDED_FROM or weeks.get((player_id, week), False):
+                    result[player_id].add(day)
+        return result
+
+    def require_legend(self, player_id: int, day: int) -> None:
+        if day not in self.legend_days()[player_id]:
+            raise ApiError(422, "not_legend_day")
+
     def statuses(self) -> dict[int, tuple[str, datetime]]:
         return {
             int(base_id): (_text(status), status_at)
@@ -366,6 +405,7 @@ def get_notebook(
         bases = notebook.bases()
         picks = notebook.picks()
         counted, counts = notebook.counted()
+        legend = notebook.legend_days()
         shown = notebook.shown()
         detail = _base(notebook, base) if base is not None else None
     codes = {base_id: base["code"] for base_id, base in bases.items()}
@@ -379,7 +419,7 @@ def get_notebook(
         for first, last, base_id in runs(mine, notebook.today):
             record = _record()
             for day in range(first, last + 1):
-                if day in counted:
+                if day in counted and day in legend[player_id]:
                     _add(record, counts.get((player_id, day)))
                     _add(records[base_id], counts.get((player_id, day)))
                     if base_id == detail:
@@ -396,6 +436,8 @@ def get_notebook(
             "league": league,
             "runs": player_runs,
             "current": None if current is None else codes[current],
+            # The days up to tomorrow a base can be set on.
+            "legend_days": sorted(legend[player_id]),
             # A pick from tomorrow, shown beside today's base.
             "next": (
                 {"day": notebook.tomorrow, "base": codes.get(mine[notebook.tomorrow])}
@@ -563,6 +605,7 @@ def save(
             if active:
                 player_id = _player(notebook, body.tag)
                 day = _pick_day(notebook, body.day, past=False)
+                notebook.require_legend(player_id, day)
             for _attempt in range(5):
                 row = connection.execute(
                     """
@@ -584,15 +627,21 @@ def save(
         elif body.action == "pick":
             player_id = _player(notebook, body.tag)
             base_id = None if body.base is None else _base(notebook, body.base)
-            pick(player_id, _pick_day(notebook, body.day, past=True), base_id)
+            day = _pick_day(notebook, body.day, past=True)
+            # Clearing a day is always allowed; setting one needs a Legend day.
+            if base_id is not None:
+                notebook.require_legend(player_id, day)
+            pick(player_id, day, base_id)
         elif body.action == "status":
             base_id = _base(notebook, body.base)
             if body.status is None:
                 raise ApiError(422, "status_required")
             status = body.status
             if body.status == "active":
-                pick(_player(notebook, body.tag),
-                     _pick_day(notebook, body.day, past=False), base_id)
+                player_id = _player(notebook, body.tag)
+                day = _pick_day(notebook, body.day, past=False)
+                notebook.require_legend(player_id, day)
+                pick(player_id, day, base_id)
             else:
                 # Stop it on every player running it, from tomorrow: a pick
                 # of it for tomorrow goes when another base is up today, so
