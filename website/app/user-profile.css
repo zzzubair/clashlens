@@ -110,12 +110,6 @@
   font-size: 0.9rem;
 }
 
-.linked-player-default {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-}
-
 .linked-player-make-default .button {
   min-height: 2.25rem;
   padding: 0.35rem 0.75rem;
@@ -264,6 +258,17 @@
 .settings-name input {
   flex: 1 1 10rem;
   min-width: 0;
+  min-height: 3rem;
+  padding: 0.6rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font: inherit;
+}
+
+.settings-name input[aria-invalid="true"] {
+  border-color: #b3261e;
 }
 
 .settings-value {
