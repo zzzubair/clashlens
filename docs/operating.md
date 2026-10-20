@@ -511,7 +511,8 @@ these steps, all run by the worker:
    is due, it saves one completed day's defense counts per defender and
    distinct army in `army_package_defense_day_counts` (about 88,000 rows,
    10.6 MB, a day), for the current Season and the last 28 days, at most one
-   day a minute, for the dashboard's Armies on defense card. After a deploy
+   day a minute, for the dashboard's Armies on defense card and the
+   Notebook's base records. After a deploy
    the current Season fills in at most about 30 minutes. The
    Armies view stays unavailable until that labelling finishes. The worker
    log shows each run as an `army_types` event; a `failed` run is retried
