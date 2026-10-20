@@ -6,9 +6,10 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
+import psycopg
 import pytest
 from domain_test_support import domain_database
-from test_crews_postgres import Site
+from test_crews_postgres import Site, _while_held
 
 from clashlens import api_accounts, api_crews, api_discord_alerts, api_overlays
 from clashlens.api_db import RequestBinding
@@ -146,3 +147,39 @@ def test_an_owner_hands_over_before_unlinking_their_only_player_in_their_crew(
     assert handed.status_code == 200
     assert _unlink(site, "owner", "#2PP").status_code == 200
     assert site.crew("owner", crew_id) is None
+
+
+def test_unlinking_waits_for_a_crew_being_made_with_that_player(site: Site) -> None:
+    site.account("owner")
+    site.link("owner", "#2PP")
+    crew_id = str(uuid4())
+
+    def make(held: psycopg.Connection) -> None:
+        crew = held.execute(
+            "INSERT INTO crews (public_id, name, size) VALUES (%s, 'Night Owls', 50)"
+            " RETURNING id",
+            (crew_id,),
+        ).fetchone()[0]
+        held.execute(
+            "INSERT INTO crew_accounts (crew_id, account_id, role) VALUES (%s, %s, 'owner')",
+            (crew, site.ids["owner"]),
+        )
+        held.execute(
+            """
+            INSERT INTO crew_players (crew_id, account_id, player_id)
+            SELECT %s, %s, id FROM players WHERE normalized_tag = '#2PP'
+            """,
+            (crew, site.ids["owner"]),
+        )
+
+    with psycopg.connect(site.info, autocommit=True) as held:
+        refused = _while_held(site, held, make, lambda: _unlink(site, "owner", "#2PP"))
+    assert (refused.status_code, refused.payload) == (
+        409,
+        {
+            "error": "owner_must_hand_over",
+            "crews": [{"crew_id": crew_id, "name": "Night Owls"}],
+        },
+    )
+    crew = site.crew("owner", crew_id)
+    assert (crew["my_role"], crew["used"]) == ("owner", 1)

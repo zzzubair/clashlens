@@ -1223,6 +1223,7 @@ def unlink_player(
                 FROM verified_player_links AS link
                 JOIN players AS player ON player.id = link.player_id
                 WHERE player.normalized_tag = %s AND link.account_id = %s
+                FOR UPDATE OF link
                 """,
                 (normalized_tag, binding.account_id),
             ).fetchone()
