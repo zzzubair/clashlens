@@ -638,7 +638,7 @@ def save(
             [base_id] if base_id is not None and (body.action == "pick" or status == "active")
             else []
         )
-        notebook.settle(put_on, [
+        notebook.settle(put_on, [] if body.action == "undo" else [
             old for _, old in touched.values() if old is not None and old not in put_on
         ])
         if status is not None and status != "active":

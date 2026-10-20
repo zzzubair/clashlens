@@ -133,6 +133,7 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 # Hex, picked on MAIN from tomorrow, is swapped back to Ring
                 # before it ever ran.
                 hexed = save(action="add", name="Hex", status="active", tag=MAIN, day=6)
+                hex_ = hexed["base"]
                 swapped = save(action="status", base=ring, status="active", tag=MAIN, day=6)
                 before_retire = notebook()
                 # Retiring Ring stops it on both players from tomorrow: MAIN
@@ -160,6 +161,12 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 zig_ran = notebook()
                 clock[0] = noon
                 unrun = save(action="pick", tag=ALT, day=5, base=spiral)
+                # Hex, set Retired though it never ran, is mis-tapped on MAIN
+                # from tomorrow; Undo makes it Retired again.
+                save(action="status", base=hex_, status="retired")
+                mistap = save(action="pick", tag=MAIN, day=6, base=hex_)
+                save(action="undo", undo=mistap["undo"])
+                hex_back = notebook()
 
                 # Undo puts back a base's old name and link, but not a note
                 # saved since.
@@ -221,7 +228,6 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     ]
     assert (theirs.status_code, theirs.json()) == (404, {"error": "base_not_found"})
 
-    hex_ = hexed["base"]
     assert swapped["changed"] == [{"base": hex_, "status": "to_try"}]
     assert retired["changed"] == []
     statuses = {base["id"]: base["status"] for base in after_retire["bases"]}
@@ -240,6 +246,7 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert {base["id"]: base["status"] for base in zig_ran["bases"]}[zig] == "retired"
     assert {item["base"]: item["status"] for item in unrun["changed"]} == {
         zig: "to_try", spiral: "active"}
+    assert {base["id"]: base["status"] for base in hex_back["bases"]}[hex_] == "retired"
 
     bases = {base["id"]: base for base in renamed_back["bases"]}
     box_page = renamed_back["base"]
