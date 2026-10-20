@@ -344,7 +344,8 @@ function AlertRows({
 }
 
 /** One switch that saves as soon as it is flipped. While the save runs it
- * already shows where it is going. */
+ * already shows where it is going, and no switch saves again until the page
+ * has the next request key. */
 function AlertSwitch({
   player,
   kind,
@@ -355,7 +356,9 @@ function AlertSwitch({
   idempotencyKey: string;
 }) {
   const intent = kind === "attack" ? "attack-alert" : "day-summary";
-  const pending = useNavigation().formData;
+  const navigation = useNavigation();
+  const busy = navigation.state !== "idle";
+  const pending = navigation.formData;
   const flipping = pending?.get("intent") === intent && pending.get("tag") === player.tag;
   const saved = kind === "attack" ? player.on : player.summaryOn;
   const on = flipping ? pending.get("on") === "on" : saved;
@@ -369,6 +372,10 @@ function AlertSwitch({
         type="submit"
         role="switch"
         aria-checked={on}
+        aria-disabled={busy || undefined}
+        onClick={(event) => {
+          if (busy) event.preventDefault();
+        }}
         aria-label={`${SWITCH_NAMES[kind]} for ${player.name ?? "Unnamed"} ${player.tag}`}
         className="switch"
       >

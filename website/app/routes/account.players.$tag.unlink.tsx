@@ -4,6 +4,7 @@ import type { BackHandle } from "../components/BackLink";
 import { SavedLine } from "../components/SavedLine";
 import type { VerifiedPlayer } from "../lib/account-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
+import type { HandOverCrew } from "../services/unlink-player.server";
 import type { Route } from "./+types/account.players.$tag.unlink";
 
 import "../user-profile.css";
@@ -21,42 +22,59 @@ export interface UnlinkPlayerLoaderData {
   player: VerifiedPlayer;
   /** It is the default player and another linked player takes over. */
   defaultMoves: boolean;
+  /** Crews the Clasher owns where this is their only player. */
+  handOver: HandOverCrew[];
   idempotencyKey: string;
 }
 
 /**
  * GET /account/players/:tag/unlink — say what unlinking one of the
- * Clasher's own players changes and what stays before they confirm it. A
- * player that is not theirs goes back to Settings.
+ * Clasher's own players changes and what stays before they confirm it, or
+ * which crews they hand over first. A player that is not theirs goes back to
+ * Settings.
  */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const tag = normalizePlayerTag(params.tag ?? "");
   const { createPythonClient } = await import("../services/python.server");
-  let summary;
+  const { listCrews } = await import("../services/crews.server");
+  const { isCrewsEnabled } = await import("../server/config.server");
+  let read;
   try {
-    summary = await createPythonClient(identity).getAccountSummary();
+    read = await Promise.all([
+      createPythonClient(identity).getAccountSummary(),
+      isCrewsEnabled() ? listCrews(identity) : null,
+    ]);
   } catch (cause) {
     const { isAccountNotFoundError } = await import("../server/actions.server");
     if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
     throw cause;
   }
+  const [summary, crews] = read;
   const player = summary.verifiedPlayers.find((linked) => linked.tag === tag);
   if (player === undefined) throw redirect(SETTINGS, { headers: NO_STORE });
+  const handOver = (crews?.crews ?? [])
+    .filter(
+      (crew) =>
+        crew.role === "owner" && crew.myTags.length === 1 && crew.myTags[0] === tag,
+    )
+    .map(({ crewId, name }) => ({ crewId, name }));
   const { freshIdempotencyKey } = await import("../server/actions.server");
   return data<UnlinkPlayerLoaderData>(
     {
       player,
       defaultMoves:
         summary.defaultPlayer === player.tag && summary.verifiedPlayers.length > 1,
+      handOver,
       idempotencyKey: freshIdempotencyKey(),
     },
     { headers: NO_STORE },
   );
 }
 
-/** POST /account/players/:tag/unlink — unlink it, then back to Settings. */
+/** POST /account/players/:tag/unlink — unlink it, then back to Settings, or
+ * say which crews to hand over first. */
 export async function action({ request, params }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -72,8 +90,9 @@ export async function action({ request, params }: Route.ActionArgs) {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
   const { unlinkPlayer } = await import("../services/unlink-player.server");
+  let handOver;
   try {
-    await unlinkPlayer(identity, tag, idempotencyKey);
+    handOver = await unlinkPlayer(identity, tag, idempotencyKey);
   } catch (cause) {
     if ((cause as { status?: number }).status === 404) {
       throw redirect(SETTINGS, { headers: NO_STORE });
@@ -81,6 +100,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     // A fresh key, so trying again is a new request.
     return data({ idempotencyKey: actions.freshIdempotencyKey() }, { status: 503 });
   }
+  if (handOver.length > 0) return data({ handOver }, { status: 409 });
   return redirect(`${SETTINGS}?saved=unlinked&tag=${encodeURIComponent(tag)}`, {
     headers: NO_STORE,
   });
@@ -91,8 +111,11 @@ export function headers() {
 }
 
 export default function UnlinkPlayerRoute() {
-  const { player, defaultMoves, idempotencyKey } = useLoaderData<typeof loader>();
-  const failed = useActionData<typeof action>();
+  const loaded = useLoaderData<typeof loader>();
+  const answer = useActionData<typeof action>();
+  const failed = answer && "idempotencyKey" in answer ? answer : null;
+  const handOver = answer && "handOver" in answer ? answer.handOver : loaded.handOver;
+  const { player, defaultMoves } = loaded;
   const name = player.name ?? player.tag;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -129,19 +152,46 @@ export default function UnlinkPlayerRoute() {
           </li>
           <li>You can link it again any time with its API token.</li>
         </ul>
-        <form method="post" className="hero-actions">
-          <input
-            type="hidden"
-            name="idempotencyKey"
-            value={failed?.idempotencyKey ?? idempotencyKey}
-          />
-          <button type="submit" className="button button-primary">
-            Unlink {name}
-          </button>
-          <Link className="button button-secondary" to={SETTINGS}>
-            Cancel
-          </Link>
-        </form>
+        {handOver.length > 0 ? (
+          <>
+            <h2>Before you unlink</h2>
+            <p>
+              {name} is your only player in{" "}
+              {new Intl.ListFormat("en-GB").format(handOver.map((crew) => crew.name))},{" "}
+              {handOver.length === 1 ? "a crew" : "crews"} you own. Hand{" "}
+              {handOver.length === 1 ? "it" : "each one"} to another member first, or
+              delete it, then come back to unlink {name}.
+            </p>
+            <div className="hero-actions">
+              {handOver.map((crew) => (
+                <Link
+                  key={crew.crewId}
+                  className="button button-primary"
+                  to={`/crews/${crew.crewId}/settings`}
+                >
+                  {crew.name} settings
+                </Link>
+              ))}
+              <Link className="button button-secondary" to={SETTINGS}>
+                Cancel
+              </Link>
+            </div>
+          </>
+        ) : (
+          <form method="post" className="hero-actions">
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={failed?.idempotencyKey ?? loaded.idempotencyKey}
+            />
+            <button type="submit" className="button button-primary">
+              Unlink {name}
+            </button>
+            <Link className="button button-secondary" to={SETTINGS}>
+              Cancel
+            </Link>
+          </form>
+        )}
       </section>
     </main>
   );

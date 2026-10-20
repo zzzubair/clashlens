@@ -1209,7 +1209,9 @@ def unlink_player(
     """Unlink one of the account's own verified players: only the link goes.
     Its crew places go with it, and the migration 0105, 0108 and 0112 triggers
     forget it as the default player and drop its Discord alerts and summary.
-    The player and its game data stay, and it can be linked again."""
+    The player and its game data stay, and it can be linked again. Refused,
+    naming the crews, while it is the owner's only player in a crew they own:
+    they hand over or delete it first, as when removing it from the crew."""
     with database.pool.connection() as connection:
         with connection.transaction():
             existing = api_db._reserve_request(database, connection, binding)
@@ -1237,18 +1239,43 @@ def unlink_player(
                     """,
                     (link[0],),
                 )
-                removed = connection.execute(
+                owned = connection.execute(
                     """
-                    DELETE FROM verified_player_links
-                    WHERE player_id = %s AND account_id = %s
+                    SELECT crew.public_id, crew.name
+                    FROM crew_players AS place
+                    JOIN crews AS crew ON crew.id = place.crew_id
+                    JOIN crew_accounts AS member
+                      ON member.crew_id = place.crew_id
+                     AND member.account_id = place.account_id
+                    WHERE place.player_id = %s AND member.role = 'owner'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM crew_players AS other
+                          WHERE other.crew_id = place.crew_id
+                            AND other.account_id = place.account_id
+                            AND other.player_id <> place.player_id
+                      )
+                    ORDER BY lower(crew.name), crew.id
                     """,
-                    (link[0], binding.account_id),
-                )
-                result = (
-                    OperationResult(200, {"unlinked": normalized_tag})
-                    if removed.rowcount == 1
-                    else OperationResult(404, {"error": "player_not_verified"})
-                )
+                    (link[0],),
+                ).fetchall()
+                if owned:
+                    crews = [{"crew_id": str(row[0]), "name": _text(row[1])} for row in owned]
+                    result = OperationResult(
+                        409, {"error": "owner_must_hand_over", "crews": crews}
+                    )
+                else:
+                    removed = connection.execute(
+                        """
+                        DELETE FROM verified_player_links
+                        WHERE player_id = %s AND account_id = %s
+                        """,
+                        (link[0], binding.account_id),
+                    )
+                    result = (
+                        OperationResult(200, {"unlinked": normalized_tag})
+                        if removed.rowcount == 1
+                        else OperationResult(404, {"error": "player_not_verified"})
+                    )
             api_db._complete_request(connection, binding.request_id, result)
             return result
 

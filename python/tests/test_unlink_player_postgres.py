@@ -10,7 +10,7 @@ import pytest
 from domain_test_support import domain_database
 from test_crews_postgres import Site
 
-from clashlens import api_accounts, api_discord_alerts, api_overlays
+from clashlens import api_accounts, api_crews, api_discord_alerts, api_overlays
 from clashlens.api_db import RequestBinding
 
 
@@ -109,3 +109,40 @@ def test_unlinking_a_player_takes_it_off_only_that_account(site: Site) -> None:
         "#2PP", "#8PY",
     ]
     assert relinked["default_player"] == "#8PY"
+
+
+def test_an_owner_hands_over_before_unlinking_their_only_player_in_their_crew(
+    site: Site,
+) -> None:
+    site.account("owner")
+    site.account("guest")
+    site.link("owner", "#2PP")
+    site.link("owner", "#8PY")
+    site.link("guest", "#9QQ")
+    crew_id = site.make("owner", ["#2PP"])
+    assert site.accept("guest", site.invite("owner", crew_id), ["#9QQ"]).status_code == 200
+    owner = site.ids["owner"]
+
+    request_id = str(uuid4())
+    refused = _unlink(site, "owner", "#2PP", request_id)
+    assert (refused.status_code, refused.payload) == (
+        409,
+        {
+            "error": "owner_must_hand_over",
+            "crews": [{"crew_id": crew_id, "name": "Night Owls"}],
+        },
+    )
+    assert _unlink(site, "owner", "#2PP", request_id).payload == refused.payload
+    # Nothing changed: still linked, still in the crew, still its owner.
+    summary = api_accounts.get_multi_account_summary(site.api, owner)
+    assert summary is not None
+    assert [player["tag"] for player in summary["verified_players"]] == ["#2PP", "#8PY"]
+    crew = site.crew("owner", crew_id)
+    assert (crew["my_role"], crew["used"]) == ("owner", 2)
+    # A player outside the crew still unlinks.
+    assert _unlink(site, "owner", "#8PY").status_code == 200
+
+    handed = site.call("owner", api_crews.hand_over, crew_id=crew_id, username="guest")
+    assert handed.status_code == 200
+    assert _unlink(site, "owner", "#2PP").status_code == 200
+    assert site.crew("owner", crew_id) is None

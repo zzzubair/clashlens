@@ -135,7 +135,7 @@ class Commands:
                 return replies.name_a_player()
             tag = self._default(account, cards)
             if tag is None:
-                return replies.which_player(self.site, account.username, cards, "stats")
+                return replies.which_player(self.site, cards, "stats")
         page = self.store.player_page(tag, now)
         if page is None:
             return replies.not_tracked(self.site, tag)

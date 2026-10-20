@@ -133,10 +133,6 @@ class Site:
     def player(self, tag: str) -> str:
         return self.url(f"/players/{quote(tag, safe='')}")
 
-    def user(self, username: str) -> str:
-        """The Clasher's own page, listing their linked accounts."""
-        return self.url(f"/users/{quote(username, safe='')}")
-
     def battle(self, tag: str, day_start: datetime, battle_id: int) -> str:
         """The player's page on that Legend day with the battle highlighted."""
         return f"{self.player(tag)}?day={day_start.date().isoformat()}#battle-{battle_id}"
@@ -294,7 +290,7 @@ def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
                         "-# /stats with a player tag or name works for anyone. Your own "
                         "linked accounts need this Discord account connected to Clash "
                         "Lens. With several linked accounts, choose your default account "
-                        f"on {page}.\n{you}"
+                        f"in {page}.\n{you}"
                     ),
                 ),
                 button=Link("Open Clash Lens", site.url("/"))
@@ -470,9 +466,7 @@ def not_tracked(site: Site, tag: str) -> Reply:
     )
 
 
-def which_player(
-    site: Site, username: str, cards: Sequence[Mapping[str, Any]], action: str
-) -> Reply:
+def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
     """No player named and no default found: ask with a dropdown of the
     person's own players."""
     return say(

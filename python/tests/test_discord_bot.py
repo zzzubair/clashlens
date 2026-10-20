@@ -369,8 +369,11 @@ def test_help_link_and_alerts_show_a_connected_accounts_settings(store) -> None:
     assert "connected as @drift, 2 linked accounts" in help_message["text"]
     assert links(help_message) == {"Open Clash Lens": "https://clashlens.test/"}
     assert CONNECT not in help_message["text"]
-    # The default account is chosen on the Clasher's own page.
-    assert "[your Clash Lens settings](https://clashlens.test/account/settings)" in help_message["text"]
+    # The default account is chosen in the Clasher's Settings.
+    assert (
+        "choose your default account in "
+        "[your Clash Lens settings](https://clashlens.test/account/settings)"
+    ) in help_message["text"]
     linked = run_command(store, "link", FakeInteraction())
     assert linked["private"] is False
     assert "**Drift** #2PP\n**Lens** #8QQ · default account" in linked["text"]

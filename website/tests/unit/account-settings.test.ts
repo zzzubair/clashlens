@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   startProviderAuthorization: vi.fn(),
   unlinkPlayer: vi.fn(),
+  listCrews: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -37,6 +38,10 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 vi.mock("../../app/services/unlink-player.server", () => ({
   unlinkPlayer: mocks.unlinkPlayer,
+}));
+
+vi.mock("../../app/services/crews.server", () => ({
+  listCrews: mocks.listCrews,
 }));
 
 import {
@@ -111,7 +116,8 @@ beforeEach(() => {
       headers: { Location: "https://provider.example" },
     }),
   );
-  mocks.unlinkPlayer.mockResolvedValue(undefined);
+  mocks.unlinkPlayer.mockResolvedValue([]);
+  mocks.listCrews.mockResolvedValue({ crews: [], maxCrews: 5 });
 });
 
 function post(path: string, fields: Record<string, string>, headers = {}): Request {
@@ -400,6 +406,51 @@ describe("Unlink player", () => {
     expect(onlyPage).toContain("Unlink #8PY?");
     expect(onlyPage).not.toContain("/stats uses your next player");
     expect(mocks.unlinkPlayer).not.toHaveBeenCalled();
+  });
+
+  const NIGHT_OWLS = {
+    crewId: "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e",
+    name: "Night Owls",
+  };
+  const DAY_HAWKS = { crewId: "0d3f9a1c-5b2e-4c7a-8f6d-2e1b0a9c8d7e", name: "Day Hawks" };
+
+  it("names the crew to hand over first instead of unlinking its owner's only player", async () => {
+    vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
+    const crew = { size: 10, used: 2 };
+    mocks.listCrews.mockResolvedValue({
+      crews: [
+        { ...NIGHT_OWLS, ...crew, role: "owner", myTags: ["#2PP"] },
+        // Their other player stays in this one, and they don't own the last.
+        { ...DAY_HAWKS, ...crew, role: "owner", myTags: ["#2PP", "#8PY"] },
+        { crewId: KEY, name: "Guests", ...crew, role: "member", myTags: ["#2PP"] },
+      ],
+      maxCrews: 5,
+    });
+    const html = await render(unlinkPage, new Request(`${ORIGIN}${path}`));
+    vi.unstubAllEnvs();
+    expect(html).toContain(">Before you unlink</h2>");
+    expect(html).toContain(
+      "Nova is your only player in Night Owls, a crew you own. Hand it to another member first, or delete it, then come back to unlink Nova.",
+    );
+    expect(html).toContain(
+      `<a class="button button-primary" href="/crews/${NIGHT_OWLS.crewId}/settings">Night Owls settings</a>`,
+    );
+    expect(html).toContain('href="/account/settings">Cancel</a>');
+    for (const text of ["Unlink Nova</button>", "Day Hawks", "Guests", "danger"])
+      expect(html).not.toContain(text);
+  });
+
+  it("says which crews to hand over when unlinking is refused at submit time", async () => {
+    mocks.unlinkPlayer.mockResolvedValue([NIGHT_OWLS, DAY_HAWKS]);
+    const html = await render(unlinkPage, post(path, { idempotencyKey: KEY }));
+    expect(mocks.unlinkPlayer).toHaveBeenCalledWith(IDENTITY, "#2PP", KEY);
+    expect(html).toContain(
+      "Nova is your only player in Night Owls and Day Hawks, crews you own. Hand each one to another member first, or delete it, then come back to unlink Nova.",
+    );
+    for (const { crewId, name } of [NIGHT_OWLS, DAY_HAWKS])
+      expect(html).toContain(`href="/crews/${crewId}/settings">${name} settings</a>`);
+    for (const text of ["wasn&#x27;t unlinked", "Unlink Nova</button>", "danger"])
+      expect(html).not.toContain(text);
   });
 
   it("sends a player that isn't theirs back to Settings", async () => {
