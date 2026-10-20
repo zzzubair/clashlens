@@ -270,9 +270,10 @@ VARIANTS: dict[int, tuple[tuple[int, str, tuple[tuple[str, str], ...]], ...]] = 
         (41, "Backpack Root Rider", (BACKPACK,)),
     ),
 }
-# A spell is a variant's "usually with" tag when at least this share of its
-# attacks carry it, and at least TAG_LEAD more than across its whole type.
-TAG_SHARE, TAG_LEAD = 0.5, 0.15
+# A spell is a variant's "usually with" tag when at least TAG_SHARE percent of
+# its attacks carry it, and at least TAG_LEAD points more than across its
+# whole type.
+TAG_SHARE, TAG_LEAD = 50, 15
 
 
 def variant(type_id: int, heroes: Iterable[Any]) -> int:
@@ -524,14 +525,14 @@ def read_type_rows(
     ``days`` maps each day number to its ``ranked_day_start``. Counted days
     are added up from their saved counts; days not counted yet, and trophy
     ranges, which saved counts cannot split, are added up from the day's
-    attacks. An older partly read army is typed from its saved home troops.
-    ``boards`` (each day's board by ``ranked_day_start``, lowest and highest
-    rank) selects each day's players from that day's board instead of
-    ``member_ids``. Rows are (type id, variant id, attacks, one-star,
-    two-star, three-star, destruction, trophies won), by type and variant id;
-    an army with no distinct army is its type's Other. The spells are, by
-    (type id, variant id) of a type with variants, the attacks carrying each
-    spell.
+    attacks, once for both the totals and the spells. An older partly read
+    army gets its type, variant and spells from its saved home troops,
+    heroes and spells. ``boards`` (each day's board by ``ranked_day_start``,
+    lowest and highest rank) selects each day's players from that day's
+    board instead of ``member_ids``. Rows are (type id, variant id, attacks,
+    one-star, two-star, three-star, destruction, trophies won), by type and
+    variant id. The spells are, by (type id, variant id) of a type with
+    variants, the attacks carrying each spell.
     """
     counted = {
         row[0]
@@ -590,45 +591,61 @@ def read_type_rows(
             population_player_id, exact_army_id, attacks, one_star, two_star,
             three_star, destruction, trophies)"""
     totals: dict[tuple[int, int], list[int]] = {}
-    for type_id, variant_id, troops, unnamed, *counts in connection.execute(
-        f"""
-        SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
-                    ELSE label.type_id END,
-               COALESCE(label.variant_id, {OTHER_VARIANT}),
-               decode.home_troops, decode.unresolved_components,
-               sum(attacks), sum(one_star), sum(two_star), sum(three_star),
-               sum(destruction), sum(trophies)
-        FROM {source}
-        LEFT JOIN army_package_types AS label
-          ON label.exact_army_id = source.exact_army_id
-        LEFT JOIN battle_army_decodes AS decode ON decode.id = -source.exact_army_id
-        GROUP BY 1, 2, 3, 4
-        """,
-        params,
-    ).fetchall():
+    spells: dict[tuple[int, int], Counter[str]] = {}
+    # Rows with a spell are each distinct army's spells once, weighted by its
+    # attacks; the others are the totals.
+    for type_id, variant_id, spell, troops, unnamed, heroes, carried, *counts in (
+        connection.execute(
+            f"""
+            WITH army AS MATERIALIZED (
+                SELECT exact_army_id, sum(attacks) AS attacks,
+                       sum(one_star) AS one_star, sum(two_star) AS two_star,
+                       sum(three_star) AS three_star,
+                       sum(destruction) AS destruction, sum(trophies) AS trophies
+                FROM {source}
+                GROUP BY 1)
+            SELECT CASE WHEN army.exact_army_id = 0 THEN {UNREADABLE}
+                        ELSE label.type_id END,
+                   COALESCE(label.variant_id, {OTHER_VARIANT}), NULL::text,
+                   decode.home_troops, decode.unresolved_components,
+                   decode.heroes, decode.spells,
+                   sum(army.attacks), sum(army.one_star), sum(army.two_star),
+                   sum(army.three_star), sum(army.destruction), sum(army.trophies)
+            FROM army
+            LEFT JOIN army_package_types AS label
+              ON label.exact_army_id = army.exact_army_id
+            LEFT JOIN battle_army_decodes AS decode ON decode.id = -army.exact_army_id
+            GROUP BY 1, 2, 4, 5, 6, 7
+            UNION ALL
+            SELECT label.type_id, label.variant_id, spell.value ->> 0,
+                   NULL, NULL, NULL, NULL, sum(army.attacks),
+                   NULL, NULL, NULL, NULL, NULL
+            FROM army
+            JOIN army_package_types AS label ON label.exact_army_id = army.exact_army_id
+            JOIN exact_armies AS exact ON exact.id = army.exact_army_id
+            CROSS JOIN jsonb_array_elements(exact.spells) AS spell
+            WHERE label.type_id = ANY(%s::smallint[])
+            GROUP BY 1, 2, 3
+            """,
+            [*params, list(VARIANTS)],
+        ).fetchall()
+    ):
+        if spell is not None:
+            spells.setdefault((type_id, variant_id), Counter())[spell] += int(counts[0])
+            continue
         if troops is not None:
-            type_id = classify(army_analytics.with_unnamed_ids(
-                {"home_troops": troops, "unresolved_components": unnamed}
-            )["home_troops"])
+            army = army_analytics.with_unnamed_ids({
+                "home_troops": troops, "unresolved_components": unnamed,
+                "heroes": heroes, "spells": carried,
+            })
+            type_id = classify(army["home_troops"])
+            variant_id = variant(type_id, army["heroes"] or [])
+            if type_id in VARIANTS:
+                for spell_id in {str(entry[0]) for entry in army["spells"] or []}:
+                    spells.setdefault((type_id, variant_id), Counter())[spell_id] += int(counts[0])
         total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
         for index, value in enumerate(counts):
             total[index] += int(value)
-    # Each distinct army's spells once, weighted by its attacks.
-    spells: dict[tuple[int, int], dict[str, int]] = {}
-    for type_id, variant_id, spell, attacks in connection.execute(
-        f"""
-        SELECT label.type_id, label.variant_id, spell.value ->> 0, sum(source.attacks)
-        FROM (SELECT exact_army_id, sum(attacks) AS attacks FROM {source}
-              WHERE exact_army_id > 0 GROUP BY 1) AS source
-        JOIN army_package_types AS label ON label.exact_army_id = source.exact_army_id
-        JOIN exact_armies AS army ON army.id = source.exact_army_id
-        CROSS JOIN jsonb_array_elements(army.spells) AS spell
-        WHERE label.type_id = ANY(%s::smallint[])
-        GROUP BY 1, 2, 3
-        """,
-        [*params, list(VARIANTS)],
-    ).fetchall():
-        spells.setdefault((int(type_id), int(variant_id)), {})[str(spell)] = int(attacks)
     return [(*key, *total) for key, total in sorted(totals.items())], spells
 
 
@@ -840,8 +857,9 @@ def type_result_rows(
                 "usually_with": [
                     unit_label(spell).removesuffix(" Spell")
                     for spell, count in sorted(carried.items(), key=lambda item: -item[1])
-                    if count >= TAG_SHARE * attacks
-                    and count / attacks - in_type[spell] / counts[0] >= TAG_LEAD
+                    if count * 100 >= TAG_SHARE * attacks
+                    and (count * counts[0] - in_type[spell] * attacks) * 100
+                    >= TAG_LEAD * attacks * counts[0]
                 ],
             })
         variants.sort(key=lambda row: (row["variant_id"] == OTHER_VARIANT,

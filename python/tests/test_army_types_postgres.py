@@ -215,16 +215,19 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             }
             monkeypatch.setitem(army_types.TYPE_NAMES, army_types.THROWER, "Thrower")
 
-            # An older partly read army, saved with unnamed equipment and no
-            # distinct army, is typed from its saved home troops, counted or not.
+            # An older partly read army, saved with its Revenge Deck unnamed
+            # and no distinct army, is typed from its saved home troops and
+            # takes its variant and spells from its saved heroes and spells,
+            # counted or not.
             thrower_battle = battles[("#2PP", "#8PP")]
             with database.pool.connection() as connection:
                 connection.execute(
                     """
                     UPDATE battle_army_decodes
                     SET status = 'partial', exact_army_id = NULL, identity_hash = NULL,
-                        unresolved_components = '[{"numeric_id": 61, "quantity": 1,
-                            "section": "h", "origin": "hero:6:equipment"}]'
+                        heroes = jsonb_set(heroes, '{0,equipment}', '["equipment:52"]'),
+                        unresolved_components = '[{"numeric_id": 60, "quantity": 1,
+                            "section": "h", "origin": "hero:7:equipment"}]'
                     WHERE id = (SELECT decode_id FROM army_analytics_battle_facts
                                 WHERE is_current AND lens = 'offense' AND battle_id = %s)
                     """,
@@ -238,8 +241,10 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 connection.execute("DELETE FROM army_type_counted_days")
             assert _types(api) == expected
             assert _types(api, "trophies-5000-9000") == expected
+            assert _variants(api) == variants
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
+            assert _variants(api) == variants
             with database.pool.connection() as connection:
                 assert connection.execute(
                     "SELECT count(*) FROM army_package_day_counts WHERE exact_army_id < 0"
@@ -278,7 +283,8 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 "Thrower": expected["Thrower"],
                 "Other": expected["Hydra"],
             }
-            assert _variants(api) == {"Thrower": [("Other Thrower", 2, 2, [])]}
+            assert _variants(api) == {"Thrower": [("Revenge Thrower", 1, 2, ["Ice Block"]),
+                                                  ("Other Thrower", 1, 2, ["Earthquake"])]}
 
             # Rolling back relabels them under the earlier rules again.
             monkeypatch.setattr(army_types, "RULES_VERSION", rules)
@@ -288,10 +294,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 _types(api)
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
-            # The partly read Revenge Thrower has no saved equipment to read.
-            assert _variants(api) == {**variants, "Thrower": [
-                ("Backpack Thrower", 1, 2, ["Earthquake"]), ("Other Thrower", 1, 2, []),
-            ]}
+            assert _variants(api) == variants
 
             # A corrected day changes the evidence hash, even with the same
             # numbers.
