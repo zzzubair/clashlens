@@ -44,7 +44,7 @@ Use these exactly.
 - **Notebook**: a Clasher's private page of the bases their verified accounts ran this Season and how each one held.
 - **Library**: all of a Clasher's bases in their Notebook this Season, each Active, To try or Retired.
 - **Base ID**: the `B-` code with six letters or digits that names one base for support; Clashers never see it on a page, and it never opens the base.
-- **Day pick**: a Clasher saying which base one account ran from one Legend day on, until the next pick.
+- **Day pick**: a Clasher saying which base one account ran from one Legend day on, until the next pick or the first day the account is out of Legend League.
 - **Run**: a stretch of Legend days on which one account ran one base.
 - **Held**: a defense on which the attacker did not get 3 stars.
 

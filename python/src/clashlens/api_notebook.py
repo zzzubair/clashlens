@@ -463,6 +463,7 @@ def get_notebook(
             "next": (
                 {"day": notebook.tomorrow, "base": codes.get(mine[notebook.tomorrow])}
                 if notebook.tomorrow > notebook.today and notebook.tomorrow in mine
+                and notebook.tomorrow in legend[player_id]
                 else None
             ),
             "picks": [

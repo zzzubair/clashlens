@@ -319,7 +319,9 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     from the Monday Reset of 19 October, Day 15: on Day 16 it has no base
     until one is picked, and fixing Day 7 to Box changes Day 7 only. Day
     28's week has no record yet, so it follows Day 15's: Box, picked then,
-    runs until the Season ends and cannot stop."""
+    runs until the Season ends and cannot stop. Hex, picked on Day 21 for
+    Day 22 while that week has no record either, is no longer MAIN's base
+    for tomorrow once MAIN is read in Legend II that Monday."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {MAIN: Climber(MAIN)})
@@ -388,6 +390,16 @@ def test_bases_are_set_and_counted_on_legend_days_only(
                 clock[0] = day(28) + timedelta(hours=7)
                 last_pick = write(action="pick", tag=MAIN, day=28, base=box)
                 last_day = write(action="status", base=box, status="retired")
+                write(action="undo", undo=last_pick[1]["undo"])
+                clock[0] = day(21) + timedelta(hours=7)
+                hex_ = write(action="add", name="Hex", status="to_try")[1]["base"]
+                hex_picked = write(action="pick", tag=MAIN, day=22, base=hex_)
+                hex_next = call(client, "sloothy", "GET", NOTEBOOK).json()
+                player.legend_ii = True
+                for hours in (1, 9):
+                    story.reads(day(22) + timedelta(hours=hours, minutes=10), {MAIN: 5000})
+                story.run_worker()
+                hex_dropped = call(client, "sloothy", "GET", NOTEBOOK).json()
         finally:
             owner.close()
             api.close()
@@ -415,3 +427,9 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     main = fixed_seen["players"][0]
     assert ([(run["from"], run["to"], run["base"]) for run in main["runs"]],
             main["current"]) == ([(6, 6, ring), (7, 7, box)], None)
+
+    assert hex_picked[0] == 200
+    assert hex_next["players"][0]["next"] == {"day": 22, "base": hex_}
+    main = hex_dropped["players"][0]
+    assert (main["legend_days"][-1], main["next"]) == (21, None)
+    assert {base["id"]: base["status"] for base in hex_dropped["bases"]}[hex_] == "to_try"
