@@ -342,7 +342,7 @@ def test_help_link_and_alerts_offer_sign_up_without_a_connection(store) -> None:
     help_message = run_command(store, "help", FakeInteraction())
     assert "this Discord account isn't connected to Clash Lens yet" in help_message["text"]
     assert help_message["private"] is False
-    assert links(help_message) == {"Get started on Clash Lens": "https://clashlens.test/login"}
+    assert links(help_message) == {"Get started on Clash Lens": "https://clashlens.test/signup"}
     assert CONNECT in help_message["text"]
     for name, purpose in (
         ("link", "to see your own Legend days here"),

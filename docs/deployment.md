@@ -469,9 +469,9 @@ ranking lists and the Daily board's score against them (default `false`;
 [collector polling](collector-polling.md#the-games-ranking-lists-once-a-day)).
 
 The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
-`app.env` (`true` or `false`, default `false`). While it is off, `/dashboard`
-shows the normal page-not-found page, the navigation bar has no Dashboard
-link, saving a dashboard layout is refused, and the private API refuses the
+`app.env` (`true` or `false`, default `false`). While it is off, `/` shows
+the front page to everyone, the navigation bar has no Dashboard
+tab, saving a dashboard layout is refused, and the private API refuses the
 dashboard's own player reads (`/v1/players/{tag}/today`,
 `/v1/players/{tag}/bases` and `/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
 API, so turning it on or off takes `./ops up`.
@@ -482,7 +482,8 @@ private API's crew routes still follow the dashboard setting. While the
 website setting is off, every `/crews` page shows the normal page-not-found
 page, player pages list no crews, and the navigation bar has no Crews link.
 While the dashboard setting is off, every private API crew route
-(`/v1/account/crews…`, `/v1/account/crew-invites/…`, `/v1/crews/…` and
+(`/v1/account/crews…`, `/v1/account/crew-invites/…`, `/v1/crew-invites/…`,
+`/v1/crews/…` and
 `/v1/players/{tag}/crews`) answers 404
 `crews_disabled` before reading anything. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.

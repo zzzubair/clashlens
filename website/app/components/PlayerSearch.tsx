@@ -66,7 +66,6 @@ export function usePlayerSuggestions(initialQuery = "") {
     query,
     setQuery,
     change,
-    searchNow: () => request(query, 0),
     dismiss,
     open,
     data,
@@ -275,11 +274,14 @@ export function HeaderSearch() {
             onSubmit={(event) => {
               event.preventDefault();
               const tag = normalizePlayerTag(suggestions.query);
-              if (tag) {
+              const words = suggestions.query.trim();
+              if (tag || words !== "") {
                 collapse(false);
-                void navigate(canonicalPlayerPath(tag));
-              } else {
-                suggestions.searchNow();
+                void navigate(
+                  tag
+                    ? canonicalPlayerPath(tag)
+                    : `/search?${new URLSearchParams({ q: words })}`,
+                );
               }
             }}
           >

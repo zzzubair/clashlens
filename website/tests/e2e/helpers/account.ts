@@ -37,30 +37,46 @@ export function expectNoPortRequests(
   expect(hits, `${label}: unexpected browser requests to port ${port}`).toEqual([]);
 }
 
+/**
+ * Sign in with the loopback provider. A new identity has no account yet, so
+ * it answers "No account found" and goes on to choosing a username.
+ */
+async function signInWith(page: Page, provider: "Google" | "Discord"): Promise<void> {
+  await page.goto("/login");
+  await page.getByRole("link", { name: `Sign in with ${provider}` }).click();
+  await expect(page).toHaveURL(/\/(?:login\?none=|users\/[a-z][a-z0-9_]+$)/);
+  if (new URL(page.url()).pathname === "/login") {
+    await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
+    await page.getByRole("link", { name: `Create account with ${provider}` }).click();
+    await expect(page).toHaveURL(/\/account\/setup$/);
+  }
+}
+
 /** Complete the local Google sign-in flow against the loopback provider. */
 export async function signIn(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Google" }).click();
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
+  await signInWith(page, "Google");
 }
 
 /** Complete the local Discord sign-in flow against the loopback provider. */
 export async function signInDiscord(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Discord" }).click();
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
+  await signInWith(page, "Discord");
 }
 
-/** Create the account only when this identity has not already been used. */
+/**
+ * Create the account only when this identity has not already been used. A
+ * new account is asked to link a player first; this goes on to the account.
+ */
 export async function ensureAccount(
   page: Page,
   username: string,
   displayName: string,
 ): Promise<void> {
   if (new URL(page.url()).pathname === "/account/setup") {
-    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Display name").fill(displayName);
     await page.getByRole("button", { name: "Create account" }).click();
+    await expect(page).toHaveURL(/\/account\/verify-player$/);
+    await page.goto("/account");
   }
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await expect(

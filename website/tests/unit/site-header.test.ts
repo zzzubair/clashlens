@@ -18,11 +18,11 @@ const SIGNED_OUT: RootLoaderData = {
   updateStatus: null,
 };
 
-async function renderHeader(data: RootLoaderData) {
+async function renderHeader(data: RootLoaderData, path = "/") {
   const handler = createStaticHandler([
-    { id: "root", path: "/", loader: () => data, Component: App },
+    { id: "root", path: "*", loader: () => data, Component: App },
   ]);
-  const context = await handler.query(new Request("https://clashlens.example/"));
+  const context = await handler.query(new Request(`https://clashlens.example${path}`));
   if (context instanceof Response) throw new Error("unexpected response");
   const html = renderToString(
     createElement(StaticRouterProvider, {
@@ -31,19 +31,57 @@ async function renderHeader(data: RootLoaderData) {
       hydrate: false,
     }),
   );
-  return /<nav class="site-nav"[\s\S]*?<\/nav>/.exec(html)![0];
+  return /<header class="site-header"[\s\S]*?<\/header>/.exec(html)![0];
 }
 
-it("signed out keeps the sign-in control and offers Join Discord in a new tab", async () => {
-  const nav = await renderHeader(SIGNED_OUT);
+const tabsOf = (nav: string) =>
+  [...nav.matchAll(/<a [^>]*>([^<]+)<\/a>/g)].map((match) => match[1]);
 
-  expect(nav).toContain('href="/login" data-discover="true">Account</a>');
-  expect(nav).toContain(
+it("names the tabs most useful first, with no Home tab", async () => {
+  const header = await renderHeader({
+    ...SIGNED_OUT,
+    dashboardEnabled: true,
+    crewsEnabled: true,
+  });
+  const wide = /<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(header)![0];
+  const menu = /<nav class="site-menu-tabs"[\s\S]*?<\/nav>/.exec(header)![0];
+  const tabs = ["Dashboard", "Rankings", "Analytics", "Crews", "Watchlists", "Blog"];
+  expect(tabsOf(wide)).toEqual(tabs);
+  expect(tabsOf(menu)).toEqual(tabs);
+  expect(wide).toContain('href="/account/watchlists"');
+  expect(header).toContain('aria-label="Clash Lens"');
+  expect(header).not.toContain(">Home<");
+
+  const switchedOff = await renderHeader(SIGNED_OUT);
+  expect(tabsOf(/<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(switchedOff)![0])).toEqual(
+    ["Rankings", "Analytics", "Watchlists", "Blog"],
+  );
+});
+
+it("signed out offers Sign in back to this page and Join Discord in a new tab", async () => {
+  const header = await renderHeader(SIGNED_OUT, "/players/%232PP");
+
+  expect(header).toContain(
+    'href="/login?returnPath=%2Fplayers%2F%25232PP" data-discover="true">Sign in</a>',
+  );
+  expect(header).toContain(
     `href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">`,
   );
-  expect(nav).toContain("Join </span>Discord");
-  expect(nav).toContain("opens in a new tab");
-  expect(nav).not.toContain("account-menu");
+  expect(header).toContain("Join </span>Discord");
+  expect(header).toContain("opens in a new tab");
+  expect(header).not.toContain("account-menu");
+  expect(header).not.toContain("Log out");
+  expect(await renderHeader(SIGNED_OUT, "/signup")).toContain(
+    'href="/login" data-discover="true">Sign in</a>',
+  );
+});
+
+it("folds the tabs, theme and Discord into one Menu", async () => {
+  const header = await renderHeader(SIGNED_OUT);
+  const menu = /<details class="site-menu"[\s\S]*?<\/details>/.exec(header)![0];
+  expect(menu).toContain("<span>Menu</span>");
+  expect(menu).toContain("theme-toggle");
+  expect(menu).toContain(DISCORD_INVITE_URL);
 });
 
 it("signed in puts your profile, tools, Settings and Log out behind the account name", async () => {
@@ -70,5 +108,5 @@ it("signed in puts your profile, tools, Settings and Log out behind the account 
   expect(panel).toContain('value="logout-key"');
   expect(panel).toContain(">Log out</button>");
   expect(nav.replace(panel, "")).not.toContain("Log out");
-  expect(nav.indexOf("account-menu-panel")).toBeLessThan(nav.indexOf(DISCORD_INVITE_URL));
+  expect(nav).not.toContain(">Sign in<");
 });

@@ -47,53 +47,6 @@
   background: var(--cl-action-soft);
 }
 
-/* Home overview */
-/* The logo on the left; the line about Clash Lens and the search beside it. */
-.home-overview {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1rem clamp(2rem, 5vw, 4rem);
-  padding: 1rem 0 clamp(2rem, 5vw, 3rem);
-  border-bottom: 1px solid var(--cl-border);
-}
-
-.home-intro {
-  display: contents;
-}
-
-/* Clash Lens is the page's heading: the logo, big. */
-.home-intro h1 {
-  grid-row: 1 / span 2;
-  align-self: center;
-  margin: 0;
-  line-height: 0;
-}
-
-.home-overview:has(.search-results) h1 {
-  align-self: start;
-}
-
-/* The home page shows the big logo, so the top bar's small one steps aside
-   but keeps its space, leaving the menu where it is on every page. */
-body:has(.home-page) .site-brand {
-  visibility: hidden;
-}
-
-.home-logo {
-  display: block;
-  width: clamp(12rem, 24vw, 16.5rem);
-  height: auto;
-  filter: drop-shadow(0 4px 0 rgb(0 0 0 / 0.25));
-}
-
-.home-intro > p {
-  align-self: end;
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 1.1rem;
-  line-height: 1.55;
-}
-
 .home-page .analytics-link {
   gap: 0.55rem;
   min-height: 2.75rem;
@@ -1088,14 +1041,6 @@ body:has(.home-page) .site-brand {
 }
 
 @media (max-width: 52rem) {
-  .home-overview {
-    grid-template-columns: 1fr;
-  }
-
-  .home-intro h1 {
-    grid-row: auto;
-  }
-
   .leading-players {
     grid-template-columns: 1fr;
   }

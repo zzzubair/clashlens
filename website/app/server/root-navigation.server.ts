@@ -1,4 +1,8 @@
-import { freshIdempotencyKey, readLoginIdentity } from "./actions.server";
+import {
+  freshIdempotencyKey,
+  isAccountNotFoundError,
+  readLoginIdentity,
+} from "./actions.server";
 import { getWebsiteConfig } from "./config.server";
 import { createPythonClient } from "../services/python.server";
 
@@ -30,7 +34,10 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
       }).getAccount();
       accountLabel = account.displayName;
       accountUsername = account.username;
-    } catch {
+    } catch (cause) {
+      // Signed in with Google or Discord before making an account: no account
+      // menu, and no Log out, until one exists.
+      if (isAccountNotFoundError(cause)) return loggedOutNavigation();
       accountLabel = null;
     }
     return {

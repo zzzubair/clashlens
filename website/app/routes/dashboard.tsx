@@ -13,13 +13,16 @@ import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { Dashboard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
+import {
+  FRONT_PAGE_PLAYERS,
+  FrontPage,
+  type FrontPageData,
+} from "../components/FrontPage";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
-  CARDS,
   CARD_IDS,
-  DEFAULT_LAYOUT,
   isDashboardSave,
   nextResetMs,
   parsePostedSettings,
@@ -35,13 +38,14 @@ import type { Route } from "./+types/dashboard";
 import "../dashboard.css";
 import "../dashboard-cards.css";
 import "../dashboard-armies.css";
+import "../front-page.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 // Cards read within this go out with the page; slower ones stream in.
 const CARD_WAIT_MS = 250;
 
 export type DashboardLoaderData =
-  | { kind: "signed-out"; loginAvailable: boolean }
+  | ({ kind: "signed-out" } & FrontPageData)
   | { kind: "error"; error: WebsiteErrorResponse }
   | {
       kind: "signed-in";
@@ -64,43 +68,48 @@ export interface DashboardActionData {
   settings: DashboardSettings | null;
 }
 
-export function meta() {
-  return [{ title: "Dashboard · Clash Lens" }];
+export function meta({ loaderData }: Route.MetaArgs) {
+  return loaderData?.kind === "signed-out"
+    ? [
+        { title: "Clash Lens" },
+        {
+          name: "description",
+          content: "Legend League results, rankings and armies for all Legend I Players.",
+        },
+      ]
+    : [{ title: "Dashboard · Clash Lens" }];
 }
 
 /**
- * GET /dashboard — the signed-in user's Legend dashboard. A visitor who is
- * not signed in sees a preview of what an account adds instead. While
- * CLASHLENS_DASHBOARD_ENABLED is off the page does not exist. The page
+ * GET / — the signed-in user's Legend dashboard. Anyone else, and everyone
+ * while CLASHLENS_DASHBOARD_ENABLED is off, gets the front page: the
+ * Dashboard preview (when on), search, Rankings, Analytics and the top
+ * players. An old `/?q=` search link opens the search page. The page
  * answers once the account and its linked players are read; each card's
  * data follows as it arrives. `?cards=goal,cutoffs` reads only those cards,
  * for a card whose settings were just saved; `&board=wait` waits a few
  * seconds for the shared board, for Legend day or Bases read before it.
  */
 export async function loader({ request }: Route.LoaderArgs) {
+  const query = new URL(request.url).searchParams;
+  if (query.has("q")) {
+    throw redirect(`/search?${new URLSearchParams({ q: query.get("q") ?? "" })}`);
+  }
   const { getWebsiteConfig, isDashboardEnabled } =
     await import("../server/config.server");
-  if (!isDashboardEnabled()) throw data(null, { status: 404 });
   const { readLoginIdentity, freshIdempotencyKey, isAccountNotFoundError } =
     await import("../server/actions.server");
   let config;
   try {
     config = getWebsiteConfig();
   } catch {
-    return data<DashboardLoaderData>(
-      { kind: "signed-out", loginAvailable: false },
-      { headers: NO_STORE },
-    );
+    return frontPage(false);
   }
-  const identity = config.loginEnabled
-    ? await readLoginIdentity(request, config).catch(() => null)
-    : null;
-  if (identity === null) {
-    return data<DashboardLoaderData>(
-      { kind: "signed-out", loginAvailable: config.loginEnabled },
-      { headers: NO_STORE },
-    );
-  }
+  const identity =
+    config.loginEnabled && isDashboardEnabled()
+      ? await readLoginIdentity(request, config).catch(() => null)
+      : null;
+  if (identity === null) return frontPage(config.loginEnabled);
 
   const { createPythonClient } = await import("../services/python.server");
   const client = createPythonClient(identity);
@@ -108,8 +117,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   try {
     account = await client.getAccount();
   } catch (cause) {
-    if (isAccountNotFoundError(cause))
-      throw redirect("/account/setup?returnPath=/dashboard");
+    // Signed in with Google or Discord but no account made yet.
+    if (isAccountNotFoundError(cause)) return frontPage(config.loginEnabled);
     const { safeWebsiteError } = await import("../server/errors.server");
     return data<DashboardLoaderData>(
       { kind: "error", error: safeWebsiteError(cause) },
@@ -127,7 +136,6 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const settings = readSettings(account.preferences.dashboard);
-  const query = new URL(request.url).searchParams;
   const requested = normalizePlayerTag(query.get("player") ?? "");
   const only = query.get("cards")?.split(",");
   const selected =
@@ -166,8 +174,35 @@ export async function loader({ request }: Route.LoaderArgs) {
   );
 }
 
+/** The front page, with the top players when the private API answers. */
+async function frontPage(loginAvailable: boolean) {
+  const { isDashboardEnabled } = await import("../server/config.server");
+  let leaderboard = null;
+  let error: WebsiteErrorResponse | null = null;
+  try {
+    const { createPythonClient } = await import("../services/python.server");
+    leaderboard = await createPythonClient().getTrackedLeaderboard(
+      FRONT_PAGE_PLAYERS,
+      "live",
+    );
+  } catch (cause) {
+    const { safeWebsiteError } = await import("../server/errors.server");
+    error = safeWebsiteError(cause);
+  }
+  return data<DashboardLoaderData>(
+    {
+      kind: "signed-out",
+      loginAvailable,
+      dashboardEnabled: isDashboardEnabled(),
+      leaderboard,
+      error,
+    },
+    { headers: NO_STORE },
+  );
+}
+
 /**
- * POST /dashboard — save the dashboard settings into the account's
+ * POST / — save the dashboard settings into the account's
  * preferences box, keeping every other preference as it was.
  */
 export async function action({ request }: Route.ActionArgs) {
@@ -242,6 +277,8 @@ export function headers() {
  * Reload the cards for another account, whatever else happened, such as a
  * save landing during the switch, failed or not. A save's answer carries
  * the settings as saved, and the page reads only the cards they change.
+ * The same address again, such as the front page's reread at a Season's
+ * end, reads again.
  */
 export function shouldRevalidate({
   currentUrl,
@@ -253,7 +290,11 @@ export function shouldRevalidate({
   if (currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player"))
     return true;
   if (isDashboardSave(formMethod, formAction)) return false;
-  if (formMethod || currentUrl.pathname !== nextUrl.pathname) {
+  if (
+    formMethod ||
+    currentUrl.pathname !== nextUrl.pathname ||
+    currentUrl.href === nextUrl.href
+  ) {
     return defaultShouldRevalidate;
   }
   return false;
@@ -265,7 +306,7 @@ function switchingTo(
   players: LinkedPlayerCard[],
 ) {
   const next = navigation.location;
-  if (navigation.state !== "loading" || next?.pathname !== "/dashboard") return null;
+  if (navigation.state !== "loading" || next?.pathname !== "/") return null;
   const tag = normalizePlayerTag(new URLSearchParams(next.search).get("player") ?? "");
   return players.find((player) => player.tag === tag) ?? null;
 }
@@ -363,86 +404,18 @@ function LinkPlayerPrompt() {
   );
 }
 
-const TEASER_TILES = [
-  { icon: "clock", label: "Legend clock in your time" },
-  { icon: "flag", label: "Your goal, on pace or not" },
-  { icon: "list", label: "Rivals just above and below you" },
-  { icon: "grid", label: "Every Season day at a glance" },
-  { icon: "bars", label: "Top lines and your gap" },
-  { icon: "users", label: "How you compare with your groups" },
-] as const;
-
-function SignedOutPreview({ loginAvailable }: { loginAvailable: boolean }) {
-  const returnPath = encodeURIComponent("/dashboard");
-  return (
-    <div className="dash-teaser">
-      <div className="dash-teaser-behind" aria-hidden="true" inert>
-        <div className="dash-grid">
-          {DEFAULT_LAYOUT.filter((card) => CARDS[card].built).map((card) => (
-            <section key={card} className={`dash-card dash-card-${CARDS[card].size}`}>
-              <h2>{CARDS[card].title}</h2>
-            </section>
-          ))}
-        </div>
-      </div>
-      <section className="dash-teaser-panel" aria-labelledby="dash-teaser-title">
-        <h1 id="dash-teaser-title">Your Legend day, on one page</h1>
-        <ul className="dash-teaser-tiles">
-          {TEASER_TILES.map((tile) => (
-            <li key={tile.label}>
-              <DashboardIcon name={tile.icon} />
-              {tile.label}
-            </li>
-          ))}
-        </ul>
-        {loginAvailable ? (
-          <div className="button-row">
-            <Link
-              className="button button-primary"
-              to={`/auth/google?returnPath=${returnPath}`}
-              reloadDocument
-            >
-              Continue with Google
-            </Link>
-            <Link
-              className="button button-secondary"
-              to={`/auth/discord?returnPath=${returnPath}`}
-              reloadDocument
-            >
-              Continue with Discord
-            </Link>
-          </div>
-        ) : (
-          <p className="dash-note" role="status">
-            Sign-in is not available right now.
-          </p>
-        )}
-        <p className="dash-note">
-          <DashboardIcon name="info" /> Free. Player pages stay public.
-        </p>
-      </section>
-    </div>
-  );
-}
-
 export default function DashboardRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const dayOver = useDayOver(
     loaderData.kind === "signed-in" ? loaderData.dayEndsMs : Number.POSITIVE_INFINITY,
   );
-  if (loaderData.kind === "signed-out") {
-    return (
-      <main id="main-content" tabIndex={-1} className="page-shell dash-page">
-        <SignedOutPreview loginAvailable={loaderData.loginAvailable} />
-      </main>
-    );
-  }
+  if (loaderData.kind === "signed-out") return <FrontPage data={loaderData} />;
   if (loaderData.kind === "error") {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell dash-page">
         <h1>Dashboard</h1>
         <ErrorNotice error={loaderData.error} />
-        <a className="button button-primary" href="/dashboard">
+        <a className="button button-primary" href="/">
           Try again
         </a>
       </main>

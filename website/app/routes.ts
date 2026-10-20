@@ -2,8 +2,9 @@ import { index, route } from "@react-router/dev/routes";
 import type { RouteConfig } from "@react-router/dev/routes";
 
 export default [
-  index("routes/home.tsx"),
-  route("dashboard", "routes/dashboard.tsx"),
+  index("routes/dashboard.tsx"),
+  route("dashboard", "routes/dashboard.redirect.ts"),
+  route("search", "routes/search.tsx"),
   route("players/:tag", "routes/player.tsx"),
   route("resources/players/search", "routes/player-search.ts"),
   route("resources/players/:tag/refresh", "routes/refresh.ts"),
@@ -17,6 +18,7 @@ export default [
   route("blog/media/:file", "routes/blog.media.ts"),
   route("blog/:slug", "routes/blog.$slug.tsx"),
   route("login", "routes/login.tsx"),
+  route("signup", "routes/signup.tsx"),
   route("auth/google", "routes/auth.google.ts"),
   route("auth/google/callback", "routes/auth.google.callback.tsx"),
   route("auth/discord", "routes/auth.discord.ts"),
@@ -38,9 +40,10 @@ export default [
   route("o/:link/settings", "routes/obs-overlay.settings.ts"),
   route("account/saved-players", "routes/account.saved-players.ts"),
   route("account/verify-player", "routes/account.verify-player.tsx"),
-  route("account/groups", "routes/account.groups.tsx"),
-  route("account/groups/add/:tag", "routes/account.groups.add.tsx"),
-  route("account/groups/:groupId", "routes/account.groups.$groupId.tsx"),
+  route("account/watchlists", "routes/account.groups.tsx"),
+  route("account/watchlists/add/:tag", "routes/account.groups.add.tsx"),
+  route("account/watchlists/:groupId", "routes/account.groups.$groupId.tsx"),
+  route("account/groups/*", "routes/account.groups.redirect.ts"),
   route("crews", "routes/crews.tsx"),
   route("crews/new", "routes/crews.new.tsx"),
   route("crews/:crewId", "routes/crews.$crewId.tsx"),

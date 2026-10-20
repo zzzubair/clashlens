@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -13,24 +13,31 @@ import type { Route } from "./+types/account.verify-player";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** Back leads to the crew invite that sent the clasher here, or to their profile. */
+/** Back leads to the page that sent the clasher here, or to their profile. */
 export const handle: BackHandle = {
   back: (match) => {
     const returnPath = (match.loaderData as VerifyPlayerLoaderData | undefined)
       ?.returnPath;
-    return returnPath
-      ? { to: returnPath, label: "Crew invite" }
-      : { to: "/account", label: "Your profile" };
+    if (!returnPath) return { to: "/account", label: "Your profile" };
+    return {
+      to: returnPath,
+      label: returnPath.startsWith(INVITE_PREFIX)
+        ? "Crew invite"
+        : returnPath === "/"
+          ? "Dashboard"
+          : "Back",
+    };
   },
 };
 
-/** Only a crew invite may ask to be returned to after linking. */
-const RETURN_PREFIX = "/crews/join/";
+const INVITE_PREFIX = "/crews/join/";
 
 export interface VerifyPlayerLoaderData {
   idempotencyKey: string;
-  /** The crew invite to go back to once the player is linked. */
+  /** The page to go on to once the player is linked, such as a crew invite. */
   returnPath: string | null;
+  /** The crew whose invite that page is. */
+  crewName: string | null;
 }
 
 export interface VerifyPlayerActionData {
@@ -67,18 +74,24 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  const returnPath = await crewReturnPath(
+  const { inviteCrewName } = await import("../services/crews.server");
+  const returnPath = await linkReturnPath(
     new URL(request.url).searchParams.get("return"),
   );
-  return { idempotencyKey: freshIdempotencyKey(), returnPath };
+  return {
+    idempotencyKey: freshIdempotencyKey(),
+    returnPath,
+    crewName: await inviteCrewName(returnPath),
+  };
 }
 
-/** A same-origin crew invite path, or null. */
-async function crewReturnPath(value: string | null | undefined): Promise<string | null> {
+/** A same-origin page to go on to, or null; never this page or account setup. */
+async function linkReturnPath(value: string | null | undefined): Promise<string | null> {
   const { getWebsiteConfig } = await import("../server/config.server");
-  const { safeReturnPath } = await import("../server/return-path.server");
+  const { safeReturnPath, ACCOUNT_SETUP_PATH } =
+    await import("../server/return-path.server");
   const path = safeReturnPath(value, getWebsiteConfig().publicOrigin);
-  return path !== null && path.startsWith(RETURN_PREFIX) ? path : null;
+  return path === ACCOUNT_SETUP_PATH || path === "/account/verify-player" ? null : path;
 }
 
 /**
@@ -135,8 +148,8 @@ export async function action({ request }: Route.ActionArgs) {
       idempotencyKey,
     );
     if (result.status === "linked" || result.status === "already_linked") {
-      // A crew invite that sent the clasher here shows the new account.
-      const returnPath = await crewReturnPath(form["return"]);
+      // The page that sent the clasher here, such as a crew invite, goes on.
+      const returnPath = await linkReturnPath(form["return"]);
       if (returnPath !== null) {
         return redirect(returnPath, { status: 303, headers: NO_STORE });
       }
@@ -233,6 +246,16 @@ export default function VerifyPlayerRoute() {
         <p className="lede">
           Link a Clash of Clans player you own to your Clash Lens profile.
         </p>
+        {loaderData.returnPath ? (
+          <p className="link-then">
+            {loaderData.crewName
+              ? `Then you'll come back to join ${loaderData.crewName}.`
+              : loaderData.returnPath === "/"
+                ? "Then you'll see your Dashboard."
+                : "Then you'll go back to where you were."}{" "}
+            <Link to={loaderData.returnPath}>Not now</Link>
+          </p>
+        ) : null}
       </section>
 
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}

@@ -18,21 +18,21 @@ test("a Clasher can sign in and use account features against the real backend", 
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
 
-  // Saved Players became groups: no menu link, and the old address opens Your groups.
+  // Saved Players became Watchlists: no menu link, and the old address opens them.
   await expect(
     page
       .getByRole("navigation", { name: "Main navigation" })
       .getByRole("link", { name: "Saved players" }),
   ).toHaveCount(0);
   await page.goto("/account/saved-players");
-  await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
+  await expect(page).toHaveURL((url) => url.pathname === "/account/watchlists");
 
-  await page.goto("/account/groups");
-  if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
-    await page.getByLabel("Group name").first().fill("War plan");
-    await page.getByRole("button", { name: "Create group" }).click();
+  await page.goto("/account/watchlists");
+  if (await page.getByRole("heading", { name: "No watchlists yet" }).isVisible()) {
+    await page.getByLabel("Watchlist name").first().fill("War plan");
+    await page.getByRole("button", { name: "Create watchlist" }).click();
     await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
-    await expect(page.getByLabel("Group name").first()).toHaveValue("");
+    await expect(page.getByLabel("Watchlist name").first()).toHaveValue("");
     await expect(
       page
         .locator(".group-card")
@@ -61,14 +61,14 @@ test("a Clasher can sign in and use account features against the real backend", 
   await expect(edit).toBeVisible();
   // Opening Edit leaves its button where it was; the panel opens below the row.
   expect(await editToggle.boundingBox()).toEqual(closedAt);
-  await expect(edit.getByLabel("Group name")).toHaveValue("War plan");
+  await expect(edit.getByLabel("Watchlist name")).toHaveValue("War plan");
   await expect(
     edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
   ).toBeVisible();
-  const yesDelete = edit.getByRole("button", { name: "Yes, delete group" });
-  await edit.locator("summary", { hasText: "Delete group" }).click();
+  const yesDelete = edit.getByRole("button", { name: "Yes, delete watchlist" });
+  await edit.locator("summary", { hasText: "Delete watchlist" }).click();
   await expect(yesDelete).toBeVisible();
-  await edit.getByRole("link", { name: "Keep group" }).click();
+  await edit.getByRole("link", { name: "Keep watchlist" }).click();
   await expect(yesDelete).toBeHidden();
   await editToggle.click();
   await expect(edit).toBeHidden();
@@ -77,7 +77,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   // A profile saves a player into a group; War plan already holds #2PP.
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/players/%232PP");
-  const addToGroup = page.getByRole("link", { name: "Add to group" });
+  const addToGroup = page.getByRole("link", { name: "Add to watchlist" });
   expect(
     await addToGroup.evaluate((element) => {
       const box = element.getBoundingClientRect();
@@ -85,15 +85,17 @@ test("a Clasher can sign in and use account features against the real backend", 
     }),
   ).toBe(true);
   await addToGroup.click();
-  await expect(page).toHaveURL(/\/account\/groups\/add\/2PP$/);
-  await expect(page.getByRole("heading", { name: "Add #2PP to a group" })).toBeVisible();
+  await expect(page).toHaveURL(/\/account\/watchlists\/add\/2PP$/);
+  await expect(
+    page.getByRole("heading", { name: "Add #2PP to a watchlist" }),
+  ).toBeVisible();
   await expect(page.getByText(/#2PP is already in/).first()).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/account/groups");
+  await page.goto("/account/watchlists");
 
-  // Back returns to Your groups in one step, however many views were opened.
+  // Back returns to Your watchlists in one step, however many views were opened.
   for (const back of [
-    () => page.getByRole("link", { name: "Back to Your groups" }).click(),
+    () => page.getByRole("link", { name: "Back to Your watchlists" }).click(),
     () => page.goBack(),
   ]) {
     await warPlan.getByRole("link", { name: "Compare players" }).click();
@@ -102,8 +104,8 @@ test("a Clasher can sign in and use account features against the real backend", 
     await page.getByRole("link", { name: "Attack", exact: true }).click();
     await expect(page).toHaveURL(/sort=attack/);
     await back();
-    await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
-    await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
+    await expect(page).toHaveURL((url) => url.pathname === "/account/watchlists");
+    await expect(page.getByRole("heading", { name: "Your watchlists" })).toBeVisible();
   }
 
   // A player opened from the comparison goes Back to it, on the same view.
@@ -113,7 +115,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   await page.locator(".compare-name").first().click();
   await expect(page).toHaveURL(/\/players\//);
   await page.getByRole("link", { name: "Back to War plan" }).click();
-  await expect(page).toHaveURL(/\/account\/groups\/[^/]+\?days=14&sort=trophies$/);
+  await expect(page).toHaveURL(/\/account\/watchlists\/[^/]+\?days=14&sort=trophies$/);
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
@@ -140,7 +142,7 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
   await page.goto("/blog");
-  const header = page.getByRole("navigation", { name: "Account and appearance" });
+  const header = page.getByRole("banner");
   const discord = header.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
   await expect(discord).toHaveAttribute("target", "_blank");
@@ -168,7 +170,8 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
 
   await page.setViewportSize({ width: 390, height: 844 });
   await toggle.click();
-  for (const control of [toggle, discord, account, logOut]) {
+  // On a phone Join Discord sits in the Menu with the tabs.
+  for (const control of [toggle, account, logOut]) {
     const box = await control.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
@@ -186,9 +189,7 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
   try {
     const noScriptPage = await noScript.newPage();
     await noScriptPage.goto("/blog");
-    const noScriptHeader = noScriptPage.getByRole("navigation", {
-      name: "Account and appearance",
-    });
+    const noScriptHeader = noScriptPage.getByRole("banner");
     await noScriptHeader.locator("details.account-menu > summary").click();
     await expect(noScriptHeader.getByRole("button", { name: "Log out" })).toBeVisible();
     await noScriptHeader.getByRole("link", { name: "Your profile", exact: true }).click();
@@ -210,13 +211,36 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
   await logOut.click();
   await expect(page).toHaveURL("/?saved=logout");
   await expect(
-    header.getByRole("link", { name: "Account", exact: true }),
-  ).toHaveAttribute("href", "/login");
+    header.getByRole("link", { name: "Sign in", exact: true }),
+  ).toHaveAttribute("href", "/login?returnPath=%2F");
+  await expect(header.getByRole("link", { name: "Account", exact: true })).toHaveCount(0);
 });
 
-test("account pages redirect anonymous users to login", async ({ page }) => {
-  await page.goto("/account");
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+test("a page that needs an account says why, with Create account and Sign in", async ({
+  page,
+}) => {
+  for (const [path, title, reason] of [
+    ["/account", "Your account", "Sign in to see it."],
+    ["/account/watchlists", "Watchlists", "You need a Clash Lens account to keep them."],
+    ["/crews", "Crews", "You need a Clash Lens account to make or join one."],
+  ] as const) {
+    const response = await page.goto(path);
+    expect(response?.status()).toBe(401);
+    await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
+    const box = page.getByRole("region", { name: "Account needed" });
+    await expect(box).toContainText(reason);
+    const back = encodeURIComponent(path);
+    await expect(box.getByRole("link", { name: "Create account" })).toHaveAttribute(
+      "href",
+      `/signup?returnPath=${back}`,
+    );
+    await expect(box.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      `/login?returnPath=${back}`,
+    );
+  }
+  // Before an account exists there is no Account menu or Log out.
+  await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
 });
 
 test("account setup accepts names entered before the page JavaScript loads", async ({
@@ -241,16 +265,19 @@ test("account setup accepts names entered before the page JavaScript loads", asy
   });
   try {
     await page.reload({ waitUntil: "commit" });
-    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Display name").fill("Early Scout");
     releaseScripts();
     await page.waitForLoadState("networkidle");
     // This control only works once the page JavaScript handles user input.
     await page.getByRole("button", { name: "Dark mode" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await expect(page.getByLabel("Username")).toHaveValue(username);
+    await expect(page.getByLabel("Username", { exact: true })).toHaveValue(username);
     await expect(page.getByLabel("Display name")).toHaveValue("Early Scout");
     await page.getByRole("button", { name: "Create account" }).click();
+    // A new account is asked to link a player next.
+    await expect(page).toHaveURL(/\/account\/verify-player$/);
+    await page.goto("/account");
     await expect(page).toHaveURL(new RegExp(`/users/${username}$`));
     await expect(page.getByRole("heading", { name: "Early Scout" })).toBeVisible();
   } finally {

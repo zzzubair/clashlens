@@ -937,7 +937,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(group).toContain("3. Bo 5,300 +12 50% +56 −240");
     expect(group).not.toContain("Lens Alt");
     expect(group).not.toContain("Cy");
-    expect(cards["group-watch"]).toContain(`href="/account/groups/${CLAN_MATES}"`);
+    expect(cards["group-watch"]).toContain(`href="/account/watchlists/${CLAN_MATES}"`);
 
     // Legend clock: today's battles; the dial draws once the browser knows the time.
     expect(text(cards["legend-clock"]!)).toContain("Times in your zone: UTC");
@@ -1335,9 +1335,9 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     python.groups = [];
     const cards = cardsIn(await render(await load()));
     expect(text(cards["group-watch"]!)).toContain(
-      "Make a group first, then this card compares you with its players.",
+      "Make a watchlist first, then this card compares you with its players.",
     );
-    expect(cards["group-watch"]).toContain('href="/account/groups"');
+    expect(cards["group-watch"]).toContain('href="/account/watchlists"');
   });
 
   it("waits for the first Reset on Day 1", async () => {

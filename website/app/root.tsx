@@ -25,7 +25,9 @@ import {
   useErrorEvent,
 } from "./components/Analytics";
 import { BackLink } from "./components/BackLink";
+import { NeedsAccount, type NeedsAccountData } from "./components/NeedsAccount";
 import { HeaderSearch } from "./components/PlayerSearch";
+import { SiteMenu } from "./components/SiteMenu";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
 import type { AnalyticsSettings } from "./lib/analytics";
@@ -40,6 +42,8 @@ import {
 } from "./lib/keep-page";
 import "./app.css";
 import "./theme.css";
+import "./site-header.css";
+import "./sign-in.css";
 import "./explore.css";
 import "./appearance.css";
 import "./header-search.css";
@@ -113,7 +117,13 @@ export const clientMiddleware: Route.ClientMiddlewareFunction[] = [
 ];
 
 export function meta() {
-  return [{ title: "Clash Lens" }];
+  return [
+    { title: "Clash Lens" },
+    {
+      name: "description",
+      content: "Legend League results, rankings and armies for all Legend I Players.",
+    },
+  ];
 }
 
 /** A route handle for a page shown on its own, with no site around it and a
@@ -210,13 +220,54 @@ export default function App() {
   );
 }
 
+// The tabs, most useful first. Dashboard and Crews follow their switches.
+function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
+  return (
+    <>
+      {data?.dashboardEnabled && (
+        <NavLink to="/" end>
+          Dashboard
+        </NavLink>
+      )}
+      <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
+      <NavLink to="/analytics/armies">Analytics</NavLink>
+      {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
+      <NavLink to="/account/watchlists">Watchlists</NavLink>
+      <NavLink to="/blog">Blog</NavLink>
+    </>
+  );
+}
+
+function DiscordLink() {
+  return (
+    <a
+      className="nav-link nav-discord"
+      href={DISCORD_INVITE_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <span>
+        <span className="nav-discord-join">Join </span>Discord
+      </span>
+      <span className="sr-only">, opens in a new tab</span>
+    </a>
+  );
+}
+
+// Sign-in pages already offer both ways in, so they don't come back to themselves.
+const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
+
 // The same top bar on every page, error pages included. Without the root
-// data (the server failed before it), it shows the signed-out menu.
+// data (the server failed before it), it shows the signed-out menu. Below
+// 64rem the tabs, theme and Discord fold into one Menu, so the bar is one row.
 function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
+  const signIn = SIGN_IN_PAGES.has(location.pathname)
+    ? "/login"
+    : `/login?returnPath=${encodeURIComponent(location.pathname)}`;
   return (
     <header className="site-header">
-      <Link className="site-brand" to="/" aria-label="Clash Lens home">
+      <Link className="site-brand" to="/" aria-label="Clash Lens">
         <img
           className="site-brand-logo"
           src="/images/clashlens-wordmark.svg"
@@ -226,20 +277,16 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         />
       </Link>
       <nav className="primary-nav" aria-label="Main navigation">
-        <NavLink to="/" end>
-          Home
-        </NavLink>
-        {data?.dashboardEnabled && <NavLink to="/dashboard">Dashboard</NavLink>}
-        <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
-        <NavLink to="/analytics/armies">Analytics</NavLink>
-        <NavLink to="/blog">Blog</NavLink>
-        <NavLink to="/account/groups">Groups</NavLink>
-        {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
+        <SiteTabs data={data} />
       </nav>
-      <nav className="site-nav" aria-label="Account and appearance">
-        {/* Home keeps its own large search. */}
-        {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
-        <ThemeToggle />
+      <div className="site-nav">
+        {/* The search page keeps its own large search. */}
+        {location.pathname !== "/search" ? (
+          <HeaderSearch key={location.pathname} />
+        ) : null}
+        <span className="site-nav-wide">
+          <ThemeToggle />
+        </span>
         {data?.loggedIn ? (
           <AccountMenu
             label={data.accountLabel ?? "Account"}
@@ -251,22 +298,23 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
           />
         ) : (
-          <Link className="nav-link nav-link-primary" to="/login">
-            Account
+          <Link className="nav-link nav-link-primary" to={signIn}>
+            Sign in
           </Link>
         )}
-        <a
-          className="nav-link nav-discord"
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <span>
-            <span className="nav-discord-join">Join </span>Discord
-          </span>
-          <span className="sr-only">, opens in a new tab</span>
-        </a>
-      </nav>
+        <span className="site-nav-wide">
+          <DiscordLink />
+        </span>
+        <SiteMenu>
+          <nav className="site-menu-tabs" aria-label="Main navigation">
+            <SiteTabs data={data} />
+          </nav>
+          <div className="site-menu-extras">
+            <ThemeToggle />
+            <DiscordLink />
+          </div>
+        </SiteMenu>
+      </div>
     </header>
   );
 }
@@ -275,7 +323,16 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
   const location = useLocation();
   const data = useRouteLoaderData<typeof loader>("root");
+  const needsAccount = needsAccountOf(error);
   useErrorEvent(isNotFound);
+  if (needsAccount) {
+    return (
+      <>
+        <SiteHeader data={data} />
+        <NeedsAccount pathname={location.pathname} returnPath={needsAccount.returnPath} />
+      </>
+    );
+  }
   return (
     <>
       <SiteHeader data={data} />
@@ -305,12 +362,24 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
             className={`button ${isNotFound ? "button-primary" : "button-secondary"}`}
             href="/"
           >
-            Return home
+            Go to Clash Lens
           </a>
         </p>
       </main>
     </>
   );
+}
+
+/** A page that needs an account, opened while signed out; see requireLogin. */
+function needsAccountOf(error: unknown): NeedsAccountData | null {
+  if (!isRouteErrorResponse(error) || error.status !== 401) return null;
+  const value = error.data as Partial<NeedsAccountData> | null;
+  return value?.needsAccount === true
+    ? {
+        needsAccount: true,
+        returnPath: typeof value.returnPath === "string" ? value.returnPath : null,
+      }
+    : null;
 }
 
 export function headers() {

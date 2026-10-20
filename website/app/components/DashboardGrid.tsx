@@ -110,7 +110,7 @@ function ReadAgain<Data>({
   const { load, data } = useFetcher<DashboardLoaderData>();
   useEffect(() => {
     void load(
-      `/dashboard?${new URLSearchParams({ player: tag, cards: card, board: "wait" })}`,
+      `/?index&${new URLSearchParams({ player: tag, cards: card, board: "wait" })}`,
     );
   }, [load, tag, card]);
   const read = (
@@ -609,9 +609,7 @@ export function Dashboard({
   useEffect(() => {
     if (stale.length === 0 || loading) return;
     requested.current = stale;
-    void load(
-      `/dashboard?${new URLSearchParams({ player: tag, cards: stale.join(",") })}`,
-    );
+    void load(`/?index&${new URLSearchParams({ player: tag, cards: stale.join(",") })}`);
   }, [stale, tag, loading, load]);
   useEffect(() => {
     const loaded = refresher.data;

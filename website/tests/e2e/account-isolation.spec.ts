@@ -25,18 +25,18 @@ test("two signed-in accounts keep groups private through direct requests", async
       // Both tags are fake Clash API players: adding one to a group checks it exists.
       const tag = index === 0 ? "#2PP" : "#Q0002";
       const groupName = `Private plan ${index}`;
-      const created = await context.request.post(`${origin}/account/groups`, {
+      const created = await context.request.post(`${origin}/account/watchlists`, {
         headers: { Origin: origin },
         form: { action: "create", name: groupName, idempotencyKey: randomUUID() },
       });
       expect(created.ok()).toBeTruthy();
-      await page.goto("/account/groups");
+      await page.goto("/account/watchlists");
       const group = page
         .locator("section")
         .filter({ has: page.getByRole("heading", { name: groupName, exact: true }) })
         .last();
       const groupId = await group.locator('input[name="groupId"]').first().inputValue();
-      const added = await context.request.post(`${origin}/account/groups`, {
+      const added = await context.request.post(`${origin}/account/watchlists`, {
         headers: { Origin: origin },
         form: { action: "add-player", groupId, tag, idempotencyKey: randomUUID() },
       });
@@ -54,8 +54,8 @@ test("two signed-in accounts keep groups private through direct requests", async
     for (const [index, owner] of owners.entries()) {
       const other = owners[1 - index];
       for (const path of [
-        "/account/groups?",
-        `/account/groups/add/${owner.tag.slice(1)}?`,
+        "/account/watchlists?",
+        `/account/watchlists/add/${owner.tag.slice(1)}?`,
       ]) {
         const response = await owner.context.request.get(
           `${owner.origin}${path}username=${other.username}&groupId=${other.groupId}`,
@@ -72,7 +72,7 @@ test("two signed-in accounts keep groups private through direct requests", async
         const responses = [];
         for (const groupId of [other.groupId, randomUUID()]) {
           responses.push(
-            await owner.context.request.post(`${owner.origin}/account/groups`, {
+            await owner.context.request.post(`${owner.origin}/account/watchlists`, {
               headers: { Origin: owner.origin },
               form: {
                 action,
@@ -94,11 +94,11 @@ test("two signed-in accounts keep groups private through direct requests", async
       const publicBody = await publicProfile.text();
       expect(publicBody).not.toContain(other.groupName);
       expect(publicBody).not.toContain(other.tag);
-      await other.page.goto("/account/groups");
+      await other.page.goto("/account/watchlists");
       await expect(
         other.page.getByRole("heading", { name: other.groupName, exact: true }),
       ).toBeVisible();
-      await other.page.goto(`/account/groups/add/${other.tag.slice(1)}`);
+      await other.page.goto(`/account/watchlists/add/${other.tag.slice(1)}`);
       await expect(
         other.page.getByText(`${other.tag} is already in ${other.groupName}`).first(),
       ).toBeVisible();

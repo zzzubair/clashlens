@@ -44,19 +44,41 @@ test("loopback Google and Discord sign-in choices are available", async ({ page 
   await page.goto("/login");
 
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue with Google" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue with Discord" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in with Discord" })).toBeVisible();
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "Create account" }),
+  ).toHaveAttribute("href", "/signup?returnPath=%2Faccount");
+  await page.goto("/signup");
+  await expect(
+    page.getByRole("heading", { name: "Create your Clash Lens account" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Discord" })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
   await expectNoSeriousAccessibilityViolations(page);
 });
 
 test("Discord completes a local sign-in without cloud credentials", async ({ page }) => {
   await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Discord" }).click();
+  await page.getByRole("link", { name: "Sign in with Discord" }).click();
 
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
-  await expect(
-    page.getByRole("heading", { name: /Create your account|Clash players/ }),
-  ).toBeVisible();
+  await expect(page).toHaveURL(/\/(?:login\?none=discord|users\/[a-z][a-z0-9_]+)$/);
+  if (new URL(page.url()).pathname === "/login") {
+    // A sign-in no account uses yet asks before making one.
+    await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Try Google instead" })).toBeVisible();
+    await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+    await page.getByRole("link", { name: "Create account with Discord" }).click();
+    await expect(page).toHaveURL(/\/account\/setup$/);
+    await expect(
+      page.getByRole("heading", { name: "Choose your username" }),
+    ).toBeVisible();
+  } else {
+    await expect(
+      page.getByRole("heading", { name: "Clash players", exact: true }),
+    ).toBeVisible();
+  }
 });
 
 test("an account can link, use, and unlink a second sign-in provider", async ({
@@ -117,7 +139,7 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   const copied = await useLoginIssuedAgo(context, identity, 2 * 3_600_000);
   const visitedAt = Date.now();
   await page.goto("/account");
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   const renewed = await loginCookie(context);
   expect(renewed?.value).not.toBe(copied);
   expect(renewed?.httpOnly).toBe(true);
@@ -139,13 +161,13 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   await expect(accountMenu).toBeHidden();
   await useLoginIssuedAgo(context, identity, 0, copied);
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?returnPath=%2Faccount$/);
+  await expect(page.getByRole("region", { name: "Account needed" })).toBeVisible();
 
   // A login 29 days old still signs in; one 30 days old does not.
   await useLoginIssuedAgo(context, identity, 29 * DAY_MS);
   await page.goto("/account");
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await useLoginIssuedAgo(context, identity, 30 * DAY_MS + 1_000);
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?returnPath=%2Faccount$/);
+  await expect(page.getByRole("region", { name: "Account needed" })).toBeVisible();
 });

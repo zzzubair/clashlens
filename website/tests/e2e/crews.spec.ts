@@ -85,7 +85,7 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     const invitePath = new URL(invite).pathname;
     await mate.page.goto(invitePath);
     await expect(mate.page.getByRole("heading", { name: "Night Owls" })).toBeVisible();
-    await mate.page.getByRole("link", { name: "Link another account" }).click();
+    await mate.page.getByRole("link", { name: "Link another player" }).click();
     await expect(mate.page).toHaveURL(/\/account\/verify-player\?return=/);
     await linkOnPage(mate.page, MATE_TAGS[2]!, invitePath);
 
@@ -94,7 +94,7 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     await account(mate.page, MATE_TAGS[0]!).check();
     await account(mate.page, MATE_TAGS[1]!).check();
     await account(mate.page, MATE_TAGS[2]!).uncheck();
-    await mate.page.getByRole("button", { name: "Join with 2 accounts" }).click();
+    await mate.page.getByRole("button", { name: "Join with 2 players" }).click();
     await expect(mate.page).toHaveURL(`${crewPath}?saved=joined`);
     await expect(mate.page.getByRole("status")).toHaveText("You joined Night Owls.");
     await expect(mate.page.getByText("4 of 10 places")).toBeVisible();
@@ -134,7 +134,25 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
         view.getByRole("heading", { name: "Live leaderboard", level: 1 }),
       ).toBeVisible();
       expect(await view.content()).not.toContain("crewcaptain");
+      // The invite shows its crew before sign-in, and why an account is needed.
+      await view.goto(invitePath);
+      await expect(
+        view.getByRole("heading", { name: "Join Night Owls", level: 1 }),
+      ).toBeVisible();
+      await expect(
+        view.getByText("You need a Clash Lens account to join a crew."),
+      ).toBeVisible();
+      await expect(view.getByRole("link", { name: "Create account" })).toHaveAttribute(
+        "href",
+        `/signup?returnPath=${encodeURIComponent(invitePath)}`,
+      );
       expectNoPageErrors(viewErrors);
+      // A link that can't be an invite says so; its 404 is the only page error.
+      const broken = await view.goto("/crews/join/not-a-whole-link");
+      expect(broken?.status()).toBe(404);
+      await expect(
+        view.getByRole("heading", { name: "This invite link doesn't work" }),
+      ).toBeVisible();
     } finally {
       await visitor.close();
     }

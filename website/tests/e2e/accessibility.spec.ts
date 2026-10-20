@@ -7,7 +7,7 @@ import {
 } from "./helpers/account";
 
 for (const [name, path, heading] of [
-  ["home", "/", "Clash Lens"],
+  ["home", "/", "No account needed"],
   ["player", "/players/%232PP", "Synthetic Clasher 001"],
   ["leaderboard", "/leaderboards/tracked", "Live Leaderboard"],
   ["login", "/login", "Sign in"],
@@ -137,10 +137,10 @@ for (const theme of ["light", "dark"] as const) {
   }) => {
     await signIn(page);
     await ensureAccount(page, "lensscout", "Lens Scout");
-    await page.goto("/account/groups");
-    if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
-      await page.getByLabel("Group name").first().fill("War plan");
-      await page.getByRole("button", { name: "Create group" }).click();
+    await page.goto("/account/watchlists");
+    if (await page.getByRole("heading", { name: "No watchlists yet" }).isVisible()) {
+      await page.getByLabel("Watchlist name").first().fill("War plan");
+      await page.getByRole("button", { name: "Create watchlist" }).click();
       await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
     }
     await useTheme(page, theme);

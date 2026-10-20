@@ -179,10 +179,21 @@ couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
 
-The Dashboard at `/dashboard` is for signed-in users, and only exists while
-`CLASHLENS_DASHBOARD_ENABLED=true`; otherwise it is a page-not-found page with
-no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
-not signed in see a blurred preview and the sign-in buttons. The card designs
+The Dashboard is `/` for signed-in users while
+`CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
+there. Everyone else, and everyone while the switch is off, gets the front
+page at `/`: the Dashboard preview with Create account and Sign in (only while
+the switch is on), the big search, Rankings and Analytics buttons, and the top
+10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+[deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
+Rankings, Analytics, Crews, Watchlists and Blog; below 64rem they fold into
+one Menu so the bar stays one row. A signed-out visitor who opens a page that
+needs an account sees, in its place, what the page is for and separate Create
+account and Sign in buttons that both come back to it
+([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)). A sign-in with Google
+or Discord that has no account yet says "No account found" and asks before
+making one; a new account chooses a username, links a player, then goes on to
+where the Clasher was heading. The card designs
 are in the [dashboard design](../docs/dashboard.md).
 
 Signed-in users get one page: account tabs for their linked players, then a
@@ -518,9 +529,9 @@ display names and linked Clash of Clans player names. Results expose only public
 names, usernames and linked-account counts, never private groups.
 Clash Lens profiles in suggestions and results have a tinted background and a
 "Clash Lens profile" label so they are not mistaken for game players.
-Every page except home, including error pages, has the same search behind a
+Every page except `/search`, including error pages, has the same search behind a
 header icon. Enter on an exact player tag opens that player; other
-text shows suggestions in place without leaving the page.
+text opens the full results at `/search?q=`.
 
 Two bounded official profile requests fetched the names of `sloothy`'s linked
 players. The normal collector code retained both raw responses in the preview

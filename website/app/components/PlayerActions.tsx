@@ -10,7 +10,7 @@ export function PlayerActions({ tag, children }: { tag: string; children?: React
   const navigation = useRouteLoaderData<RootLoaderData>("root");
   const add = navigation?.loggedIn ? (
     <Link className="button button-secondary" to={addToGroupPath(tag)}>
-      Add to group
+      Add to watchlist
     </Link>
   ) : null;
   return children || add ? (

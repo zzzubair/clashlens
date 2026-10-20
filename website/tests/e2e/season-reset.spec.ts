@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
+import type { FrontPageData } from "../../app/components/FrontPage";
 import type { GroupsLoaderData } from "../../app/routes/account.groups";
 import type { GroupCompareLoaderData } from "../../app/routes/account.groups.$groupId";
-import type { HomeLoaderData } from "../../app/routes/home";
 import type { PlayerLoaderData } from "../../app/routes/player";
 import { worstComparison } from "../fixtures/worst-case-accounts";
 import { expectNoPageErrors, trackPageErrors } from "./helpers/account";
@@ -22,7 +22,7 @@ function decode(text: string) {
       ]),
     );
   };
-  return item(0) as Record<string, { data: HomeLoaderData & PlayerLoaderData }>;
+  return item(0) as Record<string, { data: FrontPageData & PlayerLoaderData }>;
 }
 
 test("Live keeps its way to page 1 when Reset makes the open page unavailable", async ({
@@ -117,7 +117,9 @@ for (const view of ["list", "comparison"] as const) {
       },
     ];
     const path =
-      view === "list" ? "/account/groups" : `/account/groups/${comparison.groupId}`;
+      view === "list"
+        ? "/account/watchlists"
+        : `/account/watchlists/${comparison.groupId}`;
     const routeId =
       view === "list" ? "routes/account.groups" : "routes/account.groups.$groupId";
     const key = "3be934b5-68fa-4741-8c7b-e03592e4ad70";

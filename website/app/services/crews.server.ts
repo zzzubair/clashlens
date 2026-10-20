@@ -198,14 +198,16 @@ export async function makeInvite(
   return mapped(mapMadeInvite(payload));
 }
 
-/** What an invite link shows the signed-in account. */
+/** What an invite link shows: to the account, or to anyone when `identity` is undefined. */
 export async function getInvite(
-  identity: GoogleAccountIdentity,
+  identity: GoogleAccountIdentity | undefined,
   code: string,
 ): Promise<InvitePreview> {
   requireInviteCode(code);
   const payload = await requestJson<unknown>(
-    `/v1/account/crew-invites/${code}`,
+    identity === undefined
+      ? `/v1/crew-invites/${code}`
+      : `/v1/account/crew-invites/${code}`,
     "GET",
     undefined,
     "crew-invite",
@@ -492,5 +494,20 @@ export async function crewFormAction(
     return reply(status, intent, next, {
       error: crewRefusal(code, payload) ?? safeWebsiteError(cause),
     });
+  }
+}
+
+/**
+ * The crew a sign-in, sign-up or linking page is on the way to, when the
+ * clasher came from its invite link; null otherwise or when it can't be read.
+ */
+export async function inviteCrewName(returnPath: string | null): Promise<string | null> {
+  const code = /^\/crews\/join\/([^/]+)$/.exec(returnPath ?? "")?.[1];
+  if (code === undefined || !INVITE_CODE.test(code) || !isCrewsEnabled()) return null;
+  try {
+    const invite = await getInvite(undefined, code);
+    return invite.state === "invalid" ? null : invite.name;
+  } catch {
+    return null;
   }
 }

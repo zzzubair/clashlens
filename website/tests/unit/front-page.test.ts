@@ -5,6 +5,7 @@ import {
   createStaticRouter,
   MemoryRouter,
   StaticRouterProvider,
+  useLoaderData,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,7 +26,11 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import { PythonApiError } from "../../app/services/python.server";
-import Home, { loader as homeLoader } from "../../app/routes/home";
+import Search, { loader as searchLoader } from "../../app/routes/search";
+import { loader as frontLoader } from "../../app/routes/dashboard";
+import { loader as oldDashboard } from "../../app/routes/dashboard.redirect";
+import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
+import { FrontPage, type FrontPageData } from "../../app/components/FrontPage";
 import { SearchSuggestions } from "../../app/components/PlayerSearch";
 import { TagSearchAgain } from "../../app/components/TagSearchAgain";
 
@@ -38,11 +43,19 @@ const search = {
   knownOnly: true,
 };
 
-async function renderHome(data: unknown, search: string) {
+function Front() {
+  return createElement(FrontPage, { data: useLoaderData<FrontPageData>() });
+}
+
+// Searches open /search; everything else is the signed-out front page.
+async function renderHome(data: object, search: string) {
+  const front = { loginAvailable: false, dashboardEnabled: false, error: null, ...data };
   const handler = createStaticHandler([
-    { path: "/", Component: Home, loader: () => data },
+    { path: "/", Component: Front, loader: () => front },
+    { path: "/search", Component: Search, loader: () => data },
   ]);
-  const context = await handler.query(new Request(`https://clashlens.example/${search}`));
+  const path = search.startsWith("?q=") ? `/search${search}` : `/${search}`;
+  const context = await handler.query(new Request(`https://clashlens.example${path}`));
   if (context instanceof Response) throw new Error("unexpected response");
   return renderToString(
     createElement(StaticRouterProvider, {
@@ -385,80 +398,54 @@ it("counts a ranking as old once it passes 10 minutes while the page is open", a
   );
 });
 
-describe("home search loading", () => {
+describe("search loading", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
   });
 
-  it("starts rankings and search before either has finished", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started = 0;
-    const delayed = <T>(value: T) => {
-      started += 1;
-      return gate.then(() => value);
-    };
+  it("shows a failed search as an error", async () => {
     mocks.createPythonClient.mockReturnValue({
-      getTrackedLeaderboard: vi.fn(() => delayed({ totalTracked: 25 })),
-      searchPlayers: vi.fn(() => delayed(search)),
-    });
-
-    const loading = homeLoader({
-      request: new Request("https://clashlens.example/?q=Nova"),
-    } as never);
-    try {
-      await vi.waitFor(() => expect(started).toBe(2));
-    } finally {
-      release();
-    }
-    const result = await loading;
-    expect(result.leaderboard).toMatchObject({ totalTracked: 25 });
-    expect(result.search).toEqual(search);
-  });
-
-  it("shows search results when rankings fail", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getTrackedLeaderboard: vi
-        .fn()
-        .mockRejectedValue(new PythonApiError(503, { error: "unavailable" })),
-      searchPlayers: vi.fn().mockResolvedValue(search),
-    });
-    const result = await homeLoader({
-      request: new Request("https://clashlens.example/?q=Nova"),
-    } as never);
-    expect(result.leaderboard).toBeNull();
-    expect(result.search).toEqual(search);
-    expect(result.error?.error.code).toBe("unavailable");
-  });
-
-  it("keeps the rankings error first when both requests fail", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getTrackedLeaderboard: vi
-        .fn()
-        .mockRejectedValue(new PythonApiError(503, { error: "unavailable" })),
       searchPlayers: vi
         .fn()
         .mockRejectedValue(new PythonApiError(429, { error: "rate_limited" })),
     });
-    const result = await homeLoader({
-      request: new Request("https://clashlens.example/?q=Nova"),
+    const result = await searchLoader({
+      request: new Request("https://clashlens.example/search?q=Nova"),
     } as never);
     expect(result.search).toBeNull();
-    expect(result.error?.error.code).toBe("unavailable");
+    expect(result.error?.error.code).toBe("rate_limited");
+  });
+
+  it("asks nothing for an empty search", async () => {
+    const result = await searchLoader({
+      request: new Request("https://clashlens.example/search?q=%20"),
+    } as never);
+    expect(result).toEqual({ search: null, query: "", error: null });
+    expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+
+  it("forwards an old front-page search link to the search page", async () => {
+    await expect(
+      frontLoader({
+        request: new Request("https://clashlens.example/?q=Nova%20Star"),
+      } as never),
+    ).rejects.toSatisfy(
+      (response: Response) =>
+        response.status === 302 &&
+        response.headers.get("Location") === "/search?q=Nova+Star",
+    );
   });
 });
 
 it("submitting a normalized exact tag opens its automatic lookup page", async () => {
   await expect(
-    homeLoader({
-      request: new Request("https://clashlens.example/?q=%20%23lqqp%20"),
+    searchLoader({
+      request: new Request("https://clashlens.example/search?q=%20%23lqqp%20"),
     } as never),
   ).rejects.toMatchObject({ status: 302 });
   try {
-    await homeLoader({
-      request: new Request("https://clashlens.example/?q=%23lqqp"),
+    await searchLoader({
+      request: new Request("https://clashlens.example/search?q=%23lqqp"),
     } as never);
   } catch (response) {
     expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
@@ -478,15 +465,36 @@ it("asks the game again when the not-found box sends back the same tag", async (
       hydrate: false,
     }),
   );
-  expect(box).toContain('action="/" method="get"');
+  expect(box).toContain('action="/search" method="get"');
   expect(box).toContain('name="q" value="#LQQP"');
   expect(box).toContain('<input type="hidden" name="recheck" value="#LQQP"/>');
   const opens = (search: string) =>
-    homeLoader({
-      request: new Request(`https://clashlens.example/?${search}`),
+    searchLoader({
+      request: new Request(`https://clashlens.example/search?${search}`),
     } as never).catch((response: Response) => response.headers.get("Location"));
   // The box sends what it holds; a fixed typo is a normal search.
   expect(await opens("q=%23lqqp&recheck=%23LQQP")).toBe("/players/%23LQQP?retry=1");
   expect(await opens("q=%23LQQG&recheck=%23LQQP")).toBe("/players/%23LQQG");
   expect(await opens("q=%23LQQP")).toBe("/players/%23LQQP");
+});
+
+it.each([
+  [oldDashboard, "/dashboard?player=%232PP", "/?player=%232PP"],
+  [oldDashboard, "/dashboard", "/"],
+  [oldGroups, "/account/groups", "/account/watchlists"],
+  [oldGroups, "/account/groups/add/2PP", "/account/watchlists/add/2PP"],
+  [
+    oldGroups,
+    "/account/groups/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e?days=3",
+    "/account/watchlists/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e?days=3",
+  ],
+])("keeps an old link working: %#", (loader, from, to) => {
+  let response: unknown;
+  try {
+    loader({ request: new Request(`https://clashlens.example${from}`) } as never);
+  } catch (thrown) {
+    response = thrown;
+  }
+  expect((response as Response).status).toBe(301);
+  expect((response as Response).headers.get("Location")).toBe(to);
 });

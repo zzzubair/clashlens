@@ -106,9 +106,9 @@ const CARD_LIST = {
     built: true,
   },
   "group-watch": {
-    title: "Group watch",
+    title: "Watchlist",
     size: "m",
-    description: "How you compare with the players in one of your groups.",
+    description: "How you compare with the players in one of your watchlists.",
     built: true,
     settings: true,
   },
@@ -192,7 +192,7 @@ export function isDashboardSave(
   return (
     formMethod?.toUpperCase() === "POST" &&
     formAction !== undefined &&
-    new URL(formAction, "http://dashboard.invalid").pathname === "/dashboard"
+    new URL(formAction, "http://dashboard.invalid").pathname === "/"
   );
 }
 

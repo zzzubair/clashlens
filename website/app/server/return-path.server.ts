@@ -2,10 +2,10 @@
  * Same-origin return-path validation for login redirects.
  *
  * Only a plain same-origin absolute path is accepted: ASCII path characters,
- * no query string, no fragment, no percent-encoding, no dot segments, no
- * backslashes, and no protocol-relative or external forms. The configured
- * public origin is the only base that may be used, so an attacker-supplied
- * value can never redirect the browser off-site. Invalid values yield null and
+ * no query string, no fragment, no percent-encoding but the %23 of a player
+ * tag's #, no dot segments, no backslashes, and no protocol-relative or
+ * external forms. The configured public origin is the only base that may be
+ * used, so an attacker-supplied value can never redirect the browser off-site. Invalid values yield null and
  * the caller falls back to a safe default path.
  *
  * A page's data request (React Router's `/page.data`, or `/_.data` for the
@@ -17,7 +17,8 @@
 export const MAX_RETURN_PATH_LENGTH = 200;
 export const DEFAULT_RETURN_PATH = "/account";
 
-const RETURN_PATH_CHARS = /^[A-Za-z0-9._~/-]+$/;
+// Plain path characters, and %23 for the # of a player tag such as /account/watchlists/add/%232PP.
+const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
 
 /**
  * Validate a same-origin return path against the exact public origin.

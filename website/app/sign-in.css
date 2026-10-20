@@ -1,0 +1,45 @@
+/* "[Create account] Already have one? [Sign in]" and the pages around it. */
+
+.account-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0;
+}
+
+.account-buttons > span {
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.needs-account {
+  display: grid;
+  gap: 1rem;
+}
+
+.needs-account > p:first-child {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.sign-in-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.sign-in-panel > p {
+  margin: 0;
+}
+
+.sign-in-panel .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.link-then {
+  margin: 0.5rem 0 0;
+  font-weight: 650;
+}

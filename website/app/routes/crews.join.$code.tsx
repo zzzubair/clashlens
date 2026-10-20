@@ -11,6 +11,7 @@ import {
 
 import { type BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { AccountButtons } from "../components/NeedsAccount";
 import { TrophyMark } from "../components/LeaderboardShared";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
@@ -39,7 +40,9 @@ export function meta() {
 
 export interface JoinLoaderData {
   code: string;
+  /** Null for a link that can't be an invite at all. */
   invite: InvitePreview | null;
+  signedIn: boolean;
   idempotencyKey: string;
   error: WebsiteErrorResponse | null;
 }
@@ -57,14 +60,11 @@ const ELIGIBILITY: Record<InviteAccount["eligibility"], string | null> = {
   unchecked: "Not checked yet",
 };
 
-/** Crews switched on, signed in (coming back here after), and a well-formed code. */
-async function guard(request: Request, code: string | undefined) {
+/** Crews switched on and a well-formed code; anything else is a link that doesn't work. */
+async function guard(code: string | undefined): Promise<string | null> {
   const { isCrewsEnabled } = await import("../server/config.server");
   if (!isCrewsEnabled()) throw data(null, { status: 404 });
-  const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
-  if (code === undefined || !INVITE_CODE.test(code)) throw data(null, { status: 404 });
-  return { identity, code };
+  return code !== undefined && INVITE_CODE.test(code) ? code : null;
 }
 
 async function setupRedirect(request: Request, cause: unknown): Promise<void> {
@@ -77,21 +77,35 @@ async function setupRedirect(request: Request, cause: unknown): Promise<void> {
 }
 
 /**
- * GET /crews/join/:code — the crew an invite link is for and which of the
- * clasher's accounts can join. Accounts Clash Lens hasn't checked yet are
- * checked with the game first.
+ * GET /crews/join/:code — the crew an invite link is for. Signed out, the
+ * crew and why an account is needed; signed in, which of the clasher's
+ * accounts can join. Accounts Clash Lens hasn't checked yet are checked with
+ * the game first. A link that doesn't work says so before any sign-in.
  */
 export async function loader({ request, params, context }: Route.LoaderArgs) {
-  const { identity, code } = await guard(request, params.code);
-  const { freshIdempotencyKey } = await import("../server/actions.server");
-  const idempotencyKey = freshIdempotencyKey();
+  const code = await guard(params.code);
+  const actions = await import("../server/actions.server");
+  const idempotencyKey = actions.freshIdempotencyKey();
+  const reply = (status: number, value: Omit<JoinLoaderData, "idempotencyKey">) =>
+    data<JoinLoaderData>({ ...value, idempotencyKey }, { status, headers: NO_STORE });
+  if (code === null) {
+    return reply(404, { code: "", invite: null, signedIn: false, error: null });
+  }
+  const { getWebsiteConfig } = await import("../server/config.server");
+  let identity = null;
+  try {
+    const config = getWebsiteConfig();
+    if (config.loginEnabled) identity = await actions.readLoginIdentity(request, config);
+  } catch {
+    identity = null;
+  }
   try {
     const { getInvite } = await import("../services/crews.server");
-    let invite = await getInvite(identity, code);
+    let invite = await getInvite(identity ?? undefined, code);
     const unchecked = invite.accounts.filter(
       (account) => account.eligibility === "unchecked",
     );
-    if (invite.state === "ok" && unchecked.length > 0) {
+    if (identity && invite.state === "ok" && unchecked.length > 0) {
       const { checkPlayerTag } = await import("../services/group-players.server");
       const { clientAddressContext } = await import("../server/client-address.server");
       for (const account of unchecked) {
@@ -99,17 +113,21 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
       }
       invite = await getInvite(identity, code);
     }
-    return data<JoinLoaderData>(
-      { code, invite, idempotencyKey, error: null },
-      { headers: NO_STORE },
-    );
+    return reply(invite.state === "invalid" ? 404 : 200, {
+      code,
+      invite,
+      signedIn: identity !== null,
+      error: null,
+    });
   } catch (cause) {
     await setupRedirect(request, cause);
     const { safeWebsiteError } = await import("../server/errors.server");
-    return data<JoinLoaderData>(
-      { code, invite: null, idempotencyKey, error: safeWebsiteError(cause) },
-      { status: 503, headers: NO_STORE },
-    );
+    return reply(503, {
+      code,
+      invite: null,
+      signedIn: identity !== null,
+      error: safeWebsiteError(cause),
+    });
   }
 }
 
@@ -124,7 +142,10 @@ export function headers() {
  * answer replays the same requests.
  */
 export async function action({ request, params, context }: Route.ActionArgs) {
-  const { identity, code } = await guard(request, params.code);
+  const code = await guard(params.code);
+  if (code === null) throw data(null, { status: 404 });
+  const { requireLogin } = await import("../server/auth-guard.server");
+  const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
   const reply = (
@@ -150,7 +171,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     .map((field) => normalizePlayerTag(field.slice(JOIN_FIELD.length)))
     .filter((tag): tag is string => tag !== null);
   if (tags.length === 0) {
-    return reply(400, tags, "Pick at least one account.", idempotencyKey);
+    return reply(400, tags, "Pick at least one player.", idempotencyKey);
   }
   const { acceptInvite, crewErrorCode, joinCheckingAccounts } =
     await import("../services/crews.server");
@@ -176,23 +197,44 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 }
 
 export default function JoinCrewRoute() {
-  const { code, invite, idempotencyKey, error } = useLoaderData<typeof loader>();
+  const { code, invite, signedIn, idempotencyKey, error } =
+    useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
-  if (invite === null) {
+  if (error) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Crew invite</h1>
-        {error ? <ErrorNotice error={error} /> : null}
+        <ErrorNotice error={error} />
       </main>
     );
   }
-  if (invite.state === "invalid") {
+  if (invite === null || invite.state === "invalid") {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>This invite link doesn&apos;t work</h1>
         <p className="notice">
-          It expired or was turned off. Ask the crew for a new one.
+          Check you copied all of it, or ask the crew for a new link.
         </p>
+        <Link
+          className="button button-primary"
+          to="/leaderboards/tracked?view=live&page=1"
+        >
+          See Rankings
+        </Link>
+      </main>
+    );
+  }
+  const lookInside = (
+    <Link className="crew-link-button" to={`/crews/${invite.crewId}`}>
+      Look inside {invite.name}
+    </Link>
+  );
+  if (invite.state === "ended") {
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+        <h1>This invite to {invite.name} has ended</h1>
+        <p className="notice">Ask someone in the crew for a new link.</p>
+        {lookInside}
       </main>
     );
   }
@@ -201,10 +243,10 @@ export default function JoinCrewRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
       <p className="eyebrow">Crew invite</p>
-      <h1>{invite.name}</h1>
+      <h1>{invite.inCrew ? invite.name : `Join ${invite.name}`}</h1>
       <p className="crew-meta">
         {invite.ownerName ? `Owner: ${invite.ownerName} · ` : null}
-        {invite.used} of {invite.size} places · Works until{" "}
+        {invite.used} of {invite.size} places · Link works until{" "}
         <LocalTimestamp value={invite.expiresAt} />
       </p>
       {invite.inCrew ? (
@@ -216,7 +258,16 @@ export default function JoinCrewRoute() {
         </p>
       ) : null}
       {invite.state === "full" ? (
-        <p className="notice">This crew is full.</p>
+        <>
+          <p className="notice">{invite.name} is full. Ask the owner to add places.</p>
+          {signedIn ? null : lookInside}
+        </>
+      ) : !signedIn ? (
+        <section className="form-panel needs-account" aria-label="Account needed">
+          <p>You need a Clash Lens account to join a crew. It&apos;s free.</p>
+          <AccountButtons returnPath={`/crews/join/${code}`} />
+          {lookInside}
+        </section>
       ) : invite.state === "limit" ? (
         <p className="notice crew-notice-action">
           <span>You&apos;re already in {MAX_CREWS} crews, the most you can be in.</span>
@@ -226,9 +277,11 @@ export default function JoinCrewRoute() {
         </p>
       ) : invite.accounts.length === 0 ? (
         <p className="notice crew-notice-action">
-          <span>Link a Clash of Clans account to join.</span>
+          <span>
+            Pick which of your Clash players join. You haven&apos;t linked one yet.
+          </span>
           <Link className="button button-primary" to={linkAccount}>
-            Link an account
+            Link your Clash player
           </Link>
         </p>
       ) : (
@@ -284,7 +337,7 @@ function JoinForm({
       ) : null}
       <fieldset className="crew-pick">
         <legend>
-          Which accounts join? {open} {open === 1 ? "place" : "places"} open
+          Which of your players join? {open} {open === 1 ? "place" : "places"} open
         </legend>
         <ul>
           {accounts.map((account) => {
@@ -326,15 +379,15 @@ function JoinForm({
         }
       >
         {!hydrated
-          ? "Join with the picked accounts"
+          ? "Join with the picked players"
           : count === 0
-            ? "Pick at least one account"
+            ? "Pick at least one player"
             : tooMany
               ? `Pick at most ${open}`
-              : `Join with ${count} ${count === 1 ? "account" : "accounts"}`}
+              : `Join with ${count} ${count === 1 ? "player" : "players"}`}
       </button>
       <Link className="crew-link-button" to={linkAccount}>
-        Link another account
+        Link another player
       </Link>
     </Form>
   );

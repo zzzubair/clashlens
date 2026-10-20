@@ -59,6 +59,7 @@ import { loader as callbackLoader } from "../../app/routes/auth.google.callback"
 import { loader as discordStartLoader } from "../../app/routes/auth.discord";
 import { loader as googleStartLoader } from "../../app/routes/auth.google";
 import { loader as loginLoader } from "../../app/routes/login";
+import { loader as signupLoader } from "../../app/routes/signup";
 import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
 import { action as refreshAction } from "../../app/routes/refresh";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
@@ -225,7 +226,12 @@ describe("login loader", () => {
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login`),
     } as never);
-    expect(result).toEqual({ loginAvailable: false, returnPath: "/account" });
+    expect(result).toEqual({
+      loginAvailable: false,
+      returnPath: "/account",
+      crewName: null,
+      noAccount: false,
+    });
   });
 
   it("reports login unavailable when configuration fails", async () => {
@@ -235,21 +241,36 @@ describe("login loader", () => {
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login`),
     } as never);
-    expect(result).toEqual({ loginAvailable: false, returnPath: "/account" });
+    expect(result).toEqual({
+      loginAvailable: false,
+      returnPath: "/account",
+      crewName: null,
+      noAccount: false,
+    });
   });
 
   it("returns the validated return path and login availability for an anonymous request", async () => {
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fprofile`),
     } as never);
-    expect(result).toEqual({ loginAvailable: true, returnPath: "/account/profile" });
+    expect(result).toEqual({
+      loginAvailable: true,
+      returnPath: "/account/profile",
+      crewName: null,
+      noAccount: false,
+    });
   });
 
   it("returns a sign-in started from a page's data request to the page", async () => {
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups.data`),
     } as never);
-    expect(result).toEqual({ loginAvailable: true, returnPath: "/account/groups" });
+    expect(result).toEqual({
+      loginAvailable: true,
+      returnPath: "/account/groups",
+      crewName: null,
+      noAccount: false,
+    });
   });
 
   it("falls back to the default path for unsafe return paths", async () => {
@@ -284,6 +305,35 @@ describe("login loader", () => {
     );
   });
 
+  it("keeps a sign-in no account uses on the sign-in page, and sends it on from sign-up", async () => {
+    const config = testConfig();
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
+    mocks.createPythonClient.mockReturnValue({
+      getAccount: vi.fn(async () => {
+        throw new PythonApiError(403, { error: "account_not_found" });
+      }),
+    } as never);
+    const request = (page: string) =>
+      new Request(`${ORIGIN}/${page}?none=google&returnPath=%2Fcrews`, {
+        headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
+      });
+    expect(await loginLoader({ request: request("login") } as never)).toEqual({
+      loginAvailable: true,
+      returnPath: "/crews",
+      crewName: null,
+      noAccount: true,
+    });
+    await expect(signupLoader({ request: request("signup") } as never)).rejects.toSatisfy(
+      (thrown: unknown) => {
+        expect((thrown as Response).headers.get("Location")).toBe(
+          "/account/setup?returnPath=%2Fcrews",
+        );
+        return true;
+      },
+    );
+    mocks.createPythonClient.mockReset();
+  });
+
   it("shows the sign-in page when the short login check fails", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
@@ -293,7 +343,12 @@ describe("login loader", () => {
         headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
       }),
     } as never);
-    expect(result).toEqual({ loginAvailable: true, returnPath: "/account" });
+    expect(result).toEqual({
+      loginAvailable: true,
+      returnPath: "/account",
+      crewName: null,
+      noAccount: false,
+    });
   });
 
   it("exports a no-store headers policy", () => {
@@ -408,15 +463,16 @@ describe("logout route", () => {
 
     // The same cookie, replayed from another browser, is no longer a login.
     await expect(requireLogin(account())).rejects.toSatisfy((thrown: unknown) => {
-      expect((thrown as Response).headers.get("Location")).toBe(
-        "/login?returnPath=%2Faccount",
-      );
+      expect(thrown).toMatchObject({
+        data: { needsAccount: true, returnPath: "/account" },
+        init: { status: 401 },
+      });
       return true;
     });
     const loginPage = await loginLoader({
       request: new Request(`${ORIGIN}/login`, { headers: { cookie: copied } }),
     } as never);
-    expect(loginPage).toEqual({ loginAvailable: true, returnPath: "/account" });
+    expect(loginPage).toMatchObject({ loginAvailable: true, returnPath: "/account" });
     // A fresh sign-in is a new login and still works.
     const fresh = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds * 1000);
     await expect(
@@ -541,6 +597,23 @@ describe("auth.google start loader", () => {
     expect(mocks.createGoogleOidcService).toHaveBeenCalledWith(config);
   });
 
+  it("starts a sign-up, which may make an account, only from ?signup=1", async () => {
+    const intentOf = async (query: string) => {
+      const response = (await googleStartLoader({
+        request: new Request(`${ORIGIN}/auth/google?returnPath=%2Fcrews${query}`),
+      } as never)) as Response;
+      const cookie = response.headers.getSetCookie()[0];
+      return parseOAuthTransactionCookieValue(
+        cookie.slice(cookie.indexOf("=") + 1, cookie.indexOf(";")),
+        testConfig().loginSecret,
+        Math.floor(Date.now() / 1000),
+      )?.intent;
+    };
+    expect(await intentOf("&signup=1")).toBe("signup");
+    expect(await intentOf("&signup=yes")).toBe("login");
+    expect(await intentOf("")).toBe("login");
+  });
+
   it("treats privileged intent query parameters as an ordinary login", async () => {
     const response = await googleStartLoader({
       request: new Request(`${ORIGIN}/auth/google?intent=unlink`),
@@ -644,6 +717,7 @@ describe("auth.google.callback loader", () => {
     mocks.getWebsiteConfig.mockReturnValue(config);
     service = makeService();
     mocks.createGoogleOidcService.mockResolvedValue(service.service);
+    mocks.createPythonClient.mockClear();
     mocks.createPythonClient.mockReturnValue({
       getAccount: vi.fn(async () => ({
         username: "nova88",
@@ -887,7 +961,7 @@ describe("auth.google.callback loader", () => {
     expect(login!.issuedAtMs).toBeGreaterThanOrEqual(validatedAtMs);
   });
 
-  it("redirects a documented account_not_found (403 and defensive 404) to setup with the login cookie", async () => {
+  it("answers a sign-in no account uses (403 and defensive 404) with No account found, keeping the login cookie", async () => {
     for (const status of [403, 404]) {
       mocks.createPythonClient.mockReturnValue({
         getAccount: vi.fn(async () => {
@@ -903,7 +977,7 @@ describe("auth.google.callback loader", () => {
       } as never);
       expect(isResponse(response)).toBe(true);
       expect((response as Response).status).toBe(302);
-      expect((response as Response).headers.get("Location")).toBe("/account/setup");
+      expect((response as Response).headers.get("Location")).toBe("/login?none=google");
       const setCookies = (response as Response).headers.getSetCookie();
       expect(setCookies).toHaveLength(2);
       expect(setCookies[1]).toContain(`${LOGIN_COOKIE_NAME}=`);
@@ -922,16 +996,16 @@ describe("auth.google.callback loader", () => {
   });
 
   it.each(["google", "discord"] as const)(
-    "keeps a safe destination through %s sign-in for new and returning accounts",
+    "keeps a safe destination through %s sign-in and sign-up for new and returning accounts",
     async (provider) => {
       const { completeProviderCallback } =
         await import("../../app/server/provider-callback.server");
-      const signIn = (returnPath: string) => {
+      const signIn = (returnPath: string, intent: "login" | "signup" = "login") => {
         const transaction = createOAuthTransaction(
           returnPath,
           now(),
           undefined,
-          "login",
+          intent,
           provider,
         );
         const header = `${OAUTH_COOKIE_NAME}=${createOAuthTransactionCookieValue(
@@ -949,16 +1023,26 @@ describe("auth.google.callback loader", () => {
       };
       const groupPath = "/account/groups/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
       expect(await signIn(groupPath)).toMatchObject({ location: groupPath });
+      expect(await signIn(groupPath, "signup")).toMatchObject({ location: groupPath });
 
       mocks.createPythonClient.mockReturnValue({
         getAccount: vi.fn(async () => {
           throw new PythonApiError(403, { error: "account_not_found" });
         }),
       } as never);
-      expect(await signIn(groupPath)).toMatchObject({
+      expect(await signIn(groupPath, "signup")).toMatchObject({
         location: `/account/setup?returnPath=${encodeURIComponent(groupPath)}`,
       });
-      expect(await signIn("/account")).toMatchObject({ location: "/account/setup" });
+      expect(await signIn("/account", "signup")).toMatchObject({
+        location: "/account/setup",
+      });
+      // Signing in asks before making an account.
+      expect(await signIn(groupPath)).toMatchObject({
+        location: `/login?none=${provider}&returnPath=${encodeURIComponent(groupPath)}`,
+      });
+      expect(await signIn("/account")).toMatchObject({
+        location: `/login?none=${provider}`,
+      });
     },
   );
 

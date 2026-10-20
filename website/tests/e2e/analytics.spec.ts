@@ -321,7 +321,10 @@ test("changing to Decline deletes the ID and stops a held, preparing or retried 
   ).toBeFocused();
   // Long past any wait before sending and any retry of the failed send.
   await page.clock.runFor(120_000);
-  await page.getByRole("banner").getByRole("link", { name: "Home", exact: true }).click();
+  await page
+    .getByRole("banner")
+    .getByRole("link", { name: "Clash Lens", exact: true })
+    .click();
   await expect(page.getByRole("searchbox").first()).toBeVisible();
   await page.clock.runFor(120_000);
   expect(sentAfterDecline).toEqual([]);

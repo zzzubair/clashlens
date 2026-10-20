@@ -32,8 +32,8 @@ Each file has an H1 title, one paragraph on what the Clasher sees, then four H2 
 ## Features
 
 - [Player page](./player-page.md): a player's profile, Legend day card, Daily Legend log, Season summary and Refresh.
-- [Search and leaderboards](./search-and-leaderboards.md): header search, home page tables, the tracked leaderboard and Find your rank.
-- [Sign-in, accounts and groups](./account-and-groups.md): Google and Discord sign-in, account setup, linking a player, groups.
+- [Search and leaderboards](./search-and-leaderboards.md): header search, the front page's top 10, the tracked leaderboard and Find your rank.
+- [Sign-in, accounts and Watchlists](./account-and-groups.md): Google and Discord sign-in, account setup, linking a player, Watchlists.
 - [Crews](./crews.md): making a Crew, inviting, joining, and the signed-out view.
 - [Dashboard](./dashboard.md): first-visit layout choice, cards, customising and the goal.
 

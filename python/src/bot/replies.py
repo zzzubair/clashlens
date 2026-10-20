@@ -295,7 +295,7 @@ def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
                 ),
                 button=Link("Open Clash Lens", site.url("/"))
                 if username is not None
-                else Link("Get started on Clash Lens", site.url("/login")),
+                else Link("Get started on Clash Lens", site.url("/signup")),
             ),
         ),
         footer=None if username is not None else _connect_instead(site),

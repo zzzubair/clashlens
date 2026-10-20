@@ -38,8 +38,10 @@ describe("what leaves the browser", () => {
       path: "/players/:tag",
     });
     expect(routeOf("/users/someone").path).toBe("/users/:username");
-    expect(routeOf("/account/groups/7c1a").path).toBe("/account/groups/:group");
-    expect(routeOf("/account/groups/add/2PP").path).toBe("/account/groups/add/:tag");
+    expect(routeOf("/account/watchlists/7c1a").path).toBe("/account/watchlists/:group");
+    expect(routeOf("/account/watchlists/add/2PP").path).toBe(
+      "/account/watchlists/add/:tag",
+    );
     expect(routeOf("/crews/join/SECRETCODE").path).toBe("/crews/join/:code");
     expect(routeOf("/crews/new").route).toBe("crew_new");
     expect(routeOf("/")).toEqual({ route: "home", path: "/" });

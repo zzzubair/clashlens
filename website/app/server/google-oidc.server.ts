@@ -40,7 +40,8 @@ const MAX_CALLBACK_PARAM_BYTES = 8192;
  * started from an authenticated account. The provider is always the one
  * whose authorize route created the transaction.
  */
-export type OAuthIntent = "login" | "link" | "unlink";
+/** Sign in, sign up (a missing account may be made), or change sign-in connections. */
+export type OAuthIntent = "login" | "signup" | "link" | "unlink";
 
 export interface OAuthTransaction {
   /** The only provider whose callback may consume this transaction. */
@@ -311,9 +312,10 @@ export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
     /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeVerifier) &&
     /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeChallenge) &&
     (transaction.intent === "login" ||
+      transaction.intent === "signup" ||
       transaction.intent === "link" ||
       transaction.intent === "unlink") &&
-    (transaction.intent === "login"
+    (transaction.intent === "login" || transaction.intent === "signup"
       ? transaction.sessionBinding === undefined
       : typeof transaction.sessionBinding === "string" &&
         /^[A-Za-z0-9_-]{43}$/.test(transaction.sessionBinding)) &&

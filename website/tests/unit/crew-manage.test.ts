@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
+  readLoginIdentity: vi.fn(),
   requestJson: vi.fn(),
   createPythonClient: vi.fn(),
   checkPlayerTag: vi.fn(),
@@ -24,6 +25,11 @@ vi.mock("../../app/server/config.server", async (importOriginal) => {
 vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
+
+vi.mock("../../app/server/actions.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../app/server/actions.server")>();
+  return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
+});
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
@@ -55,6 +61,7 @@ import CrewSettingsRoute, {
   loader as settingsLoader,
 } from "../../app/routes/crews.$crewId.settings";
 import JoinRoute, {
+  type JoinLoaderData,
   action as joinAction,
   loader as joinLoader,
 } from "../../app/routes/crews.join.$code";
@@ -62,6 +69,7 @@ import {
   action as verifyAction,
   loader as verifyLoader,
 } from "../../app/routes/account.verify-player";
+import { loader as setupLoader } from "../../app/routes/account.setup";
 import { clientAddressContext } from "../../app/server/client-address.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
@@ -216,6 +224,7 @@ beforeEach(() => {
     }),
   );
   mocks.requireLogin.mockResolvedValue(IDENTITY);
+  mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
   mocks.requestJson.mockReset();
   mocks.requestJson.mockRejectedValue(new PythonApiError(503, { error: "unavailable" }));
   mocks.createPythonClient.mockReset();
@@ -617,10 +626,13 @@ describe("join by invite", () => {
   };
 
   it("answers a malformed code, or crews switched off, as a missing page", async () => {
-    const malformed = await thrown(() =>
-      joinLoader(get("/crews/join/short", { code: "short" }) as never),
+    const malformed = unwrap<JoinLoaderData>(
+      await joinLoader(get("/crews/join/short", { code: "short" }) as never),
     );
-    expect((malformed as { init: { status: number } }).init.status).toBe(404);
+    expect([malformed.status, malformed.data.invite]).toEqual([404, null]);
+    const html = await render("/crews/join/short", joinRoute);
+    expect(html).toContain("This invite link doesn&#x27;t work");
+    expect(html).toContain("Check you copied all of it, or ask the crew for a new link.");
     vi.stubEnv("CLASHLENS_CREWS_ENABLED", "false");
     const off = await thrown(() =>
       joinLoader(get(`/crews/join/${CODE}`, { code: CODE }) as never),
@@ -647,7 +659,7 @@ describe("join by invite", () => {
     expect(html).toContain("12 places open");
     expect(html).toContain("Not in Legend League");
     expect(html).toContain('name="join:#2PP" checked=""');
-    expect(html).toContain("Join with the picked accounts");
+    expect(html).toContain("Join with the picked players");
     expect(html).toContain(`/account/verify-player?return=/crews/join/${CODE}`);
   });
 
@@ -662,29 +674,57 @@ describe("join by invite", () => {
       { ...joinRoute, action: joinAction as never },
       post(`/crews/join/${CODE}`, {}, { code: CODE }).request,
     );
-    expect(html).toContain("Pick at least one account.");
+    expect(html).toContain("Pick at least one player.");
     expect(html).toMatch(/<button type="submit" class="button button-primary">Join with/);
   });
 
   it.each([
-    [{ state: "full" }, "This crew is full."],
+    [{ state: "full" }, "Night Owls is full. Ask the owner to add places."],
     [{ state: "limit", crew_count: 5 }, "You&#x27;re already in 5 crews"],
-    [{ accounts: [] }, "Link a Clash of Clans account to join."],
+    [{ accounts: [] }, "You haven&#x27;t linked one yet."],
   ])("shows %o as %j", async (overrides, text) => {
     mocks.requestJson.mockResolvedValue(invitePayload(overrides));
     expect(await render(`/crews/join/${CODE}`, joinRoute)).toContain(text);
   });
 
-  it("says a link that doesn't work has expired or was turned off", async () => {
-    mocks.requestJson.mockResolvedValue({
+  it("says a link that doesn't work doesn't work, and an ended one has ended", async () => {
+    mocks.requestJson.mockResolvedValueOnce({
       kind: "crew-invite",
       state: "invalid",
       in_crew: false,
       crew_count: 0,
       accounts: [],
     });
+    expect(await render(`/crews/join/${CODE}`, joinRoute)).toContain(
+      "This invite link doesn&#x27;t work",
+    );
+    mocks.requestJson.mockResolvedValueOnce({
+      kind: "crew-invite",
+      state: "ended",
+      crew_id: CREW_ID,
+      name: "Night Owls",
+      in_crew: false,
+      crew_count: 0,
+      accounts: [],
+    });
+    const ended = await render(`/crews/join/${CODE}`, joinRoute);
+    expect(ended).toContain("This invite to Night Owls has ended");
+    expect(ended).toContain(`href="/crews/${CREW_ID}"`);
+    expect(ended).toContain("Look inside Night Owls");
+  });
+
+  it("shows the crew before sign-in, and why an account is needed", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(null);
+    mocks.requestJson.mockResolvedValue(invitePayload({ accounts: [] }));
     const html = await render(`/crews/join/${CODE}`, joinRoute);
-    expect(html).toContain("It expired or was turned off.");
+    expect(mocks.requestJson.mock.calls[0]![0]).toBe(`/v1/crew-invites/${CODE}`);
+    expect(mocks.checkPlayerTag).not.toHaveBeenCalled();
+    expect(html).toContain("Join Night Owls");
+    expect(html).toContain("You need a Clash Lens account to join a crew.");
+    const back = encodeURIComponent(`/crews/join/${CODE}`);
+    expect(html).toContain(`href="/signup?returnPath=${back}"`);
+    expect(html).toContain(`href="/login?returnPath=${back}"`);
+    expect(html).not.toContain("Join with");
   });
 
   it("joins with the picked accounts and opens the crew", async () => {
@@ -754,13 +794,33 @@ describe("linking an account from an invite", () => {
       303,
       `/crews/join/${CODE}`,
     ]);
+    mocks.requestJson.mockResolvedValue(invitePayload({ accounts: [] }));
     const loaded = await verifyLoader({
       request: new Request(`${ORIGIN}/account/verify-player?return=/crews/join/${CODE}`),
     } as never);
     expect(loaded.returnPath).toBe(`/crews/join/${CODE}`);
+    expect(loaded.crewName).toBe("Night Owls");
   });
 
-  it.each(["/account/groups", "https://evil.example/crews/join/x", "//evil.example"])(
+  it("names the crew while a new clasher sets up their account", async () => {
+    mocks.requestJson.mockResolvedValue(invitePayload({ accounts: [] }));
+    const back = encodeURIComponent(`/crews/join/${CODE}`);
+    const loaded = await setupLoader({
+      request: new Request(`${ORIGIN}/account/setup?returnPath=${back}`),
+    } as never);
+    expect([loaded.returnPath, loaded.crewName]).toEqual([
+      `/crews/join/${CODE}`,
+      "Night Owls",
+    ]);
+    expect(mocks.requestJson.mock.calls[0]![0]).toBe(`/v1/crew-invites/${CODE}`);
+  });
+
+  it("goes on to any page on this website once the account is linked", async () => {
+    const response = (await link("/account/watchlists")) as Response;
+    expect(response.headers.get("Location")).toBe("/account/watchlists");
+  });
+
+  it.each(["/account/setup", "https://evil.example/crews/join/x", "//evil.example"])(
     "ignores %s and goes to the account as before",
     async (returnPath) => {
       const response = (await link(returnPath)) as Response;

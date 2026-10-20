@@ -16,6 +16,8 @@ export interface SetupLoaderData {
   idempotencyKey: string;
   /** Validated page to open once the account exists. */
   returnPath: string;
+  /** The crew whose invite link the Clasher came from, if any. */
+  crewName: string | null;
 }
 
 export interface SetupActionData {
@@ -40,7 +42,20 @@ export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoader
     new URL(request.url).searchParams.get("returnPath"),
     getWebsiteConfig().publicOrigin,
   );
-  return { idempotencyKey: freshIdempotencyKey(), returnPath };
+  const { inviteCrewName } = await import("../services/crews.server");
+  return {
+    idempotencyKey: freshIdempotencyKey(),
+    returnPath,
+    crewName: await inviteCrewName(returnPath),
+  };
+}
+
+/** A new account links a player first, then goes on to where it was heading. */
+function linkFirst(returnPath: string, defaultPath: string): string {
+  if (returnPath === "/account/verify-player") return returnPath;
+  return returnPath === defaultPath
+    ? "/account/verify-player"
+    : `/account/verify-player?return=${encodeURIComponent(returnPath)}`;
 }
 
 /**
@@ -53,7 +68,7 @@ export async function action({ request }: Route.ActionArgs) {
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
-  const { accountSetupPath, setupReturnPath } =
+  const { accountSetupPath, setupReturnPath, DEFAULT_RETURN_PATH } =
     await import("../server/return-path.server");
 
   const config = getWebsiteConfig();
@@ -119,7 +134,7 @@ export async function action({ request }: Route.ActionArgs) {
     }
     throw redirect(accountSetupPath(returnPath, config.publicOrigin));
   }
-  throw redirect(returnPath);
+  throw redirect(linkFirst(returnPath, DEFAULT_RETURN_PATH));
 }
 
 async function forbiddenResponse() {
@@ -199,11 +214,11 @@ export default function AccountSetupRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="setup-title">
-        <h1 id="setup-title">Create your account</h1>
+        <h1 id="setup-title">Choose your username</h1>
         <p className="lede">
-          Choose a unique username and a display name. You can't change your username
-          later. Your sign-in identity is never shown publicly and your email address is
-          never used.
+          {loaderData.crewName
+            ? `Then you'll join ${loaderData.crewName}.`
+            : "Then you'll link your Clash player."}
         </p>
       </section>
 
@@ -236,7 +251,8 @@ export default function AccountSetupRoute() {
               </p>
             ) : (
               <p className="form-help">
-                Lowercase letters, numbers, and underscores. Starts with a letter.
+                Lowercase letters, numbers and _. Starts with a letter. You can&apos;t
+                change it later.
               </p>
             )}
           </div>
@@ -256,7 +272,7 @@ export default function AccountSetupRoute() {
                 {displayNameError}
               </p>
             ) : (
-              <p className="form-help">1–80 characters. Shown on your public page.</p>
+              <p className="form-help">Shown on your profile. 1–80 characters.</p>
             )}
           </div>
           <button type="submit" className="button button-primary">

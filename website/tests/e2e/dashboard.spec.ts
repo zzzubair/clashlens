@@ -23,7 +23,7 @@ const ALL_CARDS = [
   "Season graph",
   "Recent form",
   "Offense consistency",
-  "Group watch",
+  "Watchlist",
   "Armies on offense",
 ];
 const DEFAULT_CARDS = ALL_CARDS.slice(0, 7);
@@ -59,7 +59,7 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   // A first visit offers our layout or an empty one, once the player is tracked.
   const welcome = page.getByRole("dialog", { name: "Your dashboard" });
   await expect(async () => {
-    await page.goto("/dashboard");
+    await page.goto("/");
     await expect(welcome).toBeVisible({ timeout: 3_000 });
   }).toPass({ intervals: [2_000], timeout: 60_000 });
   await welcome.getByRole("button", { name: /Use our layout/ }).click();
@@ -281,7 +281,7 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   ]);
   const welcome = page.getByRole("dialog", { name: "Your dashboard" });
   await expect(async () => {
-    await page.goto(`/dashboard?player=${encodeURIComponent(first)}`);
+    await page.goto(`/?player=${encodeURIComponent(first)}`);
     await expect(welcome).toBeVisible({ timeout: 3_000 });
   }).toPass({ intervals: [2_000], timeout: 60_000 });
   await welcome.getByRole("button", { name: /Use our layout/ }).click();
@@ -314,7 +314,7 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
     page.evaluate(() => (window as unknown as { shown: [string, string][] }).shown);
 
   // A slow answer: the new tab and empty cards show before it arrives.
-  const slow = /\/dashboard\.data/;
+  const slow = /\/_\.data/;
   await page.route(slow, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     await route.fallback();
