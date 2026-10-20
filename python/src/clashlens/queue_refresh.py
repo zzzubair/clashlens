@@ -117,18 +117,20 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
 
 def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
     """A profile or battle log read at ``at`` can judge the newest ended day,
-    and its own day once that has ended, when it is processed late."""
+    and its own day once that has ended, when it is processed late. So can
+    one naming the Season of a day saved before any profile named it, as a
+    first battle log processed before the first profile saves Day 1."""
     rows = connection.execute(
         """
         (SELECT ranked_day_start FROM ranked_day_versions
          WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-           AND official_season_id IN (%(season)s, %(previous)s)
+           AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
            AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
          ORDER BY ranked_day_start DESC LIMIT 1)
         UNION
         SELECT ranked_day_start FROM ranked_day_versions
         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-          AND official_season_id IN (%(season)s, %(previous)s)
+          AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
           AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
           AND ranked_day_end <= clock_timestamp()
         """,
@@ -146,6 +148,25 @@ def queue_for_next_day_start(connection: Any, player_id: int, day_start: datetim
     (``loss_rule.next_day_landing``): queue the day before once for it."""
     _queue_day(connection, player_id, day_start - timedelta(days=1),
                f"reconcile:next-day-start:{player_id}:{version_id}", "next_day_start")
+
+
+def queue_for_season_rule_start(connection: Any, player_id: int, day_start: datetime,
+                                version_id: int) -> None:
+    """A day saved starting at 5,000 by the Season rule, before the player's
+    first Legend battle of the Season, ends the day before at 5,000 too once
+    a battle log saved after it shows no battle (``reconciliation_db``):
+    queue the day before once for it while its newest saved result has no
+    end. A player who has not logged in since the Season opened may have no
+    Reset reading to end each day, so each such day back to Day 1 ends in
+    turn."""
+    before = day_start - timedelta(days=1)
+    _queue_day(connection, player_id, before,
+               f"reconcile:season-rule-start:{player_id}:{version_id}", "next_day_start",
+               only_if="""(SELECT next_start_trophies IS NULL FROM ranked_day_versions
+                   WHERE player_id = %(id)s AND ranked_day_start = %(before)s
+                     AND reconciliation_rule_version = %(rule)s
+                   ORDER BY version DESC LIMIT 1)""",
+               id=player_id, before=before)
 
 
 def queue_for_check(connection: Any, check: Any) -> None:

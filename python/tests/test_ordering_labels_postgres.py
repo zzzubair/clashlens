@@ -16,6 +16,7 @@ from test_boundary_publication_postgres import (
 from clashlens import (
     army_ingestion,
     boundary,
+    boundary_members,
     boundary_publication,
     past_reset_pacing,
     snapshots,
@@ -168,7 +169,8 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
     order, an army-only replacement whose board a revised day result
     rebuilds, or one the board rebuild check finds before it inherits the
     older board, freezes its inputs under the current rule."""
-    monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", OLDER)
+    for module in (boundary, boundary_members):
+        monkeypatch.setattr(module, "SNAPSHOT_ORDERING_RULE_VERSION", OLDER)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
@@ -300,7 +302,7 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                                 "generation": 2,
                                 "profile_not_found": 0,
                                 "late_battles": 0,
-                                "reordered": True,
+                                "reordered": True, "members_changed": 0,
                                 "correction": correction,
                             }
                         ]

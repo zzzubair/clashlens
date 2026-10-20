@@ -440,17 +440,20 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
             name_season("#PP9", old_season)
             # #PP8's 5,040 on the Season's first day comes from one recorded attack.
             with database.pool.connection() as connection:
+                # A public day names its Legend I week; its row is left out.
+                connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
                     """
                     INSERT INTO api_player_daily_logs (
                         player_id, ranked_day_start, ranked_day_end, version,
                         state, coverage, net_trophy_change, attack_gain,
-                        defense_loss, attack_count, defense_count
+                        defense_loss, attack_count, defense_count, week_start, league
                     )
-                    SELECT id, %s, %s, 1, 'Live', 'partial', 40, 40, 0, 1, 0
+                    SELECT id, %s, %s, 1, 'Live', 'partial', 40, 40, 0, 1, 0,
+                           clashlens_week_start(%s), 'legend_i'
                     FROM players WHERE normalized_tag = '#PP8'
                     """,
-                    (season_start, season_start + timedelta(days=1)),
+                    (season_start, season_start + timedelta(days=1), season_start),
                 )
             now = season_start + timedelta(minutes=20)
 
@@ -569,16 +572,18 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                         (season, tag),
                     )
                     if day is not None:
+                        # A public day names its Legend I week; its row is left out.
+                        connection.execute("SET LOCAL session_replication_role = replica")
                         connection.execute(
                             """
                             INSERT INTO api_player_daily_logs (
                                 player_id, ranked_day_start, ranked_day_end,
                                 version, state, coverage, net_trophy_change,
                                 attack_gain, defense_loss, attack_count,
-                                defense_count
+                                defense_count, week_start, league
                             )
                             SELECT id, %s, %s, 1, 'Live', 'partial', %s, %s, 0,
-                                   %s, 0
+                                   %s, 0, clashlens_week_start(%s), 'legend_i'
                             FROM players WHERE normalized_tag = %s
                             """,
                             (
@@ -587,9 +592,11 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                                 day[0],
                                 day[0],
                                 day[1],
+                                season_start,
                                 tag,
                             ),
                         )
+                        connection.execute("SET LOCAL session_replication_role = origin")
                     if frozen is None:
                         continue
                     position += 1

@@ -6,6 +6,7 @@ queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta
 
@@ -112,7 +113,7 @@ def _version(connection: psycopg.Connection, tag: str, start: datetime) -> int:
     ).fetchone()[0]
 
 
-def _plant(connection_info: str) -> None:
+def _plant(connection_info: str) -> str:
     """One error per check the worker's own recalculation cannot make."""
     with psycopg.connect(connection_info) as connection:
         # A start that does not add up to the day's end.
@@ -168,6 +169,12 @@ def _plant(connection_info: str) -> None:
         connection.execute(
             "UPDATE legend_battles SET disagreement_state = 'agreed',"
             " disagreement_fields = '{}' WHERE id = %s", (battle,))
+        # Its defender's Day 2 is saved too, as they fought Legend battles,
+        # and the recount now finds a defense their saved day lacks.
+        copied = text(connection.execute(
+            "SELECT player.normalized_tag FROM legend_battles AS battle"
+            " JOIN players AS player ON player.id = battle.defender_player_id"
+            " WHERE battle.id = %s", (battle,)).fetchone()[0])
         # One of Day 3's attacks against a tracked player whose own report of
         # it is missing.
         connection.execute(
@@ -202,6 +209,7 @@ def _plant(connection_info: str) -> None:
         connection.execute(
             "UPDATE ranked_day_versions SET attack_count = attack_count + 1 WHERE id = %s",
             (_version(connection, STUCK, day(1)),))
+    return copied
 
 
 def _queued(connection_info: str) -> list[tuple[str, str, int, str]]:
@@ -326,7 +334,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         story.wait(timedelta(hours=1))
         board_before = story.served_board(day(3))
         late_before = story.saved_day(LATE, day(2))
-        _plant(connection_info)
+        copied = _plant(connection_info)
 
         # No pass starts work from 03:50 to 07:00 UTC, and a step not saved
         # by 03:58 keeps nothing: one queued at 03:49 and run at 03:50, and
@@ -391,17 +399,20 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert slow == (1, None, set(), [])
     assert late_before["defenses"] == 7 and late_before["automatic_loss"] == 30
     assert _ranked(board_before)[LATE] == 5030
-    # Days 1 to 3, 3 players a step: 7 players on Day 1, then 8.
-    assert (first_steps, again) == (9, 0)
+    # Days 1 to 3, 3 players a step. The story's 42 opponents fought Legend
+    # battles, so the league record puts them in Legend I and their days
+    # are saved and judged too: 50 players on Days 1 and 2, then 37.
+    assert (first_steps, again) == (47, 0)
     planted = {("ledger", LEDGER, 1), ("chain", CHAIN, 2), ("copies", COPIES, 2),
                ("copies", COPIES, 3), ("board", BOARD, 2), ("recount", STUCK, 1)}
-    assert first == planted | {("recount", LATE, 2), ("missing_day", JOINED, 2)}
+    assert first == planted | {("recount", LATE, 2), ("recount", copied, 2),
+                               ("missing_day", JOINED, 2)}
     # Oldest day first, 2 a pass, at backfill priority.
     assert first_queued == [(LATE, "reconcile_pass", 25, "pending"),
                             (STUCK, "reconcile_pass", 25, "pending")]
     assert [row[:3] for row in second_queued] == [
         (LATE, "reconcile_pass", 25), (JOINED, "reconcile_pass", 25),
-        (STUCK, "reconcile_pass", 25)]
+        (copied, "reconcile_pass", 25), (STUCK, "reconcile_pass", 25)]
     assert late_fixed["defenses"] == 8 and late_fixed["automatic_loss"] is None
     assert joined_saved
     # LATE's old board row now disagrees with its recalculated day; STUCK's
@@ -413,8 +424,55 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     assert last == planted - {("board", BOARD, 2)}
     assert unfinished == []
     assert line.startswith(
-        "Clash Lens nightly re-check, last 24 hours: 9 new problems (recount 2, chain 1,"
-        " ledger 1, battle copies 2, missing days 1, board rows 2); 3 recalculations"
+        "Clash Lens nightly re-check, last 24 hours: 10 new problems (recount 3, chain 1,"
+        " ledger 1, battle copies 2, missing days 1, board rows 2); 4 recalculations"
         " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
         " failed recalculation.")
     assert repaired == (True, True)
+
+
+def test_a_pass_whose_last_step_queues_a_recalculation_finishes(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """Days 1 and 2 of the Season, saved by the real worker, and CLEAN's
+    Day 2 lost from its page. The pass's last step, Day 2's, finds the
+    missing day and queues its recalculation. Until 20 October 2026 that
+    step, having saved what it found, raised TypeError writing its log
+    line, and the worker process exited: the dev stack's worker never
+    started again, so every lookup stayed "checking". The pass must finish,
+    its line counting the 1 recalculation, which gives the page its Day 2
+    back."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, CLEAN, LATE)
+        for player in story.players.values():
+            player.battles = _even(day(1)) + _even(day(2))
+        story.reset(day(1), dict.fromkeys(story.players, (5000, SEASON)))
+        for number in (2, 3):
+            story.reads(day(number) - timedelta(minutes=10), dict.fromkeys(story.players, 5000))
+            story.reset(day(number), dict.fromkeys(story.players, (5000, SEASON)))
+            story.reads(day(number) + timedelta(minutes=20), dict.fromkeys(story.players, 5000))
+            story.run_worker()
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_start = %s AND player_id ="
+                " (SELECT id FROM players WHERE normalized_tag = %s)", (day(2), CLEAN))
+        capsys.readouterr()
+        steps = _run_pass(story, monkeypatch, day(3) + timedelta(hours=18))
+        lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+                 if line.startswith('{"event": "reconcile_pass"')]
+        found, queued = _open(connection_info), _queued(connection_info)
+        story.run_worker()
+        with psycopg.connect(connection_info) as connection:
+            restored = connection.execute(
+                "SELECT count(*) FROM api_player_daily_logs AS log"
+                " JOIN players AS player ON player.id = log.player_id"
+                " WHERE player.normalized_tag = %s AND log.ranked_day_start = %s",
+                (CLEAN, day(2))).fetchone()[0]
+
+    assert steps == 2
+    assert [(line["status"], line["day"], line["queued"]) for line in lines] == [
+        ("finished", f"{day(2):%Y-%m-%d}", 1)]
+    # Its Daily board row has no day to agree with: listed only.
+    assert found == {("missing_day", CLEAN, 2), ("board", CLEAN, 2)}
+    assert queued == [(CLEAN, "reconcile_pass", 25, "pending")]
+    assert restored == 1

@@ -23,6 +23,7 @@ from typing import Any
 from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
+from . import boundary_members
 from .analytics import latest_trophy_changes, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import (
@@ -567,8 +568,12 @@ def _snapshot_rows(
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
+    # One with none is not found when their newest answer before the Reset
+    # says so.
     not_found = profiles_not_found(
-        connection, boundary_at, {player_id: row[2] for player_id, row in profiles.items()}
+        connection, boundary_at,
+        {player_id: row[2] for player_id, row in profiles.items()}
+        | dict.fromkeys(unprofiled, datetime.min.replace(tzinfo=UTC)),
     )
     failures = {
         int(row[0]): row[1:]
@@ -601,14 +606,14 @@ def _snapshot_rows(
             (boundary_at, boundary_at, unprofiled),
         ).fetchall()
     } if unprofiled else {}
-    ranked_rows = connection.execute(
-        """SELECT id, player_id, state, failure_reasons ? 'player_not_eligible'
-        FROM ranked_day_versions WHERE id = ANY(%s::bigint[])""",
-        ([row[1] for row in members if row[1] is not None],),
-    ).fetchall()
-    ranked_states = {(int(row[0]), int(row[1])): _text_value(row[2]) for row in ranked_rows}
-    # A day the player left Legend I by (league_drop) ranks on no Legend I board.
-    left_legend_i = {(int(row[0]), int(row[1])) for row in ranked_rows if row[3]}
+    ranked_states = {
+        (int(row[0]), int(row[1])): _text_value(row[2])
+        for row in connection.execute(
+            "SELECT id, player_id, state FROM ranked_day_versions WHERE id = ANY(%s::bigint[])",
+            ([row[1] for row in members if row[1] is not None],),
+        ).fetchall()
+    }
+    leagues = boundary_members.leagues(connection, boundary_at, player_ids)
     manifest_rows: list[dict[str, Any]] = []
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
@@ -666,7 +671,10 @@ def _snapshot_rows(
                 "eligibility_state": _text_value(profile[7]),
                 "profile_json": profile[3],
             }
-            if _text_value(profile[7]) != "eligible" or (version_id, player_id) in left_legend_i:
+            # Whether the player was in Legend I is the board's membership
+            # (boundary_members); a lower-league profile's trophies still
+            # rank on no Legend I board.
+            if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
             elif player_id not in unplayed and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
@@ -693,6 +701,8 @@ def _snapshot_rows(
                 "invalid_player_tag",
             }:
                 snapshot_quality = "malformed"
+            elif player_id in not_found:
+                snapshot_quality = "profile_not_found"
             elif source_state == "conflict":
                 snapshot_quality = "conflicting"
             else:
@@ -704,6 +714,13 @@ def _snapshot_rows(
                     "Malformed": "malformed",
                 }.get(classification, "missing")
             identity["snapshot_quality"] = snapshot_quality
+        # A member whose week left Legend I after the members were taken. One
+        # the game no longer finds has no league to confirm.
+        league = leagues.get(player_id, "legend_i")
+        if league == "below_legend_i":
+            identity["snapshot_quality"] = "below_legend_i"
+        elif league != "legend_i" and identity["snapshot_quality"] != "profile_not_found":
+            identity["snapshot_quality"] = "league_not_confirmed"
         manifest_rows.append(identity)
     return manifest_rows
 

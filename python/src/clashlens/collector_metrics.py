@@ -43,8 +43,19 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             -- the current-Season republish finished, or, after that job is
             -- cleaned up, once the day has a result saved since the failure.
             -- A job an operator accepted as beyond repair no longer counts.
-            SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
-            FROM python_processing_jobs AS failed
+            -- A player the weekly league record set aside counts as one, and
+            -- so does a mark still waiting after 30 minutes: the decider has
+            -- stopped, so no new week has a league, no Legend day of it is
+            -- saved and Daily boards wait for every member.
+            SELECT count(*) AS failed_count, max(at) AS newest_at, min(at) AS oldest_at
+            FROM (
+            SELECT min(failed_at) AS at FROM league_week_dirty
+            WHERE failed_at IS NOT NULL GROUP BY player_id
+            UNION ALL
+            SELECT min(marked_at) FROM league_week_dirty WHERE failed_at IS NULL
+            HAVING min(marked_at) < clock_timestamp() - interval '30 minutes'
+            UNION ALL
+            SELECT updated_at FROM python_processing_jobs AS failed
             WHERE status = 'failed'
               AND NOT EXISTS (
                   SELECT FROM python_failed_job_acceptances AS accepted
@@ -69,6 +80,7 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                         AND day.ranked_day_start
                             = (failed.input_json->>'ranked_day_start')::timestamptz
                         AND day.created_at > failed.updated_at)))
+            ) AS failures
         ), completed AS (
             -- Through the finished-job cleanup lookup: about 1,100 rows on 8 Oct 2026, 11 ms.
             SELECT work_type, count(*) AS completed_count FROM python_processing_jobs

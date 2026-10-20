@@ -12,6 +12,7 @@ import pytest
 from domain_test_support import (
     apply_migration,
     as_api_role,
+    decide_leagues,
     domain_database,
     store_observation,
     text,
@@ -670,6 +671,10 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
 
         try:
             assert processor.process_job(initial_job, owner="upgrade-initial").outcome == "processed"
+            # This schema predates the weekly league record: the code then
+            # tracked a Legend I player from their first profile.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("UPDATE players SET active = true, eligibility_state = 'eligible'")
             check(body, NOW, "upgrade-initial")
             assert check(body, confirmed_at, "upgrade-unchanged").changed is False
             if failed_check:
@@ -801,6 +806,7 @@ def test_rank_only_profile_check_confirms_without_saving_or_processing(
 
         try:
             assert processor.process_job(job, owner="rank-applied").outcome == "processed"
+            decide_leagues(database, NOW)
             check(body, NOW, "rank-applied")
             before = counts()
 
@@ -904,6 +910,7 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
 
         try:
             assert processor.process_job(job, owner="freshness-applied") is not None
+            decide_leagues(database, NOW)
             collector_checked(applied, checked_at)
 
             fresh = page(checked_at + timedelta(minutes=1))

@@ -857,7 +857,12 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
     from datetime import timedelta
 
     import psycopg
-    from domain_test_support import as_api_role, domain_database, store_observation
+    from domain_test_support import (
+        as_api_role,
+        decide_leagues,
+        domain_database,
+        store_observation,
+    )
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
 
@@ -932,6 +937,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
             assert runtime.run() == 0
             assert not runtime.posts
             assert processor.process_job(job, owner="confirmed-initial") is not None
+            decide_leagues(database, accepted_at)
             trophies = json.loads(body)["trophies"]
             check(body, accepted_at, "confirmed-initial")
             assert check(body, confirmed_at, "confirmed-unchanged").changed is False
@@ -983,7 +989,12 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
     from datetime import timedelta
 
     import psycopg
-    from domain_test_support import as_api_role, domain_database, store_observation
+    from domain_test_support import (
+        as_api_role,
+        decide_leagues,
+        domain_database,
+        store_observation,
+    )
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
 
@@ -1048,6 +1059,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
 
         try:
             assert processor.process_job(job, owner="nf-initial") is not None
+            decide_leagues(database, accepted_at)
             check(body, accepted_at, "nf-initial")
             # A server error and a timeout leave the player listed and stale.
             check(b'{"reason":"inMaintenance"}', accepted_at + timedelta(minutes=5),

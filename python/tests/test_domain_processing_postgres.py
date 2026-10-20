@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import decide_leagues, domain_database, store_observation, text
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
@@ -611,16 +611,13 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
             assert processor.process_job(jobs[1], owner="live-repeat") is not None
             with database.pool.connection() as connection:
                 repeated_count = connection.execute(
-                    """
-                    SELECT count(*)
-                    FROM python_processing_jobs
-                    WHERE work_type = 'reconcile_ranked_day'
-                      AND deduplication_key LIKE 'reconcile:live:%%'
-                    """
+                    "SELECT count(*) FROM python_processing_jobs WHERE work_type ="
+                    " 'reconcile_ranked_day' AND deduplication_key LIKE 'reconcile:live:%%'"
                 ).fetchone()[0]
             assert repeated_count == 1
 
             assert processor.process_job(jobs[2], owner="live-changed") is not None
+            decide_leagues(database, observed_at)
             with database.pool.connection() as connection:
                 reconciliation_jobs = connection.execute(
                     """
@@ -918,10 +915,9 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
                 player_ids.values()
             )
 
+            decide_leagues(database, observed_at + timedelta(minutes=1))
             for job_id, _player_id in reconciliation_jobs:
-                result = processor.process_job(
-                    int(job_id), owner=f"live-shape-reconcile-{job_id}"
-                )
+                result = processor.process_job(int(job_id), owner=f"live-shape-reconcile-{job_id}")
                 assert result is not None and result.outcome == "processed"
 
             with database.pool.connection() as connection:
@@ -1053,8 +1049,8 @@ def test_conflicting_or_older_profiles_never_replace_last_accepted_current_profi
             accepted_result = processor.process_job(
                 accepted_job_id, owner="accepted-profile-worker"
             )
-            assert accepted_result is not None
-            assert accepted_result.outcome == "processed"
+            assert accepted_result is not None and accepted_result.outcome == "processed"
+            decide_leagues(database, accepted_at)
 
             def _profile_rows() -> list[tuple]:
                 with database.pool.connection() as connection:
@@ -1291,14 +1287,13 @@ def test_recognized_legend_tier_classifies_player_despite_season_anchor_conflict
 
             result = processor.process_job(job_id, owner="eligibility-conflict-worker")
             assert result is not None and result.outcome == "processed"
+            decide_leagues(database, observed_at + timedelta(minutes=1))
 
             with database.pool.connection() as connection:
                 row = connection.execute(
                     """
-                    SELECT p.active, p.eligibility_state,
-                           p.current_profile_version_id,
-                           v.source_contract_state, v.season_anchor_state,
-                           o.failure_category
+                    SELECT p.active, p.eligibility_state, p.current_profile_version_id,
+                           v.source_contract_state, v.season_anchor_state, o.failure_category
                     FROM players AS p
                     JOIN player_profile_versions AS v ON v.player_id = p.id
                     JOIN observation_processing_outcomes AS o

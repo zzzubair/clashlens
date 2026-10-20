@@ -15,7 +15,9 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import (
+    decide_leagues,
     domain_database,
+    record_seasons_to,
     repair_season,
     seed_battles,
     store_observation,
@@ -102,11 +104,17 @@ def _sweep(connection_info, archive_server, boundary, readings) -> list[int]:
 
 
 def _run(connection_info, archive_server, jobs) -> None:
-    """Process the saved responses, then every queued day and board."""
+    """Process the saved responses, let the weekly league record decide, as
+    it does within seconds of the newest, then every queued day and board."""
     database, processor = _processor(connection_info, archive_server)
     try:
         for job in jobs:
             assert processor.process_job(job, owner=f"job-{job}") is not None
+        with database.pool.connection() as connection:
+            newest = connection.execute(
+                "SELECT max(response_completed_at) FROM collector_observations").fetchone()[0]
+        if newest is not None:
+            decide_leagues(database, newest + timedelta(seconds=1))
         while True:
             with database.pool.connection() as connection:
                 pending = connection.execute(
@@ -312,7 +320,8 @@ def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(
     season = ranked_day_for(DAY_1).official_season_id
     with domain_database(database_url, include_coordinator=True) as connection_info:
         # Saved before the rule: the readings were rejected and the boards
-        # left the player out.
+        # left the player out. The weekly league record's Season start
+        # already starts their days at 5,000.
         monkeypatch.setattr(reset_baselines, "_unplayed", lambda *args: False)
         monkeypatch.setattr(boundary_manifest, "unplayed_profiles", lambda *args: {})
         for boundary in (DAY_1, DAY_2, DAY_3):
@@ -323,7 +332,7 @@ def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(
                 },
             ))
         with psycopg.connect(connection_info) as connection:
-            assert _days(connection)[UNPLAYED, DAY_1][2:4] == (None, None)
+            assert _days(connection)[UNPLAYED, DAY_2][2:4] == (5000, 5000)
             assert _boards(connection)[DAY_3] == [(ORDINARY, 5000)]
         monkeypatch.undo()
 
@@ -396,12 +405,15 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
     assert board == (5000, DAY_2 + READ_AFTER)
 
 
-def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
-    database_url: str, archive_server
+def test_weeks_before_a_player_first_seen_unplayed_have_no_legend_days(
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # First seen at the Day 8 Reset at 5,000 with no battle: one already
     # naming the Season, one not signed up who signs up by the Day 10 Reset,
-    # and one never signed up. The Day 9 Reset reading ends Day 8.
+    # and one never signed up. The Day 9 Reset reading ends Day 8. The week
+    # before has no evidence, so its league is not confirmed and it has no
+    # Legend days; the week first seen in starts at 5,000.
+    record_seasons_to(monkeypatch, DAY_1 + timedelta(days=28))
     signed, joins, never = "#2PP", "#8QQ", "#9YY"
     day_8, day_9, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 8, 9))
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -423,54 +435,11 @@ def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
             ).fetchone()[0]
 
     for tag in (signed, joins, never):
-        for day in range(9):
+        for day in range(7):
+            assert (tag, DAY_1 + timedelta(days=day)) not in days
+        for day in (7, 8):
             assert days[tag, DAY_1 + timedelta(days=day)][:4] == (0, 0, 5000, 5000)
     assert not_enrolled == 0
-
-
-def test_days_before_first_seen_are_recalculated_once_the_first_battle_log_lands(
-    database_url: str, archive_server
-) -> None:
-    # Each Day 8 profile and its days are processed before the first battle
-    # log, which then proves those days had no battle: read at the same
-    # Reset, or first read a day later.
-    day_8 = DAY_1 + timedelta(days=7)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        profile_job, log_job = _sweep(connection_info, archive_server, day_8, {
-            UNPLAYED: (_season_zero(UNPLAYED), _log()),
-        })
-        late_profile, late_log = (
-            store_observation(
-                connection_info, archive_server, occurrence_key=f"late-{endpoint}",
-                endpoint=endpoint, body=body, observed_at=at, normalized_tag=STARTER,
-            )[1]
-            for endpoint, body, at in (
-                ("profile", _season_zero(STARTER), day_8 + READ_AFTER),
-                ("battle_log", _log(), day_8 + timedelta(days=1) + READ_AFTER),
-            )
-        )
-        _run(connection_info, archive_server, [profile_job, late_profile])
-        _run(connection_info, archive_server, [log_job, late_log])
-        with psycopg.connect(connection_info) as connection:
-            days = {
-                (row[0], row[1]): row[2:]
-                for row in connection.execute(
-                    """
-                    SELECT DISTINCT ON (player.normalized_tag, day.ranked_day_start)
-                           player.normalized_tag, day.ranked_day_start,
-                           day.attack_count, day.defense_count, day.start_trophies,
-                           day.next_start_trophies, day.net_trophy_change
-                    FROM ranked_day_versions AS day
-                    JOIN players AS player ON player.id = day.player_id
-                    ORDER BY player.normalized_tag, day.ranked_day_start,
-                             day.version DESC
-                    """
-                )
-            }
-
-    for tag in (UNPLAYED, STARTER):
-        for day in range(7):
-            assert days[tag, DAY_1 + timedelta(days=day)] == (0, 0, 5000, 5000, 0)
 
 
 def test_a_malformed_season_at_5000_stays_rejected(

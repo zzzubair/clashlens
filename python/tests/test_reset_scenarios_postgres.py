@@ -30,6 +30,8 @@ from clashlens import (
     army_types,
     board_deadline,
     boundary_publication,
+    league_days,
+    league_week,
     past_reset_pacing,
 )
 from clashlens.api_db import ApiDatabase
@@ -162,6 +164,11 @@ class Story:
     monkeypatch: object
     players: dict[str, Player] = field(default_factory=dict)
     elapsed: timedelta = timedelta(0)
+    # Whether the worker decides the weekly league record as it runs, as
+    # production's does; a story about the decisions makes them itself.
+    decides: bool = True
+    # The record's clock: the latest moment the story has read.
+    clock: datetime = PREVIOUS_SEASON
 
     def __post_init__(self) -> None:
         # The story's clock: the database's, plus the time the story waited.
@@ -176,11 +183,20 @@ class Story:
         # minutes of the Reset here, as production's do: each board waits
         # for all of its members.
         self.monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+        # The weekly league record decides every story's Seasons, as it
+        # decides each from 5 October 2026, on the story's clock.
+        self.monkeypatch.setattr(league_days, "RECORDED_FROM", PREVIOUS_SEASON - timedelta(days=28))
+        self.monkeypatch.setattr(league_week, "_now", lambda: self.clock)
+        self.monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+
+    def _at(self, at: datetime) -> None:
+        self.clock = max(self.clock, at)
 
     def wait(self, time: timedelta) -> None:
         """Let ``time`` pass, then run the worker: the newest Reset's board
         rebuilds with corrections at most once an hour."""
         self.elapsed += time
+        self.clock += time
         self.run_worker()
 
     def reset(self, boundary: datetime,
@@ -193,6 +209,7 @@ class Story:
         ``no_log``, was never answered: the collector gave it up. Then,
         unless ``run`` is false, the worker runs until idle."""
         at = boundary + READ_AFTER
+        self._at(at)
         observations = {}
         with psycopg.connect(self.connection_info) as connection:
             for tag, (trophies, season) in readings.items():
@@ -245,6 +262,7 @@ class Story:
         """A routine read outside a sweep: the profile when ``trophies`` is
         given, else the battle log."""
         player = self.players[tag]
+        self._at(at)
         endpoint, body = (
             ("battle_log", player.log(at)) if trophies is None
             else ("profile", player.profile(trophies, season))
@@ -267,6 +285,7 @@ class Story:
     def history(self, at: datetime, season_end: datetime, finals: dict[str, int]) -> None:
         """Each player's league history read at ``at``: the game's official
         final total for the Season ending at ``season_end``."""
+        self._at(at)
         for tag, final in finals.items():
             store_observation(
                 self.connection_info, self.archive_server,
@@ -285,13 +304,16 @@ class Story:
             )
 
     def run_worker(self) -> None:
-        """Run the worker as production does: the publication check, then
-        every job due in its claim order, until nothing is left to do. A job
-        sent to wait (a retry or a dependency) is made due again, as time
-        passing would, for at most 20 rounds."""
+        """Run the worker as production does: the weekly league record's
+        decisions and the publication check, then every job due in its claim
+        order, until nothing is left to do. A job sent to wait (a retry or a
+        dependency) is made due again, as time passing would, for at most 20
+        rounds."""
         database, processor = _processor(self.connection_info, self.archive_server)
         try:
             for _ in range(20):
+                if self.decides:
+                    league_week.decide_due(database)
                 boundary_publication.reevaluate_boundary_publications(database)
                 processed = processor.process_until_idle(owner="story", max_jobs=10_000)
                 boundary_publication.reevaluate_boundary_publications(database)
@@ -303,7 +325,9 @@ class Story:
                           AND due_at > now()
                         """
                     ).rowcount
-                if not processed and not waiting:
+                    undecided = self.decides and connection.execute(
+                        "SELECT count(*) FROM league_week_dirty").fetchone()[0]
+                if not processed and not waiting and not undecided:
                     return
         finally:
             database.close()

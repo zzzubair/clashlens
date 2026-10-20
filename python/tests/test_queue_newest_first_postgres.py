@@ -6,7 +6,13 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation, text
+from domain_test_support import (
+    as_api_role,
+    decide_leagues,
+    domain_database,
+    store_observation,
+    text,
+)
 from psycopg import sql
 from test_domain_processing_postgres import (
     LIVE_BATTLE_PARSER_VERSION,
@@ -83,6 +89,7 @@ def test_one_pass_shows_every_players_newest_profile_and_skips_older_copies(
                     observed_at=DAY.start + timedelta(hours=hour),
                 )
                 assert processor.process_job(job_id, owner="seed").outcome == "processed"
+            decide_leagues(database, DAY.start + timedelta(hours=3))
 
             queued: dict[str, list[tuple[int, int, datetime]]] = {}
             for minutes in (0, 10, 20):

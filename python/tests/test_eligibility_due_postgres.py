@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, record_seasons_to, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff, _hash
 from test_domain_processing_postgres import _processor
 
-from clashlens import population, promotion_candidates
+from clashlens import league_week, population, promotion_candidates
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database, enqueue_discovered_players
 
@@ -357,6 +357,9 @@ def test_a_promotion_answer_needs_a_saved_profile_newer_than_this_weeks_answer(
         database, processor = _processor(connection_info, archive_server)
         try:
             assert processor.process_once(owner="promotion-early") is not None
+            # The worker's weekly league record decides it within seconds.
+            while league_week.decide_due(database):
+                pass
         finally:
             database.close()
         with psycopg.connect(connection_info) as connection:
@@ -422,6 +425,8 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
         try:
             assert processor.process_once(owner="repair-1") is not None
             assert processor.process_once(owner="repair-2") is not None
+            while league_week.decide_due(database):
+                pass
         finally:
             database.close()
         with psycopg.connect(connection_info) as connection:
@@ -489,8 +494,9 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
 
 
 def test_tracked_players_are_split_into_available_waiting_and_unavailable(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
+    record_seasons_to(monkeypatch, datetime(2026, 8, 10, 5, tzinfo=UTC))
     with domain_database(database_url) as connection_info:
         for tag, season, key in (
             ("#8QQ", PROFILE["currentLeagueSeasonId"], "available"),
@@ -510,6 +516,8 @@ def test_tracked_players_are_split_into_available_waiting_and_unavailable(
         try:
             for owner in ("split-1", "split-2", "split-3"):
                 assert processor.process_once(owner=owner) is not None
+            while league_week.decide_due(database):
+                pass
         finally:
             database.close()
         with psycopg.connect(connection_info) as connection:

@@ -150,7 +150,11 @@ def test_monday_reset_reading_before_the_weekly_raise(
     assert monday_members == {
         LATE_RAISE: "complete", LOSS_TOO: "complete", RAISE_UNDONE: "inconsistent",
         LATE_CREDIT: "complete", QUIET: "complete", DEFENDED: "complete"}
-    assert tuesday_members == {LATE_RAISE: "complete", LOSS_TOO: "complete"}
+    # The rest stay Legend I by the record, so members too; with no Tuesday
+    # Reset reading their Mondays are unfinished.
+    assert tuesday_members == {
+        LATE_RAISE: "complete", LOSS_TOO: "complete", RAISE_UNDONE: "partial",
+        LATE_CREDIT: "partial", QUIET: "partial", DEFENDED: "partial"}
     # The Monday board ranks each total at 05:00:00, before the loss and raise.
     assert _ranked(monday_board) == {
         DEFENDED: 5020, LOSS_TOO: 4970, LATE_RAISE: 4940, RAISE_UNDONE: 4940,
@@ -160,7 +164,13 @@ def test_monday_reset_reading_before_the_weekly_raise(
     assert labels == {
         LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", RAISE_UNDONE: "uncertain",
         LATE_CREDIT: "confirmed", QUIET: "confirmed", DEFENDED: "confirmed"}
-    assert _ranked(tuesday_board) == {LATE_RAISE: 4800, LOSS_TOO: 4800}
+    # Unfinished, they rank at their last readings, uncertain.
+    assert _ranked(tuesday_board) == {
+        LATE_RAISE: 4800, LOSS_TOO: 4800, RAISE_UNDONE: 4940, LATE_CREDIT: 5000,
+        QUIET: 5000, DEFENDED: 4980}
+    assert {entry["tag"]: entry["confidence"] for entry in tuesday_board["entries"]} == {
+        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", **dict.fromkeys(
+            (RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED), "uncertain")}
 
 
 def _instant_raise(judge):
@@ -242,7 +252,9 @@ def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
 
     assert before == {LATE_RAISE: ("Inconsistent", 4940), LOSS_TOO: ("Inconsistent", 4970)}
     assert before_labels == {LATE_RAISE: "uncertain", LOSS_TOO: "uncertain"}
-    assert (preview["players"], phases[-1]) == (2, "done")
+    # The two and the 28 opponents of their Legend battles, Legend I by the
+    # record, so tracked, with days of their own.
+    assert (preview["players"], phases[-1]) == (30, "done")
     assert unfinished == []
     sunday_day = {
         "state": "Complete", "start": 5140, "end": 4940, "next_start": 5000,

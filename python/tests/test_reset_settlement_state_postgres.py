@@ -14,7 +14,12 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation
+from domain_test_support import (
+    as_api_role,
+    domain_database,
+    record_seasons_to,
+    store_observation,
+)
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
     DAY_END,
@@ -23,10 +28,14 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import api_players, reconciliation_db, reset_baselines
+from clashlens import api_players, league_week, reconciliation_db, reset_baselines
 from clashlens.api_db import ApiDatabase
 
 TAG = "#2PP"
+# The player's own days: the weekly league record proves their Legend
+# battle opponents Legend I too, so they have days of their own.
+OWN_ID = f"SELECT id FROM players WHERE normalized_tag = '{TAG}'"
+OWN_DAYS = f"player_id = ({OWN_ID})"
 # The fixture profiles report the Season that ends at the August 10 Reset.
 BOUNDARIES = {
     "ordinary": DAY_END,
@@ -34,6 +43,13 @@ BOUNDARIES = {
     "season": datetime(2026, 8, 10, 5, tzinfo=UTC),
     "season_day_2": datetime(2026, 8, 11, 5, tzinfo=UTC),
 }
+
+
+@pytest.fixture(autouse=True)
+def _recorded(monkeypatch) -> None:
+    """The weekly league record decides these Seasons, as it does every
+    Season from 5 October 2026."""
+    record_seasons_to(monkeypatch, BOUNDARIES["season"] + timedelta(days=28))
 
 
 def _eight_defenses() -> bytes:
@@ -108,6 +124,10 @@ def _process(connection_info, archive_server, jobs) -> None:
                     " AND work_type = 'reconcile_ranked_day' ORDER BY id LIMIT 1"
                 ).fetchone()
             if pending is None:
+                # The worker's league week thread decides the weeks the
+                # work marked, queueing the days a decision changes.
+                if league_week.decide_due(database):
+                    continue
                 return
             processor.process_job(int(pending[0]), owner="reconcile")
     finally:
@@ -130,8 +150,11 @@ OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
 
 
 @pytest.mark.parametrize("kind,season_id,trophies,start", [
-    # An old Season with no new-Season Legend I profile gives no start.
-    ("season", OLD_SEASON, 6400, None),
+    # A Legend I player read at the Season-opening Reset still showing the
+    # old Season stays Legend I: the record carries the week before's league
+    # until an answer read an hour after the Reset counts. The Season rule
+    # gives the start.
+    ("season", OLD_SEASON, 6400, 5000),
     ("season", NEW_SEASON, 5000, 5000),
     # A new-Season Legend I reading that is not 5,000 starts at 5,000 by the
     # Season rule.
@@ -167,11 +190,11 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
             assert processor.process_job(job, owner="opening") is not None
         finally:
             database.close()
-        days = _rows(connection_info, """
+        days = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    official_season_id, season_day_number, start_trophies,
                    next_start_trophies
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")
         evidence = _rows(connection_info, """
             SELECT DISTINCT ON (boundary_at) state,
                    profile_observation_id IS NOT NULL
@@ -235,12 +258,12 @@ def test_rejected_reset_profile_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = _rows(connection_info, """
+        days = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies,
                    input_evidence -> 'start_baseline_evidence',
                    input_evidence -> 'end_baseline_evidence'
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")
         kept = _rows(connection_info, """
             SELECT profile.source_contract_state, profile.trophies
             FROM reset_baseline_evidence AS evidence
@@ -306,11 +329,11 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
+        days = {row[0]: row[1:] for row in _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies, attack_count,
                    defense_count, attack_gain, observed_defense_loss
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")}
         evidence = _rows(connection_info, f"""
             SELECT evidence.profile_valid, evidence.failure_reasons,
                    profile.source_contract_state, profile.trophies
@@ -359,31 +382,35 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
                 assert processor.process_job(job, owner="day") is not None
         finally:
             database.close()
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
+        days = {row[0]: row[1:] for row in _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+            FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC""")}
         current = _rows(connection_info, CURRENT_PROFILE)
-    assert days[DAY_END - timedelta(days=1)] == (6000, None)
-    assert days[DAY_END][0] is None
+    # Accepted answers in Legend I and Legend II in one week leave its
+    # league not confirmed (the record): neither day is a Legend day.
+    assert days == {}
     assert current == [(4900, "accepted")]
 
 
-DAY_ROWS = """
+DAY_ROWS = f"""
     SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state, confidence,
            start_trophies, next_start_trophies,
            input_evidence -> 'start_baseline_evidence' ->> 'start_trophies_source'
-    FROM ranked_day_versions ORDER BY ranked_day_start, version DESC"""
+    FROM ranked_day_versions WHERE {OWN_DAYS} ORDER BY ranked_day_start, version DESC"""
 
 
 @pytest.mark.parametrize("later_tier,login_day", [
     ("Legend I", 3), ("Legend I", 10), ("Legend II", 3), (None, 3),
 ])
-def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears(
+def test_season_opening_reading_of_the_old_season_starts_day_1_at_5000(
     database_url: str, archive_server, later_tier: str | None, login_day: int
 ) -> None:
     # The Season-opening Reset still reads the old Season's 6,400. On a later
     # day the player logs in: still in Legend I, demoted, or never seen again.
+    # The weekly league record carries a Legend I player into the new Season
+    # until an answer counting for it shows otherwise (the owner's rule of 14
+    # October 2026), so Day 1 starts at 5,000 by the Season rule at once.
     boundary = BOUNDARIES["season"]
     old_reading = _season_profile(6400, OLD_SEASON)
     later = old_reading
@@ -429,14 +456,14 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
             page = api_players.get_player_page(api, TAG, now=login, freshness_seconds=900)
         finally:
             api.close()
-        opening_day = next(
+        opening_day = next((
             day for day in page["screen_ready"]["days"]
             if day["ranked_day_start"] == boundary.isoformat()
-        )
+        ), None)
         # Finished jobs are deleted after 48 hours; the next Reset still does
-        # not rebuild the Season again.
+        # not recalculate the days again.
         rebuilds = ("SELECT count(*) FROM python_processing_jobs"
-                    " WHERE deduplication_key LIKE 'reconcile:season-rule:%'")
+                    " WHERE deduplication_key LIKE 'reconcile:league-week:%'")
         built = _rows(connection_info, rebuilds)[0][0]
         with psycopg.connect(connection_info, autocommit=True) as connection:
             connection.execute(
@@ -449,23 +476,29 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         ))
         rebuilt_again = _rows(connection_info, rebuilds)[0][0]
     day_28, day_1 = boundary - timedelta(days=1), boundary
-    # Until then September's last day has no end and Day 1 no start.
-    assert before[day_28][0] == "Partial" and before[day_28][3] is None
-    assert before[day_1][2] is None
-    if later_tier == "Legend I":
+    # Before the login, September's last day ends and Day 1 starts at 5,000.
+    assert before[day_28][:4] == ("Complete", "inferred", 6400, 5000)
+    assert before[day_1][2] == 5000 and before[day_1][4] == "season_rule"
+    if later_tier == "Legend II":
+        # Legend II naming the new Season: the week is below Legend I, so Day
+        # 1 is no Legend day, and September's last day ends without the
+        # Season rule.
+        assert after[day_28][3] is None
+        assert opening_day is None
+        # The opening week is decided Legend I, then below: its days are
+        # queued for each, as the week before's are for its first decision.
+        assert (built, rebuilt_again) == (3, 0)
+    else:
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
         # The login day's Reset saves an empty battle log and 5,000, so Day 1
-        # ends there too.
-        assert after[day_1][2:] == (5000, 5000, "season_rule")
-        assert (built, rebuilt_again) == (1, 0)
+        # ends there too. Never seen again, the player reads the old
+        # Season's 6,400, which gives no total, so Day 1's end waits.
+        assert after[day_1][2:] == (5000, 5000 if later_tier else None, "season_rule")
+        # Each week's first decision queues its days once: the week before
+        # the Season's, the opening week's and, by Day 10, the second's.
+        assert (built, rebuilt_again) == (2 if login_day < 8 else 3, 0)
         assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
             5000, "season_rule"
-        )
-    else:
-        assert after[day_28][3] is None and after[day_1][2] is None
-        assert (built, rebuilt_again) == (0, 0)
-        assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
-            None, None
         )
 
 
@@ -621,188 +654,12 @@ def test_last_season_day_ends_at_the_official_total(
             )])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
-    assert before[:2] == (last_day, "Partial")
+    # Until a later answer counts, the record carries Legend I into the new
+    # Season, so the Season rule ends the day before the official total.
+    assert before[:2] == (last_day, "Complete")
     assert after[:2] == (last_day, state)
     if state == "Complete":
         assert after[2:5] == ("exact", 6000, final)
-
-
-@pytest.mark.parametrize("reading,drop_at,ended,next_start,monday_eligible", [
-    # Ranked below 10,000: the Reset still reads Legend I, Legend II about
-    # 13 minutes later, processed after or before the Reset's own work.
-    ("final", "after_reset", "Complete", "final", False),
-    ("final", "before_reset", "Complete", "final", False),
-    # Kept in Legend I: raised to 5,000 as before.
-    (5000, None, "Complete", 5000, True),
-    # Legend II only after the next Reset is not a drop at this one: the
-    # Reset reading came before the raise landed (12 October 2026).
-    ("final", "next_day", "Complete", 5000, True),
-])
-def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
-    database_url: str, archive_server, reading: object, drop_at: str | None,
-    ended: str, next_start: object, monday_eligible: bool,
-) -> None:
-    from test_first_battle_log_postgres import LOSS, WIN, _log
-
-    boundary = BOUNDARIES["monday"]
-    last_day = boundary - timedelta(days=1)
-    final = 4900 + WIN - 8 * LOSS
-    assert final < 5000
-    reading_trophies = final if reading == "final" else reading
-    battles = [(last_day + timedelta(hours=1), True)] + [
-        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
-    ]
-    login_at = {
-        "after_reset": boundary + timedelta(minutes=13),
-        "before_reset": boundary + timedelta(minutes=13),
-        "next_day": boundary + timedelta(days=1, hours=1),
-    }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(connection_info, archive_server, last_day,
-                           profile=_profile(4900), log=_battle_log(empty=True))
-        reset_jobs = _reset_work(connection_info, archive_server, boundary,
-                                 profile=_profile(reading_trophies),
-                                 log=_log(*battles))
-        # The next saved profile shows Legend II again: one alone, which the
-        # parser marks conflict, proves nothing (test_conflict_eligibility_postgres).
-        login = [] if drop_at is None else [_store_dropped_login(
-            connection_info, archive_server, key,
-            login_at[drop_at] + timedelta(hours=hours), final,
-        ) for hours, key in enumerate(("dropped-login", "dropped-again"))]
-        if drop_at == "before_reset":
-            jobs, login = jobs + login, []
-        _process(connection_info, archive_server, jobs + reset_jobs)
-        # The Monday's own day, saved before or after the drop is seen.
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            job = reconciliation_db.enqueue_reconciliation(
-                database, player_tag=TAG, day_start=boundary,
-                now=boundary + timedelta(days=1), request_key="monday",
-            )
-            assert processor.process_job(job, owner="monday") is not None
-        finally:
-            database.close()
-        _process(connection_info, archive_server, login)
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
-            SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state,
-                   next_start_trophies, failure_reasons
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
-        # Off the live board and its count, and on the promotion list.
-        tracked = _rows(connection_info, f"""
-            SELECT player.active, candidate.league_tier_id
-            FROM players AS player LEFT JOIN promotion_candidates AS candidate
-              USING (normalized_tag) WHERE normalized_tag = '{TAG}'""")
-
-    assert days[last_day][:2] == (
-        ended, final if next_start == "final" else next_start
-    )
-    assert ("player_not_eligible" not in days[boundary][2]) == monday_eligible
-    assert tracked == [(False, 105000035) if drop_at else (True, None)]
-
-
-def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
-    database_url: str, archive_server, monkeypatch
-) -> None:
-    from test_first_battle_log_postgres import LOSS, WIN, _log
-
-    boundary = BOUNDARIES["monday"]
-    last_day = boundary - timedelta(days=1)
-    final = 4900 + WIN - 8 * LOSS
-    battles = [(last_day + timedelta(hours=1), True)] + [
-        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
-    ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(connection_info, archive_server, last_day,
-                           profile=_profile(4900), log=_battle_log(empty=True))
-        jobs += _reset_work(connection_info, archive_server, boundary,
-                            profile=_profile(final), log=_log(*battles))
-        jobs += [_store_dropped_login(
-            connection_info, archive_server, key,
-            boundary + timedelta(minutes=minutes), final,
-        ) for minutes, key in ((13, "dropped-login"), (73, "dropped-again"))]
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            # The Legend II profile is processed before any calculation saves
-            # the last day, and that calculation began before it, so reads no
-            # drop.
-            for job_id in jobs:
-                assert processor.process_job(job_id, owner=f"job-{job_id}") is not None
-            with monkeypatch.context() as patch:
-                patch.setattr(reconciliation_db, "_dropped_after_reading",
-                              lambda *args: False)
-                for (job_id,) in _rows(connection_info, """
-                        SELECT id FROM python_processing_jobs
-                        WHERE status = 'pending' AND work_type = 'reconcile_ranked_day'
-                          AND input_json->>'trigger' IS DISTINCT FROM 'weekly_drop'
-                        ORDER BY id"""):
-                    processor.process_job(int(job_id), owner="stale")
-        finally:
-            database.close()
-        stale = _rows(connection_info, f"""
-            SELECT DISTINCT ON (ranked_day_start) state FROM ranked_day_versions
-            WHERE ranked_day_start = '{last_day.isoformat()}'
-            ORDER BY ranked_day_start, version DESC""")
-        due = _rows(connection_info, """
-            SELECT due_at FROM python_processing_jobs
-            WHERE input_json->>'trigger' = 'weekly_drop'""")
-        _process(connection_info, archive_server, [])
-        ended = _rows(connection_info, f"""
-            SELECT DISTINCT ON (ranked_day_start) state, next_start_trophies
-            FROM ranked_day_versions
-            WHERE ranked_day_start = '{last_day.isoformat()}'
-            ORDER BY ranked_day_start, version DESC""")
-
-    # Read as a Reset reading taken before the raise landed.
-    assert stale == [("Complete",)]
-    # Due once the Reset's own calculations have long saved.
-    assert len(due) == 1
-    assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
-    assert ended == [("Complete", final)]
-
-
-def test_weekly_drop_without_a_reset_reading_gives_no_legend_i_monday(
-    database_url: str, archive_server
-) -> None:
-    # The Monday Reset profile fails and its battle log arrives; Legend II
-    # shows 13 minutes later. Sunday's end gets no raise to 5,000, and the
-    # Monday is no Legend I day, so it does not start from Sunday's end.
-    from test_first_battle_log_postgres import LOSS, WIN, _log
-
-    boundary = BOUNDARIES["monday"]
-    last_day = boundary - timedelta(days=1)
-    final = 4900 + WIN - 8 * LOSS
-    battles = [(last_day + timedelta(hours=1), True)] + [
-        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
-    ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(connection_info, archive_server, last_day,
-                           profile=_profile(4900), log=_battle_log(empty=True))
-        jobs += _reset_work(connection_info, archive_server, boundary,
-                            log=_log(*battles))
-        jobs += [_store_dropped_login(
-            connection_info, archive_server, key,
-            boundary + timedelta(minutes=minutes), final,
-        ) for minutes, key in ((13, "dropped-login"), (73, "dropped-again"))]
-        _process(connection_info, archive_server, jobs)
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            job = reconciliation_db.enqueue_reconciliation(
-                database, player_tag=TAG, day_start=boundary,
-                now=boundary + timedelta(days=1), request_key="monday",
-            )
-            assert processor.process_job(job, owner="monday") is not None
-        finally:
-            database.close()
-        days = {row[0]: row[1:] for row in _rows(connection_info, """
-            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
-                   expected_next_start_trophies, start_trophies, failure_reasons,
-                   input_evidence -> 'start_baseline_evidence'
-                       ->> 'start_trophies_source'
-            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
-
-    assert days[last_day][0] == final
-    assert days[boundary][1] is None and days[boundary][3] is None
-    assert "player_not_eligible" in days[boundary][2]
 
 
 def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
@@ -958,7 +815,7 @@ def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
             connection_info,
             "SELECT count(*) FROM python_processing_jobs"
             " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
-            " AND status::text = 'complete'",
+            f" AND status::text = 'complete' AND input_json ->> 'player_id' = ({OWN_ID})::text",
         )[0][0]
 
     assert (before[1], before[4]) == ("Complete", 5000)
@@ -1091,8 +948,8 @@ def test_official_total_recalculates_a_last_day_saved_under_older_rules(
         )[0][0]
         with psycopg.connect(connection_info) as connection:
             current = connection.execute(
-                "SELECT state, next_start_trophies FROM ranked_day_versions"
-                " WHERE ranked_day_start = %s AND reconciliation_rule_version = %s"
+                f"SELECT state, next_start_trophies FROM ranked_day_versions WHERE {OWN_DAYS}"
+                " AND ranked_day_start = %s AND reconciliation_rule_version = %s"
                 " ORDER BY version DESC LIMIT 1",
                 (last_day, RECONCILIATION_RULE_VERSION),
             ).fetchone()
@@ -1167,8 +1024,8 @@ def test_official_total_leaves_an_older_seasons_last_day_as_saved(
     ]
     final = 6000 + WIN - 8 * LOSS
     saved = (
-        "SELECT id, state, next_start_trophies FROM ranked_day_versions"
-        f" WHERE ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
+        f"SELECT id, state, next_start_trophies FROM ranked_day_versions WHERE {OWN_DAYS}"
+        f" AND ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
     )
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
@@ -1265,7 +1122,7 @@ def test_day_1_is_judged_with_the_official_total_of_the_season_before(
         day_1 = _rows(connection_info, f"""
             SELECT DISTINCT ON (ranked_day_start) start_trophies,
                    input_evidence -> 'start_baseline_evidence' ->> 'official_final_trophies'
-            FROM ranked_day_versions WHERE ranked_day_start = '{boundary.isoformat()}'
+            FROM ranked_day_versions WHERE {OWN_DAYS} AND ranked_day_start = '{boundary.isoformat()}'
             ORDER BY ranked_day_start, version DESC""")
 
     assert day_1 == [(5000, "5965")]

@@ -495,9 +495,11 @@ def _quiet_days(connection_info: str, archive_server, days: list) -> int:
         finally:
             database.close()
         _process(connection_info, archive_server, [job])
+    # Tracked, as the weekly league record tracks a player in Legend I this
+    # week: its clock is not in these August days.
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
-            "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            "UPDATE players SET active = true WHERE normalized_tag = %s RETURNING id", (TAG,)
         ).fetchone()[0]
 
 

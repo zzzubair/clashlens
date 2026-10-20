@@ -10,7 +10,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import decide_leagues, domain_database, store_observation, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector import _Client, _Spool
 from test_collector import _collector as _fake_collector
@@ -56,6 +56,7 @@ def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None, parser
     try:
         result = processor.process_job(job, owner="weekly-test")
         assert result is not None and result.outcome == "processed"
+        decide_leagues(database, at + timedelta(seconds=1))
     finally:
         database.close()
     return observation
@@ -353,6 +354,7 @@ def test_processed_eligible_profile_preserves_history_across_restart(
             try:
                 result = processor.process_job(job, owner="processed-discovery-restart")
                 assert result is not None and result.outcome == "processed"
+                decide_leagues(worker_database, at)
             finally:
                 worker_database.close()
             with psycopg.connect(info) as connection:
@@ -1097,6 +1099,7 @@ def test_recognized_profile_keeps_retrying_failed_league_history(
             worker_database, processor = _processor(info, archive_server)
             try:
                 assert processor.process_job(job, owner="history-retry").outcome == "processed"
+                decide_leagues(worker_database, at)
             finally:
                 worker_database.close()
             with psycopg.connect(info) as connection:
@@ -1180,6 +1183,7 @@ def test_unchanged_weekly_profile_reprocesses_an_unrecognized_league(
             try:
                 assert processor.process_job(
                     result.processing_job_id, owner="current-catalogue").outcome == "processed"
+                decide_leagues(worker_database, MONDAY + timedelta(seconds=1))
             finally:
                 worker_database.close()
             with psycopg.connect(info) as connection:
