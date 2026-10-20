@@ -412,6 +412,10 @@ function SortHeading({
   );
 }
 
+function namedVariantCount(row: ArmyRow) {
+  return row.variants?.filter((variant) => variant.variantId !== 0).length ?? 0;
+}
+
 // A type with variants opens on a tap anywhere on its row; its variant rows
 // follow it, each with its share of the type.
 const ArmyResultRow = memo(function ArmyResultRow({
@@ -429,7 +433,8 @@ const ArmyResultRow = memo(function ArmyResultRow({
   onToggle?: (key: string) => void;
   typeLabel?: string;
 }) {
-  const variants = row.variants?.length ? row.variants : null;
+  const named = namedVariantCount(row);
+  const variants = named ? row.variants : null;
   return (
     <tr
       role="row"
@@ -451,7 +456,8 @@ const ArmyResultRow = memo(function ArmyResultRow({
             <span>
               {row.label}
               <small>
-                {variants.length} {variants.length === 1 ? "variant" : "variants"}
+                {named} {named === 1 ? "variant" : "variants"}
+                {variants.length > named ? " + Other" : null}
               </small>
             </span>
           </button>
@@ -897,7 +903,7 @@ export default function ArmyAnalyticsRoute() {
               some. Under it is what a miss won on average.
             </p>
           ) : null}
-          {armyTypes && analytics.rows.some((row) => row.variants?.length) ? (
+          {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
             <p className="section-note analytics-coverage-note">
               Tap an army to open its variants: the same army split by its heroes’
               equipment, each with its share of that army.
@@ -944,7 +950,7 @@ export default function ArmyAnalyticsRoute() {
                     open={openTypes.has(row.key)}
                     onToggle={toggleType}
                   />,
-                  ...(row.variants && openTypes.has(row.key)
+                  ...(row.variants && namedVariantCount(row) > 0 && openTypes.has(row.key)
                     ? sortedRows(row.variants, tableSort)
                         // A type's Other stays last.
                         .sort(

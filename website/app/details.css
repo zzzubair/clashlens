@@ -928,6 +928,11 @@
     max-width: 12rem;
     box-shadow: 1px 0 0 var(--cl-border);
   }
+  .analytics-page .analytics-table tr.analytics-variant-row > th:first-child {
+    box-shadow:
+      inset 3px 0 0 var(--cl-action),
+      1px 0 0 var(--cl-border);
+  }
   .analytics-page .analytics-table-wrap {
     max-height: 70svh;
     scroll-padding: 3rem 0 0 12rem;
