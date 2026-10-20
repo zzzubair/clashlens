@@ -19,7 +19,7 @@ to add a type or a variant.
 The type comes from home troops weighted by camp space (count x housing
 space). Heroes, pets, equipment, spells, siege machines and Clan Castle troops
 never decide it. The variant comes from hero equipment only, by the hand-kept
-list in ``VARIANTS``; spells show beside it as "usually with" tags.
+list in ``VARIANTS``.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from typing import Any
 
 from . import army_analytics
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION, unit_label
+from .catalog import CATALOG_VERSION
 from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
@@ -270,10 +270,6 @@ VARIANTS: dict[int, tuple[tuple[int, str, tuple[tuple[str, str], ...]], ...]] = 
         (41, "Backpack Root Rider", (BACKPACK,)),
     ),
 }
-# A spell is a variant's "usually with" tag when at least TAG_SHARE percent of
-# its attacks carry it, and at least TAG_LEAD points more than across its
-# whole type.
-TAG_SHARE, TAG_LEAD = 50, 15
 
 
 def variant(type_id: int, heroes: Iterable[Any]) -> int:
@@ -519,20 +515,18 @@ def read_type_rows(
     member_ids: list[int] | None,
     trophy_range: tuple[int, int] | None,
     boards: tuple[dict[Any, int], int, int] | None = None,
-) -> tuple[list[tuple[int, ...]], dict[tuple[int, int], dict[str, int]]]:
+) -> list[tuple[int, ...]]:
     """Attack totals per type and variant for the selected players and Legend days.
 
     ``days`` maps each day number to its ``ranked_day_start``. Counted days
     are added up from their saved counts; days not counted yet, and trophy
     ranges, which saved counts cannot split, are added up from the day's
-    attacks, once for both the totals and the spells. An older partly read
-    army gets its type, variant and spells from its saved home troops,
-    heroes and spells. ``boards`` (each day's board by ``ranked_day_start``,
-    lowest and highest rank) selects each day's players from that day's
-    board instead of ``member_ids``. Rows are (type id, variant id, attacks,
-    one-star, two-star, three-star, destruction, trophies won), by type and
-    variant id. The spells are, by (type id, variant id) of a type with
-    variants, the attacks carrying each spell.
+    attacks. An older partly read army gets its type and variant from its
+    saved home troops and heroes. ``boards`` (each day's board by
+    ``ranked_day_start``, lowest and highest rank) selects each day's players
+    from that day's board instead of ``member_ids``. Rows are (type id,
+    variant id, attacks, one-star, two-star, three-star, destruction, trophies
+    won), by type and variant id.
     """
     counted = {
         row[0]
@@ -587,66 +581,35 @@ def read_type_rows(
             """
         )
         params += [season_id, fact_days, *filters, *_trophies("offense")]
-    source = f"""({" UNION ALL ".join(parts)}) AS source (
-            population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction, trophies)"""
     totals: dict[tuple[int, int], list[int]] = {}
-    spells: dict[tuple[int, int], Counter[str]] = {}
-    # Rows with a spell are each distinct army's spells once, weighted by its
-    # attacks; the others are the totals.
-    for type_id, variant_id, spell, troops, unnamed, heroes, carried, *counts in (
-        connection.execute(
-            f"""
-            WITH army AS MATERIALIZED (
-                SELECT exact_army_id, sum(attacks) AS attacks,
-                       sum(one_star) AS one_star, sum(two_star) AS two_star,
-                       sum(three_star) AS three_star,
-                       sum(destruction) AS destruction, sum(trophies) AS trophies
-                FROM {source}
-                GROUP BY 1)
-            SELECT CASE WHEN army.exact_army_id = 0 THEN {UNREADABLE}
-                        ELSE label.type_id END,
-                   COALESCE(label.variant_id, {OTHER_VARIANT}), NULL::text,
-                   decode.home_troops, decode.unresolved_components,
-                   decode.heroes, decode.spells,
-                   sum(army.attacks), sum(army.one_star), sum(army.two_star),
-                   sum(army.three_star), sum(army.destruction), sum(army.trophies)
-            FROM army
-            LEFT JOIN army_package_types AS label
-              ON label.exact_army_id = army.exact_army_id
-            LEFT JOIN battle_army_decodes AS decode ON decode.id = -army.exact_army_id
-            GROUP BY 1, 2, 4, 5, 6, 7
-            UNION ALL
-            SELECT label.type_id, label.variant_id, spell.value ->> 0,
-                   NULL, NULL, NULL, NULL, sum(army.attacks),
-                   NULL, NULL, NULL, NULL, NULL
-            FROM army
-            JOIN army_package_types AS label ON label.exact_army_id = army.exact_army_id
-            JOIN exact_armies AS exact ON exact.id = army.exact_army_id
-            CROSS JOIN jsonb_array_elements(exact.spells) AS spell
-            WHERE label.type_id = ANY(%s::smallint[])
-            GROUP BY 1, 2, 3
-            """,
-            [*params, list(VARIANTS)],
-        ).fetchall()
-    ):
-        if spell is not None:
-            spells.setdefault((type_id, variant_id), Counter())[spell] += int(counts[0])
-            continue
+    for type_id, variant_id, troops, unnamed, heroes, *counts in connection.execute(
+        f"""
+        SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
+                    ELSE label.type_id END,
+               COALESCE(label.variant_id, {OTHER_VARIANT}),
+               decode.home_troops, decode.unresolved_components, decode.heroes,
+               sum(attacks), sum(one_star), sum(two_star), sum(three_star),
+               sum(destruction), sum(trophies)
+        FROM ({" UNION ALL ".join(parts)}) AS source (
+            population_player_id, exact_army_id, attacks, one_star, two_star,
+            three_star, destruction, trophies)
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = source.exact_army_id
+        LEFT JOIN battle_army_decodes AS decode ON decode.id = -source.exact_army_id
+        GROUP BY 1, 2, 3, 4, 5
+        """,
+        params,
+    ).fetchall():
         if troops is not None:
             army = army_analytics.with_unnamed_ids({
-                "home_troops": troops, "unresolved_components": unnamed,
-                "heroes": heroes, "spells": carried,
+                "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
             })
             type_id = classify(army["home_troops"])
             variant_id = variant(type_id, army["heroes"] or [])
-            if type_id in VARIANTS:
-                for spell_id in {str(entry[0]) for entry in army["spells"] or []}:
-                    spells.setdefault((type_id, variant_id), Counter())[spell_id] += int(counts[0])
         total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
         for index, value in enumerate(counts):
             total[index] += int(value)
-    return [(*key, *total) for key, total in sorted(totals.items())], spells
+    return [(*key, *total) for key, total in sorted(totals.items())]
 
 
 def read_type_outcomes(
@@ -746,7 +709,7 @@ def type_result(
     Every attack counts once, under exactly one type, Other and Unreadable
     included, so the shares add up to 100%.
     """
-    rows, spells = read_type_rows(
+    rows = read_type_rows(
         connection, season_id=selection.season, days=days,
         member_ids=member_ids, trophy_range=trophy_range, boards=boards,
     )
@@ -759,7 +722,7 @@ def type_result(
         "average-trophies": "average_trophies",
     }[selection.sort]
     result_rows = sorted(
-        type_result_rows(rows, total, spells),
+        type_result_rows(rows, total),
         key=lambda row: (-row[sort_field], row["type_id"]),
     )
     result = {
@@ -778,7 +741,6 @@ def type_result(
     }
     source_hash = hashlib.sha256(json.dumps(
         {"rules": RULES_VERSION, "rows": rows, "days": sorted(day_markers.items()),
-         "spells": sorted((*key, sorted(counts.items())) for key, counts in spells.items()),
          "selection": selection.as_dict(),
          "players": member_ids, "trophies": trophy_range,
          "boards": None if boards is None else sorted(boards[0].values())},
@@ -814,14 +776,11 @@ def rules_ready(connection: Any) -> bool:
 
 
 def type_result_rows(
-    rows: list[tuple[int, ...]],
-    total_attacks: int,
-    spells: dict[tuple[int, int], dict[str, int]],
+    rows: list[tuple[int, ...]], total_attacks: int
 ) -> list[dict[str, Any]]:
     """Armies page rows, one per type, in the shape the unit rows use. A type
     with variants lists those its attacks used under ``variants``, most used
-    first and its Other last, each with its share of the type and the spells
-    it is usually with."""
+    first and its Other last, each with its share of the type."""
     types: dict[int, list[int]] = {}
     for type_id, _variant_id, *counts in rows:
         total = types.setdefault(type_id, [0] * 6)
@@ -837,16 +796,10 @@ def type_result_rows(
         if type_id not in VARIANTS:
             continue
         names = {variant_id: name for variant_id, name, _items in VARIANTS[type_id]}
-        in_type: Counter[str] = Counter()
-        for (spell_type, _variant_id), counts_by_spell in spells.items():
-            if spell_type == type_id:
-                in_type.update(counts_by_spell)
         variants = []
         for row_type, variant_id, *variant_counts in rows:
             if row_type != type_id:
                 continue
-            attacks = variant_counts[0]
-            carried = spells.get((type_id, variant_id), {})
             variants.append({
                 **_result_row(
                     f"army-variant:{type_id}:{variant_id}",
@@ -854,15 +807,6 @@ def type_result_rows(
                     variant_counts, counts[0],
                 ),
                 "variant_id": variant_id,
-                "usually_with": [
-                    unit_label(spell).removesuffix(" Spell")
-                    for spell, count in sorted(
-                        carried.items(), key=lambda item: (-item[1], unit_label(item[0]))
-                    )
-                    if count * 100 >= TAG_SHARE * attacks
-                    and (count * counts[0] - in_type[spell] * attacks) * 100
-                    >= TAG_LEAD * attacks * counts[0]
-                ],
             })
         variants.sort(key=lambda row: (row["variant_id"] == OTHER_VARIANT,
                                        -row["usage_count"], row["variant_id"]))

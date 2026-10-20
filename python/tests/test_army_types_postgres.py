@@ -61,7 +61,7 @@ def _types(api: ApiDatabase, population: str = "top-10") -> dict[str, tuple]:
 def _variants(api: ApiDatabase) -> dict[str, list[tuple]]:
     return {
         row["label"]: [(variant["label"], variant["usage_count"],
-                        variant["usage_denominator"], variant["usually_with"])
+                        variant["usage_denominator"])
                        for variant in row["variants"]]
         for row in _result(api)["rows"] if "variants" in row
     }
@@ -158,11 +158,10 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 "Hydra": (1, 3, [0, 1, 0, 0], 50.0, 10.0, 10.0),
             }
             # Each type opens into the variants its attacks used, named by
-            # hero equipment, with the spells each usually carries.
+            # hero equipment.
             variants = {
-                "Thrower": [("Revenge Thrower", 1, 2, ["Ice Block"]),
-                            ("Backpack Thrower", 1, 2, ["Earthquake"])],
-                "Hydra": [("Other Hydra", 1, 1, [])],
+                "Thrower": [("Revenge Thrower", 1, 2), ("Backpack Thrower", 1, 2)],
+                "Hydra": [("Other Hydra", 1, 1)],
             }
 
             # Nothing is shown until every saved army has its type under
@@ -217,8 +216,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
 
             # An older partly read army, saved with its Revenge Deck unnamed
             # and no distinct army, is typed from its saved home troops and
-            # takes its variant and spells from its saved heroes and spells,
-            # counted or not.
+            # takes its variant from its saved heroes, counted or not.
             thrower_battle = battles[("#2PP", "#8PP")]
             with database.pool.connection() as connection:
                 connection.execute(
@@ -283,8 +281,8 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                 "Thrower": expected["Thrower"],
                 "Other": expected["Hydra"],
             }
-            assert _variants(api) == {"Thrower": [("Revenge Thrower", 1, 2, ["Ice Block"]),
-                                                  ("Other Thrower", 1, 2, ["Earthquake"])]}
+            assert _variants(api) == {"Thrower": [("Revenge Thrower", 1, 2),
+                                                  ("Other Thrower", 1, 2)]}
 
             # Rolling back relabels them under the earlier rules again.
             monkeypatch.setattr(army_types, "RULES_VERSION", rules)

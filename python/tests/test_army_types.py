@@ -12,7 +12,6 @@ from clashlens.army_types import (
     HYDRA,
     LAVALOON,
     OTHER,
-    OTHER_VARIANT,
     ROOT_RIDER,
     SUPER_ARCHER_RUIN_WITCH,
     SUPER_BOWLER,
@@ -23,7 +22,6 @@ from clashlens.army_types import (
     UNREADABLE,
     VARIANTS,
     classify,
-    type_result_rows,
     variant,
 )
 
@@ -155,21 +153,3 @@ def test_types_without_variants_and_every_variant_id_is_used_once() -> None:
     ids = [v for listed in VARIANTS.values() for v, _name, _items in listed]
     assert len(ids) == len(set(ids)) == 41 and 0 not in ids
 
-
-def test_usually_with_counts_an_exact_15_point_lead() -> None:
-    # Ice Block on 6 of a variant's 10 attacks (60%), and on 45 of the type's
-    # 100 (45%): exactly 15 points more, so it is a tag.
-    rows = [(HYDRA, 6, 10, 0, 0, 0, 0, 0), (HYDRA, OTHER_VARIANT, 90, 0, 0, 0, 0, 0)]
-    spells = {(HYDRA, 6): {"spell:109": 6}, (HYDRA, OTHER_VARIANT): {"spell:109": 39}}
-    [hydra] = type_result_rows(rows, 100, spells)
-    assert [(row["label"], row["usually_with"]) for row in hydra["variants"]] == [
-        ("Revenge Hydra", ["Ice Block"]), ("Other Hydra", []),
-    ]
-
-
-def test_usually_with_tags_tied_on_attacks_come_in_name_order() -> None:
-    # Rage and Freeze on all 3 of a variant's attacks, Rage read first.
-    rows = [(HYDRA, 6, 3, 0, 0, 0, 0, 0), (HYDRA, OTHER_VARIANT, 7, 0, 0, 0, 0, 0)]
-    spells = {(HYDRA, 6): {"spell:2": 3, "spell:5": 3}}
-    [hydra] = type_result_rows(rows, 10, spells)
-    assert hydra["variants"][0]["usually_with"] == ["Freeze", "Rage"]
