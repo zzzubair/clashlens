@@ -21,6 +21,7 @@ from test_collector_uploads_postgres import (
     upload_database,
 )
 
+from clashlens import league_week
 from clashlens.collector_db import CollectorDatabase, CollectorWork, ResponseHandoff
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -180,9 +181,9 @@ def test_saving_never_waits_on_worker_rows_that_point_at_the_observation(
                 worker.execute("SELECT 1 FROM collector_observations FOR KEY SHARE")
                 saved = pool.submit(database.record_response, poll("saved", 1))
                 assert saved.result(timeout=5).changed is False
-                unsaved = pool.submit(database.record_unchanged_response, poll("unsaved", 2))
+                unsaved = pool.submit(database.record_unchanged_response, poll("unsaved", 3))
                 assert unsaved.result(timeout=5) is True
-                assert _sightings(connection_info)[:2] == (3, NOW + timedelta(days=2))
+                assert _sightings(connection_info)[:2] == (3, NOW + timedelta(days=3))
         finally:
             database.close()
 
@@ -343,6 +344,37 @@ def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
             polls, sighting, _ = _sightings(connection_info)
             assert polls == 2
             assert sighting == (first_at if recorded_while_held else again_at)
+        finally:
+            database.close()
+
+
+def test_a_mondays_first_answer_after_the_league_display_window_is_saved(
+    database_url: str,
+) -> None:
+    """An idle player's profile does not change at a Monday Reset, and the
+    answers always saved then are read before the game shows the new week's
+    league. The first answer after the window is saved anyway, so the weekly
+    league record has one for the week; later ones that day, and Tuesday's,
+    are not, and next Monday saves one again."""
+    monday, window = datetime(2026, 10, 12, 5, tzinfo=UTC), league_week.LEAGUE_DISPLAY_WINDOW
+    with domain_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        player_id = _player(connection_info)
+
+        def saved(key: str, at: datetime) -> bool:
+            return database.record_response(_handoff(
+                occurrence_key=key, response_hash="a" * 64, player_id=player_id, completed_at=at,
+            )).changed
+
+        try:
+            assert [saved(key, at) for key, at in (
+                ("sunday", monday - timedelta(hours=1)),
+                ("inside", monday + window - timedelta(minutes=1)),
+                ("after", monday + window),
+                ("again", monday + window + timedelta(minutes=2)),
+                ("tuesday", monday + timedelta(days=1, hours=1)),
+                ("next monday", monday + league_week.WEEK + window + timedelta(minutes=1)),
+            )] == [True, False, True, False, False, True]
         finally:
             database.close()
 

@@ -29,11 +29,11 @@ from clashlens.league_history import (
     ParsedLeagueHistory,
 )
 from clashlens.operating import WorkerMetrics
+from clashlens.stage_metrics import StageMetrics
 from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
     ObservationProcessor,
     ProcessResult,
-    StageMetrics,
     process_concurrently,
 )
 
