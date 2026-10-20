@@ -41,6 +41,12 @@ Use these exactly.
 - **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 - **Projected place**: the one estimated rank the Legend day card shows for the next Reset. It is the middle result of 200 imagined finishes of the day, copied from the last 7 days, and always falls inside the Next Reset range.
 - **Variant**: a split of an army type by the hero equipment its attacks used, from a hand-kept list (for example Revenge Hydra), with an army matching none in its type's Other.
+- **Notebook**: a Clasher's private page of the bases their verified accounts ran this Season and how each one held.
+- **Library**: all of a Clasher's bases in their Notebook this Season, each Active, To try or Retired.
+- **Base ID**: the `B-` code with six letters or digits that names one base for support; it never opens the base.
+- **Day pick**: a Clasher saying which base one account ran from one Legend day on, until the next pick.
+- **Run**: a stretch of Legend days on which one account ran one base.
+- **Held**: a defense on which the attacker did not get 3 stars.
 
 ## Technical words
 
