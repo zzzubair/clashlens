@@ -58,6 +58,7 @@ export interface RootLoaderData {
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
+  notebookEnabled?: boolean;
   analytics?: AnalyticsSettings | null;
 }
 
@@ -73,12 +74,25 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
   const switches = import("./server/config.server")
-    .then(({ isDashboardEnabled, isCrewsEnabled, loadAnalyticsSettings }) => ({
-      dashboardEnabled: isDashboardEnabled(),
-      crewsEnabled: isCrewsEnabled(),
-      analytics: loadAnalyticsSettings(),
-    }))
-    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
+    .then(
+      ({
+        isDashboardEnabled,
+        isCrewsEnabled,
+        isNotebookEnabled,
+        loadAnalyticsSettings,
+      }) => ({
+        dashboardEnabled: isDashboardEnabled(),
+        crewsEnabled: isCrewsEnabled(),
+        notebookEnabled: isNotebookEnabled(),
+        analytics: loadAnalyticsSettings(),
+      }),
+    )
+    .catch(() => ({
+      dashboardEnabled: false,
+      crewsEnabled: false,
+      notebookEnabled: false,
+      analytics: null,
+    }));
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return {
@@ -220,7 +234,8 @@ export default function App() {
   );
 }
 
-// The tabs, most useful first. Dashboard and Crews follow their switches.
+// The tabs, most useful first. Dashboard, Notebook and Crews follow their
+// switches.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   return (
     <>
@@ -229,6 +244,7 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
           Dashboard
         </NavLink>
       )}
+      {data?.notebookEnabled && data.loggedIn && <NavLink to="/notebook">Notebook</NavLink>}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
       <NavLink to="/analytics/armies">Analytics</NavLink>
       {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
@@ -266,11 +282,12 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
-// and Join Discord. `/` is Home while it shows the front page.
+// Below 64rem: the four most useful tabs, then More with Notebook (behind
+// its switch), Watchlists, Blog and Join Discord. `/` is Home while it shows
+// the front page.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
-  const inMore = ["/account/watchlists", "/blog"].some(
+  const inMore = ["/notebook", "/account/watchlists", "/blog"].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
   return (
@@ -295,6 +312,7 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
+          {data?.notebookEnabled && data.loggedIn && <NavLink to="/notebook">Notebook</NavLink>}
           <NavLink to="/account/watchlists">Watchlists</NavLink>
           <NavLink to="/blog">Blog</NavLink>
         </div>

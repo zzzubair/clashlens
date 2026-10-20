@@ -1,0 +1,183 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  baseInitials,
+  basesNear,
+  libraryView,
+  matchName,
+  parseChange,
+  parseNotebook,
+  stripBlocks,
+  type NotebookBase,
+  type NotebookPlayer,
+} from "../../app/lib/notebook";
+
+const RECORD = {
+  days: 2,
+  defenses: 10,
+  held: 7,
+  stars: [1, 3, 3, 3],
+  trophies_lost: 180,
+};
+
+function apiNotebook() {
+  return {
+    kind: "notebook",
+    season: {
+      id: "2026-10",
+      start: "2026-10-05T05:00:00Z",
+      end: "2026-11-02T05:00:00Z",
+      today: 16,
+      tomorrow: 17,
+    },
+    as_of_day: 15,
+    players: [
+      {
+        tag: "#L9L0GJ9LR",
+        name: "curtypie",
+        league: "Legend League",
+        runs: [{ from: 9, to: 16, base: "B-7K3QX9", record: RECORD }],
+        current: "B-7K3QX9",
+        next: null,
+        picks: [{ day: 9, base: "B-7K3QX9" }],
+      },
+    ],
+    bases: [
+      {
+        id: "B-7K3QX9",
+        name: "Ring",
+        status: "active",
+        added_day: 9,
+        last_ran_day: 16,
+        recent: "2026-10-20T06:00:00Z",
+        has_link: true,
+        record: RECORD,
+      },
+    ],
+  };
+}
+
+function base(
+  id: string,
+  name: string,
+  status: NotebookBase["status"],
+  held: number,
+  defenses: number,
+  recent: string,
+): NotebookBase {
+  return {
+    id,
+    name,
+    status,
+    addedDay: 1,
+    lastRanDay: null,
+    recent,
+    hasLink: false,
+    record: { days: 1, defenses, held, stars: [0, 0, 0, 0], trophiesLost: 0 },
+  };
+}
+
+describe("notebook contract", () => {
+  it("reads the private API's notebook", () => {
+    const notebook = parseNotebook(apiNotebook());
+    expect(notebook?.season.today).toBe(16);
+    expect(notebook?.players[0]?.runs[0]?.record.trophiesLost).toBe(180);
+    expect(notebook?.bases[0]).toMatchObject({
+      id: "B-7K3QX9",
+      hasLink: true,
+      addedDay: 9,
+    });
+  });
+
+  it("refuses a notebook with a malformed base ID or day", () => {
+    const badId = apiNotebook();
+    badId.bases[0]!.id = "B-7K3QXI";
+    expect(parseNotebook(badId)).toBeNull();
+    const badDay = apiNotebook();
+    badDay.season.today = 29;
+    expect(parseNotebook(badDay)).toBeNull();
+  });
+
+  it("checks a posted change before it reaches the private API", () => {
+    expect(
+      parseChange({ action: "pick", base: "B-7K3QX9", tag: "#L9L0GJ9LR", day: 9 }),
+    ).toEqual({ action: "pick", base: "B-7K3QX9", tag: "#L9L0GJ9LR", day: 9 });
+    expect(parseChange({ action: "drop" })).toBeNull();
+    expect(parseChange({ action: "pick", tag: "L9L0GJ9LR" })).toBeNull();
+    expect(
+      parseChange({ action: "edit", base: "B-7K3QX9", note: "x".repeat(2001) }),
+    ).toBeNull();
+  });
+});
+
+describe("Library", () => {
+  const bases = [
+    base("B-000001", "Ring", "active", 7, 10, "2026-10-19T06:00:00Z"),
+    base("B-000002", "Box ring", "to_try", 0, 0, "2026-10-20T06:00:00Z"),
+    base("B-000003", "Spiral", "retired", 9, 10, "2026-10-10T06:00:00Z"),
+  ];
+
+  it("searches by name anywhere, case-blind, and counts each filter", () => {
+    const view = libraryView(bases, "RING", "all", "name");
+    expect(view.rows.map((item) => item.name)).toEqual(["Box ring", "Ring"]);
+    expect(view.counts).toEqual({ all: 2, active: 1, to_try: 1, retired: 0 });
+    expect(matchName("Box ring", "RING")).toEqual(["Box ", "ring", ""]);
+  });
+
+  it("sorts by best held with untried bases last, and by most recent", () => {
+    expect(libraryView(bases, "", "all", "held").rows.map((item) => item.name)).toEqual([
+      "Spiral",
+      "Ring",
+      "Box ring",
+    ]);
+    expect(libraryView(bases, "", "all", "recent").rows[0]?.name).toBe("Box ring");
+    expect(libraryView(bases, "", "retired", "recent").rows).toHaveLength(1);
+  });
+
+  it("draws a tile's letters from the first two words", () => {
+    expect(baseInitials("anti 2 star ring")).toBe("A2");
+    expect(baseInitials("Spiral")).toBe("S");
+  });
+});
+
+describe("run strip", () => {
+  const player: NotebookPlayer = {
+    tag: "#L9L0GJ9LR",
+    name: "curtypie",
+    league: null,
+    runs: [
+      {
+        from: 3,
+        to: 8,
+        base: "B-000001",
+        record: { days: 0, defenses: 0, held: 0, stars: [0, 0, 0, 0], trophiesLost: 0 },
+      },
+      {
+        from: 9,
+        to: 16,
+        base: "B-000002",
+        record: { days: 0, defenses: 0, held: 0, stars: [0, 0, 0, 0], trophiesLost: 0 },
+      },
+    ],
+    current: "B-000002",
+    next: null,
+    picks: [
+      { day: 3, base: "B-000001" },
+      { day: 9, base: "B-000002" },
+    ],
+  };
+
+  it("covers all 28 days: no base, past run, today's run, days to come", () => {
+    expect(stripBlocks(player, 16)).toEqual([
+      { from: 1, to: 2, base: null, kind: "none" },
+      { from: 3, to: 8, base: "B-000001", kind: "past" },
+      { from: 9, to: 16, base: "B-000002", kind: "now" },
+      { from: 17, to: 28, base: null, kind: "next" },
+    ]);
+  });
+
+  it("offers the base said for a day first when fixing it", () => {
+    expect(basesNear(player, 5)).toEqual(["B-000001", "B-000002"]);
+    expect(basesNear(player, 12)).toEqual(["B-000002", "B-000001"]);
+  });
+});

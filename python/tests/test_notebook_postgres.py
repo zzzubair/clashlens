@@ -1,0 +1,208 @@
+"""Season notebook end to end: saved game data in, a base's record out.
+
+Two players' defenses are saved as the collector would save them, the real
+worker turns them into Legend days and counts each finished day's defenses,
+and a Clasher then says through the private API which base each player ran
+on which day. The notebook reads every number from those counts: held,
+star counts and trophies lost, for each run, each base and each player.
+See docs/testing.md.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from domain_test_support import as_api_role, domain_database
+from fastapi.testclient import TestClient
+from test_api_security import FakeDatabase
+from test_crews_api import call
+from test_discord_bot_postgres import _account, _verify
+from test_private_api import NOW_SECONDS, TS_CURRENT
+from test_reset_scenarios_postgres import SEASON, THROWER, _story, day, defenses
+
+from clashlens.api import create_app
+from clashlens.api_db import ApiDatabase
+
+MAIN, ALT = "#2PP", "#8PP"
+NOTEBOOK = "/v1/account/notebook"
+
+
+def test_both_notebook_routes_are_missing_while_the_dashboard_is_off() -> None:
+    app = create_app(FakeDatabase(), keys={("typescript-website", "current"): TS_CURRENT},
+                     clock=lambda: NOW_SECONDS)
+    with TestClient(app) as client:
+        for method, value in (("GET", None), ("POST", {"action": "nothing"})):
+            response = call(client, "sloothy", method, NOTEBOOK, value)
+            assert (response.status_code, response.json()) == (
+                404, {"error": "notebook_disabled"})
+
+
+def _record(days: int, defenses: int, stars: list[int], lost: int) -> dict:
+    return {"days": days, "defenses": defenses, "held": defenses - stars[3],
+            "stars": stars, "trophies_lost": lost}
+
+
+def test_a_bases_record_comes_from_the_workers_day_counts(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """MAIN ran Ring on Days 2 and 3 and Box on Day 4; ALT ran Spiral from
+    Day 3. Today is Day 5, so Days 2 to 4 are counted. A defense losing 40
+    is a triple, 16 to 32 two stars, 5 to 15 one star, under 5 none."""
+    today = day(5)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, MAIN, ALT)
+        story.players[MAIN].battles = (
+            defenses(day(2), 40, 40, 30, 10, army=THROWER)
+            + defenses(day(3), 16, 40, 0)
+            + defenses(day(4), 40, 40, 40)
+        )
+        story.players[ALT].battles = defenses(day(3), 30, 20) + defenses(day(4), 10, 0)
+        trophies = {MAIN: 5000, ALT: 5000}
+        for number in (2, 3, 4, 5):
+            story.reset(day(number), {tag: (total, SEASON) for tag, total in trophies.items()})
+            for tag, player in story.players.items():
+                trophies[tag] = 5000 + sum(
+                    battle.trophies for battle in player.battles if battle.at < day(number + 1))
+        noon = today + timedelta(hours=7)
+        story.count_armies(noon)
+        unfinished = story.unfinished_jobs()
+
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            me = _account(owner, "google", "subject-sloothy", "sloothy")
+            _account(owner, "google", "subject-other", "other")
+            _verify(owner, me, MAIN)
+            _verify(owner, me, ALT)
+            app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: noon,
+                             dashboard_enabled=True)
+            with TestClient(app) as client:
+
+                def save(**change) -> dict:
+                    response = call(client, "sloothy", "POST", NOTEBOOK, change)
+                    assert response.status_code == 200, response.json()
+                    return response.json()
+
+                def refused(user: str = "sloothy", **change) -> tuple[int, str]:
+                    response = call(client, user, "POST", NOTEBOOK, change)
+                    return response.status_code, response.json()["error"]
+
+                def notebook(user: str = "sloothy", base: str | None = None) -> dict:
+                    target = NOTEBOOK if base is None else f"{NOTEBOOK}?base={base}"
+                    return call(client, user, "GET", target).json()
+
+                # The first base on MAIN is up today; then the Clasher fixes
+                # Day 2, from when it ran, and Day 4, when Box was up.
+                ring = save(action="add", name="  Ring ", status="active", tag=MAIN,
+                            day=5)["base"]
+                box = save(action="add", name="Box", status="to_try")["base"]
+                untried = notebook()
+                save(action="pick", tag=MAIN, day=2, base=ring)
+                fixed = save(action="pick", tag=MAIN, day=4, base=box)
+                # ALT runs Ring from tomorrow; Spiral turns out to have been up
+                # since Day 3.
+                save(action="pick", tag=ALT, day=6, base=ring)
+                spiral = save(action="add", name="Spiral", status="to_try")["base"]
+                save(action="pick", tag=ALT, day=3, base=spiral)
+                seen = notebook()
+                detail = notebook(base=ring.lower())["base"]
+
+                # Days only today or tomorrow can start a base, or any day
+                # up to tomorrow when fixing one; only verified players.
+                bad = [
+                    refused(action="add", name="Hex", status="active", tag=MAIN, day=4),
+                    refused(action="pick", tag=MAIN, day=7, base=ring),
+                    refused(action="pick", tag="#9PP", day=3, base=ring),
+                    refused(action="add", name="Ring", link="javascript:alert(1)"),
+                    refused(action="add", name="Hex", status="active", day=5),
+                    refused("other", action="edit", base=ring, name="Mine"),
+                ]
+                theirs = call(client, "other", "GET", f"{NOTEBOOK}?base={ring}")
+
+                # Retiring Ring stops it on both players from tomorrow; ALT
+                # carries Spiral on. Undo puts every pick and status back.
+                retired = save(action="status", base=ring, status="retired")
+                after_retire = notebook()
+                undone = save(action="undo", undo=retired["undo"])
+                after_undo = notebook()
+                # Deleting Box leaves Day 4 on MAIN with no base.
+                save(action="delete", base=box)
+                after_delete = notebook()
+        finally:
+            owner.close()
+            api.close()
+
+    assert unfinished == []
+    # A base saved To try has not run yet.
+    assert [(base["id"], base["status"], base["last_ran_day"]) for base in untried["bases"]
+            if base["id"] == box] == [(box, "to_try", None)]
+    assert seen["season"] == {"id": str(int(SEASON.timestamp())),
+                              "start": SEASON.isoformat(),
+                              "end": (SEASON + timedelta(days=28)).isoformat(),
+                              "today": 5, "tomorrow": 6}
+    assert seen["as_of_day"] == 4
+    bases = {base["id"]: base for base in seen["bases"]}
+    assert bases[ring]["name"] == "Ring"
+    assert {code: base["status"] for code, base in bases.items()} == {
+        # Ring is MAIN's base from today and ALT's from tomorrow; Box and
+        # Spiral ran and were swapped out.
+        ring: "active", box: "retired", spiral: "retired",
+    }
+    # MAIN's Days 2 and 3 on Ring: 7 defenses, 3 triples; Box's Day 4: 3
+    # triples; ALT's Days 3 and 4 on Spiral: 4 defenses, none tripled.
+    assert bases[ring]["record"] == _record(2, 7, [1, 1, 2, 3], 176)
+    assert bases[box]["record"] == _record(1, 3, [0, 0, 0, 3], 120)
+    assert bases[spiral]["record"] == _record(2, 4, [1, 1, 2, 0], 60)
+    assert (bases[ring]["last_ran_day"], bases[box]["last_ran_day"]) == (5, 4)
+    players = {player["tag"]: player for player in seen["players"]}
+    assert [(run["from"], run["to"], run["base"]) for run in players[MAIN]["runs"]] == [
+        (2, 3, ring), (4, 4, box), (5, 5, ring)]
+    assert players[MAIN]["runs"][1]["record"] == _record(1, 3, [0, 0, 0, 3], 120)
+    assert [(run["from"], run["to"], run["base"]) for run in players[ALT]["runs"]] == [
+        (3, 5, spiral)]
+    assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, ring)
+    assert players[ALT]["next"] == {"day": 6, "base": ring}
+    # Fixing Day 4 to Box made Box Retired at once: it ran, and MAIN runs
+    # Ring again from today.
+    assert fixed["changed"] == [{"base": box, "status": "retired"}]
+    assert detail["players"] == [{"tag": MAIN, "record": _record(2, 7, [1, 1, 2, 3], 176)}]
+
+    assert bad == [
+        (422, "invalid_day"), (422, "invalid_day"), (404, "player_not_verified"),
+        (422, "invalid_base_link"), (422, "player_required"), (404, "base_not_found"),
+    ]
+    assert (theirs.status_code, theirs.json()) == (404, {"error": "base_not_found"})
+
+    statuses = {base["id"]: base["status"] for base in after_retire["bases"]}
+    assert statuses == {ring: "retired", box: "retired", spiral: "active"}
+    players = {player["tag"]: player for player in after_retire["players"]}
+    assert (players[MAIN]["current"], players[ALT]["current"]) == (None, spiral)
+    assert undone["undo"] is None
+    assert after_undo["bases"] == seen["bases"]
+    assert after_undo["players"] == seen["players"]
+
+    players = {player["tag"]: player for player in after_delete["players"]}
+    assert [(run["from"], run["to"], run["base"]) for run in players[MAIN]["runs"]] == [
+        (2, 3, ring), (5, 5, ring)]
+    assert {base["id"] for base in after_delete["bases"]} == {ring, spiral}
+
+
+def test_on_day_28_picks_stop_at_day_28(database_url: str) -> None:
+    """Day 28's tomorrow is the next Season's Day 1, in the next notebook."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            _account(owner, "google", "subject-sloothy", "sloothy")
+            now = day(28) + timedelta(hours=12)
+            app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: now,
+                             dashboard_enabled=True)
+            with TestClient(app) as client:
+                seen = call(client, "sloothy", "GET", NOTEBOOK).json()
+        finally:
+            owner.close()
+            api.close()
+    assert (seen["season"]["today"], seen["season"]["tomorrow"]) == (28, 28)
+    assert seen["players"] == [] and seen["bases"] == [] and seen["as_of_day"] is None

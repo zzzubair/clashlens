@@ -309,6 +309,18 @@ crew at `/crews/<id>/settings` renames, resizes (never below the places in
 use), turns off links, hands over and deletes; members only see that the owner
 and admins change settings.
 
+The Notebook at `/notebook` stays hidden unless `CLASHLENS_NOTEBOOK_ENABLED=true`,
+and needs sign-in. It shows each verified account's base today, its record on
+that run, and a strip of the Season's 28 Legend days with a block per run of one
+base; Change picks the base from today or tomorrow, and tapping a past day fixes
+which base was up then. Below, the Library lists the Season's bases with search,
+an All, Active, To try or Retired filter with counts, and four sorts. A base's
+page at `/notebook/bases/<base ID>` shows how it held (defenses not 3-starred)
+over the counted days it ran, its stars and each account's share, its note
+(saved as you type), its link, and Edit to rename or delete. Every change saves
+at once through `/notebook/save` and offers Undo. Records come from the worker's
+defense counts, so a day counts about 30 minutes after its Reset.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by
