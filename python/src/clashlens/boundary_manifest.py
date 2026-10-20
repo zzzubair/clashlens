@@ -568,8 +568,12 @@ def _snapshot_rows(
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
+    # One with none is not found when their newest answer before the Reset
+    # says so.
     not_found = profiles_not_found(
-        connection, boundary_at, {player_id: row[2] for player_id, row in profiles.items()}
+        connection, boundary_at,
+        {player_id: row[2] for player_id, row in profiles.items()}
+        | dict.fromkeys(unprofiled, datetime.min.replace(tzinfo=UTC)),
     )
     failures = {
         int(row[0]): row[1:]
@@ -697,6 +701,8 @@ def _snapshot_rows(
                 "invalid_player_tag",
             }:
                 snapshot_quality = "malformed"
+            elif player_id in not_found:
+                snapshot_quality = "profile_not_found"
             elif source_state == "conflict":
                 snapshot_quality = "conflicting"
             else:
@@ -708,11 +714,13 @@ def _snapshot_rows(
                     "Malformed": "malformed",
                 }.get(classification, "missing")
             identity["snapshot_quality"] = snapshot_quality
-        # A member whose week left Legend I after the members were taken.
+        # A member whose week left Legend I after the members were taken. One
+        # the game no longer finds has no league to confirm.
         league = leagues.get(player_id, "legend_i")
-        if league != "legend_i":
-            identity["snapshot_quality"] = (
-                "below_legend_i" if league == "below_legend_i" else "league_not_confirmed")
+        if league == "below_legend_i":
+            identity["snapshot_quality"] = "below_legend_i"
+        elif league != "legend_i" and identity["snapshot_quality"] != "profile_not_found":
+            identity["snapshot_quality"] = "league_not_confirmed"
         manifest_rows.append(identity)
     return manifest_rows
 

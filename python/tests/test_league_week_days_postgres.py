@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 import psycopg
-from domain_test_support import domain_database, text
+from domain_test_support import domain_database, store_observation, text
 from test_collector_db_postgres import _handoff
 from test_reset_scenarios_postgres import (
     SEASON,
@@ -427,3 +427,86 @@ def test_a_legend_i_player_found_on_thursday_gets_no_monday_from_5000(
     assert (saved["state"], saved["start"], saved["attacks"], saved["defenses"]) == (
         "Partial", None, 8, 8)
     assert public[monday]["reasons"] == ["missing_start_baseline", "missing_end_baseline"]
+
+
+def _left_off(connection_info: str, boundary: datetime) -> dict[str, str]:
+    """Why the Reset's newest Daily board ranks each member it leaves off."""
+    with psycopg.connect(connection_info) as connection:
+        return {
+            text(tag): text(quality)
+            for tag, quality in connection.execute(
+                """
+                SELECT player.normalized_tag, entry.input_identity->>'snapshot_quality'
+                FROM boundary_publication_manifest_entries((
+                    SELECT snapshot_manifest_id FROM boundary_publication_generations
+                    WHERE boundary_at = %s ORDER BY generation DESC LIMIT 1)) AS entry
+                JOIN players AS player ON player.id = entry.player_id
+                WHERE entry.input_identity->>'snapshot_quality' <> 'eligible'
+                """,
+                (boundary,),
+            ).fetchall()
+        }
+
+
+GONE, NEVER_FOUND, UNANSWERED, STAYING = "#2LL", "#8LL", "#9LL", "#GLL"
+
+
+def test_players_the_game_no_longer_finds_are_left_off_as_not_found(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """GONE and STAYING play Legend I through Sunday 11 October 2026. From
+    the Monday Reset every profile check of GONE's answers 404 (player not
+    found), as for 80 tracked players on 12 October, so the record has no
+    league for its week of 12 October. NEVER_FOUND's checks never found
+    them, as for 59 tracked players all Season, and UNANSWERED's never
+    answered. All four are swept at the Monday and Tuesday Resets. A board
+    leaves off the members the game does not find as player not found, not
+    as league not confirmed, which counts as a day not proven; only
+    UNANSWERED's league is not confirmed."""
+    saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch, {
+            tag: Player(tag) for tag in (GONE, NEVER_FOUND, UNANSWERED, STAYING)})
+        # Sunday from 5,140 for both; STAYING's Monday from 13:00 ends 80 up.
+        for tag in (GONE, STAYING):
+            story.players[tag].battles = _saturday(saturday) + attacks(
+                sunday, *[40] * 6) + defenses(sunday, *[30] * 8)
+        story.players[STAYING].battles += attacks(
+            monday + timedelta(hours=8), *[40] * 8) + defenses(
+            monday + timedelta(hours=8), *[30] * 8)
+
+        def not_found(tag: str, at: datetime) -> None:
+            # The collector saves a 404 once; the same answer again is not saved.
+            story.clock = max(story.clock, at)
+            store_observation(
+                connection_info, archive_server, occurrence_key=f"{tag}-404",
+                endpoint="profile", body=f'{{"reason":"notFound","tag":"{tag}"}}'.encode(),
+                observed_at=at, normalized_tag=tag, http_status=404,
+            )
+
+        not_found(NEVER_FOUND, saturday + timedelta(hours=9))
+        story.reset(saturday, {GONE: (5300, SEASON), STAYING: (5300, SEASON)})
+        story.reset(sunday, {GONE: (5140, SEASON), STAYING: (5140, SEASON)})
+        story.reads(monday - timedelta(minutes=10), {GONE: 5140, STAYING: 5140})
+        unread = {tag: (None, SEASON) for tag in (GONE, NEVER_FOUND, UNANSWERED)}
+        story.reset(monday, {STAYING: (5140, SEASON), **unread}, run=False,
+                    no_log=tuple(unread))
+        not_found(GONE, monday + timedelta(minutes=4))
+        story.run_worker()
+        story.reads(monday + timedelta(minutes=20), {STAYING: 5140})
+        story.reads(monday + timedelta(hours=17), {STAYING: 5220})
+        story.reads(tuesday - timedelta(minutes=10), {STAYING: 5220})
+        story.reset(tuesday, {STAYING: (5220, SEASON), **unread}, no_log=tuple(unread))
+        story.reads(tuesday + timedelta(minutes=20), {STAYING: 5220})
+        story.wait(timedelta(hours=1))
+        boards = {at: (_ranked(story.served_board(at)), _left_off(connection_info, at))
+                  for at in (monday, tuesday)}
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    # GONE's first 404 came after the Monday Reset, so it still ranks there.
+    assert boards[monday] == ({STAYING: 5140, GONE: 5140}, {
+        NEVER_FOUND: "profile_not_found", UNANSWERED: "league_not_confirmed"})
+    assert boards[tuesday] == ({STAYING: 5220}, {
+        GONE: "profile_not_found", NEVER_FOUND: "profile_not_found",
+        UNANSWERED: "league_not_confirmed"})
