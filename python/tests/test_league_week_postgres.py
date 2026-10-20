@@ -350,12 +350,16 @@ def test_players_whose_lock_is_busy_hold_up_no_one_else(
     week, and deciding so locks their week, which a day calculation of each
     is holding, as a Reset's board freezing holds the Reset's lock. A player
     looked up after them, with a Legend battle and a Legend I profile, must
-    be decided and tracked within seconds all the same. Until 20 October
-    2026 the ten were tried first in every batch, a quarter second each, so
-    the looked-up player waited as long as the lock was held. Once it is
-    free the ten are decided too."""
+    be decided and tracked within seconds all the same, even with batches
+    of 4 marks and the ten tried again each second, so more of them are
+    due again than a batch holds. Until 20 October 2026 the ten were first
+    tried first in every batch, a quarter second each, then picked into
+    each batch before the looked-up player, so it waited as long as the
+    lock was held. Once it is free the ten are decided too."""
     sunday, monday = day(7), day(8)
     monkeypatch.setattr(league_week, "_busy", {}, raising=False)
+    monkeypatch.setattr(league_week, "BATCH", 4)
+    monkeypatch.setattr(league_week, "BUSY_SECONDS", 1.0)
     # The twice-daily re-check follows the real clock; it is not under test.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -369,6 +373,7 @@ def test_players_whose_lock_is_busy_hold_up_no_one_else(
         story.run_worker()
         story.decides = False
         story.reads(monday + timedelta(hours=9), dict.fromkeys(BUSY, 4960))
+        story.run_worker()
         story.players[LOOKED_UP].battles = attacks(monday + timedelta(hours=3), 40)
         story.reads(monday + timedelta(hours=10), {LOOKED_UP: 5040})
         story.run_worker()
