@@ -1050,7 +1050,6 @@ describe("server-only Python client response boundary", () => {
               ...unit,
               key: "army-variant:3:3",
               variant_id: 3,
-              usually_with: ["Ice Block"],
             },
           ],
         },
@@ -1088,10 +1087,10 @@ describe("server-only Python client response boundary", () => {
       [40, null],
       [36.6, 26.3],
     ]);
-    // An Armies type row carries its variants, each with its spell tags.
-    expect(
-      mapped.rows[0].variants?.map((row) => [row.key, row.variantId, row.usuallyWith]),
-    ).toEqual([["army-variant:3:3", 3, ["Ice Block"]]]);
+    // An Armies type row carries its variants.
+    expect(mapped.rows[0].variants?.map((row) => [row.key, row.variantId])).toEqual([
+      ["army-variant:3:3", 3],
+    ]);
     expect(mapped.rows[1].variants).toBeUndefined();
     await expect(createPythonClient().getArmyAnalytics(query)).rejects.toMatchObject({
       status: 502,

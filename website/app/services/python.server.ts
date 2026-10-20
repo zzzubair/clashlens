@@ -896,9 +896,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
           (row.average_miss_trophies != null &&
             !isFiniteNumber(row.average_miss_trophies)) ||
           !isInteger(row.unknown_excluded_attacks)) ||
-      (row.variants !== undefined && !Array.isArray(row.variants)) ||
-      (row.usually_with !== undefined &&
-        (!Array.isArray(row.usually_with) || !row.usually_with.every(isString)))
+      (row.variants !== undefined && !Array.isArray(row.variants))
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -921,7 +919,6 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
       variants: (row.variants as unknown[] | undefined)?.map(parseRow),
       variantId: isInteger(row.variant_id) ? row.variant_id : undefined,
-      usuallyWith: row.usually_with as string[] | undefined,
     };
   };
   const rows = payload.rows.map(parseRow);

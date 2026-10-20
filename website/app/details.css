@@ -817,13 +817,6 @@
   font-weight: 600;
   box-shadow: inset 3px 0 0 var(--cl-action);
 }
-.analytics-page .analytics-usually-with {
-  display: block;
-  margin-top: 0.15rem;
-  color: var(--cl-muted);
-  font-size: 0.72rem;
-  font-weight: 500;
-}
 .analytics-page .analytics-share-bar {
   display: block;
   width: 4.5rem;

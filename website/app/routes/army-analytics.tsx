@@ -464,11 +464,6 @@ const ArmyResultRow = memo(function ArmyResultRow({
         ) : (
           row.label
         )}
-        {row.usuallyWith?.length ? (
-          <small className="analytics-usually-with">
-            Usually with {row.usuallyWith.join(", ")}
-          </small>
-        ) : null}
       </th>
       {isHistorical ? <td role="cell">{row.quantity?.toLocaleString()}</td> : null}
       <td role="cell" data-column="usage-count">

@@ -218,9 +218,8 @@ export interface ArmyAnalytics {
     unknownExcludedAttacks?: number;
     /** Armies only: the type's variants by hero equipment, its Other last. */
     variants?: ArmyAnalytics["rows"];
-    /** A variant: its id (0 for its type's Other) and its "usually with" spells. */
+    /** A variant: its id (0 for its type's Other). */
     variantId?: number;
-    usuallyWith?: string[];
   }>;
 }
 
