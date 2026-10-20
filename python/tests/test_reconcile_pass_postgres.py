@@ -6,6 +6,7 @@ queued, and the Daily board rebuilt."""
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta
 
@@ -428,3 +429,50 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
         " queued; 1 still wrong after their recalculation; 5 open, 0 of them with a"
         " failed recalculation.")
     assert repaired == (True, True)
+
+
+def test_a_pass_whose_last_step_queues_a_recalculation_finishes(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """Days 1 and 2 of the Season, saved by the real worker, and CLEAN's
+    Day 2 lost from its page. The pass's last step, Day 2's, finds the
+    missing day and queues its recalculation. Until 20 October 2026 that
+    step, having saved what it found, raised TypeError writing its log
+    line, and the worker process exited: the dev stack's worker never
+    started again, so every lookup stayed "checking". The pass must finish,
+    its line counting the 1 recalculation, which gives the page its Day 2
+    back."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, CLEAN, LATE)
+        for player in story.players.values():
+            player.battles = _even(day(1)) + _even(day(2))
+        story.reset(day(1), dict.fromkeys(story.players, (5000, SEASON)))
+        for number in (2, 3):
+            story.reads(day(number) - timedelta(minutes=10), dict.fromkeys(story.players, 5000))
+            story.reset(day(number), dict.fromkeys(story.players, (5000, SEASON)))
+            story.reads(day(number) + timedelta(minutes=20), dict.fromkeys(story.players, 5000))
+            story.run_worker()
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_start = %s AND player_id ="
+                " (SELECT id FROM players WHERE normalized_tag = %s)", (day(2), CLEAN))
+        capsys.readouterr()
+        steps = _run_pass(story, monkeypatch, day(3) + timedelta(hours=18))
+        lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+                 if line.startswith('{"event": "reconcile_pass"')]
+        found, queued = _open(connection_info), _queued(connection_info)
+        story.run_worker()
+        with psycopg.connect(connection_info) as connection:
+            restored = connection.execute(
+                "SELECT count(*) FROM api_player_daily_logs AS log"
+                " JOIN players AS player ON player.id = log.player_id"
+                " WHERE player.normalized_tag = %s AND log.ranked_day_start = %s",
+                (CLEAN, day(2))).fetchone()[0]
+
+    assert steps == 2
+    assert [(line["status"], line["day"], line["queued"]) for line in lines] == [
+        ("finished", f"{day(2):%Y-%m-%d}", 1)]
+    # Its Daily board row has no day to agree with: listed only.
+    assert found == {("missing_day", CLEAN, 2), ("board", CLEAN, 2)}
+    assert queued == [(CLEAN, "reconcile_pass", 25, "pending")]
+    assert restored == 1

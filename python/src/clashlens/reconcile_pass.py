@@ -514,20 +514,22 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                         connection, newest.official_season_id)
                     counts = record(connection, day, judgment, read_at=read_at,
                                     fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
+                    # The step's recalculations count in the pass's total,
+                    # the one ``queued`` its log line shows.
+                    total = queued + counts.pop("queued", 0)
                     done = {**counts, "days": len(players), "repairing": repairing,
                             **Counter(f"seen:{finding.check}" for finding in judgment[0])}
                     if len(players) == BATCH_DAYS:
-                        _queue_step(connection, slot, day, players[-1], queued + counts["queued"])
+                        _queue_step(connection, slot, day, players[-1], total)
                     elif day < newest.start:
-                        _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0,
-                                    queued + counts["queued"])
+                        _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0, total)
                     else:
                         done["finished"] = True
                     database._finish_claim(connection, claim, job, state="complete",
                                            outcome="processed")
                     if _quiet(_now(), SAVES_STOP):
                         raise _Stopped
-                detail, queued = done, queued + counts["queued"]
+                detail, queued = done, total
             except _Stopped:
                 # Nothing it read is kept, and nothing more is queued.
                 stopped = True
