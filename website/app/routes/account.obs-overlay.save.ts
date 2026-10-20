@@ -6,7 +6,7 @@ import type { Route } from "./+types/account.obs-overlay.save";
 const NO_STORE = { "Cache-Control": "no-store" };
 
 /**
- * POST /account/obs-overlay/save — the OBS overlay page's saves, without
+ * POST /account/obs-overlay/save — the Stream overlay page's saves, without
  * reloading the page: `intent=save` with `tag` and `settings` (JSON), or
  * `intent=new-link` with the link it `replaces`.
  */
