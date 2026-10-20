@@ -92,20 +92,22 @@ async function ownerTools(
     const identity = await actions.readLoginIdentity(request, getWebsiteConfig());
     if (identity === null) return null;
     const { createPythonClient } = await import("../services/python.server");
-    const summary = await createPythonClient(identity).getAccountSummary();
-    if (summary.username !== username) return null;
+    const account = await createPythonClient(identity).getAccount();
+    if (account.username !== username) return null;
+    const connected = account.providers.includes("discord");
     const { getAttackAlerts } = await import("../services/discord-alerts.server");
     const { getOverlay } = await import("../services/obs-overlay.server");
     const [alerts, overlay] = await Promise.all([
-      getAttackAlerts(identity).catch(() => null),
+      connected ? getAttackAlerts(identity).catch(() => null) : null,
       getOverlay(identity).catch(() => null),
     ]);
-    const on = alerts?.players.filter((player) => player.on || player.summaryOn).length;
+    const on = alerts?.players.filter((player) => player.on).length;
     const total = alerts?.players.length ?? 0;
     const shown = overlay?.players.find((player) => player.tag === overlay.tag);
     return {
-      alerts:
-        alerts === null
+      alerts: !connected
+        ? "Discord not connected"
+        : alerts === null
           ? null
           : !on
             ? "Off"

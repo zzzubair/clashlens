@@ -118,7 +118,7 @@ const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" }
 
 const client = {
   getPublicUser: vi.fn(),
-  getAccountSummary: vi.fn(),
+  getAccount: vi.fn(),
 };
 
 const alertsFor = (...switches: Array<[boolean, boolean]>) => ({
@@ -136,11 +136,11 @@ beforeEach(() => {
   mocks.requireLogin.mockResolvedValue(IDENTITY);
   mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
   client.getPublicUser.mockResolvedValue(data.user);
-  client.getAccountSummary.mockResolvedValue({
+  client.getAccount.mockResolvedValue({
     username: "nova88",
     displayName: "Nova",
-    verifiedPlayers: [],
-    defaultPlayer: "#8PY",
+    preferences: {},
+    providers: ["google", "discord"],
   });
   mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, false], [false, false]));
   mocks.getOverlay.mockResolvedValue({
@@ -270,18 +270,34 @@ it("reads the owner's tool statuses only for the profile's signed-in owner", asy
   expect(own.owner).toEqual({ alerts: "On for 1 of 2 players", overlay: "Showing Nova" });
   expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
 
-  mocks.getAttackAlerts.mockResolvedValue(alertsFor([false, true]));
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, true]));
   mocks.getOverlay.mockResolvedValue({ tag: null, players: [] });
   expect((await loadProfile()).owner).toEqual({ alerts: "On", overlay: "Not set up" });
-  mocks.getAttackAlerts.mockResolvedValue(alertsFor([false, false]));
+  // Only attack alerts count; a daily summary alone is not an attack alert.
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([false, true]));
   mocks.getOverlay.mockRejectedValue(new PythonApiError(503, { error: "x" }));
   expect((await loadProfile()).owner).toEqual({ alerts: "Off", overlay: null });
 
-  client.getAccountSummary.mockResolvedValue({
+  // Saved switches send nothing once Discord is disconnected.
+  mocks.getAttackAlerts.mockClear();
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, true]));
+  client.getAccount.mockResolvedValue({
+    username: "nova88",
+    displayName: "Nova",
+    preferences: {},
+    providers: ["google"],
+  });
+  expect((await loadProfile()).owner).toEqual({
+    alerts: "Discord not connected",
+    overlay: null,
+  });
+  expect(mocks.getAttackAlerts).not.toHaveBeenCalled();
+
+  client.getAccount.mockResolvedValue({
     username: "other",
     displayName: "Other",
-    verifiedPlayers: [],
-    defaultPlayer: "#9PY",
+    preferences: {},
+    providers: ["google", "discord"],
   });
   expect((await loadProfile()).owner).toBeNull();
 
@@ -290,7 +306,7 @@ it("reads the owner's tool statuses only for the profile's signed-in owner", asy
 
   // A failed owner read still shows the public profile, without the statuses.
   mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
-  client.getAccountSummary.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  client.getAccount.mockRejectedValue(new PythonApiError(503, { error: "x" }));
   const failed = await loadProfile();
   expect(failed.user).toEqual(data.user);
   expect(failed.owner).toBeNull();

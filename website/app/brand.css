@@ -288,8 +288,7 @@
   box-shadow: none;
 }
 /* Small items in a list are cards too, with the lighter button-sized drop. */
-:root
-  :is(.search-result, .player-link-list li, .group-name-list li, .player-action-list li) {
+:root :is(.search-result, .group-name-list li, .player-action-list li) {
   border: 2px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
   box-shadow: var(--cl-raise);

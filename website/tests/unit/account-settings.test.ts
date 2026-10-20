@@ -388,6 +388,17 @@ describe("Unlink player", () => {
     );
     expect(defaultPage).toContain("Unlink #8PY?");
     expect(defaultPage).toContain("/stats uses your next player instead.");
+    // An only player is the default too, but no player is left to take over.
+    client.getAccountSummary.mockResolvedValue({
+      ...SUMMARY,
+      verifiedPlayers: [{ tag: "#8PY", name: null }],
+    });
+    const onlyPage = await render(
+      unlinkPage,
+      new Request(`${ORIGIN}/account/players/%238PY/unlink`),
+    );
+    expect(onlyPage).toContain("Unlink #8PY?");
+    expect(onlyPage).not.toContain("/stats uses your next player");
     expect(mocks.unlinkPlayer).not.toHaveBeenCalled();
   });
 

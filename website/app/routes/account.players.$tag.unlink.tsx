@@ -19,7 +19,8 @@ export function meta() {
 
 export interface UnlinkPlayerLoaderData {
   player: VerifiedPlayer;
-  isDefault: boolean;
+  /** It is the default player and another linked player takes over. */
+  defaultMoves: boolean;
   idempotencyKey: string;
 }
 
@@ -47,7 +48,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   return data<UnlinkPlayerLoaderData>(
     {
       player,
-      isDefault: summary.defaultPlayer === player.tag,
+      defaultMoves:
+        summary.defaultPlayer === player.tag && summary.verifiedPlayers.length > 1,
       idempotencyKey: freshIdempotencyKey(),
     },
     { headers: NO_STORE },
@@ -89,7 +91,7 @@ export function headers() {
 }
 
 export default function UnlinkPlayerRoute() {
-  const { player, isDefault, idempotencyKey } = useLoaderData<typeof loader>();
+  const { player, defaultMoves, idempotencyKey } = useLoaderData<typeof loader>();
   const failed = useActionData<typeof action>();
   const name = player.name ?? player.tag;
   return (
@@ -115,7 +117,7 @@ export default function UnlinkPlayerRoute() {
             {name} leaves the crews it&apos;s in. If it was your only player in a crew you
             don&apos;t own, you leave that crew too.
           </li>
-          {isDefault ? (
+          {defaultMoves ? (
             <li>The Discord bot&apos;s /stats uses your next player instead.</li>
           ) : null}
         </ul>

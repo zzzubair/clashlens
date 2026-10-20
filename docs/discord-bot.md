@@ -16,8 +16,8 @@ Discord" (or, for an existing account, "Connect Discord"). Signing up,
 connecting Discord, linking accounts, choosing the default account and
 turning alerts on or off happen on the website, never
 in the bot. The default account is the one marked Default on
-the Clasher's account page; until they choose, it is their first linked
-account. Every reply is a normal message anyone can forward;
+the Clasher's Settings page (`/account/settings`); until they choose, it is
+their first linked account. Every reply is a normal message anyone can forward;
 only the not-connected pointer and plain errors are private to the person.
 
 ## How it runs
