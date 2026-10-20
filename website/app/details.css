@@ -819,7 +819,8 @@
 }
 .analytics-page .analytics-share-bar {
   display: block;
-  width: 4.5rem;
+  width: 100%;
+  max-width: 4.5rem;
   height: 0.25rem;
   margin: 0.3rem 0 0 auto;
   overflow: hidden;
