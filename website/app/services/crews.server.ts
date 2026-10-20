@@ -499,14 +499,15 @@ export async function crewFormAction(
 
 /**
  * The crew a sign-in, sign-up or linking page is on the way to, when the
- * clasher came from its invite link; null otherwise or when it can't be read.
+ * clasher came from its invite link; null otherwise, for a link that has
+ * ended, or when it can't be read.
  */
 export async function inviteCrewName(returnPath: string | null): Promise<string | null> {
   const code = /^\/crews\/join\/([^/]+)$/.exec(returnPath ?? "")?.[1];
   if (code === undefined || !INVITE_CODE.test(code) || !isCrewsEnabled()) return null;
   try {
     const invite = await getInvite(undefined, code);
-    return invite.state === "invalid" ? null : invite.name;
+    return invite.state === "invalid" || invite.state === "ended" ? null : invite.name;
   } catch {
     return null;
   }

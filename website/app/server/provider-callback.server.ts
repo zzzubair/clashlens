@@ -173,17 +173,25 @@ export async function completeProviderCallback(
     try {
       await python.createPythonClient(validated).getAccount();
     } catch (error) {
-      // Sign-up makes the account; a sign-in asks first, so a Clasher who
-      // pressed the other provider doesn't make a second account by mistake.
+      // Sign-up makes the account; a sign-in asks first, signed out, so a
+      // Clasher who pressed the other provider doesn't make a second account
+      // by mistake.
       if (isAccountNotFoundError(error)) {
-        return {
-          kind: "redirect",
-          location:
-            transaction.intent === "signup"
-              ? accountSetupPath(transaction.returnPath, config.publicOrigin)
-              : noAccountPath(provider, transaction.returnPath, config.publicOrigin),
-          setCookies: [clearTransactionCookie, loginCookie],
-        };
+        return transaction.intent === "signup"
+          ? {
+              kind: "redirect",
+              location: accountSetupPath(transaction.returnPath, config.publicOrigin),
+              setCookies: [clearTransactionCookie, loginCookie],
+            }
+          : {
+              kind: "redirect",
+              location: noAccountPath(
+                provider,
+                transaction.returnPath,
+                config.publicOrigin,
+              ),
+              setCookies: [clearTransactionCookie],
+            };
       }
       return unavailable(clearTransactionCookie);
     }

@@ -15,8 +15,8 @@ export interface SignInPageData {
   returnPath: string;
   /** The crew whose invite link the Clasher came from, if any. */
   crewName: string | null;
-  /** Signed in with Google or Discord, but no Clash Lens account uses it yet. */
-  noAccount: boolean;
+  /** On /login, the provider a sign-in just found no Clash Lens account for. */
+  noAccount: "google" | "discord" | null;
 }
 
 /**
@@ -37,21 +37,19 @@ export async function loadSignInPage(
       loginAvailable: false,
       returnPath: DEFAULT_RETURN_PATH,
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     };
   }
+  const query = new URL(request.url).searchParams;
   const returnPath =
-    safeReturnPath(
-      new URL(request.url).searchParams.get("returnPath"),
-      config.publicOrigin,
-    ) ?? DEFAULT_RETURN_PATH;
+    safeReturnPath(query.get("returnPath"), config.publicOrigin) ?? DEFAULT_RETURN_PATH;
+  const none = page === "login" && config.loginEnabled ? query.get("none") : null;
   // A login the API cannot check shows the page rather than redirecting.
   const identity = config.loginEnabled
     ? await readLoginIdentity(request, config, NAVIGATION_ACCOUNT_TIMEOUT_MS).catch(
         () => null,
       )
     : null;
-  let noAccount = false;
   if (identity !== null) {
     const { createPythonClient } = await import("../services/python.server");
     try {
@@ -67,7 +65,6 @@ export async function loadSignInPage(
       if (page === "signup") {
         throw redirect(accountSetupPath(returnPath, config.publicOrigin));
       }
-      noAccount = true;
     }
   }
   const { inviteCrewName } = await import("../services/crews.server");
@@ -75,6 +72,6 @@ export async function loadSignInPage(
     loginAvailable: config.loginEnabled,
     returnPath,
     crewName: await inviteCrewName(returnPath),
-    noAccount,
+    noAccount: none === "google" || none === "discord" ? none : null,
   };
 }

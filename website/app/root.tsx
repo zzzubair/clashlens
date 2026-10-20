@@ -324,7 +324,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const location = useLocation();
   const data = useRouteLoaderData<typeof loader>("root");
   const needsAccount = needsAccountOf(error);
-  useErrorEvent(isNotFound);
+  useErrorEvent(needsAccount ? null : isNotFound ? "not_found" : "error");
   if (needsAccount) {
     return (
       <>

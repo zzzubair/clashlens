@@ -230,7 +230,7 @@ describe("login loader", () => {
       loginAvailable: false,
       returnPath: "/account",
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     });
   });
 
@@ -245,7 +245,7 @@ describe("login loader", () => {
       loginAvailable: false,
       returnPath: "/account",
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     });
   });
 
@@ -257,7 +257,7 @@ describe("login loader", () => {
       loginAvailable: true,
       returnPath: "/account/profile",
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     });
   });
 
@@ -269,7 +269,7 @@ describe("login loader", () => {
       loginAvailable: true,
       returnPath: "/account/groups",
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     });
   });
 
@@ -305,7 +305,23 @@ describe("login loader", () => {
     );
   });
 
-  it("keeps a sign-in no account uses on the sign-in page, and sends it on from sign-up", async () => {
+  it("answers No account found on the sign-in page from ?none=, with no login", async () => {
+    const page = (path: string) =>
+      (path.startsWith("/login") ? loginLoader : signupLoader)({
+        request: new Request(`${ORIGIN}${path}`),
+      } as never);
+    expect(await page("/login?none=google&returnPath=%2Fcrews")).toEqual({
+      loginAvailable: true,
+      returnPath: "/crews",
+      crewName: null,
+      noAccount: "google",
+    });
+    expect((await page("/login?none=discord")).noAccount).toBe("discord");
+    expect((await page("/login?none=github")).noAccount).toBeNull();
+    expect((await page("/signup?none=google")).noAccount).toBeNull();
+  });
+
+  it("keeps a login no account uses on the sign-in page, and sends it on from sign-up", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
     mocks.createPythonClient.mockReturnValue({
@@ -314,14 +330,14 @@ describe("login loader", () => {
       }),
     } as never);
     const request = (page: string) =>
-      new Request(`${ORIGIN}/${page}?none=google&returnPath=%2Fcrews`, {
+      new Request(`${ORIGIN}/${page}?returnPath=%2Fcrews`, {
         headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
       });
     expect(await loginLoader({ request: request("login") } as never)).toEqual({
       loginAvailable: true,
       returnPath: "/crews",
       crewName: null,
-      noAccount: true,
+      noAccount: null,
     });
     await expect(signupLoader({ request: request("signup") } as never)).rejects.toSatisfy(
       (thrown: unknown) => {
@@ -347,7 +363,7 @@ describe("login loader", () => {
       loginAvailable: true,
       returnPath: "/account",
       crewName: null,
-      noAccount: false,
+      noAccount: null,
     });
   });
 
@@ -961,7 +977,7 @@ describe("auth.google.callback loader", () => {
     expect(login!.issuedAtMs).toBeGreaterThanOrEqual(validatedAtMs);
   });
 
-  it("answers a sign-in no account uses (403 and defensive 404) with No account found, keeping the login cookie", async () => {
+  it("answers a sign-in no account uses (403 and defensive 404) with No account found, saving no login", async () => {
     for (const status of [403, 404]) {
       mocks.createPythonClient.mockReturnValue({
         getAccount: vi.fn(async () => {
@@ -978,20 +994,9 @@ describe("auth.google.callback loader", () => {
       expect(isResponse(response)).toBe(true);
       expect((response as Response).status).toBe(302);
       expect((response as Response).headers.get("Location")).toBe("/login?none=google");
-      const setCookies = (response as Response).headers.getSetCookie();
-      expect(setCookies).toHaveLength(2);
-      expect(setCookies[1]).toContain(`${LOGIN_COOKIE_NAME}=`);
-      expect(
-        parseLoginCookieValue(
-          setCookies[1].slice(setCookies[1].indexOf("=") + 1, setCookies[1].indexOf(";")),
-          config.loginSecret,
-          now(),
-        ),
-      ).toEqual({
-        ...IDENTITY,
-        issuedAtMs: expect.any(Number),
-        signedInAtMs: expect.any(Number),
-      });
+      expect((response as Response).headers.getSetCookie()).toEqual([
+        `${OAUTH_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure`,
+      ]);
     }
   });
 
@@ -1030,18 +1035,24 @@ describe("auth.google.callback loader", () => {
           throw new PythonApiError(403, { error: "account_not_found" });
         }),
       } as never);
+      // Signing up keeps the login for choosing a username.
+      const login = expect.stringContaining(`${LOGIN_COOKIE_NAME}=`);
+      const cleared = expect.stringContaining(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
       expect(await signIn(groupPath, "signup")).toMatchObject({
         location: `/account/setup?returnPath=${encodeURIComponent(groupPath)}`,
+        setCookies: [cleared, login],
       });
       expect(await signIn("/account", "signup")).toMatchObject({
         location: "/account/setup",
       });
-      // Signing in asks before making an account.
+      // Signing in asks before making an account, and keeps no login.
       expect(await signIn(groupPath)).toMatchObject({
         location: `/login?none=${provider}&returnPath=${encodeURIComponent(groupPath)}`,
+        setCookies: [cleared],
       });
       expect(await signIn("/account")).toMatchObject({
         location: `/login?none=${provider}`,
+        setCookies: [cleared],
       });
     },
   );

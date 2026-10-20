@@ -114,8 +114,14 @@ const ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["privacy", "/privacy"],
 ];
 
-/** The page's label and its address with every ID replaced by a placeholder. */
-export function routeOf(pathname: string): { route: string; path: string } {
+/**
+ * The page's label and its address with every ID replaced by a placeholder.
+ * `/` is "dashboard" while it shows the signed-in Dashboard, else "home".
+ */
+export function routeOf(
+  pathname: string,
+  dashboard = false,
+): { route: string; path: string } {
   const parts = pathname.split("/").filter(Boolean);
   for (const [route, template] of ROUTES) {
     const expected = template.split("/").filter(Boolean);
@@ -123,7 +129,10 @@ export function routeOf(pathname: string): { route: string; path: string } {
       expected.length === parts.length &&
       expected.every((part, index) => part.startsWith(":") || part === parts[index])
     ) {
-      return { route, path: template };
+      return {
+        route: route === "home" && dashboard ? "dashboard" : route,
+        path: template,
+      };
     }
   }
   return { route: "other", path: "/other" };
@@ -414,6 +423,8 @@ let reopened = false;
 let watchingTabs = false;
 // Rises each time acceptance is withdrawn, here or in another tab.
 let withdrawals = 0;
+// Whether `/` shows this browser the signed-in Dashboard, not the front page.
+let dashboardShown = false;
 const choiceListeners = new Set<() => void>();
 
 /** The visitor's choice in this browser, or null before they make one. */
@@ -521,6 +532,11 @@ function send(posthog: PostHog, event: string, properties: Properties): void {
   if (applyChoice(posthog)) posthog.capture(event, properties, { send_instantly: true });
 }
 
+/** Says whether `/` shows the signed-in Dashboard, which names it in events. */
+export function setDashboardShown(shown: boolean): void {
+  dashboardShown = shown;
+}
+
 /** Loads PostHog; called only once the visitor has accepted. */
 export function startAnalytics(settings: AnalyticsSettings): void {
   if (loading) return;
@@ -574,7 +590,7 @@ export function track(
 ): void {
   const allowed = EVENTS[event];
   if (!allowed || analyticsChoice() !== "accepted") return;
-  const { route, path } = routeOf(pathname);
+  const { route, path } = routeOf(pathname, dashboardShown);
   // Kept with the event, so one sent after PostHog loads still names its page.
   const properties: Properties = {
     route,

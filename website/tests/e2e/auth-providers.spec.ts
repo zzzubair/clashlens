@@ -59,21 +59,32 @@ test("loopback Google and Discord sign-in choices are available", async ({ page 
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test("Discord completes a local sign-in without cloud credentials", async ({ page }) => {
+test("Discord completes a local sign-in without cloud credentials", async ({
+  page,
+  context,
+}) => {
   await page.goto("/login");
   await page.getByRole("link", { name: "Sign in with Discord" }).click();
 
   await expect(page).toHaveURL(/\/(?:login\?none=discord|users\/[a-z][a-z0-9_]+)$/);
   if (new URL(page.url()).pathname === "/login") {
-    // A sign-in no account uses yet asks before making one.
+    // A sign-in no account uses yet asks before making one, and stays signed
+    // out, so pages that need an account still explain why.
     await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Try Google instead" })).toBeVisible();
     await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+    expect(await loginCookie(context)).toBeUndefined();
+    await page.goto("/account/watchlists");
+    await expect(
+      page.getByText("You need a Clash Lens account to keep them."),
+    ).toBeVisible();
+    await page.goBack();
     await page.getByRole("link", { name: "Create account with Discord" }).click();
     await expect(page).toHaveURL(/\/account\/setup$/);
     await expect(
       page.getByRole("heading", { name: "Choose your username" }),
     ).toBeVisible();
+    expect(await loginCookie(context)).toBeDefined();
   } else {
     await expect(
       page.getByRole("heading", { name: "Clash players", exact: true }),

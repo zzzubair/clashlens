@@ -70,6 +70,8 @@ import {
   loader as verifyLoader,
 } from "../../app/routes/account.verify-player";
 import { loader as setupLoader } from "../../app/routes/account.setup";
+import { loader as loginLoader } from "../../app/routes/login";
+import { loader as signupLoader } from "../../app/routes/signup";
 import { clientAddressContext } from "../../app/server/client-address.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
@@ -727,7 +729,7 @@ describe("join by invite", () => {
     expect(html).not.toContain("Join with");
   });
 
-  it("joins with the picked accounts and opens the crew", async () => {
+  it("joins with the picked accounts and opens the crew, saying so", async () => {
     mocks.requestJson.mockResolvedValue({ crew_id: CREW_ID });
     const response = await thrown(() =>
       joinAction(
@@ -813,6 +815,42 @@ describe("linking an account from an invite", () => {
       "Night Owls",
     ]);
     expect(mocks.requestJson.mock.calls[0]![0]).toBe(`/v1/crew-invites/${CODE}`);
+  });
+
+  it("names no crew to join on the way to an invite that has ended", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(null);
+    const back = encodeURIComponent(`/crews/join/${CODE}`);
+    const crewNames = async () =>
+      (
+        await Promise.all([
+          loginLoader({
+            request: new Request(`${ORIGIN}/login?returnPath=${back}`),
+          } as never),
+          signupLoader({
+            request: new Request(`${ORIGIN}/signup?returnPath=${back}`),
+          } as never),
+          setupLoader({
+            request: new Request(`${ORIGIN}/account/setup?returnPath=${back}`),
+          } as never),
+          verifyLoader({
+            request: new Request(
+              `${ORIGIN}/account/verify-player?return=/crews/join/${CODE}`,
+            ),
+          } as never),
+        ])
+      ).map(({ crewName }) => crewName);
+    mocks.requestJson.mockResolvedValue({
+      kind: "crew-invite",
+      state: "ended",
+      crew_id: CREW_ID,
+      name: "Night Owls",
+      in_crew: false,
+      crew_count: 0,
+      accounts: [],
+    });
+    expect(await crewNames()).toEqual([null, null, null, null]);
+    mocks.requestJson.mockResolvedValue(invitePayload({ accounts: [] }));
+    expect(await crewNames()).toEqual(Array(4).fill("Night Owls"));
   });
 
   it("goes on to any page on this website once the account is linked", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { Link, useLocation, useMatches, useRouteLoaderData } from "react-router";
 
 import type { PlayerLookup, PlayerPage } from "../lib/contracts";
@@ -17,6 +17,7 @@ import {
   selectionEvents,
   selectionOf,
   setAnalyticsChoice,
+  setDashboardShown,
   startAnalytics,
   track,
   type Selection,
@@ -109,6 +110,10 @@ export function Analytics() {
     analyticsWithdrawals,
     () => 0,
   );
+  const dashboard = Boolean(root?.loggedIn && root?.dashboardEnabled);
+
+  // Before any page's events, which all go out from later effects.
+  useLayoutEffect(() => setDashboardShown(dashboard), [dashboard]);
 
   useEffect(() => {
     counted = { path: "", keys: new Set() };
@@ -199,12 +204,12 @@ export function usePlayerLookupEvent(
   }, [accepted, pathname, state]);
 }
 
-/** Counts an error page once it shows. */
-export function useErrorEvent(notFound: boolean) {
+/** Counts an error page once it shows; a page that isn't one, null, counts nothing. */
+export function useErrorEvent(kind: "not_found" | "error" | null) {
   const accepted = useAnalyticsChoice() === "accepted";
   useEffect(() => {
-    if (accepted) track("ui_error", { kind: notFound ? "not_found" : "error" });
-  }, [accepted, notFound]);
+    if (accepted && kind !== null) track("ui_error", { kind });
+  }, [accepted, kind]);
 }
 
 /** The Accept or Decline question; hidden while visitor counting is not configured. */

@@ -1,4 +1,4 @@
-import { Link, useLoaderData, useSearchParams } from "react-router";
+import { Link, useLoaderData } from "react-router";
 
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/login";
@@ -26,21 +26,20 @@ const PROVIDER_NAMES = { google: "Google", discord: "Discord" } as const;
 
 export default function LoginRoute() {
   const data = useLoaderData<typeof loader>();
-  const none = useSearchParams()[0].get("none");
   const back = encodeURIComponent(data.returnPath);
-  if (data.noAccount && (none === "google" || none === "discord")) {
+  const none = data.noAccount;
+  if (none !== null) {
     const other = none === "google" ? "discord" : "google";
-    const setup =
-      data.returnPath === "/account"
-        ? "/account/setup"
-        : `/account/setup?returnPath=${back}`;
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
         <h1>No account found</h1>
         <section className="form-panel sign-in-panel" aria-label="Create an account">
           <p>No Clash Lens account uses this {PROVIDER_NAMES[none]} sign-in.</p>
           <p className="button-row">
-            <Link className="button button-primary" to={setup}>
+            <Link
+              className="button button-primary"
+              to={`/auth/${none}?returnPath=${back}&signup=1`}
+            >
               Create account with {PROVIDER_NAMES[none]}
             </Link>
             <Link

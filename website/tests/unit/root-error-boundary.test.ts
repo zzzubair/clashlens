@@ -7,9 +7,20 @@ import {
   StaticRouterProvider,
   useRouteError,
 } from "react-router";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+
+const errorEvents = vi.hoisted(() => vi.fn());
+
+vi.mock("../../app/components/Analytics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/components/Analytics")>()),
+  useErrorEvent: errorEvents,
+}));
 
 import { ErrorBoundary } from "../../app/root";
+
+beforeEach(() => {
+  errorEvents.mockClear();
+});
 
 async function renderFailure(path: string, status: number, payload: unknown = null) {
   const handler = createStaticHandler([
@@ -46,6 +57,7 @@ it("offers to reload the same page when a signed-in page fails to load", async (
   expect(html).toContain('href="/account/saved-players?tab=list">Try again</a>');
   expect(html).toContain('href="/">Go to Clash Lens</a>');
   expect(html).not.toContain("Your saved players");
+  expect(errorEvents.mock.calls).toEqual([["error"]]);
 });
 
 it("does not offer a retry for a page that does not exist", async () => {
@@ -53,6 +65,7 @@ it("does not offer a retry for a page that does not exist", async () => {
   expect(html).toContain("Page not found");
   expect(html).not.toContain("Try again");
   expect(html).toContain('href="/">Go to Clash Lens</a>');
+  expect(errorEvents.mock.calls).toEqual([["not_found"]]);
 });
 
 it("explains in place why a signed-out page needs an account", async () => {
@@ -65,6 +78,8 @@ it("explains in place why a signed-out page needs an account", async () => {
   expect(html).toContain('href="/signup?returnPath=%2Fcrews"');
   expect(html).toContain('href="/login?returnPath=%2Fcrews"');
   expect(html).not.toContain("The page could not be loaded");
+  // The box is the page working as meant, so analytics counts no error.
+  expect(errorEvents.mock.calls).toEqual([[null]]);
 
   const account = await renderFailure("/account/profile", 401, {
     needsAccount: true,

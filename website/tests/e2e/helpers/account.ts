@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 
+import { LOGIN_COOKIE_NAME } from "../../../app/server/auth-cookies.server";
+
 /** Collect browser failures so a page cannot appear healthy while JavaScript failed. */
 export function trackPageErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -39,7 +41,8 @@ export function expectNoPortRequests(
 
 /**
  * Sign in with the loopback provider. A new identity has no account yet, so
- * it answers "No account found" and goes on to choosing a username.
+ * it answers "No account found", still signed out, and Create account signs
+ * up with the same provider and goes on to choosing a username.
  */
 async function signInWith(page: Page, provider: "Google" | "Discord"): Promise<void> {
   await page.goto("/login");
@@ -47,6 +50,8 @@ async function signInWith(page: Page, provider: "Google" | "Discord"): Promise<v
   await expect(page).toHaveURL(/\/(?:login\?none=|users\/[a-z][a-z0-9_]+$)/);
   if (new URL(page.url()).pathname === "/login") {
     await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
+    const cookies = await page.context().cookies();
+    expect(cookies.map(({ name }) => name)).not.toContain(LOGIN_COOKIE_NAME);
     await page.getByRole("link", { name: `Create account with ${provider}` }).click();
     await expect(page).toHaveURL(/\/account\/setup$/);
   }

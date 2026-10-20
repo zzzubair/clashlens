@@ -41,7 +41,8 @@ export const handle: BackHandle = {
 
 /**
  * GET /crews/:crewId — one crew's boards and accounts, for anyone. Only its
- * members see Invite, Members and Edit.
+ * members see Invite, Members and Edit; `?saved=joined`, after an invite, tells a
+ * member they joined.
  */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const period = crewPeriod(new URL(request.url).searchParams.get("period"));

@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const posthog = vi.hoisted(() => ({
+  init: vi.fn(),
+  capture: vi.fn(),
+  opt_in_capturing: vi.fn(),
+  opt_out_capturing: vi.fn(),
+  reset: vi.fn(),
+}));
+
+vi.mock("posthog-js/dist/module.slim.no-external", () => ({ default: posthog }));
+
 import {
   loadedPageEvents,
   lookupOutcome,
@@ -9,6 +19,9 @@ import {
   searchInput,
   selectionEvents,
   selectionOf,
+  setDashboardShown,
+  startAnalytics,
+  track,
 } from "../../app/lib/analytics";
 import type { PlayerLookup, PlayerPage, RefreshStatus } from "../../app/lib/contracts";
 import { newestPlayer, playerLookupView } from "../../app/lib/player-lookup-text";
@@ -45,7 +58,42 @@ describe("what leaves the browser", () => {
     expect(routeOf("/crews/join/SECRETCODE").path).toBe("/crews/join/:code");
     expect(routeOf("/crews/new").route).toBe("crew_new");
     expect(routeOf("/")).toEqual({ route: "home", path: "/" });
+    expect(routeOf("/", true)).toEqual({ route: "dashboard", path: "/" });
+    expect(routeOf("/players/%232PP", true).route).toBe("player");
     expect(routeOf("/typed/by/someone")).toEqual({ route: "other", path: "/other" });
+  });
+
+  it("names / as the Dashboard while it shows the signed-in Dashboard, else home", async () => {
+    vi.stubGlobal("window", {
+      localStorage: { getItem: () => "accepted" },
+      location: { origin: "https://clashlens.app", pathname: "/" },
+    });
+    try {
+      startAnalytics({ token: TOKEN });
+      await vi.waitFor(() => expect(posthog.init).toHaveBeenCalled());
+      track("$pageview", { signed_in: false });
+      setDashboardShown(true);
+      track("$pageview", { signed_in: true });
+      track("ui_error", { kind: "error" });
+      track("$pageview", { signed_in: true }, "/players/%232PP");
+      setDashboardShown(false);
+      track("$pageview", { signed_in: false });
+      expect(
+        posthog.capture.mock.calls.map(([event, properties]) => [
+          event,
+          properties.route,
+          properties.$pathname,
+        ]),
+      ).toEqual([
+        ["$pageview", "home", "/"],
+        ["$pageview", "dashboard", "/"],
+        ["ui_error", "dashboard", "/"],
+        ["$pageview", "player", "/players/:tag"],
+        ["$pageview", "home", "/"],
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("sends only listed events with their labels, never browser or device details", () => {
