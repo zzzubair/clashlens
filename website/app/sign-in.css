@@ -8,6 +8,10 @@
   margin: 0;
 }
 
+.form-panel + .account-buttons {
+  margin-top: 1rem;
+}
+
 .account-buttons > span {
   color: var(--cl-muted);
   font-size: 0.9rem;

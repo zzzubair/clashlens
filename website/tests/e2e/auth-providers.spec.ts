@@ -92,6 +92,41 @@ test("Discord completes a local sign-in without cloud credentials", async ({
   }
 });
 
+test("a sign-up quit at Choose your username can make way for a different sign-in", async ({
+  page,
+  context,
+}) => {
+  // A Google sign-in that never gets an account.
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", "fixture-google-subject-3401");
+    await route.continue({ url: url.href });
+  });
+  const signUp = "/signup?returnPath=%2Faccount%2Fwatchlists";
+  const setup = /\/account\/setup\?returnPath=%2Faccount%2Fwatchlists$/;
+  await page.goto(signUp);
+  await page.getByRole("link", { name: "Sign up with Google" }).click();
+  await expect(page).toHaveURL(setup);
+  await expect(page.getByRole("heading", { name: "Choose your username" })).toBeVisible();
+
+  // They leave. The next Create account on this browser comes back to their setup.
+  await page.goto("/");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(signUp);
+  await expect(page).toHaveURL(setup);
+  const notYou = page.getByRole("button", { name: "Not you? Use a different sign-in" });
+  expect((await notYou.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await notYou.click();
+
+  await expect(page).toHaveURL(signUp);
+  await expect(
+    page.getByRole("heading", { name: "Create your Clash Lens account" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Discord" })).toBeVisible();
+  expect(await loginCookie(context)).toBeUndefined();
+});
+
 test("an account can link, use, and unlink a second sign-in provider", async ({
   page,
 }) => {

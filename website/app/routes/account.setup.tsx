@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, Form, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
@@ -31,6 +31,7 @@ export interface SetupActionData {
 /**
  * GET /account/setup — first-time account creation form. Requires a valid
  * browser login; the account is created only through the private Python API.
+ * "Not you?" logs that login out and starts the sign-up again.
  */
 export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
@@ -280,6 +281,14 @@ export default function AccountSetupRoute() {
           </button>
         </form>
       </section>
+
+      <Form method="post" action="/logout" className="account-buttons">
+        <input type="hidden" name="idempotencyKey" value={loaderData.idempotencyKey} />
+        <input type="hidden" name="signUp" value={loaderData.returnPath} />
+        <button type="submit" className="button button-secondary">
+          Not you? Use a different sign-in
+        </button>
+      </Form>
     </main>
   );
 }

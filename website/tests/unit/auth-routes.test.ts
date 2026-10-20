@@ -500,6 +500,36 @@ describe("logout route", () => {
     ).resolves.toEqual(IDENTITY);
   });
 
+  it("goes on to sign up again, keeping where it was heading, for Not you? on account setup", async () => {
+    const config = testConfig();
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
+    const notYou = async (signUp: string) =>
+      (await logoutAction({
+        request: new Request(`${ORIGIN}/logout`, {
+          method: "POST",
+          headers: { Origin: ORIGIN, cookie: `${LOGIN_COOKIE_NAME}=${login}` },
+          body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY, signUp }),
+        }),
+      } as never)) as Response;
+    const invite = "/crews/join/h3Kq8Zp2vT_x-Yb1Wc9Dd0";
+    const response = await notYou(invite);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(
+      `/signup?returnPath=${encodeURIComponent(invite)}`,
+    );
+    expect(response.headers.getSetCookie()).toEqual([
+      `${LOGIN_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure`,
+    ]);
+    expect(mocks.revokeLogin).toHaveBeenCalledWith(
+      expect.objectContaining(IDENTITY),
+      login,
+    );
+    // The default page, setup itself and another site all start over at /signup.
+    for (const signUp of ["/account", "/account/setup", "https://evil.example/"]) {
+      expect((await notYou(signUp)).headers.get("Location")).toBe("/signup");
+    }
+  });
+
   it("returns home with a notice and still clears this browser when the logout cannot be recorded", async () => {
     const config = testConfig();
     const nowSeconds = Math.floor(Date.now() / 1000);

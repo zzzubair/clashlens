@@ -182,6 +182,10 @@ test("asks first, counts only after Accept without player tags, and remembers th
   await expect
     .poll(() => sent("search_submitted").map(({ properties }) => properties))
     .toEqual([expect.objectContaining({ source: "home", input: "name" })]);
+  // Its results page counts what it showed.
+  await expect
+    .poll(() => sent("search_results_shown").map(({ properties }) => properties.source))
+    .toContain("home");
 
   for (const body of posthog.bodies) {
     expect(body).not.toMatch(/2PP|2026-09|Secret Name|season=/i);

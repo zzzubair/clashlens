@@ -193,7 +193,8 @@ account and Sign in buttons that both come back to it
 ([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)). A sign-in with Google
 or Discord that has no account yet says "No account found" and asks before
 making one; a new account chooses a username, links a player, then goes on to
-where the Clasher was heading. The card designs
+where the Clasher was heading. "Not you? Use a different sign-in" on Choose your
+username logs that sign-in out and starts the sign-up again. The card designs
 are in the [dashboard design](../docs/dashboard.md).
 
 Signed-in users get one page: account tabs for their linked players, then a

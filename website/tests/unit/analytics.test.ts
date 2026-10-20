@@ -368,7 +368,7 @@ describe("events read from what a page shows", () => {
 describe("events read from what a page loaded", () => {
   it("buckets search results without the query", () => {
     expect(
-      loadedPageEvents("routes/home", {
+      loadedPageEvents("routes/search", {
         query: "bob",
         search: { results: [{}, {}], users: [{}] },
       }),
@@ -378,7 +378,7 @@ describe("events read from what a page loaded", () => {
         properties: { source: "home", results: "many", kind: "both" },
       },
     ]);
-    expect(loadedPageEvents("routes/home", { query: "", search: null })).toEqual([]);
+    expect(loadedPageEvents("routes/search", { query: "", search: null })).toEqual([]);
     expect(
       loadedPageEvents("routes/tracked-leaderboard", {
         query: "zzz",

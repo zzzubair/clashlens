@@ -358,14 +358,14 @@ export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent
   if (!data || typeof data !== "object") return [];
   const page = data as Record<string, unknown>;
   if (
-    (routeId === "routes/home" || routeId === "routes/tracked-leaderboard") &&
+    (routeId === "routes/search" || routeId === "routes/tracked-leaderboard") &&
     page.query
   ) {
     const search = page.search as { results: unknown[]; users?: unknown[] } | null;
     const players = search?.results.length ?? 0;
     const profiles = search?.users?.length ?? 0;
     const properties: EventProperties = {
-      source: routeId === "routes/home" ? "home" : "rankings",
+      source: routeId === "routes/search" ? "home" : "rankings",
       results: search ? countBucket(players + profiles) : "error",
     };
     if (players + profiles > 0) {

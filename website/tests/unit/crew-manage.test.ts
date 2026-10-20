@@ -729,7 +729,7 @@ describe("join by invite", () => {
     expect(html).not.toContain("Join with");
   });
 
-  it("joins with the picked accounts and opens the crew, saying so", async () => {
+  it("joins with the picked accounts and opens the crew", async () => {
     mocks.requestJson.mockResolvedValue({ crew_id: CREW_ID });
     const response = await thrown(() =>
       joinAction(
