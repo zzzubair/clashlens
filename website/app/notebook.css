@@ -468,12 +468,13 @@
   }
 }
 
-/* Toasts sit above everything at the bottom. */
+/* Toasts sit above everything at the bottom, above the phone bottom bar
+   (--cl-bottom-tabs) when there is one. */
 .nb-notice {
   position: fixed;
   z-index: 50;
   right: 0;
-  bottom: max(1rem, env(safe-area-inset-bottom));
+  bottom: max(calc(1rem + var(--cl-bottom-tabs, 0px)), env(safe-area-inset-bottom));
   left: 0;
   display: grid;
   justify-items: center;
