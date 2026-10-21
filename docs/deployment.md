@@ -490,11 +490,14 @@ creates the crew tables either way; they stay empty while the setting is off.
 
 The Notebook has its own website setting, `CLASHLENS_NOTEBOOK_ENABLED=true` in
 `app.env` (default `false`), which `./ops` passes to the website only. While it
-is off, `/notebook`, `/notebook/save` and every `/notebook/bases/…` page show the
-normal page-not-found page and the navigation bar has no Notebook link. The
-private API's `/v1/account/notebook` follows the dashboard setting and answers
-404 `notebook_disabled` before reading anything while that is off. Migration
-0124 creates the notebook tables either way; they stay empty while it is off.
+is off, `/notebook`, `/notebook/save`, `/notebook/share`, every
+`/notebook/bases/…` page and every shared base at `/b/…` show the normal
+page-not-found page and the navigation bar has no Notebook link. The private
+API's `/v1/account/notebook`, `/v1/account/notebook/share` and
+`/v1/notebook-shares/…` follow the dashboard setting and answer 404
+`notebook_disabled` before reading anything while that is off. Migrations 0124
+and 0125 create the notebook and shared-base tables either way; they stay empty
+while it is off.
 
 Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only

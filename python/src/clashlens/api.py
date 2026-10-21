@@ -64,6 +64,7 @@ _PUBLIC_OPERATIONS = frozenset(
         "analytics.read",
         "crews.view",
         "leaderboards.read",
+        "notebook_share.read",
         "overlay.read",
         "player.read",
         "refresh.status",
@@ -1241,6 +1242,14 @@ def create_app(
     from .api_notebook import register_notebook_routes
 
     register_notebook_routes(
+        app,
+        database=production_database,
+        current_time=current_time,
+        enabled=dashboard_enabled,
+    )
+    from .api_notebook_share import register_share_routes
+
+    register_share_routes(
         app,
         database=production_database,
         current_time=current_time,
