@@ -513,6 +513,20 @@ def test_a_base_saved_from_an_attack_holds_for_them_and_for_you(
                 counted = bases()[stolen]
                 write(action="pick", tag=MAIN, day=4, base=stolen)
                 run = bases()[stolen]
+
+                def correct_days_3_and_4() -> None:
+                    with owner.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE army_analytics_completed_days SET fact_input_hash ="
+                            " translate(fact_input_hash, '0123456789abcdef',"
+                            " 'fedcba9876543210') WHERE ranked_day_start = ANY(%s)",
+                            ([day(3), day(4)],),
+                        )
+
+                # A battle correction on Days 3 and 4 the worker hasn't recounted.
+                correct_days_3_and_4()
+                stale = bases()[stolen]
+                correct_days_3_and_4()
                 other = steal(untracked, 4)[1]["base"]
                 refused = [
                     steal(them, 3),
@@ -544,6 +558,8 @@ def test_a_base_saved_from_an_attack_holds_for_them_and_for_you(
     # MAIN's Day 4 on it: a triple and a one-star defense, 50 lost.
     assert run["record"] == _record(1, 2, [0, 1, 0, 1], 50)
     assert run["them"] == counted["them"]
+    assert stale["them"] == {"day": 3, "counted": False, "record": None}
+    assert stale["record"] == _record(0, 0, [0, 0, 0, 0], 0)
     assert refused == [
         (422, {"error": "already_saved"}), (422, {"error": "not_attacked"}),
         (422, {"error": "invalid_day"}), (404, {"error": "player_not_verified"}),

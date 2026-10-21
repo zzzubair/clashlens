@@ -6,6 +6,8 @@
  * Library, draw each player's run strip, and word what a change did.
  */
 
+import { validPlayerTag } from "./player-tag";
+
 export type BaseStatus = "active" | "to_try" | "retired";
 
 export const STATUS_LABEL: Record<BaseStatus, string> = {
@@ -112,7 +114,7 @@ const isCount = (value: unknown): value is number =>
 const isCode = (value: unknown): value is string =>
   typeof value === "string" && BASE_ID.test(value);
 const isTag = (value: unknown): value is string =>
-  typeof value === "string" && /^#[0-9A-Z]{2,14}$/.test(value);
+  typeof value === "string" && validPlayerTag(value);
 const isText = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
 
@@ -188,8 +190,7 @@ function parseBase(value: unknown): NotebookBase | null {
     return null;
   const { status, added_day: added, last_ran_day: last, recent } = value;
   const record = parseRecord(value.record);
-  // Absent from a private API released before bases were saved from attacks.
-  const them = value.them === undefined ? null : parseThem(value.them);
+  const them = parseThem(value.them);
   if (
     !record ||
     !STATUSES.has(status as string) ||

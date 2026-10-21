@@ -243,8 +243,12 @@ class _Notebook:
             self.day_number(start)
             for (start,) in self.connection.execute(
                 """
-                SELECT ranked_day_start FROM army_type_defense_counted_days
-                WHERE ranked_day_start >= %s AND ranked_day_start < %s
+                SELECT counted.ranked_day_start
+                FROM army_type_defense_counted_days AS counted
+                JOIN army_analytics_completed_days AS day
+                  ON day.ranked_day_start = counted.ranked_day_start
+                 AND day.fact_input_hash = counted.fact_input_hash
+                WHERE counted.ranked_day_start >= %s AND counted.ranked_day_start < %s
                 """,
                 (self.season_start, self.season_end),
             ).fetchall()
@@ -277,8 +281,12 @@ class _Notebook:
                    sum(day.defenses), sum(day.one_star), sum(day.two_star),
                    sum(day.three_star), sum(day.trophies_lost)
             FROM notebook_bases AS base
-            LEFT JOIN army_type_defense_counted_days AS counted
-                ON counted.ranked_day_start = base.from_day_start
+            LEFT JOIN (
+                army_type_defense_counted_days AS counted
+                JOIN army_analytics_completed_days AS done
+                  ON done.ranked_day_start = counted.ranked_day_start
+                 AND done.fact_input_hash = counted.fact_input_hash
+            ) ON counted.ranked_day_start = base.from_day_start
             LEFT JOIN players AS player ON player.normalized_tag = base.from_tag
             LEFT JOIN army_package_defense_day_counts AS day
                 ON day.population_player_id = player.id

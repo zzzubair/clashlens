@@ -482,6 +482,12 @@ describe("a base saved from Bases you attacked", () => {
     expect(parseNotebook(bad)).toBeNull();
   });
 
+  it("refuses a base the API sent without them", () => {
+    const bad = saved();
+    delete (bad.bases[0] as { them?: unknown }).them;
+    expect(parseNotebook(bad)).toBeNull();
+  });
+
   it("names it after the day and their trophies at that Reset", () => {
     expect(attackedName(9, 5712)).toBe("Day 9 hit · 5,712");
     expect(attackedName(9, null)).toBe("Day 9 hit");
@@ -490,6 +496,19 @@ describe("a base saved from Bases you attacked", () => {
   it("posts which attack it came from, and nothing else", () => {
     const attacked = { tag: "#L9L0GJ9LR", opponent: "#2PP", day: 9 };
     expect(parseChange({ action: "add", name: "Day 9 hit", attacked })).not.toBeNull();
+    const longest = {
+      ...attacked,
+      tag: "#2PYLQGRJCUV0289",
+      opponent: "#9QQQQQQQQQQQQQQ",
+    };
+    expect(parseChange({ action: "add", name: "x", attacked: longest })).not.toBeNull();
+    expect(
+      parseChange({
+        action: "add",
+        name: "x",
+        attacked: { ...attacked, opponent: "#2AA" },
+      }),
+    ).toBeNull();
     expect(
       parseChange({
         action: "add",
