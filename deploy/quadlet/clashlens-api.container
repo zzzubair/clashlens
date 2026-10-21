@@ -15,6 +15,8 @@ Secret=clashlens-api-database-url,type=mount,target=/run/secrets/database-url,ui
 Secret=clashlens-hmac-current,type=mount,target=/run/secrets/clashlens-hmac-current,uid=10001,gid=10001,mode=0400
 Secret=clashlens-hmac-previous,type=mount,target=/run/secrets/clashlens-hmac-previous,uid=10001,gid=10001,mode=0400
 Secret=clashlens-interactive-1,type=mount,target=/run/secrets/clashlens-interactive-1,uid=10001,gid=10001,mode=0400
+Secret=clashlens-api-pictures-access-key,type=mount,target=/run/secrets/pictures-access-key,uid=10001,gid=10001,mode=0400
+Secret=clashlens-api-pictures-secret-key,type=mount,target=/run/secrets/pictures-secret-key,uid=10001,gid=10001,mode=0400
 ReadOnly=true
 Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m
 DropCapability=all

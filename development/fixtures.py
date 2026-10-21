@@ -24,6 +24,9 @@ TAG_ALPHABET = "0289PYLQGRJCUV"
 BOOTSTRAP_SEASON_START = 1_783_918_800
 SEASON_SECONDS = 28 * 24 * 60 * 60
 ARCHIVE_BUCKET = "evidence"
+# Notebook pictures, kept under the archive root's pictures/ folder; unlike
+# raw responses they can be deleted.
+PICTURES_BUCKET = "pictures"
 ARCHIVE_MARKER_KEY = "clashlens/archive-instance.json"
 ARCHIVE_MARKER_BODY = b'{"fixture":"clashlens-dev-archive-v1"}\n'
 VERIFY_TOKEN_PREFIX = "VERIFY-"
@@ -563,7 +566,9 @@ class ClashHandler(QuietHandler):
 def archive_path(root: Path, raw_path: str) -> Path | None:
     path = unquote(urlsplit(raw_path).path).strip("/")
     bucket, separator, key = path.partition("/")
-    if bucket != ARCHIVE_BUCKET:
+    if bucket == PICTURES_BUCKET:
+        root = root / PICTURES_BUCKET
+    elif bucket != ARCHIVE_BUCKET:
         return None
     if not separator:
         return root
@@ -597,7 +602,7 @@ class ArchiveHandler(QuietHandler):
 
     def read_object(self, *, include_body: bool) -> None:
         target = archive_path(self.root, self.path)
-        if target == self.root:
+        if target in {self.root, self.root / PICTURES_BUCKET}:
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -607,7 +612,10 @@ class ArchiveHandler(QuietHandler):
             return
         body = target.read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header(
+            "Content-Type",
+            "image/webp" if target.suffix == ".webp" else "application/octet-stream",
+        )
         self.send_header("Content-Length", str(len(body)))
         self.send_header("ETag", f'"{hashlib.md5(body).hexdigest()}"')
         self.send_header("X-Amz-Meta-Sha256", hashlib.sha256(body).hexdigest())
@@ -618,9 +626,18 @@ class ArchiveHandler(QuietHandler):
         if include_body:
             self.wfile.write(body)
 
+    def do_DELETE(self) -> None:
+        target = archive_path(self.root, self.path)
+        if target is None or not target.is_relative_to(self.root / PICTURES_BUCKET):
+            s3_error(self, 405, "MethodNotAllowed")
+            return
+        target.unlink(missing_ok=True)
+        self.send_response(204)
+        self.end_headers()
+
     def do_PUT(self) -> None:
         target = archive_path(self.root, self.path)
-        if target is None or target == self.root:
+        if target is None or target in {self.root, self.root / PICTURES_BUCKET}:
             s3_error(self, 400, "InvalidURI")
             return
         try:

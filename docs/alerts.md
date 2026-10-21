@@ -328,7 +328,8 @@ began, when each of at most seven currently unreadable check parts (the Reset
 publication check has two: the website page and the private API) first failed,
 at most ten minutes of Reset work left, one sample a minute, and the day the
 once-a-day [nightly re-check line](operating.md#nightly-re-check-line) was
-last posted.
+last posted, and the week the weekly
+[Notebook picture line](operating.md#notebook-picture-line) was.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
 Each command and each network connect or read has its own time limit, and a

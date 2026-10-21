@@ -231,6 +231,35 @@ def test_disk_archive_persists_bytes_and_refuses_an_overwrite(tmp_path: Path) ->
         server.server_close()
 
 
+def test_disk_archive_deletes_pictures_but_never_raw_responses(tmp_path: Path) -> None:
+    handler = type("TestArchiveHandler", (ArchiveHandler,), {"root": tmp_path})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+    def send(method: str, target: str, body: bytes | None = None) -> tuple[int, bytes]:
+        connection.request(method, target, body=body)
+        response = connection.getresponse()
+        return response.status, response.read()
+
+    try:
+        assert send("PUT", "/pictures/a1/full.webp", b"RIFF")[0] == 200
+        assert send("GET", "/pictures/a1/full.webp?X-Amz-Signature=x") == (200, b"RIFF")
+        assert send("PUT", "/evidence/kept", b"proof")[0] == 200
+        assert send("DELETE", "/pictures/a1/full.webp")[0] == 204
+        assert send("GET", "/pictures/a1/full.webp")[0] == 404
+        # Deleting what is already gone succeeds, as in S3.
+        assert send("DELETE", "/pictures/a1/full.webp")[0] == 204
+        assert send("DELETE", "/evidence/kept")[0] == 405
+        assert send("GET", "/evidence/kept") == (200, b"proof")
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
 @pytest.mark.parametrize("duplicate_body", [b"", b"different"])
 @pytest.mark.parametrize("headers", [{}, {"If-None-Match": "*"}])
 def test_refused_archive_upload_keeps_connection_usable(

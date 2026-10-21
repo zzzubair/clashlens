@@ -84,7 +84,7 @@ select_project() {
   local scope=${1:-dev}
   PUBLISHED_WEBSITE_PORT=$WEBSITE_PORT
   PUBLISHED_OIDC_PORT=$OIDC_PORT
-  PUBLISHED_DISCORD_PORT=$DISCORD_PORT
+  PUBLISHED_DISCORD_PORT=$DISCORD_PORT PUBLISHED_PICTURES_PORT=9000
   if [[ "$scope" == dev ]]; then
     PROJECT="clashlens-dev-$REPO_KEY-$PLAYERS"
   else
@@ -95,7 +95,7 @@ select_project() {
     # normal pod ports while avoiding a developer's already-running stack.
     PUBLISHED_WEBSITE_PORT=15173
     PUBLISHED_OIDC_PORT=18011
-    PUBLISHED_DISCORD_PORT=18012
+    PUBLISHED_DISCORD_PORT=18012 PUBLISHED_PICTURES_PORT=19000
   elif [[ "$scope" == trial-* ]]; then
     # Trials may run beside both the developer stack and ./dev check. Derive
     # a stable high port range from the unique trial scope.
@@ -104,7 +104,7 @@ select_project() {
     trial_base=$((30000 + (16#$port_seed % 19000)))
     PUBLISHED_WEBSITE_PORT=$trial_base
     PUBLISHED_OIDC_PORT=$((trial_base + 1))
-    PUBLISHED_DISCORD_PORT=$((trial_base + 2))
+    PUBLISHED_DISCORD_PORT=$((trial_base + 2)) PUBLISHED_PICTURES_PORT=$((trial_base + 3))
   fi
   POD="$PROJECT"
   POSTGRES="$PROJECT-postgres"
@@ -316,7 +316,7 @@ start_dependencies() {
   "$PODMAN_BIN" pod create --name "$POD" --share net,ipc \
     --publish "$WEBSITE_HOST:$PUBLISHED_WEBSITE_PORT:5173" \
     --publish "127.0.0.1:$PUBLISHED_OIDC_PORT:$OIDC_PORT" \
-    --publish "127.0.0.1:$PUBLISHED_DISCORD_PORT:$DISCORD_PORT" >/dev/null
+    --publish "127.0.0.1:$PUBLISHED_DISCORD_PORT:$DISCORD_PORT" --publish "127.0.0.1:$PUBLISHED_PICTURES_PORT:9000" >/dev/null
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$POSTGRES" \
     --env POSTGRES_DB=clashlens --env POSTGRES_USER=clashlens \
@@ -400,7 +400,7 @@ start_application() {
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$API" \
     --volume "$STATE_DIR:/run/clashlens-dev:ro,Z" \
-    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" --env CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=true --env CLASHLENS_PICTURES_SECURE=false --env CLASHLENS_PICTURES_ENDPOINT=127.0.0.1:9000 --env CLASHLENS_PICTURES_BUCKET=pictures --env CLASHLENS_PICTURES_REGION=us-east-1 --env CLASHLENS_PICTURES_ACCESS_KEY_FILE=/run/clashlens-dev/official-key --env CLASHLENS_PICTURES_SECRET_KEY_FILE=/run/clashlens-dev/official-key \
     "$IMAGE_PREFIX-python" serve --host 0.0.0.0 --port 8000 \
     --secret-file /run/clashlens-dev/hmac-key \
     --official-key-file /run/clashlens-dev/official-key \

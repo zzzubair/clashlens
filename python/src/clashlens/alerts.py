@@ -209,6 +209,10 @@ BOARD_MAX_UNFINISHED = 50
 # The nightly re-check's line (reconcile_pass), once a day from this time,
 # after the morning pass has usually finished, with its checks' names.
 RECONCILE_LINE_AT = "12:00"
+# The Notebook picture line, once a week (Monday to Sunday) from this time.
+PICTURES_LINE_AT = "12:00"
+# What R2 stores free each month (20 Oct 2026); beyond, $0.015 per GB.
+PICTURES_FREE_BYTES = 10 * 1000**3
 RECONCILE_CHECKS = {"recount": "recount", "chain": "chain", "ledger": "ledger",
                     "copies": "battle copies", "missing_day": "missing days",
                     "board": "board rows"}
@@ -632,6 +636,35 @@ def reconcile_line(counts: list[int]) -> str:
     )
 
 
+def pictures_probe() -> None:
+    """Run inside the API container; prints the last 7 days' Notebook picture
+    uploads whose rows are still kept and the Clash Lens accounts that made
+    them, then the pictures on a base now and the bytes stored, counting ones
+    still to be deleted. A replaced or removed picture's row is deleted about
+    a day later, so the 7-day counts can undercount; an upload whose storage
+    write failed is counted until its row is deleted a day later."""
+    import psycopg
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    week = "uploaded_at > clock_timestamp() - interval '7 days'"
+    with psycopg.connect(url) as connection:
+        print(*connection.execute(
+            f"SELECT count(*) FILTER (WHERE {week}),"
+            f" count(DISTINCT account_id) FILTER (WHERE {week}),"
+            " count(*) FILTER (WHERE base_id IS NOT NULL), COALESCE(sum(bytes), 0)"
+            " FROM notebook_pictures").fetchone())
+
+
+def pictures_line(counts: list[int]) -> str:
+    uploads, uploaders, kept, stored = counts[:4]
+    return (
+        f"Clash Lens Notebook pictures, last 7 days, uploads still kept: {uploads}"
+        f" by {uploaders} Clashers. Stored now: {kept} pictures on bases, {stored / 1000**2:,.1f} MB"
+        f" in all, {stored / PICTURES_FREE_BYTES:.1%} of R2's free 10 GB."
+        " Next step: docs/operating.md, Notebook picture line."
+    )
+
+
 def elapsed_without_reset(start: float, end: float) -> float:
     # More than a day is already far over the ten-minute threshold.
     start = max(start, end - 86400)
@@ -1048,6 +1081,17 @@ def observe(
                 state["reconcile_line_day"] = today
         except (OSError, ValueError, CheckError):
             errors.append("Nightly re-check line not delivered; the next run retries it")
+    # From Monday noon, or the first noon after it the check runs.
+    week = datetime.fromtimestamp(now, UTC).strftime("%G-W%V")
+    if clock >= PICTURES_LINE_AT and state.get("pictures_line_week") != week:
+        counts = run_probe("api", ["--pictures"], 4, "Notebook picture usage")
+        try:
+            if counts is not None:
+                request(read_webhook(Path(config["webhook_file"])), payload={
+                    "content": pictures_line(counts), "allowed_mentions": {"parse": []}})
+                state["pictures_line_week"] = week
+        except (OSError, ValueError, CheckError):
+            errors.append("Notebook picture line not delivered; the next run retries it")
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})
@@ -1332,6 +1376,9 @@ def main() -> int:
             return 0
         if sys.argv[1:] == ["--reconcile-pass"]:
             reconcile_probe()
+            return 0
+        if sys.argv[1:] == ["--pictures"]:
+            pictures_probe()
             return 0
         if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
             state_dir, webhook, *urls = sys.argv[2:]

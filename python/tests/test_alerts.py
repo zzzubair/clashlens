@@ -55,6 +55,7 @@ def runtime(tmp_path, monkeypatch):
         completeness="0",
         battle_day="0",
         reconcile="1 0 0 0 2 2 2 0 1 3",
+        pictures="12 3 40 9612345",
         health_streaks={},
         site_status=200,
         disk_used=10,
@@ -151,6 +152,7 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(alerts, "LEADERBOARD_HOLD", 0)
     # The nightly re-check's daily line has its own test in test_alerts_slim.
     monkeypatch.setattr(alerts, "RECONCILE_LINE_AT", "24:00")
+    monkeypatch.setattr(alerts, "PICTURES_LINE_AT", "24:00")
     # The early warning's overdue-work limits sit under the processing alert's.
     # Other alerts' tests leave them out; the warning's own tests restore them.
     rt.warning_limits = {
@@ -191,6 +193,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = 0, rt.battle_day
         elif "--reconcile-pass" in args:
             code, output = 0, rt.reconcile
+        elif "--pictures" in args:
+            code, output = 0, rt.pictures
         elif "inspect" in args:
             code, output = 0, str(rt.health_streaks.get(args[-1], 0))
         else:
