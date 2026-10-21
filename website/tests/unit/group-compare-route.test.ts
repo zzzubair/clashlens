@@ -58,13 +58,21 @@ function player(overrides: Record<string, unknown> = {}) {
     net: 40,
     net_per_day: 40.0,
     vs_group: null,
-    attack: { count: 2, stars: 5, destruction: 180, three_stars: 1, trophies: 56 },
+    attack: {
+      count: 2,
+      stars: 5,
+      destruction: 180,
+      three_stars: 1,
+      trophies: 56,
+      days: 1,
+    },
     defense: {
       count: 1,
       stars: 1,
       destruction: 45,
       trophies: 16,
       star_counts: { "0": 0, "1": 1, "2": 0, "3": 0 },
+      days: 1,
     },
     ...overrides,
   };

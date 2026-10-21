@@ -910,7 +910,7 @@ test("season navigation clears refresh state for the same player", async ({ page
   manual = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.getByRole("region", { name: "Player refresh" });
-  await expect(refresh).toBeVisible();
+  await expect(refresh).toContainText(/Refreshing…|Updated\./);
 
   await page.getByRole("combobox", { name: "Season", exact: true }).selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
@@ -990,12 +990,17 @@ test("unknown tag starts anonymously, shows progress, and enters tracking", asyn
     "Checking this tag",
   );
   await expect(page.getByRole("button", { name: "Start tracking" })).toHaveCount(0);
-  await expect(page.getByText("Now tracking in Legend I.", { exact: true })).toBeVisible({
+  // Tracking shows in place, as the tracked page with current trophies; no
+  // line pushes the page down to say so.
+  await expect(page.getByText("Current trophies", { exact: true })).toBeVisible({
     timeout: 30_000,
   });
   await expect(
     page.getByRole("heading", { name: "Lookup eligible Clasher" }),
   ).toBeVisible();
+  await expect(page.getByText("Now tracking in Legend I.", { exact: true })).toHaveCount(
+    0,
+  );
 });
 
 test("a real non-Legend player stays accessible without a full profile or name result", async ({
@@ -1023,8 +1028,13 @@ test("not-found and uncertain eligibility are different outcomes", async ({ page
     "Player not found",
     { timeout: 30_000 },
   );
-  await expect(page.getByRole("link", { name: "Try again", exact: true })).toBeVisible();
-  await page.goto("/players/%23LQQG");
+  // Checking the same tag again cannot help; the box holds it to fix a typo.
+  await expect(page.getByRole("link", { name: "Try again", exact: true })).toHaveCount(0);
+  const again = page.getByRole("searchbox", { name: "Search for the right tag" });
+  await expect(again).toHaveValue("#LQQV");
+  await again.fill("#LQQG");
+  await again.press("Enter");
+  await expect(page).toHaveURL(/\/players\/%23LQQG$/);
   await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
     "could not confirm",
     { timeout: 30_000 },

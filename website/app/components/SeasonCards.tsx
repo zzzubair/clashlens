@@ -16,6 +16,7 @@ import {
   isShieldDay,
   offenseConsistency,
   recentForm,
+  sideAverages,
 } from "../lib/dashboard-cards";
 import {
   CardHead,
@@ -215,7 +216,7 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
     );
   }
   const side = mode === "offense" ? "positive" : "negative";
-  const average = played.reduce((sum, day) => sum + value(day), 0) / played.length;
+  const average = sideAverages(data.days)[mode];
   const shields = data.days.filter(isShieldDay).length;
   return (
     <>

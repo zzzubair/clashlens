@@ -27,6 +27,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 import { PythonApiError } from "../../app/services/python.server";
 import Home, { loader as homeLoader } from "../../app/routes/home";
 import { SearchSuggestions } from "../../app/components/PlayerSearch";
+import { TagSearchAgain } from "../../app/components/TagSearchAgain";
 
 const search = {
   kind: "player-search",
@@ -97,7 +98,7 @@ it("disables the search button and marks results busy while a search loads", asy
     leaderboard: null,
     query: "Nova",
     error: null,
-    search: { exactTag: null, users: [], results: [] },
+    search: { query: "Nova", exactTag: null, users: [], results: [] },
   };
   const idle = await renderHome(data, "?q=Nova");
   expect(idle).toContain('<button type="submit">Search</button>');
@@ -134,8 +135,20 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
     ),
   );
   expect(dropdown).toContain(
-    "No saved players or profiles found. Enter a full #tag to look up anyone.",
+    "No players or profiles found. <!-- -->Enter a full #tag to look up anyone.",
   );
+});
+
+it("says a complete #tag with letters the game never uses is not a tag", async () => {
+  const query = "#ZZZZZZZZ";
+  const html = await renderHome(
+    { leaderboard: null, query, error: null, search: { ...search, query } },
+    "?q=%23ZZZZZZZZ",
+  );
+  expect(html).toContain(
+    "<p>#ZZZZZZZZ is not a Clash of Clans player tag. Tags use only 0, 2, 8, 9 and the letters P, Y, L, Q, G, R, J, C, U and V.</p>",
+  );
+  expect(html).not.toContain("Enter a full #tag");
 });
 
 it("shows the tagline and explains a logout the server could not record", async () => {
@@ -450,4 +463,30 @@ it("submitting a normalized exact tag opens its automatic lookup page", async ()
   } catch (response) {
     expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
   }
+});
+
+it("asks the game again when the not-found box sends back the same tag", async () => {
+  const handler = createStaticHandler([
+    { path: "/", Component: () => createElement(TagSearchAgain, { tag: "#LQQP" }) },
+  ]);
+  const context = await handler.query(new Request("https://clashlens.example/"));
+  if (context instanceof Response) throw new Error("unexpected response");
+  const box = renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+      hydrate: false,
+    }),
+  );
+  expect(box).toContain('action="/" method="get"');
+  expect(box).toContain('name="q" value="#LQQP"');
+  expect(box).toContain('<input type="hidden" name="recheck" value="#LQQP"/>');
+  const opens = (search: string) =>
+    homeLoader({
+      request: new Request(`https://clashlens.example/?${search}`),
+    } as never).catch((response: Response) => response.headers.get("Location"));
+  // The box sends what it holds; a fixed typo is a normal search.
+  expect(await opens("q=%23lqqp&recheck=%23LQQP")).toBe("/players/%23LQQP?retry=1");
+  expect(await opens("q=%23LQQG&recheck=%23LQQP")).toBe("/players/%23LQQG");
+  expect(await opens("q=%23LQQP")).toBe("/players/%23LQQP");
 });

@@ -20,9 +20,11 @@ import { FoldedBattles } from "../components/FoldedBattles";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
+import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
+import { TagSearchAgain } from "../components/TagSearchAgain";
 import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummary";
 import {
   LocalTimestamp,
@@ -32,12 +34,12 @@ import {
 } from "../components/Provenance";
 import type { ArmyUnitNames } from "../lib/army";
 import { pageMeta } from "../lib/blog";
+import { seasonDates } from "../lib/season-end";
 import {
   dayEnd,
   dayEvidence,
   dayReasons,
   explainsNoResults,
-  isLegendDay,
   liveDay,
   legendDayKey,
   liveDayNotice,
@@ -390,7 +392,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         seasons={data.seasons}
         selectedSeason={data.selectedSeason}
         currentAvailable={currentAvailable}
-        label={seasonLabel}
+        now={statisticsTime}
       />
     );
   const history = selectPlayerHistory(player, statisticsTime);
@@ -649,6 +651,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   }
 
   const visibleRefreshError = refreshFailure ?? data.refreshError;
+  const refreshing = refreshInProgress(visibleStatus, visibleRefreshError !== null);
   const refreshActionPath = `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`;
 
   return (
@@ -706,7 +709,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             />
             <button
               type="submit"
-              disabled={refreshFetcher.state !== "idle"}
+              disabled={refreshFetcher.state !== "idle" || refreshing}
               name="refresh"
               value="public"
               onClick={(event) => {
@@ -717,21 +720,26 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 );
               }}
             >
-              {refreshFetcher.state === "submitting" ? "Refreshing…" : "Refresh"}
+              {refreshFetcher.state === "submitting" || refreshing
+                ? "Refreshing…"
+                : "Refresh"}
             </button>
           </refreshFetcher.Form>
+          {visibleStatus ? (
+            <RefreshProgress
+              status={visibleStatus}
+              failed={visibleRefreshError !== null}
+            />
+          ) : null}
         </PlayerActions>
       </header>
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
-      {visibleStatus ? (
-        <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
+      {trackedPlayer.profile.notFoundAt ? (
+        <p role="status">
+          Player not found. Clash of Clans did not find this tag at its latest check.
+        </p>
       ) : null}
-      <p role="status">
-        {trackedPlayer.profile.notFoundAt
-          ? "Player not found. Clash of Clans did not find this tag at its latest check."
-          : "Now tracking in Legend I."}
-      </p>
       {linkedBattle}
       {data.seasonsError ? (
         <SeasonsError tag={trackedPlayer.tag} selectedSeason={data.selectedSeason} />
@@ -821,9 +829,9 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
         <a href={canonicalPlayerPath(lookup.tag)}>Check again</a>
       ) : lookup.state === "checking" || lookup.state === "tracking" ? (
         <a href={canonicalPlayerPath(lookup.tag)}>Check progress</a>
-      ) : lookup.state === "failed" ||
-        lookup.state === "not_found" ||
-        lookup.state === "unknown" ? (
+      ) : lookup.state === "not_found" ? (
+        <TagSearchAgain tag={lookup.tag} />
+      ) : lookup.state === "failed" || lookup.state === "unknown" ? (
         <a href={`${canonicalPlayerPath(lookup.tag)}?retry=1`}>Try again</a>
       ) : null}
     </section>
@@ -873,11 +881,11 @@ function SelectedSeason({
   return (
     <section className="data-section" aria-labelledby="historical-title">
       <div className="section-heading">
-        <h2 id="historical-title">{seasonLabel(seasonId)}</h2>
+        <h2 id="historical-title">{seasonDates(seasonId)}</h2>
         {menu}
       </div>
       {error ? <ErrorNotice error={error} /> : null}
-      <p className="section-note">Results for {seasonLabel(seasonId)} are unavailable.</p>
+      <p className="section-note">Results for {seasonDates(seasonId)} are unavailable.</p>
     </section>
   );
 }
@@ -930,22 +938,22 @@ function SeasonFinish({
     stars: Record<string, number | null>,
     unknown: number | null,
     trophies: number | null,
+    played: "attacks" | "defenses",
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
+    // Days without a battle on this side, such as shielded days, don't count.
     perDay: per(
       trophies,
       summary.daysObserved -
-        summary.dailyEntries.filter(
-          (day) => !isLegendDay(day.flags, (day.attacks ?? 0) + (day.defenses ?? 0)),
-        ).length,
+        summary.dailyEntries.filter((day) => day[played] === 0).length,
     ),
     perBattle: per(trophies, count),
   });
   return (
     <SeasonSummary
-      title={seasonLabel(summary.seasonId, summary.seasonEnd)}
+      title={seasonDates(summary.seasonId)}
       controls={menu}
       {...(tracked &&
         summary.coverageState !== "complete" && {
@@ -963,12 +971,14 @@ function SeasonFinish({
           summary.attackStars,
           summary.attackStarsUnknown,
           summary.attackGain,
+          "attacks",
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
           summary.defenseLoss,
+          "defenses",
         ),
       })}
     />
@@ -1074,13 +1084,6 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       </div>
     </section>
   );
-}
-
-function seasonLabel(seasonId: string, seasonEnd?: string | null): string {
-  const end = seasonEnd
-    ? new Date(seasonEnd)
-    : new Date((Number(seasonId) + 28 * 24 * 60 * 60) * 1000);
-  return Number.isNaN(end.getTime()) ? "Past season" : formatPlayerDate(end);
 }
 
 const playerDateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -1296,6 +1299,7 @@ function LegendDay({
           day={dayKey}
           dayLabel={dayLabel}
           units={player.armyUnits ?? {}}
+          live={isCurrentDay}
         />
         <BattleColumn
           title="Defenses"
@@ -1303,6 +1307,7 @@ function LegendDay({
           day={dayKey}
           dayLabel={dayLabel}
           units={player.armyUnits ?? {}}
+          live={isCurrentDay}
         />
       </FoldedBattles>
     </details>
@@ -1324,12 +1329,15 @@ function BattleColumn({
   day,
   dayLabel,
   units,
+  live = false,
 }: {
   title: "Attacks" | "Defenses";
   events: RankedBattleEvent[];
   day: string;
   dayLabel: string;
   units: ArmyUnitNames;
+  /** Today's empty slots are not recorded yet, not missing. */
+  live?: boolean;
 }) {
   // Each army stays one tap away, so the battle's result leads the card.
   const [shownArmies, setShownArmies] = useState<ReadonlySet<string>>(new Set());
@@ -1416,47 +1424,18 @@ function BattleColumn({
             </li>
           ) : (
             <li
-              aria-label={`${title.slice(0, -1)} ${index + 1} not recorded`}
+              aria-label={`${title.slice(0, -1)} ${index + 1} ${live ? "not recorded yet" : "not recorded"}`}
               className="battle-slot battle-slot-empty"
               key={`empty-${index}`}
             >
               <span className="battle-number" aria-hidden="true">
                 {index + 1}
               </span>
-              <span aria-hidden="true">Not recorded</span>
+              <span aria-hidden="true">{live ? "—" : "Not recorded"}</span>
             </li>
           );
         })}
       </ol>
-    </section>
-  );
-}
-
-function RefreshProgress({
-  status,
-  failed,
-}: {
-  status: RefreshStatus | RefreshWork;
-  failed: boolean;
-}) {
-  const inProgress = !failed && (status.state === "queued" || status.state === "running");
-  const message =
-    status.state === "complete"
-      ? "Updated."
-      : inProgress
-        ? "Refreshing…"
-        : "Couldn't refresh right now. Showing saved results.";
-  return (
-    <section className="refresh-panel" aria-live="polite" aria-label="Player refresh">
-      <p role="status">{message}</p>
-      {inProgress ? (
-        <progress aria-label="Refresh progress" value={status.progressPercent} max="100">
-          {status.progressPercent}%
-        </progress>
-      ) : null}
-      <span className="sr-only" data-testid="refresh-work-id">
-        Work ID: {status.workId}
-      </span>
     </section>
   );
 }

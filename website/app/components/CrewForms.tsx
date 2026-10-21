@@ -20,10 +20,13 @@ interface InviteAnswer {
  */
 export function CrewInvite({
   crewName,
+  canEdit,
   idempotencyKey,
   answer,
 }: {
   crewName: string;
+  /** Owners and admins can turn links off in Edit. */
+  canEdit: boolean;
   idempotencyKey: string;
   /** The answer when the form posted without JavaScript. */
   answer: InviteAnswer | null;
@@ -64,8 +67,12 @@ export function CrewInvite({
               <input type="hidden" name="intent" value="invite" />
               <input type="hidden" name="new" value="1" />
               <input type="hidden" name="idempotencyKey" value={key} />
+              <p className="crew-sheet-note">
+                Your current link keeps working.
+                {canEdit ? " Turn links off in Edit." : ""}
+              </p>
               <button type="submit" className="crew-link-button">
-                Make a new link
+                Make another link
               </button>
             </fetcher.Form>
           ) : null}

@@ -140,7 +140,7 @@ describe("past Seasons on the player page", () => {
       "Seasons that ended up to 7 Sep 2026",
     );
     expect(html).toMatch(
-      /10 Aug 2026<\/th><td class="past-season-rank">#1<\/td><td>5,856<\/td>/,
+      />13 Jul – 9 Aug 2026<\/th><td class="past-season-rank">#1<\/td><td>5,856<\/td>/,
     );
     expect(html).toMatch(
       /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td>/,
@@ -189,18 +189,18 @@ describe("past Seasons on the player page", () => {
     const section = html.slice(html.indexOf('id="past-seasons-title"'));
     const pastSeasons = section.slice(0, section.indexOf("</section>"));
     expect(pastSeasons.match(/<th scope="col">[^<]*<\/th>/g)).toEqual([
-      '<th scope="col">Season ended</th>',
+      '<th scope="col">Season</th>',
       '<th scope="col">Global rank</th>',
       '<th scope="col">Final trophies</th>',
     ]);
     // Seasons after 7 Sep 2026 are not listed.
-    expect(html).not.toContain("5 Oct 2026");
+    expect(pastSeasons).not.toContain("4 Oct 2026");
     expect(html).not.toContain("5,437");
     expect(html).toMatch(
-      /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
+      />13 Jul – 9 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
     );
     expect(html).toMatch(
-      /7 Sep 2026<\/th><td class="past-season-rank">#1,993<\/td><td>5,208<\/td><\/tr>/,
+      />10 Aug – 6 Sep 2026<\/th><td class="past-season-rank">#1,993<\/td><td>5,208<\/td><\/tr>/,
     );
     expect(html).toMatch(
       /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td><\/tr>/,

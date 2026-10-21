@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useFetcher, useNavigate } from "react-router";
 
-import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../routes/player-search";
 import { moveFocusWithArrows } from "./ArrowKeys";
@@ -112,7 +112,7 @@ export function SearchSuggestions({
       users.length === 0 &&
       !unknownExactTag ? (
         <p className="search-dropdown-status">
-          No saved players or profiles found. Enter a full #tag to look up anyone.
+          No players or profiles found. {noMatchHint(search.query)}
         </p>
       ) : null}
       {results.length > 0 || users.length > 0 || unknownExactTag ? (

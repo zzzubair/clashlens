@@ -18,7 +18,9 @@ import {
   DAILY_BATTLES,
   GOAL_PACE_DAYS,
   SEASON_START_TROPHIES,
+  netPerDay,
   rate,
+  sideAverages,
   type CardDataMap,
   type CardReads,
   type ClockData,
@@ -596,8 +598,7 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
       (day) => day.triples,
       (day) => day.attacks,
     ),
-    offense: rate(days, (day) => day.offense),
-    defense: rate(days, (day) => day.defense),
+    ...sideAverages(days),
   };
 }
 
@@ -685,20 +686,16 @@ async function rivalsData(
 }
 
 function comparedRow(player: ComparedPlayer, name: string | null): GroupRow {
-  // The battle totals cover every saved day, not only the days whose result
-  // counts, so a day's averages divide by the saved days.
-  const days = player.days.filter(
-    (day) => day.state !== "missing" && day.state !== "retired",
-  ).length;
+  const { attack, defense } = player;
   return {
     tag: player.tag,
     name: name ?? player.name ?? player.tag,
     you: player.you,
     trophies: player.trophies,
     gain: player.netPerDay,
-    hitRate: player.attack.count ? player.attack.threeStars / player.attack.count : null,
-    offense: days ? player.attack.trophies / days : null,
-    defense: days ? -player.defense.trophies / days : null,
+    hitRate: attack.count ? attack.threeStars / attack.count : null,
+    offense: attack.days ? attack.trophies / attack.days : null,
+    defense: defense.days ? -defense.trophies / defense.days : null,
   };
 }
 
@@ -759,14 +756,13 @@ async function groupWatchData(
         name: page.profile.name || tag,
         you: tag === selected,
         trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-        gain: rate(season.days, (day) => day.net),
+        gain: netPerDay(season.days),
         hitRate: rate(
           season.days,
           (day) => day.triples,
           (day) => day.attacks,
         ),
-        offense: rate(season.days, (day) => day.offense),
-        defense: rate(season.days, (day) => day.defense),
+        ...sideAverages(season.days),
       },
     ];
   });

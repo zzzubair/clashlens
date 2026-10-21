@@ -351,7 +351,16 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                      reasons=["battle_log_overlap_gap"])
             # The account's own player, outside the group, with a big day.
             seed_profile(database, "#YQ", 5400)
-            seed_day(database, "#YQ", 1, net=100)
+            # A battle saved on two days, the later of which holds only it.
+            repeat = battle("offense", 3, 100, 40)
+            seed_day(
+                database,
+                "#YQ",
+                2,
+                net=80,
+                battles=[battle("offense", 3, 100, 40), repeat],
+            )
+            seed_day(database, "#YQ", 1, net=100, battles=[repeat])
             # The season holding the two oldest days had its detail cleaned up.
             with database.pool.connection() as connection:
                 connection.execute(
@@ -385,12 +394,13 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 ("partial", 10),
                 ("correcting", 40),
             ]
+            # The +20 day had no battles, so the average a day leaves it out.
             assert (
                 leader["counted_days"],
                 leader["counted_attacks"],
                 leader["net"],
                 leader["net_per_day"],
-            ) == (2, 2, 60, 30)
+            ) == (2, 2, 60, 40)
             assert leader["today"] == {
                 "net": 64,
                 "gained": 80,
@@ -407,6 +417,7 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "destruction": 180,
                 "three_stars": 1,
                 "trophies": 56,
+                "days": 1,
             }
             assert leader["defense"] == {
                 "count": 1,
@@ -414,6 +425,7 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "destruction": 45,
                 "trophies": 16,
                 "star_counts": {"0": 0, "1": 1, "2": 0, "3": 0},
+                "days": 1,
             }
             assert leader["trophies"] == 5300 and leader["freshness"] == "fresh"
             # Each pair is compared only on days both have counted, and the
@@ -426,8 +438,14 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "net": 5,
             }
             assert players["#8PY"]["counted_days"] == 2
+            # Counted days without a single battle give no average a day, not 0.
+            assert players["#8PY"]["net_per_day"] is None
             own = players["#YQ"]
             assert (own["you"], own["in_group"], own["vs_group"]) == (True, False, 85)
+            # It counts once, on its first day, so the later day is not played.
+            assert (own["attack"]["count"], own["attack"]["trophies"]) == (2, 80)
+            assert (own["attack"]["days"], own["counted_attacks"]) == (1, 2)
+            assert (own["net"], own["net_per_day"]) == (180, 80)
             # No result is not a zero result.
             assert players["#9PY"]["net"] is None
             assert players["#9PY"]["vs_group"] is None

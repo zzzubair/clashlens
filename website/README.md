@@ -21,9 +21,10 @@ without a button or sign-in. The existing interactive collector retains the
 profile, battle log and league history; existing profile processing activates
 eligible Legend I players. Progress waits for processed evidence. Official
 not-found, temporary failure and uncertain eligibility have distinct messages.
-Known real players reuse their eligibility result on visits. Failed checks and
-tags reported as not found offer a retry with the existing 30-second minimum
-interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
+Known real players reuse their eligibility result on visits. Failed checks offer
+a retry with the existing 30-second minimum interval. A tag reported as not found
+offers a search box holding that tag instead, so a typo can be fixed; sending the
+same tag back asks the game again, with the same minimum interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
 address handling. With JavaScript enabled, the page checks progress once a second
 for up to 60 seconds, then explains that the check may still be running. A result
 that arrives after that limit still replaces the waiting message. The Check
@@ -90,7 +91,9 @@ automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
 weekly reset.
-Today's end of day and Reset rank read After Reset.
+Today's end of day and Reset rank read After Reset, and its empty battle slots
+read —, where a finished day's read Not recorded. On a phone, today's day
+comes before the Season summary.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
@@ -109,16 +112,16 @@ The current Season's box counts only finished Legend days, never the day in
 progress; its one short line gives the dates and finished days saved. The box's
 Season menu, in the same bold style as the Analytics filters, lists the current
 Season and each past Season with Clash Lens days and opens the chosen one. Counts,
-stars, hit rate and averages all use every recorded battle of those days,
-leaving out only days without battles that saved profiles prove were before
-the player signed up. Offense per day is trophies gained from attacks divided by the saved
-finished Legend days, battles or not, and defense per day is trophies lost on defense the same
-way; per attack and per defense divide by those days' recorded battles.
+stars, hit rate and averages all use every recorded battle of those days.
+Offense per day is trophies gained from attacks divided by the days with at
+least one recorded attack, and defense per day is trophies lost on defense
+divided by the days with at least one recorded defense, so shielded or unplayed
+days don't pull them down; per attack and per defense divide by the recorded battles.
 Automatic Reset losses are not part of defense averages. Empty samples show
 Unavailable for rates and averages. Partial history and conflicting reports
 are flagged; retained past-Season totals cannot fill missing battle details. A
-past Season's box uses its saved summary, with per-day averages over every
-recorded Legend day, and when coverage is partial it says how many of the 28 days are
+past Season's box uses its saved summary, with per-day averages over the
+recorded days with a battle on that side, and when coverage is partial it says how many of the 28 days are
 recorded. A Season known only from in-game history shows just the rank, which
 reads Not published yet until the game publishes it, and trophies.
 
@@ -129,10 +132,10 @@ are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 The separate Older history table, closed until the visitor opens it, shows
 saved finishes from January 2025 up to the Season that ended on 7 September
 2026, newest first, with three columns:
-Season ended, Global rank and Final trophies. Later Seasons are not listed.
+Season, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
-28-day Seasons are dated by their closing Reset; older calendar-month results
-keep their month label. Saved in-game Legend I history wins for each Season,
+28-day Seasons are named by their first and last Legend days, such as
+13 Jul – 9 Aug 2026, and older calendar-month results keep their month label. Saved in-game Legend I history wins for each Season,
 even when a trophy count or rank is missing: those cells say "Not recorded"
 instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
 in-game row and gets one linked credit line. This table needs JavaScript and
@@ -168,7 +171,9 @@ means both API responses were saved, not that the worker has processed them, so
 processing that takes longer than about 8 seconds appears only after the next
 Refresh or page load.
 
-The page says "Updated." only when the current Refresh reports complete. A
+A Refresh shows in place: while it runs, the Refresh button reads Refreshing…
+and can't be pressed, and nothing on the page moves. Only screen readers hear
+"Refreshing…" and, when the current Refresh reports complete, "Updated.". A
 started Refresh that fails, becomes unavailable or can't be checked says it
 couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after

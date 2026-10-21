@@ -281,7 +281,7 @@ export function validateAccountNames(values: {
   const displayName = normalizeDisplayName(values.displayName);
   if (displayName === null) {
     fieldErrors.displayName =
-      "Display name must be 1–80 characters and must not contain control characters.";
+      "Display name must be 1–80 characters, with no line breaks or hidden characters.";
   } else if (isInappropriateName(values.displayName)) {
     fieldErrors.displayName = "Choose a different display name.";
   }

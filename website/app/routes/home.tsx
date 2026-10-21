@@ -21,7 +21,7 @@ import {
   OLD_UPDATE_SECONDS,
   useServerTime,
 } from "../components/Provenance";
-import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
   SearchResponse,
@@ -38,11 +38,15 @@ export interface HomeLoaderData {
 }
 
 export async function loader({ request }: LoaderFunctionArgs): Promise<HomeLoaderData> {
-  const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
+  const params = new URL(request.url).searchParams;
+  const rawQuery = params.get("q") ?? "";
   const query = rawQuery.trim();
   const invalidQuery = rawQuery.length > MAX_SEARCH_QUERY_LENGTH;
   const exactTag = invalidQuery ? null : normalizePlayerTag(query);
-  if (exactTag) throw redirect(canonicalPlayerPath(exactTag));
+  if (exactTag) {
+    const retry = params.get("recheck") === exactTag ? "?retry=1" : "";
+    throw redirect(`${canonicalPlayerPath(exactTag)}${retry}`);
+  }
   const client = import("../services/python.server").then(({ createPythonClient }) =>
     createPythonClient(),
   );
@@ -344,7 +348,7 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
     return (
       <section>
         <h3>No players or profiles found</h3>
-        <p>Enter a full #tag to look up anyone.</p>
+        <p>{noMatchHint(search.query)}</p>
       </section>
     );
   }

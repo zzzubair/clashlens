@@ -116,7 +116,7 @@ export interface GroupRow {
   name: string;
   you: boolean;
   trophies: number | null;
-  /** Averages a day over the days counted. */
+  /** Net trophies a day, over only the counted days with at least one battle. */
   gain: number | null;
   hitRate: number | null;
   offense: number | null;
@@ -168,6 +168,19 @@ export function rate(
   return ratio(over, under);
 }
 
+/** Trophies a day on each side, over only the days with a battle on that side. */
+export function sideAverages(days: SeasonDay[]) {
+  return {
+    offense: rate(days, (day) => (day.attacks ? day.offense : null)),
+    defense: rate(days, (day) => (day.defenses ? day.defense : null)),
+  };
+}
+
+/** Net trophies a day, over only the days with at least one battle. */
+export function netPerDay(days: SeasonDay[]): number | null {
+  return rate(days, (day) => (day.attacks || day.defenses ? day.net : null));
+}
+
 /** The finished days from `first` to `last` that have a saved result. */
 function between(season: SeasonData, first: number, last: number): SeasonDay[] {
   return season.days.filter((day) => day.day >= first && day.day <= last);
@@ -199,7 +212,7 @@ interface FormTotals {
 
 function formTotals(days: SeasonDay[]): FormTotals {
   return {
-    net: rate(days, (day) => day.net),
+    net: netPerDay(days),
     perAttack: rate(
       days,
       (day) => day.offense,
@@ -225,7 +238,10 @@ function formTotals(days: SeasonDay[]): FormTotals {
 
 export interface RecentForm {
   window: DayWindow;
-  /** Days with a known trophy change; the total and a-day numbers cover only these. */
+  /**
+   * Days with a known trophy change; the total covers only these, and the
+   * a-day numbers only the ones with a battle.
+   */
   counted: number;
   total: number | null;
   now: FormTotals;

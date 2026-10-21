@@ -7,11 +7,11 @@ the current Season, so each one starts fresh at the Season's first Reset.
 
 The average boards follow the player page's Season summary
 (``website/app/lib/battle-statistics.ts``): finished Legend days only, each
-recorded battle counted once, trophies divided by the Legend days in the
-window. "Last 7 days" is the last seven finished days of this Season, so it
-is shorter in the first week and empty on Day 1. Streaks count only attacks
-Clash Lens saw, and today's too except over the last seven days. Top players
-is the saved Reset board for today's Reset, in its order.
+recorded battle counted once, trophies divided by the days in the window with
+a battle on that side. "Last 7 days" is the last seven finished days of this
+Season, so it is shorter in the first week and empty on Day 1. Streaks count
+only attacks Clash Lens saw, and today's too except over the last seven days.
+Top players is the saved Reset board for today's Reset, in its order.
 """
 
 from __future__ import annotations
@@ -31,8 +31,7 @@ _WEEK_DAYS = 7
 # Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
-       player.normalized_tag, daily.ranked_day_start, daily.battles,
-       daily.partial_reasons
+       player.normalized_tag, daily.ranked_day_start, daily.battles
 FROM crew_players AS place
 JOIN players AS player ON player.id = place.player_id
 JOIN api_player_daily_logs AS daily ON daily.player_id = place.player_id
@@ -66,11 +65,7 @@ ORDER BY entry.position
 
 class _Day:
     def __init__(self, row: Any) -> None:
-        reasons = [reason for reason in row[3] or [] if isinstance(reason, str)]
         self.offense, self.defense = _screen_events(row[2])
-        # The player page's rule: a day is a Legend day unless it has no
-        # battles and saved profiles prove the player had not signed up yet.
-        self.legend = bool(self.offense or self.defense) or "not_enrolled" not in reasons
 
 
 def _events(
@@ -86,10 +81,22 @@ def _events(
 
 
 def _average_row(days: list[_Day], side: str, start: datetime, now: datetime) -> dict[str, Any]:
-    events = _events(days, side, start, now)
+    """The side's totals, averaged over the days with a battle on that side:
+    shielded or unplayed days don't pull the average down. Each battle counts
+    once, on the first of ``days`` that holds it."""
+    events: dict[str, dict[str, Any]] = {}
+    played = 0
+    for day in days:
+        new = {
+            event["battle_id"]: event
+            for event in _events([day], side, start, now)
+            if event["battle_id"] not in events
+        }
+        events.update(new)
+        played += bool(new)
     return {
-        "total": sum(abs(event["trophy_change"]) for event in events),
-        "days": len(days),
+        "total": sum(abs(event["trophy_change"]) for event in events.values()),
+        "days": played,
         "battles": len(events),
     }
 
@@ -193,14 +200,11 @@ def get_crew_boards(
     streak_rows = []
     for tag in players:
         days = saved.get(tag, {})
-        legend = [days[start] for start in window if start in days and days[start].legend]
+        window_days = [days[start] for start in window if start in days]
         for side, listed in averages.items():
-            if period == "today":
-                values = _average_row(legend, side, today, now)
-                if values["battles"]:
-                    listed.append(entry(tag, **values))
-            elif legend:
-                listed.append(entry(tag, **_average_row(legend, side, window[0], now)))
+            values = _average_row(window_days, side, window[0] if window else today, now)
+            if values["battles"]:
+                listed.append(entry(tag, **values))
         streak_days = [days[start] for start in streak_window if start in days]
         attacks = _events(streak_days, "offense", streak_window[0], now) if streak_days else []
         if attacks:
@@ -219,7 +223,6 @@ def get_crew_boards(
         averages["defense"], key=lambda row: (-per_day(row), -row["days"], *name_key(row))
     )
     streak_rows.sort(key=lambda row: (-row["best"], not row["going"], *name_key(row)))
-    quiet = "no_days_in_period"
     return {
         "kind": "crew-boards",
         "crew_id": crew_id,
@@ -232,13 +235,13 @@ def get_crew_boards(
             "live": board(live_rows, "not_on_live_board"),
             "top": board(top_rows, "no_reset_reading"),
             "attackers": board(
-                attackers, "no_attacks_today" if period == "today" else quiet
+                attackers, "no_attacks_today" if period == "today" else "no_attacks_in_period"
             ),
             "best_defenders": board(
-                best, "no_defenses_today" if period == "today" else quiet
+                best, "no_defenses_today" if period == "today" else "no_defenses_in_period"
             ),
             "worst_defenders": board(
-                worst, "no_defenses_today" if period == "today" else quiet
+                worst, "no_defenses_today" if period == "today" else "no_defenses_in_period"
             ),
             "streaks": board(
                 streak_rows, "no_attacks_today" if period == "today" else "no_attacks_in_period"

@@ -22,7 +22,7 @@ import {
   OLD_UPDATE_SECONDS,
   useCurrentTime,
 } from "../components/Provenance";
-import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import "../leaderboard-search.css";
@@ -363,7 +363,7 @@ export default function TrackedLeaderboardRoute() {
                       </a>
                     </>
                   ) : (
-                    `No players on this board match “${query}”. Enter a full #tag to look up anyone.`
+                    `No players on this board match “${query}”. ${noMatchHint(query)}`
                   )}
                 </p>
               )}

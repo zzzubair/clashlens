@@ -14,7 +14,9 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
+import { seasonStartAt } from "../components/SeasonReread";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
+import { seasonDates } from "../lib/season-end";
 import detailsStyles from "../details.css?url";
 
 export function links() {
@@ -779,7 +781,9 @@ export default function ArmyAnalyticsRoute() {
             <label className="filter-field analytics-season-picker">
               Season
               <select name="season" defaultValue={requestedSeason}>
-                <option value="current">Current Season</option>
+                <option value="current">
+                  {`This Season · ${seasonDates(seasonStartAt(Date.now()) / 1000)}`}
+                </option>
                 {[
                   ...pastSeasons,
                   ...(requestedSeason !== "current" &&
@@ -788,7 +792,7 @@ export default function ArmyAnalyticsRoute() {
                     : []),
                 ].map((season) => (
                   <option key={season} value={season}>
-                    {seasonName(season)}
+                    {seasonDates(season)}
                   </option>
                 ))}
               </select>
@@ -861,7 +865,7 @@ export default function ArmyAnalyticsRoute() {
               <strong>{includedBattleRecords.toLocaleString()}</strong>
               <small>
                 {armyTypes
-                  ? "Every attack, Unreadable included"
+                  ? "Every attack, including ones whose army could not be read"
                   : "Enough army details to use in these stats"}
               </small>
             </article>
@@ -989,19 +993,6 @@ export default function ArmyAnalyticsRoute() {
       ) : null}
     </main>
   );
-}
-
-// A past Season by the day it ended.
-function seasonName(seasonId: string) {
-  const end = new Date((Number(seasonId) + 28 * 86400) * 1000);
-  return Number.isNaN(end.getTime())
-    ? "Past season"
-    : end.toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      });
 }
 
 function dayList(days: number[]) {

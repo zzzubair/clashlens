@@ -56,6 +56,8 @@ export interface ComparedPlayer {
     destruction: number;
     threeStars: number;
     trophies: number;
+    /** Days with at least one recorded attack. */
+    days: number;
   };
   defense: {
     count: number;
@@ -63,6 +65,8 @@ export interface ComparedPlayer {
     destruction: number;
     trophies: number;
     starCounts: [number, number, number, number];
+    /** Days with at least one recorded defense. */
+    days: number;
   };
 }
 
@@ -193,11 +197,17 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
   const starCounts = defense.star_counts as Record<string, unknown>;
   const counts = ["0", "1", "2", "3"].map((star) => starCounts[star]);
   if (
-    ![attack.count, attack.stars, attack.destruction, attack.three_stars].every(
+    ![
+      attack.count,
+      attack.stars,
+      attack.destruction,
+      attack.three_stars,
+      attack.days,
+    ].every(isCount) ||
+    !isInteger(attack.trophies) ||
+    ![defense.count, defense.stars, defense.destruction, defense.days, ...counts].every(
       isCount,
     ) ||
-    !isInteger(attack.trophies) ||
-    ![defense.count, defense.stars, defense.destruction, ...counts].every(isCount) ||
     !isInteger(defense.trophies)
   )
     return null;
@@ -225,6 +235,7 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
       destruction: attack.destruction as number,
       threeStars: attack.three_stars as number,
       trophies: attack.trophies as number,
+      days: attack.days as number,
     },
     defense: {
       count: defense.count as number,
@@ -232,6 +243,7 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
       destruction: defense.destruction as number,
       trophies: defense.trophies as number,
       starCounts: counts as [number, number, number, number],
+      days: defense.days as number,
     },
   };
 }

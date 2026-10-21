@@ -201,18 +201,29 @@ def _window(
     today_start: datetime,
     retired: set[datetime],
 ) -> dict[str, Any]:
-    attack = {"count": 0, "stars": 0, "destruction": 0, "three_stars": 0, "trophies": 0}
+    attack = {
+        "count": 0,
+        "stars": 0,
+        "destruction": 0,
+        "three_stars": 0,
+        "trophies": 0,
+        "days": 0,
+    }
     defense = {
         "count": 0,
         "stars": 0,
         "destruction": 0,
         "trophies": 0,
         "star_counts": {"0": 0, "1": 0, "2": 0, "3": 0},
+        "days": 0,
     }
     days = []
     net = 0
     counted_days = 0
     counted_attacks = 0
+    played_net = 0
+    played_days = 0
+    seen: set[str] = set()
     for start in day_starts:
         row = logs.get((player_id, start))
         if row is None:
@@ -240,11 +251,18 @@ def _window(
             list(row[5]) if isinstance(row[5], list) else [],
         )
         days.append({"start": start.isoformat(), "state": state, "net": day_net})
-        offense_events, defense_events = _screen_events(row[9])
+        offense_events, defense_events = (
+            _unseen(events, seen) for events in _screen_events(row[9])
+        )
         if state in {"complete", "correcting"} and day_net is not None:
             net += day_net
             counted_days += 1
             counted_attacks += len(offense_events)
+            if offense_events or defense_events:
+                played_net += day_net
+                played_days += 1
+        attack["days"] += bool(offense_events)
+        defense["days"] += bool(defense_events)
         for event in offense_events:
             attack["count"] += 1
             attack["stars"] += event["stars"]
@@ -264,10 +282,21 @@ def _window(
         "counted_days": counted_days,
         "counted_attacks": counted_attacks,
         "net": net if counted_days else None,
-        "net_per_day": round(net / counted_days, 2) if counted_days else None,
+        "net_per_day": round(played_net / played_days, 2) if played_days else None,
         "attack": attack,
         "defense": defense,
     }
+
+
+def _unseen(events: list[dict[str, Any]], seen: set[str]) -> list[dict[str, Any]]:
+    """The events whose battle is not in ``seen``, each once, adding them to it:
+    a battle saved on more than one day counts on the first."""
+    fresh = []
+    for event in events:
+        if event["battle_id"] not in seen:
+            seen.add(event["battle_id"])
+            fresh.append(event)
+    return fresh
 
 
 def _today(row: Any) -> dict[str, Any]:

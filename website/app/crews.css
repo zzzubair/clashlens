@@ -526,7 +526,7 @@
 }
 
 .crew-link-button {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0.35rem 0;
   color: var(--cl-action-text);
   font: inherit;
@@ -632,7 +632,10 @@
 
 .crew-new-link {
   margin-top: 0.4rem;
-  text-align: right;
+}
+
+.crew-new-link .crew-sheet-note {
+  margin: 0 0 0.25rem;
 }
 
 /* ---------- Members ---------- */

@@ -151,12 +151,12 @@ export function SeasonSummary({
                 [
                   "Offense per day",
                   signed(attack.perDay, 1),
-                  "Averaged over every finished Legend day",
+                  "Averaged over the finished Legend days with at least one recorded attack",
                 ],
                 [
                   "Defense per day",
                   signed(defense.perDay, -1),
-                  "Averaged over every finished Legend day",
+                  "Averaged over the finished Legend days with at least one recorded defense",
                 ],
                 ["Per attack", signed(attack.perBattle, 1, 1)],
                 ["Per defense", signed(defense.perBattle, -1, 1)],

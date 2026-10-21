@@ -121,6 +121,7 @@ function comparedPlayer(index: number, days: number): ComparedPlayer {
       destruction: attacks * 97,
       threeStars: Math.round(attacks * 0.83),
       trophies: attacks * 34,
+      days: attacks ? Math.min(attacks, days) : 0,
     },
     defense: {
       count: quiet ? 0 : index === 3 ? 1 : days * 8,
@@ -132,6 +133,7 @@ function comparedPlayer(index: number, days: number): ComparedPlayer {
         : index === 3
           ? [0, 1, 0, 0]
           : [1, 1, days * 8 - 3, 1],
+      days: quiet ? 0 : index === 3 ? 1 : days,
     },
   };
 }

@@ -14,8 +14,7 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
   checking:
     "Checking this tag with Clash of Clans. Legend I players start tracking automatically.",
   tracking: "Now tracking in Legend I. The first results are being prepared.",
-  not_found:
-    "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
+  not_found: "Player not found. Clash of Clans has no player with this tag.",
   not_in_legend: "This player is not in Legend I.",
   uncertain:
     "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",
@@ -23,10 +22,15 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
     "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
 };
 
-/** The page's lookup note, naming the league of a player outside Legend I. */
+/**
+ * The player page's lookup note. That page has a search box, so a tag the game
+ * doesn't know also asks for a typo check; a player outside Legend I gets their league.
+ */
 export function lookupMessage(lookup: PlayerLookup): string {
-  const league = lookup.state === "not_in_legend" ? lookup.profile?.league : undefined;
   const message = LOOKUP_MESSAGES[lookup.state];
+  if (lookup.state === "not_found")
+    return `${message} Check it for typos and search again.`;
+  const league = lookup.state === "not_in_legend" ? lookup.profile?.league : undefined;
   return league ? `${message} Current league: ${league}.` : message;
 }
 

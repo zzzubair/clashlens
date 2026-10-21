@@ -117,7 +117,7 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
         view.getByRole("heading", { name: "Night Owls", level: 1 }),
       ).toBeVisible();
       await expect(view.getByText("Joining is by invite only.")).toBeVisible();
-      const accounts = view.getByRole("region", { name: "Accounts (4)" });
+      const accounts = view.getByRole("region", { name: "Players (4)" });
       for (const tag of [...CAPTAIN_TAGS, ...MATE_TAGS.slice(0, 2)]) {
         await expect(accounts.getByText(tag)).toBeVisible();
       }

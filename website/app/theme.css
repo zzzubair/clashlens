@@ -184,7 +184,6 @@ h3 {
 
 .search-panel,
 .saved-summary,
-.refresh-panel,
 .metric-card,
 .notice,
 .quality-section,
@@ -550,8 +549,7 @@ h3 {
 }
 
 .metric-row,
-.detail-list > div,
-.refresh-status {
+.detail-list > div {
   border-color: var(--cl-border);
 }
 
@@ -858,23 +856,6 @@ h3 {
   font-size: 0.8rem;
   margin-top: 0.4rem;
   color: var(--cl-action-text);
-}
-
-.refresh-status progress,
-.refresh-panel progress {
-  accent-color: var(--cl-accent-contrast);
-}
-
-.refresh-panel {
-  justify-content: flex-start;
-  margin: 1rem 0;
-  padding: 0.75rem;
-}
-
-.refresh-panel p {
-  margin: 0;
-  font-family: var(--cl-font);
-  font-weight: 600;
 }
 
 .page-footer {
