@@ -34,6 +34,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | | Watchlist comparison over the last 7 days | Exists | `/v1/account/groups/{id}/comparison?days=7`. |
 | | Each member's whole-Season numbers | Exists | The comparison only offers 3, 7 or 14 days, so Whole Season reads `/v1/players/{tag}` (this Season's finished days) for each member and you: up to 21 reads. |
 | Armies on offense | Your daily attack counts per army type; Legends hit rate per type | Exists | `/v1/players/{tag}/armies?lens=offense` returns your attacks per type over `days=3`, `days=7` or `days=season` (this Season's finished days) (counts saved since #458) and every tracked player's per type, from the saved daily counts per army (`army_package_day_counts`) the Armies page also adds up. |
+| Notebook | The account's base today, its run so far (first day, held of defenses) and a base picked from tomorrow; also the Armies on defense base line | Exists | `/v1/account/notebook`, read once per dashboard load for both cards and only while the Notebook is on. |
 
 ## Shared
 
