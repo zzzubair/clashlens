@@ -719,8 +719,9 @@ function answer(url: URL): [status: number, body: unknown] {
   return [404, { error: "not_found" }];
 }
 
+// The Notebook card needs the Notebook, switched off here (dashboard-notebook.test.ts).
 const ALL_CARDS = Object.keys(CARDS).filter(
-  (card) => CARDS[card as CardId].built,
+  (card) => CARDS[card as CardId].built && card !== "notebook",
 ) as CardId[];
 
 const loaderArgs = (url: string) =>

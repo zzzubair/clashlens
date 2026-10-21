@@ -25,6 +25,8 @@ const ALL_CARDS = [
   "Offense consistency",
   "Watchlist",
   "Armies on offense",
+  // The browser test stack runs with the Notebook switch on.
+  "Notebook",
 ];
 const DEFAULT_CARDS = ALL_CARDS.slice(0, 7);
 

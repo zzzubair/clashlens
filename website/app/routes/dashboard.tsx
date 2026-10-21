@@ -20,7 +20,7 @@ import {
 } from "../components/FrontPage";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import type { DashboardSettings } from "../lib/dashboard";
+import type { CardId, DashboardSettings } from "../lib/dashboard";
 import {
   CARD_IDS,
   isDashboardSave,
@@ -29,6 +29,7 @@ import {
   readSettings,
   serializeSettings,
   shownCards,
+  switchedOffCards,
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
@@ -39,6 +40,8 @@ import "../dashboard.css";
 import "../dashboard-cards.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
+import "../notebook.css";
+import "../dashboard-notebook.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 // Cards read within this go out with the page; slower ones stream in.
@@ -53,6 +56,8 @@ export type DashboardLoaderData =
       playersUnavailable: boolean;
       selectedTag: string | null;
       settings: DashboardSettings;
+      /** Cards whose feature is switched off, kept out of "+ Add a card". */
+      cardsOff: CardId[];
       /** Each card's read, sent on as it finishes. */
       cards: CardReads;
       /** The Reset that ends the Legend day the cards were read for. */
@@ -95,8 +100,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (query.has("q")) {
     throw redirect(`/search?${new URLSearchParams({ q: query.get("q") ?? "" })}`);
   }
-  const { getWebsiteConfig, isDashboardEnabled } =
+  const { getWebsiteConfig, isDashboardEnabled, isNotebookEnabled } =
     await import("../server/config.server");
+  const notebook = isNotebookEnabled();
+  const cardsOff = switchedOffCards({ notebook });
   const { readLoginIdentity, freshIdempotencyKey, isAccountNotFoundError } =
     await import("../server/actions.server");
   let config;
@@ -135,7 +142,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     playersUnavailable = true;
   }
 
-  const settings = readSettings(account.preferences.dashboard);
+  const settings = readSettings(account.preferences.dashboard, cardsOff);
   const requested = normalizePlayerTag(query.get("player") ?? "");
   const only = query.get("cards")?.split(",");
   const selected =
@@ -152,7 +159,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         only
           ? CARD_IDS.filter((card) => only.includes(card))
           : shownCards(settings.layout),
-        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
+        {
+          client,
+          selected,
+          settings,
+          waitForBoard: query.get("board") === "wait",
+          notebook,
+        },
         identity,
       ),
       CARD_WAIT_MS,
@@ -166,6 +179,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       playersUnavailable,
       selectedTag: selected?.tag ?? null,
       settings,
+      cardsOff,
       cards,
       dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
@@ -211,7 +225,7 @@ export async function action({ request }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
-  const { getWebsiteConfig } = await import("../server/config.server");
+  const { getWebsiteConfig, isNotebookEnabled } = await import("../server/config.server");
   const fail = (status: number, error: string) =>
     data<DashboardActionData>(
       {
@@ -263,7 +277,7 @@ export async function action({ request }: Route.ActionArgs) {
       error: null,
       idempotencyKey: actions.freshIdempotencyKey(),
       // As the next load reads them back.
-      settings: readSettings(stored),
+      settings: readSettings(stored, switchedOffCards({ notebook: isNotebookEnabled() })),
     },
     { headers: NO_STORE },
   );
@@ -492,6 +506,7 @@ function SignedInDashboard({
             key={selected.tag}
             tag={selected.tag}
             settings={settings}
+            cardsOff={loaderData.cardsOff}
             data={switching ? null : loaderData.cards}
             dayOver={dayOver}
             idempotencyKey={loaderData.idempotencyKey}

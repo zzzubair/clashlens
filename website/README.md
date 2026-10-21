@@ -186,10 +186,12 @@ page at `/`: the Dashboard preview with Create account and Sign in (only while
 the switch is on), the big search, Rankings and Analytics buttons, and the top
 10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
-Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
-screens, they move to a bar at the bottom of the screen: Home (Dashboard when
-signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
-holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
+Notebook (signed in, with the Notebook on), Rankings, Analytics, Crews,
+Watchlists and Blog. Below 64rem, and on touch screens, they move to a bar at
+the bottom of the screen: Home (Dashboard when signed in with the Dashboard
+on), Rankings, Analytics, Crews and More, which holds Watchlists, Blog and Join
+Discord. Signed in with the Notebook on, Notebook takes Crews' place in the bar
+and Crews moves into More; the top bar keeps the logo, search,
 the theme switch and Sign in or the account menu. A signed-out visitor who
 opens a page that needs an account sees, in its place, what the page is for and
 separate Create account and Sign in buttons that both come back to it
@@ -210,7 +212,8 @@ status message; with no linked player the page shows how to link one. On a
 phone every card is full width, the Customise bar stays at the bottom and
 dialogs open as bottom sheets.
 
-All 13 cards are built. Each card reads saved player pages, tracked
+All 14 cards are built; the Notebook card is offered only while the Notebook
+is on. Each card reads saved player pages, tracked
 leaderboards and groups through the private API; a player page is read once
 per load however many cards use it, and a card whose reads fail says it could
 not be loaded without taking the other cards down. Switching account shows its
@@ -325,7 +328,10 @@ as you type), its link, and Edit to rename or delete. The base ID is for
 support only, so pages never show it beyond the address. Every change saves at
 once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
-Reset.
+Reset. While the Notebook is on, the dashboard's Armies on defense card links to
+the base the selected account runs today, and Customise offers a Notebook card,
+off by default; with no base both open `/notebook?change=<tag>`, the Notebook
+with that account's Change sheet open.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the

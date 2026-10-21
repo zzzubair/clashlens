@@ -28,6 +28,8 @@ import {
   type GoalData,
   type GroupRow,
   type GroupWatchData,
+  notebookToday,
+  type NotebookToday,
   type PastBases,
   type RivalRow,
   type RivalsData,
@@ -44,6 +46,7 @@ import type { ArmyDays } from "../lib/dashboard-armies";
 import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
 import { getGroupComparison } from "./group-comparison.server";
+import { getNotebook } from "./notebook.server";
 import {
   requestJson,
   type GoogleAccountIdentity,
@@ -227,6 +230,8 @@ export interface CardContext {
   settings: DashboardSettings;
   /** Wait a few seconds for the shared board's read under way. */
   waitForBoard?: boolean;
+  /** The Notebook is switched on, so its base shows on the dashboard. */
+  notebook?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -817,6 +822,14 @@ export function readCards(
     tag: ctx.selected.tag,
     armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
   });
+  // Armies on defense and the Notebook card share one read of the Notebook.
+  let notebookRead: Promise<NotebookToday | null> | undefined;
+  const notebook = () =>
+    (notebookRead ??= ctx.notebook
+      ? getNotebook(identity)
+          .then((read) => notebookToday(read, ctx.selected.tag))
+          .catch(() => null)
+      : Promise.resolve(null));
   const readers: {
     [Card in keyof CardDataMap]: () => Promise<CardDataMap[Card] | null>;
   } = {
@@ -845,7 +858,11 @@ export function readCards(
         ...waiting(read),
       };
     },
-    "armies-defense": () => armies("defense"),
+    "armies-defense": async () => {
+      if (!ctx.notebook) return armies("defense");
+      const [read, base] = await Promise.all([armies("defense"), notebook()]);
+      return { ...read, base };
+    },
     "armies-offense": () => armies("offense"),
     "legend-clock": async () => {
       const page = await pages(ctx.selected.tag);
@@ -864,6 +881,7 @@ export function readCards(
     "recent-form": season,
     "offense-consistency": season,
     "group-watch": () => groupWatchData(ctx, pages, identity),
+    notebook,
   };
   return Object.fromEntries(
     cards

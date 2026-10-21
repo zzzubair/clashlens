@@ -7,6 +7,7 @@
 import type { LinkedPlayerCard } from "./account-contracts";
 import type { ClockBattle, OpponentRow, PlayerDay, RankRange } from "./dashboard";
 import type { PlayerArmies } from "./dashboard-armies";
+import { runOn, type BaseRecord, type Notebook } from "./notebook";
 
 /** Every Legend I player starts a Season here (domain.py SEASON_START_TROPHIES). */
 export const SEASON_START_TROPHIES = 5000;
@@ -476,6 +477,37 @@ export interface PastBases {
 export interface ArmiesData {
   tag: string;
   armies: PlayerArmies;
+  /**
+   * Armies on defense only: the account's base today, for its "Base: Ring ›"
+   * line. Left out while the Notebook is off; null when it could not be read.
+   */
+  base?: NotebookToday | null;
+}
+
+/** One account's base today in the Clasher's Notebook. */
+export interface NotebookToday {
+  tag: string;
+  /** Null when the account runs no base today. */
+  base: { id: string; name: string; since: number; record: BaseRecord } | null;
+  /** A base picked from tomorrow; a null name is "no base". */
+  next: { day: number; name: string | null } | null;
+}
+
+/** What the Notebook says `tag` runs today, as the dashboard shows it. */
+export function notebookToday(notebook: Notebook, tag: string): NotebookToday {
+  const player = notebook.players.find((item) => item.tag === tag);
+  const name = (id: string | null) =>
+    notebook.bases.find((base) => base.id === id)?.name ?? null;
+  const run = player ? runOn(player, notebook.season.today) : null;
+  const base = run && name(run.base);
+  return {
+    tag,
+    base:
+      run && base !== null
+        ? { id: run.base, name: base, since: run.from, record: run.record }
+        : null,
+    next: player?.next ? { day: player.next.day, name: name(player.next.base) } : null,
+  };
 }
 
 export interface CardDataMap {
@@ -492,6 +524,7 @@ export interface CardDataMap {
   "recent-form": SeasonData;
   "offense-consistency": SeasonData;
   "group-watch": GroupWatchData;
+  notebook: NotebookToday;
 }
 
 /** Null when the card's data could not be read this time. */

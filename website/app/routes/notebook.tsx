@@ -1,9 +1,17 @@
 import { useState } from "react";
-import { data, Link, redirect, useLoaderData, useOutletContext } from "react-router";
+import {
+  data,
+  Link,
+  redirect,
+  useLoaderData,
+  useOutletContext,
+  useSearchParams,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   AccountRow,
+  canSet,
   ChangeSheet,
   DaysSheet,
   FixDaySheet,
@@ -25,7 +33,8 @@ export function meta() {
 }
 
 /** GET /notebook — the signed-in Clasher's Season notebook: each linked
- * account's base and run strip, and the Library. While
+ * account's base and run strip, and the Library. `?change=<tag>`, from the
+ * dashboard, opens that account's Change sheet. While
  * CLASHLENS_NOTEBOOK_ENABLED is off the page does not exist. */
 export async function loader({ request }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
@@ -77,7 +86,13 @@ export default function NotebookRoute() {
 
 function NotebookPage({ notebook }: { notebook: Notebook }) {
   const saver = useOutletContext<Saver>();
-  const [open, setOpen] = useState<Open | null>(null);
+  const [searchParams] = useSearchParams();
+  const [open, setOpen] = useState<Open | null>(() => {
+    const asked = notebook.players.find(
+      (item) => item.tag === searchParams.get("change"),
+    );
+    return asked && canSet(notebook, asked) ? { kind: "change", tag: asked.tag } : null;
+  });
   const close = () => setOpen(null);
   const { season } = notebook;
   const player =

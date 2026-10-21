@@ -30,7 +30,7 @@ export const CARD_SIZE_LABELS: Record<CardSize, string> = {
   l: "Large",
 };
 
-/** The 13 cards in the order of the owner's card list (docs/dashboard.md). */
+/** The 14 cards in the order of the owner's card list (docs/dashboard.md). */
 const CARD_LIST = {
   "legend-day": {
     title: "Legend day",
@@ -118,6 +118,12 @@ const CARD_LIST = {
     description: "Your hit rate with each army, next to everyone else's.",
     built: true,
   },
+  notebook: {
+    title: "Notebook",
+    size: "s",
+    description: "The base this account runs today, from your Notebook, and how it held.",
+    built: true,
+  },
 } satisfies Record<string, CardDefinition>;
 
 export type CardId = keyof typeof CARD_LIST;
@@ -196,9 +202,19 @@ export function isDashboardSave(
   );
 }
 
-/** Cards "+ Add a card" offers: every built card not already shown. */
-export function addableCards(shown: readonly CardId[]): CardId[] {
-  return CARD_IDS.filter((id) => CARDS[id].built && !shown.includes(id));
+/** Cards "+ Add a card" offers: every built card not already shown or switched off. */
+export function addableCards(
+  shown: readonly CardId[],
+  off: readonly CardId[] = [],
+): CardId[] {
+  return CARD_IDS.filter(
+    (id) => CARDS[id].built && !shown.includes(id) && !off.includes(id),
+  );
+}
+
+/** Cards whose feature's switch is off: the Notebook card needs the Notebook. */
+export function switchedOffCards(switches: { notebook: boolean }): CardId[] {
+  return switches.notebook ? [] : ["notebook"];
 }
 
 function isCardId(value: unknown): value is CardId {
@@ -248,14 +264,18 @@ export function serializeSettings(settings: DashboardSettings): Record<string, u
 /**
  * Read saved settings. Anything missing or unreadable falls back to its
  * default; earlier test layouts (versions 1 and 2) count as a first visit.
+ * Cards in `off` are left out of the layout, as if never added.
  */
-export function readSettings(value: unknown): DashboardSettings {
+export function readSettings(
+  value: unknown,
+  off: readonly CardId[] = [],
+): DashboardSettings {
   const settings = defaultSettings();
   if (!isRecord(value) || value.v !== 3) return settings;
   if (value.layout === "default") settings.layout = "default";
   else if (Array.isArray(value.layout)) {
     settings.layout = [...new Set(value.layout.filter(isCardId))].filter(
-      (id) => CARDS[id].built,
+      (id) => CARDS[id].built && !off.includes(id),
     );
   }
   if (isGoal(value.goal)) settings.goal = value.goal;
