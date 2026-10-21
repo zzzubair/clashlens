@@ -134,7 +134,7 @@ describe("group comparison", () => {
 
   it("reads the signed-in account's group for a supported window only", async () => {
     mocks.requestJson.mockResolvedValue(payload());
-    const result = await load(`/account/groups/${GROUP_ID}?days=3`);
+    const result = await load(`/account/watchlists/${GROUP_ID}?days=3`);
     expect(result.data.comparison).not.toBeNull();
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=3`,
@@ -149,7 +149,9 @@ describe("group comparison", () => {
       days: 7,
       day_starts: [...DAYS, ...DAYS, DAYS[0]],
     });
-    const fallback = await load(`/account/groups/${GROUP_ID}?days=999&sort=__proto__`);
+    const fallback = await load(
+      `/account/watchlists/${GROUP_ID}?days=999&sort=__proto__`,
+    );
     expect(fallback.data.sort).toBe("trophies");
     expect(mocks.requestJson).toHaveBeenLastCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=7`,
@@ -165,7 +167,7 @@ describe("group comparison", () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(404, { error: "group_not_found" }),
     );
-    const result = await load(`/account/groups/${GROUP_ID}`);
+    const result = await load(`/account/watchlists/${GROUP_ID}`);
     expect(result.init.status).toBe(404);
     expect(result.data).toMatchObject({ notFound: true, comparison: null });
   });
@@ -177,7 +179,7 @@ describe("group comparison", () => {
         detail: "34 players; compare at most 20",
       }),
     );
-    const result = await load(`/account/groups/${GROUP_ID}`);
+    const result = await load(`/account/watchlists/${GROUP_ID}`);
     expect(result.data.tooLarge).toBe("34 players; compare at most 20");
   });
 
@@ -185,18 +187,18 @@ describe("group comparison", () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(403, { error: "account_not_found" }),
     );
-    const thrown = await load(`/account/groups/${GROUP_ID}?days=3`).catch(
+    const thrown = await load(`/account/watchlists/${GROUP_ID}?days=3`).catch(
       (error: unknown) => error,
     );
     expect((thrown as Response).headers.get("Location")).toBe(
-      `/account/setup?returnPath=${encodeURIComponent(`/account/groups/${GROUP_ID}`)}`,
+      `/account/setup?returnPath=${encodeURIComponent(`/account/watchlists/${GROUP_ID}`)}`,
     );
   });
 
   it("shows the table without explanation paragraphs", async () => {
     const handler = createStaticHandler([
       {
-        path: "/account/groups/:groupId",
+        path: "/account/watchlists/:groupId",
         Component: GroupCompareRoute,
         loader: () => ({
           comparison: mapGroupComparison(
@@ -215,7 +217,7 @@ describe("group comparison", () => {
       },
     ]);
     const context = await handler.query(
-      new Request(`${ORIGIN}/account/groups/${GROUP_ID}`),
+      new Request(`${ORIGIN}/account/watchlists/${GROUP_ID}`),
     );
     if (context instanceof Response) throw new Error("unexpected response");
     const html = renderToString(
@@ -243,7 +245,7 @@ describe("group comparison", () => {
   it("offers to reload the comparison when it could not be read", async () => {
     const handler = createStaticHandler([
       {
-        path: "/account/groups/:groupId",
+        path: "/account/watchlists/:groupId",
         Component: GroupCompareRoute,
         loader: () => ({
           comparison: null,
@@ -256,7 +258,7 @@ describe("group comparison", () => {
       },
     ]);
     const context = await handler.query(
-      new Request(`${ORIGIN}/account/groups/${GROUP_ID}?days=3&sort=net`),
+      new Request(`${ORIGIN}/account/watchlists/${GROUP_ID}?days=3&sort=net`),
     );
     if (context instanceof Response) throw new Error("unexpected response");
     const html = renderToString(
@@ -267,12 +269,12 @@ describe("group comparison", () => {
     ).replaceAll("&amp;", "&");
     expect(html).toContain("Comparison unavailable");
     expect(html).toContain(
-      `<a href="/account/groups/${GROUP_ID}?days=3&sort=net">Try again</a>`,
+      `<a href="/account/watchlists/${GROUP_ID}?days=3&sort=net">Try again</a>`,
     );
   });
 
   it("does not call Python for a malformed group ID", async () => {
-    const result = await load("/account/groups/not-a-group");
+    const result = await load("/account/watchlists/not-a-group");
     expect(result.init.status).toBe(404);
     expect(mocks.requestJson).not.toHaveBeenCalled();
   });
@@ -283,7 +285,7 @@ describe("group comparison", () => {
     // Totals over 14 days pass 1,000 trophies, and each count reads in the singular.
     for (const text of ["−1,234", "+3,808 won · −3,360 lost", "1 defense gave up 1 star"])
       expect(html).toContain(text);
-    expect(html).not.toContain("No players in this group yet");
+    expect(html).not.toContain("No players in this watchlist yet");
   });
 
   it("shows your own players alongside a group without members", async () => {
@@ -291,16 +293,16 @@ describe("group comparison", () => {
     comparison.players = comparison.players.filter((player) => !player.inGroup);
     const html = await renderComparison(comparison);
     expect(html.match(/<tr/g)).toHaveLength(2);
-    expect(html).toContain("not in this group");
-    expect(html).not.toContain("No players in this group yet");
+    expect(html).toContain("not in this watchlist");
+    expect(html).not.toContain("No players in this watchlist yet");
   });
 
   it("says a comparison without any players has nobody to compare", async () => {
     const comparison = worstComparison(3);
     comparison.players = [];
     const html = await renderComparison(comparison);
-    expect(html).toContain("No players in this group yet");
-    expect(html).toContain(`href="/account/groups#group-${comparison.groupId}"`);
+    expect(html).toContain("No players in this watchlist yet");
+    expect(html).toContain(`href="/account/watchlists#group-${comparison.groupId}"`);
     expect(html).not.toContain("<table");
   });
 });
@@ -308,7 +310,7 @@ describe("group comparison", () => {
 async function renderComparison(comparison: GroupComparison) {
   const handler = createStaticHandler([
     {
-      path: "/account/groups/:groupId",
+      path: "/account/watchlists/:groupId",
       Component: GroupCompareRoute,
       loader: () => ({
         comparison,
@@ -321,7 +323,7 @@ async function renderComparison(comparison: GroupComparison) {
     },
   ]);
   const context = await handler.query(
-    new Request(`${ORIGIN}/account/groups/${GROUP_ID}`),
+    new Request(`${ORIGIN}/account/watchlists/${GROUP_ID}`),
   );
   if (context instanceof Response) throw new Error("unexpected response");
   return renderToString(

@@ -182,6 +182,10 @@ test("asks first, counts only after Accept without player tags, and remembers th
   await expect
     .poll(() => sent("search_submitted").map(({ properties }) => properties))
     .toEqual([expect.objectContaining({ source: "home", input: "name" })]);
+  // Its results page counts what it showed.
+  await expect
+    .poll(() => sent("search_results_shown").map(({ properties }) => properties.source))
+    .toContain("home");
 
   for (const body of posthog.bodies) {
     expect(body).not.toMatch(/2PP|2026-09|Secret Name|season=/i);
@@ -214,6 +218,16 @@ test("accepting again after Decline counts the page it is made on afresh", async
   await reopenFromFooter(page);
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await expect.poll(lookups).toBe(2);
+});
+
+test("on a phone the open More sheet covers the question", async ({ page }) => {
+  await fakePostHog(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect(banner(page)).toBeVisible();
+  await page.locator("details.site-menu > summary").click();
+  await page.locator(".site-menu-panel").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
 });
 
 test("Decline loads nothing, is remembered, and can be changed on the privacy page", async ({
@@ -321,7 +335,10 @@ test("changing to Decline deletes the ID and stops a held, preparing or retried 
   ).toBeFocused();
   // Long past any wait before sending and any retry of the failed send.
   await page.clock.runFor(120_000);
-  await page.getByRole("banner").getByRole("link", { name: "Home", exact: true }).click();
+  await page
+    .getByRole("banner")
+    .getByRole("link", { name: "Clash Lens", exact: true })
+    .click();
   await expect(page.getByRole("searchbox").first()).toBeVisible();
   await page.clock.runFor(120_000);
   expect(sentAfterDecline).toEqual([]);

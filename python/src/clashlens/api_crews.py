@@ -861,22 +861,41 @@ def _valid_invite(connection: Any, code: str, now: datetime) -> Any:
 
 
 def get_invite(
-    database: ApiDatabase, account_id: int, code: str, *, now: datetime
+    database: ApiDatabase, account_id: int | None, code: str, *, now: datetime
 ) -> dict[str, Any]:
-    """What a signed-in clasher sees on opening an invite link. A link that
-    doesn't work says nothing about the crew it was for."""
+    """What a clasher sees on opening an invite link; signed out (None), the
+    crew without their accounts. A link that was turned off or ran out names
+    its crew, which anyone can look inside; an unknown one says nothing."""
     with database.pool.connection() as connection:
-        crew_count = int(
-            connection.execute(
-                "SELECT count(*) FROM crew_accounts WHERE account_id = %s",
-                (account_id,),
-            ).fetchone()[0]
+        crew_count = (
+            0
+            if account_id is None
+            else int(
+                connection.execute(
+                    "SELECT count(*) FROM crew_accounts WHERE account_id = %s",
+                    (account_id,),
+                ).fetchone()[0]
+            )
         )
         crew = _valid_invite(connection, code, now)
         if crew is None:
+            ended = connection.execute(
+                """
+                SELECT crew.public_id, crew.name
+                FROM crew_invites AS invite
+                JOIN crews AS crew ON crew.id = invite.crew_id
+                WHERE invite.code = %s
+                """,
+                (code,),
+            ).fetchone()
             return {
                 "kind": "crew-invite",
-                "state": "invalid",
+                "state": "invalid" if ended is None else "ended",
+                **(
+                    {}
+                    if ended is None
+                    else {"crew_id": str(ended[0]), "name": _text(ended[1])}
+                ),
                 "in_crew": False,
                 "crew_count": crew_count,
                 "accounts": [],
@@ -892,7 +911,8 @@ def get_invite(
             (crew_row,),
         ).fetchone()
         in_crew = (
-            connection.execute(
+            account_id is not None
+            and connection.execute(
                 "SELECT 1 FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
                 (crew_row, account_id),
             ).fetchone()

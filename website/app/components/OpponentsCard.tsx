@@ -337,7 +337,7 @@ export function OpponentsCard({
                   to={addToGroupPath(row.tag)}
                   onClick={(event) => event.stopPropagation()}
                 >
-                  Add to group
+                  Add to watchlist
                 </Link>
               </div>
             </div>

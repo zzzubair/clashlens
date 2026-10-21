@@ -33,5 +33,5 @@ export function canonicalPlayerPath(value: string): string {
 
 /** Where a signed-in Clasher saves the player into one of their groups. */
 export function addToGroupPath(tag: string): string {
-  return `/account/groups/add/${tag.replace(/^#/, "")}`;
+  return `/account/watchlists/add/${tag.replace(/^#/, "")}`;
 }

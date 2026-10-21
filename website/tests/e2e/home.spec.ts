@@ -55,20 +55,28 @@ test("old About links open home, and no page links to About", async ({ page }) =
 
   await page.goto("/about");
   await expect(page).toHaveURL(/\/$/);
-  await expect(
-    page.getByRole("heading", { name: "Clash Lens", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No account needed" })).toBeVisible();
   await expect(page.getByRole("link", { name: "About", exact: true })).toHaveCount(0);
 });
 
-test("home and the full leaderboard show collected synthetic players", async ({
+test("the front page and the full leaderboard show collected synthetic players", async ({
   page,
 }) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Clash Lens", exact: true }),
+    page.getByRole("heading", { name: "Your Legend day, on one page" }),
   ).toBeVisible();
+  const preview = page.getByRole("region", { name: "Your Legend day, on one page" });
+  await expect(preview.getByRole("link", { name: "Create account" })).toHaveAttribute(
+    "href",
+    "/signup?returnPath=%2F",
+  );
+  await expect(preview.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+    "href",
+    "/login?returnPath=%2F",
+  );
+  await expect(page.getByRole("heading", { name: "Top 10 right now" })).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),
   ).toBeVisible();
@@ -77,7 +85,10 @@ test("home and the full leaderboard show collected synthetic players", async ({
   await expect(homeTable.getByText("Synthetic Clasher 001")).toBeVisible();
   await expect(homeTable.getByText("#2PP", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "Full rankings" }).click();
+  await page
+    .getByRole("navigation", { name: "Rankings and Analytics" })
+    .getByRole("link", { name: /^Rankings/ })
+    .click();
   await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
   await expect(page.getByRole("heading", { name: "Live Leaderboard" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Live Leaderboard" })).toBeVisible();
@@ -233,7 +244,9 @@ test.describe("on a touch phone", () => {
         page.getByRole("region", { name: "Player and profile search suggestions" }),
       ).toContainText("Synthetic Clasher 001");
       await tapMiddle(page, page.getByRole("button", { name: "Search", exact: true }));
-      await expect(page).toHaveURL(/\/\?q=Synthetic(?:\+|%20)Clasher(?:\+|%20)001$/);
+      await expect(page).toHaveURL(
+        /\/search\?q=Synthetic(?:\+|%20)Clasher(?:\+|%20)001$/,
+      );
       await expect(
         page.getByRole("heading", { name: "Clash of Clans players" }),
       ).toBeVisible();
@@ -330,14 +343,14 @@ test("public pages render without browser JavaScript", async ({ browser }) => {
   await context.close();
 });
 
-test("header search opens from its icon away from home, suggests players and closes on Escape", async ({
+test("header search opens from its icon away from the search page, suggests players and closes on Escape", async ({
   page,
 }) => {
   const searches: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/resources/players/search")) searches.push(request.url());
   });
-  await page.goto("/");
+  await page.goto("/search");
   await expect(page.getByRole("button", { name: "Search players" })).toHaveCount(0);
 
   await page.goto("/blog");
@@ -390,7 +403,7 @@ test("header search is a full-width sheet on phones and jumps to an exact tag", 
   await expect(panel).toHaveCount(0);
 });
 
-test("pressing Enter on a name in the header search shows suggestions without leaving the page", async ({
+test("pressing Enter on a name in the header search opens the full results", async ({
   page,
 }) => {
   await page.goto("/blog");
@@ -399,11 +412,10 @@ test("pressing Enter on a name in the header search shows suggestions without le
   );
   await input.fill("Synthetic Clasher 001");
   await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/search\?q=Synthetic(?:\+|%20)Clasher(?:\+|%20)001$/);
   await expect(
-    page.getByRole("region", { name: "Player and profile search suggestions" }),
-  ).toContainText("Synthetic Clasher 001");
-  await expect(page).toHaveURL(/\/blog$/);
-  await expect(input).toHaveValue("Synthetic Clasher 001");
+    page.getByRole("heading", { name: "Clash of Clans players" }),
+  ).toBeVisible();
 });
 
 test("the error page header has the search and jumps to an exact tag", async ({

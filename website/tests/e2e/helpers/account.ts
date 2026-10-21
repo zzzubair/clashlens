@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 
+import { LOGIN_COOKIE_NAME } from "../../../app/server/auth-cookies.server";
+
 /** Collect browser failures so a page cannot appear healthy while JavaScript failed. */
 export function trackPageErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -37,30 +39,55 @@ export function expectNoPortRequests(
   expect(hits, `${label}: unexpected browser requests to port ${port}`).toEqual([]);
 }
 
+/**
+ * Sign in with the loopback provider. A new identity has no account yet, so
+ * it answers "No account found", still signed out, and Create account signs
+ * up with the same provider and goes on to choosing a username.
+ *
+ * Tests pick a fake identity by rewriting the request to the provider, which
+ * Playwright can only do when the page's JavaScript sends the browser straight
+ * there. Clicked before it loads, the link follows a redirect instead and
+ * signs in as the default identity, so each click waits for the page first.
+ */
+async function signInWith(page: Page, provider: "Google" | "Discord"): Promise<void> {
+  await page.goto("/login", { waitUntil: "networkidle" });
+  await page.getByRole("link", { name: `Sign in with ${provider}` }).click();
+  await expect(page).toHaveURL(/\/(?:login\?none=|users\/[a-z][a-z0-9_]+$)/);
+  if (new URL(page.url()).pathname === "/login") {
+    await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
+    const cookies = await page.context().cookies();
+    expect(cookies.map(({ name }) => name)).not.toContain(LOGIN_COOKIE_NAME);
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("link", { name: `Create account with ${provider}` }).click();
+    await expect(page).toHaveURL(/\/account\/setup$/);
+  }
+}
+
 /** Complete the local Google sign-in flow against the loopback provider. */
 export async function signIn(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Google" }).click();
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
+  await signInWith(page, "Google");
 }
 
 /** Complete the local Discord sign-in flow against the loopback provider. */
 export async function signInDiscord(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Discord" }).click();
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
+  await signInWith(page, "Discord");
 }
 
-/** Create the account only when this identity has not already been used. */
+/**
+ * Create the account only when this identity has not already been used. A
+ * new account is asked to link a player first; this goes on to the account.
+ */
 export async function ensureAccount(
   page: Page,
   username: string,
   displayName: string,
 ): Promise<void> {
   if (new URL(page.url()).pathname === "/account/setup") {
-    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Username", { exact: true }).fill(username);
     await page.getByLabel("Display name").fill(displayName);
     await page.getByRole("button", { name: "Create account" }).click();
+    await expect(page).toHaveURL(/\/account\/verify-player$/);
+    await page.goto("/account");
   }
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await expect(
@@ -74,4 +101,26 @@ export async function expectNoSeriousAccessibilityViolations(page: Page): Promis
     ["critical", "serious"].includes(violation.impact ?? ""),
   );
   expect(seriousViolations, JSON.stringify(seriousViolations, null, 2)).toEqual([]);
+}
+
+/**
+ * "[Create account] Already have one? [Sign in]" on this page: the question
+ * always sits beside the Sign in it introduces, every button is at least
+ * 44 px tall, and on a phone the pair wraps below Create account as a whole.
+ */
+export async function expectAccountButtonsRead(
+  page: Page,
+  phone: boolean,
+): Promise<void> {
+  const row = page.locator(".account-buttons").filter({ hasText: "Already have one?" });
+  const create = (await row.getByRole("link", { name: "Create account" }).boundingBox())!;
+  const question = (await row.getByText("Already have one?").boundingBox())!;
+  const signIn = (await row
+    .getByRole("link", { name: "Sign in", exact: true })
+    .boundingBox())!;
+  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+  expect(Math.abs(middle(question) - middle(signIn))).toBeLessThanOrEqual(4);
+  expect(question.x).toBeLessThan(signIn.x);
+  expect(Math.min(create.height, signIn.height)).toBeGreaterThanOrEqual(44);
+  if (phone) expect(middle(signIn)).toBeGreaterThan(create.y + create.height);
 }

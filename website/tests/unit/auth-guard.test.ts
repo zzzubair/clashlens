@@ -45,6 +45,16 @@ function loginRequest(path = "/account", cookie?: string): Request {
   });
 }
 
+// A page opened signed out answers 401 and shows its "needs an account" box.
+function expectNeedsAccount(thrown: unknown, returnPath: string | null): void {
+  const answer = thrown as { data: unknown; init: ResponseInit | null };
+  expect(answer.init?.status).toBe(401);
+  expect(answer.data).toEqual({ needsAccount: true, returnPath });
+  const text = JSON.stringify(answer.data);
+  expect(text).not.toContain(IDENTITY.providerSubject);
+  expect(text.toLowerCase()).not.toContain("provider");
+}
+
 function expectLoginRedirect(thrown: unknown, expectedLocation: string): void {
   expect(thrown).toBeInstanceOf(Response);
   const response = thrown as Response;
@@ -74,19 +84,38 @@ describe("requireLogin auth guard", () => {
     ).resolves.toEqual(IDENTITY);
   });
 
-  it("redirects to /login with the current path as the return path when the cookie is missing", async () => {
+  it("sends a form without a login to /login, coming back to its page", async () => {
+    const request = new Request("https://clashlens.example/account/watchlists", {
+      method: "POST",
+    });
+    await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {
+      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fwatchlists");
+      return true;
+    });
+  });
+
+  it("keeps a player tag's # in the return path", async () => {
+    await expect(
+      requireLogin(loginRequest("/account/watchlists/add/%232PP")),
+    ).rejects.toSatisfy((thrown: unknown) => {
+      expectNeedsAccount(thrown, "/account/watchlists/add/%232PP");
+      return true;
+    });
+  });
+
+  it("answers a page without a login with its needs-an-account box, coming back to it", async () => {
     await expect(requireLogin(loginRequest("/account"))).rejects.toSatisfy(
       (thrown: unknown) => {
-        expectLoginRedirect(thrown, "/login?returnPath=%2Faccount");
+        expectNeedsAccount(thrown, "/account");
         return true;
       },
     );
   });
 
-  it("redirects with the exact pathname for nested account routes", async () => {
+  it("comes back to the exact pathname for nested account routes", async () => {
     await expect(requireLogin(loginRequest("/account/saved-players"))).rejects.toSatisfy(
       (thrown: unknown) => {
-        expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fsaved-players");
+        expectNeedsAccount(thrown, "/account/saved-players");
         return true;
       },
     );
@@ -99,7 +128,7 @@ describe("requireLogin auth guard", () => {
     ]) {
       await expect(requireLogin(loginRequest(path))).rejects.toSatisfy(
         (thrown: unknown) => {
-          expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+          expectNeedsAccount(thrown, "/account/groups");
           return true;
         },
       );
@@ -107,7 +136,7 @@ describe("requireLogin auth guard", () => {
     await expect(
       requireLogin(loginRequest("/account/setup.data?returnPath=%2Faccount%2Fgroups")),
     ).rejects.toSatisfy((thrown: unknown) => {
-      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+      expectNeedsAccount(thrown, "/account/groups");
       return true;
     });
   });
@@ -127,7 +156,7 @@ describe("requireLogin auth guard", () => {
         ),
       ),
     ).rejects.toSatisfy((thrown: unknown) => {
-      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+      expectNeedsAccount(thrown, "/account/groups");
       return true;
     });
   });
@@ -142,13 +171,13 @@ describe("requireLogin auth guard", () => {
       await expect(
         requireLogin(loginRequest(`/account/setup?returnPath=${destination}`)),
       ).rejects.toSatisfy((thrown: unknown) => {
-        expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fsetup");
+        expectNeedsAccount(thrown, "/account/setup");
         return true;
       });
     }
   });
 
-  it("redirects safely for tampered, malformed, and expired cookies", async () => {
+  it("treats tampered, malformed, and expired cookies as signed out", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(
       IDENTITY,
@@ -174,13 +203,13 @@ describe("requireLogin auth guard", () => {
       await expect(
         requireLogin(loginRequest("/account", `${LOGIN_COOKIE_NAME}=${value}`)),
       ).rejects.toSatisfy((thrown: unknown) => {
-        expectLoginRedirect(thrown, "/login?returnPath=%2Faccount");
+        expectNeedsAccount(thrown, "/account");
         return true;
       });
     }
   });
 
-  it("redirects a logged-out login and answers 503 when the API cannot check it", async () => {
+  it("treats a logged-out login as signed out and answers 503 when the API cannot check it", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(
       IDENTITY,
@@ -190,7 +219,7 @@ describe("requireLogin auth guard", () => {
     const request = loginRequest("/account", `${LOGIN_COOKIE_NAME}=${cookie}`);
     mocks.isLoginRevoked.mockResolvedValueOnce(true);
     await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {
-      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount");
+      expectNeedsAccount(thrown, "/account");
       return true;
     });
     mocks.isLoginRevoked.mockRejectedValueOnce(new Error("unavailable"));

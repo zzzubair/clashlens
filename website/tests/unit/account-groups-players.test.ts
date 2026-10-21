@@ -64,7 +64,7 @@ interface Outcome {
 
 async function submit(fields: Record<string, string>): Promise<Outcome> {
   const result = (await action({
-    request: new Request(`${ORIGIN}/account/groups`, {
+    request: new Request(`${ORIGIN}/account/watchlists`, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -173,7 +173,7 @@ describe("adding and removing one group player", () => {
     });
     const handler = createStaticHandler([
       {
-        path: "/account/groups",
+        path: "/account/watchlists",
         Component: GroupsRoute,
         loader: () => ({
           groups: listed?.groups ?? [],
@@ -188,7 +188,7 @@ describe("adding and removing one group player", () => {
         }),
       },
     ]);
-    const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
+    const context = await handler.query(new Request(`${ORIGIN}/account/watchlists`));
     if (context instanceof Response) throw new Error("unexpected response");
     const html = renderToString(
       createElement(StaticRouterProvider, {
@@ -224,13 +224,13 @@ describe("adding and removing one group player", () => {
       400,
       "Enter one valid player tag, like #2PY0LQ.",
     ],
-    ["a duplicate", { tag: TAG }, [TAG], 409, "#P0LQ2Y8 is already in this group."],
+    ["a duplicate", { tag: TAG }, [TAG], 409, "#P0LQ2Y8 is already in this watchlist."],
     [
       "a 21st player",
       { tag: TAG },
       Array.from({ length: 20 }, (_, index) => `#2${"PYLQGRJCUV"[index % 10]}${index}`),
       422,
-      "This group already has 20 players, the most a comparison shows.",
+      "This watchlist already has 20 players, the most a comparison shows.",
     ],
   ])(
     "refuses %s before checking the tag with the game",
@@ -288,7 +288,7 @@ describe("adding and removing one group player", () => {
     const removed = await submit({ action: "remove-player", tag: TAG });
 
     expect(removed.status).toBe(200);
-    expect(removed.data.notice).toBe("Removed #P0LQ2Y8 from the group.");
+    expect(removed.data.notice).toBe("Removed #P0LQ2Y8 from the watchlist.");
     expect(mocks.removeGroupPlayer).toHaveBeenCalledWith(
       IDENTITY,
       GROUP_ID,
@@ -306,7 +306,7 @@ describe("adding and removing one group player", () => {
     const removed = await submit({ action: "remove-player", tag: TAG });
 
     expect(removed.data.generalError?.error.message).toBe(
-      "The group no longer exists. Refresh the page.",
+      "The watchlist no longer exists. Refresh the page.",
     );
   });
 
@@ -323,13 +323,13 @@ describe("adding and removing one group player", () => {
     expect(card).toMatch(
       new RegExp(
         `^<li[^>]*><div class="group-card-head"><h3>[^<]*</h3><a [^>]*>Compare players</a>` +
-          `<a class="button button-secondary" href="/account/groups\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*>Add player</a>` +
-          `<a class="button button-secondary" href="/account/groups\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*>Edit</a></div>` +
-          `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/groups" method="post"><input type="hidden" name="action" value="add-player"/>`,
+          `<a class="button button-secondary" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*>Add player</a>` +
+          `<a class="button button-secondary" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*>Edit</a></div>` +
+          `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/watchlists" method="post"><input type="hidden" name="action" value="add-player"/>`,
       ),
     );
     expect(card).toMatch(
-      /^[^]*?<div id="[^"]+-edit" class="group-panel" hidden=""><div class="group-edit">[^]*?name="action" value="update"[^]*?>Save name<\/button>[^]*?aria-label="Remove [^"]+ from [^"]+"[^]*?<details class="group-delete-step"><summary[^>]*>Delete group<\/summary>[^]*?<button type="submit"[^>]*>Yes, delete group<\/button><a [^>]*>Keep group<\/a>/,
+      /^[^]*?<div id="[^"]+-edit" class="group-panel" hidden=""><div class="group-edit">[^]*?name="action" value="update"[^]*?>Save name<\/button>[^]*?aria-label="Remove [^"]+ from [^"]+"[^]*?<details class="group-delete-step"><summary[^>]*>Delete watchlist<\/summary>[^]*?<button type="submit"[^>]*>Yes, delete watchlist<\/button><a [^>]*>Keep watchlist<\/a>/,
     );
     expect(html).not.toMatch(/class="group-panel">/);
   });
@@ -344,7 +344,7 @@ describe("adding and removing one group player", () => {
     );
     expect(card(add)).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
     expect(card(add)).toContain(
-      `href="/account/groups#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add">Add player</a>`,
+      `href="/account/watchlists#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add">Add player</a>`,
     );
     expect(add.match(/class="group-panel">/g)).toHaveLength(1);
 
@@ -428,7 +428,7 @@ async function renderGroups(
   );
   const handler = createStaticHandler([
     {
-      path: "/account/groups",
+      path: "/account/watchlists",
       Component: GroupsRoute,
       action: () => actionData,
       loader: () => ({
@@ -445,8 +445,11 @@ async function renderGroups(
   ]);
   const context = await handler.query(
     actionData === undefined
-      ? new Request(`${ORIGIN}/account/groups${search}`)
-      : new Request(`${ORIGIN}/account/groups`, { method: "POST", body: new FormData() }),
+      ? new Request(`${ORIGIN}/account/watchlists${search}`)
+      : new Request(`${ORIGIN}/account/watchlists`, {
+          method: "POST",
+          body: new FormData(),
+        }),
   );
   if (context instanceof Response) throw new Error("unexpected response");
   return renderToString(

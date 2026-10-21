@@ -4,15 +4,17 @@ Clash Lens makes competitive Clash of Clans ranked data accessible to all. It
 turns official observations into trustworthy tracking and analysis so players
 can make evidence-led decisions.
 
-## Saving players in groups
+## Saving players in Watchlists
 
-Players are saved in private groups. When signed in, "Add to group" on a player
-page opens `/account/groups/add/<tag>`: with
-no groups you name a first group and the player goes straight into it, with one
-group the player goes there, and with several you choose which one. A group
+Players are saved in private Watchlists. When signed in, "Add to watchlist" on
+a player page opens `/account/watchlists/add/<tag>`: with
+no watchlists you name a first one and the player goes straight into it, with one
+the player goes there, and with several you choose which one. A watchlist
 that already holds the player, or already has 20 players, says so and cannot
-be chosen. An account holds at most 10 groups. These pages work without
-JavaScript. The old `/account/saved-players` address opens Your groups.
+be chosen. An account holds at most 10 watchlists. These pages work without
+JavaScript. The old `/account/saved-players` and `/account/groups/...`
+addresses open the same page under `/account/watchlists`. The code and the
+private API still call them groups.
 
 ## Repository map
 

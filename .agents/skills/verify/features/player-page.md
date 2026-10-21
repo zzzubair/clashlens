@@ -16,7 +16,7 @@ A Clasher opens any tracked player and sees their name, tag, current trophies, t
 
 - Open `/players/%232PP` directly.
 - Search `#2PP` from the header search (see [Search and leaderboards](./search-and-leaderboards.md)) and choose the result.
-- Choose a player's name on the home page or tracked leaderboard.
+- Choose a player's name on the front page or tracked leaderboard.
 
 ## Driving it with Playwright
 

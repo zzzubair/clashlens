@@ -119,8 +119,8 @@ export type InviteLink = MadeInvite & { link: string };
 /** The code in an invite link, as the private API makes it. */
 export const INVITE_CODE = /^[A-Za-z0-9_-]{22}$/;
 
-export type InviteState = "ok" | "invalid" | "full" | "limit";
-const INVITE_STATES: readonly InviteState[] = ["ok", "invalid", "full", "limit"];
+export type InviteState = "ok" | "invalid" | "ended" | "full" | "limit";
+const INVITE_STATES: readonly InviteState[] = ["ok", "invalid", "ended", "full", "limit"];
 export type Eligibility = "ok" | "not_in_legend" | "already_in_crew" | "unchecked";
 const ELIGIBILITIES: readonly Eligibility[] = [
   "ok",
@@ -144,8 +144,9 @@ export function joiningCount(accounts: InviteAccount[], picked: string[]): numbe
 }
 
 /**
- * What an invite link shows the signed-in clasher. A link that doesn't
- * work says nothing about its crew.
+ * What an invite link shows, with the clasher's own accounts when signed in.
+ * A link that was turned off or ran out names only its crew; an unknown one
+ * says nothing.
  */
 export type InvitePreview = {
   inCrew: boolean;
@@ -153,8 +154,9 @@ export type InvitePreview = {
   accounts: InviteAccount[];
 } & (
   | { state: "invalid" }
+  | { state: "ended"; crewId: string; name: string }
   | {
-      state: Exclude<InviteState, "invalid">;
+      state: Exclude<InviteState, "invalid" | "ended">;
       crewId: string;
       name: string;
       ownerName: string | null;
@@ -421,6 +423,11 @@ export function mapInvitePreview(value: unknown): InvitePreview | null {
   }
   const common = { inCrew: value.in_crew, crewCount: value.crew_count, accounts };
   if (value.state === "invalid") return { ...common, state: "invalid" };
+  if (value.state === "ended") {
+    return isUuid(value.crew_id) && isString(value.name)
+      ? { ...common, state: "ended", crewId: value.crew_id, name: value.name }
+      : null;
+  }
   const header = mapHeader(value);
   if (
     header === null ||
@@ -431,7 +438,7 @@ export function mapInvitePreview(value: unknown): InvitePreview | null {
   }
   return {
     ...common,
-    state: value.state as Exclude<InviteState, "invalid">,
+    state: value.state as Exclude<InviteState, "invalid" | "ended">,
     crewId: header.crewId,
     name: header.name,
     ownerName: value.owner_display_name,

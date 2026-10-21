@@ -1,0 +1,123 @@
+/* The signed-out front page: the Dashboard preview, then search with big
+   Rankings and Analytics buttons, then the top players. */
+
+/* The preview's cards and its panel share one grid cell, so the taller of
+   the two sets the height and nothing below slides under the panel. */
+.front-page .dash-teaser {
+  display: grid;
+  min-height: 0;
+  margin-bottom: 0.5rem;
+}
+
+.front-page .dash-teaser > * {
+  grid-area: 1 / 1;
+}
+
+.front-page .dash-teaser-behind {
+  max-height: 26rem;
+  overflow: hidden;
+}
+
+.front-page .dash-teaser-panel {
+  position: relative;
+  top: auto;
+  left: auto;
+  align-self: start;
+  justify-self: center;
+  margin: 3rem 0 1.5rem;
+  transform: none;
+}
+
+.front-section {
+  display: grid;
+  gap: 1rem;
+  padding-top: clamp(1.5rem, 4vw, 2.25rem);
+}
+
+.front-section h2 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+}
+
+.front-lede {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.front-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.front-link {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-height: 4.5rem;
+  padding: 1rem 1.25rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+  text-decoration: none;
+}
+
+.front-link:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+
+.front-link .dash-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--cl-accent);
+}
+
+.front-link span {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.front-link b {
+  font-family: var(--cl-font-heading);
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+.front-link small {
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+@media (max-width: 40rem) {
+  .front-page .dash-teaser-panel {
+    margin: 1rem 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .front-link {
+    gap: 0.55rem;
+    min-height: 4rem;
+    padding: 0.75rem;
+  }
+
+  .front-link .dash-icon {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+
+  .front-link b {
+    font-size: 1.1rem;
+  }
+
+  .front-link small {
+    font-size: 0.8rem;
+  }
+}

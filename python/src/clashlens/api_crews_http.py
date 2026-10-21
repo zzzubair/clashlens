@@ -1,7 +1,7 @@
 """Private API routes for crews. Every route answers 404 ``crews_disabled``
 while crews are switched off, before checking the request or reading
-anything. Viewing a crew, its boards and a player's crews needs no
-sign-in; everything else does."""
+anything. Viewing a crew, its boards, an invite link's crew and a player's
+crews needs no sign-in; everything else does."""
 
 from __future__ import annotations
 
@@ -286,6 +286,13 @@ def register_crew_routes(
         caller = account_id(request)
         result = api_crews.get_invite(
             database, caller, _invite_code(code), now=current_time()
+        )
+        return JSONResponse(content=_json_safe(result))
+
+    @router.get("/v1/crew-invites/{code}")
+    def public_invite(code: str, request: Request) -> JSONResponse:
+        result = api_crews.get_invite(
+            database, viewer(request), _invite_code(code), now=current_time()
         )
         return JSONResponse(content=_json_safe(result))
 

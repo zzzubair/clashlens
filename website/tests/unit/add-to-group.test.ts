@@ -70,7 +70,7 @@ const twentyTags = Array.from(
 
 function submit(fields: Record<string, string>, origin = "https://clashlens.example") {
   return action({
-    request: new Request("https://clashlens.example/account/groups/add/2PP", {
+    request: new Request("https://clashlens.example/account/watchlists/add/2PP", {
       method: "POST",
       headers: { Origin: origin },
       body: new URLSearchParams({ tag: "#2PP", addIdempotencyKey: ADD_KEY, ...fields }),
@@ -82,13 +82,13 @@ function submit(fields: Record<string, string>, origin = "https://clashlens.exam
 async function renderPage(search = "") {
   const handler = createStaticHandler([
     {
-      path: "/account/groups/add/:tag",
+      path: "/account/watchlists/add/:tag",
       Component: AddToGroupRoute,
       loader: loader as never,
     },
   ]);
   const context = await handler.query(
-    new Request(`https://clashlens.example/account/groups/add/2PP${search}`),
+    new Request(`https://clashlens.example/account/watchlists/add/2PP${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected route response");
   return renderToString(
@@ -113,12 +113,12 @@ beforeEach(() => {
   });
 });
 
-it("asks a Clasher with no groups to name one, then puts the player straight in", async () => {
+it("asks a Clasher with no watchlists to name one, then puts the player straight in", async () => {
   mocks.listGroups.mockResolvedValue({ season: "1791176400", groups: [] });
   const html = await renderPage();
-  expect(html).toContain("Create your first group");
+  expect(html).toContain("Create your first watchlist");
   expect(html).toContain(
-    "You have no groups yet. Name one and #2PP goes straight into it.",
+    "You have no watchlists yet. Name one and #2PP goes straight into it.",
   );
 
   mocks.createGroup.mockResolvedValue({ groupId: FRIENDS, name: "Friends", tags: [] });
@@ -136,7 +136,7 @@ it("asks a Clasher with no groups to name one, then puts the player straight in"
   expect(result.data.addedTo).toBe(FRIENDS);
 });
 
-it("leaves no empty group behind for a tag the game does not know", async () => {
+it("leaves no empty watchlist behind for a tag the game does not know", async () => {
   mocks.listGroups.mockResolvedValue({ season: "1791176400", groups: [] });
   mocks.getPlayerLookup.mockResolvedValue({ tag: "#2PP", state: "not_found" });
   const result = await submit({
@@ -151,23 +151,23 @@ it("leaves no empty group behind for a tag the game does not know", async () => 
   expect(mocks.createGroup).not.toHaveBeenCalled();
 });
 
-it("adds to the only group and names it", async () => {
+it("adds to the only watchlist and names it", async () => {
   mocks.listGroups.mockResolvedValue({
     season: "1791176400",
     groups: [group(FRIENDS, "Friends", [])],
   });
   // Query text in the address, such as another account's group id, is not echoed back.
   const html = await renderPage(`?groupId=${WAR}`);
-  expect(html).toContain('action="/account/groups/add/2PP"');
+  expect(html).toContain('action="/account/watchlists/add/2PP"');
   expect(html).not.toContain(WAR);
-  expect(html).toContain("Friends is your only group, so #2PP goes there.");
+  expect(html).toContain("Friends is your only watchlist, so #2PP goes there.");
   expect(html).toContain("Add to Friends");
 
   const result = await submit({ action: "add", groupId: FRIENDS });
   expect(result.data.notice).toBe("Added Nova (#2PP) to Friends.");
 });
 
-it("makes a Clasher with several groups choose, and explains the ones that cannot take the player", async () => {
+it("makes a Clasher with several watchlists choose, and explains the ones that cannot take the player", async () => {
   mocks.listGroups.mockResolvedValue({
     season: "1791176400",
     groups: [
@@ -177,19 +177,19 @@ it("makes a Clasher with several groups choose, and explains the ones that canno
     ],
   });
   const html = await renderPage();
-  expect(html).toContain("Choose a group");
-  expect(html).toContain("#2PP is already in this group");
+  expect(html).toContain("Choose a watchlist");
+  expect(html).toContain("#2PP is already in this watchlist");
   expect(html).toContain("Full: 20 of 20 players");
   expect(html.match(/type="radio"[^>]*disabled=""/g)).toHaveLength(2);
 
   const unchosen = await submit({ action: "add" });
   expect(unchosen.init?.status).toBe(400);
-  expect(unchosen.data.fieldErrors).toEqual({ tag: "Choose a group." });
+  expect(unchosen.data.fieldErrors).toEqual({ tag: "Choose a watchlist." });
 
   const member = await submit({ action: "add", groupId: FRIENDS });
   expect(member.init?.status).toBe(409);
   expect(member.data.fieldErrors).toEqual({
-    tag: "Nova (#2PP) is already in this group.",
+    tag: "Nova (#2PP) is already in this watchlist.",
   });
 
   const full = await submit({ action: "add", groupId: FULL });
@@ -208,9 +208,9 @@ it("keeps the player through account setup", async () => {
   mocks.listGroups.mockRejectedValue(
     new PythonApiError(404, { error: "account_not_found" }),
   );
-  const setup = "/account/setup?returnPath=%2Faccount%2Fgroups%2Fadd%2F2PP";
+  const setup = "/account/setup?returnPath=%2Faccount%2Fwatchlists%2Fadd%2F2PP";
   const page = await loader({
-    request: new Request("https://clashlens.example/account/groups/add/2PP"),
+    request: new Request("https://clashlens.example/account/watchlists/add/2PP"),
     params: { tag: "2PP" },
   } as never).catch((thrown: unknown) => thrown);
   expect((page as Response).headers.get("Location")).toBe(setup);
@@ -220,7 +220,7 @@ it("keeps the player through account setup", async () => {
   expect((saved as Response).headers.get("Location")).toBe(setup);
 });
 
-it("reloads the group choices after a refused save", async () => {
+it("reloads the watchlist choices after a refused save", async () => {
   mocks.listGroups.mockResolvedValue({ season: "1791176400", groups: [] });
   mocks.createGroup.mockResolvedValue({ groupId: FRIENDS, name: "Friends", tags: [] });
   mocks.requestJson.mockRejectedValue(new Error("private API down"));
@@ -230,7 +230,7 @@ it("reloads the group choices after a refused save", async () => {
     createIdempotencyKey: CREATE_KEY,
   });
   expect(refused.init?.status).toBe(503);
-  const url = new URL("https://clashlens.example/account/groups/add/2PP");
+  const url = new URL("https://clashlens.example/account/watchlists/add/2PP");
   expect(
     shouldRevalidate({
       currentUrl: url,
@@ -255,14 +255,14 @@ it("refuses other sites and needs a login", async () => {
   await expect(submit({ action: "add", groupId: WAR })).rejects.toBe(login);
   await expect(
     loader({
-      request: new Request("https://clashlens.example/account/groups/add/2PP"),
+      request: new Request("https://clashlens.example/account/watchlists/add/2PP"),
       params: { tag: "2PP" },
     } as never),
   ).rejects.toBe(login);
   expect(mocks.createPythonClient).not.toHaveBeenCalled();
 });
 
-it("shows Add to group on a profile only to a signed-in Clasher", async () => {
+it("shows Add to watchlist on a profile only to a signed-in Clasher", async () => {
   for (const loggedIn of [true, false]) {
     const handler = createStaticHandler([
       {
@@ -280,7 +280,7 @@ it("shows Add to group on a profile only to a signed-in Clasher", async () => {
         context,
       }),
     );
-    expect(html.includes('href="/account/groups/add/2PP"')).toBe(loggedIn);
+    expect(html.includes('href="/account/watchlists/add/2PP"')).toBe(loggedIn);
   }
 });
 

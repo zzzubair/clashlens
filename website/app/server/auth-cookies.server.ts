@@ -45,7 +45,8 @@ const COOKIE_VERSION = 1;
 /** Hard cap for any cookie value; real values are a few hundred bytes. */
 const MAX_COOKIE_VALUE_BYTES = 4096;
 const MAX_RETURN_PATH_LENGTH = 200;
-const RETURN_PATH_CHARS = /^[A-Za-z0-9._~/-]+$/;
+// Plain path characters, and %23 for the # of a player tag such as /account/watchlists/add/%232PP.
+const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
 
 const LOGIN_PROVIDERS: ReadonlySet<string> = new Set(["google", "discord"]);
 
@@ -69,7 +70,9 @@ interface ContinuedLogin {
 }
 
 function isBoundedIntent(value: unknown): value is OAuthIntent {
-  return value === "login" || value === "link" || value === "unlink";
+  return (
+    value === "login" || value === "signup" || value === "link" || value === "unlink"
+  );
 }
 
 function isBoundedReturnPath(value: string): boolean {

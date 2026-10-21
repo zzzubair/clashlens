@@ -10,6 +10,8 @@ import type { Route } from "./+types/logout";
  * "You're logged out.".
  * Logout is a same-origin cookie-authenticated mutation, so it follows the
  * same origin rule as every other account action.
+ * "Not you?" on account setup sends `signUp` with its return path, and goes
+ * on to /signup with that path instead of home.
  * A plain GET to this route just returns home.
  */
 export async function loader(): Promise<Response> {
@@ -21,6 +23,8 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   const { getWebsiteConfig } = await import("../server/config.server");
   const cookies = await import("../server/auth-cookies.server");
   const actions = await import("../server/actions.server");
+  const { DEFAULT_RETURN_PATH, setupReturnPath } =
+    await import("../server/return-path.server");
 
   let config;
   try {
@@ -34,6 +38,14 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   const form = await actions.parseBoundedFormData(request);
   if (form === null || !actions.isIdempotencyKey(form.idempotencyKey)) {
     return new Response(null, { status: 400, headers: NO_STORE });
+  }
+  let next = "/?saved=logout";
+  if (form.signUp !== undefined) {
+    const returnPath = setupReturnPath(form.signUp, config.publicOrigin);
+    next =
+      returnPath === DEFAULT_RETURN_PATH
+        ? "/signup"
+        : `/signup?returnPath=${encodeURIComponent(returnPath)}`;
   }
   const loginCookie = actions
     .parseCookieHeader(request.headers.get("cookie"))
@@ -57,7 +69,7 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   return new Response(null, {
     status: 302,
     headers: {
-      Location: recorded ? "/?saved=logout" : "/?logout=unrecorded",
+      Location: recorded ? next : "/?logout=unrecorded",
       "Set-Cookie": cookies.buildClearCookieHeader(
         cookies.LOGIN_COOKIE_NAME,
         config.cookieSecure,

@@ -44,19 +44,88 @@ test("loopback Google and Discord sign-in choices are available", async ({ page 
   await page.goto("/login");
 
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue with Google" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue with Discord" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in with Discord" })).toBeVisible();
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "Create account" }),
+  ).toHaveAttribute("href", "/signup?returnPath=%2Faccount");
+  await page.goto("/signup");
+  await expect(
+    page.getByRole("heading", { name: "Create your Clash Lens account" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Discord" })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test("Discord completes a local sign-in without cloud credentials", async ({ page }) => {
+test("Discord completes a local sign-in without cloud credentials", async ({
+  page,
+  context,
+}) => {
   await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Discord" }).click();
+  await page.getByRole("link", { name: "Sign in with Discord" }).click();
 
-  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
+  await expect(page).toHaveURL(/\/(?:login\?none=discord|users\/[a-z][a-z0-9_]+)$/);
+  if (new URL(page.url()).pathname === "/login") {
+    // A sign-in no account uses yet asks before making one, and stays signed
+    // out, so pages that need an account still explain why.
+    await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Try Google instead" })).toBeVisible();
+    await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+    expect(await loginCookie(context)).toBeUndefined();
+    await page.goto("/account/watchlists");
+    await expect(
+      page.getByText("You need a Clash Lens account to keep them."),
+    ).toBeVisible();
+    await page.goBack();
+    await page.getByRole("link", { name: "Create account with Discord" }).click();
+    await expect(page).toHaveURL(/\/account\/setup$/);
+    await expect(
+      page.getByRole("heading", { name: "Choose your username" }),
+    ).toBeVisible();
+    expect(await loginCookie(context)).toBeDefined();
+  } else {
+    await expect(
+      page.getByRole("heading", { name: "Clash players", exact: true }),
+    ).toBeVisible();
+  }
+});
+
+test("a sign-up quit at Choose your username can make way for a different sign-in", async ({
+  page,
+  context,
+}) => {
+  // A Google sign-in that never gets an account.
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", "fixture-google-subject-3401");
+    await route.continue({ url: url.href });
+  });
+  const signUp = "/signup?returnPath=%2Faccount%2Fwatchlists";
+  const setup = /\/account\/setup\?returnPath=%2Faccount%2Fwatchlists$/;
+  // The fake identity only applies once the page's JavaScript has loaded.
+  await page.goto(signUp, { waitUntil: "networkidle" });
+  await page.getByRole("link", { name: "Sign up with Google" }).click();
+  await expect(page).toHaveURL(setup);
+  await expect(page.getByRole("heading", { name: "Choose your username" })).toBeVisible();
+
+  // They leave. The next Create account on this browser comes back to their setup.
+  await page.goto("/");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(signUp);
+  await expect(page).toHaveURL(setup);
+  const notYou = page.getByRole("button", { name: "Not you? Use a different sign-in" });
+  expect((await notYou.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await notYou.click();
+
+  await expect(page).toHaveURL(signUp);
   await expect(
-    page.getByRole("heading", { name: /Create your account|Clash players/ }),
+    page.getByRole("heading", { name: "Create your Clash Lens account" }),
   ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Google" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up with Discord" })).toBeVisible();
+  expect(await loginCookie(context)).toBeUndefined();
 });
 
 test("an account can link, use, and unlink a second sign-in provider", async ({
@@ -117,7 +186,7 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   const copied = await useLoginIssuedAgo(context, identity, 2 * 3_600_000);
   const visitedAt = Date.now();
   await page.goto("/account");
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   const renewed = await loginCookie(context);
   expect(renewed?.value).not.toBe(copied);
   expect(renewed?.httpOnly).toBe(true);
@@ -139,13 +208,13 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   await expect(accountMenu).toBeHidden();
   await useLoginIssuedAgo(context, identity, 0, copied);
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?returnPath=%2Faccount$/);
+  await expect(page.getByRole("region", { name: "Account needed" })).toBeVisible();
 
   // A login 29 days old still signs in; one 30 days old does not.
   await useLoginIssuedAgo(context, identity, 29 * DAY_MS);
   await page.goto("/account");
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await useLoginIssuedAgo(context, identity, 30 * DAY_MS + 1_000);
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?returnPath=%2Faccount$/);
+  await expect(page.getByRole("region", { name: "Account needed" })).toBeVisible();
 });

@@ -80,21 +80,10 @@
   background: var(--cl-action-soft);
 }
 
-/* Where the header is tight the account shows only its icon, and phones read
-   "Discord"; screen readers still hear the full words. */
+/* Where the header is tight the account shows only its icon; screen readers
+   still hear its name. */
 @media (max-width: 34rem), (min-width: 64.0625rem) and (max-width: 70rem) {
   .nav-account-name {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
-@media (max-width: 34rem) {
-  .nav-discord-join {
     position: absolute;
     width: 1px;
     height: 1px;

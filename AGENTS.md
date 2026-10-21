@@ -36,7 +36,8 @@ Use these exactly.
 - **EOD**: trophy count at the end of a Legend day.
 - **Season**: exactly 28 Legend days.
 - **Tournament**: a ranked competition period. Weekly in other Ranked Leagues, 28 Legend days in Legend I.
-- **Crew**: an invite-only group of up to 100 Legend League accounts, owned by Clash Lens accounts, with shared boards. Separate from Groups.
+- **Crew**: an invite-only group of up to 100 Legend League accounts, owned by Clash Lens accounts, with shared boards. Separate from Watchlists.
+- **Watchlist**: a private list of up to 20 players one Clash Lens account compares side by side; an account has at most 10.
 - **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 - **Projected place**: the one estimated rank the Legend day card shows for the next Reset. It is the middle result of 200 imagined finishes of the day, copied from the last 7 days, and always falls inside the Next Reset range.
 - **Variant**: a split of an army type by the hero equipment its attacks used, from a hand-kept list (for example Revenge Hydra), with an army matching none in its type's Other.

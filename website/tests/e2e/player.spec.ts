@@ -917,19 +917,19 @@ test("season navigation clears refresh state for the same player", async ({ page
   await expect(refresh).toHaveCount(0);
 });
 
-test("Back after switching Seasons returns to Your groups in one step", async ({
+test("Back after switching Seasons returns to Your watchlists in one step", async ({
   page,
 }) => {
   await refuseRefreshes(page);
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
-  await page.goto("/account/groups");
+  await page.goto("/account/watchlists");
   const group = page.locator(".group-card").filter({
     has: page.getByRole("heading", { name: "War plan" }),
   });
   if ((await group.count()) === 0) {
-    await page.getByLabel("Group name").first().fill("War plan");
-    await page.getByRole("button", { name: "Create group" }).click();
+    await page.getByLabel("Watchlist name").first().fill("War plan");
+    await page.getByRole("button", { name: "Create watchlist" }).click();
   }
   const members = group.getByRole("list", { name: "Players in War plan" });
   if ((await members.filter({ hasText: "#2PP" }).count()) === 0) {
@@ -973,9 +973,9 @@ test("Back after switching Seasons returns to Your groups in one step", async ({
   await seasonMenu.selectOption("");
   await expect(page).toHaveURL(/\/players\/%232PP$/);
 
-  await page.getByRole("link", { name: "Back to Your groups" }).click();
-  await expect(page).toHaveURL(/\/account\/groups$/);
-  await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
+  await page.getByRole("link", { name: "Back to Your watchlists" }).click();
+  await expect(page).toHaveURL(/\/account\/watchlists$/);
+  await expect(page.getByRole("heading", { name: "Your watchlists" })).toBeVisible();
   // The groups list sits in the main menu, so it has no Back.
   await expect(page.locator(".back-link")).toHaveCount(0);
 });

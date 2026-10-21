@@ -179,10 +179,25 @@ couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
 
-The Dashboard at `/dashboard` is for signed-in users, and only exists while
-`CLASHLENS_DASHBOARD_ENABLED=true`; otherwise it is a page-not-found page with
-no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
-not signed in see a blurred preview and the sign-in buttons. The card designs
+The Dashboard is `/` for signed-in users while
+`CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
+there. Everyone else, and everyone while the switch is off, gets the front
+page at `/`: the Dashboard preview with Create account and Sign in (only while
+the switch is on), the big search, Rankings and Analytics buttons, and the top
+10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+[deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
+Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
+screens, they move to a bar at the bottom of the screen: Home (Dashboard when
+signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
+holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
+the theme switch and Sign in or the account menu. A signed-out visitor who
+opens a page that needs an account sees, in its place, what the page is for and
+separate Create account and Sign in buttons that both come back to it
+([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)). A sign-in with Google
+or Discord that has no account yet says "No account found" and asks before
+making one; a new account chooses a username, links a player, then goes on to
+where the Clasher was heading. "Not you? Use a different sign-in" on Choose your
+username logs that sign-in out and starts the sign-up again. The card designs
 are in the [dashboard design](../docs/dashboard.md).
 
 Signed-in users get one page: account tabs for their linked players, then a
@@ -226,7 +241,7 @@ chosen. It reads only the day where clicking stops for 0.4 s, and waits up to
 
 The first visit offers "Use our layout" or "Build my own". Customise moves
 (drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
-card settings and the group picked on Group watch save at once. A user is on
+card settings and the watchlist picked on the Watchlist card save at once. A user is on
 the default layout (`DEFAULT_LAYOUT` in
 [`dashboard.ts`](app/lib/dashboard.ts)), which follows each release, or on
 their own. Settings are saved in the account's existing 4,096-byte preferences
@@ -282,9 +297,12 @@ tag. Visitors never see which Clash Lens accounts are in it, its invite links,
 or Invite, Members and Edit, and a player's page names the crews that player
 is in, linking to each. Invite on a crew's page makes or reuses the clasher's
 48-hour link and shows it with Copy and Share; a new crew opens with it. The
-link, `/crews/join/<code>`, shows the crew and which of the clasher's linked
-accounts can join, and "Link another account" goes through
-`/account/verify-player?return=/crews/join/<code>` and comes back. Members at
+link, `/crews/join/<code>`, shows the crew to anyone; signed out it says an
+account is needed, with separate Create account and Sign in buttons that come
+back to it. Signed in, it shows which of the clasher's linked accounts can join,
+and "Link another player" goes through
+`/account/verify-player?return=/crews/join/<code>` and comes back. A link that
+was turned off or ran out names its crew; any other says it doesn't work. Members at
 `/crews/<id>/members` lets clashers add or remove their own accounts and leave,
 the owner make or remove admins, and the owner or an admin kick accounts. Edit
 crew at `/crews/<id>/settings` renames, resizes (never below the places in
@@ -518,9 +536,9 @@ display names and linked Clash of Clans player names. Results expose only public
 names, usernames and linked-account counts, never private groups.
 Clash Lens profiles in suggestions and results have a tinted background and a
 "Clash Lens profile" label so they are not mistaken for game players.
-Every page except home, including error pages, has the same search behind a
+Every page except `/search`, including error pages, has the same search behind a
 header icon. Enter on an exact player tag opens that player; other
-text shows suggestions in place without leaving the page.
+text opens the full results at `/search?q=`.
 
 Two bounded official profile requests fetched the names of `sloothy`'s linked
 players. The normal collector code retained both raw responses in the preview

@@ -6,7 +6,12 @@ import { Form } from "react-router";
  */
 export function TagSearchAgain({ tag }: { tag: string }) {
   return (
-    <Form method="get" action="/" role="search" className="search-form tag-search-again">
+    <Form
+      method="get"
+      action="/search"
+      role="search"
+      className="search-form tag-search-again"
+    >
       <label htmlFor="tag-search-again">Search for the right tag</label>
       <div className="search-controls">
         <input

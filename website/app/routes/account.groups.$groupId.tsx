@@ -28,7 +28,7 @@ const SORTS = {
 type SortKey = keyof typeof SORTS;
 
 export const handle: BackHandle = {
-  back: { to: "/account/groups", label: "Your groups" },
+  back: { to: "/account/watchlists", label: "Your watchlists" },
 };
 
 export interface GroupCompareLoaderData {
@@ -41,7 +41,7 @@ export interface GroupCompareLoaderData {
 }
 
 /**
- * GET /account/groups/:groupId — one private group side by side over the
+ * GET /account/watchlists/:groupId — one private group side by side over the
  * same ended Legend days, read for the signed-in account only.
  */
 export async function loader({ request, params }: Route.LoaderArgs) {
@@ -119,11 +119,11 @@ export default function GroupCompareRoute() {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
         <p className="eyebrow">
-          <a href="/account/groups">Private groups</a>
+          <a href="/account/watchlists">Your watchlists</a>
         </p>
-        <h1>{notFound ? "Group not found" : "Comparison unavailable"}</h1>
+        <h1>{notFound ? "Watchlist not found" : "Comparison unavailable"}</h1>
         {notFound ? (
-          <p>This group does not exist or belongs to another account.</p>
+          <p>This watchlist does not exist or belongs to another account.</p>
         ) : null}
         {tooLarge !== null ? (
           <p>
@@ -163,8 +163,8 @@ export default function GroupCompareRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell compare-page">
       <section className="compare-head" aria-labelledby="compare-title">
         <p className="eyebrow">
-          <a href="/account/groups">Private groups</a> ·{" "}
-          <a href={`/account/groups#group-${comparison.groupId}`}>
+          <a href="/account/watchlists">Your watchlists</a> ·{" "}
+          <a href={`/account/watchlists#group-${comparison.groupId}`}>
             Add or remove players
           </a>
         </p>
@@ -220,7 +220,7 @@ export default function GroupCompareRoute() {
       {!hasYou ? (
         <p className="compare-notice">
           <a href="/account/verify-player">Link your own player</a> to see yourself next
-          to this group.
+          to this watchlist.
         </p>
       ) : null}
 
@@ -237,7 +237,7 @@ export default function GroupCompareRoute() {
                 <th scope="col">Today so far</th>
                 <th scope="col">Last {days} days</th>
                 <th scope="col">Won vs lost</th>
-                <th scope="col">Vs the group</th>
+                <th scope="col">Vs the watchlist</th>
                 <th scope="col">Attack</th>
                 <th scope="col">Defense</th>
               </tr>
@@ -257,9 +257,9 @@ export default function GroupCompareRoute() {
         </div>
       ) : (
         <div className="empty-state compare-empty-group">
-          <h2>No players in this group yet</h2>
+          <h2>No players in this watchlist yet</h2>
           <p>
-            <a href={`/account/groups#group-${comparison.groupId}`}>Add players</a> to
+            <a href={`/account/watchlists#group-${comparison.groupId}`}>Add players</a> to
             compare them side by side.
           </p>
         </div>
@@ -295,7 +295,7 @@ function PlayerRow({
           {player.tag}
           {player.you ? <span className="compare-badge">You</span> : null}
           {player.you && !player.inGroup ? (
-            <span className="compare-badge-note">not in this group</span>
+            <span className="compare-badge-note">not in this watchlist</span>
           ) : null}
         </span>
         {player.status !== "tracking" ? (
@@ -372,7 +372,7 @@ function PlayerRow({
           </>
         )}
       </td>
-      <td data-label="Vs the group">
+      <td data-label="Vs the watchlist">
         {player.vsGroup === null ? (
           <Empty />
         ) : (

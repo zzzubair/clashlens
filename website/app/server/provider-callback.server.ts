@@ -32,6 +32,7 @@ import {
   accountSetupPath,
   DEFAULT_RETURN_PATH,
   safeReturnPath,
+  setupReturnPath,
 } from "./return-path.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
@@ -118,7 +119,8 @@ export async function completeProviderCallback(
   const nowSeconds = Math.floor(Date.now() / 1000);
   let session: LoginSession | null = null;
   const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
-  if (transaction.intent !== "login") {
+  const signingIn = transaction.intent === "login" || transaction.intent === "signup";
+  if (!signingIn) {
     const loginRequired: CallbackErrorView = {
       kind: "error",
       status: 400,
@@ -160,7 +162,7 @@ export async function completeProviderCallback(
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
 
-  if (transaction.intent === "login") {
+  if (signingIn) {
     const loginCookie = buildSetCookieHeader(
       LOGIN_COOKIE_NAME,
       createLoginCookieValue(validated, config.loginSecret, Date.now()),
@@ -171,12 +173,25 @@ export async function completeProviderCallback(
     try {
       await python.createPythonClient(validated).getAccount();
     } catch (error) {
+      // Sign-up makes the account; a sign-in asks first, signed out, so a
+      // Clasher who pressed the other provider doesn't make a second account
+      // by mistake.
       if (isAccountNotFoundError(error)) {
-        return {
-          kind: "redirect",
-          location: accountSetupPath(transaction.returnPath, config.publicOrigin),
-          setCookies: [clearTransactionCookie, loginCookie],
-        };
+        return transaction.intent === "signup"
+          ? {
+              kind: "redirect",
+              location: accountSetupPath(transaction.returnPath, config.publicOrigin),
+              setCookies: [clearTransactionCookie, loginCookie],
+            }
+          : {
+              kind: "redirect",
+              location: noAccountPath(
+                provider,
+                transaction.returnPath,
+                config.publicOrigin,
+              ),
+              setCookies: [clearTransactionCookie],
+            };
       }
       return unavailable(clearTransactionCookie);
     }
@@ -312,6 +327,18 @@ export async function completeProviderCallback(
     location: `/account/settings?saved=${provider}-disconnected`,
     setCookies: [clearTransactionCookie],
   };
+}
+
+/** The sign-in page's "No account found" answer for this provider. */
+function noAccountPath(
+  provider: "google" | "discord",
+  returnPath: string,
+  origin: URL,
+): string {
+  const path = setupReturnPath(returnPath, origin);
+  const back =
+    path === DEFAULT_RETURN_PATH ? "" : `&returnPath=${encodeURIComponent(path)}`;
+  return `/login?none=${provider}${back}`;
 }
 
 /** Safe documented Python error codes only; everything else stays opaque. */

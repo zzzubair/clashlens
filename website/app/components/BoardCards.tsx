@@ -358,7 +358,7 @@ export function GroupWatchCard({
     data.groups.length > 1 ? (
       <select
         className="group-picker"
-        aria-label="Group"
+        aria-label="Watchlist"
         value={data.groupId ?? ""}
         disabled={saving}
         onChange={(event) => onPick(event.currentTarget.value)}
@@ -377,12 +377,15 @@ export function GroupWatchCard({
   if (data.groupId === null) {
     return (
       <>
-        <CardHead title="Group watch" />
+        <CardHead title="Watchlist" />
         <CardNote>
-          Make a group first, then this card compares you with its players.
+          Make a watchlist first, then this card compares you with its players.
         </CardNote>
-        <Link className="button button-secondary dash-small-button" to="/account/groups">
-          Make a group
+        <Link
+          className="button button-secondary dash-small-button"
+          to="/account/watchlists"
+        >
+          Make a watchlist
         </Link>
       </>
     );
@@ -392,7 +395,7 @@ export function GroupWatchCard({
   const first = data.rows.indexOf(shown[0]!);
   return (
     <>
-      <CardHead title="Group watch" meta={picker} />
+      <CardHead title="Watchlist" meta={picker} />
       <p className="dash-muted dash-card-sub">
         {data.window === "7" ? "Last 7 days" : `Whole Season · ${data.days} days`}
       </p>
@@ -426,7 +429,7 @@ export function GroupWatchCard({
       ) : (
         <CardNote>Your numbers could not be loaded.</CardNote>
       )}
-      <Link className="dash-card-link" to={`/account/groups/${data.groupId}`}>
+      <Link className="dash-card-link" to={`/account/watchlists/${data.groupId}`}>
         Open full comparison →
       </Link>
     </>

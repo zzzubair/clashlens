@@ -572,15 +572,16 @@ h3 {
   cursor: pointer;
 }
 
-/* The analytics question: a small dark card in the bottom-left corner. */
+/* The analytics question: a small dark card in the bottom-left corner, above
+   the phone bottom bar (--cl-bottom-tabs) when there is one. */
 body {
-  padding-bottom: var(--analytics-choice-space, 0);
+  padding-bottom: calc(var(--analytics-choice-space, 0px) + var(--cl-bottom-tabs, 0px));
 }
 
 .analytics-choice {
   position: fixed;
   z-index: 50;
-  bottom: 1rem;
+  bottom: calc(1rem + var(--cl-bottom-tabs, 0px));
   left: 1rem;
   width: min(22rem, calc(100% - 2rem));
   padding: 1rem;
@@ -609,7 +610,7 @@ body {
 /* Phone width: the card spans the screen; the page gets its height as room below. */
 @media (max-width: 34rem) {
   .analytics-choice {
-    bottom: 0.75rem;
+    bottom: calc(0.75rem + var(--cl-bottom-tabs, 0px));
     left: 0.75rem;
     width: calc(100% - 1.5rem);
   }

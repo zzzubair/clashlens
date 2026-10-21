@@ -262,7 +262,7 @@ def test_joining_by_invite_link(site: Site) -> None:
     ).payload == {"error": "crew_full", "open_places": 0}
 
 
-def test_links_that_no_longer_work_read_alike(site: Site) -> None:
+def test_links_that_no_longer_work_name_their_crew_only_if_it_had_one(site: Site) -> None:
     for name in ("owner", "joiner"):
         site.account(name)
     site.link("owner", "#2PP")
@@ -279,9 +279,10 @@ def test_links_that_no_longer_work_read_alike(site: Site) -> None:
     later = NOW + timedelta(hours=48)
     unknown = "A" * 22
     for code, now in ((expired, later), (turned_off, NOW), (unknown, NOW)):
+        ended = {"state": "ended", "crew_id": crew_id, "name": "Night Owls"}
         assert api_crews.get_invite(site.api, site.ids["joiner"], code, now=now) == {
             "kind": "crew-invite",
-            "state": "invalid",
+            **(ended if code != unknown else {"state": "invalid"}),
             "in_crew": False,
             "crew_count": 0,
             "accounts": [],

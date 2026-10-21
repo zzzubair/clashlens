@@ -1,7 +1,7 @@
 import type { GroupPlayer } from "./account-contracts";
 import { MAX_GROUPS } from "./account-validation";
 
-export const GROUP_LIMIT = `You have ${MAX_GROUPS} groups, the most an account can have. Delete one to create another.`;
+export const GROUP_LIMIT = `You have ${MAX_GROUPS} watchlists, the most an account can have. Delete one to create another.`;
 
 /** What a member row says when the player is not tracked in Legend League. */
 export const STATE_LABELS: Record<GroupPlayer["state"], string> = {

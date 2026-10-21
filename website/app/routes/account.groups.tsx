@@ -72,7 +72,7 @@ export interface GroupsActionData {
 }
 
 /**
- * GET /account/groups — list only the signed-in account's private groups with
+ * GET /account/watchlists — list only the signed-in account's private groups with
  * explicit create, rename, add-player, remove-player and confirmed-delete
  * forms, each bound to its own idempotency key.
  */
@@ -116,7 +116,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
 }
 
 /**
- * POST /account/groups — create, rename, or delete a private group, or add or
+ * POST /account/watchlists — create, rename, or delete a private group, or add or
  * remove one player. The action and group ID are explicit, deletion requires
  * an explicit confirmation, and every mutation is same-origin with a
  * canonical idempotency UUID. A player joins only after the game confirms
@@ -179,12 +179,12 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (normalizedName === null) {
       return reply(400, {
         fieldErrors: {
-          name: "Group name must be 1–80 characters and must not contain control characters.",
+          name: "Watchlist name must be 1–80 characters, with no line breaks or hidden characters.",
         },
       });
     }
     if (isInappropriateName(values.name)) {
-      return reply(400, { fieldErrors: { name: "Choose a different group name." } });
+      return reply(400, { fieldErrors: { name: "Choose a different watchlist name." } });
     }
   }
   const tag = normalizeSubmittedPlayerTag(values.tag);
@@ -200,7 +200,7 @@ export async function action({ request, context }: Route.ActionArgs) {
         { name: normalizedName as string },
         idempotencyKey,
       );
-      throw redirect(`/account/groups#group-${created.groupId}`);
+      throw redirect(`/account/watchlists#group-${created.groupId}`);
     } else if (actionMode === "update") {
       await client.updateGroup(
         groupId,
@@ -212,7 +212,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       await client.deleteGroup(groupId, idempotencyKey);
     } else if (actionMode === "remove-player") {
       await players.removeGroupPlayer(identity, groupId, tag as string, idempotencyKey);
-      return reply(200, { notice: `Removed ${tag} from the group.` });
+      return reply(200, { notice: `Removed ${tag} from the watchlist.` });
     } else {
       // Refuse duplicates and a full group before spending a player lookup.
       const group = (await client.listGroups()).groups.find(
@@ -242,7 +242,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     }
     if (pythonError.status === 409 && code === "group_name_conflict") {
       return reply(409, {
-        fieldErrors: { name: "A group with this name already exists." },
+        fieldErrors: { name: "A watchlist with this name already exists." },
       });
     }
     if (code === "group_limit_reached") {
@@ -253,7 +253,9 @@ export async function action({ request, context }: Route.ActionArgs) {
       (actionMode === "create" || actionMode === "update")
     ) {
       return reply(422, {
-        fieldErrors: { name: "This group was not accepted. Choose a different name." },
+        fieldErrors: {
+          name: "This watchlist was not accepted. Choose a different name.",
+        },
       });
     }
     const { safeWebsiteError } = await import("../server/errors.server");
@@ -269,18 +271,21 @@ export async function action({ request, context }: Route.ActionArgs) {
                 error: {
                   code: safeError.error.code,
                   message:
-                    "Could not confirm the group was created. Refresh the page before trying again.",
+                    "Could not confirm the watchlist was created. Refresh the page before trying again.",
                 },
               }
             : safeError,
     });
   }
   // Replace the deleted group's history entry so Back does not return to it.
-  throw replace("/account/groups");
+  throw replace("/account/watchlists");
 }
 
 const GROUP_GONE: WebsiteErrorResponse = {
-  error: { code: "conflict", message: "The group no longer exists. Refresh the page." },
+  error: {
+    code: "conflict",
+    message: "The watchlist no longer exists. Refresh the page.",
+  },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -352,17 +357,17 @@ export default function GroupsRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="groups-title">
-        <h1 id="groups-title">Private groups</h1>
+        <h1 id="groups-title">Watchlists</h1>
         <p className="lede">
-          Groups are visible only to you and hold public player tags for your own
-          organization. Compare up to 20 players side by side.
+          Watchlists are private lists of players you compare side by side. Only you can
+          see them. Up to 20 players each.
         </p>
       </section>
 
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
-      <section className="form-panel" aria-label="Create a group">
-        <h2>Create a group</h2>
+      <section className="form-panel" aria-label="Create a watchlist">
+        <h2>Create a watchlist</h2>
         <Form key={createKey} method="post" action="." className="stack-form" replace>
           <input type="hidden" name="action" value="create" />
           <input type="hidden" name="idempotencyKey" value={createKey} />
@@ -373,7 +378,7 @@ export default function GroupsRoute() {
             help={
               atLimit
                 ? GROUP_LIMIT
-                : `You add players one at a time once the group exists. Up to ${MAX_GROUPS} groups.`
+                : `You add players one at a time once the watchlist exists. Up to ${MAX_GROUPS} watchlists.`
             }
           />
           <button
@@ -381,19 +386,19 @@ export default function GroupsRoute() {
             className="button button-primary"
             disabled={creating || atLimit}
           >
-            {creating ? "Creating group…" : "Create group"}
+            {creating ? "Creating watchlist…" : "Create watchlist"}
           </button>
         </Form>
       </section>
 
       <section className="data-section" aria-labelledby="group-list-title">
         <h2 id="group-list-title" ref={listTitle} tabIndex={-1}>
-          Your groups
+          Your watchlists
         </h2>
         {loaderData.error ? (
           <aside className="notice notice-unavailable" role="alert">
-            <strong>Groups could not be loaded.</strong>{" "}
-            <a href="/account/groups">Try again</a>
+            <strong>Watchlists could not be loaded.</strong>{" "}
+            <a href="/account/watchlists">Try again</a>
           </aside>
         ) : groups.length > 0 ? (
           <ul className="group-card-list">
@@ -410,8 +415,8 @@ export default function GroupsRoute() {
           </ul>
         ) : (
           <div className="empty-state">
-            <h3>No private groups yet</h3>
-            <p>Create a group above to compare players by their tags.</p>
+            <h3>No watchlists yet</h3>
+            <p>Create a watchlist above to compare players by their tags.</p>
           </div>
         )}
       </section>
@@ -459,8 +464,8 @@ function GroupCard({
   const toggle = (name: Panel) => ({
     href:
       panel === name
-        ? `/account/groups#group-${id}`
-        : `/account/groups?group=${id}&panel=${name}#group-${id}`,
+        ? `/account/watchlists#group-${id}`
+        : `/account/watchlists?group=${id}&panel=${name}#group-${id}`,
     "aria-expanded": panel === name,
     "aria-controls": `group-${id}-${name}`,
     onClick: (event: MouseEvent) => {
@@ -474,7 +479,7 @@ function GroupCard({
     <li id={`group-${id}`} className="group-card">
       <div className="group-card-head">
         <h3>{group.name}</h3>
-        <Link className="button button-primary" to={`/account/groups/${id}`}>
+        <Link className="button button-primary" to={`/account/watchlists/${id}`}>
           Compare players
         </Link>
         <a className="button button-secondary" {...toggle("add")}>
@@ -664,7 +669,7 @@ function EditGroup({
           open={deleteResult !== undefined}
         >
           <summary ref={deleteSummary} className="button button-secondary danger-button">
-            Delete group
+            Delete watchlist
           </summary>
           <p>
             Delete {group.name} and its list of players? This cannot be undone. The
@@ -672,18 +677,18 @@ function EditGroup({
           </p>
           <div className="group-card-actions">
             <button type="submit" className="button danger-button" disabled={deleting}>
-              {deleting ? "Deleting…" : "Yes, delete group"}
+              {deleting ? "Deleting…" : "Yes, delete watchlist"}
             </button>
             <a
               className="button button-secondary"
-              href="/account/groups"
+              href="/account/watchlists"
               onClick={(event) => {
                 event.preventDefault();
                 if (deleteStep.current) deleteStep.current.open = false;
                 deleteSummary.current?.focus();
               }}
             >
-              Keep group
+              Keep watchlist
             </a>
           </div>
         </details>
@@ -696,7 +701,7 @@ function EditGroup({
 }
 
 function MemberName({ player }: { player: GroupPlayer }) {
-  const backState = useBackState("Your groups");
+  const backState = useBackState("Your watchlists");
   return (
     <span className="player-action-name">
       <Link to={canonicalPlayerPath(player.tag)} state={backState}>
@@ -775,7 +780,7 @@ function NameField({
 }) {
   return (
     <div className="form-field">
-      <label htmlFor={id}>Group name</label>
+      <label htmlFor={id}>Watchlist name</label>
       <input
         id={id}
         name="name"

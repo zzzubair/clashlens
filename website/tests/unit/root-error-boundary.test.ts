@@ -7,11 +7,22 @@ import {
   StaticRouterProvider,
   useRouteError,
 } from "react-router";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+
+const errorEvents = vi.hoisted(() => vi.fn());
+
+vi.mock("../../app/components/Analytics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/components/Analytics")>()),
+  useErrorEvent: errorEvents,
+}));
 
 import { ErrorBoundary } from "../../app/root";
 
-async function renderFailure(path: string, status: number) {
+beforeEach(() => {
+  errorEvents.mockClear();
+});
+
+async function renderFailure(path: string, status: number, payload: unknown = null) {
   const handler = createStaticHandler([
     {
       id: "root",
@@ -22,7 +33,7 @@ async function renderFailure(path: string, status: number) {
         {
           path: "*",
           loader: () => {
-            throw data(null, { status });
+            throw data(payload, { status });
           },
           Component: () => createElement("p", null, "Your saved players"),
         },
@@ -44,13 +55,35 @@ it("offers to reload the same page when a signed-in page fails to load", async (
   const html = await renderFailure("/account/saved-players?tab=list", 503);
   expect(html).toContain("The page could not be loaded");
   expect(html).toContain('href="/account/saved-players?tab=list">Try again</a>');
-  expect(html).toContain('href="/">Return home</a>');
+  expect(html).toContain('href="/">Go to Clash Lens</a>');
   expect(html).not.toContain("Your saved players");
+  expect(errorEvents.mock.calls).toEqual([["error"]]);
 });
 
 it("does not offer a retry for a page that does not exist", async () => {
   const html = await renderFailure("/missing", 404);
   expect(html).toContain("Page not found");
   expect(html).not.toContain("Try again");
-  expect(html).toContain('href="/">Return home</a>');
+  expect(html).toContain('href="/">Go to Clash Lens</a>');
+  expect(errorEvents.mock.calls).toEqual([["not_found"]]);
+});
+
+it("explains in place why a signed-out page needs an account", async () => {
+  const html = await renderFailure("/crews", 401, {
+    needsAccount: true,
+    returnPath: "/crews",
+  });
+  expect(html).toContain("<h1>Crews</h1>");
+  expect(html).toContain("You need a Clash Lens account to make or join one.");
+  expect(html).toContain('href="/signup?returnPath=%2Fcrews"');
+  expect(html).toContain('href="/login?returnPath=%2Fcrews"');
+  expect(html).not.toContain("The page could not be loaded");
+  // The box is the page working as meant, so analytics counts no error.
+  expect(errorEvents.mock.calls).toEqual([[null]]);
+
+  const account = await renderFailure("/account/profile", 401, {
+    needsAccount: true,
+    returnPath: "/account/profile",
+  });
+  expect(account).toContain("<h1>Your account</h1>");
 });

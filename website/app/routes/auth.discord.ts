@@ -32,9 +32,10 @@ export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   const returnPath =
     safeReturnPath(rawReturnPath, config.publicOrigin) ?? DEFAULT_RETURN_PATH;
   // Privileged intents are started only by the protected account POST action;
-  // query parameters on this public GET route can start login only.
+  // query parameters on this public GET route can start sign-in or sign-up only.
+  const intent = url.searchParams.get("signup") === "1" ? "signup" : "login";
   try {
-    return await startProviderAuthorization(config, "discord", "login", returnPath);
+    return await startProviderAuthorization(config, "discord", intent, returnPath);
   } catch {
     throw redirect("/login");
   }

@@ -190,13 +190,13 @@ describe("account routes", () => {
 
     it.each([
       [
-        "groups",
+        "watchlists",
         GroupsRoute,
         groupsLoader,
         "listGroups",
-        "Groups could not be loaded.",
-        "No private groups yet",
-        "Create group",
+        "Watchlists could not be loaded.",
+        "No watchlists yet",
+        "Create watchlist",
       ],
     ] as const)(
       "shows a retryable read failure and recovers on %s",
@@ -235,7 +235,7 @@ describe("account routes", () => {
         groupsLoader,
         groupsAction,
         "createGroup",
-        { action: "create", name: "New group" },
+        { action: "create", name: "New watchlist" },
         "Clanmates",
       ],
     ] as const)(
@@ -288,11 +288,11 @@ describe("account routes", () => {
             ),
           } as never)
         ).returnPath;
-      expect(await returnPathOf("/account/groups")).toBe("/account/groups");
+      expect(await returnPathOf("/account/watchlists")).toBe("/account/watchlists");
       for (const unsafe of [
-        "https://evil.example/account/groups",
-        "//evil.example/account/groups",
-        "/account/groups?days=3&sort=defense",
+        "https://evil.example/account/watchlists",
+        "//evil.example/account/watchlists",
+        "/account/watchlists?days=3&sort=defense",
         "/account/setup",
       ]) {
         expect(await returnPathOf(unsafe)).toBe("/account");
@@ -307,23 +307,24 @@ describe("account routes", () => {
             returnPath,
           }),
         } as never);
-      await expect(submit("/account/groups")).rejects.toSatisfy(
-        expectRedirectTo("/account/groups"),
+      // A new account links a player first, then goes on.
+      await expect(submit("/account/watchlists")).rejects.toSatisfy(
+        expectRedirectTo("/account/verify-player?return=%2Faccount%2Fwatchlists"),
       );
-      await expect(submit("https://evil.example/account/groups")).rejects.toSatisfy(
-        expectRedirectTo("/account"),
+      await expect(submit("https://evil.example/account/watchlists")).rejects.toSatisfy(
+        expectRedirectTo("/account/verify-player"),
       );
       client.createAccount = vi.fn(async () => {
         throw new PythonApiError(409, { error: "account_exists" });
       });
-      await expect(submit("/account/groups")).rejects.toSatisfy(
-        expectRedirectTo("/account/groups"),
+      await expect(submit("/account/watchlists")).rejects.toSatisfy(
+        expectRedirectTo("/account/watchlists"),
       );
       client.createAccount = vi.fn(async () => {
         throw new PythonApiError(403, { error: "account_not_found" });
       });
-      await expect(submit("/account/groups")).rejects.toSatisfy(
-        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fgroups"),
+      await expect(submit("/account/watchlists")).rejects.toSatisfy(
+        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fwatchlists"),
       );
     });
 
@@ -336,7 +337,7 @@ describe("account routes", () => {
             displayName: " Nova ",
           }),
         } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account"));
+      ).rejects.toSatisfy(expectRedirectTo("/account/verify-player"));
       expect(client.createAccount).toHaveBeenCalledWith(
         { username: "nova88", displayName: "Nova" },
         IDEMPOTENCY_KEY,
@@ -500,17 +501,15 @@ describe("account routes", () => {
   });
 
   describe("account.saved-players", () => {
-    it("sends a signed-in visit to the old address on to Your groups", async () => {
-      await expect(
-        savedPlayersLoader({
-          request: new Request(`${ORIGIN}/account/saved-players`),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
+    it("sends the old address on to Watchlists", async () => {
+      await expect(savedPlayersLoader()).rejects.toSatisfy(
+        expectRedirectTo("/account/watchlists"),
+      );
     });
   });
 
   describe("account.groups", () => {
-    it("loads groups with fresh per-group update and delete keys", async () => {
+    it("loads watchlists with fresh per-group update and delete keys", async () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
         groups: [
@@ -531,7 +530,7 @@ describe("account routes", () => {
         ],
       }));
       const result = await groupsLoader({
-        request: new Request(`${ORIGIN}/account/groups`),
+        request: new Request(`${ORIGIN}/account/watchlists`),
       } as never);
       expect(result.groups).toHaveLength(1);
       expect(UUID_PATTERN.test(result.createIdempotencyKey)).toBe(true);
@@ -541,34 +540,34 @@ describe("account routes", () => {
       assertNoProviderData(result);
     });
 
-    it("redirects an unresolved account to setup, then back to groups", async () => {
+    it("redirects an unresolved account to setup, then back to watchlists", async () => {
       client.listGroups = vi.fn(async () => {
         throw new PythonApiError(404, { error: "account_not_found" });
       });
       await expect(
-        groupsLoader({ request: new Request(`${ORIGIN}/account/groups`) } as never),
+        groupsLoader({ request: new Request(`${ORIGIN}/account/watchlists`) } as never),
       ).rejects.toSatisfy(
-        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fgroups"),
+        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fwatchlists"),
       );
     });
 
-    it("creates a group with a redirect and renames one in place", async () => {
+    it("creates a watchlist with a redirect and renames one in place", async () => {
       await expect(
         groupsAction({
-          request: formRequest("/account/groups", {
+          request: formRequest("/account/watchlists", {
             action: "create",
             name: " Clanmates ",
             idempotencyKey: IDEMPOTENCY_KEY,
           }),
         } as never),
-      ).rejects.toSatisfy(expectRedirectTo(`/account/groups#group-${GROUP_ID}`));
+      ).rejects.toSatisfy(expectRedirectTo(`/account/watchlists#group-${GROUP_ID}`));
       expect(client.createGroup).toHaveBeenCalledWith(
         { name: "Clanmates" },
         IDEMPOTENCY_KEY,
       );
 
       const renamed = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "update",
           groupId: GROUP_ID,
           name: "Clanmates",
@@ -583,24 +582,24 @@ describe("account routes", () => {
       );
     });
 
-    it("stops a Clasher at ten groups and says why", async () => {
+    it("stops a Clasher at ten watchlists and says why", async () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
         groups: Array.from({ length: 10 }, (_, index) => ({
           groupId: `${GROUP_ID.slice(0, -2)}${String(index).padStart(2, "0")}`,
-          name: `Group ${index}`,
+          name: `Watchlist ${index}`,
           tags: [],
           players: [],
         })),
       }));
       const handler = createStaticHandler([
         {
-          path: "/account/groups",
+          path: "/account/watchlists",
           Component: GroupsRoute,
           loader: groupsLoader as never,
         },
       ]);
-      const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
+      const context = await handler.query(new Request(`${ORIGIN}/account/watchlists`));
       if (context instanceof Response) throw new Error("unexpected route response");
       const html = renderToString(
         createElement(StaticRouterProvider, {
@@ -609,15 +608,15 @@ describe("account routes", () => {
         }),
       );
       expect(html).toMatch(
-        /<button type="submit" class="button button-primary" disabled="">Create group/,
+        /<button type="submit" class="button button-primary" disabled="">Create watchlist/,
       );
-      expect(html).toContain("You have 10 groups, the most an account can have.");
+      expect(html).toContain("You have 10 watchlists, the most an account can have.");
 
       client.createGroup = vi.fn(async () => {
         throw new PythonApiError(422, { error: "group_limit_reached" });
       });
       const refused = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "create",
           name: "Eleventh",
           idempotencyKey: IDEMPOTENCY_KEY,
@@ -628,9 +627,9 @@ describe("account routes", () => {
       expect(data.fieldErrors.name).toContain("the most an account can have");
     });
 
-    it("requires a confirmation before deleting a group", async () => {
+    it("requires a confirmation before deleting a watchlist", async () => {
       const unconfirmed = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "delete",
           groupId: GROUP_ID,
           idempotencyKey: IDEMPOTENCY_KEY,
@@ -645,22 +644,22 @@ describe("account routes", () => {
       expect(client.deleteGroup).not.toHaveBeenCalled();
 
       const deleted = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "delete",
           groupId: GROUP_ID,
           confirm: "on",
           idempotencyKey: IDEMPOTENCY_KEY,
         }),
       } as never).catch((thrown: unknown) => thrown);
-      expect(expectRedirectTo("/account/groups")(deleted)).toBe(true);
+      expect(expectRedirectTo("/account/watchlists")(deleted)).toBe(true);
       // Replacing the history entry keeps Back from returning to the deleted group.
       expect((deleted as Response).headers.get("X-Remix-Replace")).toBe("true");
       expect(client.deleteGroup).toHaveBeenCalledWith(GROUP_ID, IDEMPOTENCY_KEY);
     });
 
-    it("rejects invalid names, tags, and group IDs before calling Python", async () => {
+    it("rejects invalid names, tags, and watchlist IDs before calling Python", async () => {
       const badName = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "create",
           name: "bad\u0000name",
           tags: "abc123",
@@ -670,7 +669,7 @@ describe("account routes", () => {
       expect(dataOf(badName).status).toBe(400);
 
       const badTags = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "add-player",
           groupId: GROUP_ID,
           tag: "not a tag",
@@ -680,7 +679,7 @@ describe("account routes", () => {
       expect(dataOf(badTags).status).toBe(400);
 
       const badGroupId = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "update",
           groupId: "not-a-uuid",
           name: "Clanmates",
@@ -698,7 +697,7 @@ describe("account routes", () => {
     it("rejects cross-origin requests before any mutation", async () => {
       const result = await groupsAction({
         request: formRequest(
-          "/account/groups",
+          "/account/watchlists",
           {
             action: "create",
             name: "Clanmates",
@@ -716,12 +715,12 @@ describe("account routes", () => {
       expect(client.createGroup).not.toHaveBeenCalled();
     });
 
-    it("maps Python group outcomes: conflict, validation, missing, and general", async () => {
+    it("maps Python watchlist outcomes: conflict, validation, missing, and general", async () => {
       client.createGroup = vi.fn(async () => {
         throw new PythonApiError(409, { error: "group_name_conflict" });
       });
       const conflict = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "create",
           name: "Clanmates",
           tags: TAG,
@@ -731,14 +730,14 @@ describe("account routes", () => {
       const conflictResult = dataOf<{ fieldErrors: Record<string, string> }>(conflict);
       expect(conflictResult.status).toBe(409);
       expect(conflictResult.data.fieldErrors.name).toBe(
-        "A group with this name already exists.",
+        "A watchlist with this name already exists.",
       );
 
       client.createGroup = vi.fn(async () => {
         throw new PythonApiError(422, { error: "invalid_request" });
       });
       const validation = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "create",
           name: "Clanmates",
           tags: TAG,
@@ -751,7 +750,7 @@ describe("account routes", () => {
         throw new PythonApiError(404, { error: "group_not_found" });
       });
       const missing = await groupsAction({
-        request: formRequest("/account/groups", {
+        request: formRequest("/account/watchlists", {
           action: "delete",
           groupId: GROUP_ID,
           confirm: "on",
@@ -763,7 +762,7 @@ describe("account routes", () => {
       );
       expect(missingResult.status).toBe(422);
       expect(missingResult.data.generalError.error.message).toBe(
-        "The group no longer exists. Refresh the page.",
+        "The watchlist no longer exists. Refresh the page.",
       );
 
       for (const [status, code] of [
@@ -774,7 +773,7 @@ describe("account routes", () => {
           throw new PythonApiError(status, { error: code });
         });
         const unconfirmed = await groupsAction({
-          request: formRequest("/account/groups", {
+          request: formRequest("/account/watchlists", {
             action: "create",
             name: "Clanmates",
             tags: TAG,
@@ -787,7 +786,7 @@ describe("account routes", () => {
         expect(result.status).toBe(422);
         expect(result.data.generalError.error.code).toBe(code);
         expect(result.data.generalError.error.message).toBe(
-          "Could not confirm the group was created. Refresh the page before trying again.",
+          "Could not confirm the watchlist was created. Refresh the page before trying again.",
         );
         assertNoStoreHeaders(result.headers);
         assertNoProviderData(result.data);
@@ -800,7 +799,7 @@ describe("account routes", () => {
       });
       await expect(
         groupsAction({
-          request: formRequest("/account/groups", {
+          request: formRequest("/account/watchlists", {
             action: "create",
             name: "Clanmates",
             tags: "p0lq2y8",
@@ -996,7 +995,7 @@ describe("account routes", () => {
   });
 
   describe("account overview", () => {
-    it("opens the public profile even when groups are unavailable", async () => {
+    it("opens the public profile even when watchlists are unavailable", async () => {
       client.getAccountSummary = vi.fn(async () => ({
         ...SUMMARY,
         verifiedPlayers: [{ tag: TAG, name: "Alpha" }],

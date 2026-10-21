@@ -36,10 +36,14 @@ describe("same-origin return path validation", () => {
     expect(safeReturnPath("account/profile", ORIGIN)).toBeNull();
   });
 
+  it("keeps an encoded # so a player page is a place to come back to", () => {
+    expect(safeReturnPath("/players/%232PP", ORIGIN)).toBe("/players/%232PP");
+  });
+
   it("rejects encoded, backslash, and dot-segment path tricks", () => {
     expect(safeReturnPath("/\\evil.example/account", ORIGIN)).toBeNull();
     expect(safeReturnPath("/%2F%2Fevil.example", ORIGIN)).toBeNull();
-    expect(safeReturnPath("/players/%232PP", ORIGIN)).toBeNull();
+    expect(safeReturnPath("/players/%2523", ORIGIN)).toBeNull();
     expect(safeReturnPath("/a/../b", ORIGIN)).toBeNull();
     expect(safeReturnPath("/a/./b", ORIGIN)).toBeNull();
     expect(safeReturnPath("/a/..", ORIGIN)).toBeNull();

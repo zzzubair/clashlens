@@ -100,7 +100,7 @@
   border-color: var(--cl-brand-night);
   box-shadow: 0 3px 0 #000000;
 }
-:root .site-nav .nav-link:not(.nav-link-primary),
+:root :is(.site-nav, .site-menu-extras) .nav-link:not(.nav-link-primary),
 :root .site-header :is(.theme-toggle, .header-search-toggle) {
   color: var(--cl-header-ink);
   background: transparent;
@@ -108,7 +108,9 @@
   border-radius: 999px;
   box-shadow: none;
 }
-:root .site-nav .nav-link:not(.nav-link-primary):is(:hover, :focus-visible),
+:root
+  :is(.site-nav, .site-menu-extras)
+  .nav-link:not(.nav-link-primary):is(:hover, :focus-visible),
 :root .site-header :is(.theme-toggle, .header-search-toggle):is(:hover, :active) {
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);

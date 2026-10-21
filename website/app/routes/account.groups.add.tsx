@@ -71,7 +71,7 @@ async function setupRedirect(request: Request): Promise<Response> {
 }
 
 /**
- * GET /account/groups/add/:tag — where a player is saved: into the only
+ * GET /account/watchlists/add/:tag — where a player is saved: into the only
  * group, a chosen one of several, or a first group created on the spot. The
  * tag is in the path so login and account setup return here with it.
  */
@@ -101,7 +101,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 }
 
 /**
- * POST /account/groups/add/:tag — add the player to a chosen group, or, for an
+ * POST /account/watchlists/add/:tag — add the player to a chosen group, or, for an
  * account with no groups, create the first one and add the player to it.
  * Same-origin only, with a canonical idempotency UUID for each change.
  */
@@ -160,12 +160,14 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (creating) {
       // The form only offers a new group to an account that has none.
       if (groups.length > 0) {
-        return reply(409, { fieldErrors: { tag: "Choose one of your groups below." } });
+        return reply(409, {
+          fieldErrors: { tag: "Choose one of your watchlists below." },
+        });
       }
       const name = normalizeGroupName(values.name);
       if (name === null || isInappropriateName(values.name)) {
         return reply(400, {
-          fieldErrors: { name: "Choose a group name of 1–80 characters." },
+          fieldErrors: { name: "Choose a watchlist name of 1–80 characters." },
         });
       }
       // Check the player first, so a mistyped tag leaves no empty group behind.
@@ -183,7 +185,9 @@ export async function action({ request, context }: Route.ActionArgs) {
         return reply(values.groupId === "" ? 400 : 404, {
           fieldErrors: {
             tag:
-              values.groupId === "" ? "Choose a group." : "That group no longer exists.",
+              values.groupId === ""
+                ? "Choose a watchlist."
+                : "That watchlist no longer exists.",
           },
         });
       }
@@ -212,7 +216,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       return reply(status ?? 422, { fieldErrors: { tag: tagError } });
     if (code === "group_name_conflict") {
       return reply(409, {
-        fieldErrors: { name: "A group with this name already exists." },
+        fieldErrors: { name: "A watchlist with this name already exists." },
       });
     }
     if (code === "group_limit_reached")
@@ -250,10 +254,10 @@ export default function AddToGroupRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="add-title">
         <h1 id="add-title">
-          {tag === null ? "Add a player to a group" : `Add ${tag} to a group`}
+          {tag === null ? "Add a player to a watchlist" : `Add ${tag} to a watchlist`}
         </h1>
         <p className="lede">
-          Players are saved in your private groups. Only you can see them.
+          Players are saved in your private watchlists. Only you can see them.
         </p>
       </section>
 
@@ -261,18 +265,20 @@ export default function AddToGroupRoute() {
       {actionData?.notice ? (
         <p className="add-player-done" role="status">
           {actionData.notice}{" "}
-          <Link to={`/account/groups#group-${actionData.addedTo}`}>Open your groups</Link>
+          <Link to={`/account/watchlists#group-${actionData.addedTo}`}>
+            Open your watchlists
+          </Link>
         </p>
       ) : null}
 
       {tag === null ? (
         <aside className="notice notice-unavailable" role="alert">
           <strong>That player tag could not be read.</strong> Open a player and choose Add
-          to group again.
+          to watchlist again.
         </aside>
       ) : loaderData.error ? (
         <aside className="notice notice-unavailable" role="alert">
-          <strong>Your groups could not be loaded.</strong>{" "}
+          <strong>Your watchlists could not be loaded.</strong>{" "}
           <a href={addToGroupPath(tag)}>Try again</a>
         </aside>
       ) : (
@@ -282,11 +288,11 @@ export default function AddToGroupRoute() {
             <input type="hidden" name="addIdempotencyKey" value={addKey} />
             {groups.length === 0 ? (
               <>
-                <h2 id="add-form-title">Create your first group</h2>
+                <h2 id="add-form-title">Create your first watchlist</h2>
                 <input type="hidden" name="action" value="create" />
                 <input type="hidden" name="createIdempotencyKey" value={createKey} />
                 <div className="form-field">
-                  <label htmlFor="add-group-name">Group name</label>
+                  <label htmlFor="add-group-name">Watchlist name</label>
                   <input
                     id="add-group-name"
                     name="name"
@@ -303,11 +309,11 @@ export default function AddToGroupRoute() {
                     role={errors.name ? "alert" : undefined}
                   >
                     {errors.name ??
-                      `You have no groups yet. Name one and ${tag} goes straight into it.`}
+                      `You have no watchlists yet. Name one and ${tag} goes straight into it.`}
                   </p>
                 </div>
                 <button type="submit" className="button button-primary" disabled={busy}>
-                  {busy ? "Adding…" : "Create group and add"}
+                  {busy ? "Adding…" : "Create watchlist and add"}
                 </button>
               </>
             ) : only ? (
@@ -317,10 +323,10 @@ export default function AddToGroupRoute() {
                 <input type="hidden" name="groupId" value={only.groupId} />
                 <p className="form-help">
                   {only.member
-                    ? `${tag} is already in ${only.name}, your only group.`
+                    ? `${tag} is already in ${only.name}, your only watchlist.`
                     : only.count >= MAX_GROUP_TAGS
-                      ? `${only.name} already has ${MAX_GROUP_TAGS} players, the most a group holds. Remove a player there to add another.`
-                      : `${only.name} is your only group, so ${tag} goes there.`}
+                      ? `${only.name} already has ${MAX_GROUP_TAGS} players, the most a watchlist holds. Remove a player there to add another.`
+                      : `${only.name} is your only watchlist, so ${tag} goes there.`}
                 </p>
                 <button
                   type="submit"
@@ -332,7 +338,7 @@ export default function AddToGroupRoute() {
               </>
             ) : (
               <>
-                <h2 id="add-form-title">Choose a group</h2>
+                <h2 id="add-form-title">Choose a watchlist</h2>
                 <fieldset className="group-choices" aria-labelledby="add-form-title">
                   <input type="hidden" name="action" value="add" />
                   {groups.map((group) => {
@@ -351,7 +357,7 @@ export default function AddToGroupRoute() {
                           <strong>{group.name}</strong>{" "}
                           <span className="group-member-detail">
                             {group.member
-                              ? `${tag} is already in this group`
+                              ? `${tag} is already in this watchlist`
                               : full
                                 ? `Full: ${MAX_GROUP_TAGS} of ${MAX_GROUP_TAGS} players`
                                 : `${group.count} of ${MAX_GROUP_TAGS} players`}
@@ -365,7 +371,7 @@ export default function AddToGroupRoute() {
                     className="button button-primary"
                     disabled={busy || open.length === 0}
                   >
-                    {busy ? "Adding…" : "Add to group"}
+                    {busy ? "Adding…" : "Add to watchlist"}
                   </button>
                 </fieldset>
               </>

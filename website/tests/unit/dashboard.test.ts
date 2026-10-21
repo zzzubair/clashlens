@@ -125,7 +125,7 @@ function postRequest(
   origin = ORIGIN,
 ): Parameters<typeof action>[0] {
   return {
-    request: new Request(`${ORIGIN}/dashboard`, {
+    request: new Request(`${ORIGIN}/`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
       body: new URLSearchParams({
@@ -547,7 +547,7 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
     expect(plain).not.toContain("not yet");
     // Each opponent can be saved into one of the account's groups.
-    expect(html).toContain('href="/account/groups/add/8PP"');
+    expect(html).toContain('href="/account/watchlists/add/8PP"');
     expect(html.match(/is-yours/g)).toHaveLength(3);
   });
 
@@ -852,7 +852,7 @@ describe("dashboard route", () => {
     mocks.createPythonClient.mockReturnValue(client);
   });
 
-  const load = async (url = `${ORIGIN}/dashboard`) => {
+  const load = async (url = `${ORIGIN}/`) => {
     const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(url)));
     if (data.kind !== "signed-in") throw new Error("expected signed in");
     return { ...data, cards: await settled(data.cards) };
@@ -860,10 +860,8 @@ describe("dashboard route", () => {
 
   it("shows the signed-out preview without a login", async () => {
     mocks.readLoginIdentity.mockResolvedValue(null);
-    const { data } = unwrap<DashboardLoaderData>(
-      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
-    );
-    expect(data).toEqual({ kind: "signed-out", loginAvailable: true });
+    const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(`${ORIGIN}/`)));
+    expect(data).toMatchObject({ kind: "signed-out", loginAvailable: true });
     expect(client.getAccount).not.toHaveBeenCalled();
   });
 
@@ -924,7 +922,7 @@ describe("dashboard route", () => {
       boardPending: true,
     });
     const again = await load(
-      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
+      `${ORIGIN}/?${new URLSearchParams({ player: MAIN, cards: "legend-day,bases", board: "wait" })}`,
     );
     // Legend day has its range but not yet its projected place, so asks again.
     expect(again.cards).toEqual({
@@ -939,7 +937,7 @@ describe("dashboard route", () => {
       bases: { dayNumber: null, rows: [], comparedAtMs: Date.parse(boardAt) },
     });
     const last = await load(
-      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+      `${ORIGIN}/?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
     );
     expect(last.cards).toEqual({
       "legend-day": {
@@ -951,7 +949,7 @@ describe("dashboard route", () => {
       },
     });
     const none = await load(
-      `${ORIGIN}/dashboard?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
+      `${ORIGIN}/?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
     );
     expect(none.cards["legend-day"]).toMatchObject({ projected: null });
     expect(none.cards["legend-day"]).not.toHaveProperty("boardPending");
@@ -966,7 +964,7 @@ describe("dashboard route", () => {
 
   it("follows the switcher's player and reads no cards outside Legend I", async () => {
     account.preferences = { dashboard: { v: 3, layout: ["goal"], goal: 50 } };
-    const data = await load(`${ORIGIN}/dashboard?player=%232pp8qly0`);
+    const data = await load(`${ORIGIN}/?player=%232pp8qly0`);
     expect(data.selectedTag).toBe(ALT);
     expect(data.settings).toMatchObject({ layout: ["goal"], goal: 50 });
     expect(data.cards).toEqual({});
@@ -992,15 +990,12 @@ describe("dashboard route", () => {
     expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
   });
 
-  it("sends an account without a profile to setup", async () => {
+  it("shows the front page to a sign-in with no account yet", async () => {
     client.getAccount.mockRejectedValue(
       new PythonApiError(404, { error: "account_not_found" }),
     );
-    await expect(loader(loaderArgs(`${ORIGIN}/dashboard`))).rejects.toSatisfy(
-      (thrown: unknown) =>
-        thrown instanceof Response &&
-        thrown.headers.get("Location") === "/account/setup?returnPath=/dashboard",
-    );
+    const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(`${ORIGIN}/`)));
+    expect(data).toMatchObject({ kind: "signed-out", loginAvailable: true });
   });
 
   it("saves the settings and keeps every other preference", async () => {
@@ -1088,14 +1083,12 @@ describe("dashboard route", () => {
         defaultShouldRevalidate: true,
       } as Parameters<typeof shouldRevalidate>[0]);
     // A save answers with the settings as saved; the page reads nothing else.
-    expect(check("/dashboard", "/dashboard", "POST", "/dashboard?player=%232PP")).toBe(
-      false,
-    );
-    expect(check("/dashboard", "/dashboard", "POST", "/logout")).toBe(true);
-    expect(check("/dashboard", "/dashboard?player=%232PP8QLY0")).toBe(true);
-    expect(check("/dashboard?player=%232PP8QLY0", "/dashboard?player=%232PP8QLY0")).toBe(
-      false,
-    );
+    expect(check("/", "/", "POST", "/?player=%232PP")).toBe(false);
+    expect(check("/", "/", "POST", "/logout")).toBe(true);
+    expect(check("/", "/?player=%232PP8QLY0")).toBe(true);
+    expect(check("/?player=%232PP8QLY0", "/?player=%232PP8QLY0&cards=goal")).toBe(false);
+    // The same address again, such as a reread, reads again.
+    expect(check("/?player=%232PP8QLY0", "/?player=%232PP8QLY0")).toBe(true);
   });
 
   it.each([
@@ -1181,24 +1174,21 @@ describe("dashboard switch", () => {
     );
   }
 
-  it("hides the page, its saves and the nav link while it is off", async () => {
+  it("shows the front page, refuses saves and hides the tab while it is off", async () => {
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "");
-    for (const run of [
-      () => loader(loaderArgs(`${ORIGIN}/dashboard`)),
-      () => action(saveRequest(DEFAULT_SAVE)),
-    ]) {
-      const thrown = await run().then(
-        () => null,
-        (error: unknown) => error,
-      );
-      expect(unwrap(thrown).status).toBe(404);
-    }
-    expect(await renderNavigation()).not.toContain('href="/dashboard"');
+    const { data } = unwrap<DashboardLoaderData>(await loader(loaderArgs(`${ORIGIN}/`)));
+    expect(data).toMatchObject({ kind: "signed-out", dashboardEnabled: false });
+    const thrown = await action(saveRequest(DEFAULT_SAVE)).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(unwrap(thrown).status).toBe(404);
+    expect(await renderNavigation()).not.toContain(">Dashboard</a>");
   });
 
-  it("shows the nav link while it is on", async () => {
+  it("shows the tab while it is on", async () => {
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
-    expect(await renderNavigation()).toContain('href="/dashboard"');
+    expect(await renderNavigation()).toContain(">Dashboard</a>");
   });
 });
 
@@ -1207,9 +1197,9 @@ describe("dashboard page", () => {
 
   async function renderPage(loaderData: DashboardLoaderData) {
     const handler = createStaticHandler([
-      { path: "/dashboard", Component: DashboardRoute, loader: () => loaderData },
+      { path: "/", Component: DashboardRoute, loader: () => loaderData },
     ]);
-    const context = await handler.query(new Request(`${ORIGIN}/dashboard`));
+    const context = await handler.query(new Request(`${ORIGIN}/`));
     if (context instanceof Response) throw new Error("unexpected response");
     return renderToString(
       createElement(StaticRouterProvider, {
@@ -1281,7 +1271,7 @@ describe("dashboard page", () => {
     expect(plain).toContain("Lens Alt Not in Legend I");
     expect(plain).toContain("Lens New Not tracked yet");
     expect(html).toContain(
-      `aria-current="page" href="/dashboard?player=${encodeURIComponent(MAIN)}"`,
+      `aria-current="page" href="/?player=${encodeURIComponent(MAIN)}"`,
     );
     expect(html).toContain('href="/account/verify-player"');
     // The player's name shows once, in its tab, cut with "…" and in full on hover.
@@ -1397,10 +1387,16 @@ describe("dashboard page", () => {
   });
 
   it("previews the default cards behind sign-in", async () => {
-    const html = await renderPage({ kind: "signed-out", loginAvailable: true });
+    const html = await renderPage({
+      kind: "signed-out",
+      loginAvailable: true,
+      dashboardEnabled: true,
+      leaderboard: null,
+      error: null,
+    });
     const plain = text(html);
     expect(plain).toContain("Your Legend day, on one page");
-    expect(plain).toContain("Continue with Google");
+    expect(plain).toContain("Create account Already have one? Sign in");
     expect(plain).toContain(
       "Legend day Legend clock Bases you attacked Goal Armies on defense Rivals watch Season heat map",
     );
