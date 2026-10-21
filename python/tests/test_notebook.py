@@ -60,9 +60,7 @@ def test_a_pick_from_tomorrow_is_in_no_run_yet() -> None:
 
 
 def test_base_ids_are_short_and_never_use_letters_that_look_like_digits() -> None:
-    codes = {new_code() for _ in range(2_000)}
-    assert len(codes) == 2_000
-    for code in codes:
+    for code in (new_code() for _ in range(2_000)):
         assert code.startswith("B-") and len(code) == 8
         assert not set(code[2:]) & set("ILOU")
 

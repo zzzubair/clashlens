@@ -35,7 +35,7 @@ import {
   type NotebookPlayer,
   type NotebookSaved,
 } from "../lib/notebook";
-import { PictureButton } from "./NotebookPictures";
+import { PictureButton, useRelink } from "./NotebookPictures";
 
 const SAVE = "/notebook/save";
 export const LEGEND_ONLY = "Bases can be set on Legend days only.";
@@ -192,13 +192,14 @@ export function BaseTile({
   picture?: BasePicture | null;
   size?: "sm" | "lg";
 }) {
+  const relink = useRelink();
   return (
     <span
       className={`nb-tile nb-tile-${size}${name ? "" : " nb-tile-empty"}`}
       aria-hidden="true"
     >
       {picture ? (
-        <img src={picture.small} alt="" loading="lazy" decoding="async" />
+        <img src={picture.small} alt="" loading="lazy" decoding="async" {...relink} />
       ) : name ? (
         baseInitials(name)
       ) : (

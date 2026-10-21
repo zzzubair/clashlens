@@ -13,18 +13,34 @@ const PNG = Buffer.from(
 
 test.use({ viewport: { width: 390, height: 844 } });
 
+/** Every one of these pictures loaded from the picture store. */
+async function expectLoaded(images: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      images.evaluateAll(
+        (list) =>
+          list.length > 0 &&
+          list.every((image) => (image as HTMLImageElement).naturalWidth > 0),
+      ),
+    )
+    .toBe(true);
+}
+
 /** Give the base on its open page a picture. */
 async function addPicture(page: Page, name: string): Promise<void> {
   await page
     .getByText("+ Add a picture")
     .locator("input[type=file]")
     .setInputFiles({ name: `${name}.png`, mimeType: "image/png", buffer: PNG });
-  await expect(page.getByRole("button", { name: `See ${name}'s picture` })).toBeVisible();
+  const picture = page.getByRole("button", { name: `See ${name}'s picture` });
+  await expect(picture).toBeVisible();
+  await expectLoaded(picture.locator("img"));
 }
 
 /**
- * Tap a base's picture: it opens full size over the page, at least 44 px to
- * tap, with the address unchanged and nothing saved, and closes again.
+ * Tap a base's picture, its small copy shown: it opens full size over the
+ * page, at least 44 px to tap, with the address unchanged and nothing saved,
+ * and closes again.
  */
 async function preview(
   page: Page,
@@ -38,9 +54,12 @@ async function preview(
   await expect(picture).toBeVisible();
   const box = (await picture.boundingBox())!;
   expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
+  // The small copy, in the button or the row's tile beneath it.
+  await expectLoaded(picture.locator("xpath=..").locator("img"));
   await picture.click();
   const shown = page.getByRole("dialog", { name: `${name}, picture` });
   await expect(shown).toBeVisible();
+  await expectLoaded(shown.locator("img"));
   expect(page.url()).toBe(before);
   await shown.getByRole("button", { name: "Close" }).click();
   await expect(shown).toBeHidden();
@@ -132,4 +151,19 @@ test("a base's picture opens full size from every list, never saving or leaving 
   await expect(status.getByText("Active on which account?")).toBeVisible();
   await preview(page, status, "Ring", saves);
   await expect(status.getByText("Active on which account?")).toBeVisible();
+  await status.getByRole("button", { name: "Close" }).first().click();
+
+  // A picture link that stopped working, as an expired one does, reads the
+  // page again for fresh links.
+  const again = await page.context().newPage();
+  await again.route(
+    (url) => url.pathname.endsWith("/full.webp"),
+    (route) => route.abort(),
+  );
+  const fresh = again.waitForRequest((request) =>
+    new URL(request.url()).pathname.endsWith(".data"),
+  );
+  await again.goto(page.url());
+  await fresh;
+  await again.close();
 });

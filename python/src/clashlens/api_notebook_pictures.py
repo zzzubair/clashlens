@@ -47,6 +47,9 @@ MAX_PIXELS = 50_000_000
 FULL_SIDE = 1600
 SMALL_SIDE = 96
 DAILY_UPLOADS = 30
+# Picture uploads the API handles at once, from reading the body to storing
+# the files: one decode can take about 400 MB of the API's 1 GiB.
+AT_ONCE = 1
 LINK_LIFETIME = timedelta(hours=1)
 # Links are signed from the start of each half hour, so a page loaded again
 # within it gets the same links and the browser's saved copy, and every link
@@ -239,6 +242,19 @@ def _lock_base(connection: Any, account_id: int, code: str, now: datetime) -> in
     return int(row[0])
 
 
+def _within_limit(connection: Any, account_id: int, code: str, now: datetime) -> int:
+    """The base, as `_lock_base`, while the account has uploads left today."""
+    base_id = _lock_base(connection, account_id, code, now)
+    (uploaded,) = connection.execute(
+        "SELECT count(*) FROM notebook_pictures WHERE account_id = %s"
+        " AND uploaded_at > clock_timestamp() - interval '1 day'",
+        (account_id,),
+    ).fetchone()
+    if uploaded >= DAILY_UPLOADS:
+        raise ApiError(429, "daily_limit")
+    return base_id
+
+
 def upload(
     database: ApiDatabase,
     store: PictureStore | None,
@@ -253,17 +269,13 @@ def upload(
         raise ApiError(503, "pictures_unavailable")
     if len(raw) > MAX_UPLOAD_BYTES:
         raise ApiError(413, "picture_too_large")
+    # Refused before the costly decode, and checked again once it is done.
+    with database.pool.connection() as connection, connection.transaction():
+        _within_limit(connection, account_id, code, now)
     full, small = shrink(raw)
     key = secrets.token_hex(16)
     with database.pool.connection() as connection, connection.transaction():
-        _lock_base(connection, account_id, code, now)
-        (uploaded,) = connection.execute(
-            "SELECT count(*) FROM notebook_pictures WHERE account_id = %s"
-            " AND uploaded_at > clock_timestamp() - interval '1 day'",
-            (account_id,),
-        ).fetchone()
-        if uploaded >= DAILY_UPLOADS:
-            raise ApiError(429, "daily_limit")
+        _within_limit(connection, account_id, code, now)
         # Counted, and deleted in a day if the upload stops here.
         connection.execute(
             "INSERT INTO notebook_pictures (account_id, key, bytes) VALUES (%s, %s, %s)",

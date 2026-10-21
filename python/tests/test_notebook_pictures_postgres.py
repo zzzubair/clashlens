@@ -210,6 +210,9 @@ def test_thirty_uploads_a_day_then_none(notebook_api) -> None:
             assert _upload(client, ring, _image((40, 40))).status_code == 200
         response = _upload(client, ring, _image((40, 40)))
         assert (response.status_code, response.json()["error"]) == (429, "daily_limit")
+        # Refused before it is read: even a file that is no picture.
+        response = _upload(client, ring, b"not a picture")
+        assert (response.status_code, response.json()["error"]) == (429, "daily_limit")
         # The other Clasher has their own 30.
         theirs = _add(client, "Theirs", user="other")
         assert _upload(client, theirs, _image((40, 40)), user="other").status_code == 200

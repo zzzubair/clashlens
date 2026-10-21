@@ -18,6 +18,25 @@ const ERRORS: Record<string, string> = {
   unavailable: "Couldn't save the picture just now. Try again in a moment.",
 };
 
+// Links that failed to load once; each reads the page again only once.
+const failed = new Set<string>();
+
+/** Props for a picture: a signed link that stopped working, usually because
+ * it expired, reads the page again for fresh links, also when it failed
+ * before the page's scripts started. */
+export function useRelink() {
+  const revalidator = useRevalidator();
+  const check = (image: HTMLImageElement | null) => {
+    if (!image?.complete || image.naturalWidth > 0 || failed.has(image.src)) return;
+    failed.add(image.src);
+    void revalidator.revalidate();
+  };
+  return {
+    ref: check,
+    onError: (event: { currentTarget: HTMLImageElement }) => check(event.currentTarget),
+  };
+}
+
 /** Upload or remove one base's picture, then read the page again. */
 export function usePictureSave(base: string) {
   const revalidator = useRevalidator();
@@ -103,6 +122,7 @@ export function PicturePreview({
   const dialog = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  const relink = useRelink();
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
@@ -142,7 +162,7 @@ export function PicturePreview({
       }}
     >
       <figure>
-        <img src={picture.full} alt={name} />
+        <img src={picture.full} alt={name} {...relink} />
         <figcaption>{name}</figcaption>
       </figure>
       <button
@@ -169,6 +189,7 @@ export function PictureButton({
   size?: "sm" | "lg" | "cover";
 }) {
   const [open, setOpen] = useState(false);
+  const relink = useRelink();
   return (
     <>
       <button
@@ -185,6 +206,7 @@ export function PictureButton({
             alt=""
             loading="lazy"
             decoding="async"
+            {...relink}
           />
         )}
       </button>
