@@ -225,7 +225,9 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert seen["season"] == {"id": str(int(SEASON.timestamp())),
                               "start": SEASON.isoformat(),
                               "end": (SEASON + timedelta(days=28)).isoformat(),
-                              "today": 5, "tomorrow": 6}
+                              "today": 5, "tomorrow": 6, "current": True,
+                              "editable": True,
+                              "editable_until": (SEASON + timedelta(days=56)).isoformat()}
     assert seen["as_of_day"] == 4
     bases = {base["id"]: base for base in seen["bases"]}
     assert bases[ring]["name"] == "Ring"

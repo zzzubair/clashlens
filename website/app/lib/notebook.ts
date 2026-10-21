@@ -59,8 +59,25 @@ export interface NotebookBase {
   record: BaseRecord;
 }
 
+/** A Season's ID (its start in Unix seconds) and its first and last Reset. */
+export interface NotebookSeason {
+  id: string;
+  start: string;
+  end: string;
+}
+
 export interface Notebook {
-  season: { id: string; start: string; end: string; today: number; tomorrow: number };
+  /** A past Season is read as on its Day 28. It can be changed until
+   * `editableUntil`, the end of the Season after it. */
+  season: NotebookSeason & {
+    today: number;
+    tomorrow: number;
+    current: boolean;
+    editable: boolean;
+    editableUntil: string;
+  };
+  /** This Season, then each earlier one with a notebook, newest first. */
+  seasons: NotebookSeason[];
   /** The newest Legend day whose defenses are counted. */
   asOfDay: number | null;
   players: NotebookPlayer[];
@@ -70,13 +87,17 @@ export interface Notebook {
     id: string;
     note: string;
     link: string | null;
+    /** In a past Season: this Season's base that carries it on, or a copy. */
+    thisSeason: string | null;
     players: Array<{ tag: string; record: BaseRecord }>;
   };
 }
 
 /** One change, as the private API takes it. `undo` is passed back as given. */
 export interface NotebookChange {
-  action: "add" | "pick" | "status" | "edit" | "delete" | "undo";
+  action: "add" | "pick" | "status" | "edit" | "delete" | "copy" | "undo";
+  /** The Season of the notebook to change, or with copy, to copy from. */
+  season?: string;
   base?: string | null;
   name?: string;
   link?: string;
@@ -94,6 +115,7 @@ export interface NotebookSaved {
 }
 
 export const BASE_ID = /^B-[0-9A-HJKMNP-TV-Z]{6}$/;
+export const SEASON_ID = /^[0-9]{1,12}$/;
 const STATUSES = new Set(["active", "to_try", "retired"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -106,6 +128,20 @@ const isCode = (value: unknown): value is string =>
   typeof value === "string" && BASE_ID.test(value);
 const isText = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
+const isMoment = (value: unknown): value is string =>
+  typeof value === "string" && Number.isFinite(Date.parse(value));
+
+function parseSeason(value: unknown): NotebookSeason | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !SEASON_ID.test(value.id) ||
+    !isMoment(value.start) ||
+    !isMoment(value.end)
+  )
+    return null;
+  return { id: value.id, start: value.start, end: value.end };
+}
 
 function parseRecord(value: unknown): BaseRecord | null {
   if (!isRecord(value) || !Array.isArray(value.stars) || value.stars.length !== 4)
@@ -194,23 +230,29 @@ function parseBase(value: unknown): NotebookBase | null {
 export function parseNotebook(value: unknown): Notebook | null {
   if (!isRecord(value) || value.kind !== "notebook" || !isRecord(value.season))
     return null;
-  const { id, start, end, today, tomorrow } = value.season;
+  const season = parseSeason(value.season);
+  const { today, tomorrow, current, editable, editable_until: until } = value.season;
   if (
-    typeof id !== "string" ||
-    typeof start !== "string" ||
-    typeof end !== "string" ||
+    !season ||
     !isDay(today) ||
     !isDay(tomorrow) ||
+    typeof current !== "boolean" ||
+    typeof editable !== "boolean" ||
+    !isMoment(until) ||
     !(value.as_of_day === null || isDay(value.as_of_day)) ||
+    !Array.isArray(value.seasons) ||
     !Array.isArray(value.players) ||
     !Array.isArray(value.bases)
   )
     return null;
+  const seasons = value.seasons.map(parseSeason);
   const players = value.players.map(parsePlayer);
   const bases = value.bases.map(parseBase);
-  if (players.includes(null) || bases.includes(null)) return null;
+  if (seasons.includes(null) || players.includes(null) || bases.includes(null))
+    return null;
   const notebook: Notebook = {
-    season: { id, start, end, today, tomorrow },
+    season: { ...season, today, tomorrow, current, editable, editableUntil: until },
+    seasons: seasons as NotebookSeason[],
     asOfDay: value.as_of_day,
     players: players as NotebookPlayer[],
     bases: bases as NotebookBase[],
@@ -222,6 +264,7 @@ export function parseNotebook(value: unknown): Notebook | null {
       !isCode(base.id) ||
       typeof base.note !== "string" ||
       !isText(base.link) ||
+      !(base.this_season === null || isCode(base.this_season)) ||
       !Array.isArray(base.players)
     )
       return null;
@@ -235,6 +278,7 @@ export function parseNotebook(value: unknown): Notebook | null {
       id: base.id,
       note: base.note,
       link: base.link,
+      thisSeason: base.this_season,
       players: records as Array<{ tag: string; record: BaseRecord }>,
     };
   }
@@ -264,10 +308,11 @@ export function parseSaved(value: unknown): NotebookSaved | null {
 /** A change the page posted, checked before it goes to the private API. */
 export function parseChange(value: unknown): NotebookChange | null {
   if (!isRecord(value)) return null;
-  const actions = ["add", "pick", "status", "edit", "delete", "undo"];
-  const { action, base, name, link, note, status, tag, day, undo } = value;
+  const actions = ["add", "pick", "status", "edit", "delete", "copy", "undo"];
+  const { action, season, base, name, link, note, status, tag, day, undo } = value;
   if (
     !actions.includes(action as string) ||
+    !(season === undefined || (typeof season === "string" && SEASON_ID.test(season))) ||
     !(base === undefined || base === null || isCode(base)) ||
     !(name === undefined || (typeof name === "string" && name.length <= 200)) ||
     !(link === undefined || (typeof link === "string" && link.length <= 400)) ||
@@ -304,12 +349,42 @@ export function playerName(player: { tag: string; name: string | null }): string
 /** "5 Oct – 2 Nov" for the Season starting and ending at those Resets. */
 export function seasonLabel(start: string, end: string): string {
   const format = (value: string) =>
-    new Date(value).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-      timeZone: "UTC",
-    });
+    new Date(value)
+      .toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        timeZone: "UTC",
+      })
+      // The site writes September as Sep, like every other month.
+      .replace("Sept", "Sep");
   return `${format(start)} – ${format(end)}`;
+}
+
+/** The Notebook page of `season`: this Season's has no `season` in it. */
+export function notebookPath(season?: { id: string; current: boolean }): string {
+  return season && !season.current ? `/notebook?season=${season.id}` : "/notebook";
+}
+
+/** A base's page in the notebook it is in. */
+export function basePath(notebook: Notebook, code: string): string {
+  const { season } = notebook;
+  return `/notebook/bases/${code}${season.current ? "" : `?season=${season.id}`}`;
+}
+
+/** "30 Nov, 05:00 UTC". */
+export function momentText(value: string): string {
+  const at = new Date(value);
+  const date = at.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+  const time = at.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${date.replace("Sept", "Sep")}, ${time} UTC`;
 }
 
 /** Up to two letters for a base's tile, while bases have no picture. */
@@ -469,15 +544,14 @@ export function isLegendDay(player: NotebookPlayer, day: number): boolean {
 
 /** The day's date, as "Tue 20 Oct", for the Season starting at ``start``. */
 export function dayDate(start: string, day: number): string {
-  return new Date(Date.parse(start) + (day - 1) * 86_400_000).toLocaleDateString(
-    "en-GB",
-    {
+  return new Date(Date.parse(start) + (day - 1) * 86_400_000)
+    .toLocaleDateString("en-GB", {
       weekday: "short",
       day: "numeric",
       month: "short",
       timeZone: "UTC",
-    },
-  );
+    })
+    .replace("Sept", "Sep");
 }
 
 /** The players' runs of one base, as "Days 5–9, Day 13". */

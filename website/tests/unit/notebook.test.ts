@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
   saveNotebook: vi.fn(),
+  getNotebook: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -24,17 +25,22 @@ vi.mock("../../app/server/auth-guard.server", () => ({
 
 vi.mock("../../app/services/notebook.server", () => ({
   saveNotebook: mocks.saveNotebook,
+  getNotebook: mocks.getNotebook,
 }));
 
 import {
   AccountRow,
   canSet,
   DaysSheet,
+  dayFixWords,
   dayOptions,
   LEGEND_ONLY,
+  Library,
   RunStrip,
   saveError,
+  savedToast,
 } from "../../app/components/NotebookParts";
+import { SeasonSwitcher } from "../../app/components/NotebookSeasons";
 import {
   baseInitials,
   baseOnDay,
@@ -65,12 +71,18 @@ function apiNotebook() {
   return {
     kind: "notebook",
     season: {
-      id: "2026-10",
+      id: "1791176400",
       start: "2026-10-05T05:00:00Z",
       end: "2026-11-02T05:00:00Z",
       today: 16,
       tomorrow: 17,
+      current: true,
+      editable: true,
+      editable_until: "2026-11-30T05:00:00Z",
     },
+    seasons: [
+      { id: "1791176400", start: "2026-10-05T05:00:00Z", end: "2026-11-02T05:00:00Z" },
+    ],
     as_of_day: 15,
     players: [
       {
@@ -285,12 +297,18 @@ describe("Legend days only", () => {
   };
   const notebook: Notebook = {
     season: {
-      id: "2026-10",
+      id: "1791262800",
       start: "2026-10-06T05:00:00Z",
       end: "2026-11-03T05:00:00Z",
       today: 28,
       tomorrow: 28,
+      current: true,
+      editable: true,
+      editableUntil: "2026-12-01T05:00:00Z",
     },
+    seasons: [
+      { id: "1791262800", start: "2026-10-06T05:00:00Z", end: "2026-11-03T05:00:00Z" },
+    ],
     asOfDay: 27,
     players: [daily, dropped],
     bases: DAYS.map((day) => ({
@@ -437,5 +455,167 @@ describe("a refused save", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("past Seasons", () => {
+  const SEPTEMBER = "1788757200";
+  // The Season of 7 Sep – 5 Oct, read on 20 Oct, in the Season after it.
+  const past = (editable: boolean): Notebook => {
+    const notebook = parseNotebook({
+      ...apiNotebook(),
+      season: {
+        id: SEPTEMBER,
+        start: "2026-09-07T05:00:00Z",
+        end: "2026-10-05T05:00:00Z",
+        today: 28,
+        tomorrow: 28,
+        current: false,
+        editable,
+        editable_until: "2026-11-02T05:00:00Z",
+      },
+      seasons: [
+        { id: "1791176400", start: "2026-10-05T05:00:00Z", end: "2026-11-02T05:00:00Z" },
+        { id: SEPTEMBER, start: "2026-09-07T05:00:00Z", end: "2026-10-05T05:00:00Z" },
+      ],
+    });
+    if (!notebook) throw new Error("unreadable notebook");
+    return notebook;
+  };
+  const row = (notebook: Notebook) =>
+    render(
+      createElement(AccountRow, {
+        notebook,
+        player: notebook.players[0]!,
+        onChange: () => {},
+        onAdd: () => {},
+        onDays: () => {},
+      }),
+    );
+
+  it("starts no base in a past Season, and fixes days only while editable", async () => {
+    const open = await row(past(true));
+    expect(open).not.toContain(">Change<");
+    expect(open).not.toContain(LEGEND_ONLY);
+    expect(open).not.toContain("today");
+    expect(open).toContain("No base on Day 28");
+    expect(open).toContain(">Days<");
+    expect(await row(past(false))).not.toContain(">Days<");
+  });
+
+  it("opens a past Season's bases in that Season, with no + New base", async () => {
+    const html = await render(createElement(Library, { notebook: past(false) }));
+    expect(html).not.toContain("New base");
+    expect(html).toContain(`href="/notebook/bases/B-7K3QX9?season=${SEPTEMBER}"`);
+    expect(html.replaceAll("<!-- -->", "")).toContain("ran Day 16 · held 7 of 10");
+  });
+
+  it("switches between this Season and past ones", async () => {
+    const html = (
+      await render(createElement(SeasonSwitcher, { notebook: past(true) }))
+    ).replaceAll("<!-- -->", "");
+    expect(html).toContain(
+      '<option value="1791176400">5 Oct – 2 Nov · this Season</option>',
+    );
+    expect(html).toContain(
+      `<option value="${SEPTEMBER}" selected="">7 Sep – 5 Oct</option>`,
+    );
+    expect(html).not.toContain("of 28");
+  });
+
+  it("words a fixed day from its Season's notebook once the page shows the next", async () => {
+    const origin = "https://clashlens.example";
+    // September as on its Day 28, before the fix: Ring from Day 9 to 28.
+    const before = past(true);
+    const player: NotebookPlayer = {
+      ...before.players[0]!,
+      runs: [{ ...before.players[0]!.runs[0]!, to: 28 }],
+      current: null,
+      legendDays: Array.from({ length: 28 }, (_, index) => index + 1),
+    };
+    // After it: Hex from Day 10 to 28, as the private API now reads it.
+    const fixed = parseNotebook({
+      ...apiNotebook(),
+      season: { ...apiNotebook().season, id: SEPTEMBER, today: 28, tomorrow: 28 },
+      players: [
+        {
+          ...apiNotebook().players[0],
+          runs: [
+            { from: 9, to: 9, base: "B-7K3QX9", record: RECORD },
+            { from: 10, to: 28, base: "B-000003", record: RECORD },
+          ],
+          picks: [
+            { day: 9, base: "B-7K3QX9" },
+            { day: 10, base: "B-000003" },
+          ],
+          legend_days: Array.from({ length: 28 }, (_, index) => index + 1),
+        },
+      ],
+      bases: [
+        ...apiNotebook().bases,
+        { ...apiNotebook().bases[0], id: "B-000003", name: "Hex", status: "retired" },
+      ],
+    });
+    const saved = { base: null, changed: [], undo: { season: SEPTEMBER } };
+    vi.stubEnv("CLASHLENS_NOTEBOOK_ENABLED", "true");
+    mocks.getWebsiteConfig.mockReturnValue({ publicOrigin: new URL(origin) });
+    mocks.saveNotebook.mockResolvedValue(saved);
+    mocks.getNotebook.mockResolvedValue(fixed);
+    try {
+      const change = { action: "pick", season: SEPTEMBER, tag: player.tag, day: 10 };
+      const post = async (fields: Record<string, string>) =>
+        (await saveAction({
+          request: new Request(`${origin}/notebook/save`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              Origin: origin,
+            },
+            body: new URLSearchParams({
+              change: JSON.stringify({ ...change, base: "B-000003" }),
+              ...fields,
+            }).toString(),
+          }),
+        } as never)) as unknown as {
+          data: { saved: typeof saved; notebook: Notebook | null };
+        };
+      // An ordinary save reads no notebook: the page reloads its own.
+      mocks.getNotebook.mockClear();
+      expect((await post({})).data.notebook).toBeNull();
+      expect(mocks.getNotebook).not.toHaveBeenCalled();
+      // A page left open past its Season's end asks for that Season's.
+      const answer = await post({ reread: "1" });
+      expect(mocks.getNotebook.mock.calls[0]?.slice(1)).toEqual([undefined, SEPTEMBER]);
+      // The page has reloaded as October's Day 16.
+      const toast = savedToast(
+        answer.data.saved,
+        answer.data.notebook,
+        parseNotebook(apiNotebook()),
+        SEPTEMBER,
+        dayFixWords(player, 10, "B-000003"),
+      );
+      expect(toast?.text.trim()).toBe("Hex on curtypie, Days 10–28.");
+      expect(toast?.actions.map((item) => [item.label, item.change])).toEqual([
+        [
+          "Only Day 10",
+          {
+            action: "pick",
+            tag: player.tag,
+            day: 11,
+            base: "B-7K3QX9",
+            season: SEPTEMBER,
+          },
+        ],
+        ["Undo", { action: "undo", undo: { season: SEPTEMBER } }],
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("checks a copy names a Season", () => {
+    const copy = { action: "copy", season: SEPTEMBER, base: "B-7K3QX9" };
+    expect(parseChange(copy)).toEqual(copy);
+    expect(parseChange({ ...copy, season: "2026-09" })).toBeNull();
   });
 });

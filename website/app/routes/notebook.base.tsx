@@ -10,6 +10,7 @@ import {
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { CopyToSeason, PastSeasonNotice } from "../components/NotebookSeasons";
 import {
   BaseTile,
   recordLine,
@@ -25,7 +26,9 @@ import {
   baseRuns,
   dayDate,
   heldText,
+  notebookPath,
   playerName,
+  SEASON_ID,
   type BaseRecord,
   type Notebook,
   type NotebookBase,
@@ -37,26 +40,37 @@ const NO_STORE = { "Cache-Control": "no-store" };
 // A note saves this long after the last key press.
 const NOTE_WAIT_MS = 800;
 
-export const handle: BackHandle = { back: { to: "/notebook", label: "Notebook" } };
+export const handle: BackHandle = {
+  // Back to the notebook the base is in.
+  back: (match) => ({
+    to: notebookPath(
+      (match.loaderData as { notebook?: Notebook | null } | undefined)?.notebook?.season,
+    ),
+    label: "Notebook",
+  }),
+};
 
 export function meta({ loaderData: loaded }: Route.MetaArgs) {
   const name = loaded?.notebook?.bases.find((base) => base.id === loaded.code)?.name;
   return [{ title: `${name ?? "Base"} · Notebook · Clash Lens` }];
 }
 
-/** GET /notebook/bases/:code — one base: its record, note and link. The
- * base ID is for support, so the page never shows it. */
+/** GET /notebook/bases/:code — one base: its record, note and link; with
+ * `?season=`, in that past Season's notebook. The base ID is for support,
+ * so the page never shows it. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
   const code = params.code;
-  if (!BASE_ID.test(code)) throw data(null, { status: 404 });
+  const season = new URL(request.url).searchParams.get("season") ?? undefined;
+  if (!BASE_ID.test(code) || (season !== undefined && !SEASON_ID.test(season)))
+    throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { PythonApiError } = await import("../services/python.server");
   try {
     const { getNotebook } = await import("../services/notebook.server");
-    const notebook: Notebook = await getNotebook(identity, code);
+    const notebook: Notebook = await getNotebook(identity, code, season);
     return data({ notebook, code, error: null }, { headers: NO_STORE });
   } catch (cause) {
     // Not in this account's notebook, or deleted a moment ago.
@@ -87,7 +101,7 @@ export default function NotebookBaseRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell nb-page">
       {notebook && base ? (
-        <BasePage notebook={notebook} base={base} />
+        <BasePage key={`${notebook.season.id} ${code}`} notebook={notebook} base={base} />
       ) : (
         <>
           <h1>Base</h1>
@@ -110,19 +124,28 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
   const detail = notebook.base;
   const lost = averageLost(base.record);
   const accounts = new Set(detail?.players.map((item) => item.tag)).size;
+  const { current, editable } = notebook.season;
   return (
     <>
+      <PastSeasonNotice notebook={notebook} onBase />
       <BaseTile name={base.name} size="lg" />
       <div className="nb-base-title">
         <h1>{base.name}</h1>
-        <button
-          type="button"
-          className={`nb-status nb-status-${base.status} nb-status-button`}
-          onClick={() => setOpen("status")}
-          aria-label={`Status: ${statusText(base, notebook)}. Change status`}
-        >
-          {statusText(base, notebook)} ▾
-        </button>
+        {/* A past Season's status is how the base ended it. */}
+        {current ? (
+          <button
+            type="button"
+            className={`nb-status nb-status-${base.status} nb-status-button`}
+            onClick={() => setOpen("status")}
+            aria-label={`Status: ${statusText(base, notebook)}. Change status`}
+          >
+            {statusText(base, notebook)} ▾
+          </button>
+        ) : (
+          <span className={`nb-status nb-status-${base.status}`}>
+            {statusText(base, notebook)}
+          </span>
+        )}
       </div>
       <p className="nb-headline">
         {base.record.defenses
@@ -142,6 +165,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         </small>
       </p>
       <div className="nb-actions">
+        <CopyToSeason notebook={notebook} base={base} saver={saver} />
         {detail?.link ? (
           <a
             className="button"
@@ -152,13 +176,15 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
             Open in game
           </a>
         ) : null}
-        <button
-          type="button"
-          className="button secondary"
-          onClick={() => setOpen("edit")}
-        >
-          Edit
-        </button>
+        {editable ? (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => setOpen("edit")}
+          >
+            Edit
+          </button>
+        ) : null}
       </div>
       {/* Every number on the page itself, one section each; the best and
        * worst armies go in a section after Stars. */}
@@ -201,7 +227,13 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         )}
         <p className="nb-hint">{recordLine(notebook)}</p>
       </section>
-      <NoteBox key={base.id} base={base} note={detail?.note ?? ""} saver={saver} />
+      <NoteBox
+        season={notebook.season.id}
+        base={base}
+        note={detail?.note ?? ""}
+        saver={saver}
+        readOnly={!editable}
+      />
       {open === "status" ? (
         <StatusSheet
           notebook={notebook}
@@ -213,6 +245,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
       {open === "edit" ? (
         <EditSheet
           base={base}
+          home={notebookPath(notebook.season)}
           link={detail?.link ?? null}
           saver={saver}
           onClose={() => setOpen(null)}
@@ -238,13 +271,18 @@ function Stars({ record }: { record: BaseRecord }) {
 /** The base's note, saved as the Clasher types, when the box loses focus,
  * and when the page closes. */
 function NoteBox({
+  season,
   base,
   note,
   saver,
+  readOnly,
 }: {
+  /** The Season of the notebook the note is in. */
+  season: string;
   base: NotebookBase;
   note: string;
   saver: Saver;
+  readOnly: boolean;
 }) {
   const [text, setText] = useState(note);
   const [saved, setSaved] = useState(false);
@@ -258,7 +296,7 @@ function NoteBox({
     if (value === null) return;
     waiting.current = null;
     // Called only once the save succeeded.
-    saver.save({ action: "edit", base: base.id, note: value }, () => {
+    saver.save({ action: "edit", season, base: base.id, note: value }, () => {
       if (waiting.current === null) setSaved(true);
       return null;
     });
@@ -274,7 +312,8 @@ function NoteBox({
         value={text}
         maxLength={1000}
         rows={3}
-        placeholder="Clan Castle troops, traps, anything"
+        readOnly={readOnly}
+        placeholder={readOnly ? "" : "Clan Castle troops, traps, anything"}
         onChange={(event) => {
           waiting.current = event.target.value;
           setText(event.target.value);
@@ -291,11 +330,14 @@ function NoteBox({
 /** Rename a base, change its base link, or delete it. */
 function EditSheet({
   base,
+  home,
   link,
   saver,
   onClose,
 }: {
   base: NotebookBase;
+  /** The notebook to go back to once the base is deleted. */
+  home: string;
   link: string | null;
   saver: Saver;
   onClose: () => void;
@@ -355,7 +397,7 @@ function EditSheet({
                   text: `${base.name} deleted.`,
                   actions: [],
                 }));
-                void navigate("/notebook");
+                void navigate(home);
               }}
             >
               Delete base

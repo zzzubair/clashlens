@@ -13,6 +13,7 @@ import {
   baseInitials,
   baseLine,
   baseOnDay,
+  basePath,
   dayDate,
   daysText,
   heldText,
@@ -53,6 +54,8 @@ const ERRORS: Record<string, string> = {
   base_not_found: "That base was deleted. Refresh the page.",
   runs_until_season_end: "It runs until the Season ends.",
   not_legend_day: LEGEND_ONLY,
+  read_only: "That Season's notebook is read-only now.",
+  season_ended: "That Season has ended. Copy the base to this Season to run it.",
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
@@ -67,16 +70,52 @@ export interface Toast {
 
 type Describe = (saved: NotebookSaved, notebook: Notebook) => Toast | null;
 
-/** Saves through /notebook/save, then words the result in a toast with Undo
- * once the page has read the notebook again. `notebook` is the page's, or
- * null on a page without one, such as a base just deleted. */
+/** The toast for a saved change sent to `season`, worded by `words` from
+ * `read`, that Season's notebook read with the save; failing that from
+ * `page`, the page's, when it shows that Season. Its actions go to that
+ * Season too, then Undo. */
+export function savedToast(
+  saved: NotebookSaved,
+  read: Notebook | null,
+  page: Notebook | null,
+  season: string | undefined,
+  words: Describe | null,
+): Toast | null {
+  const notebook = read ?? (page?.season.id === season ? page : null);
+  const shown = notebook
+    ? (words?.(saved, notebook) ?? null)
+    : page
+      ? { text: "Saved.", actions: [] }
+      : null;
+  if (!shown) return null;
+  const actions = shown.actions.map((item) =>
+    item.change.season === undefined
+      ? { ...item, change: { ...item.change, season } }
+      : item,
+  );
+  return {
+    ...shown,
+    actions: saved.undo
+      ? [...actions, { label: "Undo", change: { action: "undo", undo: saved.undo } }]
+      : actions,
+  };
+}
+
+/** Saves through /notebook/save, then words the result in a toast with Undo.
+ * `notebook` is the page's, or null on a page without one, such as a base
+ * just deleted. */
 export function useNotebookSave(notebook: Notebook | null) {
-  const fetcher = useFetcher<{ saved?: NotebookSaved; error?: string }>({
+  const fetcher = useFetcher<{
+    saved?: NotebookSaved;
+    notebook?: Notebook | null;
+    error?: string;
+  }>({
     key: "notebook",
   });
   const latest = useRef(notebook);
   if (notebook) latest.current = notebook;
   const describe = useRef<Describe | null>(null);
+  const sentSeason = useRef<string | undefined>(undefined);
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
   const handled = useRef<unknown>(null);
@@ -92,17 +131,14 @@ export function useNotebookSave(notebook: Notebook | null) {
     const saved = fetcher.data.saved;
     if (!saved) return;
     setError(null);
-    const shown = (latest.current && describe.current?.(saved, latest.current)) ?? null;
     setToast(
-      shown && saved.undo
-        ? {
-            ...shown,
-            actions: [
-              ...shown.actions,
-              { label: "Undo", change: { action: "undo", undo: saved.undo } },
-            ],
-          }
-        : shown,
+      savedToast(
+        saved,
+        fetcher.data.notebook ?? null,
+        latest.current,
+        sentSeason.current,
+        describe.current,
+      ),
     );
   }, [fetcher.state, fetcher.data]);
 
@@ -115,8 +151,17 @@ export function useNotebookSave(notebook: Notebook | null) {
   function save(change: NotebookChange, words?: Describe) {
     describe.current = words ?? null;
     setToast(null);
+    // A change goes to the notebook of the page it was made on, even once
+    // a Reset has started the next Season.
+    const season = latest.current?.season.id;
+    const sent = change.season === undefined && season ? { ...change, season } : change;
+    sentSeason.current = sent.season;
+    // A page of this Season left open past its end reloads as the next
+    // Season, so the change is worded from its own Season's notebook.
+    const page = latest.current?.season;
+    const reread = page?.current && Date.now() >= Date.parse(page.end);
     void fetcher.submit(
-      { change: JSON.stringify(change) },
+      { change: JSON.stringify(sent), ...(reread ? { reread: "1" } : {}) },
       { method: "post", action: SAVE },
     );
   }
@@ -289,9 +334,10 @@ export function dayOptions(
   return player ? days.filter(([day]) => isLegendDay(player, day)) : days;
 }
 
-/** Whether a base can be set on the player today or tomorrow. */
+/** Whether a base can be set on the player today or tomorrow: never in a
+ * past Season. */
 export function canSet(notebook: Notebook, player: NotebookPlayer): boolean {
-  return dayOptions(notebook, player).length > 0;
+  return notebook.season.current && dayOptions(notebook, player).length > 0;
 }
 
 /** Who runs a base, as "Active · Main, Alt from Day 6". */
@@ -366,8 +412,8 @@ function SearchBox({
 }
 
 /** The Library: search, status filter with counts, sort, and a row per base
- * that opens its page. */
-export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => void }) {
+ * that opens its page. A past Season's has no + New base. */
+export function Library({ notebook, onNew }: { notebook: Notebook; onNew?: () => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [sort, setSort] = useState<LibrarySort>("recent");
@@ -386,14 +432,17 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
             · {total} {total === 1 ? "base" : "bases"}
           </span>
         </h2>
-        <button type="button" className="button nb-add" onClick={onNew}>
-          + New base
-        </button>
+        {onNew ? (
+          <button type="button" className="button nb-add" onClick={onNew}>
+            + New base
+          </button>
+        ) : null}
       </div>
       {total === 0 ? (
         <p className="nb-empty">
-          No bases yet. Add the base you run now from your account above, or save one you
-          plan to try with + New base.
+          {onNew
+            ? "No bases yet. Add the base you run now from your account above, or save one you plan to try with + New base."
+            : "No bases this Season."}
         </p>
       ) : (
         <>
@@ -428,13 +477,19 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
           <ul className="nb-list">
             {rows.slice(0, limit).map((base) => (
               <li key={base.id}>
-                <Link to={`/notebook/bases/${base.id}`} className="nb-row">
+                <Link to={basePath(notebook, base.id)} className="nb-row">
                   <BaseTile name={base.name} />
                   <span className="nb-row-text">
                     <b>
                       <Highlight name={base.name} query={query} />
                     </b>
-                    <small>{baseLine(base, notebook.season.today)}</small>
+                    {/* A past Season has no today. */}
+                    <small>
+                      {baseLine(
+                        base,
+                        notebook.season.current ? notebook.season.today : 0,
+                      )}
+                    </small>
                   </span>
                   <span className={`nb-status nb-status-${base.status}`}>
                     {statusText(base, notebook)}
@@ -580,6 +635,48 @@ export function ChangeSheet({
   );
 }
 
+/** The toast for setting `base` on the player's `day`: the days it now
+ * runs, with "Only Day N" when it runs past that day. */
+export function dayFixWords(
+  player: NotebookPlayer,
+  day: number,
+  base: string | null,
+): Describe {
+  // What ran the next day before this change, for "Only Day N".
+  const before = baseOnDay(player, day + 1);
+  const who = playerName(player);
+  return (saved, next) => {
+    const now = next.players.find((item) => item.tag === player.tag);
+    const to = now ? sameUntil(now, day, next.season.today) : day;
+    const name = nameOf(next, base);
+    const only =
+      to > day && before !== base
+        ? [
+            {
+              label: `Only Day ${day}`,
+              change: {
+                action: "pick",
+                tag: player.tag,
+                day: day + 1,
+                base: before,
+              } as const,
+              describe: () => ({
+                text: `${name} on ${who}, Day ${day} only.`,
+                actions: [],
+              }),
+            },
+          ]
+        : [];
+    return {
+      text: [
+        `${base ? name : "No base"} on ${who}, ${daysText(day, to)}.`,
+        statusNews(saved, next, base ?? undefined),
+      ].join(" "),
+      actions: only,
+    };
+  };
+}
+
 /** Fix a past day: which base was up on that day, for one account only. */
 export function FixDaySheet({
   notebook,
@@ -601,38 +698,10 @@ export function FixDaySheet({
   const who = playerName(player);
 
   function pick(base: string | null) {
-    // What ran the next day before this change, for "Only Day N".
-    const before = baseOnDay(player, day + 1);
-    saver.save({ action: "pick", tag: player.tag, day, base }, (saved, next) => {
-      const now = next.players.find((item) => item.tag === player.tag);
-      const to = now ? sameUntil(now, day, next.season.today) : day;
-      const name = nameOf(next, base);
-      const only =
-        to > day && before !== base
-          ? [
-              {
-                label: `Only Day ${day}`,
-                change: {
-                  action: "pick",
-                  tag: player.tag,
-                  day: day + 1,
-                  base: before,
-                } as const,
-                describe: () => ({
-                  text: `${name} on ${who}, Day ${day} only.`,
-                  actions: [],
-                }),
-              },
-            ]
-          : [];
-      return {
-        text: [
-          `${base ? name : "No base"} on ${who}, ${daysText(day, to)}.`,
-          statusNews(saved, next, base ?? undefined),
-        ].join(" "),
-        actions: only,
-      };
-    });
+    saver.save(
+      { action: "pick", tag: player.tag, day, base },
+      dayFixWords(player, day, base),
+    );
     onClose();
   }
 
@@ -951,7 +1020,7 @@ export function RunStrip({
   notebook: Notebook;
   player: NotebookPlayer;
 }) {
-  const { today } = notebook.season;
+  const { today, current } = notebook.season;
   const blocks = stripBlocks(player, today);
   const who = playerName(player);
   const summary = blocks
@@ -963,7 +1032,7 @@ export function RunStrip({
       <div
         className="nb-strip"
         role="img"
-        aria-label={`${who}'s Season: ${summary || "no base picked yet"}. Today is Day ${today}.`}
+        aria-label={`${who}'s Season: ${summary || "no base picked yet"}.${current ? ` Today is Day ${today}.` : ""}`}
       >
         {blocks.map((block) => {
           const length = block.to - block.from + 1;
@@ -971,7 +1040,7 @@ export function RunStrip({
           return (
             <span
               key={block.from}
-              className={`nb-run nb-run-${block.kind}`}
+              className={`nb-run nb-run-${current || block.kind !== "now" ? block.kind : "past"}`}
               style={
                 {
                   gridColumn: `${block.from} / ${block.to + 1}`,
@@ -994,7 +1063,7 @@ export function RunStrip({
       </div>
       <div className="nb-axis" aria-hidden="true">
         <span>Day 1</span>
-        <span>{today} · today</span>
+        {current ? <span>{today} · today</span> : null}
         <span>28</span>
       </div>
     </div>
@@ -1021,7 +1090,8 @@ export function AccountRow({
   const base = notebook.bases.find((item) => item.id === run?.base);
   const next = player.next;
   const settable = canSet(notebook, player);
-  const fixable = player.legendDays.some((day) => day <= today);
+  const fixable =
+    notebook.season.editable && player.legendDays.some((day) => day <= today);
   // Back in Legend League with no base: picking one is the next step.
   const pickNext = settable && !run && !next?.base && player.runs.length > 0;
   return (
@@ -1036,11 +1106,16 @@ export function AccountRow({
           <p>
             {base && run ? (
               <>
-                <Link to={`/notebook/bases/${base.id}`}>{base.name}</Link> · since Day{" "}
-                {run.from} · {heldText(run.record)}
+                <Link to={basePath(notebook, base.id)}>{base.name}</Link> ·{" "}
+                {notebook.season.current
+                  ? `since Day ${run.from}`
+                  : daysText(run.from, run.to)}{" "}
+                · {heldText(run.record)}
               </>
-            ) : (
+            ) : notebook.season.current ? (
               "No base today"
+            ) : (
+              "No base on Day 28"
             )}
             {next ? (
               <span className="nb-next">
@@ -1075,7 +1150,9 @@ export function AccountRow({
           ) : null}
         </div>
       ) : null}
-      {!settable ? <p className="nb-hint">{LEGEND_ONLY}</p> : null}
+      {notebook.season.current && !settable ? (
+        <p className="nb-hint">{LEGEND_ONLY}</p>
+      ) : null}
     </article>
   );
 }
@@ -1093,7 +1170,7 @@ export function DaysSheet({
   onDay: (day: number) => void;
   onClose: () => void;
 }) {
-  const { today, start } = notebook.season;
+  const { today, start, current } = notebook.season;
   return (
     <Sheet title={`${playerName(player)} · days`} onClose={onClose}>
       <ul className="nb-list nb-days">
@@ -1111,7 +1188,7 @@ export function DaysSheet({
                 <span className="nb-row-text">
                   <b>
                     Day {day}
-                    {day === today ? " · today" : ""}
+                    {current && day === today ? " · today" : ""}
                   </b>
                   <small>{dayDate(start, day)}</small>
                 </span>
