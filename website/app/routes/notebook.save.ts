@@ -24,7 +24,8 @@ const REFUSALS = new Set([
 /**
  * POST /notebook/save — one change to the signed-in Clasher's notebook, sent
  * as `change` (JSON) by the Notebook and base pages without a reload. Answers
- * what the change did and what undoes it, or an `error` code.
+ * what the change did and what undoes it, with the notebook of the Season it
+ * names to word that from, or an `error` code.
  */
 export async function action({ request }: Route.ActionArgs) {
   const { isNotebookEnabled, getWebsiteConfig } = await import("../server/config.server");
@@ -45,10 +46,16 @@ export async function action({ request }: Route.ActionArgs) {
   }
   if (change === null)
     return data({ error: "invalid" }, { status: 400, headers: NO_STORE });
-  const { saveNotebook } = await import("../services/notebook.server");
+  const { getNotebook, saveNotebook } = await import("../services/notebook.server");
   const { PythonApiError } = await import("../services/python.server");
   try {
-    return data({ saved: await saveNotebook(identity, change) }, { headers: NO_STORE });
+    const saved = await saveNotebook(identity, change);
+    // Saved either way: without it the page words the change from its own.
+    const notebook =
+      change.season === undefined
+        ? null
+        : await getNotebook(identity, undefined, change.season).catch(() => null);
+    return data({ saved, notebook }, { headers: NO_STORE });
   } catch (cause) {
     const code = (cause as { payload?: { error?: unknown } }).payload?.error;
     if (cause instanceof PythonApiError && typeof code === "string" && REFUSALS.has(code))

@@ -70,11 +70,46 @@ export interface Toast {
 
 type Describe = (saved: NotebookSaved, notebook: Notebook) => Toast | null;
 
-/** Saves through /notebook/save, then words the result in a toast with Undo
- * once the page has read the notebook again. `notebook` is the page's, or
- * null on a page without one, such as a base just deleted. */
+/** The toast for a saved change sent to `season`, worded by `words` from
+ * `read`, that Season's notebook read with the save; failing that from
+ * `page`, the page's, when it shows that Season. Its actions go to that
+ * Season too, then Undo. */
+export function savedToast(
+  saved: NotebookSaved,
+  read: Notebook | null,
+  page: Notebook | null,
+  season: string | undefined,
+  words: Describe | null,
+): Toast | null {
+  const notebook = read ?? (page?.season.id === season ? page : null);
+  const shown = notebook
+    ? (words?.(saved, notebook) ?? null)
+    : page
+      ? { text: "Saved.", actions: [] }
+      : null;
+  if (!shown) return null;
+  const actions = shown.actions.map((item) =>
+    item.change.season === undefined
+      ? { ...item, change: { ...item.change, season } }
+      : item,
+  );
+  return {
+    ...shown,
+    actions: saved.undo
+      ? [...actions, { label: "Undo", change: { action: "undo", undo: saved.undo } }]
+      : actions,
+  };
+}
+
+/** Saves through /notebook/save, then words the result in a toast with Undo.
+ * `notebook` is the page's, or null on a page without one, such as a base
+ * just deleted. */
 export function useNotebookSave(notebook: Notebook | null) {
-  const fetcher = useFetcher<{ saved?: NotebookSaved; error?: string }>({
+  const fetcher = useFetcher<{
+    saved?: NotebookSaved;
+    notebook?: Notebook | null;
+    error?: string;
+  }>({
     key: "notebook",
   });
   const latest = useRef(notebook);
@@ -96,31 +131,14 @@ export function useNotebookSave(notebook: Notebook | null) {
     const saved = fetcher.data.saved;
     if (!saved) return;
     setError(null);
-    // A toast's words and actions come from the notebook the change went to.
-    const season = sentSeason.current;
-    const page = latest.current;
-    const shown = !page
-      ? null
-      : page.season.id === season
-        ? (describe.current?.(saved, page) ?? null)
-        : { text: "Saved.", actions: [] };
-    const actions = (shown?.actions ?? []).map((item) =>
-      item.change.season === undefined
-        ? { ...item, change: { ...item.change, season } }
-        : item,
-    );
     setToast(
-      shown
-        ? {
-            ...shown,
-            actions: saved.undo
-              ? [
-                  ...actions,
-                  { label: "Undo", change: { action: "undo", undo: saved.undo } },
-                ]
-              : actions,
-          }
-        : null,
+      savedToast(
+        saved,
+        fetcher.data.notebook ?? null,
+        latest.current,
+        sentSeason.current,
+        describe.current,
+      ),
     );
   }, [fetcher.state, fetcher.data]);
 
@@ -613,6 +631,48 @@ export function ChangeSheet({
   );
 }
 
+/** The toast for setting `base` on the player's `day`: the days it now
+ * runs, with "Only Day N" when it runs past that day. */
+export function dayFixWords(
+  player: NotebookPlayer,
+  day: number,
+  base: string | null,
+): Describe {
+  // What ran the next day before this change, for "Only Day N".
+  const before = baseOnDay(player, day + 1);
+  const who = playerName(player);
+  return (saved, next) => {
+    const now = next.players.find((item) => item.tag === player.tag);
+    const to = now ? sameUntil(now, day, next.season.today) : day;
+    const name = nameOf(next, base);
+    const only =
+      to > day && before !== base
+        ? [
+            {
+              label: `Only Day ${day}`,
+              change: {
+                action: "pick",
+                tag: player.tag,
+                day: day + 1,
+                base: before,
+              } as const,
+              describe: () => ({
+                text: `${name} on ${who}, Day ${day} only.`,
+                actions: [],
+              }),
+            },
+          ]
+        : [];
+    return {
+      text: [
+        `${base ? name : "No base"} on ${who}, ${daysText(day, to)}.`,
+        statusNews(saved, next, base ?? undefined),
+      ].join(" "),
+      actions: only,
+    };
+  };
+}
+
 /** Fix a past day: which base was up on that day, for one account only. */
 export function FixDaySheet({
   notebook,
@@ -634,38 +694,10 @@ export function FixDaySheet({
   const who = playerName(player);
 
   function pick(base: string | null) {
-    // What ran the next day before this change, for "Only Day N".
-    const before = baseOnDay(player, day + 1);
-    saver.save({ action: "pick", tag: player.tag, day, base }, (saved, next) => {
-      const now = next.players.find((item) => item.tag === player.tag);
-      const to = now ? sameUntil(now, day, next.season.today) : day;
-      const name = nameOf(next, base);
-      const only =
-        to > day && before !== base
-          ? [
-              {
-                label: `Only Day ${day}`,
-                change: {
-                  action: "pick",
-                  tag: player.tag,
-                  day: day + 1,
-                  base: before,
-                } as const,
-                describe: () => ({
-                  text: `${name} on ${who}, Day ${day} only.`,
-                  actions: [],
-                }),
-              },
-            ]
-          : [];
-      return {
-        text: [
-          `${base ? name : "No base"} on ${who}, ${daysText(day, to)}.`,
-          statusNews(saved, next, base ?? undefined),
-        ].join(" "),
-        actions: only,
-      };
-    });
+    saver.save(
+      { action: "pick", tag: player.tag, day, base },
+      dayFixWords(player, day, base),
+    );
     onClose();
   }
 

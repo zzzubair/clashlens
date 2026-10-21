@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
   saveNotebook: vi.fn(),
+  getNotebook: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -24,17 +25,20 @@ vi.mock("../../app/server/auth-guard.server", () => ({
 
 vi.mock("../../app/services/notebook.server", () => ({
   saveNotebook: mocks.saveNotebook,
+  getNotebook: mocks.getNotebook,
 }));
 
 import {
   AccountRow,
   canSet,
   DaysSheet,
+  dayFixWords,
   dayOptions,
   LEGEND_ONLY,
   Library,
   RunStrip,
   saveError,
+  savedToast,
 } from "../../app/components/NotebookParts";
 import { SeasonSwitcher } from "../../app/components/NotebookSeasons";
 import {
@@ -517,6 +521,84 @@ describe("past Seasons", () => {
       `<option value="${SEPTEMBER}" selected="">7 Sep – 5 Oct</option>`,
     );
     expect(html).not.toContain("of 28");
+  });
+
+  it("words a fixed day from its Season's notebook once the page shows the next", async () => {
+    const origin = "https://clashlens.example";
+    // September as on its Day 28, before the fix: Ring from Day 9 to 28.
+    const before = past(true);
+    const player: NotebookPlayer = {
+      ...before.players[0]!,
+      runs: [{ ...before.players[0]!.runs[0]!, to: 28 }],
+      current: null,
+      legendDays: Array.from({ length: 28 }, (_, index) => index + 1),
+    };
+    // After it: Hex from Day 10 to 28, as the private API now reads it.
+    const fixed = parseNotebook({
+      ...apiNotebook(),
+      season: { ...apiNotebook().season, id: SEPTEMBER, today: 28, tomorrow: 28 },
+      players: [
+        {
+          ...apiNotebook().players[0],
+          runs: [
+            { from: 9, to: 9, base: "B-7K3QX9", record: RECORD },
+            { from: 10, to: 28, base: "B-000003", record: RECORD },
+          ],
+          picks: [
+            { day: 9, base: "B-7K3QX9" },
+            { day: 10, base: "B-000003" },
+          ],
+          legend_days: Array.from({ length: 28 }, (_, index) => index + 1),
+        },
+      ],
+      bases: [
+        ...apiNotebook().bases,
+        { ...apiNotebook().bases[0], id: "B-000003", name: "Hex", status: "retired" },
+      ],
+    });
+    const saved = { base: null, changed: [], undo: { season: SEPTEMBER } };
+    vi.stubEnv("CLASHLENS_NOTEBOOK_ENABLED", "true");
+    mocks.getWebsiteConfig.mockReturnValue({ publicOrigin: new URL(origin) });
+    mocks.saveNotebook.mockResolvedValue(saved);
+    mocks.getNotebook.mockResolvedValue(fixed);
+    try {
+      const change = { action: "pick", season: SEPTEMBER, tag: player.tag, day: 10 };
+      const request = new Request(`${origin}/notebook/save`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
+        body: new URLSearchParams({
+          change: JSON.stringify({ ...change, base: "B-000003" }),
+        }).toString(),
+      });
+      const answer = (await saveAction({ request } as never)) as unknown as {
+        data: { saved: typeof saved; notebook: Notebook };
+      };
+      expect(mocks.getNotebook.mock.calls[0]?.slice(1)).toEqual([undefined, SEPTEMBER]);
+      // The page has reloaded as October's Day 16.
+      const toast = savedToast(
+        answer.data.saved,
+        answer.data.notebook,
+        parseNotebook(apiNotebook()),
+        SEPTEMBER,
+        dayFixWords(player, 10, "B-000003"),
+      );
+      expect(toast?.text.trim()).toBe("Hex on curtypie, Days 10–28.");
+      expect(toast?.actions.map((item) => [item.label, item.change])).toEqual([
+        [
+          "Only Day 10",
+          {
+            action: "pick",
+            tag: player.tag,
+            day: 11,
+            base: "B-7K3QX9",
+            season: SEPTEMBER,
+          },
+        ],
+        ["Undo", { action: "undo", undo: { season: SEPTEMBER } }],
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("checks a copy names a Season", () => {
