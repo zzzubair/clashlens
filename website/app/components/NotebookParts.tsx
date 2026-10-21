@@ -515,6 +515,9 @@ function PickList({
               </span>
               <span className="nb-pick">Pick</span>
             </button>
+            {base.picture ? (
+              <PictureButton base={base} picture={base.picture} size="cover" />
+            ) : null}
           </li>
         ))}
         {rows.length > limit ? (
@@ -681,6 +684,9 @@ export function FixDaySheet({
                     </span>
                     <span className="nb-pick">{code === said ? "✓" : "This one"}</span>
                   </button>
+                  {base.picture ? (
+                    <PictureButton base={base} picture={base.picture} size="cover" />
+                  ) : null}
                 </li>
               );
             })}
@@ -921,33 +927,43 @@ export function StatusSheet({
         <>
           <p className="nb-ask">Active on which account?</p>
           <ul className="nb-list nb-pick-list">
-            {runners.map((player) => (
-              <li key={player.tag}>
-                <button
-                  type="button"
-                  className="nb-row"
-                  onClick={() => set("active", player)}
-                >
-                  <BaseTile
-                    name={player.current ? nameOf(notebook, player.current) : null}
-                    picture={
-                      notebook.bases.find((item) => item.id === player.current)?.picture
-                    }
-                  />
-                  <span className="nb-row-text">
-                    <b>{playerName(player)}</b>
-                    <small>
-                      {player.current
-                        ? `now ${nameOf(notebook, player.current)}${
-                            player.current === base.id ? "" : ` · it stops on Day ${day}`
-                          }`
-                        : "no base yet"}
-                    </small>
-                  </span>
-                  <span className="nb-pick">Pick</span>
-                </button>
-              </li>
-            ))}
+            {runners.map((player) => {
+              const current = notebook.bases.find((item) => item.id === player.current);
+              return (
+                <li key={player.tag}>
+                  <button
+                    type="button"
+                    className="nb-row"
+                    onClick={() => set("active", player)}
+                  >
+                    <BaseTile
+                      name={player.current ? nameOf(notebook, player.current) : null}
+                      picture={current?.picture}
+                    />
+                    <span className="nb-row-text">
+                      <b>{playerName(player)}</b>
+                      <small>
+                        {player.current
+                          ? `now ${nameOf(notebook, player.current)}${
+                              player.current === base.id
+                                ? ""
+                                : ` · it stops on Day ${day}`
+                            }`
+                          : "no base yet"}
+                      </small>
+                    </span>
+                    <span className="nb-pick">Pick</span>
+                  </button>
+                  {current?.picture ? (
+                    <PictureButton
+                      base={current}
+                      picture={current.picture}
+                      size="cover"
+                    />
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
           {runners.length < notebook.players.length ? (
             <p className="nb-hint">{LEGEND_ONLY}</p>

@@ -674,7 +674,7 @@ button.nb-tile-picture,
   opacity: 0.65;
   cursor: progress;
 }
-/* A list row is a link to its base, so its picture's button lies over the
+/* A list row is a link or a button, so its picture's button lies over the
  * row's tile. */
 .nb-list > li {
   position: relative;

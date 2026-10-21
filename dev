@@ -400,7 +400,7 @@ start_application() {
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$API" \
     --volume "$STATE_DIR:/run/clashlens-dev:ro,Z" \
-    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" --env CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=true --env CLASHLENS_PICTURES_SECURE=false --env CLASHLENS_PICTURES_ENDPOINT=127.0.0.1:9000 --env CLASHLENS_PICTURES_BUCKET=pictures --env CLASHLENS_PICTURES_REGION=us-east-1 --env CLASHLENS_PICTURES_ACCESS_KEY_FILE=/run/clashlens-dev/official-key --env CLASHLENS_PICTURES_SECRET_KEY_FILE=/run/clashlens-dev/official-key \
     "$IMAGE_PREFIX-python" serve --host 0.0.0.0 --port 8000 \
     --secret-file /run/clashlens-dev/hmac-key \
     --official-key-file /run/clashlens-dev/official-key \
