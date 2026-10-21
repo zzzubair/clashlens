@@ -136,6 +136,10 @@
   position: absolute;
   inset: 0;
 }
+.nb-account-head > .nb-tile-picture {
+  position: relative;
+  z-index: 1;
+}
 .nb-next {
   color: var(--cl-action-text);
   font-weight: 700;

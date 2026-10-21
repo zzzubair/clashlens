@@ -1202,12 +1202,16 @@ A board row whose day changed is rebuilt by the board's own corrections.
 
 **What it means:** not an alert. Once a week, from Monday 12:00 UTC, the
 alert check posts how Notebook pictures were used: uploads in the last 7 days
-and how many Clashers made them, the pictures on a base now, and the bytes all
-stored pictures take, as a share of R2's free 10 GB. The bytes include files
-still waiting to be deleted (see [Notebook pictures](#notebook-pictures)).
+whose rows are still kept and how many Clashers made them, the pictures on a
+base now, and the bytes all stored pictures take, as a share of R2's free
+10 GB. The bytes include files still waiting to be deleted (see
+[Notebook pictures](#notebook-pictures)). A replaced or removed picture's row
+is deleted about a day later, so the 7-day counts can undercount. An upload
+whose storage write failed is still counted, in uploads and bytes, until its
+row is deleted a day later.
 If the count can't be read, the next run tries again.
 
-**First checks:** the biggest uploaders this week:
+**First checks:** the biggest uploaders this week, among rows still kept:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \

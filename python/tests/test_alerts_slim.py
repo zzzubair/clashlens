@@ -593,8 +593,8 @@ def test_the_notebook_picture_line_goes_once_a_week_from_noon(runtime, monkeypat
     for seconds in (60, 3600):
         assert at(rt, seconds, start) == 0
     assert lines() == [(
-        "Clash Lens Notebook pictures, last 7 days: 12 uploads by 3 Clashers. Stored"
-        " now: 40 pictures on bases, 9.6 MB in all, 0.1% of R2's free 10 GB. Next"
+        "Clash Lens Notebook pictures, last 7 days, uploads still kept: 12 by 3"
+        " Clashers. Stored now: 40 pictures on bases, 9.6 MB in all, 0.1% of R2's free 10 GB. Next"
         " step: docs/operating.md, Notebook picture line."
     )]
     # Monday starts a new week, from noon.

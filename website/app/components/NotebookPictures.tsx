@@ -18,16 +18,15 @@ const ERRORS: Record<string, string> = {
   unavailable: "Couldn't save the picture just now. Try again in a moment.",
 };
 
-/** Upload or remove one base's picture, then read the page again. `send`
- * says whether it saved. */
+/** Upload or remove one base's picture, then read the page again. */
 export function usePictureSave(base: string) {
   const revalidator = useRevalidator();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  async function send(file: File | null): Promise<boolean> {
+  async function send(file: File | null): Promise<void> {
     if (file && file.size > MAX_PICTURE_BYTES) {
       setError(ERRORS.picture_too_large!);
-      return false;
+      return;
     }
     setBusy(true);
     setError(null);
@@ -47,13 +46,11 @@ export function usePictureSave(base: string) {
       const answer = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) {
         setError(ERRORS[answer.error ?? ""] ?? ERRORS.unavailable!);
-        return false;
+        return;
       }
       await revalidator.revalidate();
-      return true;
     } catch {
       setError(ERRORS.unavailable!);
-      return false;
     } finally {
       setBusy(false);
     }
@@ -228,17 +225,8 @@ export function BasePictureArea({ base }: { base: NotebookBase }) {
 }
 
 /** The Edit sheet's picture: change or remove it, or add one. */
-export function PictureField({
-  base,
-  onDone,
-}: {
-  base: NotebookBase;
-  onDone: () => void;
-}) {
+export function PictureField({ base }: { base: NotebookBase }) {
   const { busy, error, send } = usePictureSave(base.id);
-  const done = (saved: boolean) => {
-    if (saved) onDone();
-  };
   return (
     <div className="nb-picture-field">
       <span className="nb-field-label">Picture</span>
@@ -247,14 +235,14 @@ export function PictureField({
           className="button secondary"
           label={busy ? "Saving…" : base.picture ? "Change picture" : "Add a picture"}
           disabled={busy}
-          onFile={(file) => void send(file).then(done)}
+          onFile={(file) => void send(file)}
         />
         {base.picture ? (
           <button
             type="button"
             className="button secondary"
             disabled={busy}
-            onClick={() => void send(null).then(done)}
+            onClick={() => void send(null)}
           >
             Remove picture
           </button>

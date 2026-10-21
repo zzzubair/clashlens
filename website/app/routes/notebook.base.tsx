@@ -343,7 +343,7 @@ function EditSheet({
           Save
         </button>
       </form>
-      <PictureField base={base} onDone={onClose} />
+      <PictureField base={base} />
       <div className="nb-delete">
         {deleting ? (
           <>

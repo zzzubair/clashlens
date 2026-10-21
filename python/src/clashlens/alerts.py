@@ -638,8 +638,11 @@ def reconcile_line(counts: list[int]) -> str:
 
 def pictures_probe() -> None:
     """Run inside the API container; prints the last 7 days' Notebook picture
-    uploads and the Clash Lens accounts that made them, then the pictures on
-    a base now and the bytes stored, counting ones still to be deleted."""
+    uploads whose rows are still kept and the Clash Lens accounts that made
+    them, then the pictures on a base now and the bytes stored, counting ones
+    still to be deleted. A replaced or removed picture's row is deleted about
+    a day later, so the 7-day counts can undercount; an upload whose storage
+    write failed is counted until its row is deleted a day later."""
     import psycopg
 
     url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
@@ -655,8 +658,8 @@ def pictures_probe() -> None:
 def pictures_line(counts: list[int]) -> str:
     uploads, uploaders, kept, stored = counts[:4]
     return (
-        f"Clash Lens Notebook pictures, last 7 days: {uploads} uploads by {uploaders}"
-        f" Clashers. Stored now: {kept} pictures on bases, {stored / 1000**2:,.1f} MB"
+        f"Clash Lens Notebook pictures, last 7 days, uploads still kept: {uploads}"
+        f" by {uploaders} Clashers. Stored now: {kept} pictures on bases, {stored / 1000**2:,.1f} MB"
         f" in all, {stored / PICTURES_FREE_BYTES:.1%} of R2's free 10 GB."
         " Next step: docs/operating.md, Notebook picture line."
     )
