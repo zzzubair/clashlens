@@ -116,7 +116,7 @@ export interface GroupRow {
   name: string;
   you: boolean;
   trophies: number | null;
-  /** Averages a day over the days counted. */
+  /** Net trophies a day, over only the counted days with at least one battle. */
   gain: number | null;
   hitRate: number | null;
   offense: number | null;

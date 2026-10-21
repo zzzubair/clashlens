@@ -177,9 +177,9 @@ Stage 4: Legend days, Daily board members and tracking follow it. No page or cou
   or defense loss. Preserve the evidence that explains a difference.
 - A player page's Daily Legend log shows only the current Season's days, each
   numbered from that Season's start. An ended Season's saved days appear under
-  that Season in the page's Seasons list, dated by its end. That list offers
-  only Seasons with Clash Lens days; one known only from the game's league
-  history is left out. A link to a day of an ended Season opens that Season
+  that Season in the page's Seasons list, named by its first and last Legend
+  days. That list offers only Seasons with Clash Lens days; one known only
+  from the game's league history is left out. A link to a day of an ended Season opens that Season
   with the day marked, or says no Legend log is saved for that date. Such a
   day, like a current-Season day the log leaves out, also shows its attacks and
   defenses from the saved days the page already loads; when only its Season

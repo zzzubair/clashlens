@@ -91,7 +91,9 @@ automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
 weekly reset.
-Today's end of day and Reset rank read After Reset.
+Today's end of day and Reset rank read After Reset, and its empty battle slots
+read —, where a finished day's read Not recorded. On a phone, today's day
+comes before the Season summary.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final

@@ -28,7 +28,7 @@ Preconditions:
 - **Profile.** `page.getByText("#2PP", { exact: true })` and `page.getByText("Current trophies", { exact: true })` are visible.
 - **Log.** `page.getByRole("heading", { name: "Daily Legend log", exact: true })` is visible.
 - **Season summary.** In `page.getByRole("region", { name: "Season summary" })`, `Hit rate` text, the row header `Defenses` and `Per defense` text are visible.
-- **Refresh.** Click `page.getByRole("button", { name: "Refresh", exact: true })`. The POST to `/resources/players/%232PP/refresh` answers `202`, and the region `Player refresh` appears with the status `Refreshing…` and a `Refresh progress` bar. Wait up to 30 seconds for that region to finish; the time in `.player-updated` (its `datetime` attribute) is then the same or later than before. Screenshot while refreshing and after.
+- **Refresh.** Click `page.getByRole("button", { name: "Refresh", exact: true })`. The POST to `/resources/players/%232PP/refresh` answers `202`, the button reads `Refreshing…` and is disabled, and the region `Player refresh` holds the screen-reader-only status `Refreshing…`; nothing else on the page moves. Wait up to 30 seconds for that status to read `Updated.` and the button `Refresh` again; the time in `.player-updated` (its `datetime` attribute) is then the same or later than before. Screenshot while refreshing and after.
 - **Phone width.** `page.setViewportSize({ width: 375, height: 812 })`, reload, then `document.documentElement.scrollWidth - document.documentElement.clientWidth` is `0`.
 - **Proof.** Screenshot and `page.locator("main").ariaSnapshot()` after Open and after Refresh, plus the phone screenshot.
 
