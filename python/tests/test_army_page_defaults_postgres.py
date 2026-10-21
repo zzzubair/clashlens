@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from threading import Timer
 
 from domain_test_support import domain_database, store_observation, text
 from fastapi.testclient import TestClient
@@ -120,6 +121,23 @@ def test_page_request_reads_attacks_from_every_finished_day(
                 defense = f"/v1/analytics/armies?{PAGE_QUERY}&lens=defense"
                 saved = client.get(defense, headers=signed_headers(defense)).json()
                 assert saved["total_attacks"] == 1
+
+                # Other reads hold every pool connection for a moment, as on
+                # a busy server; the Armies read waits for one instead of
+                # answering that the service is unavailable.
+                busy = [api.pool.getconn() for _ in range(api.pool.max_size)]
+                Timer(0.5, lambda: [api.pool.putconn(c) for c in busy]).start()
+                response = client.get(target, headers=signed_headers(target))
+                assert response.status_code == 200, response.text
+                # Held for longer, it answers that it took too long.
+                held = [api.pool.getconn() for _ in range(api.pool.max_size)]
+                try:
+                    response = client.get(target, headers=signed_headers(target))
+                finally:
+                    for connection in held:
+                        api.pool.putconn(connection)
+                assert response.status_code == 503
+                assert response.json() == {"error": "timeout"}
         finally:
             api.close()
             database.close()

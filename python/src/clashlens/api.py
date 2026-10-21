@@ -14,6 +14,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from psycopg.errors import QueryCanceled, TransactionTimeout
+from psycopg_pool import PoolTimeout
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import (
@@ -676,7 +677,7 @@ def create_app(
                 + ",".join(str(day) for day in unavailable.affected_days),
                 affected_days=unavailable.affected_days,
             ) from unavailable
-        except (QueryCanceled, TransactionTimeout) as timeout:
+        except (QueryCanceled, TransactionTimeout, PoolTimeout) as timeout:
             raise ApiError(503, "timeout") from timeout
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
