@@ -6,7 +6,7 @@ writers saved again what had not changed: each input added to a board
 correction saved the correction's whole list again, 3.1 MB for 40,422
 inputs on 9 October 2026; each battle log re-saved every battle it repeated;
 each recount of a day's armies deleted and saved the whole day again. See
-migration 0122 and docs/testing.md.
+migration 0124 and docs/testing.md.
 """
 
 from __future__ import annotations

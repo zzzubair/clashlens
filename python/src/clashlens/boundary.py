@@ -918,7 +918,7 @@ def _record_boundary_generation(
                     (correction_artifacts, queued[0]),
                 )
                 # One row per added input: adding to the list itself saved
-                # the whole list again (migration 0122).
+                # the whole list again (migration 0124).
                 connection.execute(
                     """
                     INSERT INTO boundary_publication_correction_inputs

@@ -305,7 +305,7 @@ the manifest rows are reused.
 ## Rewrites of unchanged rows
 
 Three worker writes saved unchanged data again. Each input added to a board
-correction rewrote the correction's whole input list; since migration 0122 each
+correction rewrote the correction's whole input list; since migration 0124 each
 added input is one row of `boundary_publication_correction_inputs` and
 `clashlens_correction_inputs(correction)` returns them in arrival order. Each
 battle log rewrote every battle it repeated; a battle already saved is now

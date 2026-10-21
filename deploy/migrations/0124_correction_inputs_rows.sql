@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0122.
+-- Clash Lens deployment migration 0124.
 -- A queued board correction added each changed player's day to one growing
 -- list in boundary_publication_corrections.pending_inputs, and PostgreSQL
 -- saves a changed list whole, so every addition wrote the entire list to the
@@ -304,6 +304,6 @@ REVOKE ALL ON FUNCTION clashlens_correction_inputs(boundary_publication_correcti
 GRANT EXECUTE ON FUNCTION clashlens_correction_inputs(boundary_publication_corrections)
     TO clashlens_python_worker, clashlens_python_api;
 
-INSERT INTO clash_lens_schema_migrations (version) VALUES (122)
+INSERT INTO clash_lens_schema_migrations (version) VALUES (124)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;
