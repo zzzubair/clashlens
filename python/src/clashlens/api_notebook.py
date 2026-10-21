@@ -55,10 +55,10 @@ from .league_week import WEEK, week_start
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _CODE = re.compile(r"B-[0-9A-HJKMNP-TV-Z]{6}")
-# Support may type an ID in lower case, or with I, L or O for 1 and 0.
-_MISREAD = str.maketrans("ILO", "110")
 # The in-game link that opens a layout; nothing else may be saved as one.
 _BASE_LINK = re.compile(r"https://link\.clashofclans\.com/[A-Za-z0-9/?=&%._:;,+-]{1,270}")
+# The invisible joiner inside emoji such as ❤️‍🔥, kept in names and notes.
+_JOINER = "\u200d"
 MAX_NAME = 60
 MAX_NOTE = 1000
 Status = Literal["active", "to_try", "retired"]
@@ -70,19 +70,17 @@ def new_code() -> str:
 
 
 def parse_code(value: str) -> str:
-    """The base ID in ``value``, as support might type it, or ApiError."""
-    cleaned = value.strip().upper().translate(_MISREAD)
-    if not cleaned.startswith("B-"):
-        cleaned = "B-" + cleaned
-    if not _CODE.fullmatch(cleaned):
+    """``value`` if it is a base ID, or ApiError."""
+    if not _CODE.fullmatch(value):
         raise ApiError(404, "base_not_found")
-    return cleaned
+    return value
 
 
 def clean_name(value: str) -> str:
     name = " ".join(unicodedata.normalize("NFC", value).split())
     if not 1 <= len(name) <= MAX_NAME or any(
-        unicodedata.category(character).startswith("C") for character in name
+        unicodedata.category(character).startswith("C") and character != _JOINER
+        for character in name
     ):
         raise ApiError(422, "invalid_name")
     return name
@@ -102,7 +100,7 @@ def clean_note(value: str) -> str:
     note = unicodedata.normalize("NFC", value).strip()
     if len(note) > MAX_NOTE or any(
         unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
-        and character not in "\n\t"
+        and character not in "\n\t" + _JOINER
         for character in note
     ):
         raise ApiError(422, "invalid_note")

@@ -1,5 +1,5 @@
-"""Season notebook rules that need no database: runs from day picks, and
-base IDs as support would read them out or type them."""
+"""Season notebook rules that need no database: runs from day picks, base
+IDs, and the names, notes and links a Clasher may save."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from clashlens.api import ApiError
 from clashlens.api_notebook import (
     base_on,
     clean_link,
+    clean_name,
+    clean_note,
     new_code,
     parse_code,
     runs,
@@ -61,15 +63,24 @@ def test_base_ids_are_short_and_never_use_letters_that_look_like_digits() -> Non
         assert not set(code[2:]) & set("ILOU")
 
 
-def test_support_can_type_a_base_id_loosely() -> None:
-    assert parse_code("b-7k3qx9") == "B-7K3QX9"
-    assert parse_code("7K3QX9") == "B-7K3QX9"
-    # I and L read as 1, O as 0.
-    assert parse_code("B-IL0OQX") == "B-1100QX"
-    with pytest.raises(ApiError):
-        parse_code("B-7K3QX")
-    with pytest.raises(ApiError):
-        parse_code("B-7K3QXU")
+def test_only_an_exact_base_id_is_read() -> None:
+    assert parse_code("B-7K3QX9") == "B-7K3QX9"
+    for bad in ("b-7k3qx9", "7K3QX9", "B-IL0OQX", " B-7K3QX9", "B-7K3QX", "B-7K3QXU"):
+        with pytest.raises(ApiError):
+            parse_code(bad)
+
+
+def test_joined_emoji_are_kept_but_other_invisible_characters_are_not() -> None:
+    # 🧑‍🚀 and ❤️‍🔥 are each joined by U+200D.
+    name = "\U0001f9d1\u200d\U0001f680 Rocket"
+    note = "CC: \u2764\ufe0f\u200d\U0001f525 lure first"
+    assert (clean_name(name), clean_note(note)) == (name, note)
+    # A zero-width space, a right-to-left override and a bell stay refused.
+    for hidden in ("\u200b", "\u202e", "\x07"):
+        with pytest.raises(ApiError):
+            clean_name(f"Ring{hidden}")
+        with pytest.raises(ApiError):
+            clean_note(f"Ring{hidden}")
 
 
 def test_only_the_games_own_base_links_are_kept() -> None:

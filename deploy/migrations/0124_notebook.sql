@@ -11,7 +11,7 @@
 -- Legend day a base was picked from, at most one a day: 28 a player a
 -- Season, about 60 bytes each. No limit on bases; rows are kept until the
 -- Clasher deletes the base or their account. Numbered 0124, leaving 0122
--- and 0123 to work in progress on other branches.
+-- to work in progress on another branch.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS notebook_bases (

@@ -38,6 +38,8 @@ from clashlens.api_db import ApiDatabase
 MAIN, ALT = "#2PP", "#8PP"
 NOTEBOOK = "/v1/account/notebook"
 LINK = "https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAAKgAAAAJ"
+ROCKET = "\U0001f9d1\u200d\U0001f680 Rocket"
+LURE = "CC: \u2764\ufe0f\u200d\U0001f525 lure first"
 
 
 def test_both_notebook_routes_are_missing_while_the_dashboard_is_off() -> None:
@@ -127,7 +129,7 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 spiral = save(action="add", name="Spiral", status="to_try")["base"]
                 save(action="pick", tag=ALT, day=3, base=spiral)
                 seen = notebook()
-                detail = notebook(base=ring.lower())["base"]
+                detail = notebook(base=ring)["base"]
 
                 # Days only today or tomorrow can start a base, or any day
                 # up to tomorrow when fixing one; only verified players.
@@ -189,6 +191,10 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 save(action="undo", undo=deleted["undo"])
                 restored = notebook(base=box)
                 put_back = stored(box)
+                # A name and a note with emoji joined by U+200D, 🧑‍🚀 and ❤️‍🔥,
+                # save and read back unchanged.
+                save(action="edit", base=spiral, name=ROCKET, note=LURE)
+                joined = notebook(base=spiral)
 
                 # Monday, Day 8, an hour after the Reset, before the new
                 # week's league record is written: the week follows the one
@@ -277,6 +283,8 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
     assert put_back == kept
     for key in ("bases", "players", "base"):
         assert restored[key] == renamed_back[key]
+    names = {base["id"]: base["name"] for base in joined["bases"]}
+    assert (names[spiral], joined["base"]["note"]) == (ROCKET, LURE)
 
     players = {player["tag"]: player for player in monday["players"]}
     assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, ring)
