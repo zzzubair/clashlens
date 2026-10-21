@@ -16,14 +16,14 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /** Back leads to the page that sent the clasher here, or to their profile. */
 export const handle: BackHandle = {
   back: (match) => {
-    const returnPath = (match.loaderData as VerifyPlayerLoaderData | undefined)
-      ?.returnPath;
+    const loaderData = match.loaderData as VerifyPlayerLoaderData | undefined;
+    const returnPath = loaderData?.returnPath;
     if (!returnPath) return { to: "/account", label: "Your profile" };
     return {
       to: returnPath,
       label: returnPath.startsWith(INVITE_PREFIX)
         ? "Crew invite"
-        : returnPath === "/"
+        : loaderData?.toDashboard
           ? "Dashboard"
           : "Back",
     };
@@ -38,6 +38,8 @@ export interface VerifyPlayerLoaderData {
   returnPath: string | null;
   /** The crew whose invite that page is. */
   crewName: string | null;
+  /** That page is the Dashboard, which `/` is only while its switch is on. */
+  toDashboard: boolean;
 }
 
 export interface VerifyPlayerActionData {
@@ -75,6 +77,7 @@ export async function loader({
   await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const { inviteCrewName } = await import("../services/crews.server");
+  const { isDashboardEnabled } = await import("../server/config.server");
   const returnPath = await linkReturnPath(
     new URL(request.url).searchParams.get("return"),
   );
@@ -82,6 +85,7 @@ export async function loader({
     idempotencyKey: freshIdempotencyKey(),
     returnPath,
     crewName: await inviteCrewName(returnPath),
+    toDashboard: returnPath === "/" && isDashboardEnabled(),
   };
 }
 
@@ -250,7 +254,7 @@ export default function VerifyPlayerRoute() {
           <p className="link-then">
             {loaderData.crewName
               ? `Then you'll come back to join ${loaderData.crewName}.`
-              : loaderData.returnPath === "/"
+              : loaderData.toDashboard
                 ? "Then you'll see your Dashboard."
                 : "Then you'll go back to where you were."}{" "}
             <Link to={loaderData.returnPath}>Not now</Link>

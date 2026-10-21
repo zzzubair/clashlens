@@ -26,7 +26,7 @@ Preconditions:
 - Pick an unused fake identity per run, e.g. `fixture-google-subject-4001`, by rewriting `login_hint` on `**/authorize?*` (see `website/tests/e2e/account-isolation.spec.ts`).
 
 - **Sign in.** `page.goto("/login")`, click `page.getByRole("link", { name: "Sign in with Google" })`. For a new identity the URL becomes `/login?none=google`; click `Create account with Google` and the URL becomes `/account/setup`.
-- **Set up.** Fill `page.getByLabel("Username")` with `lensverify` and `page.getByLabel("Display name")` with `Lens Verify`, click `Create account`. The URL becomes `/account/verify-player`; open `/account` and the URL becomes `/users/lensverify` with the heading `Clash players`.
+- **Set up.** Fill `page.getByLabel("Username", { exact: true })` with `lensverify` and `page.getByLabel("Display name")` with `Lens Verify`, click `Create account`. The URL becomes `/account/verify-player`; open `/account` and the URL becomes `/users/lensverify` with the heading `Clash players`.
 - **Link a player.** `page.goto("/account/verify-player")`, fill `Player tag` with `#2PP` and `API token` (`exact: true`) with `VERIFY-2PP`, click `Link player`, retrying for up to 30 seconds. The URL ends `?linked=%232PP` and the line `Synthetic Clasher 001 linked.` (or `#2PP linked.` before its name is saved) is shown.
 - **Second view.** In a new, signed-out context, open `/users/lensverify`. The heading `Lens Verify` and `#2PP` are visible.
 - **Watchlist.** Open `/account/watchlists/add/%232PP`, fill `Watchlist name` with `War plan`, submit. `/account/watchlists` lists a watchlist headed `War plan`, and its list `Players in War plan` contains `#2PP`.

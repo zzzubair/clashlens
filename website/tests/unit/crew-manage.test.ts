@@ -65,8 +65,9 @@ import JoinRoute, {
   action as joinAction,
   loader as joinLoader,
 } from "../../app/routes/crews.join.$code";
-import {
+import VerifyPlayerRoute, {
   action as verifyAction,
+  handle as verifyHandle,
   loader as verifyLoader,
 } from "../../app/routes/account.verify-player";
 import { loader as setupLoader } from "../../app/routes/account.setup";
@@ -856,6 +857,31 @@ describe("linking an account from an invite", () => {
   it("goes on to any page on this website once the account is linked", async () => {
     const response = (await link("/account/watchlists")) as Response;
     expect(response.headers.get("Location")).toBe("/account/watchlists");
+  });
+
+  it("promises the Dashboard on the way to / only while it is switched on", async () => {
+    const path = "/account/verify-player?return=%2F";
+    const linkPage = async () => {
+      const html = await render(path, {
+        path: "/account/verify-player",
+        Component: VerifyPlayerRoute,
+        loader: verifyLoader as never,
+      });
+      const loaderData = await verifyLoader({
+        request: new Request(`${ORIGIN}${path}`),
+      } as never);
+      const back = verifyHandle.back as (match: unknown) => { label: string };
+      return { html, back: back({ loaderData }).label };
+    };
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "false");
+    const off = await linkPage();
+    expect(off.html).toContain("go back to where you were.");
+    expect(off.html).not.toContain("Dashboard");
+    expect(off.back).toBe("Back");
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+    const on = await linkPage();
+    expect(on.html).toContain("see your Dashboard.");
+    expect(on.back).toBe("Dashboard");
   });
 
   it.each(["/account/setup", "https://evil.example/crews/join/x", "//evil.example"])(
