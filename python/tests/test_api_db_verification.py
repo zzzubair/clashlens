@@ -743,6 +743,9 @@ def test_verifying_a_linked_player_again_keeps_the_first_linked_default(
 
             assert link("#2PP", NOW) == "linked"
             assert link("#8PY", NOW + timedelta(minutes=1)) == "linked"
+            # Only tracked players can be the default when none is chosen.
+            with database.pool.connection() as connection:
+                connection.execute("UPDATE players SET active = true")
             assert default() == "#2PP"
             assert link("#2PP", NOW + timedelta(minutes=2)) == "already_linked"
             assert default() == "#2PP"

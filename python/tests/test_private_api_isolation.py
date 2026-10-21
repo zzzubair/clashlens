@@ -131,6 +131,7 @@ def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(account
             "display_name": owner["username"],
             "verified_players": [],
             "default_player": None,
+            "next_default_player": None,
         }
         # Searching a public username must not disclose private counts or labels.
         search = call(client, owner, "GET", f"/v1/players/search?q={other['username']}")
@@ -309,6 +310,7 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("DELETE", f"{group_path}/players/{quote(other['tag'])}", None),
             ("GET", f"{group_path}/comparison", None),
             ("POST", "/v1/account/default-player", {"tag": other["tag"]}),
+            ("DELETE", f"/v1/account/players/{quote(other['tag'])}", None),
             ("GET", "/v1/account/discord-alerts", None),
             ("POST", "/v1/account/discord-alerts", {"tag": other["tag"], "on": True}),
             ("GET", "/v1/account/obs-overlay", None),

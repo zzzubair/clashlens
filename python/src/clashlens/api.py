@@ -1010,6 +1010,17 @@ def create_app(
         )
         return _operation_response(result)
 
+    @app.delete("/v1/account/players/{tag}")
+    def unlink_player(tag: str, request: Request) -> JSONResponse:
+        context = _authorize(request, "account.update", production_database)
+        assert production_database is not None and context.account is not None
+        normalized_tag = _safe_tag(tag)
+        result = api_accounts.unlink_player(production_database,
+            _binding(request, context, "account.update", {"unlink_player": normalized_tag}),
+            normalized_tag=normalized_tag,
+        )
+        return _operation_response(result)
+
     @app.post("/v1/account/exports")
     def submit_export(body: ExportBody, request: Request) -> JSONResponse:
         context = _authorize(request, "exports.submit", production_database)

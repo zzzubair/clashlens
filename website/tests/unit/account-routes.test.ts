@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
   createPythonClient: vi.fn(),
-  startProviderAuthorization: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -27,36 +26,19 @@ vi.mock("../../app/server/login-session.server", () => ({
   isLoginRevoked: async () => false,
 }));
 
-vi.mock("../../app/server/provider-start.server", () => ({
-  startProviderAuthorization: mocks.startProviderAuthorization,
-}));
-
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
 
-import {
-  LOGIN_COOKIE_NAME,
-  createLoginCookieValue,
-  createLoginSessionBinding,
-} from "../../app/server/auth-cookies.server";
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
 import { loader as accountLoader } from "../../app/routes/account";
-import ProvidersRoute, {
-  action as providersAction,
-  loader as providersLoader,
-} from "../../app/routes/account.providers";
 import GroupsRoute, {
   action as groupsAction,
   loader as groupsLoader,
 } from "../../app/routes/account.groups";
-import ProfileRoute, {
-  action as profileAction,
-  loader as profileLoader,
-} from "../../app/routes/account.profile";
 import { loader as savedPlayersLoader } from "../../app/routes/account.saved-players";
 import {
   action as setupAction,
@@ -84,6 +66,7 @@ const SUMMARY = {
   displayName: "Nova",
   verifiedPlayers: [],
   defaultPlayer: null,
+  nextDefaultPlayer: null,
 };
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -186,19 +169,12 @@ describe("account routes", () => {
     mocks.requireLogin.mockResolvedValue(IDENTITY);
     client = fakeClient();
     mocks.createPythonClient.mockReturnValue(client);
-    mocks.startProviderAuthorization.mockReset();
-    mocks.startProviderAuthorization.mockResolvedValue(
-      new Response(null, {
-        status: 302,
-        headers: { Location: "https://provider.example" },
-      }),
-    );
   });
 
   describe("account read failures", () => {
     async function renderAccount(
       path: string,
-      Component: typeof ProfileRoute,
+      Component: typeof GroupsRoute,
       loader: unknown,
     ) {
       const handler = createStaticHandler([{ path, Component, loader: loader as never }]);
@@ -221,24 +197,6 @@ describe("account routes", () => {
         "Groups could not be loaded.",
         "No private groups yet",
         "Create group",
-      ],
-      [
-        "profile",
-        ProfileRoute,
-        profileLoader,
-        "getAccount",
-        "Profile could not be loaded.",
-        'name="displayName"',
-        null,
-      ],
-      [
-        "providers",
-        ProvidersRoute,
-        providersLoader,
-        "getAccount",
-        "Sign-in connections could not be loaded.",
-        'name="intent"',
-        null,
       ],
     ] as const)(
       "shows a retryable read failure and recovers on %s",
@@ -267,26 +225,8 @@ describe("account routes", () => {
         const recoveredHtml = await renderAccount(path, Component, loader);
         expect(recoveredHtml).not.toContain(message);
         expect(recoveredHtml).toContain(unknownContent);
-        if (route === "profile") expect(recoveredHtml).toContain('value="Nova"');
-        if (route === "providers") {
-          expect(recoveredHtml).toContain("Unlink");
-          // The default account is chosen on the account page now.
-          expect(recoveredHtml).toContain('<a href="/account">your account page</a>');
-          expect(recoveredHtml).not.toContain("<select");
-        }
       },
     );
-
-    it("keeps link actions for successfully loaded empty connections", async () => {
-      client.getAccount = vi.fn(async () => ({ ...ACCOUNT, providers: [] }));
-      const html = await renderAccount(
-        "/account/providers",
-        ProvidersRoute,
-        providersLoader,
-      );
-      expect(html.match(/>Link<\/button>/g)).toHaveLength(2);
-      expect(html).not.toContain("could not be loaded");
-    });
 
     it.each([
       [
@@ -297,15 +237,6 @@ describe("account routes", () => {
         "createGroup",
         { action: "create", name: "New group" },
         "Clanmates",
-      ],
-      [
-        "profile",
-        ProfileRoute,
-        profileLoader,
-        profileAction,
-        "updateAccount",
-        { displayName: "New name" },
-        'value="New name"',
       ],
     ] as const)(
       "keeps loaded values after a failed save on %s",
@@ -334,99 +265,8 @@ describe("account routes", () => {
         expect(html).toContain(savedContent);
         expect(html).toContain('role="alert"');
         expect(html).not.toContain("could not be loaded");
-        if (route === "profile") expect(html).toContain("@nova88");
       },
     );
-  });
-
-  describe("account.providers", () => {
-    it.each([403, 404])(
-      "redirects a new sign-in to account setup when the account service returns %s",
-      async (status) => {
-        client.getAccount = vi.fn(async () => {
-          throw new PythonApiError(status, { error: "account_not_found" });
-        });
-        await expect(
-          providersLoader({
-            request: new Request(`${ORIGIN}/account/providers`),
-          } as never),
-        ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-      },
-    );
-
-    it("shows connected providers for an account that has completed setup", async () => {
-      const result = await providersLoader({
-        request: new Request(`${ORIGIN}/account/providers`),
-      } as never);
-      expect(result.providers).toEqual(["google"]);
-      expect(result.error).toBeNull();
-    });
-
-    it.each([
-      { status: 503, code: "unavailable" },
-      { status: 403, code: "forbidden" },
-      { status: 404, code: "missing" },
-    ])(
-      "keeps a $status service error visible instead of sending the user to setup",
-      async ({ status, code }) => {
-        client.getAccount = vi.fn(async () => {
-          throw new PythonApiError(status, { error: code });
-        });
-        const result = await providersLoader({
-          request: new Request(`${ORIGIN}/account/providers`),
-        } as never);
-        expect(result.error?.error.code).toBe(code);
-      },
-    );
-
-    it("starts privileged OAuth only from a same-origin POST bound to the login session", async () => {
-      const loginCookie = createLoginCookieValue(
-        IDENTITY,
-        config.loginSecret,
-        Date.now(),
-      );
-      const response = await providersAction({
-        request: formRequest(
-          "/account/providers",
-          {
-            idempotencyKey: IDEMPOTENCY_KEY,
-            intent: "unlink",
-            provider: "google",
-          },
-          { cookie: `${LOGIN_COOKIE_NAME}=${loginCookie}` },
-        ),
-      } as never);
-
-      expect(response.status).toBe(302);
-      expect(mocks.startProviderAuthorization).toHaveBeenCalledWith(
-        config,
-        "google",
-        "unlink",
-        "/account/providers",
-        createLoginSessionBinding(loginCookie),
-      );
-    });
-
-    it("rejects non-POST and cross-origin attempts before starting OAuth", async () => {
-      const getResponse = await providersAction({
-        request: new Request(`${ORIGIN}/account/providers?intent=unlink`),
-      } as never);
-      expect(getResponse.status).toBe(405);
-
-      const hostile = await providersAction({
-        request: formRequest(
-          "/account/providers",
-          {
-            idempotencyKey: IDEMPOTENCY_KEY,
-            intent: "unlink",
-            provider: "google",
-          },
-          { Origin: "https://evil.example" },
-        ),
-      } as never);
-      expect(hostile.status).toBe(403);
-      expect(mocks.startProviderAuthorization).not.toHaveBeenCalled();
-    });
   });
 
   describe("account.setup", () => {
@@ -655,168 +495,6 @@ describe("account routes", () => {
 
     it("exports a no-store headers policy", async () => {
       const { headers } = await import("../../app/routes/account.setup");
-      expect(headers()).toEqual({ "Cache-Control": "no-store" });
-    });
-  });
-
-  describe("account.profile", () => {
-    it("loads the current names with a fresh idempotency key", async () => {
-      const result = await profileLoader({
-        request: new Request(`${ORIGIN}/account/profile`),
-      } as never);
-      expect(result).toMatchObject({
-        username: "nova88",
-        displayName: "Nova",
-        error: null,
-      });
-      expect(UUID_PATTERN.test(result.idempotencyKey)).toBe(true);
-      assertNoProviderData(result);
-    });
-
-    it("redirects an unresolved account to setup", async () => {
-      client.getAccount = vi.fn(async () => {
-        throw new PythonApiError(403, { error: "account_not_found" });
-      });
-      await expect(
-        profileLoader({ request: new Request(`${ORIGIN}/account/profile`) } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-    });
-
-    it("returns a safe error when the account service is unavailable", async () => {
-      client.getAccount = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
-      const result = await profileLoader({
-        request: new Request(`${ORIGIN}/account/profile`),
-      } as never);
-      expect(result.error?.error.code).toBe("unavailable");
-      expect(result.username).toBe("");
-      assertNoProviderData(result);
-    });
-
-    it("updates the display name, keeping the stored username and preferences", async () => {
-      await expect(
-        profileAction({
-          request: formRequest("/account/profile", {
-            idempotencyKey: IDEMPOTENCY_KEY,
-            displayName: "Nova Nova",
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/profile"));
-      expect(client.updateAccount).toHaveBeenCalledWith(
-        { username: "nova88", displayName: "Nova Nova", preferences: {} },
-        IDEMPOTENCY_KEY,
-      );
-    });
-
-    it("rejects a forged username change without changing the profile", async () => {
-      const result = await profileAction({
-        request: formRequest("/account/profile", {
-          idempotencyKey: IDEMPOTENCY_KEY,
-          username: "anothername",
-          displayName: "Nova Nova",
-        }),
-      } as never);
-      const response = dataOf<{
-        fieldErrors: { username?: string };
-        values: { username: string };
-      }>(result);
-      expect(response.status).toBe(400);
-      expect(response.data.fieldErrors.username).toBeTruthy();
-      expect(response.data.values.username).toBe("nova88");
-      expect(client.updateAccount).not.toHaveBeenCalled();
-    });
-
-    it("shows the username error inside a valid username list item", async () => {
-      const handler = createStaticHandler([
-        {
-          path: "/account/profile",
-          Component: ProfileRoute,
-          loader: profileLoader as never,
-          action: profileAction as never,
-        },
-      ]);
-      const context = await handler.query(
-        formRequest("/account/profile", {
-          idempotencyKey: IDEMPOTENCY_KEY,
-          username: "anothername",
-          displayName: "Nova Nova",
-        }),
-      );
-      if (context instanceof Response) throw new Error("unexpected response");
-      const html = renderToString(
-        createElement(StaticRouterProvider, {
-          router: createStaticRouter(handler.dataRoutes, context),
-          context,
-          hydrate: false,
-        }),
-      );
-      // A <dl> may only hold <dt>/<dd> directly, so the alert sits inside a <dd>.
-      expect(html).toContain(
-        '<dd><p class="field-error" role="alert">To request a username change, contact support.</p></dd>',
-      );
-      expect(html).not.toContain('<dd class="field-error"');
-    });
-
-    it("redirects an unresolved account to setup from the action too", async () => {
-      client.getAccount = vi.fn(async () => {
-        throw new PythonApiError(404, { error: "account_not_found" });
-      });
-      await expect(
-        profileAction({
-          request: formRequest("/account/profile", {
-            idempotencyKey: IDEMPOTENCY_KEY,
-            username: "nova88",
-            displayName: "Nova",
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-    });
-
-    it("rejects bad names and cross-origin requests before calling Python", async () => {
-      const badName = await profileAction({
-        request: formRequest("/account/profile", {
-          idempotencyKey: IDEMPOTENCY_KEY,
-          displayName: "FuckYou",
-        }),
-      } as never);
-      expect(dataOf(badName).status).toBe(400);
-
-      const crossOrigin = await profileAction({
-        request: formRequest(
-          "/account/profile",
-          { idempotencyKey: IDEMPOTENCY_KEY, username: "nova88", displayName: "Nova" },
-          { Origin: "https://evil.example" },
-        ),
-      } as never);
-      expect(dataOf(crossOrigin).status).toBe(403);
-      expect(client.updateAccount).not.toHaveBeenCalled();
-      expect(client.getAccount).not.toHaveBeenCalled();
-    });
-
-    it("maps general Python failures to a safe 422 response", async () => {
-      client.getAccount = vi.fn(async () => ({ ...ACCOUNT }));
-      client.updateAccount = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
-      const result = await profileAction({
-        request: formRequest("/account/profile", {
-          idempotencyKey: IDEMPOTENCY_KEY,
-          username: "nova88",
-          displayName: "Nova",
-        }),
-      } as never);
-      const { data, status, headers } = dataOf<{
-        generalError: { error: { code: string } };
-      }>(result);
-      expect(status).toBe(422);
-      expect(data.generalError.error.code).toBe("unavailable");
-      assertNoStoreHeaders(headers);
-      assertNoProviderData(data);
-    });
-
-    it("exports a no-store headers policy", async () => {
-      const { headers } = await import("../../app/routes/account.profile");
       expect(headers()).toEqual({ "Cache-Control": "no-store" });
     });
   });

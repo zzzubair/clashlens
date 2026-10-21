@@ -335,7 +335,7 @@ def test_a_private_reply_is_dropped_when_the_public_placeholder_cannot_be_remove
     assert run_command(store, "stats", interaction, player=None) is None
 
 
-CONNECT = "[Connect Discord](https://clashlens.test/account/providers)"
+CONNECT = "[Connect Discord](https://clashlens.test/account/settings)"
 
 
 def test_help_link_and_alerts_offer_sign_up_without_a_connection(store) -> None:
@@ -369,13 +369,16 @@ def test_help_link_and_alerts_show_a_connected_accounts_settings(store) -> None:
     assert "connected as @drift, 2 linked accounts" in help_message["text"]
     assert links(help_message) == {"Open Clash Lens": "https://clashlens.test/"}
     assert CONNECT not in help_message["text"]
-    # The default account is chosen on the Clasher's own page.
-    assert "[your Clash Lens page](https://clashlens.test/users/drift)" in help_message["text"]
+    # The default account is chosen in the Clasher's Settings.
+    assert (
+        "choose your default account in "
+        "[your Clash Lens settings](https://clashlens.test/account/settings)"
+    ) in help_message["text"]
     linked = run_command(store, "link", FakeInteraction())
     assert linked["private"] is False
     assert "**Drift** #2PP\n**Lens** #8QQ · default account" in linked["text"]
     assert linked["colours"] == [GOLD]
-    assert links(linked) == {"Change linked accounts": "https://clashlens.test/users/drift"}
+    assert links(linked) == {"Change linked accounts": "https://clashlens.test/account/settings"}
     alerts = run_command(store, "alerts", FakeInteraction())
     assert alerts["private"] is False
     assert (

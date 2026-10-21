@@ -231,10 +231,11 @@ export async function completeProviderCallback(
     return {
       kind: "redirect",
       // Connecting from the Discord alerts page goes back there.
-      location:
+      location: `${
         transaction.returnPath === "/account/discord-alerts"
           ? transaction.returnPath
-          : "/account/providers",
+          : "/account/settings"
+      }?saved=${provider}-connected`,
       setCookies: [clearTransactionCookie],
     };
   }
@@ -308,7 +309,7 @@ export async function completeProviderCallback(
   }
   return {
     kind: "redirect",
-    location: "/account/providers",
+    location: `/account/settings?saved=${provider}-disconnected`,
     setCookies: [clearTransactionCookie],
   };
 }

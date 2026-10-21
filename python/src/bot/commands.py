@@ -62,7 +62,8 @@ class Commands:
 
     def _default(self, account: AccountContext, cards: Sequence[Mapping[str, Any]]) -> str | None:
         """The player commands use when none is named: the only one, or the
-        default player chosen on the website, otherwise the first linked."""
+        default player chosen on the website, otherwise the first linked one
+        Clash Lens tracks."""
         chosen = self.store.default_tag(account)
         return cards[0]["tag"] if len(cards) == 1 else chosen
 
@@ -135,7 +136,7 @@ class Commands:
                 return replies.name_a_player()
             tag = self._default(account, cards)
             if tag is None:
-                return replies.which_player(self.site, account.username, cards, "stats")
+                return replies.which_player(self.site, cards, "stats")
         page = self.store.player_page(tag, now)
         if page is None:
             return replies.not_tracked(self.site, tag)

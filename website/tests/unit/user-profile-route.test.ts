@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   requireLogin: vi.fn(),
   readLoginIdentity: vi.fn(),
   createPythonClient: vi.fn(),
+  getAttackAlerts: vi.fn(),
+  getOverlay: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -40,7 +42,15 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
 
-import UserRoute, { action, loader } from "../../app/routes/users.$username";
+vi.mock("../../app/services/discord-alerts.server", () => ({
+  getAttackAlerts: mocks.getAttackAlerts,
+}));
+
+vi.mock("../../app/services/obs-overlay.server", () => ({
+  getOverlay: mocks.getOverlay,
+}));
+
+import UserRoute, { loader } from "../../app/routes/users.$username";
 import { PythonApiError } from "../../app/services/python.server";
 import { worstPublicUser } from "../fixtures/worst-case-accounts";
 
@@ -105,32 +115,56 @@ const data = {
 };
 
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" };
-const IDEMPOTENCY_KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
 
 const client = {
   getPublicUser: vi.fn(),
-  getAccountSummary: vi.fn(),
-  setDefaultPlayer: vi.fn(),
+  getAccount: vi.fn(),
 };
+
+const alertsFor = (...switches: Array<[boolean, boolean]>) => ({
+  players: switches.map(([on, summaryOn], index) => ({
+    tag: `#${index}PP`,
+    name: null,
+    on,
+    summaryOn,
+  })),
+  undelivered: null,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.requireLogin.mockResolvedValue(IDENTITY);
   mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
   client.getPublicUser.mockResolvedValue(data.user);
-  client.getAccountSummary.mockResolvedValue({
+  client.getAccount.mockResolvedValue({
     username: "nova88",
     displayName: "Nova",
-    verifiedPlayers: [],
-    defaultPlayer: "#8PY",
+    preferences: {},
+    providers: ["google", "discord"],
   });
-  client.setDefaultPlayer.mockResolvedValue(undefined);
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, false], [false, false]));
+  mocks.getOverlay.mockResolvedValue({
+    tag: "#2PP",
+    players: [{ tag: "#2PP", name: "Nova", league: null }],
+  });
   mocks.createPythonClient.mockReturnValue(client);
 });
 
-async function renderProfile(search: string, loaderData: object = data) {
+/** The profile page; `signedInAs` is who the top bar says is signed in. */
+async function renderProfile(
+  search: string,
+  loaderData: object = data,
+  signedInAs: string | null = null,
+) {
   const handler = createStaticHandler([
-    { path: "/users/:username", Component: UserRoute, loader: () => loaderData },
+    {
+      id: "root",
+      path: "/",
+      loader: () => ({ accountUsername: signedInAs }),
+      children: [
+        { path: "users/:username", Component: UserRoute, loader: () => loaderData },
+      ],
+    },
   ]);
   const context = await handler.query(
     new Request(`https://clashlens.example/users/nova88${search}`),
@@ -142,14 +176,18 @@ async function renderProfile(search: string, loaderData: object = data) {
       context,
       hydrate: false,
     }),
-  ).replaceAll("<!-- -->", "");
+  )
+    .replaceAll("<!-- -->", "")
+    .replaceAll(' data-discover="true"', "");
 }
 
-it("confirms a just-linked player without knowing who is signed in", async () => {
+it("confirms a just-linked player by name in one line at the top", async () => {
   const html = await renderProfile("?linked=%232PP");
-  expect(html).toContain("Linked #2PP");
-  expect(html).not.toContain("Edit profile");
-  expect(await renderProfile("?linked=%232PY")).not.toContain("Linked #2PY");
+  expect(html).toContain(
+    '<main id="main-content" tabindex="-1" class="page-shell narrow-shell"><p class="status-banner status-banner-success saved-line" role="status">Nova linked.</p>',
+  );
+  expect(html).not.toContain(">Edit<");
+  expect(await renderProfile("?linked=%232PY")).not.toContain("saved-line");
 });
 
 it("shows each linked account as one card linking to its player page", async () => {
@@ -195,8 +233,8 @@ it("says a failed profile read could not load instead of showing no linked accou
   });
   expect(html).toContain("Profile could not be loaded.");
   expect(html).toContain('<a href="/users/nova88">Try again</a>');
-  expect(html).not.toContain("No linked accounts yet");
-  expect(html).not.toContain("Linked accounts");
+  expect(html).not.toContain("linked a Clash player");
+  expect(html).not.toContain("Clash players");
 });
 
 it("shows worst-case linked players with separators and every missing value named", async () => {
@@ -226,115 +264,85 @@ async function loadProfile() {
   return result.data;
 }
 
-it("gives the default account controls only to the profile's signed-in owner", async () => {
+it("reads the owner's tool statuses only for the profile's signed-in owner", async () => {
   const own = await loadProfile();
   expect(own.user).toEqual(data.user);
-  expect(own.owner).toEqual({
-    defaultPlayer: "#8PY",
-    idempotencyKey: expect.any(String),
-  });
+  expect(own.owner).toEqual({ alerts: "On for 1 of 2 players", overlay: "Showing Nova" });
   expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
 
-  client.getAccountSummary.mockResolvedValue({
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, true]));
+  mocks.getOverlay.mockResolvedValue({ tag: null, players: [] });
+  expect((await loadProfile()).owner).toEqual({ alerts: "On", overlay: "Not set up" });
+  // Only attack alerts count; a daily summary alone is not an attack alert.
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([false, true]));
+  mocks.getOverlay.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  expect((await loadProfile()).owner).toEqual({ alerts: "Off", overlay: null });
+
+  // Saved switches send nothing once Discord is disconnected.
+  mocks.getAttackAlerts.mockClear();
+  mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, true]));
+  client.getAccount.mockResolvedValue({
+    username: "nova88",
+    displayName: "Nova",
+    preferences: {},
+    providers: ["google"],
+  });
+  expect((await loadProfile()).owner).toEqual({
+    alerts: "Discord not connected",
+    overlay: null,
+  });
+  expect(mocks.getAttackAlerts).not.toHaveBeenCalled();
+
+  client.getAccount.mockResolvedValue({
     username: "other",
     displayName: "Other",
-    verifiedPlayers: [],
-    defaultPlayer: "#9PY",
+    preferences: {},
+    providers: ["google", "discord"],
   });
   expect((await loadProfile()).owner).toBeNull();
 
   mocks.readLoginIdentity.mockResolvedValue(null);
   expect((await loadProfile()).owner).toBeNull();
 
-  // A failed owner read still shows the public profile, without the controls.
+  // A failed owner read still shows the public profile, without the statuses.
   mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
-  client.getAccountSummary.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  client.getAccount.mockRejectedValue(new PythonApiError(503, { error: "x" }));
   const failed = await loadProfile();
   expect(failed.user).toEqual(data.user);
   expect(failed.owner).toBeNull();
 });
 
-it("marks the owner's default account and offers Make default on the others", async () => {
-  const html = await renderProfile("", {
-    ...data,
-    owner: { defaultPlayer: "#8PY", idempotencyKey: IDEMPOTENCY_KEY },
-  });
-  const items = html.match(/<li class="linked-player-owned">[\s\S]*?<\/li>/g) ?? [];
-  expect(items).toHaveLength(4);
-  const [nova, second, ...rest] = items;
-  expect(second).toContain("✓</span> Default");
-  expect(second).not.toContain("Make default");
-  for (const item of [nova, ...rest]) {
-    expect(item).toContain(">Make default</button>");
-    expect(item).not.toContain("linked-player-default");
-  }
-  // The button sits beside the card link, never inside it.
-  for (const card of html.match(/<a class="linked-player-card"[\s\S]*?<\/a>/g) ?? [])
-    expect(card).not.toContain("<form");
-  expect(nova).toContain('name="tag" value="#2PP"');
-  expect(nova).toContain(`value="${IDEMPOTENCY_KEY}"`);
-  expect(
-    await renderProfile("?default=saved", {
-      ...data,
-      owner: { defaultPlayer: "#8PY", idempotencyKey: IDEMPOTENCY_KEY },
-    }),
-  ).toContain("Default account saved.");
+it("gives the owner one small Edit button and their two tools, and no settings", async () => {
+  const owner = { alerts: "On for 1 of 2 players", overlay: "Not set up" };
+  const html = await renderProfile("", { ...data, owner }, "nova88");
+  expect(html).toContain(
+    '<a class="button button-secondary profile-edit" aria-label="Edit your profile in Settings" href="/account/settings">Edit</a>',
+  );
+  const tools = html.match(/<a class="profile-tool"[\s\S]*?<\/a>/g) ?? [];
+  expect(tools).toHaveLength(2);
+  expect(tools[0]).toContain('href="/account/discord-alerts"');
+  expect(tools[0]).toContain("On for 1 of 2 players");
+  expect(tools[1]).toContain('href="/account/obs-overlay"');
+  expect(tools[1]).toContain("Stream overlay");
+  expect(tools[1]).toContain("Not set up");
+  for (const text of ["Make default", "Sign-in", "OBS overlay", "Default"])
+    expect(html).not.toContain(text);
+  // The cards are the same ones every visitor sees.
+  expect(html.match(/<a class="linked-player-card"/g)).toHaveLength(4);
 });
 
-it("shows other visitors neither the Default badge nor Make default", async () => {
-  const html = await renderProfile("?default=saved");
-  for (const text of ["Make default", "linked-player-default", "Default account saved."])
+it("shows other visitors no Edit button and no tools", async () => {
+  const html = await renderProfile("", data, "someone");
+  for (const text of [">Edit<", "Your tools", "profile-tool"])
     expect(html).not.toContain(text);
 });
 
-function defaultRequest(
-  fields: Record<string, string>,
-  origin = "https://clashlens.example",
-) {
-  return new Request("https://clashlens.example/users/nova88", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
-    body: new URLSearchParams(fields).toString(),
-  });
-}
-
-it.each([
-  { failure: false, outcome: "saved" },
-  { failure: true, outcome: "failed" },
-])("saves the default account and says it was $outcome", async ({ failure, outcome }) => {
-  if (failure)
-    client.setDefaultPlayer.mockRejectedValue(
-      new PythonApiError(404, { error: "player_not_verified" }),
-    );
-  const response = await action({
-    params: { username: "nova88" },
-    request: defaultRequest({
-      intent: "default-player",
-      tag: "#2PP",
-      idempotencyKey: IDEMPOTENCY_KEY,
-    }),
-  } as never);
-  expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
-  expect(client.setDefaultPlayer).toHaveBeenCalledWith("#2PP", IDEMPOTENCY_KEY);
-  expect(response.status).toBe(302);
-  expect(response.headers.get("Location")).toBe(`/users/nova88?default=${outcome}`);
-});
-
-it("refuses a default account change from another site or without a key", async () => {
-  const fields = {
-    intent: "default-player",
-    tag: "#2PP",
-    idempotencyKey: IDEMPOTENCY_KEY,
-  };
-  const crossSite = await action({
-    params: { username: "nova88" },
-    request: defaultRequest(fields, "https://evil.example"),
-  } as never);
-  expect(crossSite.status).toBe(403);
-  const noKey = await action({
-    params: { username: "nova88" },
-    request: defaultRequest({ ...fields, idempotencyKey: "" }),
-  } as never);
-  expect(noKey.status).toBe(400);
-  expect(client.setDefaultPlayer).not.toHaveBeenCalled();
+it("asks the owner, and only the owner, to link a first player", async () => {
+  const empty = { ...data, user: { ...data.user, verifiedPlayers: [] } };
+  const own = await renderProfile("", empty, "nova88");
+  expect(own).toContain("Link your Clash player to see your Legend days here.");
+  expect(own).toContain('href="/account/verify-player">Link your Clash player</a>');
+  const other = await renderProfile("", empty);
+  expect(other).toContain("This user hasn&#x27;t linked a Clash player yet.");
+  expect(other).not.toContain("verify-player");
 });

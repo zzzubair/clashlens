@@ -1,4 +1,4 @@
-"""OBS overlay: one per account, set up on the website's OBS overlay page and
+"""OBS overlay: one per account, set up on the website's Stream overlay page and
 shown in OBS through one private link (migration 0113).
 
 The overlay shows one of the account's verified players; a player that leaves

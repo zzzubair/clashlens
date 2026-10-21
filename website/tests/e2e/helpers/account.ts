@@ -64,7 +64,7 @@ export async function ensureAccount(
   }
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await expect(
-    page.getByRole("heading", { name: "Linked accounts", exact: true }),
+    page.getByRole("heading", { name: "Clash players", exact: true }),
   ).toBeVisible();
 }
 

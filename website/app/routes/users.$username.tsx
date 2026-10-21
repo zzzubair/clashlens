@@ -9,6 +9,7 @@ import {
 } from "react-router";
 
 import { useBackState } from "../components/BackLink";
+import { SavedLine } from "../components/SavedLine";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -26,21 +27,21 @@ export interface UserLoaderData {
   notFound: boolean;
   error: WebsiteErrorResponse | null;
   /** Only for the signed-in owner of this profile, null for everyone else. */
-  owner: OwnerControls | null;
+  owner: OwnerTools | null;
 }
 
-export interface OwnerControls {
-  /** The default account: the player the Discord bot's /stats uses when none is named. */
-  defaultPlayer: string | null;
-  idempotencyKey: string;
+/** The status line on each of the owner's tools; null when it could not be read. */
+export interface OwnerTools {
+  alerts: string | null;
+  overlay: string | null;
 }
 
 /**
  * GET /users/:username — the public user page from the anonymous Python
  * client. Only the canonical username, display name, and verified player
  * links are shown; Google identity, groups, preferences, and
- * internal IDs never appear. The signed-in owner also gets their default
- * account and the key to change it.
+ * internal IDs never appear. The signed-in owner also gets the status of
+ * their Discord alerts and Stream overlay.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
   const rawUsername = params.username ?? "";
@@ -58,7 +59,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const { createPythonClient } = await import("../services/python.server");
     const [user, owner] = await Promise.all([
       createPythonClient().getPublicUser(username),
-      ownerControls(request, username),
+      ownerTools(request, username),
     ]);
     return data<UserLoaderData>(
       { user, notFound: false, error: null, owner },
@@ -80,69 +81,49 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 }
 
-/** The owner's default account, or null when the visitor is anyone else. */
-async function ownerControls(
+/** The owner's tool statuses, or null when the visitor is anyone else. */
+async function ownerTools(
   request: Request,
   username: string,
-): Promise<OwnerControls | null> {
+): Promise<OwnerTools | null> {
   try {
     const { getWebsiteConfig } = await import("../server/config.server");
     const actions = await import("../server/actions.server");
     const identity = await actions.readLoginIdentity(request, getWebsiteConfig());
     if (identity === null) return null;
     const { createPythonClient } = await import("../services/python.server");
-    const summary = await createPythonClient(identity).getAccountSummary();
-    if (summary.username !== username) return null;
+    const account = await createPythonClient(identity).getAccount();
+    if (account.username !== username) return null;
+    const connected = account.providers.includes("discord");
+    const { getAttackAlerts } = await import("../services/discord-alerts.server");
+    const { getOverlay } = await import("../services/obs-overlay.server");
+    const [alerts, overlay] = await Promise.all([
+      connected ? getAttackAlerts(identity).catch(() => null) : null,
+      getOverlay(identity).catch(() => null),
+    ]);
+    const on = alerts?.players.filter((player) => player.on).length;
+    const total = alerts?.players.length ?? 0;
+    const shown = overlay?.players.find((player) => player.tag === overlay.tag);
     return {
-      defaultPlayer: summary.defaultPlayer,
-      idempotencyKey: actions.freshIdempotencyKey(),
+      alerts: !connected
+        ? "Discord not connected"
+        : alerts === null
+          ? null
+          : !on
+            ? "Off"
+            : total === 1
+              ? "On"
+              : `On for ${on} of ${total} players`,
+      overlay:
+        overlay === null
+          ? null
+          : overlay.tag === null
+            ? "Not set up"
+            : `Showing ${shown?.name ?? overlay.tag}`,
     };
   } catch {
     return null;
   }
-}
-
-/**
- * POST /users/:username — the signed-in Clasher makes one of their own
- * linked accounts the default account.
- */
-export async function action({ params, request }: Route.ActionArgs): Promise<Response> {
-  if (request.method !== "POST") {
-    return new Response(null, { status: 405, headers: NO_STORE });
-  }
-  const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
-  const actions = await import("../server/actions.server");
-  const { getWebsiteConfig } = await import("../server/config.server");
-  let config;
-  try {
-    config = getWebsiteConfig();
-  } catch {
-    throw redirect("/login");
-  }
-  if (!actions.isSameOrigin(request, config.publicOrigin)) {
-    return new Response(null, { status: 403, headers: NO_STORE });
-  }
-  const form = await actions.parseBoundedFormData(request);
-  const idempotencyKey = form?.["idempotencyKey"] ?? "";
-  if (
-    form === null ||
-    !actions.isIdempotencyKey(idempotencyKey) ||
-    form["intent"] !== "default-player"
-  ) {
-    return new Response(null, { status: 400, headers: NO_STORE });
-  }
-  const back = `/users/${encodeURIComponent(normalizeUsername(params.username ?? "") ?? "")}`;
-  try {
-    const { createPythonClient } = await import("../services/python.server");
-    await createPythonClient(identity).setDefaultPlayer(
-      form["tag"] ?? "",
-      idempotencyKey,
-    );
-  } catch {
-    return redirect(`${back}?default=failed`, { headers: NO_STORE });
-  }
-  return redirect(`${back}?default=saved`, { headers: NO_STORE });
 }
 
 export function headers() {
@@ -162,8 +143,6 @@ export default function UserRoute() {
   const justLinked = data.user?.verifiedPlayers.find(
     (player) => player.tag === linkedTag,
   );
-  const defaultSaved = searchParams.get("default");
-  const owner = data.owner;
   if (data.notFound) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -185,81 +164,53 @@ export default function UserRoute() {
       </main>
     );
   }
+  const players = data.user?.verifiedPlayers ?? [];
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      <section className="hero" aria-labelledby="user-title">
-        <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
-        <p className="player-tag">@{data.user?.username ?? ""}</p>
-        {isOwnProfile ? (
-          <p className="hero-actions">
-            <Link className="button button-secondary" to="/account/profile">
-              Edit profile
-            </Link>
-            <Link className="button button-secondary" to="/account/providers">
-              Sign-in connections
-            </Link>
-            <Link className="button button-secondary" to="/account/discord-alerts">
-              Discord alerts
-            </Link>
-            <Link className="button button-secondary" to="/account/obs-overlay">
-              OBS overlay
-            </Link>
-          </p>
-        ) : null}
-      </section>
-
       {justLinked ? (
-        <div className="status-banner status-banner-success" role="status">
-          Linked {justLinked.tag}
-        </div>
+        <SavedLine>{justLinked.name ?? justLinked.tag} linked.</SavedLine>
       ) : null}
-      {owner && defaultSaved === "saved" ? (
-        <div className="status-banner status-banner-success" role="status">
-          Default account saved.
-        </div>
-      ) : owner && defaultSaved === "failed" ? (
-        <div className="status-banner status-banner-warning" role="alert">
-          The default account could not be saved. Try again.
-        </div>
-      ) : null}
-
-      <section className="data-section" aria-labelledby="user-players-title">
-        <div className="section-heading">
-          <h2 id="user-players-title">Linked accounts</h2>
+      <section className="hero profile-hero" aria-labelledby="user-title">
+        <div className="profile-name">
+          <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
           {isOwnProfile ? (
-            <Link className="button button-secondary" to="/account/verify-player">
-              Link your Clash player
+            <Link
+              className="button button-secondary profile-edit"
+              to="/account/settings"
+              aria-label="Edit your profile in Settings"
+            >
+              Edit
             </Link>
           ) : null}
         </div>
-        {owner && data.user && data.user.verifiedPlayers.length > 0 ? (
-          <p className="form-help linked-player-hint">
-            The Discord bot&apos;s /stats shows your default account when you don&apos;t
-            name a player.
-          </p>
-        ) : null}
-        {data.user && data.user.verifiedPlayers.length > 0 ? (
+        <p className="player-tag">@{data.user?.username ?? ""}</p>
+      </section>
+
+      {isOwnProfile ? <YourTools tools={data.owner} /> : null}
+
+      <section className="data-section" aria-labelledby="user-players-title">
+        <h2 id="user-players-title">Clash players</h2>
+        {players.length > 0 ? (
           <ul className="linked-player-cards">
-            {data.user.verifiedPlayers.map((player) => (
-              <li key={player.tag} className={owner ? "linked-player-owned" : undefined}>
+            {players.map((player) => (
+              <li key={player.tag}>
                 <LinkedPlayer
                   player={player}
-                  backLabel={isOwnProfile ? "Your account" : data.user!.displayName}
+                  backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
                 />
-                {owner ? (
-                  <DefaultAccount
-                    tag={player.tag}
-                    isDefault={owner.defaultPlayer === player.tag}
-                    idempotencyKey={owner.idempotencyKey}
-                  />
-                ) : null}
               </li>
             ))}
           </ul>
+        ) : isOwnProfile ? (
+          <div className="empty-state">
+            <p>Link your Clash player to see your Legend days here.</p>
+            <Link className="button button-primary" to="/account/verify-player">
+              Link your Clash player
+            </Link>
+          </div>
         ) : (
           <div className="empty-state">
-            <h3>No linked accounts yet</h3>
-            <p>This user has not linked any Clash of Clans accounts yet.</p>
+            <p>This user hasn&apos;t linked a Clash player yet.</p>
           </div>
         )}
       </section>
@@ -267,37 +218,39 @@ export default function UserRoute() {
   );
 }
 
-/** The top-right corner of an owner's card: a Default badge, or the button to make it so. */
-function DefaultAccount({
-  tag,
-  isDefault,
-  idempotencyKey,
-}: {
-  tag: string;
-  isDefault: boolean;
-  idempotencyKey: string;
-}) {
-  const id = `linked-player-${tag.slice(1)}`;
-  if (isDefault) {
-    return (
-      <span className="linked-player-default">
-        <span aria-hidden="true">✓</span> Default
-      </span>
-    );
-  }
+/** The owner's two tools, each one card with what it does and its status. */
+function YourTools({ tools }: { tools: OwnerTools | null }) {
+  const cards = [
+    {
+      to: "/account/discord-alerts",
+      title: "Discord alerts",
+      text: "A Discord message when someone attacks your players.",
+      status: tools?.alerts ?? null,
+    },
+    {
+      to: "/account/obs-overlay",
+      title: "Stream overlay",
+      text: "Your live Legend day on your stream.",
+      status: tools?.overlay ?? null,
+    },
+  ];
   return (
-    <form method="post" className="linked-player-make-default">
-      <input type="hidden" name="intent" value="default-player" />
-      <input type="hidden" name="tag" value={tag} />
-      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-      <button
-        type="submit"
-        className="button button-secondary"
-        aria-describedby={`${id}-name ${id}-tag`}
-      >
-        Make default
-      </button>
-    </form>
+    <section className="data-section" aria-labelledby="your-tools-title">
+      <h2 id="your-tools-title">Your tools</h2>
+      <ul className="profile-tools">
+        {cards.map((card) => (
+          <li key={card.to}>
+            <Link className="profile-tool" to={card.to}>
+              <strong>{card.title}</strong>
+              <span>{card.text}</span>
+              {card.status === null ? null : (
+                <span className="profile-tool-status">{card.status}</span>
+              )}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

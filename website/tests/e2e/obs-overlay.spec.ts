@@ -11,7 +11,7 @@ import {
 // A fake Clash API player in Legend League that no other browser test links.
 const TAG = "#Q00VP";
 
-test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and a new link retires the old one", async ({
+test("a streamer sets up the Stream overlay, OBS shows it live at stream size, and a new link retires the old one", async ({
   browser,
   page,
 }) => {
@@ -34,8 +34,8 @@ test("a streamer sets up the OBS overlay, OBS shows it live at stream size, and 
     await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
   }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
 
-  // The account page leads to it, next to Discord alerts.
-  await page.getByRole("link", { name: "OBS overlay" }).click();
+  // The profile's tools lead to it, next to Discord alerts.
+  await page.getByRole("link", { name: /^Stream overlay/ }).click();
   await expect(page).toHaveURL(/\/account\/obs-overlay$/);
   await expect(page.getByRole("radio", { name: new RegExp(TAG) })).toBeChecked();
   const address = page.getByLabel("Overlay address");

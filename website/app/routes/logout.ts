@@ -6,7 +6,8 @@ import type { Route } from "./+types/logout";
  * POST /logout — end the current browser login. The private API records the
  * login as logged out, so a copy of the cookie stops working too, and the
  * browser cookie is cleared. If the API cannot record it, the cookie is still
- * cleared and home shows a short notice that the logout was not recorded.
+ * cleared and home says the logout was not recorded; otherwise it says
+ * "You're logged out.".
  * Logout is a same-origin cookie-authenticated mutation, so it follows the
  * same origin rule as every other account action.
  * A plain GET to this route just returns home.
@@ -56,7 +57,7 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   return new Response(null, {
     status: 302,
     headers: {
-      Location: recorded ? "/" : "/?logout=unrecorded",
+      Location: recorded ? "/?saved=logout" : "/?logout=unrecorded",
       "Set-Cookie": cookies.buildClearCookieHeader(
         cookies.LOGIN_COOKIE_NAME,
         config.cookieSecure,

@@ -179,7 +179,8 @@ class Store:
 
     def default_tag(self, account: AccountContext) -> str | None:
         """The default player chosen on the website, while still verified,
-        otherwise the first verified player."""
+        otherwise the first verified player Clash Lens tracks; None when there
+        is neither."""
         with self.database.pool.connection() as connection:
             return api_accounts.default_player_tag(connection, account.internal_id)
 

@@ -161,7 +161,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     tags.length,
     (key) => acceptInvite(identity, code, tags, key),
   );
-  if (joined.ok) throw redirect(`/crews/${joined.value}`);
+  if (joined.ok) throw redirect(`/crews/${joined.value}?saved=joined`);
   const { cause, unfinished } = joined;
   await setupRedirect(request, cause);
   const status = (cause as { status?: number }).status ?? 503;

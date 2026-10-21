@@ -24,10 +24,10 @@ import "../obs-overlay.css";
 const PAGE = "/account/obs-overlay";
 const SAVE = "/account/obs-overlay/save";
 
-export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
+export const handle: BackHandle = { back: { to: "/account", label: "Your profile" } };
 
 export function meta() {
-  return [{ title: "OBS overlay · Clash Lens" }];
+  return [{ title: "Stream overlay · Clash Lens" }];
 }
 
 export interface ObsOverlayLoaderData {
@@ -253,7 +253,7 @@ export default function ObsOverlayRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell obs-settings">
       <section className="hero" aria-labelledby="obs-overlay-title">
-        <h1 id="obs-overlay-title">OBS overlay</h1>
+        <h1 id="obs-overlay-title">Stream overlay</h1>
         <p className="lede">
           Show your live Legend day on stream. Pick a player, make it fit your layout,
           then paste one address into OBS.
@@ -261,7 +261,7 @@ export default function ObsOverlayRoute() {
       </section>
       {data.overlay === null ? (
         <aside className="notice notice-unavailable" role="alert">
-          <strong>Your OBS overlay could not be loaded.</strong>{" "}
+          <strong>Your Stream overlay could not be loaded.</strong>{" "}
           <a href={PAGE}>Try again</a>
         </aside>
       ) : data.overlay.players.length === 0 ? (

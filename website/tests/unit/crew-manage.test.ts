@@ -698,7 +698,9 @@ describe("join by invite", () => {
         ) as never,
       ),
     );
-    expect((response as Response).headers.get("Location")).toBe(`/crews/${CREW_ID}`);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/crews/${CREW_ID}?saved=joined`,
+    );
     const [target, method, body, , key] = mocks.requestJson.mock.calls[0]!;
     expect([target, method, key]).toEqual([
       `/v1/account/crew-invites/${CODE}/accept`,

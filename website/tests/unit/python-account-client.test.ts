@@ -411,6 +411,7 @@ describe("server-only Python account client", () => {
         display_name: "Nova",
         verified_players: [{ tag: "#2PP", name: "Nova" }],
         default_player: null,
+        next_default_player: null,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -421,6 +422,7 @@ describe("server-only Python account client", () => {
       displayName: "Nova",
       verifiedPlayers: [{ tag: "#2PP", name: "Nova" }],
       defaultPlayer: null,
+      nextDefaultPlayer: null,
     });
   });
 
@@ -574,6 +576,39 @@ describe("server-only Python account client", () => {
     await expect(
       client.verifyPlayerToken("#2PP", "token", IDEMPOTENCY_KEY),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+  });
+
+  it("unlinks a player, or names the crews its owner hands over first", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ unlinked: "#2PP" }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "owner_must_hand_over",
+            crews: [{ crew_id: GROUP_ID, name: "Night Owls" }],
+          },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ error: "player_not_verified" }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+    const { unlinkPlayer } = await import("../../app/services/unlink-player.server");
+
+    await expect(unlinkPlayer(IDENTITY, "#2PP", IDEMPOTENCY_KEY)).resolves.toEqual([]);
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url).toEqual(
+      new URL("/v1/account/players/%232PP", "http://python-fixture.test/"),
+    );
+    expect(init.method).toBe("DELETE");
+    expect(new Headers(init.headers).get("X-ClashLens-Request-Id")).toBe(IDEMPOTENCY_KEY);
+    await expect(unlinkPlayer(IDENTITY, "#2PP", IDEMPOTENCY_KEY)).resolves.toEqual([
+      { crewId: GROUP_ID, name: "Night Owls" },
+    ]);
+    await expect(unlinkPlayer(IDENTITY, "#2PP", IDEMPOTENCY_KEY)).rejects.toMatchObject({
+      status: 404,
+      payload: { error: "player_not_verified" },
+    });
   });
 
   it("rejects account operations without a Google identity", async () => {

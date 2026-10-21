@@ -13,14 +13,14 @@ import type { Route } from "./+types/account.verify-player";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** Back leads to the crew invite that sent the clasher here, or to the account. */
+/** Back leads to the crew invite that sent the clasher here, or to their profile. */
 export const handle: BackHandle = {
   back: (match) => {
     const returnPath = (match.loaderData as VerifyPlayerLoaderData | undefined)
       ?.returnPath;
     return returnPath
       ? { to: returnPath, label: "Crew invite" }
-      : { to: "/account", label: "Your account" };
+      : { to: "/account", label: "Your profile" };
   },
 };
 

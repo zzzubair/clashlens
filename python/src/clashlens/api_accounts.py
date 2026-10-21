@@ -1137,17 +1137,24 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
         ).fetchone()
         if account is None:
             return None
+        default = default_player_tag(connection, account_id)
         return {
             "username": _text(account[0]),
             "display_name": _text(account[1]),
             "verified_players": _verified_players(connection, account_id),
-            "default_player": default_player_tag(connection, account_id),
+            "default_player": default,
+            # Who /stats uses once the default player is unlinked.
+            "next_default_player": default_player_tag(connection, account_id, unlinked=default),
         }
 
 
-def default_player_tag(connection: Any, account_id: int) -> str | None:
+def default_player_tag(
+    connection: Any, account_id: int, *, unlinked: str | None = None
+) -> str | None:
     """The account's chosen default player while it is still verified to it,
-    otherwise its first verified player; None with no verified player."""
+    otherwise its first verified player Clash Lens tracks; None when there is
+    neither, so nothing points the bot at a player with no data. ``unlinked``
+    gives the default once that player is unlinked."""
     row = connection.execute(
         """
         SELECT player.normalized_tag
@@ -1155,11 +1162,12 @@ def default_player_tag(connection: Any, account_id: int) -> str | None:
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN account_default_players AS chosen
             ON chosen.account_id = link.account_id AND chosen.player_id = link.player_id
-        WHERE link.account_id = %s
+        WHERE link.account_id = %s AND player.normalized_tag IS DISTINCT FROM %s
+          AND (chosen.player_id IS NOT NULL OR player.active)
         ORDER BY chosen.player_id IS NULL, link.verified_at, link.player_id
         LIMIT 1
         """,
-        (account_id,),
+        (account_id, unlinked),
     ).fetchone()
     return None if row is None else _text(row[0])
 
@@ -1199,6 +1207,84 @@ def set_default_player(
                     (binding.account_id, link[0]),
                 )
                 result = OperationResult(200, {"default_player": normalized_tag})
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
+def unlink_player(
+    database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str
+) -> OperationResult:
+    """Unlink one of the account's own verified players: only the link goes.
+    Its crew places go with it, and the migration 0105, 0108 and 0112 triggers
+    forget it as the default player and drop its Discord alerts and summary.
+    The player and its game data stay, and it can be linked again. Refused,
+    naming the crews, while it is the owner's only player in a crew they own:
+    they hand over or delete it first, as when removing it from the crew."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            link = connection.execute(
+                """
+                SELECT link.player_id
+                FROM verified_player_links AS link
+                JOIN players AS player ON player.id = link.player_id
+                WHERE player.normalized_tag = %s AND link.account_id = %s
+                FOR UPDATE OF link
+                """,
+                (normalized_tag, binding.account_id),
+            ).fetchone()
+            if link is None:
+                result = OperationResult(404, {"error": "player_not_verified"})
+            else:
+                # Every crew write holds the crew row first (migration 0095).
+                connection.execute(
+                    """
+                    SELECT 1 FROM crews
+                    WHERE id IN (SELECT crew_id FROM crew_players WHERE player_id = %s)
+                    ORDER BY id
+                    FOR UPDATE
+                    """,
+                    (link[0],),
+                )
+                owned = connection.execute(
+                    """
+                    SELECT crew.public_id, crew.name
+                    FROM crew_players AS place
+                    JOIN crews AS crew ON crew.id = place.crew_id
+                    JOIN crew_accounts AS member
+                      ON member.crew_id = place.crew_id
+                     AND member.account_id = place.account_id
+                    WHERE place.player_id = %s AND member.role = 'owner'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM crew_players AS other
+                          WHERE other.crew_id = place.crew_id
+                            AND other.account_id = place.account_id
+                            AND other.player_id <> place.player_id
+                      )
+                    ORDER BY lower(crew.name), crew.id
+                    """,
+                    (link[0],),
+                ).fetchall()
+                if owned:
+                    crews = [{"crew_id": str(row[0]), "name": _text(row[1])} for row in owned]
+                    result = OperationResult(
+                        409, {"error": "owner_must_hand_over", "crews": crews}
+                    )
+                else:
+                    removed = connection.execute(
+                        """
+                        DELETE FROM verified_player_links
+                        WHERE player_id = %s AND account_id = %s
+                        """,
+                        (link[0], binding.account_id),
+                    )
+                    result = (
+                        OperationResult(200, {"unlinked": normalized_tag})
+                        if removed.rowcount == 1
+                        else OperationResult(404, {"error": "player_not_verified"})
+                    )
             api_db._complete_request(connection, binding.request_id, result)
             return result
 

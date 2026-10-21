@@ -131,19 +131,34 @@ describe("Discord attack alerts settings", () => {
     mocks.requestJson.mockResolvedValue({ kind: "discord-attack-alerts", ...ALERTS });
   });
 
-  it("says in words whether each player's alerts are on, and highlights on", async () => {
+  it("shows one row per player with two switches that say where they are", async () => {
     const html = await renderPage();
     const rows = html.split("<li").slice(1);
-    expect(rows[0]).toContain("attack-alert-on");
-    expect(rows[0]).toContain("✓ On");
-    expect(rows[0]).toContain(
-      "You&#x27;ll get a Discord DM when someone attacks Wanderer.",
+    expect(rows).toHaveLength(2);
+    const switchOf = (row: string, label: string) =>
+      row.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`))?.[0] ?? "";
+    // Wanderer: attack alerts on, summary off; Nightfall the other way round.
+    expect(rows[0]).toContain("Wanderer");
+    expect(switchOf(rows[0], "Attack alerts for Wanderer #2PP")).toContain(
+      'aria-checked="true"',
     );
-    expect(rows[0]).toContain('aria-label="Turn off attack alerts for Wanderer #2PP"');
-    expect(rows[1]).not.toContain("attack-alert-on");
-    expect(rows[1]).toContain(">Off<");
-    expect(rows[1]).toContain("No alerts for Nightfall.");
-    expect(rows[1]).toContain('aria-label="Turn on attack alerts for Nightfall #8QQ"');
+    expect(switchOf(rows[0], "Daily summary for Wanderer #2PP")).toContain(
+      'aria-checked="false"',
+    );
+    expect(switchOf(rows[1], "Attack alerts for Nightfall #8QQ")).toContain(
+      'aria-checked="false"',
+    );
+    expect(switchOf(rows[1], "Daily summary for Nightfall #8QQ")).toContain(
+      'aria-checked="true"',
+    );
+    // Each switch posts the state it flips to.
+    expect(rows[0]).toMatch(
+      /value="attack-alert"[\s\S]*?name="on" value="off"[\s\S]*?value="day-summary"[\s\S]*?name="on" value="on"/,
+    );
+    expect(html.match(/role="switch"/g)).toHaveLength(4);
+    // The state is said once, by the switch: no badges or sentences repeat it.
+    for (const text of ["✓ On", ">Off<", "No alerts for", "Turn on", "Turn off"])
+      expect(html).not.toContain(text);
     expect(html).toContain("🛡️ Wanderer −24 🏆");
     expect(html).not.toContain("wasn&#x27;t delivered");
     expect(html).not.toContain("Reconnect Discord");
@@ -154,7 +169,26 @@ describe("Discord attack alerts settings", () => {
     const html = await renderPage();
     expect(html).toContain("Connect Discord first");
     expect(html).toContain('name="intent" value="connect-discord"');
-    expect(html).not.toContain("Turn on");
+    expect(html).not.toContain('role="switch"');
+  });
+
+  it("says Discord connected after connecting it from this page", async () => {
+    const html = await renderPage("?saved=discord-connected");
+    expect(html).toMatch(/role="status"[^>]*>Discord connected\.</);
+    expect(html.match(/role="switch"/g)).toHaveLength(4);
+  });
+
+  it("names a player with no saved name by its tag, as Settings and the profile do", async () => {
+    mocks.requestJson.mockResolvedValue({
+      kind: "discord-attack-alerts",
+      players: [{ tag: "#L82PYUC9J", name: null, on: false, summary_on: false }],
+      undelivered: null,
+    });
+    const html = await renderPage();
+    expect(html).not.toContain("Unnamed");
+    expect(html).toContain("<span>#L82PYUC9J</span>");
+    expect(html).toContain('aria-label="Attack alerts for #L82PYUC9J"');
+    expect(html).toContain("🛡️ #L82PYUC9J −24 🏆");
   });
 
   it("connects Discord through the existing flow and comes back here", async () => {
@@ -198,7 +232,7 @@ describe("Discord attack alerts settings", () => {
   it("says so when the alert settings can't be read", async () => {
     mocks.requestJson.mockRejectedValue(new Error("down"));
     const html = await renderPage();
-    expect(html).toContain("Attack alerts could not be loaded.");
+    expect(html).toContain("Your alerts could not be loaded.");
   });
 
   it.each([
@@ -222,32 +256,29 @@ describe("Discord attack alerts settings", () => {
     );
   });
 
-  it("shows whether a switch saved on that player's row", async () => {
-    const saved = (await renderPage("?alerts=on&tag=%238QQ")).split("<li").slice(1);
-    expect(saved[0]).not.toContain("Saved.");
-    expect(saved[1]).toContain("Saved. The bot is sending you a confirmation message");
-    const failed = (await renderPage("?alerts=failed&tag=%232PP")).split("<li").slice(1);
-    expect(failed[0]).toContain("Not saved. Try again.");
+  it.each([
+    [
+      "?alerts=on&tag=%238QQ",
+      "Attack alerts on for Nightfall. The bot is sending you a confirmation message on Discord now.",
+    ],
+    ["?alerts=off&tag=%232PP", "Attack alerts off for Wanderer."],
+    ["?summary=on&tag=%238QQ", "Daily summary on for Nightfall."],
+  ])("says what %s saved in one line at the top", async (search, line) => {
+    const html = await renderPage(search);
+    expect(html).toContain(
+      `<main id="main-content" tabindex="-1" class="page-shell narrow-shell"><p class="status-banner status-banner-success saved-line" role="status">${line}`,
+    );
+    expect(html.match(/saved-line/g)).toHaveLength(1);
   });
 
-  it("shows each player's Legend day summary switch apart from its attack alerts", async () => {
-    const html = await renderPage();
-    const summary = html.split('id="summary-title"')[1];
-    expect(summary).toContain("After each Reset&#x27;s Daily board is published");
-    const rows = summary.split("<li").slice(1);
-    expect(rows[0]).not.toContain("attack-alert-on");
-    expect(rows[0]).toContain("Wanderer is left out of your summary.");
-    expect(rows[0]).toContain(
-      'aria-label="Turn on the Legend day summary for Wanderer #2PP"',
+  it("says a failed switch wasn't saved", async () => {
+    const html = await renderPage("?alerts=failed&tag=%232PP");
+    expect(html).toContain(
+      'class="status-banner status-banner-warning saved-line" role="alert">Not saved. Try again.',
     );
-    expect(rows[1]).toContain("✓ On");
-    expect(rows[1]).toContain(
-      "Nightfall&#x27;s Legend day is in your summary after each Reset.",
-    );
-    expect(rows[1]).toContain('name="intent" value="day-summary"');
   });
 
-  it("saves a Legend day summary switch and says so on its own row", async () => {
+  it("saves a daily summary switch", async () => {
     const response = await alertsAction({
       request: post({ intent: "day-summary", tag: "#8QQ", on: "off" }),
     } as never);
@@ -262,12 +293,6 @@ describe("Discord attack alerts settings", () => {
     expect(response.headers.get("Location")).toBe(
       "/account/discord-alerts?summary=off&tag=%238QQ",
     );
-    const [alerts, summary] = (await renderPage("?summary=on&tag=%238QQ")).split(
-      'id="summary-title"',
-    );
-    expect(alerts).not.toContain("Saved.");
-    expect(summary.split("<li")[2]).toContain("Saved.");
-    expect(summary).not.toContain("confirmation message");
   });
 
   it("refuses a switch that is neither on nor off", async () => {

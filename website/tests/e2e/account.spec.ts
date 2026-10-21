@@ -120,8 +120,8 @@ test("a Clasher can sign in and use account features against the real backend", 
   await page.getByLabel("API token", { exact: true }).fill("VERIFY-2PP");
   await page.getByRole("button", { name: "Link player" }).click();
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+\?linked=%232PP$/);
-  await expect(page.getByText("Linked #2PP", { exact: true })).toBeVisible();
-  const linkedAccounts = page.getByRole("region", { name: "Linked accounts" });
+  await expect(page.getByRole("status")).toHaveText(/ linked\.$/);
+  const linkedAccounts = page.getByRole("region", { name: "Clash players" });
   await expect(linkedAccounts.getByText("#2PP", { exact: true })).toBeVisible();
 
   await page.goto("/users/lensscout");
@@ -132,7 +132,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   expectNoPageErrors(errors);
 });
 
-test("the account name opens Account and Log out beside Join Discord", async ({
+test("the account name opens your profile, tools, Settings and Log out beside Join Discord", async ({
   page,
   browser,
   baseURL,
@@ -146,7 +146,7 @@ test("the account name opens Account and Log out beside Join Discord", async ({
   await expect(discord).toHaveAttribute("target", "_blank");
   const menu = header.locator("details.account-menu");
   const toggle = menu.locator("summary");
-  const account = header.getByRole("link", { name: "Account", exact: true });
+  const account = header.getByRole("link", { name: "Your profile", exact: true });
   const logOut = header.getByRole("button", { name: "Log out" });
   await expect(menu).not.toHaveAttribute("open");
   await expect(logOut).toBeHidden();
@@ -191,15 +191,24 @@ test("the account name opens Account and Log out beside Join Discord", async ({
     });
     await noScriptHeader.locator("details.account-menu > summary").click();
     await expect(noScriptHeader.getByRole("button", { name: "Log out" })).toBeVisible();
-    await noScriptHeader.getByRole("link", { name: "Account", exact: true }).click();
+    await noScriptHeader.getByRole("link", { name: "Your profile", exact: true }).click();
     await expect(noScriptPage).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   } finally {
     await noScript.close();
   }
 
   await toggle.click();
+  for (const [name, path] of [
+    ["Discord alerts", "/account/discord-alerts"],
+    ["Stream overlay", "/account/obs-overlay"],
+    ["Settings", "/account/settings"],
+  ])
+    await expect(header.getByRole("link", { name, exact: true })).toHaveAttribute(
+      "href",
+      path,
+    );
   await logOut.click();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/?saved=logout");
   await expect(
     header.getByRole("link", { name: "Account", exact: true }),
   ).toHaveAttribute("href", "/login");
