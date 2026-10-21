@@ -280,7 +280,17 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   // Tapping a tab again while its page loads would start the load over.
   function ignoreRepeatTap(event: MouseEvent<HTMLAnchorElement>) {
     const next = navigation.location;
-    if (next && next.pathname + next.search === event.currentTarget.getAttribute("href"))
+    const plain =
+      event.button === 0 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey;
+    if (
+      plain &&
+      next &&
+      next.pathname + next.search === event.currentTarget.getAttribute("href")
+    )
       event.preventDefault();
   }
   return (

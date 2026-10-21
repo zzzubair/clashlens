@@ -113,10 +113,50 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
   expect(await filled(more)).toBe(false);
   await analytics.click();
   await expect(page).toHaveURL(/\/blog$/);
+  // Ctrl/Cmd and middle clicks still open the tab's page in a new tab.
+  for (const click of [
+    () => analytics.click({ modifiers: ["ControlOrMeta"] }),
+    () => analytics.click({ button: "middle" }),
+  ]) {
+    const opened = page.context().waitForEvent("page");
+    await click();
+    const tab = await opened;
+    await expect(tab).toHaveURL(/\/analytics\/armies$/);
+    await tab.close();
+  }
+  await expect(page).toHaveURL(/\/blog$/);
   release();
 
   await expect(page).toHaveURL(/\/analytics\/armies$/);
   await expect(analytics).toHaveAttribute("aria-current", "page");
   expect(await loading(analytics)).toBe(false);
   expect(loads).toBe(1);
+});
+
+test("tapping the open tab again shows it loading, also with reduced motion", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/leaderboards/tracked?view=daily");
+  const rankings = tabs(page).getByRole("link", { name: "Rankings" });
+  await expect(rankings).toHaveAttribute("aria-current", "page");
+  const loading = () =>
+    rankings.evaluate((el) => getComputedStyle(el, "::after").content !== "none");
+  expect(await loading()).toBe(false);
+
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => url.pathname === "/leaderboards/tracked.data",
+    async (route) => {
+      await held;
+      await route.continue();
+    },
+  );
+  await rankings.click();
+  await expect.poll(loading).toBe(true);
+  release();
+  await expect(page).toHaveURL(/view=live/);
+  await expect.poll(loading).toBe(false);
 });

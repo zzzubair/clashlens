@@ -342,8 +342,8 @@
   }
 
   /* The loading line under the label, until the page shows. */
-  .bottom-tab.pending:not([aria-current])::after,
-  .site-menu:has(.pending:not([aria-current])) > .bottom-tab::after {
+  .bottom-tab.pending::after,
+  .site-menu:has(.pending) > .bottom-tab::after {
     position: absolute;
     bottom: 0.2rem;
     left: 35%;
@@ -356,8 +356,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .bottom-tab.pending:not([aria-current])::after,
-    .site-menu:has(.pending:not([aria-current])) > .bottom-tab::after {
+    .bottom-tab.pending::after,
+    .site-menu:has(.pending) > .bottom-tab::after {
       animation-name: bottom-tab-loading-still;
     }
   }
