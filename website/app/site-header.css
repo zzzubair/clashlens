@@ -205,8 +205,16 @@
   text-decoration: none;
 }
 
-.site-menu-tabs a:is(:hover, :focus-visible) {
+.site-menu-tabs a:focus-visible {
   background: var(--cl-header-soft);
+}
+
+/* Touch screens keep a tapped link's hover look until the next tap, so the
+   bar and its sheet hover only for a mouse and show a press instead. */
+@media (hover: hover) {
+  .site-menu-tabs a:hover {
+    background: var(--cl-header-soft);
+  }
 }
 
 .site-menu-tabs a[aria-current="page"] {
@@ -268,6 +276,7 @@
   }
 
   .bottom-tab {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
@@ -283,21 +292,94 @@
     line-height: 1.1;
     text-decoration: none;
     text-align: center;
+    transition:
+      transform 140ms var(--cl-ease-out),
+      background-color 140ms ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
 
-  .bottom-tab:is(:hover, :focus-visible) {
+  .bottom-tab:focus-visible {
     color: var(--cl-header-ink);
     background: var(--cl-header-soft);
   }
 
+  @media (hover: hover) {
+    .bottom-tab:hover {
+      color: var(--cl-header-ink);
+      background: var(--cl-header-soft);
+    }
+  }
+
+  .bottom-tab:active {
+    color: var(--cl-header-ink);
+    background: var(--cl-header-soft);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .bottom-tab:active {
+      transform: scale(0.94);
+    }
+  }
+
+  /* A tapped tab is chosen at once, while its page loads (NavLink's
+     `pending`); the tab being left looks like the others until then. */
   .bottom-tab[aria-current="page"],
-  .site-menu[open] > .bottom-tab {
+  .bottom-tab.pending,
+  .site-menu[open] > .bottom-tab,
+  .site-menu:has(.pending) > .bottom-tab {
     color: var(--cl-brand-night);
     background: var(--cl-brand-fill);
   }
 
+  .bottom-tabs:has(.pending:not([aria-current]))
+    > .bottom-tab[aria-current]:not(.pending),
+  .bottom-tabs:has(> .pending:not([aria-current]))
+    .site-menu:not([open])
+    > .bottom-tab[aria-current] {
+    color: var(--cl-header-muted);
+    background: transparent;
+  }
+
+  /* The loading line under the label, until the page shows. */
+  .bottom-tab.pending::after,
+  .site-menu:has(.pending) > .bottom-tab::after {
+    position: absolute;
+    bottom: 0.2rem;
+    left: 35%;
+    width: 30%;
+    height: 3px;
+    background: currentColor;
+    border-radius: 999px;
+    content: "";
+    animation: bottom-tab-loading 900ms ease-in-out infinite alternate;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bottom-tab.pending::after,
+    .site-menu:has(.pending) > .bottom-tab::after {
+      animation-name: bottom-tab-loading-still;
+    }
+  }
+
   .site-menu {
     display: block;
+  }
+}
+
+@keyframes bottom-tab-loading {
+  from {
+    transform: translateX(-70%);
+  }
+
+  to {
+    transform: translateX(70%);
+  }
+}
+
+@keyframes bottom-tab-loading-still {
+  from {
+    opacity: 0.35;
   }
 }
 
