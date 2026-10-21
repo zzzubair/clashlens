@@ -1,8 +1,9 @@
-"""Army types: one level-1 name for each distinct army, from its home troops.
+"""Army types: one level-1 name for each distinct army, from its home troops,
+and one variant inside it, from its heroes' equipment.
 
 A distinct army is an ``exact_armies`` row: the same home troops, spells and
 heroes with their pets and equipment share one row however many attacks used
-it. Each gets one type in ``army_package_types``; the worker saves each
+it. Each gets one type and variant in ``army_package_types``; the worker saves each
 completed Legend day's counts per player and distinct army in
 ``army_package_day_counts``; the Armies page and the dashboard's Armies on
 offense card add those counts up by type. Defenses are counted the same way,
@@ -11,12 +12,14 @@ defense's army is the attacker's, read from the defender's own battle report,
 and the dashboard's Armies on defense card adds those up by type.
 
 So a rule change relabels the distinct armies only (``RULES_VERSION``), and
-a rename changes ``TYPE_NAMES`` only: the type ids saved with each army never
-change meaning. docs/domain.md says how to add a type.
+a rename changes ``TYPE_NAMES`` or ``VARIANTS`` names only: the type and
+variant ids saved with each army never change meaning. docs/domain.md says how
+to add a type or a variant.
 
 The type comes from home troops weighted by camp space (count x housing
 space). Heroes, pets, equipment, spells, siege machines and Clan Castle troops
-never decide it; they stay saved with the army for a later second level.
+never decide it. The variant comes from hero equipment only, by the hand-kept
+list in ``VARIANTS``.
 """
 
 from __future__ import annotations
@@ -36,8 +39,9 @@ from .catalog import CATALOG_VERSION
 from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
-# Bump on any change to the rules or camp spaces below, never for a rename.
-RULES_VERSION = "army-types-v4"
+# Bump on any change to the rules, camp spaces or variant list below, never
+# for a rename. v5 is v4's types plus the first variant list.
+RULES_VERSION = "army-types-v5"
 
 # Permanent type ids: rename freely, never reuse or renumber one.
 OTHER, UNREADABLE = 1, 2
@@ -178,14 +182,120 @@ def classify(home_troops: Iterable[Any]) -> int:
     return pair
 
 
-def label_new_army(connection: Any, exact_army_id: int, home_troops: Iterable[Any]) -> None:
-    """Save a newly seen distinct army's type, as its attack arrives."""
+# Variants: per type, (permanent variant id, name, equipment the army's heroes
+# must all carry), checked in order. The first match names the army; an army
+# matching none is its type's Other, variant 0. Names are the equipment word
+# plus the type, as Clashers say them. Rename freely; never reuse or renumber
+# an id. A new variant gets the next unused id and a RULES_VERSION bump.
+OTHER_VARIANT = 0
+QUEEN, WARDEN, PRINCE, DUKE = "hero:1", "hero:2", "hero:6", "hero:7"
+MONOLITH, GIANT_ARROW, MAGIC_MIRROR = (
+    (QUEEN, "equipment:16"), (QUEEN, "equipment:17"), (QUEEN, "equipment:39"))
+FIREBALL, ETERNAL_TOME, LAVALOON_PUPPET = (
+    (WARDEN, "equipment:22"), (WARDEN, "equipment:4"), (WARDEN, "equipment:41"))
+PORTAL_PENDANT = (PRINCE, "equipment:61")
+REVENGE, BACKPACK, FIRE_HEART = (
+    (DUKE, "equipment:60"), (DUKE, "equipment:53"), (DUKE, "equipment:52"))
+STUN_BLASTER, FLAME_BLOWER, ELECTRO_FANGS = (
+    (DUKE, "equipment:56"), (DUKE, "equipment:57"), (DUKE, "equipment:59"))
+VARIANTS: dict[int, tuple[tuple[int, str, tuple[tuple[str, str], ...]], ...]] = {
+    THROWER: (
+        (1, "Fireball Thrower", (FIREBALL,)),
+        (2, "Revenge Backpack Thrower", (REVENGE, BACKPACK)),
+        (3, "Revenge Thrower", (REVENGE,)),
+        (4, "Backpack Thrower", (BACKPACK,)),
+    ),
+    HYDRA: (
+        (5, "Revenge Backpack Hydra", (REVENGE, BACKPACK)),
+        (6, "Revenge Hydra", (REVENGE,)),
+        (7, "Backpack Hydra", (BACKPACK,)),
+    ),
+    # The Queen's Monolith Arrow first, then the Duke, as other trackers split it.
+    SUPER_BOWLER: (
+        (8, "Monolith Super Bowler", (MONOLITH,)),
+        (9, "Electro Fangs Super Bowler", (ELECTRO_FANGS,)),
+        (10, "Revenge Super Bowler", (REVENGE,)),
+    ),
+    FIREBALL_SUPER_MINION: (
+        (11, "Revenge Super Minion", (REVENGE,)),
+        (12, "Fire Heart Super Minion", (FIRE_HEART,)),
+    ),
+    SUPER_YETI: (
+        (13, "Magic Mirror Super Yeti", (MAGIC_MIRROR,)),
+        (14, "Giant Arrow Super Yeti", (GIANT_ARROW,)),
+    ),
+    DRAGON_RIDER: (
+        (15, "Revenge Dragon Rider", (REVENGE,)),
+        (16, "Backpack Dragon Rider", (BACKPACK,)),
+        (17, "Electro Fangs Dragon Rider", (ELECTRO_FANGS,)),
+    ),
+    RUIN_WITCH: (
+        (18, "Revenge Fireball Ruin Witch", (REVENGE,)),
+        (19, "Backpack Fireball Ruin Witch", (BACKPACK,)),
+    ),
+    # The Minion Prince's Portal Pendant first: nearly all of them also carry
+    # the Warden's Fireball.
+    LAVALOON: (
+        (20, "Portal Pendant LaLo", (PORTAL_PENDANT,)),
+        (21, "Fireball LaLo", (FIREBALL,)),
+        (22, "Lavaloon Puppet LaLo", (LAVALOON_PUPPET,)),
+        (23, "Eternal Tome LaLo", (ETERNAL_TOME,)),
+    ),
+    THROWER_RUIN_WITCH: (
+        (24, "Fireball Thrower + Ruin Witch", (FIREBALL,)),
+        (25, "Revenge Thrower + Ruin Witch", (REVENGE,)),
+    ),
+    SUPER_ARCHER_RUIN_WITCH: (
+        (26, "Revenge Backpack Super Archer + Ruin Witch", (REVENGE, BACKPACK)),
+        (27, "Revenge Super Archer + Ruin Witch", (REVENGE,)),
+        (28, "Backpack Super Archer + Ruin Witch", (BACKPACK,)),
+    ),
+    ROCKET_BALLOON: (
+        (29, "Flame Blower Rocket Balloon", (FLAME_BLOWER,)),
+        (30, "Stun Blaster Rocket Balloon", (STUN_BLASTER,)),
+        (31, "Revenge Backpack Rocket Balloon", (REVENGE, BACKPACK)),
+        (32, "Revenge Rocket Balloon", (REVENGE,)),
+        (33, "Backpack Rocket Balloon", (BACKPACK,)),
+    ),
+    SUPER_WITCH: (
+        (34, "Revenge Backpack Super Witch", (REVENGE, BACKPACK)),
+        (35, "Revenge Super Witch", (REVENGE,)),
+        (36, "Backpack Super Witch", (BACKPACK,)),
+    ),
+    ROOT_RIDER: (
+        (37, "Flame Blower Root Rider", (FLAME_BLOWER,)),
+        (38, "Stun Blaster Root Rider", (STUN_BLASTER,)),
+        (39, "Revenge Backpack Root Rider", (REVENGE, BACKPACK)),
+        (40, "Revenge Root Rider", (REVENGE,)),
+        (41, "Backpack Root Rider", (BACKPACK,)),
+    ),
+}
+
+
+def variant(type_id: int, heroes: Iterable[Any]) -> int:
+    """The variant id for an army of ``type_id`` with these saved heroes."""
+    carried = {
+        (str(hero.get("hero")), str(item))
+        for hero in heroes if isinstance(hero, dict)
+        for item in hero.get("equipment") or ()
+    }
+    for variant_id, _name, items in VARIANTS.get(type_id, ()):
+        if all(item in carried for item in items):
+            return variant_id
+    return OTHER_VARIANT
+
+
+def label_new_army(
+    connection: Any, exact_army_id: int, home_troops: Iterable[Any], heroes: Iterable[Any]
+) -> None:
+    """Save a newly seen distinct army's type and variant, as its attack arrives."""
+    type_id = classify(home_troops)
     connection.execute(
         """
-        INSERT INTO army_package_types (exact_army_id, type_id, rules_version)
-        VALUES (%s, %s, %s) ON CONFLICT (exact_army_id) DO NOTHING
+        INSERT INTO army_package_types (exact_army_id, type_id, variant_id, rules_version)
+        VALUES (%s, %s, %s, %s) ON CONFLICT (exact_army_id) DO NOTHING
         """,
-        (exact_army_id, classify(home_troops), RULES_VERSION),
+        (exact_army_id, type_id, variant(type_id, heroes), RULES_VERSION),
     )
 
 
@@ -258,22 +368,27 @@ def _label(connection: Any) -> dict[str, Any] | None:
     )
     armies = connection.execute(
         """
-        SELECT army.id, army.home_troops FROM exact_armies AS army
+        SELECT army.id, army.home_troops, army.heroes FROM exact_armies AS army
         LEFT JOIN army_package_types AS label ON label.exact_army_id = army.id
         WHERE label.exact_army_id IS NULL OR label.rules_version <> %s
         ORDER BY army.id LIMIT %s
         """,
         (RULES_VERSION, LABEL_BATCH),
     ).fetchall()
+    labels = []
+    for army_id, troops, heroes in armies:
+        type_id = classify(troops or [])
+        labels.append((int(army_id), type_id, variant(type_id, heroes or []), RULES_VERSION))
     with connection.cursor() as cursor:
         cursor.executemany(
             """
-            INSERT INTO army_package_types (exact_army_id, type_id, rules_version)
-            VALUES (%s, %s, %s)
+            INSERT INTO army_package_types (exact_army_id, type_id, variant_id, rules_version)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (exact_army_id) DO UPDATE
-            SET type_id = EXCLUDED.type_id, rules_version = EXCLUDED.rules_version
+            SET type_id = EXCLUDED.type_id, variant_id = EXCLUDED.variant_id,
+                rules_version = EXCLUDED.rules_version
             """,
-            [(int(army_id), classify(troops or []), RULES_VERSION) for army_id, troops in armies],
+            labels,
         )
     if len(armies) < LABEL_BATCH:
         connection.execute(
@@ -401,16 +516,17 @@ def read_type_rows(
     trophy_range: tuple[int, int] | None,
     boards: tuple[dict[Any, int], int, int] | None = None,
 ) -> list[tuple[int, ...]]:
-    """Attack totals per type for the selected players and Legend days.
+    """Attack totals per type and variant for the selected players and Legend days.
 
     ``days`` maps each day number to its ``ranked_day_start``. Counted days
     are added up from their saved counts; days not counted yet, and trophy
     ranges, which saved counts cannot split, are added up from the day's
-    attacks. An older partly read army is typed from its saved home troops.
-    ``boards`` (each day's board by ``ranked_day_start``, lowest and highest
-    rank) selects each day's players from that day's board instead of
-    ``member_ids``. Rows are (type id, attacks, one-star, two-star,
-    three-star, destruction, trophies won), by type id.
+    attacks. An older partly read army gets its type and variant from its
+    saved home troops and heroes. ``boards`` (each day's board by
+    ``ranked_day_start``, lowest and highest rank) selects each day's players
+    from that day's board instead of ``member_ids``. Rows are (type id,
+    variant id, attacks, one-star, two-star, three-star, destruction, trophies
+    won), by type and variant id.
     """
     counted = {
         row[0]
@@ -465,12 +581,12 @@ def read_type_rows(
             """
         )
         params += [season_id, fact_days, *filters, *_trophies("offense")]
-    totals: dict[int, list[int]] = {}
-    for type_id, troops, unnamed, *counts in connection.execute(
+    rows = connection.execute(
         f"""
         SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
                     ELSE label.type_id END,
-               decode.home_troops, decode.unresolved_components,
+               COALESCE(label.variant_id, {OTHER_VARIANT}),
+               CASE WHEN source.exact_army_id < 0 THEN -source.exact_army_id END,
                sum(attacks), sum(one_star), sum(two_star), sum(three_star),
                sum(destruction), sum(trophies)
         FROM ({" UNION ALL ".join(parts)}) AS source (
@@ -478,19 +594,35 @@ def read_type_rows(
             three_star, destruction, trophies)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
-        LEFT JOIN battle_army_decodes AS decode ON decode.id = -source.exact_army_id
         GROUP BY 1, 2, 3
         """,
         params,
-    ).fetchall():
-        if troops is not None:
-            type_id = classify(army_analytics.with_unnamed_ids(
-                {"home_troops": troops, "unresolved_components": unnamed}
-            )["home_troops"])
-        total = totals.setdefault(type_id or OTHER, [0] * 6)
+    ).fetchall()
+    # An older partly read army has no distinct army: its saved decode is
+    # read once, after the totals, so the totals never join the decodes.
+    partial_ids = [row[2] for row in rows if row[2] is not None]
+    partial = {
+        decode_id: army_analytics.with_unnamed_ids({
+            "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
+        })
+        for decode_id, troops, unnamed, heroes in connection.execute(
+            """
+            SELECT id, home_troops, unresolved_components, heroes
+            FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
+            """,
+            (partial_ids,),
+        ).fetchall()
+    } if partial_ids else {}
+    totals: dict[tuple[int, int], list[int]] = {}
+    for type_id, variant_id, decode_id, *counts in rows:
+        if decode_id in partial:
+            army = partial[decode_id]
+            type_id = classify(army["home_troops"])
+            variant_id = variant(type_id, army["heroes"] or [])
+        total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
         for index, value in enumerate(counts):
             total[index] += int(value)
-    return [(type_id, *total) for type_id, total in sorted(totals.items())]
+    return [(*key, *total) for key, total in sorted(totals.items())]
 
 
 def read_type_outcomes(
@@ -594,8 +726,8 @@ def type_result(
         connection, season_id=selection.season, days=days,
         member_ids=member_ids, trophy_range=trophy_range, boards=boards,
     )
-    total = sum(row[1] for row in rows)
-    unreadable = sum(row[1] for row in rows if row[0] == UNREADABLE)
+    total = sum(row[2] for row in rows)
+    unreadable = sum(row[2] for row in rows if row[0] == UNREADABLE)
     sort_field = {
         "usage-rate": "usage_rate", "usage-count": "usage_count",
         "three-star-rate": "three_star_rate", "average-stars": "average_stars",
@@ -603,7 +735,8 @@ def type_result(
         "average-trophies": "average_trophies",
     }[selection.sort]
     result_rows = sorted(
-        type_result_rows(rows, total), key=lambda row: (-row[sort_field], row["type_id"])
+        type_result_rows(rows, total),
+        key=lambda row: (-row[sort_field], row["type_id"]),
     )
     result = {
         "kind": "army-analytics", "total_attacks": total,
@@ -655,24 +788,62 @@ def rules_ready(connection: Any) -> bool:
     ).fetchone() is not None
 
 
-def type_result_rows(rows: list[tuple[int, ...]], total_attacks: int) -> list[dict[str, Any]]:
-    """Armies page rows, one per type, in the shape the unit rows use."""
+def type_result_rows(
+    rows: list[tuple[int, ...]], total_attacks: int
+) -> list[dict[str, Any]]:
+    """Armies page rows, one per type, in the shape the unit rows use. A type
+    with variants lists those its attacks used under ``variants``, most used
+    first and its Other last, each with its share of the type."""
+    types: dict[int, list[int]] = {}
+    for type_id, _variant_id, *counts in rows:
+        total = types.setdefault(type_id, [0] * 6)
+        for index, value in enumerate(counts):
+            total[index] += value
     result = []
-    for type_id, attacks, one, two, three, destruction, trophies in rows:
-        star_counts = [attacks - one - two - three, one, two, three]
-        star_rates = [count / attacks if attacks else 0 for count in star_counts]
-        result.append({
-            "key": f"army-type:{type_id}", "label": TYPE_NAMES.get(type_id, f"Type {type_id}"),
-            "type_id": type_id, "usage_count": attacks, "usage_denominator": total_attacks,
-            "usage_rate": attacks / total_attacks if total_attacks else 0,
-            "star_counts": star_counts, "star_rates": star_rates,
-            "three_star_rate": star_rates[3],
-            "average_stars": (one + 2 * two + 3 * three) / attacks if attacks else 0,
-            "average_destruction": destruction / attacks if attacks else 0,
-            "average_trophies": trophies / attacks if attacks else 0,
-            # What a miss wins on average, None without a miss.
-            "average_miss_trophies": (trophies - THREE_STAR_TROPHIES * three)
-            / (attacks - three) if attacks > three else None,
-            "unknown_excluded_attacks": 0,
-        })
+    for type_id, counts in sorted(types.items()):
+        row = _result_row(
+            f"army-type:{type_id}", TYPE_NAMES.get(type_id, f"Type {type_id}"),
+            counts, total_attacks,
+        )
+        result.append({**row, "type_id": type_id})
+        if type_id not in VARIANTS:
+            continue
+        names = {variant_id: name for variant_id, name, _items in VARIANTS[type_id]}
+        variants = []
+        for row_type, variant_id, *variant_counts in rows:
+            if row_type != type_id:
+                continue
+            variants.append({
+                **_result_row(
+                    f"army-variant:{type_id}:{variant_id}",
+                    names.get(variant_id, f"Other {TYPE_NAMES[type_id]}"),
+                    variant_counts, counts[0],
+                ),
+                "variant_id": variant_id,
+            })
+        variants.sort(key=lambda row: (row["variant_id"] == OTHER_VARIANT,
+                                       -row["usage_count"], row["variant_id"]))
+        result[-1]["variants"] = variants
     return result
+
+
+def _result_row(
+    key: str, label: str, counts: list[int], denominator: int
+) -> dict[str, Any]:
+    attacks, one, two, three, destruction, trophies = counts
+    star_counts = [attacks - one - two - three, one, two, three]
+    star_rates = [count / attacks if attacks else 0 for count in star_counts]
+    return {
+        "key": key, "label": label,
+        "usage_count": attacks, "usage_denominator": denominator,
+        "usage_rate": attacks / denominator if denominator else 0,
+        "star_counts": star_counts, "star_rates": star_rates,
+        "three_star_rate": star_rates[3],
+        "average_stars": (one + 2 * two + 3 * three) / attacks if attacks else 0,
+        "average_destruction": destruction / attacks if attacks else 0,
+        "average_trophies": trophies / attacks if attacks else 0,
+        # What a miss wins on average, None without a miss.
+        "average_miss_trophies": (trophies - THREE_STAR_TROPHIES * three)
+        / (attacks - three) if attacks > three else None,
+        "unknown_excluded_attacks": 0,
+    }

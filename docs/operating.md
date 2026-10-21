@@ -500,7 +500,7 @@ these steps, all run by the worker:
    The worker log shows each count as an `army_rank_band_totals` event naming
    the day and leaderboard.
 5. The same timer gives each saved distinct army its
-   [army type](domain.md#army-types), 50,000 a run after a rules change, then
+   [army type](domain.md#army-types) and variant, 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in
    `army_package_day_counts`, with the trophies they won for the Armies
    view's Avg. trophies, outside 04:30-07:00 UTC. Migration 0114 forgets
