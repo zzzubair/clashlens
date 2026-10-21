@@ -73,7 +73,7 @@ it("signed out offers Sign in back to this page and Join Discord in a new tab", 
   expect(header).toContain(
     `href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">`,
   );
-  expect(header).toContain("Join </span>Discord");
+  expect(header).toContain(">Join Discord<");
   expect(header).toContain("opens in a new tab");
   expect(header).not.toContain("account-menu");
   expect(header).not.toContain("Log out");

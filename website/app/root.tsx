@@ -314,9 +314,7 @@ function DiscordLink() {
       target="_blank"
       rel="noopener noreferrer"
     >
-      <span>
-        <span className="nav-discord-join">Join </span>Discord
-      </span>
+      Join Discord
       <span className="sr-only">, opens in a new tab</span>
     </a>
   );

@@ -3,7 +3,8 @@ import { useLocation } from "react-router";
 
 /**
  * More, the last tab of the bottom bar on narrow screens: a sheet with the
- * rest of the tabs, the theme switch and Join Discord. Opening a page,
+ * rest of the tabs (Watchlists and Blog) and Join Discord; the theme switch
+ * stays in the top bar. Opening a page,
  * tapping outside it, Escape and tabbing away close it. It is a native
  * disclosure, so it also opens before or without page scripts. `current`
  * marks it while one of its pages is open.

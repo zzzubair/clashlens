@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const tabs = (page: Page) => page.locator("nav.bottom-tabs");
 
@@ -32,8 +32,17 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   await more.locator("summary").click();
   await expect(more).toHaveAttribute("open", "");
   const sheet = more.locator(".site-menu-panel");
-  await expect(sheet.getByRole("link", { name: "Watchlists" })).toBeVisible();
-  await expect(sheet.getByRole("link", { name: /^Join Discord/ })).toBeVisible();
+  const watchlists = sheet.getByRole("link", { name: "Watchlists" });
+  await expect(watchlists).toBeVisible();
+  // Join Discord is a full row in the sheet's own colours, like Watchlists.
+  const discord = sheet.getByRole("link", { name: /^Join Discord/ });
+  await expect(discord).toBeVisible();
+  await expect(discord).toContainText("Join Discord");
+  const row = (await discord.boundingBox())!;
+  expect(row.height).toBeGreaterThanOrEqual(44);
+  expect(row.width).toBe((await watchlists.boundingBox())!.width);
+  const colour = (link: Locator) => link.evaluate((el) => getComputedStyle(el).color);
+  expect(await colour(discord)).toBe(await colour(watchlists));
   await page.mouse.click(195, 200);
   await expect(more).not.toHaveAttribute("open");
   await more.locator("summary").click();

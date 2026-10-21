@@ -171,7 +171,7 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
 
   await page.setViewportSize({ width: 390, height: 844 });
   await toggle.click();
-  // On a phone Join Discord sits in the Menu with the tabs.
+  // On a phone Join Discord sits in the bottom bar's More sheet.
   for (const control of [toggle, account, logOut]) {
     const box = await control.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);

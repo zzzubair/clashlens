@@ -103,7 +103,7 @@
   white-space: normal;
 }
 
-.site-nav .nav-link:not(.nav-link-primary) {
+:is(.site-nav, .site-menu-extras) .nav-link:not(.nav-link-primary) {
   color: var(--cl-header-ink);
   border-color: var(--cl-header-soft);
 }
@@ -115,7 +115,8 @@
   border-color: var(--cl-action-border);
 }
 
-.site-nav .nav-link:not(.nav-link-primary):is(:hover, :focus-visible) {
+:is(.site-nav, .site-menu-extras)
+  .nav-link:not(.nav-link-primary):is(:hover, :focus-visible) {
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);
   border-color: transparent;
@@ -156,7 +157,12 @@
 }
 
 /* More rises from the bottom bar as a sheet, in the bar's own dark colours,
-   over a dimmed page that closes it when tapped. */
+   over a dimmed page that closes it when tapped. Open, it covers everything
+   else, the analytics question included. */
+.site-header:has(.site-menu[open]) {
+  z-index: 60;
+}
+
 .site-menu[open]::before {
   position: fixed;
   inset: 0 0 var(--cl-bottom-tabs);
@@ -210,12 +216,14 @@
 }
 
 .site-menu-extras {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  align-items: center;
+  display: grid;
   padding-top: 0.6rem;
   border-top: 1px solid var(--cl-header-soft);
+}
+
+.site-menu-extras .nav-link {
+  min-height: 3.25rem;
+  font-size: 0.875rem;
 }
 
 /* Phones, tablets and any touch screen get the bottom bar; a mouse keeps

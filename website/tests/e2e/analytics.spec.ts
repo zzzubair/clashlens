@@ -220,6 +220,16 @@ test("accepting again after Decline counts the page it is made on afresh", async
   await expect.poll(lookups).toBe(2);
 });
 
+test("on a phone the open More sheet covers the question", async ({ page }) => {
+  await fakePostHog(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${analyticsFixtureOrigin}/privacy`);
+  await expect(banner(page)).toBeVisible();
+  await page.locator("details.site-menu > summary").click();
+  await page.locator(".site-menu-panel").getByRole("link", { name: "Blog" }).click();
+  await expect(page.getByRole("heading", { name: "Blog", level: 1 })).toBeVisible();
+});
+
 test("Decline loads nothing, is remembered, and can be changed on the privacy page", async ({
   page,
   context,
