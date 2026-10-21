@@ -57,6 +57,10 @@ export interface NotebookBase {
   /** The later of when it last ran and when it was added or its status set. */
   recent: string;
   record: BaseRecord;
+  /** Saved from Bases you attacked: the Legend day of the attack, and how
+   * the base held for its player that day, null until the day is counted
+   * (`counted`) or when their defenses aren't tracked. */
+  them: { day: number; counted: boolean; record: BaseRecord | null } | null;
 }
 
 export interface Notebook {
@@ -84,6 +88,9 @@ export interface NotebookChange {
   status?: BaseStatus;
   tag?: string;
   day?: number;
+  /** A base saved from Bases you attacked: the Clasher's player, whose base
+   * it was, and the Legend day. */
+  attacked?: { tag: string; opponent: string; day: number };
   undo?: unknown;
 }
 
@@ -104,6 +111,8 @@ const isCount = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) >= 0;
 const isCode = (value: unknown): value is string =>
   typeof value === "string" && BASE_ID.test(value);
+const isTag = (value: unknown): value is string =>
+  typeof value === "string" && /^#[0-9A-Z]{2,14}$/.test(value);
 const isText = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
 
@@ -165,18 +174,30 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
   };
 }
 
+function parseThem(value: unknown): NotebookBase["them"] | undefined {
+  if (value === null) return null;
+  if (!isRecord(value) || !isDay(value.day) || typeof value.counted !== "boolean")
+    return undefined;
+  const record = value.record === null ? null : parseRecord(value.record);
+  if (record === null && value.record !== null) return undefined;
+  return { day: value.day, counted: value.counted, record };
+}
+
 function parseBase(value: unknown): NotebookBase | null {
   if (!isRecord(value) || !isCode(value.id) || typeof value.name !== "string")
     return null;
   const { status, added_day: added, last_ran_day: last, recent } = value;
   const record = parseRecord(value.record);
+  // Absent from a private API released before bases were saved from attacks.
+  const them = value.them === undefined ? null : parseThem(value.them);
   if (
     !record ||
     !STATUSES.has(status as string) ||
     !isDay(added) ||
     !(last === null || isDay(last)) ||
     typeof recent !== "string" ||
-    !Number.isFinite(Date.parse(recent))
+    !Number.isFinite(Date.parse(recent)) ||
+    them === undefined
   )
     return null;
   return {
@@ -187,6 +208,7 @@ function parseBase(value: unknown): NotebookBase | null {
     lastRanDay: last,
     recent,
     record,
+    them,
   };
 }
 
@@ -265,7 +287,7 @@ export function parseSaved(value: unknown): NotebookSaved | null {
 export function parseChange(value: unknown): NotebookChange | null {
   if (!isRecord(value)) return null;
   const actions = ["add", "pick", "status", "edit", "delete", "undo"];
-  const { action, base, name, link, note, status, tag, day, undo } = value;
+  const { action, base, name, link, note, status, tag, day, attacked, undo } = value;
   if (
     !actions.includes(action as string) ||
     !(base === undefined || base === null || isCode(base)) ||
@@ -273,8 +295,16 @@ export function parseChange(value: unknown): NotebookChange | null {
     !(link === undefined || (typeof link === "string" && link.length <= 400)) ||
     !(note === undefined || (typeof note === "string" && note.length <= 2000)) ||
     !(status === undefined || STATUSES.has(status as string)) ||
-    !(tag === undefined || (typeof tag === "string" && /^#[0-9A-Z]{2,14}$/.test(tag))) ||
+    !(tag === undefined || isTag(tag)) ||
     !(day === undefined || isDay(day)) ||
+    !(
+      attacked === undefined ||
+      (isRecord(attacked) &&
+        Object.keys(attacked).length === 3 &&
+        isTag(attacked.tag) &&
+        isTag(attacked.opponent) &&
+        isDay(attacked.day))
+    ) ||
     !(undo === undefined || isRecord(undo))
   )
     return null;
@@ -376,10 +406,26 @@ export function libraryView(
   return { rows, counts };
 }
 
-/** A Library row's one line: when it last ran and how it held, or when it
- * was added. */
+/** How a base saved from an attack held for them, as "held 6 of 8 for
+ * them on Day 9"; null when that isn't known. */
+export function themText(them: NotebookBase["them"]): string | null {
+  if (!them?.record?.defenses) return null;
+  return `held ${them.record.held} of ${them.record.defenses} for them on Day ${them.day}`;
+}
+
+/** The name a base saved from an attack starts with, as "Day 9 hit · 5,712",
+ * from the Legend day and the base's trophies at that day's Reset. */
+export function attackedName(day: number, trophies: number | null): string {
+  return trophies === null
+    ? `Day ${day} hit`
+    : `Day ${day} hit · ${trophies.toLocaleString("en-US")}`;
+}
+
+/** A Library row's one line: when it last ran and how it held, or how it
+ * held for them, or when it was added. */
 export function baseLine(base: NotebookBase, today: number): string {
-  if (base.lastRanDay === null) return `added Day ${base.addedDay}`;
+  if (base.lastRanDay === null)
+    return themText(base.them) ?? `added Day ${base.addedDay}`;
   const when = base.lastRanDay === today ? "ran today" : `ran Day ${base.lastRanDay}`;
   return `${when} · ${heldText(base.record)}`;
 }

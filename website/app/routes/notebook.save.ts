@@ -17,6 +17,8 @@ const REFUSALS = new Set([
   "base_not_found",
   "runs_until_season_end",
   "not_legend_day",
+  "not_attacked",
+  "already_saved",
 ]);
 
 /**

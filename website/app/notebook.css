@@ -605,6 +605,38 @@
   color: var(--cl-muted);
   font-size: 0.85rem;
 }
+/* Them vs You: a base saved from an attack, its day for them beside you. */
+.nb-them {
+  width: 100%;
+  margin: 0.75rem 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.nb-them th,
+.nb-them td {
+  padding: 0.45rem 0.25rem;
+  border-bottom: 1px solid var(--cl-border);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.nb-them thead th {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+.nb-them tbody th {
+  color: var(--cl-muted);
+  font-weight: 700;
+}
+.nb-them td {
+  font-weight: 800;
+}
+.nb-them-line {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--cl-panel);
+  border-radius: var(--cl-radius);
+  font-weight: 700;
+}
 .nb-delete {
   display: grid;
   gap: 0.5rem;

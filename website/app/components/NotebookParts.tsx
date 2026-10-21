@@ -53,6 +53,8 @@ const ERRORS: Record<string, string> = {
   base_not_found: "That base was deleted. Refresh the page.",
   runs_until_season_end: "It runs until the Season ends.",
   not_legend_day: LEGEND_ONLY,
+  not_attacked: "That attack isn't in your battle log yet. Try again in a few minutes.",
+  already_saved: "This base is in your Notebook already.",
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };

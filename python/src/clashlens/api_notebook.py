@@ -28,6 +28,12 @@ players it ran on, read live, so it grows as each finished Legend day is
 counted, about 30 minutes after the Reset. Held means the attacker did not
 get 3 stars. Nothing here runs at the Reset or in the worker.
 
+A base saved from Bases you attacked keeps whose base it was and the Legend
+day of the attack, once per attack, and only after the Clasher's player's
+battle log that day shows the attack. Its record for them, Them beside the
+Clasher's own, is that player's defense counts on that day, read the same
+way, so it shows once that day is counted.
+
 Every write but Undo returns what undoes it: the picks and statuses it
 changed, a base it made, an edited base's old name and link, or a deleted
 base to put back.
@@ -48,7 +54,7 @@ from pydantic import Field
 
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
-from .api_db import ApiDatabase, _text
+from .api_db import ApiDatabase, _screen_events, _text
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .league_week import WEEK, week_start
 
@@ -259,6 +265,53 @@ class _Notebook:
         }
         return days, counts
 
+    def them(self) -> dict[int, dict[str, Any]]:
+        """Each base saved from an attack: its day, whether the worker has
+        counted that day, and the attacked player's record that day, None
+        until it is counted or when their defenses are not tracked: every
+        tracked player's count includes the Clasher's attack."""
+        result: dict[int, dict[str, Any]] = {}
+        for base_id, start, counted, *counts in self.connection.execute(
+            """
+            SELECT base.id, base.from_day_start, counted.ranked_day_start IS NOT NULL,
+                   sum(day.defenses), sum(day.one_star), sum(day.two_star),
+                   sum(day.three_star), sum(day.trophies_lost)
+            FROM notebook_bases AS base
+            LEFT JOIN army_type_defense_counted_days AS counted
+                ON counted.ranked_day_start = base.from_day_start
+            LEFT JOIN players AS player ON player.normalized_tag = base.from_tag
+            LEFT JOIN army_package_defense_day_counts AS day
+                ON day.population_player_id = player.id
+               AND day.ranked_day_start = base.from_day_start
+            WHERE base.account_id = %s AND base.season_id = %s
+              AND base.from_tag IS NOT NULL
+            GROUP BY base.id, base.from_day_start, counted.ranked_day_start
+            """,
+            (self.account_id, self.season_id),
+        ).fetchall():
+            record = None
+            if counted and counts[0] is not None:
+                record = _record()
+                _add(record, [int(value) for value in counts])
+            result[int(base_id)] = {
+                "day": self.day_number(start), "counted": counted, "record": record,
+            }
+        return result
+
+    def attacked(self, player_id: int, opponent: str, day: int) -> bool:
+        """Whether the player's battle log for ``day`` shows an attack on
+        ``opponent``: the latest one published, as Bases you attacked reads."""
+        row = self.connection.execute(
+            """
+            SELECT battles FROM api_player_daily_logs
+            WHERE player_id = %s AND ranked_day_start = %s
+            ORDER BY version DESC LIMIT 1
+            """,
+            (player_id, self.day_start(day)),
+        ).fetchone()
+        attacks, _ = _screen_events(None if row is None else row[0])
+        return any(event["opponent"]["tag"] == opponent for event in attacks)
+
     def legend_days(self) -> dict[int, set[int]]:
         """Each player's Legend days this Season up to tomorrow: days in a
         week the weekly league record says was Legend I. This week or
@@ -382,6 +435,27 @@ def _base(notebook: _Notebook, code: str | None) -> int:
     return int(row[0])
 
 
+def _attack(notebook: _Notebook, attack: Attacked) -> tuple[str, datetime]:
+    """The attacked player's tag and the attack's Legend day start, once the
+    Clasher's player's log that day shows it, on a Legend day of theirs up
+    to today, and no base of this notebook was saved from it yet."""
+    player_id = _player(notebook, attack.tag)
+    opponent = _safe_tag(attack.opponent)
+    if attack.day > notebook.today:
+        raise ApiError(422, "invalid_day")
+    notebook.require_legend(player_id, attack.day)
+    if not notebook.attacked(player_id, opponent, attack.day):
+        raise ApiError(422, "not_attacked")
+    start = notebook.day_start(attack.day)
+    if notebook.connection.execute(
+        "SELECT 1 FROM notebook_bases WHERE account_id = %s AND season_id = %s"
+        " AND from_tag = %s AND from_day_start = %s",
+        (notebook.account_id, notebook.season_id, opponent, start),
+    ).fetchone() is not None:
+        raise ApiError(422, "already_saved")
+    return opponent, start
+
+
 def _moment(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value)
@@ -433,6 +507,7 @@ def get_notebook(
         counted, counts = notebook.counted()
         legend = notebook.legend_days()
         shown = notebook.shown()
+        them = notebook.them()
         detail = _base(notebook, base) if base is not None else None
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
@@ -503,6 +578,8 @@ def get_notebook(
                        - timedelta(seconds=1)] if base_id in last_ran else []),
                 ]).isoformat(),
                 "record": records[base_id],
+                # Saved from an attack: the day and how it held for them.
+                "them": them.get(base_id),
             }
             for base_id, base in bases.items()
         ],
@@ -545,6 +622,9 @@ class UndoEdit(StrictBody):
 
 class UndoBase(UndoEdit):
     season: str = Field(max_length=12)
+    # Saved from an attack on this player on this day.
+    from_tag: str | None = Field(default=None, max_length=16)
+    from_day: int | None = Field(default=None, ge=1, le=28)
     note: str = Field(max_length=2 * MAX_NOTE)
     status: Status
     created_at: str = Field(max_length=40)
@@ -563,6 +643,15 @@ class Undo(StrictBody):
     restore: UndoBase | None = None
 
 
+class Attacked(StrictBody):
+    """The attack a base is saved from: the Clasher's player, whose base it
+    was, and the Legend day."""
+
+    tag: str = Field(max_length=16)
+    opponent: str = Field(max_length=16)
+    day: int = Field(ge=1, le=28)
+
+
 class NotebookWrite(StrictBody):
     action: Literal["add", "pick", "status", "edit", "delete", "undo"]
     base: str | None = Field(default=None, max_length=12)
@@ -572,6 +661,7 @@ class NotebookWrite(StrictBody):
     status: Status | None = None
     tag: str | None = Field(default=None, max_length=16)
     day: int | None = Field(default=None, ge=1, le=28)
+    attacked: Attacked | None = None
     undo: Undo | None = None
 
 
@@ -633,16 +723,19 @@ def save(
                 player_id = _player(notebook, body.tag)
                 day = _pick_day(notebook, body.day, past=False)
                 notebook.require_legend(player_id, day)
+            source = None if body.attacked is None else _attack(notebook, body.attacked)
             for _attempt in range(5):
                 row = connection.execute(
                     """
                     INSERT INTO notebook_bases (code, account_id, season_id, name,
-                                                base_link, status)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                                                base_link, status, from_tag,
+                                                from_day_start)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (code) DO NOTHING RETURNING id, code
                     """,
                     (new_code(), account_id, notebook.season_id, name, link,
-                     "active" if active else body.status or "to_try"),
+                     "active" if active else body.status or "to_try",
+                     *(source or (None, None))),
                 ).fetchone()
                 if row is not None:
                     break
@@ -686,7 +779,8 @@ def save(
             base_id = _base(notebook, body.base)
             saved = connection.execute(
                 "SELECT code, name, note, base_link, status, created_at, status_at,"
-                " updated_at FROM notebook_bases WHERE id = %s", (base_id,),
+                " updated_at, from_tag, from_day_start FROM notebook_bases WHERE id = %s",
+                (base_id,),
             ).fetchone()
             # The base as Undo puts it back.
             kept = {
@@ -695,6 +789,8 @@ def save(
                 "link": "" if saved[3] is None else _text(saved[3]),
                 "status": _text(saved[4]), "created_at": saved[5].isoformat(),
                 "status_at": saved[6].isoformat(), "updated_at": saved[7].isoformat(),
+                "from_tag": None if saved[8] is None else _text(saved[8]),
+                "from_day": None if saved[9] is None else notebook.day_number(saved[9]),
             }
             if body.action == "edit":
                 edited = {key: kept[key] for key in ("base", "name", "link")}
@@ -764,6 +860,18 @@ def save(
     }
 
 
+def _restored_from(notebook: _Notebook, base: UndoBase) -> tuple[Any, Any]:
+    """A deleted base's attack, put back only if one of the account's
+    players' logs that day still shows it."""
+    if base.from_tag is None or base.from_day is None:
+        return None, None
+    opponent = _safe_tag(base.from_tag)
+    if not any(notebook.attacked(player_id, opponent, base.from_day)
+               for player_id in notebook.player_ids.values()):
+        raise ApiError(422, "invalid_request")
+    return opponent, notebook.day_start(base.from_day)
+
+
 def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
     """Put back the base a change deleted, then the picks, statuses, name and
     link it replaced, and delete the base it made. Every base and player
@@ -777,14 +885,14 @@ def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
             """
             INSERT INTO notebook_bases (code, account_id, season_id, name, note,
                                         base_link, status, created_at, status_at,
-                                        updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        updated_at, from_tag, from_day_start)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (code) DO NOTHING RETURNING id
             """,
             (parse_code(base.base), notebook.account_id, notebook.season_id,
              clean_name(base.name), clean_note(base.note), clean_link(base.link),
              base.status, _moment(base.created_at), _moment(base.status_at),
-             _moment(base.updated_at)),
+             _moment(base.updated_at), *_restored_from(notebook, base)),
         ).fetchone()
         if row is None:
             raise ApiError(422, "invalid_request")

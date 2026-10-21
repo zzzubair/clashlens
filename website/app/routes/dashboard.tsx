@@ -290,6 +290,8 @@ export function shouldRevalidate({
   if (currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player"))
     return true;
   if (isDashboardSave(formMethod, formAction)) return false;
+  // Saving a base to the Notebook changes no card.
+  if (formAction === "/notebook/save") return false;
   if (
     formMethod ||
     currentUrl.pathname !== nextUrl.pathname ||
