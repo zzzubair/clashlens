@@ -8,6 +8,7 @@ const PICTURE = "/notebook/picture";
 // own HEIC photos into JPEG.
 const PICTURE_TYPES = "image/jpeg,image/png,image/webp";
 
+const TRY_AGAIN = "Couldn't save the picture just now. Try again in a moment.";
 const ERRORS: Record<string, string> = {
   not_a_picture:
     "That file isn't a picture. Use a JPEG, PNG or WebP screenshot or photo.",
@@ -15,7 +16,8 @@ const ERRORS: Record<string, string> = {
   daily_limit: "You've added 30 pictures in the last 24 hours. Try again later.",
   base_not_found: "That base was deleted. Refresh the page.",
   pictures_unavailable: "Pictures can't be saved just now. Try again later.",
-  unavailable: "Couldn't save the picture just now. Try again in a moment.",
+  pictures_busy: TRY_AGAIN,
+  unavailable: TRY_AGAIN,
 };
 
 /** A picture from a signed link. One that fails to load, usually because

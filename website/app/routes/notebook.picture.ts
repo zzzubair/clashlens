@@ -1,6 +1,7 @@
 import { data } from "react-router";
 
 import { BASE_ID, MAX_PICTURE_BYTES } from "../lib/notebook";
+import type { GoogleAccountIdentity } from "../services/python.server";
 import type { Route } from "./+types/notebook.picture";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -13,7 +14,11 @@ const REFUSALS: Record<string, number> = {
   daily_limit: 429,
   base_not_found: 404,
   pictures_unavailable: 503,
+  pictures_busy: 503,
 };
+// One picture request at a time per website process, from reading its body
+// to the private API's answer; another is refused at once.
+let busy = false;
 
 /**
  * POST /notebook/picture?base=B-… — the signed-in Clasher's picture for one
@@ -37,6 +42,21 @@ export async function action({ request }: Route.ActionArgs) {
   const type = request.headers.get("Content-Type") ?? "";
   if (!BASE_ID.test(base) || (!remove && !type.startsWith("image/")))
     return data({ error: "invalid" }, { status: 400, headers: NO_STORE });
+  if (busy) return data({ error: "pictures_busy" }, { status: 503, headers: NO_STORE });
+  busy = true;
+  try {
+    return await change(request, identity, base, remove);
+  } finally {
+    busy = false;
+  }
+}
+
+async function change(
+  request: Request,
+  identity: GoogleAccountIdentity,
+  base: string,
+  remove: boolean,
+) {
   const image = remove ? null : await readPicture(request);
   if (image === "too_large")
     return data({ error: "picture_too_large" }, { status: 413, headers: NO_STORE });

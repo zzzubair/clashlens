@@ -202,21 +202,41 @@ def test_uploads_that_are_not_pictures_or_too_big_are_refused(notebook_api) -> N
         assert _pictures(client) == {"Ring": None}
 
 
-def test_an_upload_while_another_shrinks_is_told_to_try_again(
+def test_a_picture_request_while_another_is_in_flight_is_refused_at_once(
     notebook_api, monkeypatch
 ) -> None:
-    """One picture is shrunk at a time; another upload waits briefly, then
-    is refused rather than waiting until its signature runs out."""
+    """One picture request at a time: another is refused straight away,
+    without waiting, and the next one after it finishes or fails goes on."""
     client_for, _, _ = notebook_api
-    monkeypatch.setattr(api_notebook_pictures, "BUSY_WAIT_SECONDS", 0.1)
+    shrink = api_notebook_pictures.shrink
+    shrinking, finish = threading.Event(), threading.Event()
+
+    def slow(raw: bytes) -> tuple[bytes, bytes]:
+        shrinking.set()
+        assert finish.wait(timeout=10)
+        return shrink(raw)
+
     with client_for() as client:
         ring = _add(client, "Ring")
-        assert api_notebook_pictures.SHRINKING.acquire(timeout=1)
+        monkeypatch.setattr(api_notebook_pictures, "shrink", slow)
+        first: list = []
+        upload = threading.Thread(
+            target=lambda: first.append(_upload(client, ring, _image((40, 40))))
+        )
+        upload.start()
         try:
-            response = _upload(client, ring, _image((40, 40)))
+            assert shrinking.wait(timeout=10)
+            for raw in (_image((40, 40)), None):
+                response = _upload(client, ring, raw)
+                assert (response.status_code, response.json()["error"]) == (
+                    503, "pictures_busy")
         finally:
-            api_notebook_pictures.SHRINKING.release()
-        assert (response.status_code, response.json()["error"]) == (503, "pictures_busy")
+            finish.set()
+            upload.join(timeout=10)
+        assert first[0].status_code == 200
+        monkeypatch.setattr(api_notebook_pictures, "shrink", shrink)
+        # A failed one frees the slot too.
+        assert _upload(client, ring, b"not a picture").status_code == 422
         assert _upload(client, ring, _image((40, 40))).status_code == 200
 
 

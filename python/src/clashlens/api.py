@@ -264,7 +264,24 @@ def create_app(
             return JSONResponse(status_code=error.status_code, content=content)
         return JSONResponse(status_code=503, content={"error": "service_unavailable"})
 
+    # One picture request at a time, from reading its body to storing its
+    # files: one decode can take about 400 MB of the API's 1 GiB. Another is
+    # refused at once, so it never waits while its signature runs out.
+    picture_in_flight = False
+
     @app.middleware("http")
+    async def one_picture_at_a_time(request: Request, call_next):
+        nonlocal picture_in_flight
+        if request.url.path != api_notebook_pictures.PICTURE_PATH:
+            return await proof_middleware(request, call_next)
+        if picture_in_flight:
+            return JSONResponse(status_code=503, content={"error": "pictures_busy"})
+        picture_in_flight = True
+        try:
+            return await proof_middleware(request, call_next)
+        finally:
+            picture_in_flight = False
+
     async def proof_middleware(request: Request, call_next):
         request_started = time.perf_counter()
 

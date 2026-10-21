@@ -115,6 +115,27 @@ describe("picture uploads", () => {
     expect(mocks.requestJson).not.toHaveBeenCalled();
   });
 
+  it("refuses a second picture at once while one is in flight", async () => {
+    let answer!: (value: unknown) => void;
+    mocks.requestJson.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const file = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const first = post("?base=B-7K3QX9", file);
+    await vi.waitFor(() => expect(mocks.requestJson).toHaveBeenCalledTimes(1));
+    expect(await post("?base=B-7K3QX9", file)).toEqual({
+      status: 503,
+      error: "pictures_busy",
+    });
+    expect(await post("?base=B-7K3QX9&remove=1")).toMatchObject({ status: 503 });
+    answer({ kind: "notebook-picture", picture: LINKS });
+    expect(await first).toEqual({ status: 200, picture: LINKS });
+    // A failed one frees the slot too.
+    mocks.requestJson.mockRejectedValueOnce(new Error("down"));
+    expect((await post("?base=B-7K3QX9", file)).status).toBe(503);
+    mocks.requestJson.mockResolvedValueOnce({ kind: "notebook-picture", picture: LINKS });
+    expect(await post("?base=B-7K3QX9", file)).toEqual({ status: 200, picture: LINKS });
+    expect(mocks.requestJson).toHaveBeenCalledTimes(3);
+  });
+
   it("passes on what the page can explain, and nothing else", async () => {
     mocks.requestJson.mockRejectedValueOnce(
       new PythonApiError(429, { error: "daily_limit" }),

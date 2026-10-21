@@ -21,7 +21,6 @@ import io
 import os
 import re
 import secrets
-import threading
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,11 +47,6 @@ MAX_PIXELS = 50_000_000
 FULL_SIDE = 1600
 SMALL_SIDE = 96
 DAILY_UPLOADS = 30
-# Pictures the API shrinks at once: one decode can take about 400 MB of the
-# API's 1 GiB. Another upload waits at most this long, well inside its
-# signature's life, then is told to try again.
-SHRINKING = threading.BoundedSemaphore(1)
-BUSY_WAIT_SECONDS = 2
 LINK_LIFETIME = timedelta(hours=1)
 # Links are signed from the start of each half hour, so a page loaded again
 # within it gets the same links and the browser's saved copy, and every link
@@ -275,12 +269,7 @@ def upload(
     # Refused before the costly decode, and checked again once it is done.
     with database.pool.connection() as connection, connection.transaction():
         _within_limit(connection, account_id, code, now)
-    if not SHRINKING.acquire(timeout=BUSY_WAIT_SECONDS):
-        raise ApiError(503, "pictures_busy")
-    try:
-        full, small = shrink(raw)
-    finally:
-        SHRINKING.release()
+    full, small = shrink(raw)
     key = secrets.token_hex(16)
     with database.pool.connection() as connection, connection.transaction():
         _within_limit(connection, account_id, code, now)
