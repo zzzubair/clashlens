@@ -102,6 +102,9 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                 ring_page = notebook(base=ring)
                 box_page = notebook(base=box)
                 september = notebook(season=SEPTEMBER)
+                # Their first look after the Reset is September's Zig, which
+                # carries it in first, so the page links to it.
+                zig_then = notebook("other", season=SEPTEMBER, base=zig)
                 other(action="delete", base=zig)
                 ring_then = notebook(season=SEPTEMBER, base=ring)
                 missing = [
@@ -218,6 +221,7 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
         str(int(NOVEMBER.timestamp())), str(int(SEASON.timestamp())), SEPTEMBER]
     # The other Clasher's empty October notebook is the latest before
     # November, so Zig, deleted there, does not come back from September.
+    assert zig_then["base"]["this_season"] == zig
     assert november_other["bases"] == []
     assert [item["id"] for item in november_other["seasons"]] == [
         str(int(NOVEMBER.timestamp())), str(int(SEASON.timestamp())), SEPTEMBER]

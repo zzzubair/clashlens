@@ -96,9 +96,14 @@ export function useNotebookSave(notebook: Notebook | null) {
     const saved = fetcher.data.saved;
     if (!saved) return;
     setError(null);
-    const shown = (latest.current && describe.current?.(saved, latest.current)) ?? null;
-    // A toast's actions go to the notebook the change went to.
+    // A toast's words and actions come from the notebook the change went to.
     const season = sentSeason.current;
+    const page = latest.current;
+    const shown = !page
+      ? null
+      : page.season.id === season
+        ? (describe.current?.(saved, page) ?? null)
+        : { text: "Saved.", actions: [] };
     const actions = (shown?.actions ?? []).map((item) =>
       item.change.season === undefined
         ? { ...item, change: { ...item.change, season } }

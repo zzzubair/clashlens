@@ -101,7 +101,7 @@ export default function NotebookBaseRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell nb-page">
       {notebook && base ? (
-        <BasePage notebook={notebook} base={base} />
+        <BasePage key={`${notebook.season.id} ${code}`} notebook={notebook} base={base} />
       ) : (
         <>
           <h1>Base</h1>
@@ -228,7 +228,6 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <p className="nb-hint">{recordLine(notebook)}</p>
       </section>
       <NoteBox
-        key={`${notebook.season.id} ${base.id}`}
         season={notebook.season.id}
         base={base}
         note={detail?.note ?? ""}

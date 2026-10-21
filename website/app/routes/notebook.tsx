@@ -71,7 +71,7 @@ export default function NotebookRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell nb-page">
       {notebook ? (
-        <NotebookPage notebook={notebook} />
+        <NotebookPage key={notebook.season.id} notebook={notebook} />
       ) : (
         <>
           <h1>Notebook</h1>

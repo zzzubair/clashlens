@@ -554,9 +554,8 @@ def get_notebook(
     its players, each one's runs and current base, and every base with its
     record. With ``base``, also that base's note, link and record on each
     player."""
-    if season_day(season, now).official_season_id == ranked_day_for(now).official_season_id:
-        with database.pool.connection() as connection, connection.transaction():
-            carry(connection, account_id, now)
+    with database.pool.connection() as connection, connection.transaction():
+        carry(connection, account_id, now)
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         notebook = _Notebook(connection, account_id, now, season)
