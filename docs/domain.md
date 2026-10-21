@@ -110,7 +110,7 @@ A domain change is complete only when every affected source observation, derived
 
 ### Weekly league record
 
-Stage 4: Legend days, Daily board members and tracking follow it. No page or count reads it yet.
+Stage 4: Legend days, Daily board members, tracking and the Notebook follow it. No other page or count reads it yet.
 
 - Clash Lens records which league each player was in each week, Monday Reset to Monday Reset: Legend I, below Legend I, or league unknown, with the evidence that decided it (`player_league_weeks`, one row per player per week with any evidence, from the week of 5 October 2026, and for players with evidence in the week of 28 September 2026 from the Season that week ended, so the current Season's first week has a week before it). See [`league_week.py`](../python/src/clashlens/league_week.py).
 - Evidence, strongest first. Official: a Legend battle that week, or a league history row. Accepted: a profile whose Season checks pass. Unconfirmed: a Legend I profile naming Season ID `0`, or two profiles below Legend I naming Season ID `0` under the same guards as [Identity and eligibility](#identity-and-eligibility): next to each other among the week's profiles, from different responses, with no profile response between them left unsaved. One such lower-league profile alone proves nothing. The strongest evidence decides; when the strongest pieces name both leagues, the week is unknown, recorded as a conflict. A weaker piece naming the other league is kept as the evidence against, so a battle outweighs an accepted lower-league profile the same week.

@@ -74,6 +74,13 @@ export function isCrewsEnabled(
   return env.CLASHLENS_CREWS_ENABLED === "true";
 }
 
+/** The Season notebook stays hidden, as an unknown page, until this is "true". */
+export function isNotebookEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CLASHLENS_NOTEBOOK_ENABLED === "true";
+}
+
 /**
  * Visitor counting stays off, with no script and no requests, unless the
  * PostHog project token is set. The token is public by design: it can only

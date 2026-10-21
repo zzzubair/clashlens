@@ -1238,6 +1238,14 @@ def create_app(
     from .api_overlays import register_overlay_routes
 
     register_overlay_routes(app, database=production_database)
+    from .api_notebook import register_notebook_routes
+
+    register_notebook_routes(
+        app,
+        database=production_database,
+        current_time=current_time,
+        enabled=dashboard_enabled,
+    )
     return app
 
 
