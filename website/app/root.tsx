@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import {
   Link,
   NavLink,
@@ -7,6 +7,7 @@ import {
   useRouteLoaderData,
   useLocation,
   useMatches,
+  useNavigation,
   type LoaderFunctionArgs,
   type ShouldRevalidateFunctionArgs,
   Links,
@@ -267,36 +268,53 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
 }
 
 // Below 64rem: the four most useful tabs, then More with Watchlists, Blog
-// and Join Discord. `/` is Home while it shows the front page.
+// and Join Discord. `/` is Home while it shows the front page. A tapped tab
+// looks chosen, with a loading line, from the tap until its page shows (the
+// `pending` class NavLink adds); see site-header.css.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
+  const navigation = useNavigation();
   const inMore = ["/account/watchlists", "/blog"].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
+  // Tapping a tab again while its page loads would start the load over.
+  function ignoreRepeatTap(event: MouseEvent<HTMLAnchorElement>) {
+    const next = navigation.location;
+    if (next && next.pathname + next.search === event.currentTarget.getAttribute("href"))
+      event.preventDefault();
+  }
   return (
     <nav className="bottom-tabs" aria-label="Main navigation">
-      <NavLink className="bottom-tab" to="/" end>
+      <NavLink className="bottom-tab" to="/" end onClick={ignoreRepeatTap}>
         <TabIcon name="home" />
         {data?.dashboardEnabled && data.loggedIn ? "Dashboard" : "Home"}
       </NavLink>
-      <NavLink className="bottom-tab" to="/leaderboards/tracked?view=live&page=1">
+      <NavLink
+        className="bottom-tab"
+        to="/leaderboards/tracked?view=live&page=1"
+        onClick={ignoreRepeatTap}
+      >
         <TabIcon name="rankings" />
         Rankings
       </NavLink>
-      <NavLink className="bottom-tab" to="/analytics/armies">
+      <NavLink className="bottom-tab" to="/analytics/armies" onClick={ignoreRepeatTap}>
         <TabIcon name="analytics" />
         Analytics
       </NavLink>
       {data?.crewsEnabled && (
-        <NavLink className="bottom-tab" to="/crews">
+        <NavLink className="bottom-tab" to="/crews" onClick={ignoreRepeatTap}>
           <TabIcon name="crews" />
           Crews
         </NavLink>
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          <NavLink to="/account/watchlists">Watchlists</NavLink>
-          <NavLink to="/blog">Blog</NavLink>
+          <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
+            Watchlists
+          </NavLink>
+          <NavLink to="/blog" onClick={ignoreRepeatTap}>
+            Blog
+          </NavLink>
         </div>
         <div className="site-menu-extras">
           <DiscordLink />

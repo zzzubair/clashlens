@@ -80,3 +80,43 @@ test("a tablet held sideways keeps the bottom bar; a mouse keeps the top bar", a
   await expect(tabs(page)).toBeHidden();
   await expect(page.locator("nav.primary-nav")).toBeVisible();
 });
+
+test("a tapped tab is chosen at once and loads once, however often it is tapped", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/blog");
+  const bar = tabs(page);
+  const analytics = bar.getByRole("link", { name: "Analytics" });
+  const more = page.locator("details.site-menu > summary");
+  const filled = (tab: Locator) =>
+    tab.evaluate((el) => getComputedStyle(el).backgroundImage !== "none");
+  const loading = (tab: Locator) =>
+    tab.evaluate((el) => getComputedStyle(el, "::after").content !== "none");
+  await expect(more).toHaveAttribute("aria-current", "page");
+
+  // Hold the page's data, as a slow server or phone signal would.
+  let loads = 0;
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => url.pathname === "/analytics/armies.data",
+    async (route) => {
+      loads += 1;
+      await held;
+      await route.continue();
+    },
+  );
+  await analytics.click();
+  await expect.poll(() => filled(analytics)).toBe(true);
+  expect(await loading(analytics)).toBe(true);
+  expect(await filled(more)).toBe(false);
+  await analytics.click();
+  await expect(page).toHaveURL(/\/blog$/);
+  release();
+
+  await expect(page).toHaveURL(/\/analytics\/armies$/);
+  await expect(analytics).toHaveAttribute("aria-current", "page");
+  expect(await loading(analytics)).toBe(false);
+  expect(loads).toBe(1);
+});
