@@ -104,7 +104,8 @@ test("a sign-up quit at Choose your username can make way for a different sign-i
   });
   const signUp = "/signup?returnPath=%2Faccount%2Fwatchlists";
   const setup = /\/account\/setup\?returnPath=%2Faccount%2Fwatchlists$/;
-  await page.goto(signUp);
+  // The fake identity only applies once the page's JavaScript has loaded.
+  await page.goto(signUp, { waitUntil: "networkidle" });
   await page.getByRole("link", { name: "Sign up with Google" }).click();
   await expect(page).toHaveURL(setup);
   await expect(page.getByRole("heading", { name: "Choose your username" })).toBeVisible();

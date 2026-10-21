@@ -43,15 +43,21 @@ export function expectNoPortRequests(
  * Sign in with the loopback provider. A new identity has no account yet, so
  * it answers "No account found", still signed out, and Create account signs
  * up with the same provider and goes on to choosing a username.
+ *
+ * Tests pick a fake identity by rewriting the request to the provider, which
+ * Playwright can only do when the page's JavaScript sends the browser straight
+ * there. Clicked before it loads, the link follows a redirect instead and
+ * signs in as the default identity, so each click waits for the page first.
  */
 async function signInWith(page: Page, provider: "Google" | "Discord"): Promise<void> {
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "networkidle" });
   await page.getByRole("link", { name: `Sign in with ${provider}` }).click();
   await expect(page).toHaveURL(/\/(?:login\?none=|users\/[a-z][a-z0-9_]+$)/);
   if (new URL(page.url()).pathname === "/login") {
     await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
     const cookies = await page.context().cookies();
     expect(cookies.map(({ name }) => name)).not.toContain(LOGIN_COOKIE_NAME);
+    await page.waitForLoadState("networkidle");
     await page.getByRole("link", { name: `Create account with ${provider}` }).click();
     await expect(page).toHaveURL(/\/account\/setup$/);
   }
