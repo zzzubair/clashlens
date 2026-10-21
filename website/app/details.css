@@ -761,7 +761,86 @@
   font-size: 0.75rem;
   white-space: nowrap;
 }
+/* Armies: a type row with variants opens on a tap anywhere on it. */
+.analytics-page .analytics-type-row {
+  cursor: pointer;
+}
+.analytics-page .analytics-type-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.analytics-page .analytics-type-toggle:focus-visible {
+  outline: 3px solid var(--cl-action);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.analytics-page .analytics-type-toggle:active {
+  transform: none;
+}
+.analytics-page .analytics-type-toggle small {
+  display: block;
+  color: var(--cl-action-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.analytics-page .analytics-type-chevron {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-inline: 0.15rem;
+  border-right: 2px solid var(--cl-action-text);
+  border-bottom: 2px solid var(--cl-action-text);
+  transform: rotate(-45deg);
+  transition: transform 160ms var(--cl-ease-out);
+}
+.analytics-page .analytics-type-row[data-open="true"] .analytics-type-chevron {
+  transform: rotate(45deg);
+}
+.analytics-page .analytics-type-row[data-open="true"] :is(th, td) {
+  border-bottom-color: transparent;
+}
+.analytics-page .analytics-table .analytics-variant-row :is(th, td) {
+  background: var(--cl-panel);
+}
+.analytics-page .analytics-table .analytics-variant-row th {
+  padding-left: 2.9rem;
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--cl-action);
+}
+.analytics-page .analytics-share-bar {
+  display: block;
+  width: 100%;
+  max-width: 4.5rem;
+  height: 0.25rem;
+  margin: 0.3rem 0 0 auto;
+  overflow: hidden;
+  background: var(--cl-border);
+  border-radius: 999px;
+}
+.analytics-page .analytics-share-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--cl-action);
+}
+@media (prefers-reduced-motion: reduce) {
+  .analytics-page .analytics-type-chevron {
+    transition: none;
+  }
+}
 @media (hover: hover) and (pointer: fine) {
+  .analytics-page .analytics-type-row:hover .analytics-type-chevron {
+    border-color: var(--cl-ink);
+  }
   .player-page .legend-day > summary:hover,
   .player-page .legend-day[open] > summary:hover {
     background: var(--cl-panel);
@@ -842,6 +921,11 @@
     min-width: 10rem;
     max-width: 12rem;
     box-shadow: 1px 0 0 var(--cl-border);
+  }
+  .analytics-page .analytics-table tr.analytics-variant-row > th:first-child {
+    box-shadow:
+      inset 3px 0 0 var(--cl-action),
+      1px 0 0 var(--cl-border);
   }
   .analytics-page .analytics-table-wrap {
     max-height: 70svh;
@@ -953,6 +1037,12 @@
   .analytics-page .analytics-results-table td[colspan] {
     flex: 1 0 auto;
     max-width: calc(100vw - 2rem - 2px);
+  }
+  /* Variant names break between words, in the narrow pinned column. */
+  .analytics-page .analytics-results-table .analytics-variant-row th {
+    padding-left: 0.85rem;
+    font-size: 0.85rem;
+    overflow-wrap: break-word;
   }
 }
 @media (max-width: 34rem) {

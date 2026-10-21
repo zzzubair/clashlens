@@ -870,7 +870,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   )
     throw new PythonApiError(502, { error: "malformed" });
   const usageOnly = payload.history_usage_only === true;
-  const rows = payload.rows.map((row) => {
+  const parseRow = (row: unknown): ArmyAnalytics["rows"][number] => {
     if (!isRecord(row)) throw new PythonApiError(502, { error: "malformed" });
     if (
       !isString(row.key) ||
@@ -895,7 +895,8 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
           (row.average_trophies !== undefined && !isFiniteNumber(row.average_trophies)) ||
           (row.average_miss_trophies != null &&
             !isFiniteNumber(row.average_miss_trophies)) ||
-          !isInteger(row.unknown_excluded_attacks))
+          !isInteger(row.unknown_excluded_attacks)) ||
+      (row.variants !== undefined && !Array.isArray(row.variants))
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -916,8 +917,11 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       averageTrophies: row.average_trophies as number | undefined,
       averageMissTrophies: row.average_miss_trophies as number | null | undefined,
       unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
+      variants: (row.variants as unknown[] | undefined)?.map(parseRow),
+      variantId: isInteger(row.variant_id) ? row.variant_id : undefined,
     };
-  });
+  };
+  const rows = payload.rows.map(parseRow);
   const armyStates = Object.fromEntries(
     Object.entries(payload.army_states).map(([state, count]) => {
       if (!isInteger(count)) throw new PythonApiError(502, { error: "malformed" });

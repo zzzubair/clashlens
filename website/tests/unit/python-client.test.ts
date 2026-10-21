@@ -1045,6 +1045,13 @@ describe("server-only Python client response boundary", () => {
           key: "army-type:3",
           average_trophies: 40,
           average_miss_trophies: null,
+          variants: [
+            {
+              ...unit,
+              key: "army-variant:3:3",
+              variant_id: 3,
+            },
+          ],
         },
         {
           ...unit,
@@ -1080,6 +1087,11 @@ describe("server-only Python client response boundary", () => {
       [40, null],
       [36.6, 26.3],
     ]);
+    // An Armies type row carries its variants.
+    expect(mapped.rows[0].variants?.map((row) => [row.key, row.variantId])).toEqual([
+      ["army-variant:3:3", 3],
+    ]);
+    expect(mapped.rows[1].variants).toBeUndefined();
     await expect(createPythonClient().getArmyAnalytics(query)).rejects.toMatchObject({
       status: 502,
     });
