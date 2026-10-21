@@ -156,8 +156,12 @@ export function useNotebookSave(notebook: Notebook | null) {
     const season = latest.current?.season.id;
     const sent = change.season === undefined && season ? { ...change, season } : change;
     sentSeason.current = sent.season;
+    // A page of this Season left open past its end reloads as the next
+    // Season, so the change is worded from its own Season's notebook.
+    const page = latest.current?.season;
+    const reread = page?.current && Date.now() >= Date.parse(page.end);
     void fetcher.submit(
-      { change: JSON.stringify(sent) },
+      { change: JSON.stringify(sent), ...(reread ? { reread: "1" } : {}) },
       { method: "post", action: SAVE },
     );
   }

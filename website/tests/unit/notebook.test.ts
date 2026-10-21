@@ -563,16 +563,28 @@ describe("past Seasons", () => {
     mocks.getNotebook.mockResolvedValue(fixed);
     try {
       const change = { action: "pick", season: SEPTEMBER, tag: player.tag, day: 10 };
-      const request = new Request(`${origin}/notebook/save`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
-        body: new URLSearchParams({
-          change: JSON.stringify({ ...change, base: "B-000003" }),
-        }).toString(),
-      });
-      const answer = (await saveAction({ request } as never)) as unknown as {
-        data: { saved: typeof saved; notebook: Notebook };
-      };
+      const post = async (fields: Record<string, string>) =>
+        (await saveAction({
+          request: new Request(`${origin}/notebook/save`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              Origin: origin,
+            },
+            body: new URLSearchParams({
+              change: JSON.stringify({ ...change, base: "B-000003" }),
+              ...fields,
+            }).toString(),
+          }),
+        } as never)) as unknown as {
+          data: { saved: typeof saved; notebook: Notebook | null };
+        };
+      // An ordinary save reads no notebook: the page reloads its own.
+      mocks.getNotebook.mockClear();
+      expect((await post({})).data.notebook).toBeNull();
+      expect(mocks.getNotebook).not.toHaveBeenCalled();
+      // A page left open past its Season's end asks for that Season's.
+      const answer = await post({ reread: "1" });
       expect(mocks.getNotebook.mock.calls[0]?.slice(1)).toEqual([undefined, SEPTEMBER]);
       // The page has reloaded as October's Day 16.
       const toast = savedToast(

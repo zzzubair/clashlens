@@ -24,8 +24,9 @@ const REFUSALS = new Set([
 /**
  * POST /notebook/save — one change to the signed-in Clasher's notebook, sent
  * as `change` (JSON) by the Notebook and base pages without a reload. Answers
- * what the change did and what undoes it, with the notebook of the Season it
- * names to word that from, or an `error` code.
+ * what the change did and what undoes it, or an `error` code. With `reread`,
+ * sent by a page left open past its Season's end, also the notebook of the
+ * Season the change names, to word that from.
  */
 export async function action({ request }: Route.ActionArgs) {
   const { isNotebookEnabled, getWebsiteConfig } = await import("../server/config.server");
@@ -52,7 +53,7 @@ export async function action({ request }: Route.ActionArgs) {
     const saved = await saveNotebook(identity, change);
     // Saved either way: without it the page words the change from its own.
     const notebook =
-      change.season === undefined
+      change.season === undefined || form?.["reread"] !== "1"
         ? null
         : await getNotebook(identity, undefined, change.season).catch(() => null);
     return data({ saved, notebook }, { headers: NO_STORE });
