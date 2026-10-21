@@ -458,6 +458,17 @@
 .opponents-action {
   display: flex;
   justify-content: flex-end;
+  gap: 0.4rem;
+}
+/* Big enough for a thumb on phones and tablets, and a tap on Save or Add
+   to group flashes no highlight over the whole row, which opens the player. */
+@media (pointer: coarse) {
+  .opponents-row {
+    -webkit-tap-highlight-color: transparent;
+  }
+  .opponents-action .button {
+    min-height: 2.75rem;
+  }
 }
 
 /* ---------- Goal ---------- */

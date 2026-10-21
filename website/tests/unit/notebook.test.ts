@@ -35,8 +35,12 @@ import {
   RunStrip,
   saveError,
 } from "../../app/components/NotebookParts";
+import { OpponentsCard } from "../../app/components/OpponentsCard";
+import type { OpponentRow } from "../../app/lib/dashboard";
 import {
+  attackedName,
   baseInitials,
+  baseLine,
   baseOnDay,
   basesNear,
   libraryView,
@@ -49,7 +53,7 @@ import {
   type NotebookBase,
   type NotebookPlayer,
 } from "../../app/lib/notebook";
-import { loader as baseLoader } from "../../app/routes/notebook.base";
+import NotebookBaseRoute, { loader as baseLoader } from "../../app/routes/notebook.base";
 import { action as saveAction } from "../../app/routes/notebook.save";
 import { PythonApiError } from "../../app/services/python.server";
 
@@ -93,6 +97,7 @@ function apiNotebook() {
         last_ran_day: 16,
         recent: "2026-10-20T06:00:00Z",
         record: RECORD,
+        them: null as unknown,
       },
     ],
   };
@@ -114,6 +119,7 @@ function base(
     lastRanDay: null,
     recent,
     record: { days: 1, defenses, held, stars: [0, 0, 0, 0], trophiesLost: 0 },
+    them: null,
   };
 }
 
@@ -301,6 +307,7 @@ describe("Legend days only", () => {
       lastRanDay: day,
       recent: "2026-10-06T05:00:00Z",
       record: { ...EMPTY, stars: [0, 0, 0, 0] },
+      them: null,
     })),
   };
 
@@ -439,3 +446,157 @@ describe("a refused save", () => {
     }
   });
 });
+
+describe("a base saved from Bases you attacked", () => {
+  const THEM = { days: 1, defenses: 8, held: 6, stars: [1, 2, 3, 2], trophies_lost: 144 };
+  const saved = () => {
+    const payload = apiNotebook();
+    payload.bases.push({
+      ...payload.bases[0]!,
+      id: "B-9H2MZ4",
+      name: "Day 9 hit · 5,712",
+      status: "to_try",
+      last_ran_day: null as unknown as number,
+      record: { days: 0, defenses: 0, held: 0, stars: [0, 0, 0, 0], trophies_lost: 0 },
+      them: { day: 9, counted: true, record: THEM },
+    });
+    return payload;
+  };
+
+  it("lands To try with how it held for them in the Library", () => {
+    const notebook = parseNotebook(saved());
+    const stolen = notebook!.bases[1]!;
+    expect(stolen.them?.record?.held).toBe(6);
+    expect(baseLine(stolen, 16)).toBe("held 6 of 8 for them on Day 9");
+    // Before their day is counted, it says when it was added.
+    expect(
+      baseLine({ ...stolen, them: { day: 9, counted: false, record: null } }, 16),
+    ).toBe("added Day 9");
+    // A base saved some other way has no them.
+    expect(notebook!.bases[0]!.them).toBeNull();
+  });
+
+  it("refuses a malformed record for them", () => {
+    const bad = saved();
+    bad.bases[1]!.them = { day: 30, counted: true, record: THEM };
+    expect(parseNotebook(bad)).toBeNull();
+  });
+
+  it("refuses a base the API sent without them", () => {
+    const bad = saved();
+    delete (bad.bases[0] as { them?: unknown }).them;
+    expect(parseNotebook(bad)).toBeNull();
+  });
+
+  it("names it after the day and their trophies at that Reset", () => {
+    expect(attackedName(9, 5712)).toBe("Day 9 hit · 5,712");
+    expect(attackedName(9, null)).toBe("Day 9 hit");
+  });
+
+  it("posts which attack it came from, and nothing else", () => {
+    const attacked = { tag: "#L9L0GJ9LR", opponent: "#2PP", day: 9 };
+    expect(parseChange({ action: "add", name: "Day 9 hit", attacked })).not.toBeNull();
+    const longest = {
+      ...attacked,
+      tag: "#2PYLQGRJCUV0289",
+      opponent: "#9QQQQQQQQQQQQQQ",
+    };
+    expect(parseChange({ action: "add", name: "x", attacked: longest })).not.toBeNull();
+    expect(
+      parseChange({
+        action: "add",
+        name: "x",
+        attacked: { ...attacked, opponent: "#2AA" },
+      }),
+    ).toBeNull();
+    expect(
+      parseChange({
+        action: "add",
+        name: "x",
+        attacked: { ...attacked, opponent: "2PP" },
+      }),
+    ).toBeNull();
+    expect(
+      parseChange({ action: "add", name: "x", attacked: { ...attacked, name: "Opp" } }),
+    ).toBeNull();
+  });
+
+  const row: OpponentRow = {
+    tag: "#2PP",
+    name: "Opp",
+    resetTrophies: 5712,
+    hit: { stars: 2, destruction: 88, trophyChange: 30, at: 0 },
+    defenses: [
+      { stars: 2, trophyChange: -30, yours: true },
+      { stars: 3, trophyChange: -40, yours: false },
+    ],
+    observedAtMs: null,
+    legends: null,
+  };
+  const card = (notebookEnabled: boolean) =>
+    renderRoot(
+      createElement(OpponentsCard, {
+        tag: "#L9L0GJ9LR",
+        dayNumber: 9,
+        days: { chosen: null, read: new Map(), choose() {} },
+        rows: [row],
+        timeZone: "UTC",
+      }),
+      { notebookEnabled },
+    );
+
+  it("offers Save on each base only while the Notebook is on", async () => {
+    expect(await card(true)).toMatch(/<button[^>]*>Save<\/button>/);
+    expect(await card(false)).not.toContain(">Save<");
+  });
+
+  it("compares Them on that day with You on the base page", async () => {
+    const notebook = parseNotebook(saved())!;
+    notebook.bases[1]!.record = {
+      days: 3,
+      defenses: 24,
+      held: 15,
+      stars: [2, 5, 8, 9],
+      trophiesLost: 576,
+    };
+    const html = await renderRoot(createElement(NotebookBaseRoute), {}, () => ({
+      notebook,
+      code: "B-9H2MZ4",
+      error: null,
+    }));
+    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    expect(text).toContain("Them vs You");
+    expect(text).toContain("Them · Day 9 You");
+    expect(text).toContain("Held 6 of 8 · 75% 15 of 24 · 63%");
+    expect(text).toContain("Lost a defense −18 −24");
+    // The base ID stays off the page, and so does whose base it was.
+    expect(text).not.toContain("B-9H2MZ4");
+    expect(text).not.toContain("Opp");
+  });
+});
+
+/** Renders `element` under a root route with `root` as its data, and
+ * `loader` as the page's. */
+async function renderRoot(
+  element: ReturnType<typeof createElement>,
+  root: object,
+  loader?: () => object,
+) {
+  const handler = createStaticHandler([
+    {
+      id: "root",
+      path: "/",
+      loader: () => root,
+      children: [{ index: true, loader, Component: () => element }],
+    },
+  ]);
+  const context = await handler.query(new Request("http://localhost/"));
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+      hydrate: false,
+    }),
+  );
+}

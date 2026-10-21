@@ -26,6 +26,7 @@ from test_reset_scenarios_postgres import (
     Story,
     _saturday,
     _story,
+    _tag,
     attacks,
     day,
     defenses,
@@ -450,3 +451,120 @@ def test_bases_are_set_and_counted_on_legend_days_only(
     main = hex_dropped["players"][0]
     assert (main["legend_days"][-1], main["next"]) == (21, None)
     assert {base["id"]: base["status"] for base in hex_dropped["bases"]}[hex_] == "to_try"
+
+
+def test_a_base_saved_from_an_attack_holds_for_them_and_for_you(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """MAIN attacks THEM on Day 3 and an untracked player on Day 4. THEM
+    defends 40, 10 and 0 that day; MAIN, once it runs the saved base on
+    Day 4, defends 40 and 10. Today is Day 5. Their Day 3 shows only once
+    the worker counts it, from the same counts as MAIN's record."""
+    # The fixture names the opponent of the n-th battle on a log by n. Day 2's
+    # three defenses come first, so THEM's own three defenses are never
+    # against THEM.
+    battles = sorted(defenses(day(2), 10, 10, 10) + attacks(day(3), 40)
+                     + attacks(day(4), 30) + defenses(day(4), 40, 10),
+                     key=lambda battle: battle.at)
+    them, untracked = (f"#{_tag(battles.index(battle) + 1)}"
+                       for battle in battles if battle.attack)
+    today = day(5)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, MAIN, them)
+        story.players[MAIN].battles = battles
+        story.players[them].battles = defenses(day(3), 40, 10, 0)
+        trophies = {MAIN: 5000, them: 5000}
+        for number in (2, 3, 4, 5):
+            story.reset(day(number), {tag: (total, SEASON) for tag, total in trophies.items()})
+            for tag, player in story.players.items():
+                trophies[tag] = 5000 + sum(
+                    battle.trophies for battle in player.battles if battle.at < day(number + 1))
+        noon = today + timedelta(hours=7)
+
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            me = _account(owner, "google", "subject-sloothy", "sloothy")
+            _account(owner, "google", "subject-other", "other")
+            _verify(owner, me, MAIN)
+            app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: noon,
+                             dashboard_enabled=True)
+            with TestClient(app) as client:
+
+                def write(user: str = "sloothy", **change) -> tuple[int, dict]:
+                    response = call(client, user, "POST", NOTEBOOK, change)
+                    return response.status_code, response.json()
+
+                def bases() -> dict[str, dict]:
+                    seen = call(client, "sloothy", "GET", NOTEBOOK).json()
+                    return {base["id"]: base for base in seen["bases"]}
+
+                def steal(opponent: str, number: int, user: str = "sloothy",
+                          tag: str = MAIN) -> tuple[int, dict]:
+                    return write(user, action="add", name=f"Day {number} hit",
+                                 status="to_try",
+                                 attacked={"tag": tag, "opponent": opponent, "day": number})
+
+                saved = steal(them, 3)
+                stolen = saved[1]["base"]
+                uncounted = bases()[stolen]
+                story.count_armies(noon)
+                counted = bases()[stolen]
+                write(action="pick", tag=MAIN, day=4, base=stolen)
+                run = bases()[stolen]
+
+                def correct_days_3_and_4() -> None:
+                    with owner.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE army_analytics_completed_days SET fact_input_hash ="
+                            " translate(fact_input_hash, '0123456789abcdef',"
+                            " 'fedcba9876543210') WHERE ranked_day_start = ANY(%s)",
+                            ([day(3), day(4)],),
+                        )
+
+                # A battle correction on Days 3 and 4 the worker hasn't recounted.
+                correct_days_3_and_4()
+                stale = bases()[stolen]
+                correct_days_3_and_4()
+                other = steal(untracked, 4)[1]["base"]
+                refused = [
+                    steal(them, 3),
+                    steal(them, 4),
+                    steal(them, 6),
+                    steal(them, 3, user="other"),
+                ]
+                deleted = write(action="delete", base=stolen)
+                write(action="undo", undo=deleted[1]["undo"])
+                restored = bases()[stolen]
+                # Undo can't attach a base to an attack none of MAIN's logs show.
+                forged = deleted[1]["undo"]
+                forged["restore"]["from_tag"] = "#Q000000"
+                write(action="delete", base=stolen)
+                faked = write(action="undo", undo=forged)
+                left = bases()
+        finally:
+            owner.close()
+            api.close()
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert saved[0] == 200
+    assert (uncounted["status"], uncounted["last_ran_day"]) == ("to_try", None)
+    assert uncounted["them"] == {"day": 3, "counted": False, "record": None}
+    # THEM's Day 3: a triple, a one-star and a no-star defense, 50 lost.
+    assert counted["them"] == {"day": 3, "counted": True,
+                               "record": _record(1, 3, [1, 1, 0, 1], 50)}
+    # MAIN's Day 4 on it: a triple and a one-star defense, 50 lost.
+    assert run["record"] == _record(1, 2, [0, 1, 0, 1], 50)
+    assert run["them"] == counted["them"]
+    assert stale["them"] == {"day": 3, "counted": False, "record": None}
+    assert stale["record"] == _record(0, 0, [0, 0, 0, 0], 0)
+    assert refused == [
+        (422, {"error": "already_saved"}), (422, {"error": "not_attacked"}),
+        (422, {"error": "invalid_day"}), (404, {"error": "player_not_verified"}),
+    ]
+    assert restored == run
+    assert faked == (422, {"error": "invalid_request"})
+    assert stolen not in left
+    assert left[other]["them"] == {"day": 4, "counted": True, "record": None}

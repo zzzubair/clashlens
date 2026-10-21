@@ -166,6 +166,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <h2 id="nb-stars-title">Stars</h2>
         <Stars record={base.record} />
       </section>
+      {base.them ? <ThemVsYou them={base.them} record={base.record} /> : null}
       <section className="nb-base-part" aria-labelledby="nb-each-title">
         <h2 id="nb-each-title">Each account</h2>
         {detail?.players.length ? (
@@ -233,6 +234,65 @@ function Stars({ record }: { record: BaseRecord }) {
       ))}
     </dl>
   );
+}
+
+/** A base saved from an attack: how it held for its player on that day,
+ * beside how it holds for the Clasher's accounts. */
+function ThemVsYou({
+  them,
+  record,
+}: {
+  them: NonNullable<NotebookBase["them"]>;
+  record: BaseRecord;
+}) {
+  const theirs = them.record;
+  const rows: Array<[string, (one: BaseRecord) => string]> = [
+    ["Held", (one) => `${one.held} of ${one.defenses} · ${share(one)}`],
+    ["3★", (one) => String(one.stars[3])],
+    ["Lost a defense", (one) => averageLost(one) ?? "–"],
+    ["Days", (one) => String(one.days)],
+  ];
+  return (
+    <section className="nb-base-part" aria-labelledby="nb-them-title">
+      <h2 id="nb-them-title">Them vs You</h2>
+      {theirs?.defenses ? (
+        <table className="nb-them">
+          <thead>
+            <tr>
+              <th scope="col">
+                <span className="sr-only">Number</span>
+              </th>
+              <th scope="col">Them · Day {them.day}</th>
+              <th scope="col">You</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, value]) => (
+              <tr key={label}>
+                <th scope="row">{label}</th>
+                <td>{value(theirs)}</td>
+                <td>{record.defenses ? value(record) : "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="nb-hint">
+          {them.counted
+            ? `Their Day ${them.day} defenses weren't tracked, so there's nothing to compare.`
+            : `Their Day ${them.day} defenses count about 30 minutes after the Reset that ends it.`}
+        </p>
+      )}
+      {theirs?.defenses && !record.defenses ? (
+        <p className="nb-hint">Run it on a Legend day to compare: make it Active.</p>
+      ) : null}
+    </section>
+  );
+}
+
+/** The held share, as "75%". */
+function share(record: BaseRecord): string {
+  return `${Math.round((100 * record.held) / record.defenses)}%`;
 }
 
 /** The base's note, saved as the Clasher types, when the box loses focus,

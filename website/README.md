@@ -327,6 +327,18 @@ once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
 Reset.
 
+With the Notebook on, each row of the dashboard's Bases you attacked has Save:
+a sheet with a Name box filled in as "Day 9 hit · 5,712" (the Legend day and
+the base's trophies at its Reset), and To try, or Active on the dashboard's
+account from tomorrow or today on its Legend days. The private API saves it
+only once per attack, and only when that account's battle log that day shows
+the attack. It keeps whose base it was as their player tag, never their name,
+and no page shows it. Until it runs, its
+Library line says how it held for them ("held 6 of 8 for them on Day 9"), and
+its page has Them vs You: held, 3-star defenses, trophies lost a defense and
+days for that player on that day beside the Clasher's own, both from the same
+defense counts.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by

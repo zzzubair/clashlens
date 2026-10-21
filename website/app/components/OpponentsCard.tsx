@@ -11,6 +11,7 @@ import type { PastBases } from "../lib/dashboard-cards";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, updatedAgo } from "./DashboardParts";
 import { signed, starText, timeFormatter } from "./LegendClock";
+import { SaveAttacked, useNotebookOn } from "./NotebookSaveSheet";
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",
@@ -158,9 +159,11 @@ function trophiesLine(row: OpponentRow): string {
  * mode compares the trophies it gave up a defense with what those players
  * lost a defense, and shows the total it lost today beside what they lost
  * on average over as many defenses.
- * Colours follow the attacker: green is good for you, red is bad.
+ * Colours follow the attacker: green is good for you, red is bad. With the
+ * Notebook on, Save keeps a base in the Notebook of `tag`'s Clasher.
  */
 export function OpponentsCard({
+  tag,
   dayNumber,
   days,
   rows: todayRows,
@@ -169,6 +172,8 @@ export function OpponentsCard({
   nowMs = null,
   comparedAtMs = null,
 }: {
+  /** The dashboard's account, whose attacks these are. */
+  tag?: string;
   /** Today's Legend day; null hides the day button. */
   dayNumber: number | null;
   days: BasesDay;
@@ -180,6 +185,8 @@ export function OpponentsCard({
   comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();
+  const notebookOn = useNotebookOn();
+  const [saving, setSaving] = useState<OpponentRow | null>(null);
   const format = timeFormatter(timeZone);
   const { chosen, read } = days;
   const earlier = chosen !== null && dayNumber !== null && chosen < dayNumber;
@@ -257,9 +264,13 @@ export function OpponentsCard({
         STRENGTH_ORDER.indexOf(a.strength) - STRENGTH_ORDER.indexOf(b.strength) ||
         hardness(b.row.defenses) - hardness(a.row.defenses),
     );
+  const canSave = notebookOn && tag !== undefined && day !== null;
   return (
     <>
       {head}
+      {canSave ? (
+        <SaveAttacked tag={tag} day={day} row={saving} onClose={() => setSaving(null)} />
+      ) : null}
       <div className="opponents">
         <div className="opponents-head" aria-hidden="true">
           <span>Player · trophies at Reset</span>
@@ -332,6 +343,19 @@ export function OpponentsCard({
                 </span>
               </div>
               <div className="opponents-action">
+                {canSave ? (
+                  <button
+                    type="button"
+                    className="button dash-small-button"
+                    aria-label={`Save ${row.name ?? row.tag}'s base to your Notebook`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSaving(row);
+                    }}
+                  >
+                    Save
+                  </button>
+                ) : null}
                 <Link
                   className="button button-secondary dash-small-button"
                   to={addToGroupPath(row.tag)}
