@@ -1123,7 +1123,9 @@ describe("auth.google.callback loader", () => {
         },
       ),
     } as never);
-    expect((linked as Response).headers.get("Location")).toBe("/account/discord-alerts");
+    expect((linked as Response).headers.get("Location")).toBe(
+      "/account/discord-alerts?saved=google-connected",
+    );
   });
 
   it("exports a no-store headers policy", async () => {

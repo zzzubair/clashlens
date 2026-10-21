@@ -24,6 +24,8 @@ type Saved = {
 
 export interface DiscordAlertsLoaderData {
   connected: boolean;
+  /** Discord was just connected from this page's Connect button. */
+  justConnected: boolean;
   /** Each verified player's attack alert switch; null when unreadable. */
   alerts: AttackAlerts | null;
   saved: Saved;
@@ -58,6 +60,9 @@ export async function loader({
     ]);
     return {
       connected: account.providers.includes("discord"),
+      justConnected:
+        params.get("saved") === "discord-connected" &&
+        account.providers.includes("discord"),
       alerts,
       saved,
       idempotencyKey: freshIdempotencyKey(),
@@ -70,6 +75,7 @@ export async function loader({
     const { safeWebsiteError } = await import("../server/errors.server");
     return {
       connected: false,
+      justConnected: false,
       alerts: null,
       saved: null,
       idempotencyKey: freshIdempotencyKey(),
@@ -169,7 +175,11 @@ export default function DiscordAlertsRoute() {
   const data = useLoaderData<typeof loader>();
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      {data.saved ? <SavedNote saved={data.saved} alerts={data.alerts} /> : null}
+      {data.saved ? (
+        <SavedNote saved={data.saved} alerts={data.alerts} />
+      ) : data.justConnected ? (
+        <SavedLine>Discord connected.</SavedLine>
+      ) : null}
       <section className="hero" aria-labelledby="discord-alerts-title">
         <h1 id="discord-alerts-title">Discord alerts</h1>
         <p className="lede">
@@ -230,6 +240,11 @@ function ConnectDiscord({
 
 const SWITCH_NAMES = { attack: "Attack alerts", summary: "Daily summary" } as const;
 
+/** A player with no saved name goes by its tag, as on Settings and the profile. */
+function nameAndTag(player: { name: string | null; tag: string }): string {
+  return player.name === null ? player.tag : `${player.name} ${player.tag}`;
+}
+
 /** What the last switch did, at the top of the page; only attack alerts send
  * a confirmation. */
 function SavedNote({
@@ -286,10 +301,8 @@ function AlertRows({
           <p>
             <strong>
               A Discord message about{" "}
-              {missedPlayer
-                ? `${missedPlayer.name ?? "Unnamed"} ${missedPlayer.tag}`
-                : missed.tag}{" "}
-              wasn&apos;t delivered.
+              {missedPlayer ? nameAndTag(missedPlayer) : missed.tag} wasn&apos;t
+              delivered.
             </strong>
           </p>
           <p>{UNDELIVERED_HELP[missed.reason]}</p>
@@ -302,7 +315,7 @@ function AlertRows({
         {alerts.players.map((player) => (
           <li key={player.tag} className="settings-row">
             <div className="settings-label">
-              <span>{player.name ?? "Unnamed"}</span>
+              <span>{player.name ?? player.tag}</span>
               <p className="form-help player-tag">{player.tag}</p>
             </div>
             <div className="settings-control">
@@ -330,7 +343,7 @@ function AlertRows({
           An attack alert looks like this. Your phone&apos;s notification shows its first
           line:
         </figcaption>
-        <strong>{`🛡️ ${example.name ?? "Unnamed"} −24 🏆`}</strong>
+        <strong>{`🛡️ ${example.name ?? example.tag} −24 🏆`}</strong>
         <div className="attack-alert-message">
           <strong>Drift</strong>
           <strong className="attack-alert-result">★★☆ · 87%</strong>
@@ -376,7 +389,7 @@ function AlertSwitch({
         onClick={(event) => {
           if (busy) event.preventDefault();
         }}
-        aria-label={`${SWITCH_NAMES[kind]} for ${player.name ?? "Unnamed"} ${player.tag}`}
+        aria-label={`${SWITCH_NAMES[kind]} for ${nameAndTag(player)}`}
         className="switch"
       >
         <span className="switch-track" aria-hidden="true" />

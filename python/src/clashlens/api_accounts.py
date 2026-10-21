@@ -1147,7 +1147,8 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
 
 def default_player_tag(connection: Any, account_id: int) -> str | None:
     """The account's chosen default player while it is still verified to it,
-    otherwise its first verified player; None with no verified player."""
+    otherwise its first verified player Clash Lens tracks; None when there is
+    neither, so nothing points the bot at a player with no data."""
     row = connection.execute(
         """
         SELECT player.normalized_tag
@@ -1156,6 +1157,7 @@ def default_player_tag(connection: Any, account_id: int) -> str | None:
         LEFT JOIN account_default_players AS chosen
             ON chosen.account_id = link.account_id AND chosen.player_id = link.player_id
         WHERE link.account_id = %s
+          AND (chosen.player_id IS NOT NULL OR player.active)
         ORDER BY chosen.player_id IS NULL, link.verified_at, link.player_id
         LIMIT 1
         """,

@@ -172,6 +172,25 @@ describe("Discord attack alerts settings", () => {
     expect(html).not.toContain('role="switch"');
   });
 
+  it("says Discord connected after connecting it from this page", async () => {
+    const html = await renderPage("?saved=discord-connected");
+    expect(html).toMatch(/role="status"[^>]*>Discord connected\.</);
+    expect(html.match(/role="switch"/g)).toHaveLength(4);
+  });
+
+  it("names a player with no saved name by its tag, as Settings and the profile do", async () => {
+    mocks.requestJson.mockResolvedValue({
+      kind: "discord-attack-alerts",
+      players: [{ tag: "#L82PYUC9J", name: null, on: false, summary_on: false }],
+      undelivered: null,
+    });
+    const html = await renderPage();
+    expect(html).not.toContain("Unnamed");
+    expect(html).toContain("<span>#L82PYUC9J</span>");
+    expect(html).toContain('aria-label="Attack alerts for #L82PYUC9J"');
+    expect(html).toContain("🛡️ #L82PYUC9J −24 🏆");
+  });
+
   it("connects Discord through the existing flow and comes back here", async () => {
     const config = mocks.getWebsiteConfig();
     const login = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());

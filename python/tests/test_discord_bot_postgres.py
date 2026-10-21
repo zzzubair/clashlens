@@ -206,6 +206,50 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
             owner.close()
 
 
+def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            # #L82 was linked first but Clash Lens doesn't track it yet.
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag, active) VALUES ('#L82', false)"
+                )
+            seed_profile(owner, "#2PP", 5100)
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            _verify(owner, mine, "#L82")
+            _verify(owner, mine, "#2PP")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+
+            # Settings and /stats both use the tracked player.
+            summary = api_accounts.get_multi_account_summary(bot, mine)
+            assert summary is not None and summary["default_player"] == "#2PP"
+            assert store.default_tag(account) == "#2PP"
+            commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
+            assert commands.stats(DISCORD_ID, "drift").text.startswith("### ")
+            assert "#L82" not in commands.stats(DISCORD_ID, "drift").text
+            # A chosen default stays chosen, tracked or not.
+            assert _set_default(bot, account, "#L82") is True
+            assert store.default_tag(account) == "#L82"
+
+            # With none chosen and nothing tracked there is no default, and
+            # /stats asks which player.
+            with owner.pool.connection() as connection:
+                connection.execute("DELETE FROM account_default_players")
+                connection.execute(
+                    "UPDATE players SET active = false WHERE normalized_tag = '#2PP'"
+                )
+            summary = api_accounts.get_multi_account_summary(bot, mine)
+            assert summary is not None and summary["default_player"] is None
+            assert commands.stats(DISCORD_ID, "drift").text.startswith("Which linked account?")
+        finally:
+            bot.close()
+            owner.close()
+
+
 def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
