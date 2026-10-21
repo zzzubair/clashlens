@@ -244,7 +244,9 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
           Dashboard
         </NavLink>
       )}
-      {data?.notebookEnabled && data.loggedIn && <NavLink to="/notebook">Notebook</NavLink>}
+      {data?.notebookEnabled && data.loggedIn && (
+        <NavLink to="/notebook">Notebook</NavLink>
+      )}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
       <NavLink to="/analytics/armies">Analytics</NavLink>
       {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
@@ -312,7 +314,9 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          {data?.notebookEnabled && data.loggedIn && <NavLink to="/notebook">Notebook</NavLink>}
+          {data?.notebookEnabled && data.loggedIn && (
+            <NavLink to="/notebook">Notebook</NavLink>
+          )}
           <NavLink to="/account/watchlists">Watchlists</NavLink>
           <NavLink to="/blog">Blog</NavLink>
         </div>
