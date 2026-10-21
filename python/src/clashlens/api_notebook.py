@@ -76,13 +76,23 @@ def parse_code(value: str) -> str:
     return value
 
 
+def _refuse_hidden(text: str) -> None:
+    """Refuse an invisible control or format character other than a line
+    break, a tab or the joiner, a surrogate or a private-use one. Unassigned
+    code points pass: Python 3.12 has emoji newer than Unicode 15 as those."""
+    if any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+        and character not in "\n\t" + _JOINER
+        for character in text
+    ):
+        raise ApiError(422, "invalid_characters")
+
+
 def clean_name(value: str) -> str:
     name = " ".join(unicodedata.normalize("NFC", value).split())
-    if not 1 <= len(name) <= MAX_NAME or any(
-        unicodedata.category(character).startswith("C") and character != _JOINER
-        for character in name
-    ):
+    if not 1 <= len(name) <= MAX_NAME:
         raise ApiError(422, "invalid_name")
+    _refuse_hidden(name)
     return name
 
 
@@ -98,12 +108,9 @@ def clean_link(value: str) -> str | None:
 
 def clean_note(value: str) -> str:
     note = unicodedata.normalize("NFC", value).strip()
-    if len(note) > MAX_NOTE or any(
-        unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
-        and character not in "\n\t" + _JOINER
-        for character in note
-    ):
+    if len(note) > MAX_NOTE:
         raise ApiError(422, "invalid_note")
+    _refuse_hidden(note)
     return note
 
 

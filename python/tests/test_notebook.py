@@ -70,17 +70,24 @@ def test_only_an_exact_base_id_is_read() -> None:
             parse_code(bad)
 
 
-def test_joined_emoji_are_kept_but_other_invisible_characters_are_not() -> None:
-    # 🧑‍🚀 and ❤️‍🔥 are each joined by U+200D.
-    name = "\U0001f9d1\u200d\U0001f680 Rocket"
-    note = "CC: \u2764\ufe0f\u200d\U0001f525 lure first"
-    assert (clean_name(name), clean_note(note)) == (name, note)
-    # A zero-width space, a right-to-left override and a bell stay refused.
-    for hidden in ("\u200b", "\u202e", "\x07"):
-        with pytest.raises(ApiError):
-            clean_name(f"Ring{hidden}")
-        with pytest.raises(ApiError):
-            clean_note(f"Ring{hidden}")
+def test_emoji_are_kept_but_invisible_characters_are_not() -> None:
+    # 🧑‍🚀 and ❤️‍🔥 are each joined by U+200D; 🫟 and 🫩 are newer than
+    # the Unicode 15 table Python 3.12 has.
+    for name, note in (
+        ("\U0001f9d1\u200d\U0001f680 Rocket", "CC: \u2764\ufe0f\u200d\U0001f525 lure first"),
+        ("\U0001fadf Splash", "CC \U0001fae9 lure first"),
+    ):
+        assert (clean_name(name), clean_note(note)) == (name, note)
+    # A zero-width space, a right-to-left override, a bell, a surrogate and a
+    # private-use character stay refused, for that reason and not length.
+    for hidden in ("\u200b", "\u202e", "\x07", "\ud800", "\ue000"):
+        for clean in (clean_name, clean_note):
+            with pytest.raises(ApiError) as refused:
+                clean(f"Ring{hidden}")
+            assert refused.value.code == "invalid_characters"
+    with pytest.raises(ApiError) as refused:
+        clean_note("x" * 1001)
+    assert refused.value.code == "invalid_note"
 
 
 def test_only_the_games_own_base_links_are_kept() -> None:

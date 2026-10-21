@@ -7,6 +7,25 @@ import {
 } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
+const mocks = vi.hoisted(() => ({
+  getWebsiteConfig: vi.fn(),
+  requireLogin: vi.fn(),
+  saveNotebook: vi.fn(),
+}));
+
+vi.mock("../../app/server/config.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../app/server/config.server")>();
+  return { ...actual, getWebsiteConfig: mocks.getWebsiteConfig };
+});
+
+vi.mock("../../app/server/auth-guard.server", () => ({
+  requireLogin: mocks.requireLogin,
+}));
+
+vi.mock("../../app/services/notebook.server", () => ({
+  saveNotebook: mocks.saveNotebook,
+}));
+
 import {
   AccountRow,
   canSet,
@@ -14,6 +33,7 @@ import {
   dayOptions,
   LEGEND_ONLY,
   RunStrip,
+  saveError,
 } from "../../app/components/NotebookParts";
 import {
   baseInitials,
@@ -30,6 +50,8 @@ import {
   type NotebookPlayer,
 } from "../../app/lib/notebook";
 import { loader as baseLoader } from "../../app/routes/notebook.base";
+import { action as saveAction } from "../../app/routes/notebook.save";
+import { PythonApiError } from "../../app/services/python.server";
 
 const RECORD = {
   days: 2,
@@ -382,6 +404,36 @@ describe("base page", () => {
         (error: unknown) => error,
       );
       expect((refused as { init: { status: number } }).init.status).toBe(404);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("a refused save", () => {
+  it("says a name or note has invisible characters, not that it is too long", async () => {
+    const origin = "https://clashlens.example";
+    vi.stubEnv("CLASHLENS_NOTEBOOK_ENABLED", "true");
+    mocks.getWebsiteConfig.mockReturnValue({ publicOrigin: new URL(origin) });
+    mocks.saveNotebook.mockRejectedValue(
+      new PythonApiError(422, { error: "invalid_characters" }),
+    );
+    try {
+      const change = { action: "edit", base: "B-7K3QX9", note: "Ring\u200b" };
+      const request = new Request(`${origin}/notebook/save`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin },
+        body: new URLSearchParams({ change: JSON.stringify(change) }).toString(),
+      });
+      const answer = (await saveAction({ request } as never)) as unknown as {
+        data: { error: string };
+        init: { status: number };
+      };
+      expect([answer.init.status, saveError(answer.data.error)]).toEqual([
+        422,
+        "Names and notes can't contain invisible characters.",
+      ]);
+      expect(saveError("invalid_note")).toBe("Notes can be up to 1,000 characters.");
     } finally {
       vi.unstubAllEnvs();
     }

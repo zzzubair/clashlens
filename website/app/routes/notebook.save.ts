@@ -10,6 +10,7 @@ const REFUSALS = new Set([
   "invalid_name",
   "invalid_base_link",
   "invalid_note",
+  "invalid_characters",
   "invalid_day",
   "player_required",
   "player_not_verified",

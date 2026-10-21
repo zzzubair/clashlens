@@ -46,6 +46,7 @@ const ERRORS: Record<string, string> = {
   invalid_base_link:
     "That isn't a base link from the game. Copy it from the layout's share button.",
   invalid_note: "Notes can be up to 1,000 characters.",
+  invalid_characters: "Names and notes can't contain invisible characters.",
   invalid_day: "That day can't be changed any more. Refresh the page.",
   player_required: "Pick which account.",
   player_not_verified: "That account is no longer linked to you.",
@@ -55,6 +56,9 @@ const ERRORS: Record<string, string> = {
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
+
+/** What the page says when a save is refused with `code`. */
+export const saveError = (code: string): string => ERRORS[code] ?? ERRORS.unavailable!;
 
 export interface Toast {
   text: string;
@@ -82,7 +86,7 @@ export function useNotebookSave(notebook: Notebook | null) {
       return;
     handled.current = fetcher.data;
     if (fetcher.data.error) {
-      setError(ERRORS[fetcher.data.error] ?? ERRORS.unavailable!);
+      setError(saveError(fetcher.data.error));
       return;
     }
     const saved = fetcher.data.saved;

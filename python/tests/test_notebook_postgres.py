@@ -40,6 +40,8 @@ NOTEBOOK = "/v1/account/notebook"
 LINK = "https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAAKgAAAAJ"
 ROCKET = "\U0001f9d1\u200d\U0001f680 Rocket"
 LURE = "CC: \u2764\ufe0f\u200d\U0001f525 lure first"
+SPLASH = "\U0001fadf Splash"
+TIRED = "CC \U0001fae9 lure first"
 
 
 def test_both_notebook_routes_are_missing_while_the_dashboard_is_off() -> None:
@@ -195,6 +197,11 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
                 # save and read back unchanged.
                 save(action="edit", base=spiral, name=ROCKET, note=LURE)
                 joined = notebook(base=spiral)
+                # So do 🫟 and 🫩, newer than Python 3.12's character table,
+                # through deleting the base and Undo.
+                save(action="edit", base=hex_, name=SPLASH, note=TIRED)
+                save(action="undo", undo=save(action="delete", base=hex_)["undo"])
+                newer = notebook(base=hex_)
 
                 # Monday, Day 8, an hour after the Reset, before the new
                 # week's league record is written: the week follows the one
@@ -285,6 +292,8 @@ def test_a_bases_record_comes_from_the_workers_day_counts(
         assert restored[key] == renamed_back[key]
     names = {base["id"]: base["name"] for base in joined["bases"]}
     assert (names[spiral], joined["base"]["note"]) == (ROCKET, LURE)
+    names = {base["id"]: base["name"] for base in newer["bases"]}
+    assert (names[hex_], newer["base"]["note"]) == (SPLASH, TIRED)
 
     players = {player["tag"]: player for player in monday["players"]}
     assert (players[MAIN]["current"], players[ALT]["current"]) == (ring, ring)
