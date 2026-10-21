@@ -190,9 +190,9 @@ Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
 screens, they move to a bar at the bottom of the screen: Home (Dashboard when
 signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
 holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
-the theme switch and Sign in or the account menu. A signed-out visitor who opens a page that
-needs an account sees, in its place, what the page is for and separate Create
-account and Sign in buttons that both come back to it
+the theme switch and Sign in or the account menu. A signed-out visitor who
+opens a page that needs an account sees, in its place, what the page is for and
+separate Create account and Sign in buttons that both come back to it
 ([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)). A sign-in with Google
 or Discord that has no account yet says "No account found" and asks before
 making one; a new account chooses a username, links a player, then goes on to
