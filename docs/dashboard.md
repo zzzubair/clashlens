@@ -14,7 +14,7 @@ The dashboard can be built behind the off switch, but nothing goes live until tr
 - **Customise:** move cards (drag, or ↑ ↓), remove (✕), add from "+ Add a card" (each card listed with its size and one-line description), Reset to default, Done. Cards with settings show a filled "⚙ Settings" button while customising: a full-width bar under a Small card's controls, and in the top-right corner of a Medium or Large card. On a phone every card shows the bar.
 - **Default layout:** each user is either on the default layout or on their own. Users on the default get the new default when it ships, including new cards. Any move, remove or add switches them to their own layout, which we never change for them; "Reset to default" puts them back.
 - **First visit:** a pop-up offers "Use our layout" (recommended) or "Build my own" (starts empty with the card list open), with "Change it any time with ⚙ Customise dashboard".
-- **Groups, not saved players.** Group cards show the group's real members plus the selected account (on the viewer's card only). Other linked accounts appear only if they are members; accounts not in Legend I never appear.
+- **Watchlists, not saved players.** Watchlist cards show the watchlist's real members plus the selected account (on the viewer's card only). Other linked accounts appear only if they are members; accounts not in Legend I never appear.
 - **Names:** long, emoji, symbol or right-to-left names are cut with "…" and shown in full on hover.
 
 ## Default layout
