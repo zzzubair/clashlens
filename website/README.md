@@ -325,7 +325,10 @@ as you type), its link, and Edit to rename or delete. The base ID is for
 support only, so pages never show it beyond the address. Every change saves at
 once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
-Reset.
+Reset. Each base can have one picture (JPEG, PNG or WebP, up to 15 MB): added
+at the top of its page, changed or removed in Edit, saved through
+`/notebook/picture`, shown small in lists and full size when tapped, without
+changing the address; tap outside, Close, Escape or Back closes it.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the

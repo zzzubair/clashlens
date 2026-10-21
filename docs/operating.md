@@ -254,7 +254,10 @@ Each base has at most one picture. The private API turns an upload (JPEG, PNG
 or WebP, up to 15 MB and 50 million pixels) into a WebP at most 1,600 pixels
 on its longer side, about 300 KB, and a 96-pixel square small copy of about
 4 KB, and stores only those two. A Clasher can upload 30 pictures in any
-24 hours. Pages get signed links that work for one hour. Files of a replaced
+24 hours. Pages get signed links that work for one hour, signed from the
+start of each half hour so browsers can reuse saved copies; a page's links
+have 30 to 60 minutes left. The private API takes one picture upload or
+removal at a time and answers any other at once with `pictures_busy`. Files of a replaced
 or removed picture, or of a deleted base, are deleted from R2 by later uploads
 once a day has passed, 20 at a time, so Undo can still bring them back.
 
