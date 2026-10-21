@@ -111,8 +111,7 @@ def test_a_shared_link_shows_the_bases_record_until_sharing_stops(
                 named = shared(link)
                 unshared = share(action="settings", base=box, show_names=True)
 
-                # The next Season, Ring still shows its record as of the
-                # Season's end.
+                # Once its Season has ended, the link shows nothing.
                 clock[0] = day(31)
                 next_season = shared(link)
                 clock[0] = noon
@@ -167,8 +166,7 @@ def test_a_shared_link_shows_the_bases_record_until_sharing_stops(
                                         "stars": [0, 1, 0, 0], "trophies_lost": 5}},
     ]
     assert unshared == (404, {"error": "share_not_found"})
-    assert next_season[0] == 200
-    assert next_season[1]["record"] == ring_record
+    assert next_season == (404, {"error": "share_not_found"})
 
     assert stopped["share"] is None
     assert after_stop == (404, {"error": "share_not_found"})

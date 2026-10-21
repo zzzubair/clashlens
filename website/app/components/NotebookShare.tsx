@@ -23,7 +23,7 @@ async function send(change: ShareChange): Promise<BaseShare | null> {
     error?: string;
   };
   if (!response.ok || answer.share === undefined)
-    throw new Error(ERRORS[answer.error ?? ""] ?? UNAVAILABLE);
+    throw new Error(ERRORS[answer.error ?? ""] ?? UNAVAILABLE, { cause: answer.error });
   return answer.share;
 }
 
@@ -68,10 +68,8 @@ export function ShareButton({
     setOpen(true);
     setError(null);
     setCopied(null);
-    const made: Promise<BaseShare | null> = current
-      ? Promise.resolve(current)
-      : send({ action: "share", base });
-    setBusy(!current);
+    const made = send({ action: "share", base });
+    setBusy(true);
     const address = made.then((shared) => {
       if (!shared) throw new Error(UNAVAILABLE);
       return location.origin + sharePath(shared.link);
@@ -99,9 +97,9 @@ export function ShareButton({
         setCurrent(shared);
         if (!shared) setCopied(null);
       })
-      .catch((cause: Error) => {
-        setCurrent(before);
-        setError(cause.message);
+      .catch((failure: Error) => {
+        setCurrent(failure.cause === "share_not_found" ? null : before);
+        setError(failure.message);
       })
       .finally(() => setBusy(false));
   }

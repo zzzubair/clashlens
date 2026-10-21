@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Request
@@ -85,8 +85,7 @@ def save_share(database: ApiDatabase, account_id: int, body: ShareWrite) -> dict
 
 def read_share(database: ApiDatabase, link_id: str, *, now: datetime) -> dict[str, Any] | None:
     """What the shared page shows, by its link, or None for a link that does
-    not exist or was stopped. A base from a finished Season shows its record
-    as of that Season's end."""
+    not exist, was stopped, or is for a base whose Season has ended."""
     with database.pool.connection() as connection:
         row = connection.execute(
             """
@@ -101,12 +100,10 @@ def read_share(database: ApiDatabase, link_id: str, *, now: datetime) -> dict[st
     if row is None:
         return None
     account_id, code, season_id, name, include_link, show_names = row
-    season_end = datetime.fromtimestamp(int(_text(season_id)), UTC) + SEASON_DURATION
+    if now >= datetime.fromtimestamp(int(_text(season_id)), UTC) + SEASON_DURATION:
+        return None
     try:
-        notebook = get_notebook(
-            database, int(account_id), base=_text(code),
-            now=min(now, season_end - timedelta(seconds=1)),
-        )
+        notebook = get_notebook(database, int(account_id), base=_text(code), now=now)
     except ApiError:
         # Deleted, or stopped, since the link was read.
         return None
