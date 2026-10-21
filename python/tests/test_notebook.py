@@ -1,7 +1,10 @@
 """Season notebook rules that need no database: runs from day picks, base
-IDs, and the names, notes and links a Clasher may save."""
+IDs, the names, notes and links a Clasher may save, and which picture bucket
+the private API uses."""
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 import pytest
 
@@ -15,6 +18,7 @@ from clashlens.api_notebook import (
     parse_code,
     runs,
 )
+from clashlens.api_notebook_pictures import store_from_environment
 
 RING, BOX, FORT = 1, 2, 3
 LEGEND = set(range(1, 29))
@@ -98,3 +102,29 @@ def test_only_the_games_own_base_links_are_kept() -> None:
                 "https://link.clashofclans.com.evil.example/x", link + " <b>"):
         with pytest.raises(ApiError):
             clean_link(bad)
+
+
+def test_pictures_go_to_the_private_r2_bucket_only_once_its_keys_are_set(tmp_path) -> None:
+    access, secret = tmp_path / "access", tmp_path / "secret"
+    env = {
+        "CLASHLENS_PICTURES_ACCESS_KEY_FILE": str(access),
+        "CLASHLENS_PICTURES_SECRET_KEY_FILE": str(secret),
+    }
+    # No key files, as outside the API container.
+    assert store_from_environment(env) is None
+    # The placeholder a fixture run leaves.
+    access.write_text("disabled")
+    secret.write_text("disabled")
+    assert store_from_environment(env) is None
+    access.write_text("test-access\n")
+    secret.write_text("test-secret")
+    store = store_from_environment(env)
+    assert store is not None
+    link = store.link("0" * 32 + "/full.webp", datetime(2026, 10, 21, 3, 40, tzinfo=UTC))
+    assert link.startswith(
+        "https://8d7a40d7dce99455d64eaba26d180709.eu.r2.cloudflarestorage.com"
+        "/clashlens-notebook-pictures/"
+    )
+    assert "X-Amz-Expires=3600" in link
+    with pytest.raises(ValueError):
+        store_from_environment({**env, "CLASHLENS_PICTURES_SECURE": "false"})

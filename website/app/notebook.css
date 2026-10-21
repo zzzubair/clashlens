@@ -59,7 +59,7 @@
   color: var(--cl-muted);
 }
 
-/* A base's tile: its initials until bases have pictures. */
+/* A base's tile: its picture's small copy, or its initials without one. */
 .nb-tile {
   display: inline-grid;
   flex: 0 0 auto;
@@ -629,4 +629,125 @@
 }
 .nb-base-part + .nb-note {
   margin-top: 1rem;
+}
+
+/* Pictures: the small copy fills a tile; tapping a picture opens it. */
+.nb-tile:has(> img) {
+  overflow: hidden;
+  background: var(--cl-panel);
+}
+.nb-tile > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+button.nb-tile-picture,
+.nb-tile-cover {
+  padding: 0;
+  cursor: zoom-in;
+}
+.nb-tile-picture.nb-tile-lg {
+  height: auto;
+  max-height: 18rem;
+  aspect-ratio: 2 / 1;
+}
+.nb-tile-add-picture {
+  color: var(--cl-action-text);
+  background: var(--cl-panel);
+  border-style: dashed;
+  border-color: var(--cl-action-border);
+  font-family: var(--cl-font);
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nb-tile-add-picture:focus-within,
+.nb-picture-actions label:focus-within {
+  outline: 3px solid var(--cl-orange);
+  outline-offset: 2px;
+}
+.nb-disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+/* A list row is a link to its base, so its picture's button lies over the
+ * row's tile. */
+.nb-list > li {
+  position: relative;
+}
+.nb-tile-cover {
+  position: absolute;
+  top: 50%;
+  left: calc(0.5rem + 1px);
+  width: 2.75rem;
+  height: 2.75rem;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  transform: translateY(-50%);
+}
+.nb-picture-error {
+  margin: 0.5rem 0 0;
+  color: var(--cl-negative);
+  font-weight: 650;
+}
+.nb-picture-field {
+  display: grid;
+  gap: 0.5rem;
+}
+.nb-field-label {
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+.nb-picture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.nb-preview {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 3.5rem 1rem 1rem;
+  background: transparent;
+  border: 0;
+}
+.nb-preview[open] {
+  display: grid;
+  place-items: center;
+}
+.nb-preview::backdrop {
+  background: rgb(12 8 16 / 0.9);
+}
+/* Only the picture itself keeps a tap from closing it. */
+.nb-preview figure {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  max-width: 100%;
+  margin: 0;
+  pointer-events: none;
+}
+.nb-preview img {
+  max-width: 100%;
+  max-height: calc(100dvh - 7rem);
+  object-fit: contain;
+  border-radius: var(--cl-radius);
+  pointer-events: auto;
+}
+.nb-preview figcaption {
+  color: #fff;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.nb-preview-close {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.75rem;
+  color: #fff;
+  background: rgb(0 0 0 / 0.45);
+  border-color: rgb(255 255 255 / 0.55);
 }

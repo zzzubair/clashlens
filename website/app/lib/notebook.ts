@@ -47,6 +47,13 @@ export interface NotebookPlayer {
   legendDays: number[];
 }
 
+/** A base's picture and its small copy for lists: links that work for 30 to
+ * 60 minutes after the page loads. */
+export interface BasePicture {
+  full: string;
+  small: string;
+}
+
 export interface NotebookBase {
   /** The base ID, like B-7K3QX9. */
   id: string;
@@ -57,6 +64,8 @@ export interface NotebookBase {
   /** The later of when it last ran and when it was added or its status set. */
   recent: string;
   record: BaseRecord;
+  /** None without a picture, or while pictures are off. */
+  picture?: BasePicture | null;
 }
 
 export interface Notebook {
@@ -94,6 +103,8 @@ export interface NotebookSaved {
 }
 
 export const BASE_ID = /^B-[0-9A-HJKMNP-TV-Z]{6}$/;
+// The largest picture upload; a phone photo or screenshot is 2 to 8 MB.
+export const MAX_PICTURE_BYTES = 15 * 1024 * 1024;
 const STATUSES = new Set(["active", "to_try", "retired"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -165,13 +176,26 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
   };
 }
 
+const isLink = (value: unknown): value is string =>
+  typeof value === "string" && /^https?:\/\/[^\s"'<>]+$/.test(value);
+
+/** A picture's links, null for none, or undefined when they do not fit. */
+export function parsePicture(value: unknown): BasePicture | null | undefined {
+  if (value === null || value === undefined) return null;
+  return isRecord(value) && isLink(value.full) && isLink(value.small)
+    ? { full: value.full, small: value.small }
+    : undefined;
+}
+
 function parseBase(value: unknown): NotebookBase | null {
   if (!isRecord(value) || !isCode(value.id) || typeof value.name !== "string")
     return null;
   const { status, added_day: added, last_ran_day: last, recent } = value;
   const record = parseRecord(value.record);
+  const picture = parsePicture(value.picture);
   if (
     !record ||
+    picture === undefined ||
     !STATUSES.has(status as string) ||
     !isDay(added) ||
     !(last === null || isDay(last)) ||
@@ -187,6 +211,7 @@ function parseBase(value: unknown): NotebookBase | null {
     lastRanDay: last,
     recent,
     record,
+    picture,
   };
 }
 

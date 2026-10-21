@@ -49,6 +49,14 @@ from pydantic import Field
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
+from .api_notebook_pictures import (
+    PictureStore,
+    detach,
+    keys,
+    links,
+    reattach,
+    register_picture_routes,
+)
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .league_week import WEEK, week_start
 
@@ -420,11 +428,16 @@ def _pick_day(notebook: _Notebook, day: int | None, *, past: bool) -> int:
 
 
 def get_notebook(
-    database: ApiDatabase, account_id: int, *, now: datetime, base: str | None = None
+    database: ApiDatabase,
+    account_id: int,
+    *,
+    now: datetime,
+    base: str | None = None,
+    pictures: PictureStore | None = None,
 ) -> dict[str, Any]:
     """The account's notebook this Season: its players, each one's runs and
-    current base, and every base with its record. With ``base``, also that
-    base's note, link and record on each player."""
+    current base, and every base with its record and picture links. With
+    ``base``, also that base's note, link and record on each player."""
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         notebook = _Notebook(connection, account_id, now)
@@ -434,6 +447,7 @@ def get_notebook(
         legend = notebook.legend_days()
         shown = notebook.shown()
         detail = _base(notebook, base) if base is not None else None
+        picture_keys = keys(connection, list(bases))
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
     by_player: dict[int, dict[int, dict[str, Any]]] = {}
@@ -503,6 +517,7 @@ def get_notebook(
                        - timedelta(seconds=1)] if base_id in last_ran else []),
                 ]).isoformat(),
                 "record": records[base_id],
+                "picture": links(pictures, picture_keys.get(base_id), now),
             }
             for base_id, base in bases.items()
         ],
@@ -550,6 +565,8 @@ class UndoBase(UndoEdit):
     created_at: str = Field(max_length=40)
     status_at: str = Field(max_length=40)
     updated_at: str = Field(max_length=40)
+    # Its picture's key, "" for none.
+    picture: str = Field(default="", max_length=32)
 
 
 class Undo(StrictBody):
@@ -700,7 +717,8 @@ def save(
                 edited = {key: kept[key] for key in ("base", "name", "link")}
                 _edit(connection, base_id, body.name, body.link, body.note)
             else:
-                gone = kept
+                # Its picture stays a day off it, for Undo to put back.
+                gone = {**kept, "picture": detach(connection, base_id) or ""}
                 # Its days keep their picks, with no base, until Undo.
                 for player_id, mine in notebook.picks().items():
                     for day, picked in mine.items():
@@ -788,6 +806,7 @@ def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
         ).fetchone()
         if row is None:
             raise ApiError(422, "invalid_request")
+        reattach(notebook.connection, notebook.account_id, base.picture, int(row[0]))
     for item in undo.picks:
         player_id = _player(notebook, item.tag)
         day = _pick_day(notebook, item.day, past=True)
@@ -815,8 +834,9 @@ def register_notebook_routes(
     database: ApiDatabase,
     current_time: Callable[[], datetime],
     enabled: bool,
+    pictures: PictureStore | None = None,
 ) -> None:
-    """The notebook's two routes, both answering 404 ``notebook_disabled``
+    """The notebook's routes, each answering 404 ``notebook_disabled``
     while the dashboard is switched off, before reading anything."""
 
     def switch() -> None:
@@ -836,7 +856,7 @@ def register_notebook_routes(
         if base is not None and len(base) > 12:
             raise ApiError(404, "base_not_found")
         return JSONResponse(content=get_notebook(
-            database, account_id, now=current_time(), base=base
+            database, account_id, now=current_time(), base=base, pictures=pictures
         ))
 
     @router.post("/v1/account/notebook")
@@ -844,4 +864,6 @@ def register_notebook_routes(
         account_id = account(request, "account.update")
         return JSONResponse(content=save(database, account_id, body, now=current_time()))
 
+    register_picture_routes(router, database=database, current_time=current_time,
+                            store=pictures, account=account)
     app.include_router(router)

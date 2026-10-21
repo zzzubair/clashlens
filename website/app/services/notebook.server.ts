@@ -1,6 +1,8 @@
 import {
   parseNotebook,
+  parsePicture,
   parseSaved,
+  type BasePicture,
   type Notebook,
   type NotebookChange,
   type NotebookSaved,
@@ -43,4 +45,29 @@ export async function saveNotebook(
   const saved = parseSaved(payload);
   if (saved === null) throw new PythonApiError(502, { error: "malformed" });
   return saved;
+}
+
+/** Make `image` the base's picture, or with null remove it; its new links. */
+export async function saveBasePicture(
+  identity: GoogleAccountIdentity,
+  base: string,
+  image: Buffer | null,
+): Promise<BasePicture | null> {
+  const payload = await requestJson<{ picture?: unknown }>(
+    "/v1/account/notebook/picture",
+    "POST",
+    Buffer.from(
+      JSON.stringify({ base, image: image === null ? null : image.toString("base64") }),
+      "utf8",
+    ),
+    "notebook-picture",
+    undefined,
+    identity,
+    undefined,
+    // A large photo takes a second or two to shrink and store.
+    30_000,
+  );
+  const picture = parsePicture(payload.picture);
+  if (picture === undefined) throw new PythonApiError(502, { error: "malformed" });
+  return picture;
 }

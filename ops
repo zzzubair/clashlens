@@ -937,7 +937,7 @@ prepare_secrets() {
     replace_secret clashlens-interactive-api-keys interactive-1=dev-interactive-key
     replace_secret clashlens-interactive-1 dev-interactive-key
     replace_secret clashlens-hmac-current AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
-    replace_secret clashlens-hmac-previous disabled
+    local name; for name in hmac-previous api-pictures-access-key api-pictures-secret-key; do replace_secret "clashlens-$name" disabled; done
     replace_secret clashlens-login-secret QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8
     replace_secret clashlens-google-client-secret clashlens-browser-test-secret
     replace_secret clashlens-discord-client-secret discord-browser-test-secret

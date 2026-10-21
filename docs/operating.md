@@ -229,6 +229,35 @@ requests, since the collector started. It excludes player verification and
 operator recovery. Read it twice, 60 seconds apart, and divide the difference
 by 60 for the collection rate.
 
+## Notebook pictures
+
+Notebook pictures live in the private Cloudflare R2 bucket
+`clashlens-notebook-pictures`, whose address is fixed in
+`python/src/clashlens/api_notebook_pictures.py`. Its key pair is two rootless
+Podman secrets the private API mounts, `clashlens-api-pictures-access-key` and
+`clashlens-api-pictures-secret-key`, made by hand on rogue from an R2 API token
+with object read and write on that bucket only:
+
+```sh
+printf '%s' "$ACCESS_KEY" | podman secret create clashlens-api-pictures-access-key -
+printf '%s' "$SECRET_KEY" | podman secret create clashlens-api-pictures-secret-key -
+```
+
+Both must exist before `./ops up`, or the API container cannot start. In
+production `./ops` never touches them; a fixture run fills its own with the
+placeholder `disabled`. While either holds `disabled`, the private API saves no
+pictures and answers `pictures_unavailable`. To rotate, `podman secret rm`
+both, create them again and run `./ops up`. Migration 0125 creates the
+`notebook_pictures` table.
+
+Each base has at most one picture. The private API turns an upload (JPEG, PNG
+or WebP, up to 15 MB and 50 million pixels) into a WebP at most 1,600 pixels
+on its longer side, about 300 KB, and a 96-pixel square small copy of about
+4 KB, and stores only those two. A Clasher can upload 30 pictures in any
+24 hours. Pages get signed links that work for one hour. Files of a replaced
+or removed picture, or of a deleted base, are deleted from R2 by later uploads
+once a day has passed, 20 at a time, so Undo can still bring them back.
+
 ## Respond to alerts
 
 Start with the commands below in the same production checkout. Keep incident
@@ -1168,6 +1197,28 @@ for board rows. `./ops logs worker` shows each pass's end as
 **Fix or escalate:** escalate any still wrong after their recalculation, and
 any chain or ledger problem: the worker's calculation can produce neither.
 A board row whose day changed is rebuilt by the board's own corrections.
+
+### Notebook picture line
+
+**What it means:** not an alert. Once a week, from Monday 12:00 UTC, the
+alert check posts how Notebook pictures were used: uploads in the last 7 days
+and how many Clashers made them, the pictures on a base now, and the bytes all
+stored pictures take, as a share of R2's free 10 GB. The bytes include files
+still waiting to be deleted (see [Notebook pictures](#notebook-pictures)).
+If the count can't be read, the next run tries again.
+
+**First checks:** the biggest uploaders this week:
+
+```sh
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT account_id, count(*), sum(bytes) FROM notebook_pictures
+   WHERE uploaded_at > now() - interval '7 days'
+   GROUP BY account_id ORDER BY count(*) DESC LIMIT 10"
+```
+
+**Fix or escalate:** escalate once storage passes 80% of the free 10 GB, or
+when one account uploads far more than the rest; each Clasher is held to 30
+uploads in 24 hours.
 
 ### Season final ranks missing
 

@@ -195,6 +195,7 @@ def create_app(
     api_metrics: ApiMetrics | None = None,
     clashking_client: ClashKingClient | None = None,
     dashboard_enabled: bool = False,
+    notebook_pictures: Any = None,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -232,6 +233,10 @@ def create_app(
         database.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    from . import api_notebook_pictures
+
+    # The notebook's picture bucket: given by a test, or CLASHLENS_PICTURES_*.
+    pictures = notebook_pictures or api_notebook_pictures.store_from_environment()
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
@@ -279,7 +284,11 @@ def create_app(
             return response
 
         try:
-            body = await _read_limited_body(request, max_body_bytes)
+            # Only a picture upload may be larger.
+            body = await _read_limited_body(request, max(max_body_bytes, (
+                api_notebook_pictures.MAX_BODY_BYTES
+                if request.url.path == api_notebook_pictures.PICTURE_PATH else 0
+            )))
         except RequestBodyTooLarge:
             response = JSONResponse(
                 status_code=413,
@@ -1245,6 +1254,7 @@ def create_app(
         database=production_database,
         current_time=current_time,
         enabled=dashboard_enabled,
+        pictures=pictures,
     )
     return app
 

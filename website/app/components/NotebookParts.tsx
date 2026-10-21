@@ -25,6 +25,7 @@ import {
   SORT_LABEL,
   STATUS_LABEL,
   stripBlocks,
+  type BasePicture,
   type BaseStatus,
   type LibraryFilter,
   type LibrarySort,
@@ -34,6 +35,7 @@ import {
   type NotebookPlayer,
   type NotebookSaved,
 } from "../lib/notebook";
+import { PictureButton } from "./NotebookPictures";
 
 const SAVE = "/notebook/save";
 export const LEGEND_ONLY = "Bases can be set on Legend days only.";
@@ -180,12 +182,14 @@ export function statusNews(
     .join(" ");
 }
 
-/** A base's tile: its initials until bases have pictures. */
+/** A base's tile: its picture's small copy, or its initials without one. */
 export function BaseTile({
   name,
+  picture,
   size = "sm",
 }: {
   name: string | null;
+  picture?: BasePicture | null;
   size?: "sm" | "lg";
 }) {
   return (
@@ -193,7 +197,13 @@ export function BaseTile({
       className={`nb-tile nb-tile-${size}${name ? "" : " nb-tile-empty"}`}
       aria-hidden="true"
     >
-      {name ? baseInitials(name) : ""}
+      {picture ? (
+        <img src={picture.small} alt="" loading="lazy" decoding="async" />
+      ) : name ? (
+        baseInitials(name)
+      ) : (
+        ""
+      )}
     </span>
   );
 }
@@ -429,7 +439,7 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
             {rows.slice(0, limit).map((base) => (
               <li key={base.id}>
                 <Link to={`/notebook/bases/${base.id}`} className="nb-row">
-                  <BaseTile name={base.name} />
+                  <BaseTile name={base.name} picture={base.picture} />
                   <span className="nb-row-text">
                     <b>
                       <Highlight name={base.name} query={query} />
@@ -440,6 +450,10 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
                     {statusText(base, notebook)}
                   </span>
                 </Link>
+                {/* Tapping the picture opens it; the rest of the row, the base. */}
+                {base.picture ? (
+                  <PictureButton base={base} picture={base.picture} size="cover" />
+                ) : null}
               </li>
             ))}
             {rows.length > limit ? (
@@ -490,7 +504,7 @@ function PickList({
         {rows.slice(0, limit).map((base) => (
           <li key={base.id}>
             <button type="button" className="nb-row" onClick={() => onPick(base)}>
-              <BaseTile name={base.name} />
+              <BaseTile name={base.name} picture={base.picture} />
               <span className="nb-row-text">
                 <b>
                   <Highlight name={base.name} query={query} />
@@ -656,7 +670,7 @@ export function FixDaySheet({
                     aria-current={code === said ? "true" : undefined}
                     onClick={() => (code === said ? onClose() : pick(code))}
                   >
-                    <BaseTile name={base.name} />
+                    <BaseTile name={base.name} picture={base.picture} />
                     <span className="nb-row-text">
                       <b>{base.name}</b>
                       <small>
@@ -916,6 +930,9 @@ export function StatusSheet({
                 >
                   <BaseTile
                     name={player.current ? nameOf(notebook, player.current) : null}
+                    picture={
+                      notebook.bases.find((item) => item.id === player.current)?.picture
+                    }
                   />
                   <span className="nb-row-text">
                     <b>{playerName(player)}</b>
@@ -1027,7 +1044,11 @@ export function AccountRow({
   return (
     <article className="nb-account">
       <div className="nb-account-head">
-        <BaseTile name={base?.name ?? null} />
+        {base?.picture ? (
+          <PictureButton base={base} picture={base.picture} />
+        ) : (
+          <BaseTile name={base?.name ?? null} />
+        )}
         <div className="nb-account-text">
           <h3>
             {playerName(player)}

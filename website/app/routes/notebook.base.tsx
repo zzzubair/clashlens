@@ -11,13 +11,13 @@ import {
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
-  BaseTile,
   recordLine,
   Sheet,
   StatusSheet,
   statusText,
   type Saver,
 } from "../components/NotebookParts";
+import { BasePictureArea, PictureField } from "../components/NotebookPictures";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   averageLost,
@@ -112,7 +112,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
   const accounts = new Set(detail?.players.map((item) => item.tag)).size;
   return (
     <>
-      <BaseTile name={base.name} size="lg" />
+      <BasePictureArea key={base.id} base={base} />
       <div className="nb-base-title">
         <h1>{base.name}</h1>
         <button
@@ -288,7 +288,7 @@ function NoteBox({
   );
 }
 
-/** Rename a base, change its base link, or delete it. */
+/** Rename a base, change its base link or picture, or delete it. */
 function EditSheet({
   base,
   link,
@@ -343,6 +343,7 @@ function EditSheet({
           Save
         </button>
       </form>
+      <PictureField base={base} onDone={onClose} />
       <div className="nb-delete">
         {deleting ? (
           <>
