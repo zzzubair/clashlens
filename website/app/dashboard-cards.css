@@ -253,9 +253,9 @@
 .clock-sheet {
   position: fixed;
   right: 0;
-  bottom: 0;
+  bottom: var(--cl-bottom-tabs, 0px);
   left: 0;
-  padding: 0.9rem 1rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: 0.9rem 1rem 1.5rem;
   border-radius: 16px 16px 0 0;
 }
 

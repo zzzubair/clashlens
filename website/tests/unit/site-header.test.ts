@@ -36,6 +36,15 @@ async function renderHeader(data: RootLoaderData, path = "/") {
 
 const tabsOf = (nav: string) =>
   [...nav.matchAll(/<a [^>]*>([^<]+)<\/a>/g)].map((match) => match[1]);
+// Each link's or toggle's words, icons left out.
+const labelsOf = (html: string) =>
+  [...html.matchAll(/<(a|summary) [^>]*>([\s\S]*?)<\/\1>/g)].map((match) =>
+    match[2].replace(/<[^>]*>/g, ""),
+  );
+const bottomOf = (header: string) =>
+  /<nav class="bottom-tabs"[\s\S]*?<\/nav>/.exec(header)![0];
+const moreOf = (header: string) =>
+  /<details class="site-menu"[\s\S]*?<\/details>/.exec(header)![0];
 
 it("names the tabs most useful first, with no Home tab", async () => {
   const header = await renderHeader({
@@ -44,13 +53,10 @@ it("names the tabs most useful first, with no Home tab", async () => {
     crewsEnabled: true,
   });
   const wide = /<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(header)![0];
-  const menu = /<nav class="site-menu-tabs"[\s\S]*?<\/nav>/.exec(header)![0];
   const tabs = ["Dashboard", "Rankings", "Analytics", "Crews", "Watchlists", "Blog"];
   expect(tabsOf(wide)).toEqual(tabs);
-  expect(tabsOf(menu)).toEqual(tabs);
   expect(wide).toContain('href="/account/watchlists"');
   expect(header).toContain('aria-label="Clash Lens"');
-  expect(header).not.toContain(">Home<");
 
   const switchedOff = await renderHeader(SIGNED_OUT);
   expect(tabsOf(/<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(switchedOff)![0])).toEqual(
@@ -84,12 +90,55 @@ it("on a sign-in page, Sign in passes on where the Clasher was going", async () 
   );
 });
 
-it("folds the tabs, theme and Discord into one Menu", async () => {
+it("on phones puts the four most useful tabs and More in the bottom bar", async () => {
+  const features = { dashboardEnabled: true, crewsEnabled: true };
+  const signedOut = await renderHeader({ ...SIGNED_OUT, ...features });
+  const more = moreOf(signedOut);
+  const bar = labelsOf(bottomOf(signedOut).replace(more, ""));
+  expect(bar).toEqual(["Home", "Rankings", "Analytics", "Crews"]);
+  expect(labelsOf(more)).toEqual([
+    "More",
+    "Watchlists",
+    "Blog",
+    "Join Discord, opens in a new tab",
+  ]);
+  expect(more).toContain(DISCORD_INVITE_URL);
+
+  const signedIn = await renderHeader({
+    ...SIGNED_OUT,
+    ...features,
+    loggedIn: true,
+    accountLabel: "Lens Scout",
+  });
+  expect(labelsOf(bottomOf(signedIn))[0]).toBe("Dashboard");
+  // With the Dashboard switched off, / is the front page for everyone.
+  expect(
+    labelsOf(bottomOf(await renderHeader({ ...SIGNED_OUT, loggedIn: true }))),
+  ).toEqual([
+    "Home",
+    "Rankings",
+    "Analytics",
+    "More",
+    "Watchlists",
+    "Blog",
+    "Join Discord, opens in a new tab",
+  ]);
+});
+
+it("keeps one theme switch, in the top bar, on every screen size", async () => {
   const header = await renderHeader(SIGNED_OUT);
-  const menu = /<details class="site-menu"[\s\S]*?<\/details>/.exec(header)![0];
-  expect(menu).toContain("<span>Menu</span>");
-  expect(menu).toContain("theme-toggle");
-  expect(menu).toContain(DISCORD_INVITE_URL);
+  expect(header.match(/class="theme-toggle"/g)).toHaveLength(1);
+  expect(bottomOf(header)).not.toContain("theme-toggle");
+});
+
+it("marks More while one of its pages is open", async () => {
+  const toggleOf = (header: string) => /<summary [^>]*>/.exec(moreOf(header))![0];
+  expect(toggleOf(await renderHeader(SIGNED_OUT, "/blog"))).toContain(
+    'aria-current="page"',
+  );
+  expect(toggleOf(await renderHeader(SIGNED_OUT, "/analytics/armies"))).not.toContain(
+    "aria-current",
+  );
 });
 
 it("signed in puts your profile, tools, Settings and Log out behind the account name", async () => {

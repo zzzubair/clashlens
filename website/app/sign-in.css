@@ -12,7 +12,14 @@
   margin-top: 1rem;
 }
 
-.account-buttons > span {
+.account-buttons-pair {
+  display: inline-flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.account-buttons > span:not(.account-buttons-pair),
+.account-buttons-pair > span {
   color: var(--cl-muted);
   font-size: 0.9rem;
 }

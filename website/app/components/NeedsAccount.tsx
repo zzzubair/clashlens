@@ -15,10 +15,13 @@ export function AccountButtons({ returnPath }: { returnPath: string | null }) {
       <Link className="button button-primary" to={`/signup${back}`}>
         Create account
       </Link>
-      <span>Already have one?</span>
-      <Link className="button button-secondary" to={`/login${back}`}>
-        Sign in
-      </Link>
+      {/* The question wraps with the button it introduces, never apart from it. */}
+      <span className="account-buttons-pair">
+        <span>Already have one?</span>
+        <Link className="button button-secondary" to={`/login${back}`}>
+          Sign in
+        </Link>
+      </span>
     </p>
   );
 }

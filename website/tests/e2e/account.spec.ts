@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   ensureAccount,
+  expectAccountButtonsRead,
   expectNoPageErrors,
   expectNoPortRequests,
   signIn,
@@ -241,6 +242,21 @@ test("a page that needs an account says why, with Create account and Sign in", a
   }
   // Before an account exists there is no Account menu or Log out.
   await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+});
+
+test("Already have one? stays with its Sign in on a phone and on a desktop", async ({
+  page,
+}) => {
+  for (const [width, height, phone] of [
+    [390, 844, true],
+    [1280, 800, false],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const path of ["/", "/crews", "/account/watchlists", "/account"]) {
+      await page.goto(path);
+      await expectAccountButtonsRead(page, phone);
+    }
+  }
 });
 
 test("account setup accepts names entered before the page JavaScript loads", async ({

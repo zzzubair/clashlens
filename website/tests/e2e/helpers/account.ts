@@ -102,3 +102,25 @@ export async function expectNoSeriousAccessibilityViolations(page: Page): Promis
   );
   expect(seriousViolations, JSON.stringify(seriousViolations, null, 2)).toEqual([]);
 }
+
+/**
+ * "[Create account] Already have one? [Sign in]" on this page: the question
+ * always sits beside the Sign in it introduces, every button is at least
+ * 44 px tall, and on a phone the pair wraps below Create account as a whole.
+ */
+export async function expectAccountButtonsRead(
+  page: Page,
+  phone: boolean,
+): Promise<void> {
+  const row = page.locator(".account-buttons").filter({ hasText: "Already have one?" });
+  const create = (await row.getByRole("link", { name: "Create account" }).boundingBox())!;
+  const question = (await row.getByText("Already have one?").boundingBox())!;
+  const signIn = (await row
+    .getByRole("link", { name: "Sign in", exact: true })
+    .boundingBox())!;
+  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+  expect(Math.abs(middle(question) - middle(signIn))).toBeLessThanOrEqual(4);
+  expect(question.x).toBeLessThan(signIn.x);
+  expect(Math.min(create.height, signIn.height)).toBeGreaterThanOrEqual(44);
+  if (phone) expect(middle(signIn)).toBeGreaterThan(create.y + create.height);
+}

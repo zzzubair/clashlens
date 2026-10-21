@@ -36,9 +36,14 @@ export function ThemeToggle() {
     sync();
     window.addEventListener("storage", sync);
     media.addEventListener("change", sync);
+    // Any switch on the page changes the page's theme; every switch follows it.
+    const root = document.documentElement;
+    const follow = new MutationObserver(() => setDark(root.dataset.theme === "dark"));
+    follow.observe(root, { attributeFilter: ["data-theme"] });
     return () => {
       window.removeEventListener("storage", sync);
       media.removeEventListener("change", sync);
+      follow.disconnect();
     };
   }, []);
 

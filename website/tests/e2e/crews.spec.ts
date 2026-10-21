@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 
 import {
   ensureAccount,
+  expectAccountButtonsRead,
   expectNoPageErrors,
   signIn,
   trackPageErrors,
@@ -146,6 +147,8 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
         "href",
         `/signup?returnPath=${encodeURIComponent(invitePath)}`,
       );
+      await view.setViewportSize({ width: 390, height: 844 });
+      await expectAccountButtonsRead(view, true);
       expectNoPageErrors(viewErrors);
       // A link that can't be an invite says so; its 404 is the only page error.
       const broken = await view.goto("/crews/join/not-a-whole-link");

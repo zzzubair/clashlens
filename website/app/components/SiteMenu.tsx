@@ -2,12 +2,19 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useLocation } from "react-router";
 
 /**
- * The top bar's Menu on narrow screens: the tabs, the theme switch and Join
- * Discord. Opening a page, clicking outside, Escape and tabbing away close
- * it. It is a native disclosure, so it also opens before or without page
- * scripts.
+ * More, the last tab of the bottom bar on narrow screens: a sheet with the
+ * rest of the tabs, the theme switch and Join Discord. Opening a page,
+ * tapping outside it, Escape and tabbing away close it. It is a native
+ * disclosure, so it also opens before or without page scripts. `current`
+ * marks it while one of its pages is open.
  */
-export function SiteMenu({ children }: { children: ReactNode }) {
+export function SiteMenu({
+  current,
+  children,
+}: {
+  current: boolean;
+  children: ReactNode;
+}) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const toggleRef = useRef<HTMLElement>(null);
   const location = useLocation();
@@ -21,7 +28,9 @@ export function SiteMenu({ children }: { children: ReactNode }) {
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       const menu = menuRef.current;
-      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+      // The dimmed page behind the sheet belongs to the disclosure itself.
+      const outside = !menu?.contains(event.target as Node) || event.target === menu;
+      if (menu?.open && outside) menu.open = false;
     }
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
@@ -47,21 +56,25 @@ export function SiteMenu({ children }: { children: ReactNode }) {
         }
       }}
     >
-      <summary ref={toggleRef} className="nav-link site-menu-toggle">
+      <summary
+        ref={toggleRef}
+        className="bottom-tab site-menu-toggle"
+        aria-current={current ? "page" : undefined}
+      >
         <svg
-          width="20"
-          height="20"
+          width="22"
+          height="22"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2.2"
+          strokeWidth="3.4"
           strokeLinecap="round"
           aria-hidden="true"
           focusable="false"
         >
-          <path d="M4 7h16M4 12h16M4 17h16" />
+          <path d="M5 12h.01M12 12h.01M19 12h.01" />
         </svg>
-        <span>Menu</span>
+        More
       </summary>
       <div className="site-menu-panel">{children}</div>
     </details>

@@ -238,6 +238,74 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   );
 }
 
+const TAB_ICONS = {
+  home: "M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z",
+  rankings:
+    "M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8",
+  analytics: "M5 20V11M12 20V5M19 20v-7",
+  crews:
+    "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 3-5 6-5s6 2 6 5M17 11a2.5 2.5 0 1 0 0-5M18 15c2 .5 3 2 3 4",
+} as const;
+
+function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={TAB_ICONS[name]} />
+    </svg>
+  );
+}
+
+// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
+// and Join Discord. `/` is Home while it shows the front page.
+function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
+  const location = useLocation();
+  const inMore = ["/account/watchlists", "/blog"].some(
+    (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+  );
+  return (
+    <nav className="bottom-tabs" aria-label="Main navigation">
+      <NavLink className="bottom-tab" to="/" end>
+        <TabIcon name="home" />
+        {data?.dashboardEnabled && data.loggedIn ? "Dashboard" : "Home"}
+      </NavLink>
+      <NavLink className="bottom-tab" to="/leaderboards/tracked?view=live&page=1">
+        <TabIcon name="rankings" />
+        Rankings
+      </NavLink>
+      <NavLink className="bottom-tab" to="/analytics/armies">
+        <TabIcon name="analytics" />
+        Analytics
+      </NavLink>
+      {data?.crewsEnabled && (
+        <NavLink className="bottom-tab" to="/crews">
+          <TabIcon name="crews" />
+          Crews
+        </NavLink>
+      )}
+      <SiteMenu current={inMore}>
+        <div className="site-menu-tabs">
+          <NavLink to="/account/watchlists">Watchlists</NavLink>
+          <NavLink to="/blog">Blog</NavLink>
+        </div>
+        <div className="site-menu-extras">
+          <DiscordLink />
+        </div>
+      </SiteMenu>
+    </nav>
+  );
+}
+
 function DiscordLink() {
   return (
     <a
@@ -260,7 +328,7 @@ const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
 
 // The same top bar on every page, error pages included. Without the root
 // data (the server failed before it), it shows the signed-out menu. Below
-// 64rem the tabs, theme and Discord fold into one Menu, so the bar is one row.
+// 64rem the tabs move to a bar at the bottom of the screen, in thumb reach.
 function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const back = SIGN_IN_PAGES.has(location.pathname)
@@ -286,9 +354,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         {location.pathname !== "/search" ? (
           <HeaderSearch key={location.pathname} />
         ) : null}
-        <span className="site-nav-wide">
-          <ThemeToggle />
-        </span>
+        <ThemeToggle />
         {data?.loggedIn ? (
           <AccountMenu
             label={data.accountLabel ?? "Account"}
@@ -307,16 +373,8 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         <span className="site-nav-wide">
           <DiscordLink />
         </span>
-        <SiteMenu>
-          <nav className="site-menu-tabs" aria-label="Main navigation">
-            <SiteTabs data={data} />
-          </nav>
-          <div className="site-menu-extras">
-            <ThemeToggle />
-            <DiscordLink />
-          </div>
-        </SiteMenu>
       </div>
+      <BottomTabs data={data} />
     </header>
   );
 }
