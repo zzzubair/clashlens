@@ -80,6 +80,7 @@ export function useNotebookSave(notebook: Notebook | null) {
   const latest = useRef(notebook);
   if (notebook) latest.current = notebook;
   const describe = useRef<Describe | null>(null);
+  const sentSeason = useRef<string | undefined>(undefined);
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
   const handled = useRef<unknown>(null);
@@ -96,16 +97,25 @@ export function useNotebookSave(notebook: Notebook | null) {
     if (!saved) return;
     setError(null);
     const shown = (latest.current && describe.current?.(saved, latest.current)) ?? null;
+    // A toast's actions go to the notebook the change went to.
+    const season = sentSeason.current;
+    const actions = (shown?.actions ?? []).map((item) =>
+      item.change.season === undefined
+        ? { ...item, change: { ...item.change, season } }
+        : item,
+    );
     setToast(
-      shown && saved.undo
+      shown
         ? {
             ...shown,
-            actions: [
-              ...shown.actions,
-              { label: "Undo", change: { action: "undo", undo: saved.undo } },
-            ],
+            actions: saved.undo
+              ? [
+                  ...actions,
+                  { label: "Undo", change: { action: "undo", undo: saved.undo } },
+                ]
+              : actions,
           }
-        : shown,
+        : null,
     );
   }, [fetcher.state, fetcher.data]);
 
@@ -118,12 +128,11 @@ export function useNotebookSave(notebook: Notebook | null) {
   function save(change: NotebookChange, words?: Describe) {
     describe.current = words ?? null;
     setToast(null);
-    // A change on a past Season's page goes to that Season's notebook.
-    const season = latest.current?.season;
-    const sent =
-      change.season === undefined && season && !season.current
-        ? { ...change, season: season.id }
-        : change;
+    // A change goes to the notebook of the page it was made on, even once
+    // a Reset has started the next Season.
+    const season = latest.current?.season.id;
+    const sent = change.season === undefined && season ? { ...change, season } : change;
+    sentSeason.current = sent.season;
     void fetcher.submit(
       { change: JSON.stringify(sent) },
       { method: "post", action: SAVE },

@@ -228,7 +228,8 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <p className="nb-hint">{recordLine(notebook)}</p>
       </section>
       <NoteBox
-        key={base.id}
+        key={`${notebook.season.id} ${base.id}`}
+        season={notebook.season.id}
         base={base}
         note={detail?.note ?? ""}
         saver={saver}
@@ -271,11 +272,14 @@ function Stars({ record }: { record: BaseRecord }) {
 /** The base's note, saved as the Clasher types, when the box loses focus,
  * and when the page closes. */
 function NoteBox({
+  season,
   base,
   note,
   saver,
   readOnly,
 }: {
+  /** The Season of the notebook the note is in. */
+  season: string;
   base: NotebookBase;
   note: string;
   saver: Saver;
@@ -293,7 +297,7 @@ function NoteBox({
     if (value === null) return;
     waiting.current = null;
     // Called only once the save succeeded.
-    saver.save({ action: "edit", base: base.id, note: value }, () => {
+    saver.save({ action: "edit", season, base: base.id, note: value }, () => {
       if (waiting.current === null) setSaved(true);
       return null;
     });

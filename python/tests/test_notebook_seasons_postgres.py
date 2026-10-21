@@ -54,6 +54,7 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
         api = ApiDatabase(as_api_role(connection_info))
         try:
             me = _account(owner, "google", "subject-sloothy", "sloothy")
+            _account(owner, "google", "subject-other", "other")
             _verify(owner, me, MAIN)
             clock = [day(26, season) + timedelta(hours=7)]
             app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
@@ -70,11 +71,16 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                     response = call(client, "sloothy", "POST", NOTEBOOK, change)
                     return response.status_code, response.json()["error"]
 
-                def notebook(**query: str) -> dict:
+                def notebook(who: str = "sloothy", **query: str) -> dict:
                     target = NOTEBOOK + "".join(
                         f"{'&' if index else '?'}{key}={value}"
                         for index, (key, value) in enumerate(query.items()))
-                    return call(client, "sloothy", "GET", target).json()
+                    return call(client, who, "GET", target).json()
+
+                def other(**change) -> dict:
+                    response = call(client, "other", "POST", NOTEBOOK, change)
+                    assert response.status_code == 200, response.json()
+                    return response.json()
 
                 # Day 26 of the September Season.
                 spiral = save(action="add", name="Spiral", status="active", tag=MAIN,
@@ -85,6 +91,9 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                 save(action="edit", base=box, note="CC: lure first")
                 hex_ = save(action="add", name="Hex", status="to_try")["base"]
                 save(action="status", base=hex_, status="retired")
+                # Another Clasher saves Zig To try, carries it into October
+                # and deletes it there, leaving October's notebook empty.
+                zig = other(action="add", name="Zig", status="to_try")["base"]
 
                 # Day 2 of the October Season: the first look carries the
                 # bases in; a second does not bring a deleted one back.
@@ -93,6 +102,7 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                 ring_page = notebook(base=ring)
                 box_page = notebook(base=box)
                 september = notebook(season=SEPTEMBER)
+                other(action="delete", base=zig)
                 ring_then = notebook(season=SEPTEMBER, base=ring)
                 missing = [
                     call(client, "sloothy", "GET", f"{NOTEBOOK}?season={value}").json()
@@ -107,6 +117,11 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                     refused(action="add", season=SEPTEMBER, name="Zig", status="to_try"),
                     refused(action="status", season=SEPTEMBER, base=box, status="retired"),
                 ]
+                # A note from a September page left open across the Reset
+                # stays on September's Ring.
+                save(action="edit", season=SEPTEMBER, base=ring, note="Day 28 tab")
+                ring_noted = notebook(base=ring)
+                ring_then_noted = notebook(season=SEPTEMBER, base=ring)
                 # Copying Spiral in, undoing it, and copying it again.
                 copied = save(action="copy", season=SEPTEMBER, base=spiral)
                 copy_page = notebook(base=copied["base"])
@@ -130,6 +145,7 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
                 september_late = notebook(season=SEPTEMBER)
                 late_copy = save(action="copy", season=SEPTEMBER, base=hex_)["base"]
                 november = notebook()
+                november_other = notebook("other")
         finally:
             owner.close()
             api.close()
@@ -176,6 +192,8 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
             ] == [(25, 26), (27, 28)]
     assert september_undone["players"] == september["players"]
     assert ended == [(422, "season_ended")] * 2
+    assert (ring_then_noted["base"]["note"], ring_noted["base"]["note"]) == (
+        "Day 28 tab", ring_page["base"]["note"])
 
     # A copy is a new base with a new ID, To try, in this Season only.
     assert copied["base"] not in {spiral, ring, box, hex_}
@@ -197,4 +215,9 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
     # October's To try copy of Spiral carried into November with its ID.
     assert {base["id"]: base["status"] for base in november["bases"]}[copy] == "to_try"
     assert [item["id"] for item in november["seasons"]] == [
+        str(int(NOVEMBER.timestamp())), str(int(SEASON.timestamp())), SEPTEMBER]
+    # The other Clasher's empty October notebook is the latest before
+    # November, so Zig, deleted there, does not come back from September.
+    assert november_other["bases"] == []
+    assert [item["id"] for item in november_other["seasons"]] == [
         str(int(NOVEMBER.timestamp())), str(int(SEASON.timestamp())), SEPTEMBER]

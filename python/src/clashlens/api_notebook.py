@@ -395,8 +395,9 @@ class _Notebook:
         newest first."""
         found = {
             _text(season_id) for (season_id,) in self.connection.execute(
-                "SELECT DISTINCT season_id FROM notebook_bases WHERE account_id = %s",
-                (self.account_id,),
+                "SELECT season_id FROM notebook_bases WHERE account_id = %s"
+                " UNION SELECT season_id FROM notebook_carries WHERE account_id = %s",
+                (self.account_id, self.account_id),
             ).fetchall()
         }
         return sorted(found | {self.this_season}, key=int, reverse=True)
@@ -439,9 +440,10 @@ def carry(connection: Any, account_id: int, now: datetime) -> None:
     ).fetchone() is None:
         return
     (latest,) = connection.execute(
-        "SELECT max(season_id::bigint) FROM notebook_bases"
-        " WHERE account_id = %s AND season_id::bigint < %s",
-        (account_id, int(season)),
+        "SELECT max(season_id::bigint) FROM (SELECT season_id FROM notebook_bases"
+        " WHERE account_id = %(account)s UNION ALL SELECT season_id FROM notebook_carries"
+        " WHERE account_id = %(account)s) AS notebooks WHERE season_id::bigint < %(season)s",
+        {"account": account_id, "season": int(season)},
     ).fetchone()
     if latest is None:
         return

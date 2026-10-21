@@ -96,7 +96,7 @@ export interface Notebook {
 /** One change, as the private API takes it. `undo` is passed back as given. */
 export interface NotebookChange {
   action: "add" | "pick" | "status" | "edit" | "delete" | "copy" | "undo";
-  /** A past Season's notebook to change, or with copy, to copy from. */
+  /** The Season of the notebook to change, or with copy, to copy from. */
   season?: string;
   base?: string | null;
   name?: string;
