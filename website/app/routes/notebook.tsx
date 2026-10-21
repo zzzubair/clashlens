@@ -2,6 +2,7 @@ import { useState } from "react";
 import { data, Link, redirect, useLoaderData, useOutletContext } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { PastSeasonNotice, SeasonSwitcher } from "../components/NotebookSeasons";
 import {
   AccountRow,
   ChangeSheet,
@@ -14,7 +15,7 @@ import {
   type Saver,
 } from "../components/NotebookParts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { seasonLabel, type Notebook } from "../lib/notebook";
+import { SEASON_ID, type Notebook } from "../lib/notebook";
 import type { Route } from "./+types/notebook";
 import "../notebook.css";
 
@@ -25,18 +26,24 @@ export function meta() {
 }
 
 /** GET /notebook — the signed-in Clasher's Season notebook: each linked
- * account's base and run strip, and the Library. While
- * CLASHLENS_NOTEBOOK_ENABLED is off the page does not exist. */
+ * account's base and run strip, and the Library; `?season=` opens a past
+ * Season's. While CLASHLENS_NOTEBOOK_ENABLED is off the page does not exist. */
 export async function loader({ request }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
+  const season = new URL(request.url).searchParams.get("season") ?? undefined;
+  if (season !== undefined && !SEASON_ID.test(season)) throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
+  const { PythonApiError } = await import("../services/python.server");
   try {
     const { getNotebook } = await import("../services/notebook.server");
-    const notebook: Notebook = await getNotebook(identity);
+    const notebook: Notebook = await getNotebook(identity, undefined, season);
     return data({ notebook, error: null }, { headers: NO_STORE });
   } catch (cause) {
+    // No such Season, or one still to come.
+    if (cause instanceof PythonApiError && cause.status === 404)
+      throw data(null, { status: 404 });
     const { isAccountNotFoundError } = await import("../server/actions.server");
     if (isAccountNotFoundError(cause)) {
       const { accountSetupPath } = await import("../server/return-path.server");
@@ -88,10 +95,9 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
     <>
       <header className="nb-title">
         <h1>Notebook</h1>
-        <p className="nb-season">
-          {seasonLabel(season.start, season.end)} · Day {season.today} of 28
-        </p>
+        <SeasonSwitcher notebook={notebook} />
       </header>
+      <PastSeasonNotice notebook={notebook} />
       <p className="lede">
         Your bases this Season and how each one held. Say which base each account runs;
         Clash Lens fills in every defense. {recordLine(notebook)}
@@ -122,7 +128,11 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
       )}
       <Library
         notebook={notebook}
-        onNew={() => setOpen({ kind: "new", preset: { status: "to_try" } })}
+        onNew={
+          season.current
+            ? () => setOpen({ kind: "new", preset: { status: "to_try" } })
+            : undefined
+        }
       />
       {open?.kind === "change" && player ? (
         <ChangeSheet

@@ -13,6 +13,7 @@ import {
   baseInitials,
   baseLine,
   baseOnDay,
+  basePath,
   dayDate,
   daysText,
   heldText,
@@ -53,6 +54,8 @@ const ERRORS: Record<string, string> = {
   base_not_found: "That base was deleted. Refresh the page.",
   runs_until_season_end: "It runs until the Season ends.",
   not_legend_day: LEGEND_ONLY,
+  read_only: "That Season's notebook is read-only now.",
+  season_ended: "That Season has ended. Copy the base to this Season to run it.",
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
@@ -115,8 +118,14 @@ export function useNotebookSave(notebook: Notebook | null) {
   function save(change: NotebookChange, words?: Describe) {
     describe.current = words ?? null;
     setToast(null);
+    // A change on a past Season's page goes to that Season's notebook.
+    const season = latest.current?.season;
+    const sent =
+      change.season === undefined && season && !season.current
+        ? { ...change, season: season.id }
+        : change;
     void fetcher.submit(
-      { change: JSON.stringify(change) },
+      { change: JSON.stringify(sent) },
       { method: "post", action: SAVE },
     );
   }
@@ -289,9 +298,10 @@ export function dayOptions(
   return player ? days.filter(([day]) => isLegendDay(player, day)) : days;
 }
 
-/** Whether a base can be set on the player today or tomorrow. */
+/** Whether a base can be set on the player today or tomorrow: never in a
+ * past Season. */
 export function canSet(notebook: Notebook, player: NotebookPlayer): boolean {
-  return dayOptions(notebook, player).length > 0;
+  return notebook.season.current && dayOptions(notebook, player).length > 0;
 }
 
 /** Who runs a base, as "Active · Main, Alt from Day 6". */
@@ -366,8 +376,8 @@ function SearchBox({
 }
 
 /** The Library: search, status filter with counts, sort, and a row per base
- * that opens its page. */
-export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => void }) {
+ * that opens its page. A past Season's has no + New base. */
+export function Library({ notebook, onNew }: { notebook: Notebook; onNew?: () => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [sort, setSort] = useState<LibrarySort>("recent");
@@ -386,14 +396,17 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
             · {total} {total === 1 ? "base" : "bases"}
           </span>
         </h2>
-        <button type="button" className="button nb-add" onClick={onNew}>
-          + New base
-        </button>
+        {onNew ? (
+          <button type="button" className="button nb-add" onClick={onNew}>
+            + New base
+          </button>
+        ) : null}
       </div>
       {total === 0 ? (
         <p className="nb-empty">
-          No bases yet. Add the base you run now from your account above, or save one you
-          plan to try with + New base.
+          {onNew
+            ? "No bases yet. Add the base you run now from your account above, or save one you plan to try with + New base."
+            : "No bases this Season."}
         </p>
       ) : (
         <>
@@ -428,13 +441,19 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
           <ul className="nb-list">
             {rows.slice(0, limit).map((base) => (
               <li key={base.id}>
-                <Link to={`/notebook/bases/${base.id}`} className="nb-row">
+                <Link to={basePath(notebook, base.id)} className="nb-row">
                   <BaseTile name={base.name} />
                   <span className="nb-row-text">
                     <b>
                       <Highlight name={base.name} query={query} />
                     </b>
-                    <small>{baseLine(base, notebook.season.today)}</small>
+                    {/* A past Season has no today. */}
+                    <small>
+                      {baseLine(
+                        base,
+                        notebook.season.current ? notebook.season.today : 0,
+                      )}
+                    </small>
                   </span>
                   <span className={`nb-status nb-status-${base.status}`}>
                     {statusText(base, notebook)}
@@ -951,7 +970,7 @@ export function RunStrip({
   notebook: Notebook;
   player: NotebookPlayer;
 }) {
-  const { today } = notebook.season;
+  const { today, current } = notebook.season;
   const blocks = stripBlocks(player, today);
   const who = playerName(player);
   const summary = blocks
@@ -963,7 +982,7 @@ export function RunStrip({
       <div
         className="nb-strip"
         role="img"
-        aria-label={`${who}'s Season: ${summary || "no base picked yet"}. Today is Day ${today}.`}
+        aria-label={`${who}'s Season: ${summary || "no base picked yet"}.${current ? ` Today is Day ${today}.` : ""}`}
       >
         {blocks.map((block) => {
           const length = block.to - block.from + 1;
@@ -971,7 +990,7 @@ export function RunStrip({
           return (
             <span
               key={block.from}
-              className={`nb-run nb-run-${block.kind}`}
+              className={`nb-run nb-run-${current || block.kind !== "now" ? block.kind : "past"}`}
               style={
                 {
                   gridColumn: `${block.from} / ${block.to + 1}`,
@@ -994,7 +1013,7 @@ export function RunStrip({
       </div>
       <div className="nb-axis" aria-hidden="true">
         <span>Day 1</span>
-        <span>{today} · today</span>
+        {current ? <span>{today} · today</span> : null}
         <span>28</span>
       </div>
     </div>
@@ -1021,7 +1040,8 @@ export function AccountRow({
   const base = notebook.bases.find((item) => item.id === run?.base);
   const next = player.next;
   const settable = canSet(notebook, player);
-  const fixable = player.legendDays.some((day) => day <= today);
+  const fixable =
+    notebook.season.editable && player.legendDays.some((day) => day <= today);
   // Back in Legend League with no base: picking one is the next step.
   const pickNext = settable && !run && !next?.base && player.runs.length > 0;
   return (
@@ -1036,11 +1056,16 @@ export function AccountRow({
           <p>
             {base && run ? (
               <>
-                <Link to={`/notebook/bases/${base.id}`}>{base.name}</Link> · since Day{" "}
-                {run.from} · {heldText(run.record)}
+                <Link to={basePath(notebook, base.id)}>{base.name}</Link> ·{" "}
+                {notebook.season.current
+                  ? `since Day ${run.from}`
+                  : daysText(run.from, run.to)}{" "}
+                · {heldText(run.record)}
               </>
-            ) : (
+            ) : notebook.season.current ? (
               "No base today"
+            ) : (
+              "No base on Day 28"
             )}
             {next ? (
               <span className="nb-next">
@@ -1075,7 +1100,9 @@ export function AccountRow({
           ) : null}
         </div>
       ) : null}
-      {!settable ? <p className="nb-hint">{LEGEND_ONLY}</p> : null}
+      {notebook.season.current && !settable ? (
+        <p className="nb-hint">{LEGEND_ONLY}</p>
+      ) : null}
     </article>
   );
 }
@@ -1093,7 +1120,7 @@ export function DaysSheet({
   onDay: (day: number) => void;
   onClose: () => void;
 }) {
-  const { today, start } = notebook.season;
+  const { today, start, current } = notebook.season;
   return (
     <Sheet title={`${playerName(player)} · days`} onClose={onClose}>
       <ul className="nb-list nb-days">
@@ -1111,7 +1138,7 @@ export function DaysSheet({
                 <span className="nb-row-text">
                   <b>
                     Day {day}
-                    {day === today ? " · today" : ""}
+                    {current && day === today ? " · today" : ""}
                   </b>
                   <small>{dayDate(start, day)}</small>
                 </span>

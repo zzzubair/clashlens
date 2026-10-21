@@ -32,9 +32,11 @@ import {
   DaysSheet,
   dayOptions,
   LEGEND_ONLY,
+  Library,
   RunStrip,
   saveError,
 } from "../../app/components/NotebookParts";
+import { SeasonSwitcher } from "../../app/components/NotebookSeasons";
 import {
   baseInitials,
   baseOnDay,
@@ -65,12 +67,18 @@ function apiNotebook() {
   return {
     kind: "notebook",
     season: {
-      id: "2026-10",
+      id: "1791176400",
       start: "2026-10-05T05:00:00Z",
       end: "2026-11-02T05:00:00Z",
       today: 16,
       tomorrow: 17,
+      current: true,
+      editable: true,
+      editable_until: "2026-11-30T05:00:00Z",
     },
+    seasons: [
+      { id: "1791176400", start: "2026-10-05T05:00:00Z", end: "2026-11-02T05:00:00Z" },
+    ],
     as_of_day: 15,
     players: [
       {
@@ -285,12 +293,18 @@ describe("Legend days only", () => {
   };
   const notebook: Notebook = {
     season: {
-      id: "2026-10",
+      id: "1791262800",
       start: "2026-10-06T05:00:00Z",
       end: "2026-11-03T05:00:00Z",
       today: 28,
       tomorrow: 28,
+      current: true,
+      editable: true,
+      editableUntil: "2026-12-01T05:00:00Z",
     },
+    seasons: [
+      { id: "1791262800", start: "2026-10-06T05:00:00Z", end: "2026-11-03T05:00:00Z" },
+    ],
     asOfDay: 27,
     players: [daily, dropped],
     bases: DAYS.map((day) => ({
@@ -437,5 +451,77 @@ describe("a refused save", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("past Seasons", () => {
+  const SEPTEMBER = "1788757200";
+  // The Season of 7 Sep – 5 Oct, read on 20 Oct, in the Season after it.
+  const past = (editable: boolean): Notebook => {
+    const notebook = parseNotebook({
+      ...apiNotebook(),
+      season: {
+        id: SEPTEMBER,
+        start: "2026-09-07T05:00:00Z",
+        end: "2026-10-05T05:00:00Z",
+        today: 28,
+        tomorrow: 28,
+        current: false,
+        editable,
+        editable_until: "2026-11-02T05:00:00Z",
+      },
+      seasons: [
+        { id: "1791176400", start: "2026-10-05T05:00:00Z", end: "2026-11-02T05:00:00Z" },
+        { id: SEPTEMBER, start: "2026-09-07T05:00:00Z", end: "2026-10-05T05:00:00Z" },
+      ],
+    });
+    if (!notebook) throw new Error("unreadable notebook");
+    return notebook;
+  };
+  const row = (notebook: Notebook) =>
+    render(
+      createElement(AccountRow, {
+        notebook,
+        player: notebook.players[0]!,
+        onChange: () => {},
+        onAdd: () => {},
+        onDays: () => {},
+      }),
+    );
+
+  it("starts no base in a past Season, and fixes days only while editable", async () => {
+    const open = await row(past(true));
+    expect(open).not.toContain(">Change<");
+    expect(open).not.toContain(LEGEND_ONLY);
+    expect(open).not.toContain("today");
+    expect(open).toContain("No base on Day 28");
+    expect(open).toContain(">Days<");
+    expect(await row(past(false))).not.toContain(">Days<");
+  });
+
+  it("opens a past Season's bases in that Season, with no + New base", async () => {
+    const html = await render(createElement(Library, { notebook: past(false) }));
+    expect(html).not.toContain("New base");
+    expect(html).toContain(`href="/notebook/bases/B-7K3QX9?season=${SEPTEMBER}"`);
+    expect(html.replaceAll("<!-- -->", "")).toContain("ran Day 16 · held 7 of 10");
+  });
+
+  it("switches between this Season and past ones", async () => {
+    const html = (
+      await render(createElement(SeasonSwitcher, { notebook: past(true) }))
+    ).replaceAll("<!-- -->", "");
+    expect(html).toContain(
+      '<option value="1791176400">5 Oct – 2 Nov · this Season</option>',
+    );
+    expect(html).toContain(
+      `<option value="${SEPTEMBER}" selected="">7 Sep – 5 Oct</option>`,
+    );
+    expect(html).not.toContain("of 28");
+  });
+
+  it("checks a copy names a Season", () => {
+    const copy = { action: "copy", season: SEPTEMBER, base: "B-7K3QX9" };
+    expect(parseChange(copy)).toEqual(copy);
+    expect(parseChange({ ...copy, season: "2026-09" })).toBeNull();
   });
 });

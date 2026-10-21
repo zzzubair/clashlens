@@ -327,6 +327,17 @@ once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
 Reset.
 
+Each Season has its own notebook. The first time a Season's notebook opens,
+the bases that were Active or To try at the end of the account's last notebook
+come in with the same base ID, name, note and link; one an account ran on the
+last Season's Day 28 runs on from Day 1. Retired bases stay behind. Once there
+is a past notebook, a Season switcher under the title opens it at
+`/notebook?season=<Season ID>` (its bases at `/notebook/bases/<base ID>?season=…`).
+A past notebook can still be fixed (days, notes, names, links, deletes) until
+the end of the Season after it, 05:00 UTC, then is read-only. Any past base has
+Copy to this Season, which makes a new base, To try, with a new base ID; when
+this Season already has it, the button is a link to it instead.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by

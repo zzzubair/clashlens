@@ -493,8 +493,9 @@ The Notebook has its own website setting, `CLASHLENS_NOTEBOOK_ENABLED=true` in
 is off, `/notebook`, `/notebook/save` and every `/notebook/bases/…` page show the
 normal page-not-found page and the navigation bar has no Notebook link. The
 private API's `/v1/account/notebook` follows the dashboard setting and answers
-404 `notebook_disabled` before reading anything while that is off. Migration
-0124 creates the notebook tables either way; they stay empty while it is off.
+404 `notebook_disabled` before reading anything while that is off. Migrations
+0124 and 0125 create the notebook tables either way; they stay empty while it
+is off.
 
 Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only

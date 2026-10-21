@@ -31,6 +31,13 @@ get 3 stars. Nothing here runs at the Reset or in the worker.
 Every write but Undo returns what undoes it: the picks and statuses it
 changed, a base it made, an edited base's old name and link, or a deleted
 base to put back.
+
+Seasons: a notebook can be changed during its Season and the next, then is
+read-only; a past one still opens, and any of its bases can be copied into
+this Season as a new base. The first time a Season's notebook is opened or
+changed, the bases of the account's latest earlier notebook still Active or
+To try at its end carry into it keeping their base IDs (carry), so one base
+ID names one base in each Season it is in.
 """
 
 from __future__ import annotations
@@ -39,7 +46,7 @@ import re
 import secrets
 import unicodedata
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Request
@@ -49,12 +56,14 @@ from pydantic import Field
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
-from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .domain import RANKED_DAY_DURATION, SEASON_DURATION, RankedDay, ranked_day_for
 from .league_week import WEEK, week_start
 
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _CODE = re.compile(r"B-[0-9A-HJKMNP-TV-Z]{6}")
+# A Season's official ID: its start in Unix seconds.
+_SEASON = re.compile(r"[0-9]{1,12}")
 # The in-game link that opens a layout; nothing else may be saved as one.
 _BASE_LINK = re.compile(r"https://link\.clashofclans\.com/[A-Za-z0-9/?=&%._:;,+-]{1,270}")
 # The invisible joiner inside emoji such as ❤️‍🔥, kept in names and notes.
@@ -86,6 +95,23 @@ def _refuse_hidden(text: str) -> None:
         for character in text
     ):
         raise ApiError(422, "invalid_characters")
+
+
+def season_day(season: str | None, now: datetime) -> RankedDay:
+    """The notebook's day: today for this Season (``season`` None or its
+    ID), or the last day of an earlier one. ApiError for any other ID."""
+    today = ranked_day_for(now)
+    if season is None or season == today.official_season_id:
+        return today
+    try:
+        if not _SEASON.fullmatch(season):
+            raise ValueError
+        first = ranked_day_for(datetime.fromtimestamp(int(season), UTC))
+    except (OverflowError, OSError, ValueError):
+        raise ApiError(404, "season_not_found") from None
+    if first.official_season_id != season or first.season_start > today.season_start:
+        raise ApiError(404, "season_not_found")
+    return ranked_day_for(first.season_end - timedelta(microseconds=1))
 
 
 def clean_name(value: str) -> str:
@@ -166,13 +192,21 @@ def _add(record: dict[str, Any], counts: list[int] | None) -> None:
 
 
 class _Notebook:
-    """One account's notebook for the Season ``now`` falls in, read in one
-    transaction."""
+    """One account's notebook for the Season ``now`` falls in, or the past
+    Season ``season``, read in one transaction. A past one is read as on
+    its last day."""
 
-    def __init__(self, connection: Any, account_id: int, now: datetime) -> None:
+    def __init__(
+        self, connection: Any, account_id: int, now: datetime, season: str | None = None
+    ) -> None:
         self.connection = connection
         self.account_id = account_id
-        day = ranked_day_for(now)
+        day = season_day(season, now)
+        self.this_season = ranked_day_for(now).official_season_id
+        self.current = day.official_season_id == self.this_season
+        # Changes are taken during the notebook's Season and the next.
+        self.editable_until = day.season_end + SEASON_DURATION
+        self.editable = now < self.editable_until
         self.season_id = day.official_season_id
         self.season_start = day.season_start
         self.season_end = day.season_end
@@ -356,6 +390,93 @@ class _Notebook:
              "season": self.season_id, "put_on": put_on, "taken_off": taken_off},
         )
 
+    def seasons(self) -> list[str]:
+        """This Season and every earlier one the account has a notebook in,
+        newest first."""
+        found = {
+            _text(season_id) for (season_id,) in self.connection.execute(
+                "SELECT DISTINCT season_id FROM notebook_bases WHERE account_id = %s",
+                (self.account_id,),
+            ).fetchall()
+        }
+        return sorted(found | {self.this_season}, key=int, reverse=True)
+
+    def continued(self, code: str) -> str | None:
+        """The base in this Season's notebook that carries on the base
+        ``code``, or failing that the latest copy of it."""
+        row = self.connection.execute(
+            """
+            SELECT code FROM notebook_bases
+            WHERE account_id = %s AND season_id = %s AND (code = %s OR copied_from = %s)
+            ORDER BY code = %s DESC, created_at DESC LIMIT 1
+            """,
+            (self.account_id, self.this_season, code, code, code),
+        ).fetchone()
+        return None if row is None else _text(row[0])
+
+
+def carry(connection: Any, account_id: int, now: datetime) -> None:
+    """Once a Season, when its notebook is first opened or changed, bring in
+    the bases of the account's latest earlier notebook that were Active or
+    To try at its end, keeping their base IDs, names, notes and links;
+    Retired ones stay behind, still copyable. When that notebook is the
+    Season just ended, a base up on its last day also carries on from Day 1
+    on each player that ran it then, if Day 1 is their Legend day, as the
+    game keeps a layout into the new Season."""
+    season = ranked_day_for(now).official_season_id
+    if connection.execute(
+        "SELECT 1 FROM notebook_carries WHERE account_id = %s AND season_id = %s",
+        (account_id, season),
+    ).fetchone():
+        return
+    connection.execute(
+        "SELECT 1 FROM clash_lens_accounts WHERE id = %s FOR NO KEY UPDATE", (account_id,)
+    )
+    if connection.execute(
+        "INSERT INTO notebook_carries (account_id, season_id) VALUES (%s, %s)"
+        " ON CONFLICT DO NOTHING RETURNING 1",
+        (account_id, season),
+    ).fetchone() is None:
+        return
+    (latest,) = connection.execute(
+        "SELECT max(season_id::bigint) FROM notebook_bases"
+        " WHERE account_id = %s AND season_id::bigint < %s",
+        (account_id, int(season)),
+    ).fetchone()
+    if latest is None:
+        return
+    old = _Notebook(connection, account_id, now, str(latest))
+    new = _Notebook(connection, account_id, now)
+    shown = old.shown()
+    codes = {_text(code): int(base_id) for code, base_id in connection.execute(
+        """
+        INSERT INTO notebook_bases (code, account_id, season_id, name, note, base_link,
+                                    status, copied_from, created_at, status_at)
+        SELECT code, account_id, %(season)s, name, note, base_link,
+               CASE WHEN id = ANY(%(active)s) THEN 'active' ELSE 'to_try' END,
+               copied_from, %(start)s, %(start)s
+        FROM notebook_bases WHERE id = ANY(%(carried)s)
+        ON CONFLICT (code, season_id) DO NOTHING
+        RETURNING code, id
+        """,
+        {"season": new.season_id, "start": new.season_start,
+         "active": [key for key, status in shown.items() if status == "active"],
+         "carried": [key for key, status in shown.items() if status != "retired"]},
+    ).fetchall()}
+    if old.season_end == new.season_start:
+        old_codes = {key: base["code"] for key, base in old.bases().items()}
+        old_legend, new_legend = old.legend_days(), new.legend_days()
+        for player_id, mine in old.picks().items():
+            last = base_on(mine, 28, old_legend[player_id])
+            if last is None or old_codes[last] not in codes or 1 not in new_legend[player_id]:
+                continue
+            connection.execute(
+                "INSERT INTO notebook_day_picks (account_id, player_id, ranked_day_start,"
+                " base_id) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (account_id, player_id, new.season_start, codes[old_codes[last]]),
+            )
+    new.settle([], [])
+
 
 def _player(notebook: _Notebook, tag: str | None) -> int:
     """The verified player ``tag`` names, or the only one when it is None."""
@@ -420,20 +541,34 @@ def _pick_day(notebook: _Notebook, day: int | None, *, past: bool) -> int:
 
 
 def get_notebook(
-    database: ApiDatabase, account_id: int, *, now: datetime, base: str | None = None
+    database: ApiDatabase,
+    account_id: int,
+    *,
+    now: datetime,
+    base: str | None = None,
+    season: str | None = None,
 ) -> dict[str, Any]:
-    """The account's notebook this Season: its players, each one's runs and
-    current base, and every base with its record. With ``base``, also that
-    base's note, link and record on each player."""
+    """The account's notebook this Season, or in the past Season ``season``:
+    its players, each one's runs and current base, and every base with its
+    record. With ``base``, also that base's note, link and record on each
+    player."""
+    if season_day(season, now).official_season_id == ranked_day_for(now).official_season_id:
+        with database.pool.connection() as connection, connection.transaction():
+            carry(connection, account_id, now)
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        notebook = _Notebook(connection, account_id, now)
+        notebook = _Notebook(connection, account_id, now, season)
         bases = notebook.bases()
         picks = notebook.picks()
         counted, counts = notebook.counted()
         legend = notebook.legend_days()
         shown = notebook.shown()
+        seasons = notebook.seasons()
         detail = _base(notebook, base) if base is not None else None
+        continued = (
+            notebook.continued(bases[detail]["code"])
+            if detail is not None and not notebook.current else None
+        )
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
     by_player: dict[int, dict[int, dict[str, Any]]] = {}
@@ -484,7 +619,17 @@ def get_notebook(
             "end": notebook.season_end.isoformat(),
             "today": notebook.today,
             "tomorrow": notebook.tomorrow,
+            "current": notebook.current,
+            "editable": notebook.editable,
+            "editable_until": notebook.editable_until.isoformat(),
         },
+        # The Season switcher: this Season, then each earlier notebook.
+        "seasons": [
+            {"id": key,
+             "start": (start := datetime.fromtimestamp(int(key), UTC)).isoformat(),
+             "end": (start + SEASON_DURATION).isoformat()}
+            for key in seasons
+        ],
         # The newest Legend day whose defenses are counted: records are as of it.
         "as_of_day": max(counted) if counted else None,
         "players": players,
@@ -513,6 +658,9 @@ def get_notebook(
             "id": base["code"],
             "note": base["note"],
             "link": base["link"],
+            # In a past Season: this Season's base that carries it on, or a
+            # copy of it.
+            "this_season": continued,
             "players": [
                 {"tag": tag, "record": by_player.get(detail, {}).get(player_id, _record())}
                 for player_id, tag, *_ in notebook.players
@@ -550,9 +698,12 @@ class UndoBase(UndoEdit):
     created_at: str = Field(max_length=40)
     status_at: str = Field(max_length=40)
     updated_at: str = Field(max_length=40)
+    copied_from: str | None = Field(default=None, max_length=12)
 
 
 class Undo(StrictBody):
+    # The notebook the change was in: its Season's ID.
+    season: str | None = Field(default=None, max_length=12)
     picks: list[UndoPick] = Field(default_factory=list, max_length=200)
     statuses: list[UndoStatus] = Field(default_factory=list, max_length=2000)
     # A base the change made, deleted on undo.
@@ -564,7 +715,9 @@ class Undo(StrictBody):
 
 
 class NotebookWrite(StrictBody):
-    action: Literal["add", "pick", "status", "edit", "delete", "undo"]
+    action: Literal["add", "pick", "status", "edit", "delete", "copy", "undo"]
+    # A past Season's notebook to change, or with copy, to copy ``base`` from.
+    season: str | None = Field(default=None, max_length=12)
     base: str | None = Field(default=None, max_length=12)
     name: str | None = Field(default=None, max_length=200)
     link: str | None = Field(default=None, max_length=400)
@@ -573,6 +726,30 @@ class NotebookWrite(StrictBody):
     tag: str | None = Field(default=None, max_length=16)
     day: int | None = Field(default=None, ge=1, le=28)
     undo: Undo | None = None
+
+
+def _new_base(
+    notebook: _Notebook, name: str, link: str | None, status: str, *,
+    note: str = "", copied_from: str | None = None,
+) -> tuple[int, str]:
+    """Make a base in the notebook with a base ID no base has had in any
+    Season."""
+    for _attempt in range(5):
+        code = new_code()
+        row = notebook.connection.execute(
+            """
+            INSERT INTO notebook_bases (code, account_id, season_id, name, note,
+                                        base_link, status, copied_from)
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s
+            WHERE NOT EXISTS (SELECT 1 FROM notebook_bases WHERE code = %s)
+            ON CONFLICT (code, season_id) DO NOTHING RETURNING id
+            """,
+            (code, notebook.account_id, notebook.season_id, name, note, link, status,
+             copied_from, code),
+        ).fetchone()
+        if row is not None:
+            return int(row[0]), code
+    raise ApiError(503, "busy")  # pragma: no cover - five draws all taken: about 1 in 10^15.
 
 
 def save(
@@ -586,7 +763,20 @@ def save(
             "SELECT 1 FROM clash_lens_accounts WHERE id = %s FOR NO KEY UPDATE",
             (account_id,),
         )
-        notebook = _Notebook(connection, account_id, now)
+        carry(connection, account_id, now)
+        # A copy goes into this Season's notebook; Undo goes to the one the
+        # change was in.
+        season = (
+            None if body.action == "copy"
+            else body.undo.season if body.action == "undo" and body.undo is not None
+            else body.season
+        )
+        notebook = _Notebook(connection, account_id, now, season)
+        if not notebook.editable:
+            raise ApiError(422, "read_only")
+        # A past Season has no day left to start a base on.
+        if not notebook.current and body.action in {"add", "status"}:
+            raise ApiError(422, "season_ended")
         before = notebook.statuses()
         seen_before = notebook.shown()
         touched: dict[tuple[int, int], tuple[bool, int | None]] = {}
@@ -633,22 +823,9 @@ def save(
                 player_id = _player(notebook, body.tag)
                 day = _pick_day(notebook, body.day, past=False)
                 notebook.require_legend(player_id, day)
-            for _attempt in range(5):
-                row = connection.execute(
-                    """
-                    INSERT INTO notebook_bases (code, account_id, season_id, name,
-                                                base_link, status)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (code) DO NOTHING RETURNING id, code
-                    """,
-                    (new_code(), account_id, notebook.season_id, name, link,
-                     "active" if active else body.status or "to_try"),
-                ).fetchone()
-                if row is not None:
-                    break
-            else:  # pragma: no cover - five draws all taken: about 1 in 10^15.
-                raise ApiError(503, "busy")
-            base_id, made = int(row[0]), _text(row[1])
+            base_id, made = _new_base(
+                notebook, name, link, "active" if active else body.status or "to_try"
+            )
             if active:
                 pick(player_id, day, base_id)
         elif body.action == "pick":
@@ -686,7 +863,7 @@ def save(
             base_id = _base(notebook, body.base)
             saved = connection.execute(
                 "SELECT code, name, note, base_link, status, created_at, status_at,"
-                " updated_at FROM notebook_bases WHERE id = %s", (base_id,),
+                " updated_at, copied_from FROM notebook_bases WHERE id = %s", (base_id,),
             ).fetchone()
             # The base as Undo puts it back.
             kept = {
@@ -695,6 +872,7 @@ def save(
                 "link": "" if saved[3] is None else _text(saved[3]),
                 "status": _text(saved[4]), "created_at": saved[5].isoformat(),
                 "status_at": saved[6].isoformat(), "updated_at": saved[7].isoformat(),
+                "copied_from": None if saved[8] is None else _text(saved[8]),
             }
             if body.action == "edit":
                 edited = {key: kept[key] for key in ("base", "name", "link")}
@@ -707,6 +885,19 @@ def save(
                         if picked == base_id:
                             touched[(player_id, day)] = (True, base_id)
                 connection.execute("DELETE FROM notebook_bases WHERE id = %s", (base_id,))
+        elif body.action == "copy":
+            # A past Season's base, as a new base in this one: To try.
+            source = _Notebook(connection, account_id, now, body.season)
+            if source.current:
+                raise ApiError(422, "invalid_request")
+            code, name, note, link = connection.execute(
+                "SELECT code, name, note, base_link FROM notebook_bases WHERE id = %s",
+                (_base(source, body.base),),
+            ).fetchone()
+            base_id, made = _new_base(
+                notebook, _text(name), None if link is None else _text(link), "to_try",
+                note=_text(note), copied_from=_text(code),
+            )
         else:
             if body.undo is None:
                 raise ApiError(422, "undo_required")
@@ -742,6 +933,7 @@ def save(
         if key in seen_before and seen_before[key] != seen_after[key]
     ]
     undo = None if body.action == "undo" else {
+        "season": notebook.season_id,
         "picks": [
             {"tag": tags[player_id], "day": day,
              "base": None if old is None else codes[old], "absent": not existed}
@@ -773,18 +965,23 @@ def _undo(notebook: _Notebook, undo: Undo, pick: Callable[..., None]) -> None:
         # Its days are this Season's, so it only comes back in this notebook.
         if base.season != notebook.season_id:
             raise ApiError(422, "invalid_request")
+        # Its base ID, unless another account's base has it now.
         row = notebook.connection.execute(
             """
             INSERT INTO notebook_bases (code, account_id, season_id, name, note,
                                         base_link, status, created_at, status_at,
-                                        updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (code) DO NOTHING RETURNING id
+                                        updated_at, copied_from)
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM notebook_bases WHERE code = %s AND account_id <> %s)
+            ON CONFLICT (code, season_id) DO NOTHING RETURNING id
             """,
             (parse_code(base.base), notebook.account_id, notebook.season_id,
              clean_name(base.name), clean_note(base.note), clean_link(base.link),
              base.status, _moment(base.created_at), _moment(base.status_at),
-             _moment(base.updated_at)),
+             _moment(base.updated_at),
+             None if base.copied_from is None else parse_code(base.copied_from),
+             base.base, notebook.account_id),
         ).fetchone()
         if row is None:
             raise ApiError(422, "invalid_request")
@@ -831,12 +1028,16 @@ def register_notebook_routes(
         return context.account.internal_id
 
     @router.get("/v1/account/notebook")
-    def notebook(request: Request, base: str | None = None) -> JSONResponse:
+    def notebook(
+        request: Request, base: str | None = None, season: str | None = None
+    ) -> JSONResponse:
         account_id = account(request, "account.read")
         if base is not None and len(base) > 12:
             raise ApiError(404, "base_not_found")
+        if season is not None and len(season) > 12:
+            raise ApiError(404, "season_not_found")
         return JSONResponse(content=get_notebook(
-            database, account_id, now=current_time(), base=base
+            database, account_id, now=current_time(), base=base, season=season
         ))
 
     @router.post("/v1/account/notebook")

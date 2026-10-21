@@ -630,3 +630,38 @@
 .nb-base-part + .nb-note {
   margin-top: 1rem;
 }
+
+/* Seasons: the switcher under the title, and the note on a past Season. */
+.nb-season-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+.nb-season-pick select {
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0.45rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
+  border: 1px solid var(--cl-input-border, var(--cl-border));
+  border-radius: var(--cl-radius);
+  font: inherit;
+}
+.nb-past {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 0.9rem;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+}
+.nb-past p {
+  margin: 0;
+}
+.nb-past a {
+  display: inline-block;
+  min-height: 2.75rem;
+  margin-top: 0.25rem;
+  line-height: 2.75rem;
+  font-weight: 700;
+}
