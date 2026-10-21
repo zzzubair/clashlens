@@ -10,8 +10,7 @@
 -- add about 10 MB a Season. notebook_day_picks holds one row per player and
 -- Legend day a base was picked from, at most one a day: 28 a player a
 -- Season, about 60 bytes each. No limit on bases; rows are kept until the
--- Clasher deletes the base or their account. Numbered 0124, leaving 0122
--- to work in progress on another branch.
+-- Clasher deletes the base or their account. Numbered 0124, after 0123.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS notebook_bases (

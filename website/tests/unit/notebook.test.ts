@@ -5,7 +5,7 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AccountRow,
@@ -29,6 +29,7 @@ import {
   type NotebookBase,
   type NotebookPlayer,
 } from "../../app/lib/notebook";
+import { loader as baseLoader } from "../../app/routes/notebook.base";
 
 const RECORD = {
   days: 2,
@@ -365,5 +366,24 @@ describe("Legend days only", () => {
     expect(text.indexOf("Day 28 · today")).toBeLessThan(text.indexOf("Day 7<"));
     expect(html).toContain("Not a Legend day");
     expect(html).toContain("Tue 6 Oct");
+  });
+});
+
+describe("base page", () => {
+  it("opens only an exact base ID", async () => {
+    vi.stubEnv("CLASHLENS_NOTEBOOK_ENABLED", "true");
+    try {
+      const request = new Request("http://localhost/notebook/bases/b-7k3qx9");
+      const refused = await baseLoader({
+        request,
+        params: { code: "b-7k3qx9" },
+      } as never).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect((refused as { init: { status: number } }).init.status).toBe(404);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

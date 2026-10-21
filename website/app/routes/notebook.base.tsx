@@ -49,7 +49,7 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
-  const code = params.code.toUpperCase();
+  const code = params.code;
   if (!BASE_ID.test(code)) throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
