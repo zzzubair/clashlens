@@ -18,6 +18,7 @@ import {
   statusText,
   type Saver,
 } from "../components/NotebookParts";
+import { BaseArmies } from "../components/NotebookRanks";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   averageLost,
@@ -160,12 +161,12 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           Edit
         </button>
       </div>
-      {/* Every number on the page itself, one section each; the best and
-       * worst armies go in a section after Stars. */}
+      {/* Every number on the page itself, one section each. */}
       <section className="nb-base-part" aria-labelledby="nb-stars-title">
         <h2 id="nb-stars-title">Stars</h2>
         <Stars record={base.record} />
       </section>
+      <BaseArmies armies={detail?.armies ?? null} defenses={base.record.defenses} />
       <section className="nb-base-part" aria-labelledby="nb-each-title">
         <h2 id="nb-each-title">Each account</h2>
         {detail?.players.length ? (

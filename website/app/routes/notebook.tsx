@@ -13,6 +13,7 @@ import {
   type NewBasePreset,
   type Saver,
 } from "../components/NotebookParts";
+import { TopBases } from "../components/NotebookRanks";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { seasonLabel, type Notebook } from "../lib/notebook";
 import type { Route } from "./+types/notebook";
@@ -25,7 +26,7 @@ export function meta() {
 }
 
 /** GET /notebook — the signed-in Clasher's Season notebook: each linked
- * account's base and run strip, and the Library. While
+ * account's base and run strip, the Top 3 bases, and the Library. While
  * CLASHLENS_NOTEBOOK_ENABLED is off the page does not exist. */
 export async function loader({ request }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
@@ -120,6 +121,7 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
           ))}
         </section>
       )}
+      <TopBases notebook={notebook} />
       <Library
         notebook={notebook}
         onNew={() => setOpen({ kind: "new", preset: { status: "to_try" } })}

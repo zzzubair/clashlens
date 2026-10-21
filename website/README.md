@@ -317,10 +317,14 @@ tomorrow, and Days lists every day so far, one full-width row each, to fix
 which base was up then. Each starts from one account and only changes that
 account. Bases can be set only on an account's Legend days (its weekly league
 record says Legend I), and records count only those days' defenses. Below, the
-Library lists the Season's bases with search, an All, Active, To try or Retired
-filter with counts, and four sorts. A base's page at `/notebook/bases/<base ID>`
-shows how it held (defenses not 3-starred) over the counted days it ran, its
-stars, each account's record with the days and dates it ran, its note (saved
+Top 3 bases this Season are the ones with the fewest trophies lost a defense
+among bases with at least 16 defenses, and the Library lists the Season's bases
+with search, an All, Active, To try or Retired filter with counts, and four
+sorts. A base's page at `/notebook/bases/<base ID>` shows how it held (defenses
+not 3-starred) over the counted days it ran, its stars, its armies best to
+worst (each army type with at least 3 defenses on it, named as on the
+dashboard's Armies on defense card, Other and unreadable left out), each
+account's record with the days and dates it ran, its note (saved
 as you type), its link, and Edit to rename or delete. The base ID is for
 support only, so pages never show it beyond the address. Every change saves at
 once through `/notebook/save` and offers Undo, except the note. Records come

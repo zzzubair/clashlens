@@ -15,6 +15,7 @@ from clashlens.api_notebook import (
     parse_code,
     runs,
 )
+from clashlens.notebook_ranks import top_bases
 
 RING, BOX, FORT = 1, 2, 3
 LEGEND = set(range(1, 29))
@@ -98,3 +99,19 @@ def test_only_the_games_own_base_links_are_kept() -> None:
                 "https://link.clashofclans.com.evil.example/x", link + " <b>"):
         with pytest.raises(ApiError):
             clean_link(bad)
+
+
+def test_the_top_3_is_fewest_trophies_lost_a_defense_among_bases_with_16() -> None:
+    def record(defenses: int, lost: int) -> dict:
+        return {"defenses": defenses, "trophies_lost": lost}
+
+    bases = {
+        "B-000001": ("Ring", record(20, 400)),  # 20 a defense
+        "B-000002": ("Box", record(15, 0)),  # too few defenses
+        "B-000003": ("Fort", record(16, 160)),  # 10
+        "B-000004": ("Spiral", record(32, 320)),  # 10, more defenses
+        "B-000005": ("Hex", record(16, 400)),  # 25: fourth
+        "B-000006": ("arrow", record(16, 160)),  # 10, ties Fort by name
+    }
+    assert top_bases(bases) == ["B-000004", "B-000006", "B-000003"]
+    assert top_bases({}) == []

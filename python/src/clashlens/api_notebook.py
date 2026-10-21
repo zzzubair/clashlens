@@ -51,6 +51,7 @@ from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .league_week import WEEK, week_start
+from .notebook_ranks import base_armies, top_bases
 
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -423,8 +424,9 @@ def get_notebook(
     database: ApiDatabase, account_id: int, *, now: datetime, base: str | None = None
 ) -> dict[str, Any]:
     """The account's notebook this Season: its players, each one's runs and
-    current base, and every base with its record. With ``base``, also that
-    base's note, link and record on each player."""
+    current base, every base with its record, and the Top 3 bases. With
+    ``base``, also that base's note, link, record on each player, and the
+    armies that did best and worst against it."""
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         notebook = _Notebook(connection, account_id, now)
@@ -434,6 +436,13 @@ def get_notebook(
         legend = notebook.legend_days()
         shown = notebook.shown()
         detail = _base(notebook, base) if base is not None else None
+        armies = None if detail is None else base_armies(connection, [
+            (player_id, notebook.day_start(day))
+            for player_id, mine in picks.items()
+            for first, last, base_id in runs(mine, notebook.today, legend[player_id])
+            if base_id == detail
+            for day in range(first, last + 1) if day in counted
+        ])
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
     by_player: dict[int, dict[int, dict[str, Any]]] = {}
@@ -506,6 +515,9 @@ def get_notebook(
             }
             for base_id, base in bases.items()
         ],
+        "top": top_bases({
+            base["code"]: (base["name"], records[base_id]) for base_id, base in bases.items()
+        }),
     }
     if detail is not None:
         base = bases[detail]
@@ -518,6 +530,9 @@ def get_notebook(
                 for player_id, tag, *_ in notebook.players
                 if player_id in by_player.get(detail, {})
             ],
+            # Fewest trophies lost a defense first; None while armies are
+            # being labelled under new type rules.
+            "armies": armies,
         }
     return result
 
