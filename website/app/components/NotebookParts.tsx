@@ -25,6 +25,7 @@ import {
   SORT_LABEL,
   STATUS_LABEL,
   stripBlocks,
+  type BaseRecord,
   type BaseStatus,
   type LibraryFilter,
   type LibrarySort,
@@ -195,6 +196,20 @@ export function BaseTile({
     >
       {name ? baseInitials(name) : ""}
     </span>
+  );
+}
+
+/** A record's 3, 2, 1 and 0-star defenses. */
+export function Stars({ record }: { record: BaseRecord }) {
+  return (
+    <dl className="nb-stars">
+      {[3, 2, 1, 0].map((stars) => (
+        <div key={stars}>
+          <dt>{stars}★</dt>
+          <dd>{record.stars[stars]}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -434,7 +449,10 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
                     <b>
                       <Highlight name={base.name} query={query} />
                     </b>
-                    <small>{baseLine(base, notebook.season.today)}</small>
+                    <small>
+                      {baseLine(base, notebook.season.today)}
+                      {base.shared ? " · shared" : ""}
+                    </small>
                   </span>
                   <span className={`nb-status nb-status-${base.status}`}>
                     {statusText(base, notebook)}

@@ -327,6 +327,16 @@ once through `/notebook/save` and offers Undo, except the note. Records come
 from the worker's defense counts, so a day counts about 30 minutes after its
 Reset.
 
+Share on a base's page makes an unlisted link, `/b/<22 random characters>`,
+copies it and opens the share sheet, saving through `/notebook/share`. Anyone
+with the link sees the base's name, its live record and star counts as the
+Clasher's notebook counts them, and, as the Clasher switches, its in-game link
+(on at first) and each of their players that ran it with its record (off at
+first); never its base ID or note. The page asks search engines not to list it
+and sends no referrer. Stop sharing deletes the link, so it shows nothing from
+then on; sharing again makes a new one. Once a base's Season ends, its link
+shows nothing.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by

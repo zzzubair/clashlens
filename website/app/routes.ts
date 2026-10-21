@@ -49,6 +49,8 @@ export default [
     route("notebook/bases/:code", "routes/notebook.base.tsx"),
   ]),
   route("notebook/save", "routes/notebook.save.ts"),
+  route("notebook/share", "routes/notebook.share.ts"),
+  route("b/:link", "routes/b.$link.tsx"),
   route("crews", "routes/crews.tsx"),
   route("crews/new", "routes/crews.new.tsx"),
   route("crews/:crewId", "routes/crews.$crewId.tsx"),

@@ -14,10 +14,12 @@ import {
   BaseTile,
   recordLine,
   Sheet,
+  Stars,
   StatusSheet,
   statusText,
   type Saver,
 } from "../components/NotebookParts";
+import { ShareButton } from "../components/NotebookShare";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   averageLost,
@@ -26,12 +28,12 @@ import {
   dayDate,
   heldText,
   playerName,
-  type BaseRecord,
   type Notebook,
   type NotebookBase,
 } from "../lib/notebook";
 import type { Route } from "./+types/notebook.base";
 import "../notebook.css";
+import "../notebook-share.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 // A note saves this long after the last key press.
@@ -142,9 +144,15 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         </small>
       </p>
       <div className="nb-actions">
+        <ShareButton
+          key={base.id}
+          base={base.id}
+          name={base.name}
+          share={detail?.share ?? null}
+        />
         {detail?.link ? (
           <a
-            className="button"
+            className="button secondary"
             href={detail.link}
             target="_blank"
             rel="noopener noreferrer"
@@ -219,19 +227,6 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         />
       ) : null}
     </>
-  );
-}
-
-function Stars({ record }: { record: BaseRecord }) {
-  return (
-    <dl className="nb-stars">
-      {[3, 2, 1, 0].map((stars) => (
-        <div key={stars}>
-          <dt>{stars}★</dt>
-          <dd>{record.stars[stars]}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 

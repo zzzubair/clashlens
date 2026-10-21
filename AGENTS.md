@@ -47,6 +47,7 @@ Use these exactly.
 - **Day pick**: a Clasher saying which base one account ran from one Legend day on, until the next pick or the first day the account is out of Legend League.
 - **Run**: a stretch of Legend days on which one account ran one base.
 - **Held**: a defense on which the attacker did not get 3 stars.
+- **Shared base**: a Notebook base anyone with its unlisted link can see, with its live record; Stop sharing kills the link for good.
 
 ## Technical words
 

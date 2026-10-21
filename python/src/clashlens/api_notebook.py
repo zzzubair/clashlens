@@ -434,6 +434,19 @@ def get_notebook(
         legend = notebook.legend_days()
         shown = notebook.shown()
         detail = _base(notebook, base) if base is not None else None
+        # Each shared base's unlisted link (api_notebook_share.py).
+        shares = {
+            int(base_id): {"link": _text(link), "include_link": include, "show_names": names}
+            for base_id, link, include, names in connection.execute(
+                """
+                SELECT share.base_id, share.link_id, share.include_link, share.show_names
+                FROM notebook_shares AS share
+                JOIN notebook_bases AS base ON base.id = share.base_id
+                WHERE base.account_id = %s AND base.season_id = %s
+                """,
+                (account_id, notebook.season_id),
+            ).fetchall()
+        }
     codes = {base_id: base["code"] for base_id, base in bases.items()}
     records = {base_id: _record() for base_id in bases}
     by_player: dict[int, dict[int, dict[str, Any]]] = {}
@@ -503,6 +516,7 @@ def get_notebook(
                        - timedelta(seconds=1)] if base_id in last_ran else []),
                 ]).isoformat(),
                 "record": records[base_id],
+                "shared": base_id in shares,
             }
             for base_id, base in bases.items()
         ],
@@ -513,6 +527,7 @@ def get_notebook(
             "id": base["code"],
             "note": base["note"],
             "link": base["link"],
+            "share": shares.get(detail),
             "players": [
                 {"tag": tag, "record": by_player.get(detail, {}).get(player_id, _record())}
                 for player_id, tag, *_ in notebook.players

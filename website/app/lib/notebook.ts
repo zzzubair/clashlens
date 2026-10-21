@@ -57,6 +57,8 @@ export interface NotebookBase {
   /** The later of when it last ran and when it was added or its status set. */
   recent: string;
   record: BaseRecord;
+  /** Whether it has an unlisted link. */
+  shared?: boolean;
 }
 
 export interface Notebook {
@@ -70,8 +72,17 @@ export interface Notebook {
     id: string;
     note: string;
     link: string | null;
+    share: BaseShare | null;
     players: Array<{ tag: string; record: BaseRecord }>;
   };
+}
+
+/** How a base is shared through its unlisted link (lib/notebook-share.ts),
+ * and what the shared page shows. */
+export interface BaseShare {
+  link: string;
+  includeLink: boolean;
+  showNames: boolean;
 }
 
 /** One change, as the private API takes it. `undo` is passed back as given. */
@@ -94,6 +105,8 @@ export interface NotebookSaved {
 }
 
 export const BASE_ID = /^B-[0-9A-HJKMNP-TV-Z]{6}$/;
+/** A shared base's unlisted link: 16 random bytes, URL-safe base64. */
+export const SHARE_LINK = /^[A-Za-z0-9_-]{22}$/;
 const STATUSES = new Set(["active", "to_try", "retired"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -107,7 +120,7 @@ const isCode = (value: unknown): value is string =>
 const isText = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
 
-function parseRecord(value: unknown): BaseRecord | null {
+export function parseRecord(value: unknown): BaseRecord | null {
   if (!isRecord(value) || !Array.isArray(value.stars) || value.stars.length !== 4)
     return null;
   const { days, defenses, held, stars, trophies_lost: lost } = value;
@@ -187,6 +200,26 @@ function parseBase(value: unknown): NotebookBase | null {
     lastRanDay: last,
     recent,
     record,
+    shared: value.shared === true,
+  };
+}
+
+/** A base's share as the private API words it, null for none, or
+ * undefined when it does not fit the contract. */
+export function parseShare(value: unknown): BaseShare | null | undefined {
+  if (value === null) return null;
+  if (
+    !isRecord(value) ||
+    typeof value.link !== "string" ||
+    !SHARE_LINK.test(value.link) ||
+    typeof value.include_link !== "boolean" ||
+    typeof value.show_names !== "boolean"
+  )
+    return undefined;
+  return {
+    link: value.link,
+    includeLink: value.include_link,
+    showNames: value.show_names,
   };
 }
 
@@ -230,11 +263,13 @@ export function parseNotebook(value: unknown): Notebook | null {
         ? { tag: item.tag, record: parseRecord(item.record) as BaseRecord }
         : null,
     );
-    if (records.includes(null)) return null;
+    const share = parseShare(base.share);
+    if (records.includes(null) || share === undefined) return null;
     notebook.base = {
       id: base.id,
       note: base.note,
       link: base.link,
+      share,
       players: records as Array<{ tag: string; record: BaseRecord }>,
     };
   }
