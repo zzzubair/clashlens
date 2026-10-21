@@ -23,7 +23,7 @@ from test_crews_api import call
 from test_discord_bot_postgres import _account
 from test_private_api import NOW_SECONDS, TS_CURRENT
 
-from clashlens import alerts
+from clashlens import alerts, api_notebook_pictures
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.api_notebook_pictures import PictureStore
@@ -200,6 +200,24 @@ def test_uploads_that_are_not_pictures_or_too_big_are_refused(notebook_api) -> N
             response = _upload(client, code, _image((40, 40)))
             assert (response.status_code, response.json()["error"]) == (404, "base_not_found")
         assert _pictures(client) == {"Ring": None}
+
+
+def test_an_upload_while_another_shrinks_is_told_to_try_again(
+    notebook_api, monkeypatch
+) -> None:
+    """One picture is shrunk at a time; another upload waits briefly, then
+    is refused rather than waiting until its signature runs out."""
+    client_for, _, _ = notebook_api
+    monkeypatch.setattr(api_notebook_pictures, "BUSY_WAIT_SECONDS", 0.1)
+    with client_for() as client:
+        ring = _add(client, "Ring")
+        assert api_notebook_pictures.SHRINKING.acquire(timeout=1)
+        try:
+            response = _upload(client, ring, _image((40, 40)))
+        finally:
+            api_notebook_pictures.SHRINKING.release()
+        assert (response.status_code, response.json()["error"]) == (503, "pictures_busy")
+        assert _upload(client, ring, _image((40, 40))).status_code == 200
 
 
 def test_thirty_uploads_a_day_then_none(notebook_api) -> None:

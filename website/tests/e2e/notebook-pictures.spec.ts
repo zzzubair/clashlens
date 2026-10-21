@@ -153,17 +153,17 @@ test("a base's picture opens full size from every list, never saving or leaving 
   await expect(status.getByText("Active on which account?")).toBeVisible();
   await status.getByRole("button", { name: "Close" }).first().click();
 
-  // A picture link that stopped working, as an expired one does, reads the
-  // page again for fresh links.
+  // A picture that fails to load once, as one with an expired link does,
+  // reads the page again and then loads.
   const again = await page.context().newPage();
   await again.route(
     (url) => url.pathname.endsWith("/full.webp"),
     (route) => route.abort(),
-  );
-  const fresh = again.waitForRequest((request) =>
-    new URL(request.url()).pathname.endsWith(".data"),
+    { times: 1 },
   );
   await again.goto(page.url());
-  await fresh;
+  await expectLoaded(
+    again.getByRole("button", { name: "See Spare's picture" }).locator("img"),
+  );
   await again.close();
 });

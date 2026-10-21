@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
 import { useRevalidator } from "react-router";
 
 import { MAX_PICTURE_BYTES, type BasePicture, type NotebookBase } from "../lib/notebook";
@@ -18,23 +18,27 @@ const ERRORS: Record<string, string> = {
   unavailable: "Couldn't save the picture just now. Try again in a moment.",
 };
 
-// Links that failed to load once; each reads the page again only once.
-const failed = new Set<string>();
-
-/** Props for a picture: a signed link that stopped working, usually because
- * it expired, reads the page again for fresh links, also when it failed
- * before the page's scripts started. */
-export function useRelink() {
+/** A picture from a signed link. One that fails to load, usually because
+ * its link expired, reads the page again for fresh links and then loads
+ * once more, also when it failed before the page's scripts started. */
+export function PictureImage(props: ImgHTMLAttributes<HTMLImageElement>) {
   const revalidator = useRevalidator();
+  const [tries, setTries] = useState(0);
+  const retried = useRef(false);
   const check = (image: HTMLImageElement | null) => {
-    if (!image?.complete || image.naturalWidth > 0 || failed.has(image.src)) return;
-    failed.add(image.src);
-    void revalidator.revalidate();
+    if (!image?.complete || image.naturalWidth > 0 || retried.current) return;
+    retried.current = true;
+    // A new element loads again even when its link is unchanged.
+    void revalidator.revalidate().then(() => setTries(1));
   };
-  return {
-    ref: check,
-    onError: (event: { currentTarget: HTMLImageElement }) => check(event.currentTarget),
-  };
+  return (
+    <img
+      key={tries}
+      {...props}
+      ref={check}
+      onError={(event) => check(event.currentTarget)}
+    />
+  );
 }
 
 /** Upload or remove one base's picture, then read the page again. */
@@ -122,7 +126,6 @@ export function PicturePreview({
   const dialog = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
-  const relink = useRelink();
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
@@ -162,7 +165,7 @@ export function PicturePreview({
       }}
     >
       <figure>
-        <img src={picture.full} alt={name} {...relink} />
+        <PictureImage src={picture.full} alt={name} />
         <figcaption>{name}</figcaption>
       </figure>
       <button
@@ -189,7 +192,6 @@ export function PictureButton({
   size?: "sm" | "lg" | "cover";
 }) {
   const [open, setOpen] = useState(false);
-  const relink = useRelink();
   return (
     <>
       <button
@@ -201,12 +203,11 @@ export function PictureButton({
         onClick={() => setOpen(true)}
       >
         {size === "cover" ? null : (
-          <img
+          <PictureImage
             src={size === "lg" ? picture.full : picture.small}
             alt=""
             loading="lazy"
             decoding="async"
-            {...relink}
           />
         )}
       </button>

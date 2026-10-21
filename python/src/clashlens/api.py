@@ -264,8 +264,6 @@ def create_app(
             return JSONResponse(status_code=error.status_code, content=content)
         return JSONResponse(status_code=503, content={"error": "service_unavailable"})
 
-    pictures_at_once = asyncio.Semaphore(api_notebook_pictures.AT_ONCE)
-
     @app.middleware("http")
     async def proof_middleware(request: Request, call_next):
         request_started = time.perf_counter()
@@ -349,15 +347,6 @@ def create_app(
             background=response.background,
         )
         return observed(bounded, response_size)
-
-    # Added last, so it runs first: a picture upload waits its turn before
-    # its large body is read.
-    @app.middleware("http")
-    async def one_picture_at_a_time(request: Request, call_next):
-        if request.url.path != api_notebook_pictures.PICTURE_PATH:
-            return await call_next(request)
-        async with pictures_at_once:
-            return await call_next(request)
 
     @app.get("/livez")
     def live() -> dict[str, bool]:
