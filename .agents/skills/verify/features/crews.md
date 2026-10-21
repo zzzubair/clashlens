@@ -26,7 +26,7 @@ Preconditions:
 
 - **Create.** As the owner, `page.goto("/crews/new")`, fill `Crew name` with `Night Owls` and `Places` (`exact: true`) with `10`, tick each account's checkbox (the `label` containing the tag), click `Create crew`. The URL becomes `/crews/<id>?invite=1` and the dialog `Invite to Night Owls` shows a `/crews/join/...` link and `8 places open`.
 - **Join.** As the joiner, open the invite path. The heading `Night Owls` is visible. Tick both accounts and click `Join with 2 accounts`. The URL is the Crew page and `4 of 10 places` is shown.
-- **Signed-out view.** In a new context, open the Crew page. The heading `Night Owls` (level 1), `Joining is by invite only.`, and the region `Accounts (4)` with all four tags are visible. `Invite`, `Members` and `Edit` are absent. The page HTML contains neither username nor the invite code.
+- **Signed-out view.** In a new context, open the Crew page. The heading `Night Owls` (level 1), `Joining is by invite only.`, and the region `Players (4)` with all four tags are visible. `Invite`, `Members` and `Edit` are absent. The page HTML contains neither username nor the invite code.
 - **Crew board.** Open `<crew page>/boards/live`. The heading `Live leaderboard` (level 1) is visible.
 - **Proof.** Screenshot and accessibility snapshot after each step, plus the saved HTML check's result.
 

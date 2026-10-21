@@ -141,7 +141,8 @@ export default function CrewRoute() {
         )}
       </section>
 
-      <h2 className="crew-section-title">Right now</h2>
+      {/* The live boards speak for themselves; the heading only keeps the outline whole. */}
+      <h2 className="sr-only">Right now</h2>
       <div className="crew-boards">
         {NOW_BOARDS.map((key) => (
           <BoardCard key={key} board={key} crew={crew} boards={boards} period={period} />
@@ -167,7 +168,7 @@ function CrewAccounts({ crew }: { crew: CrewView }) {
   if (crew.players.length === 0) return null;
   return (
     <section className="crew-panel crew-missing" aria-labelledby="crew-accounts-title">
-      <h2 id="crew-accounts-title">Accounts ({crew.players.length})</h2>
+      <h2 id="crew-accounts-title">Players ({crew.players.length})</h2>
       <ul>
         {crew.players.map((player) => (
           <li key={player.tag}>
