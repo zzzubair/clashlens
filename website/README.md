@@ -186,10 +186,12 @@ page at `/`: the Dashboard preview with Create account and Sign in (only while
 the switch is on), the big search, Rankings and Analytics buttons, and the top
 10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
-Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
-screens, they move to a bar at the bottom of the screen: Home (Dashboard when
-signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
-holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
+Notebook (signed in, with the Notebook on), Rankings, Analytics, Crews,
+Watchlists and Blog. Below 64rem, and on touch screens, they move to a bar at
+the bottom of the screen: Home (Dashboard when signed in with the Dashboard
+on), Rankings, Analytics, Crews and More, which holds Watchlists, Blog and Join
+Discord. Signed in with the Notebook on, Notebook takes Crews' place in the bar
+and Crews moves into More; the top bar keeps the logo, search,
 the theme switch and Sign in or the account menu. A signed-out visitor who
 opens a page that needs an account sees, in its place, what the page is for and
 separate Create account and Sign in buttons that both come back to it

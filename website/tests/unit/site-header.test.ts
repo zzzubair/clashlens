@@ -125,6 +125,57 @@ it("on phones puts the four most useful tabs and More in the bottom bar", async 
   ]);
 });
 
+it("gives the Notebook its own tab and moves Crews into More", async () => {
+  const signedIn = {
+    ...SIGNED_OUT,
+    loggedIn: true,
+    accountLabel: "Lens Scout",
+    dashboardEnabled: true,
+    crewsEnabled: true,
+  };
+  const header = await renderHeader({ ...signedIn, notebookEnabled: true });
+  const more = moreOf(header);
+  expect(labelsOf(bottomOf(header).replace(more, ""))).toEqual([
+    "Dashboard",
+    "Rankings",
+    "Analytics",
+    "Notebook",
+  ]);
+  expect(bottomOf(header)).toContain('href="/notebook"');
+  expect(labelsOf(more)).toEqual([
+    "More",
+    "Crews",
+    "Watchlists",
+    "Blog",
+    "Join Discord, opens in a new tab",
+  ]);
+  const wide = /<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(header)![0];
+  expect(tabsOf(wide)).toEqual([
+    "Dashboard",
+    "Notebook",
+    "Rankings",
+    "Analytics",
+    "Crews",
+    "Watchlists",
+    "Blog",
+  ]);
+  const toggleOf = (html: string) => /<summary [^>]*>/.exec(moreOf(html))![0];
+  expect(
+    toggleOf(await renderHeader({ ...signedIn, notebookEnabled: true }, "/crews")),
+  ).toContain('aria-current="page"');
+
+  // With the Notebook off, or signed out, Crews keeps its tab.
+  for (const data of [
+    signedIn,
+    { ...signedIn, loggedIn: false, notebookEnabled: true },
+  ]) {
+    const bar = await renderHeader(data);
+    expect(labelsOf(bottomOf(bar).replace(moreOf(bar), ""))).toContain("Crews");
+    expect(labelsOf(moreOf(bar))).not.toContain("Crews");
+    expect(bar).not.toContain('href="/notebook"');
+  }
+});
+
 it("keeps one theme switch, in the top bar, on every screen size", async () => {
   const header = await renderHeader(SIGNED_OUT);
   expect(header.match(/class="theme-toggle"/g)).toHaveLength(1);

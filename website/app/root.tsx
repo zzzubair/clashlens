@@ -263,6 +263,7 @@ const TAB_ICONS = {
   analytics: "M5 20V11M12 20V5M19 20v-7",
   crews:
     "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 3-5 6-5s6 2 6 5M17 11a2.5 2.5 0 1 0 0-5M18 15c2 .5 3 2 3 4",
+  notebook: "M6 4h12v16H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM9 4v16M12 9h3M12 13h3",
 } as const;
 
 function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
@@ -284,12 +285,19 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-// Below 64rem: the four most useful tabs, then More with Notebook (behind
-// its switch), Watchlists, Blog and Join Discord. `/` is Home while it shows
-// the front page.
+// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
+// and Join Discord, and Crews while the Notebook has its tab. `/` is Home
+// while it shows the front page.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
-  const inMore = ["/notebook", "/account/watchlists", "/blog"].some(
+  // The Notebook takes Crews' place in the bar, and Crews moves into More.
+  const notebook = Boolean(data?.notebookEnabled && data.loggedIn);
+  const crewsInMore = notebook && data?.crewsEnabled;
+  const inMore = [
+    "/account/watchlists",
+    "/blog",
+    ...(crewsInMore ? ["/crews"] : []),
+  ].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
   return (
@@ -306,17 +314,20 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
         <TabIcon name="analytics" />
         Analytics
       </NavLink>
-      {data?.crewsEnabled && (
+      {notebook ? (
+        <NavLink className="bottom-tab" to="/notebook">
+          <TabIcon name="notebook" />
+          Notebook
+        </NavLink>
+      ) : data?.crewsEnabled ? (
         <NavLink className="bottom-tab" to="/crews">
           <TabIcon name="crews" />
           Crews
         </NavLink>
-      )}
+      ) : null}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          {data?.notebookEnabled && data.loggedIn && (
-            <NavLink to="/notebook">Notebook</NavLink>
-          )}
+          {crewsInMore ? <NavLink to="/crews">Crews</NavLink> : null}
           <NavLink to="/account/watchlists">Watchlists</NavLink>
           <NavLink to="/blog">Blog</NavLink>
         </div>
