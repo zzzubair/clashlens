@@ -256,8 +256,7 @@ h3 {
 
 .observation-note,
 .muted,
-.subvalue,
-.provenance {
+.subvalue {
   color: #53657c;
   font-size: 0.9rem;
 }
@@ -312,7 +311,6 @@ h3 {
 }
 
 .tag,
-.provenance,
 .subvalue {
   display: block;
 }
@@ -327,17 +325,6 @@ h3 {
   font-size: 1rem;
 }
 
-.provenance {
-  margin-top: 0.2rem;
-  font-size: 0.78rem;
-}
-
-.coverage-summary {
-  margin: 0.75rem 0;
-  color: #42546b;
-  font-size: 0.88rem;
-}
-
 .table-detail {
   display: block;
   margin-top: 0.25rem;
@@ -349,78 +336,6 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
-}
-
-.state-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  width: fit-content;
-  padding: 0.15rem 0.42rem;
-  color: #26364d;
-  background: #eef3f8;
-  border: 1px solid #a8b6c8;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 750;
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.state-live,
-.state-available,
-.state-fresh,
-.state-complete {
-  color: #14532d;
-  background: #edf8f1;
-  border-color: #75b88a;
-}
-
-.state-badge__mark {
-  width: 0.48rem;
-  height: 0.48rem;
-  background: #53657c;
-  border-radius: 50%;
-}
-
-.state-stale,
-.state-rate-limited,
-.state-unavailable {
-  color: #6a3900;
-  background: #fff6df;
-  border-color: #d99a28;
-}
-
-.state-stale .state-badge__mark,
-.state-rate-limited .state-badge__mark,
-.state-unavailable .state-badge__mark {
-  background: #a75c00;
-}
-
-.state-uncertain,
-.state-malformed,
-.state-partial {
-  color: #722b21;
-  background: #fff0ed;
-  border-color: #d77b6d;
-}
-
-.state-uncertain .state-badge__mark,
-.state-malformed .state-badge__mark,
-.state-partial .state-badge__mark {
-  background: #a43a2e;
-}
-
-.state-missing,
-.state-unclassified {
-  color: #4d3f08;
-  background: #fffbe5;
-  border-color: #c7ac35;
-}
-
-.state-missing .state-badge__mark,
-.state-unclassified .state-badge__mark {
-  background: #8b7100;
 }
 
 .notice {
@@ -746,31 +661,6 @@ body {
   margin-bottom: 0;
 }
 
-.provenance {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.7rem;
-  margin: 1rem 0;
-}
-
-.provenance > div {
-  min-width: 0;
-  padding: 0.65rem;
-  background: #eef3f8;
-  border-radius: 0.45rem;
-}
-
-.provenance dt {
-  color: #53657c;
-  font-size: 0.76rem;
-  font-weight: 750;
-}
-
-.provenance dd {
-  margin: 0.2rem 0 0;
-  overflow-wrap: anywhere;
-}
-
 .search-result-list,
 .quality-list {
   display: grid;
@@ -895,20 +785,11 @@ body {
   color: #53657c;
 }
 
-.state-mark {
-  font-weight: 900;
-}
-
-.state-label {
-  white-space: nowrap;
-}
-
 .narrow-page {
   max-width: 50rem;
 }
 
 @media (max-width: 48rem) {
-  .provenance,
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -926,7 +807,6 @@ body {
 }
 
 @media (max-width: 34rem) {
-  .provenance,
   .metric-grid {
     grid-template-columns: 1fr;
   }

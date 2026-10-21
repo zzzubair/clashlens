@@ -320,7 +320,7 @@
 
 /* ---------- Badges ---------- */
 
-:root :is(.state-badge, .profile-badge) {
+:root :is(.profile-badge) {
   border: 2px solid currentColor;
   border-radius: 999px;
   font-weight: 800;

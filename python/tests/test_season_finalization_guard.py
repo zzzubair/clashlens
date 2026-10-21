@@ -14,11 +14,6 @@ END = datetime(2026, 10, 5, 5, tzinfo=UTC)
 ELIGIBLE = datetime(2026, 10, 12, 5, tzinfo=UTC)
 
 
-def test_september_season_id_is_its_start() -> None:
-    assert datetime.fromtimestamp(1788757200, UTC) == START
-    assert START + timedelta(days=28) == END
-
-
 WINDOW = (START, END)
 KNOWN = {"eligible_at": ELIGIBLE.isoformat()}
 

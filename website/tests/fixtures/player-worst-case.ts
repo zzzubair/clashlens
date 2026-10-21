@@ -1,7 +1,6 @@
 import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
-  PastSeasonFinish,
   PlayerPage,
   RankedBattleEvent,
   RankedDaySummary,
@@ -226,15 +225,3 @@ export const WORST_SEASON_SUMMARY: HistoricalSeasonSummary = {
     finalPlacement: 13204,
   },
 };
-
-export const WORST_PAST_SEASONS: PastSeasonFinish[] = Array.from(
-  { length: 20 },
-  (_, index) => ({
-    seasonId: `20${String(24 - Math.floor(index / 12)).padStart(2, "0")}-${String(12 - (index % 12)).padStart(2, "0")}`,
-    seasonStart: null,
-    seasonEnd:
-      index < 3 ? new Date(Date.UTC(2026, 8 - index, 29, 5)).toISOString() : null,
-    trophies: 4800 + index * 85,
-    globalRank: index % 4 === 3 ? null : [1, 13204, 248913][index % 3],
-  }),
-);

@@ -40,21 +40,6 @@ _REASON_CHARS = 64
 _DAY_REASON_LIMIT = 8
 _SEASON_REASON_LIMIT = 16
 TRUNCATED_REASONS_FLAG = "truncated_reasons"
-KNOWN_SEASON_FLAGS = frozenset(
-    {
-        "missing_days",
-        "unknown_day_numbers",
-        "partial_days",
-        "too_many_days",
-        "malformed_battle_entries",
-        "ranked_version_missing",
-        "detailed_boundaries_unavailable",
-        "ranked_version_mismatch",
-        "attack_star_total_mismatch",
-        "defense_star_total_mismatch",
-    }
-)
-
 _TOTAL_FIELDS = (
     "attack_count",
     "attack_gain",

@@ -513,23 +513,6 @@ h3 {
   margin-top: 1rem;
 }
 
-.provenance {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  margin: 1.25rem 0;
-  color: var(--cl-ink);
-  border: 1px solid var(--cl-border);
-}
-
-.provenance > div {
-  padding: 0.7rem;
-  background: var(--cl-paper);
-  border-right: 1px solid var(--cl-border);
-  border-bottom: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-}
-
-.provenance dt,
 .stats-grid dt,
 .compact-stats dt,
 .detail-list dt,
@@ -594,51 +577,10 @@ h3 {
   font-weight: 600;
 }
 
-.state-badge {
-  color: var(--cl-ink);
-  background: var(--cl-paper);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  font-family: var(--cl-font);
-  font-weight: 650;
-}
-
-.state-live,
-.state-available,
-.state-fresh,
-.state-complete {
-  color: var(--cl-ink);
-  background: #dcf3e1;
-  border-color: var(--cl-border);
-}
-
-.state-stale,
-.state-rate-limited,
-.state-unavailable,
 .notice-warning {
   color: var(--cl-ink);
   background: #fdefc3;
   border-color: var(--cl-border);
-}
-
-.state-uncertain,
-.state-malformed,
-.state-partial {
-  color: var(--cl-ink);
-  background: #fde1e1;
-  border-color: var(--cl-border);
-}
-
-.state-missing,
-.state-unclassified {
-  color: var(--cl-ink);
-  background: var(--cl-panel);
-  border-color: var(--cl-border);
-}
-
-.state-badge__mark {
-  background: currentColor;
-  border-radius: var(--cl-radius);
 }
 
 .legend-days {
@@ -878,10 +820,6 @@ h3 {
     align-items: flex-start;
   }
 
-  .provenance {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .battle-columns {
     grid-template-columns: 1fr;
   }
@@ -917,10 +855,6 @@ h3 {
 
   .section-heading {
     align-items: stretch;
-  }
-
-  .provenance {
-    grid-template-columns: 1fr;
   }
 }
 

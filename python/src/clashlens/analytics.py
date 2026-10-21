@@ -173,23 +173,6 @@ GROUP BY battle.attacker_player_id
 """
 
 
-def season_attack_tallies(
-    connection: Any,
-    *,
-    season_start: datetime,
-    cutoff: datetime,
-    player_ids: list[int] | None = None,
-) -> dict[int, tuple[int, int]]:
-    """Each player's (attacks, destruction) in the Season before ``cutoff``."""
-    return {
-        int(row[0]): (int(row[1]), int(row[2]))
-        for row in connection.execute(
-            _SEASON_ATTACKS_SQL,
-            {"season_start": season_start, "cutoff": cutoff, "player_ids": player_ids},
-        ).fetchall()
-    }
-
-
 # The Live board reads these counts from live_attack_tallies, recounted from
 # the current Season's recorded battles every LIVE_TALLY_SECONDS (about 5
 # seconds at a Season's end on 8 October 2026 data), so its tie order can lag

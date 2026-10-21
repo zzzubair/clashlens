@@ -220,40 +220,6 @@ class ApiDatabase:
             return None if row is None else _text(row[0])
 
 
-def lookup_request(database: ApiDatabase, binding: RequestBinding) -> OperationResult | None:
-    with database.pool.connection() as connection:
-        row = connection.execute(
-            """
-            SELECT caller, provider, provider_subject, account_id, operation,
-                   method, request_target, identity_json, state,
-                   response_status, response_json
-            FROM private_api_requests
-            WHERE request_id = %s
-            """,
-            (binding.request_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        expected = (
-            binding.caller,
-            binding.provider,
-            binding.provider_subject,
-            binding.account_id,
-            binding.operation,
-            binding.method,
-            binding.request_target,
-            binding.identity,
-        )
-        actual = tuple(_text(value) for value in row[:8])
-        if actual != expected:
-            return OperationResult(
-                409, {"error": "request_id_conflict"}, replayed=True
-            )
-        if _text(row[8]) != "complete":
-            return OperationResult(202, {"status": "in_progress"}, replayed=True)
-        return OperationResult(int(row[9]), dict(row[10]), replayed=True)
-
-
 def _reserve_request(
     database: ApiDatabase,
     connection: Any,

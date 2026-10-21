@@ -15,7 +15,6 @@ from .domain import (
 )
 from .source_observation_contract import PROFILE_SOURCE_OBSERVATION_CONTRACT
 
-ENDPOINT_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.endpoint_version
 SCHEMA_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.schema_version
 PARSER_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.default_parser_version
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"

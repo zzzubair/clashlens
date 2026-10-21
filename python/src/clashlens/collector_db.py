@@ -36,7 +36,6 @@ BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
-UPLOAD_RETRY_DELAY = timedelta(seconds=5)
 _ENDPOINTS = {
     "profile",
     "battle_log",

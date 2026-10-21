@@ -318,16 +318,3 @@ def is_siege_troop(typed_id: str) -> bool:
 
 def is_valid_typed_id(typed_id: str) -> bool:
     return typed_id in _CATALOG_ENTRIES
-
-
-def catalog_entries() -> dict[str, dict[str, str | bool]]:
-    return {typed_id: dict(entry) for typed_id, entry in _CATALOG_ENTRIES.items()}
-
-
-def catalog_version_info() -> dict[str, str]:
-    return {
-        "version": CATALOG_VERSION,
-        "hash": CATALOG_HASH,
-        "provenance": CATALOG_PROVENANCE,
-        "license": CATALOG_LICENSE,
-    }

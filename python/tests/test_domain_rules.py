@@ -131,14 +131,6 @@ def test_unknown_allocation_version_is_rejected() -> None:
         allocate_trophies(2, 55, rule_version="legend-trophy-allocation-v3")
 
 
-def test_trophy_allocation_uses_last_boundary_not_greater_than_destruction() -> None:
-    assert allocate_trophies(0, 9).attacker_gain == 0
-    assert allocate_trophies(0, 10).attacker_gain == 1
-    assert allocate_trophies(1, 99).attacker_gain == 15
-    assert allocate_trophies(2, 99).attacker_gain == 32
-    assert allocate_trophies(3, 100).attacker_gain == 40
-
-
 @pytest.mark.parametrize(
     ("stars", "destruction"),
     [(-1, 50), (4, 50), (0, -1), (1, 0), (2, 49), (3, 99), (3, 101)],

@@ -181,7 +181,6 @@ main {
   }
 }
 .lede,
-.coverage-summary,
 .table-detail,
 .day-range,
 .quality-list p {
@@ -292,31 +291,13 @@ main {
   background: var(--cl-surface);
   border-color: var(--cl-border);
 }
-[data-theme="dark"]
-  :is(
-    .state-live,
-    .state-available,
-    .state-fresh,
-    .state-complete,
-    .status-banner-success
-  ) {
+[data-theme="dark"] :is(.status-banner-success) {
   color: #c5edd7;
   background: #213b30;
 }
-[data-theme="dark"]
-  :is(
-    .state-stale,
-    .state-rate-limited,
-    .state-unavailable,
-    .notice-warning,
-    .status-banner-warning
-  ) {
+[data-theme="dark"] :is(.notice-warning, .status-banner-warning) {
   color: #f6dcab;
   background: #41351e;
-}
-[data-theme="dark"] :is(.state-uncertain, .state-malformed, .state-partial) {
-  color: #ffc7bd;
-  background: #442929;
 }
 [data-theme="dark"] .form-field :is(input, textarea)[aria-invalid="true"] {
   border-color: #f59e9e;
