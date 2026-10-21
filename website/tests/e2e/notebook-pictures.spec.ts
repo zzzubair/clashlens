@@ -114,6 +114,11 @@ test("a base's picture opens full size from every list, never saving or leaving 
   const day = page.getByRole("dialog", { name: /^Day \d+ · / });
   await preview(page, day, "Ring", saves);
   await expect(day).toBeVisible();
+  // Search all bases: every base, as in Change.
+  await day.getByRole("button", { name: /^Search all \d+ bases$/ }).click();
+  await expect(day.getByRole("searchbox")).toBeVisible();
+  await preview(page, day, "Spare", saves);
+  await expect(day.getByRole("searchbox")).toBeVisible();
   await day.getByRole("button", { name: "Close" }).first().click();
 
   // Spare's page: setting it Active asks which account, shown by its base.
