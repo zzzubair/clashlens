@@ -630,3 +630,54 @@
 .nb-base-part + .nb-note {
   margin-top: 1rem;
 }
+
+/* Top 3 bases: a Library row with its place in front and the trophies lost
+   a defense at the end. */
+.nb-top-place {
+  flex: 0 0 1.25rem;
+  color: var(--cl-muted);
+  font-family: var(--cl-font-heading);
+  font-size: 1.2rem;
+  text-align: center;
+}
+.nb-lost {
+  display: grid;
+  flex: 0 0 auto;
+  font-family: var(--cl-font-heading);
+  font-size: 1.2rem;
+  text-align: right;
+}
+.nb-lost small {
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+/* A base's armies, best first: a Best or Worst tag on the first and last. */
+.nb-army-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.nb-army-name b {
+  overflow-wrap: anywhere;
+}
+.nb-army-tag {
+  flex: 0 0 auto;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+.nb-army-best {
+  color: var(--cl-positive);
+}
+.nb-army-worst {
+  color: var(--cl-negative);
+}
+.nb-army-lost {
+  font-weight: 800;
+  white-space: nowrap;
+}

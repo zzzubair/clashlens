@@ -35,6 +35,7 @@ import {
   RunStrip,
   saveError,
 } from "../../app/components/NotebookParts";
+import { BaseArmies, TopBases } from "../../app/components/NotebookRanks";
 import {
   baseInitials,
   baseOnDay,
@@ -95,6 +96,7 @@ function apiNotebook() {
         record: RECORD,
       },
     ],
+    top: ["B-7K3QX9"],
   };
 }
 
@@ -123,6 +125,29 @@ describe("notebook contract", () => {
     expect(notebook?.season.today).toBe(16);
     expect(notebook?.players[0]?.runs[0]?.record.trophiesLost).toBe(180);
     expect(notebook?.bases[0]).toMatchObject({ id: "B-7K3QX9", addedDay: 9 });
+  });
+
+  it("reads the Top 3 and a base's armies", () => {
+    const value = {
+      ...apiNotebook(),
+      base: {
+        id: "B-7K3QX9",
+        note: "",
+        link: null,
+        players: [],
+        armies: [{ type_id: 4, name: "Hydra", defenses: 6, held: 6, trophies_lost: 30 }],
+      },
+    };
+    const notebook = parseNotebook(value);
+    expect(notebook?.top).toEqual(["B-7K3QX9"]);
+    expect(notebook?.base?.armies).toEqual([
+      { name: "Hydra", defenses: 6, held: 6, trophiesLost: 30 },
+    ]);
+    expect(
+      parseNotebook({ ...value, base: { ...value.base, armies: null } })?.base?.armies,
+    ).toBeNull();
+    // A Top 3 base must be one of the notebook's.
+    expect(parseNotebook({ ...apiNotebook(), top: ["B-000001"] })).toBeNull();
   });
 
   it("refuses a notebook with a malformed base ID or day", () => {
@@ -302,6 +327,7 @@ describe("Legend days only", () => {
       recent: "2026-10-06T05:00:00Z",
       record: { ...EMPTY, stars: [0, 0, 0, 0] },
     })),
+    top: [],
   };
 
   it("offers only the account's Legend days", () => {
@@ -437,5 +463,82 @@ describe("a refused save", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("rankings", () => {
+  const record = (defenses: number, lost: number) => ({
+    days: 2,
+    defenses,
+    held: defenses - 1,
+    stars: [0, 0, 0, 1] as [number, number, number, number],
+    trophiesLost: lost,
+  });
+  const ranked = (top: string[]): Notebook => ({
+    season: {
+      id: "2026-10",
+      start: "2026-10-05T05:00:00Z",
+      end: "2026-11-02T05:00:00Z",
+      today: 16,
+      tomorrow: 17,
+    },
+    asOfDay: 15,
+    players: [],
+    bases: [
+      {
+        ...base("B-000001", "Ring", "active", 0, 0, "2026-10-19T06:00:00Z"),
+        record: record(19, 324),
+      },
+      {
+        ...base("B-000002", "Spiral", "retired", 0, 0, "2026-10-19T06:00:00Z"),
+        record: record(16, 40),
+      },
+      {
+        ...base("B-000003", "Box", "to_try", 0, 0, "2026-10-19T06:00:00Z"),
+        record: record(5, 0),
+      },
+    ],
+    top,
+  });
+
+  it("lists the Top 3 in the API's order, each linking to its base", async () => {
+    const html = (
+      await render(
+        createElement(TopBases, { notebook: ranked(["B-000002", "B-000001"]) }),
+      )
+    ).replaceAll("<!-- -->", "");
+    expect(html.indexOf("Spiral")).toBeLessThan(html.indexOf("Ring"));
+    expect(html).not.toContain("Box");
+    expect(html).toContain('href="/notebook/bases/B-000002"');
+    expect(html).toContain("held 15 of 16 · 2 days");
+    expect(html).toContain("−3<small>a defense");
+    const none = await render(createElement(TopBases, { notebook: ranked([]) }));
+    expect(none).toContain("16 defenses on Legend days");
+  });
+
+  it("tags the best army first and the worst last, and counts what is ranked", async () => {
+    const armies = [
+      { name: "Hydra", defenses: 6, held: 6, trophiesLost: 30 },
+      { name: "Root Rider", defenses: 3, held: 2, trophiesLost: 45 },
+      { name: "Thrower", defenses: 7, held: 5, trophiesLost: 178 },
+    ];
+    const html = (
+      await render(createElement(BaseArmies, { armies, defenses: 19 }))
+    ).replaceAll("<!-- -->", "");
+    expect(html).toMatch(/Best<\/span><b>Hydra<\/b>/);
+    expect(html).toMatch(/Worst<\/span><b>Thrower<\/b>/);
+    expect(html.match(/nb-army-tag/g)).toHaveLength(2);
+    expect(html).toContain("−5 a defense");
+    expect(html).toContain("held 5 of 7");
+    expect(html).toContain("16 of 19 defenses ranked");
+    // One army is neither best nor worst; null means armies are relabelling.
+    const one = await render(
+      createElement(BaseArmies, { armies: armies.slice(0, 1), defenses: 6 }),
+    );
+    expect(one).not.toContain("nb-army-tag");
+    const later = await render(createElement(BaseArmies, { armies: null, defenses: 6 }));
+    expect(later).toContain("Check back in a few minutes");
+    const none = await render(createElement(BaseArmies, { armies: [], defenses: 2 }));
+    expect(none).toContain("No army has 3 defenses on this base yet");
   });
 });

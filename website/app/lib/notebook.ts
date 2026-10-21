@@ -59,18 +59,33 @@ export interface NotebookBase {
   record: BaseRecord;
 }
 
+/** One army type's defenses on a base, named as the dashboard's Armies on
+ * defense card names it. */
+export interface BaseArmy {
+  name: string;
+  defenses: number;
+  held: number;
+  trophiesLost: number;
+}
+
 export interface Notebook {
   season: { id: string; start: string; end: string; today: number; tomorrow: number };
   /** The newest Legend day whose defenses are counted. */
   asOfDay: number | null;
   players: NotebookPlayer[];
   bases: NotebookBase[];
+  /** The Season's Top 3 bases by base ID: fewest trophies lost a defense
+   * among bases with at least 16 defenses. */
+  top: string[];
   /** One base's note, link and record on each player, when asked for. */
   base?: {
     id: string;
     note: string;
     link: string | null;
     players: Array<{ tag: string; record: BaseRecord }>;
+    /** Army types with at least 3 defenses on it, fewest trophies lost a
+     * defense first; null while armies are being relabelled. */
+    armies: BaseArmy[] | null;
   };
 }
 
@@ -117,6 +132,18 @@ function parseRecord(value: unknown): BaseRecord | null {
     defenses: defenses as number,
     held: held as number,
     stars: stars as BaseRecord["stars"],
+    trophiesLost: lost as number,
+  };
+}
+
+function parseArmy(value: unknown): BaseArmy | null {
+  if (!isRecord(value) || typeof value.name !== "string") return null;
+  const { defenses, held, trophies_lost: lost } = value;
+  if (![defenses, held, lost].every(isCount) || !(defenses as number)) return null;
+  return {
+    name: value.name,
+    defenses: defenses as number,
+    held: held as number,
     trophiesLost: lost as number,
   };
 }
@@ -203,17 +230,21 @@ export function parseNotebook(value: unknown): Notebook | null {
     !isDay(tomorrow) ||
     !(value.as_of_day === null || isDay(value.as_of_day)) ||
     !Array.isArray(value.players) ||
-    !Array.isArray(value.bases)
+    !Array.isArray(value.bases) ||
+    !Array.isArray(value.top)
   )
     return null;
   const players = value.players.map(parsePlayer);
   const bases = value.bases.map(parseBase);
   if (players.includes(null) || bases.includes(null)) return null;
+  const codes = new Set((bases as NotebookBase[]).map((base) => base.id));
+  if (!value.top.every((code) => isCode(code) && codes.has(code))) return null;
   const notebook: Notebook = {
     season: { id, start, end, today, tomorrow },
     asOfDay: value.as_of_day,
     players: players as NotebookPlayer[],
     bases: bases as NotebookBase[],
+    top: value.top as string[],
   };
   if (value.base !== undefined) {
     const base = value.base;
@@ -222,7 +253,8 @@ export function parseNotebook(value: unknown): Notebook | null {
       !isCode(base.id) ||
       typeof base.note !== "string" ||
       !isText(base.link) ||
-      !Array.isArray(base.players)
+      !Array.isArray(base.players) ||
+      !(base.armies === null || Array.isArray(base.armies))
     )
       return null;
     const records = base.players.map((item) =>
@@ -230,12 +262,14 @@ export function parseNotebook(value: unknown): Notebook | null {
         ? { tag: item.tag, record: parseRecord(item.record) as BaseRecord }
         : null,
     );
-    if (records.includes(null)) return null;
+    const armies = base.armies === null ? null : base.armies.map(parseArmy);
+    if (records.includes(null) || armies?.includes(null)) return null;
     notebook.base = {
       id: base.id,
       note: base.note,
       link: base.link,
       players: records as Array<{ tag: string; record: BaseRecord }>,
+      armies: armies as BaseArmy[] | null,
     };
   }
   return notebook;
@@ -291,7 +325,9 @@ export function heldText(record: BaseRecord): string {
 }
 
 /** Average trophies lost a defense, as "−24", or null with none. */
-export function averageLost(record: BaseRecord): string | null {
+export function averageLost(
+  record: Pick<BaseRecord, "defenses" | "trophiesLost">,
+): string | null {
   if (!record.defenses) return null;
   return `−${Math.round(record.trophiesLost / record.defenses)}`;
 }
