@@ -183,6 +183,7 @@ def test_active_and_to_try_bases_carry_into_the_next_season(
     then = {base["id"]: base for base in september["bases"]}
     assert {code: base["status"] for code, base in then.items()} == {
         spiral: "retired", ring: "active", box: "to_try", hex_: "retired"}
+    assert [then[code]["added_day"] for code in (spiral, ring, box, hex_)] == [26] * 4
     assert then[spiral]["record"] == _record(1, 2, [0, 0, 1, 1], 70)
     assert then[ring]["record"] == _record(1, 2, [0, 1, 1, 0], 26)
     assert [(run["from"], run["to"], run["base"]) for run in september["players"][0]["runs"]

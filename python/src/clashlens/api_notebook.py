@@ -201,6 +201,7 @@ class _Notebook:
     ) -> None:
         self.connection = connection
         self.account_id = account_id
+        self.now = now
         day = season_day(season, now)
         self.this_season = ranked_day_for(now).official_season_id
         self.current = day.official_season_id == self.this_season
@@ -239,7 +240,7 @@ class _Notebook:
                 SELECT id, code, name, base_link, note, created_at, status_at
                 FROM notebook_bases
                 WHERE account_id = %s AND season_id = %s
-                ORDER BY created_at, id
+                ORDER BY created_at, code
                 """,
                 (self.account_id, self.season_id),
             ).fetchall()
@@ -734,19 +735,20 @@ def _new_base(
     note: str = "", copied_from: str | None = None,
 ) -> tuple[int, str]:
     """Make a base in the notebook with a base ID no base has had in any
-    Season."""
+    Season, made at the moment that chose the notebook's Season."""
     for _attempt in range(5):
         code = new_code()
         row = notebook.connection.execute(
             """
             INSERT INTO notebook_bases (code, account_id, season_id, name, note,
-                                        base_link, status, copied_from)
-            SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                                        base_link, status, copied_from, created_at,
+                                        status_at)
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             WHERE NOT EXISTS (SELECT 1 FROM notebook_bases WHERE code = %s)
             ON CONFLICT (code, season_id) DO NOTHING RETURNING id
             """,
             (code, notebook.account_id, notebook.season_id, name, note, link, status,
-             copied_from, code),
+             copied_from, notebook.now, notebook.now, code),
         ).fetchone()
         if row is not None:
             return int(row[0]), code
