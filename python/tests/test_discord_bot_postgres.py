@@ -224,9 +224,11 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
             account = store.account(DISCORD_ID)
             assert account is not None
 
-            # Settings and /stats both use the tracked player.
+            # Settings and /stats both use the tracked player, and nothing
+            # takes over from it, since #L82 isn't tracked.
             summary = api_accounts.get_multi_account_summary(bot, mine)
-            assert summary is not None and summary["default_player"] == "#2PP"
+            assert summary is not None
+            assert (summary["default_player"], summary["next_default_player"]) == ("#2PP", None)
             assert store.default_tag(account) == "#2PP"
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
             assert commands.stats(DISCORD_ID, "drift").text.startswith("### ")
@@ -234,6 +236,12 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
             # A chosen default stays chosen, tracked or not.
             assert _set_default(bot, account, "#L82") is True
             assert store.default_tag(account) == "#L82"
+            # Unlinking it would hand /stats to the tracked player.
+            summary = api_accounts.get_multi_account_summary(bot, mine)
+            assert summary is not None
+            assert (summary["default_player"], summary["next_default_player"]) == (
+                "#L82", "#2PP",
+            )
 
             # With none chosen and nothing tracked there is no default, and
             # /stats asks which player.
@@ -243,7 +251,8 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
                     "UPDATE players SET active = false WHERE normalized_tag = '#2PP'"
                 )
             summary = api_accounts.get_multi_account_summary(bot, mine)
-            assert summary is not None and summary["default_player"] is None
+            assert summary is not None
+            assert (summary["default_player"], summary["next_default_player"]) == (None, None)
             assert commands.stats(DISCORD_ID, "drift").text.startswith("Which linked account?")
         finally:
             bot.close()

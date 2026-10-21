@@ -75,6 +75,11 @@ def test_unlinking_a_player_takes_it_off_only_that_account(site: Site) -> None:
     assert _unlink(site, "other", "#2PP").payload == {"error": "player_not_verified"}
     assert _unlink(site, "host", "#2PP").status_code == 404
 
+    # The summary says which player becomes the default once #2PP goes.
+    before = api_accounts.get_multi_account_summary(site.api, first)
+    assert before is not None
+    assert (before["default_player"], before["next_default_player"]) == ("#2PP", "#8PY")
+
     request_id = str(uuid4())
     unlinked = _unlink(site, "first", "#2PP", request_id)
     assert (unlinked.status_code, unlinked.payload) == (200, {"unlinked": "#2PP"})

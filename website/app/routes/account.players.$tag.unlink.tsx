@@ -20,8 +20,8 @@ export function meta() {
 
 export interface UnlinkPlayerLoaderData {
   player: VerifiedPlayer;
-  /** It is the default player and another linked player takes over. */
-  defaultMoves: boolean;
+  /** The player /stats uses instead when this default player is unlinked. */
+  nextDefault: VerifiedPlayer | null;
   /** Crews the Clasher owns where this is their only player. */
   handOver: HandOverCrew[];
   idempotencyKey: string;
@@ -64,8 +64,12 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   return data<UnlinkPlayerLoaderData>(
     {
       player,
-      defaultMoves:
-        summary.defaultPlayer === player.tag && summary.verifiedPlayers.length > 1,
+      nextDefault:
+        summary.defaultPlayer === player.tag
+          ? (summary.verifiedPlayers.find(
+              (linked) => linked.tag === summary.nextDefaultPlayer,
+            ) ?? null)
+          : null,
       handOver,
       idempotencyKey: freshIdempotencyKey(),
     },
@@ -115,7 +119,7 @@ export default function UnlinkPlayerRoute() {
   const answer = useActionData<typeof action>();
   const failed = answer && "idempotencyKey" in answer ? answer : null;
   const handOver = answer && "handOver" in answer ? answer.handOver : loaded.handOver;
-  const { player, defaultMoves } = loaded;
+  const { player, nextDefault } = loaded;
   const name = player.name ?? player.tag;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -140,8 +144,11 @@ export default function UnlinkPlayerRoute() {
             {name} leaves the crews it&apos;s in. If it was your only player in a crew you
             don&apos;t own, you leave that crew too.
           </li>
-          {defaultMoves ? (
-            <li>The Discord bot&apos;s /stats uses your next player instead.</li>
+          {nextDefault ? (
+            <li>
+              The Discord bot&apos;s /stats uses {nextDefault.name ?? nextDefault.tag}{" "}
+              instead.
+            </li>
           ) : null}
         </ul>
         <h2>What stays</h2>

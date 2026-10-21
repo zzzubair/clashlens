@@ -68,6 +68,7 @@ describe("Python account response mappers", () => {
         { tag: "#2PQ", name: null },
       ],
       default_player: "#2PQ",
+      next_default_player: "#2PP",
     };
     expect(mapSummary(payload)).toEqual({
       username: "nova",
@@ -77,9 +78,14 @@ describe("Python account response mappers", () => {
         { tag: "#2PQ", name: null },
       ],
       defaultPlayer: "#2PQ",
+      nextDefaultPlayer: "#2PP",
     });
     // A default that is not one of the verified players is never shown.
     expect(mapSummary({ ...payload, default_player: "#9RR" })?.defaultPlayer).toBeNull();
+    expect(
+      mapSummary({ ...payload, next_default_player: "#9RR" })?.nextDefaultPlayer,
+    ).toBeNull();
+    expect(mapSummary({ ...payload, next_default_player: 7 })).toBeNull();
   });
 
   it("maps each public profile card and rejects a malformed one", () => {

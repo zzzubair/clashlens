@@ -51,7 +51,7 @@ test("Settings saves the name and default player, and unlinks a player after a c
   // Unlinking asks first, says what changes and what stays, and Cancel keeps it.
   await row(UNLINKED).getByRole("link", { name: "Unlink" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(/^Unlink /);
-  await expect(page.getByText("/stats uses your next player instead.")).toBeVisible();
+  await expect(page.getByText(/\/stats uses .+ instead\./)).toBeVisible();
   await expect(page.getByText("You can link it again any time")).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
   await page.getByRole("link", { name: "Cancel" }).click();

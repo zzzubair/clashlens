@@ -79,6 +79,7 @@ const SUMMARY = {
     { tag: "#8PY", name: null },
   ],
   defaultPlayer: "#8PY",
+  nextDefaultPlayer: "#2PP",
 };
 
 let config: WebsiteConfig;
@@ -386,25 +387,26 @@ describe("Unlink player", () => {
     ])
       expect(html).toContain(text);
     expect(html).not.toContain("danger");
-    // Only the default player's page says the bot moves on to the next one.
-    expect(html).not.toContain("/stats uses your next player");
-    const defaultPage = await render(
-      unlinkPage,
-      new Request(`${ORIGIN}/account/players/%238PY/unlink`),
-    );
+    // Only the default player's page names the player the bot moves on to.
+    expect(html).not.toContain("/stats uses");
+    const defaultPath = `${ORIGIN}/account/players/%238PY/unlink`;
+    const defaultPage = await render(unlinkPage, new Request(defaultPath));
     expect(defaultPage).toContain("Unlink #8PY?");
-    expect(defaultPage).toContain("/stats uses your next player instead.");
+    expect(defaultPage).toContain("The Discord bot&#x27;s /stats uses Nova instead.");
     // An only player is the default too, but no player is left to take over.
     client.getAccountSummary.mockResolvedValue({
       ...SUMMARY,
       verifiedPlayers: [{ tag: "#8PY", name: null }],
+      nextDefaultPlayer: null,
     });
-    const onlyPage = await render(
-      unlinkPage,
-      new Request(`${ORIGIN}/account/players/%238PY/unlink`),
-    );
+    const onlyPage = await render(unlinkPage, new Request(defaultPath));
     expect(onlyPage).toContain("Unlink #8PY?");
-    expect(onlyPage).not.toContain("/stats uses your next player");
+    expect(onlyPage).not.toContain("/stats uses");
+    // Nor is one when every player left is one Clash Lens doesn't track.
+    client.getAccountSummary.mockResolvedValue({ ...SUMMARY, nextDefaultPlayer: null });
+    const untrackedPage = await render(unlinkPage, new Request(defaultPath));
+    expect(untrackedPage).toContain("Unlink #8PY?");
+    expect(untrackedPage).not.toContain("/stats uses");
     expect(mocks.unlinkPlayer).not.toHaveBeenCalled();
   });
 

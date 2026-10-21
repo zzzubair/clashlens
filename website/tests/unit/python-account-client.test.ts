@@ -411,6 +411,7 @@ describe("server-only Python account client", () => {
         display_name: "Nova",
         verified_players: [{ tag: "#2PP", name: "Nova" }],
         default_player: null,
+        next_default_player: null,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -421,6 +422,7 @@ describe("server-only Python account client", () => {
       displayName: "Nova",
       verifiedPlayers: [{ tag: "#2PP", name: "Nova" }],
       defaultPlayer: null,
+      nextDefaultPlayer: null,
     });
   });
 

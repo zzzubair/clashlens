@@ -131,6 +131,7 @@ def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(account
             "display_name": owner["username"],
             "verified_players": [],
             "default_player": None,
+            "next_default_player": None,
         }
         # Searching a public username must not disclose private counts or labels.
         search = call(client, owner, "GET", f"/v1/players/search?q={other['username']}")

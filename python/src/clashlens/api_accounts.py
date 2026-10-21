@@ -1137,18 +1137,24 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
         ).fetchone()
         if account is None:
             return None
+        default = default_player_tag(connection, account_id)
         return {
             "username": _text(account[0]),
             "display_name": _text(account[1]),
             "verified_players": _verified_players(connection, account_id),
-            "default_player": default_player_tag(connection, account_id),
+            "default_player": default,
+            # Who /stats uses once the default player is unlinked.
+            "next_default_player": default_player_tag(connection, account_id, unlinked=default),
         }
 
 
-def default_player_tag(connection: Any, account_id: int) -> str | None:
+def default_player_tag(
+    connection: Any, account_id: int, *, unlinked: str | None = None
+) -> str | None:
     """The account's chosen default player while it is still verified to it,
     otherwise its first verified player Clash Lens tracks; None when there is
-    neither, so nothing points the bot at a player with no data."""
+    neither, so nothing points the bot at a player with no data. ``unlinked``
+    gives the default once that player is unlinked."""
     row = connection.execute(
         """
         SELECT player.normalized_tag
@@ -1156,12 +1162,12 @@ def default_player_tag(connection: Any, account_id: int) -> str | None:
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN account_default_players AS chosen
             ON chosen.account_id = link.account_id AND chosen.player_id = link.player_id
-        WHERE link.account_id = %s
+        WHERE link.account_id = %s AND player.normalized_tag IS DISTINCT FROM %s
           AND (chosen.player_id IS NOT NULL OR player.active)
         ORDER BY chosen.player_id IS NULL, link.verified_at, link.player_id
         LIMIT 1
         """,
-        (account_id,),
+        (account_id, unlinked),
     ).fetchone()
     return None if row is None else _text(row[0])
 

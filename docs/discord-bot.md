@@ -17,7 +17,8 @@ connecting Discord, linking accounts, choosing the default account and
 turning alerts on or off happen on the website, never
 in the bot. The default account is the one marked Default on
 the Clasher's Settings page (`/account/settings`); until they choose, it is
-their first linked account. Every reply is a normal message anyone can forward;
+their first linked account Clash Lens tracks. With none tracked there is no
+default, and `/stats` asks which account unless they have only one. Every reply is a normal message anyone can forward;
 only the not-connected pointer and plain errors are private to the person.
 
 ## How it runs
