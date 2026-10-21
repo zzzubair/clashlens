@@ -29,8 +29,11 @@
   font-weight: 700;
 }
 
+/* One column as wide as the page, so a long row cuts its text instead of
+   widening the page. */
 .nb-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.9rem;
   margin-top: 1.5rem;
 }
@@ -225,6 +228,7 @@
 }
 .nb-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.35rem;
   margin: 0;
   padding: 0;
@@ -518,8 +522,10 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+/* The full label, wrapping on a phone rather than widening the page. */
 .nb-status-button {
-  max-width: none;
+  max-width: 100%;
+  white-space: normal;
   min-height: 2.75rem;
   padding-inline: 0.85rem;
   font-size: 0.9rem;
