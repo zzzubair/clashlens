@@ -1,6 +1,6 @@
 # Player dashboard design
 
-Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. All 13 cards are built. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
+Settled with the owner on **2026-10-12**. This is the design for the signed-in player dashboard. All 14 cards are built; the Notebook card needs the Notebook switch. The data each card needs, and whether Clash Lens already has it, is in [dashboard-data.md](dashboard-data.md).
 
 The dashboard can be built behind the off switch, but nothing goes live until tracking passes the accuracy bar.
 
@@ -26,9 +26,9 @@ The dashboard can be built behind the off switch, but nothing goes live until tr
 | 3 | Goal (Small) + Armies on defense (Medium) |
 | 4 | Rivals watch (Medium) + Season heat map (Small) |
 
-Goal starts at Top 200 until the user picks a rank. The other 6 cards are available from "+ Add a card".
+Goal starts at Top 200 until the user picks a rank. The other 7 cards are available from "+ Add a card".
 
-## The 13 cards
+## The 14 cards
 
 | Card | Size | In default | What it shows |
 |---|---|---|---|
@@ -36,7 +36,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Legend clock | Small | ✓ | 24-hour dial in the user's time zone, Reset on top, countdown to Reset; attacks as swords, defenses as shields; battles within 20 minutes grouped with a count; tap one for name, stars and trophies. |
 | Bases you attacked | Large | ✓ | One row per attack today: the player and their trophies at Reset, your hit, their defenses today as coloured blocks, and Hard / Average / Easy. Held % mode: the base's held rate today against the held rate of Legends at similar trophies today: players whose day started within 20 trophies of the base's Reset trophies, widened evenly until that holds 200 defenses but never past 300 trophies either side. With fewer than 200 defenses within 300, it uses those if there are at least 50. Otherwise, or when the base's Reset trophies are unknown, there is no comparison: the label is "–" with "held X of Y · no comparison yet". It is never compared with all Legends. Average within ±15 points. Held rate falls as trophies rise (last Season about 65% under 4,900, 41% at 5,200–5,299 and 30% at 5,400+), so comparing with all Legends (about 52%) called typical high-trophy bases Easy. Trophies mode (default): average trophies the base gave up per defense today against what the same Legends at similar trophies lost a defense today, Average within ±1.25 a defense, and "–" with "no comparison yet" when there is no such comparison; the row shows the total it lost today and its defenses beside what those Legends lost over as many defenses, such as "lost −185 · avg −201 · in 6 defenses", and both even before its 3rd defense. Trophies lost rise with trophies (13 October 2026: about −31 a defense near 4,900, −32 near 5,000, −36 at 5,300+), so the fixed −32 it used before called typical high-trophy bases Easy. Both modes need 3+ defenses for a rating, else "Too early". Row opens the player's page; "Add to watchlist" button. The ‹ Day 9 · today › button in the header steps back through this Season's earlier Legend days and forward to today. An earlier day shows the bases attacked that day, their defenses and trophies lost that day, and both modes' comparison with every player's saved defenses that day at similar trophies, as a finished day has no Live Leaderboard; there a base under 3 defenses reads "Too few". |
 | Goal | Small | ✓ | Any rank from 1 to 10,000 (the owner's chosen range) for the end of the Season: trophies a day needed from the last Reset, On pace / Behind pace / Already ahead, gap, days left, how fast that rank's line is moving, your pace, a "Shield days 1 / 2 / 3" row, and a small chart of you vs the line. |
-| Armies on defense | Medium | ✓ | Top 5 army types that attacked you over the last 3 days, 7 days or a Custom 1–28 days, sorted by most trophies lost: share of your defenses, your held % and your average trophies lost, each followed by the Legends average for that army in grey ("29% / 50%", "−37 / −33") under grey header text saying "/ Legends avg"; an All defenses row with the overall Legends average. The Legends average is every tracked player's defenses on the same finished days, from defenders' own battle reports; a defense whose attacking army could not be read counts only in All defenses. Shows – until the worker has counted every one of those days. |
+| Armies on defense | Medium | ✓ | Top 5 army types that attacked you over the last 3 days, 7 days or a Custom 1–28 days, sorted by most trophies lost: share of your defenses, your held % and your average trophies lost, each followed by the Legends average for that army in grey ("29% / 50%", "−37 / −33") under grey header text saying "/ Legends avg"; an All defenses row with the overall Legends average. The Legends average is every tracked player's defenses on the same finished days, from defenders' own battle reports; a defense whose attacking army could not be read counts only in All defenses. Shows – until the worker has counted every one of those days. While the Notebook is on, a "Base: Ring ›" line under the title opens the base the account runs today; with none it says "Which base? ›" and opens that account's Change sheet on the Notebook. |
 | Rivals watch | Medium | ✓ | The live leaderboard around you: 3 above, you, 3 below (edges handled). Live: rank with ▲▼ since Reset, trophies, today's hit rate, offense, defense. Season: the board at the last Reset with Season averages. |
 | Season heat map | Small | ✓ | 28 squares, one per Season day, with a Net / Offense / Defense switch. Each day is coloured by rank within your own Season: your best day green, your worst red, orange and yellow between; shield days grey and left out. Summary follows the switch. Click a day to swap the summary for that day's offense, attacks, defense, defenses, net and trophies at the end. |
 | Cutoffs | Small | | Trophies needed for 7 Top lines (picked from 12; default Top 10, 50, 100, 200, 500, 1,000, 5,000) with your account slotted in; gap −N to lines above you, +N to lines below. Live / Last Reset switch. |
@@ -45,6 +45,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Offense consistency | Small | | Hit rate over the last 3 days, 7 days or the whole Season so far (assuming 8 attacks a day) as the big number, with the "N of M tripled" fraction smaller under it; the 3★/2★/1★/0★ split, average per attack, average when not tripled and trophies missed against tripling everything; triples each day out of 8 as boxes at the bottom of the card, seven to a row for the whole Season. |
 | Watchlist | Medium | | One of your watchlists, picked from a drop-down on the card, over the last 7 days or the whole Season: trophies, average gain, hit rate, average offense and defense; 7 rows around you; link to the full comparison. Shows your only watchlist, or the first one you made; with no watchlists, the card asks you to make one first. |
 | Armies on offense | Small | | The army types you attacked with over the last 3 days, 7 days or the whole Season so far (up to 3 plus "Other armies"): your hit rate next to everyone's hit rate with that army over the same days. A one-army player sees big You vs Legends numbers. |
+| Notebook | Small | | Only while the Notebook is on. The base the account runs today with its tile, "since Day 10 · held 31 of 50" for that run, and a base picked from tomorrow; tapping it opens the base. "Change base ›" (or "Which base? ›" with none) opens the account's Change sheet on the Notebook; "Open ›" opens the Notebook. |
 
 **Goal shield row:** shield days count as 0 for you while the goal line keeps moving, so trophies a day needed = (gap + line speed × days left) ÷ (days left − shield days). The row then says "still on pace" or "behind by N" against your pace. It is hidden on Day 1 and for lengths that cover every remaining day. Legend I has only one-day and two-day shields; they can be stacked, and their waits before rebuying mean three days in a row is the longest possible.
 
@@ -76,6 +77,7 @@ Goal starts at Top 200 until the user picks a rank. The other 6 cards are availa
 | Offense consistency | How often you triple, and what your misses cost. |
 | Watchlist | How you compare with the players in one of your watchlists. |
 | Armies on offense | Your hit rate with each army, next to everyone else's. |
+| Notebook | The base this account runs today, from your Notebook, and how it held. |
 
 ## Dropped, and why
 

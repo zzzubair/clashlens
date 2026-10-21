@@ -17,6 +17,7 @@ import {
 } from "../lib/dashboard-armies";
 import { CardHead, CardNote, Name, Switch } from "./DashboardParts";
 import { signed } from "./LegendClock";
+import { BaseLine } from "./NotebookCard";
 
 /** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;
@@ -212,6 +213,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
         title="Armies on defense"
         meta={<DaySwitch days={days} choose={choose} custom />}
       />
+      {data.base ? <BaseLine today={data.base} /> : null}
       {empty || !armies ? (
         <CardNote>{empty}</CardNote>
       ) : (

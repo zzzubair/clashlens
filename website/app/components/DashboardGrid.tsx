@@ -26,6 +26,7 @@ import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "./ArmyCards";
 import { DashboardIcon } from "./DashboardIcon";
 import { CardHead, CardNote } from "./DashboardParts";
 import { LegendDayCard } from "./LegendDayCard";
+import { NotebookCard } from "./NotebookCard";
 import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
 import {
   HeatMapCard,
@@ -81,6 +82,7 @@ const CARD_VIEWS: {
   "group-watch": (data, context) => (
     <GroupWatchCard data={data} onPick={context.pickGroup} saving={context.saving} />
   ),
+  notebook: (data) => <NotebookCard data={data} />,
 };
 
 function hasView(card: CardId): card is keyof CardDataMap {
@@ -536,6 +538,7 @@ function FirstVisit({
 export function Dashboard({
   tag,
   settings,
+  cardsOff,
   data,
   dayOver,
   idempotencyKey,
@@ -544,6 +547,8 @@ export function Dashboard({
   tag: string;
   /** As last saved: a change reads again the cards it changes or adds. */
   settings: DashboardSettings;
+  /** Cards whose feature is switched off: "+ Add a card" leaves them out. */
+  cardsOff: CardId[];
   /** Null while the player's cards load. */
   data: CardReads | null;
   dayOver: boolean;
@@ -872,7 +877,7 @@ export function Dashboard({
       ) : null}
       {adding && editing ? (
         <AddSheet
-          cards={addableCards(cards)}
+          cards={addableCards(cards, cardsOff)}
           saving={saving}
           onClose={() => setAdding(false)}
           onAdd={(card) =>

@@ -226,6 +226,7 @@ describe("dashboard settings", () => {
       "offense-consistency",
       "group-watch",
       "armies-offense",
+      "notebook",
     ]);
   });
 
@@ -1219,6 +1220,7 @@ describe("dashboard page", () => {
       playersUnavailable: false,
       selectedTag: MAIN,
       settings: { ...defaultSettings(), layout: "default" },
+      cardsOff: [],
       cards: {},
       dayEndsMs: Date.UTC(2099, 0, 1, 5),
       idempotencyKey: IDEMPOTENCY_KEY,
