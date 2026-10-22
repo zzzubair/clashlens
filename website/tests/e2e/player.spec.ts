@@ -580,17 +580,22 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
 test("a folded Legend day keeps every battle as the page starts and after a Refresh", async ({
   browser,
 }) => {
+  test.setTimeout(120_000);
   const battles = "details.legend-day:not([open]) .battle-slot[id]";
   const noScript = await browser.newContext({ javaScriptEnabled: false });
-  let sent: string[];
+  let sent: string[] = [];
   try {
     const page = await noScript.newPage();
-    await page.goto("/players/%232PP");
-    sent = await page.locator(battles).evaluateAll((rows) => rows.map((row) => row.id));
+    // On a fresh stack the worker may not have saved the previous day's
+    // battle yet; it waits its turn behind other Reset and live work.
+    await expect(async () => {
+      await page.goto("/players/%232PP");
+      sent = await page.locator(battles).evaluateAll((rows) => rows.map((row) => row.id));
+      expect(sent.length).toBeGreaterThan(0);
+    }).toPass({ timeout: 90_000, intervals: [1000] });
   } finally {
     await noScript.close();
   }
-  expect(sent.length).toBeGreaterThan(0);
   // Times change from UTC to the browser's own zone once the page has started.
   const context = await browser.newContext({ timezoneId: "Asia/Tokyo" });
   try {

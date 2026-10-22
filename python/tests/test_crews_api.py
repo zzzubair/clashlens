@@ -188,8 +188,9 @@ def test_anyone_can_view_a_crew_but_not_who_runs_it(served) -> None:
         assert crew["clashers"] == (None if role is None else 2)
         assert sorted(player["tag"] for player in crew["players"]) == ["#2PP", "#8PY"]
         assert set(crew["players"][0]) == {"tag", "name", "trophies", "status"}
-        # Nothing names a Clash Lens account or an invite link.
-        text = response.text
+        # Nothing names a Clash Lens account or an invite link. The crew's
+        # random ID can spell "bea" in its hex, as on 14 Oct 2026.
+        text = response.text.replace(crew_id, "")
         for secret in ("akira", "Akira", "bea", "Bea", "subject-", code, "invite"):
             assert secret not in text, (viewer, secret)
 

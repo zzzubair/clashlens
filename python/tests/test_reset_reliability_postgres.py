@@ -267,6 +267,11 @@ def test_at_0600_the_board_publishes_without_every_unfinished_player(
     # published without them no alert said so.
     late = [f"#{_tag(number)}" for number in range(1, 52)]
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    # The Reset before builds its board here, which no past Reset does from
+    # 04:30 to 07:00 UTC (test_past_reset_pacing_postgres); CI runs at any hour.
+    monkeypatch.setattr(
+        past_reset_pacing, "PAST_RESET_QUIET_END", past_reset_pacing.PAST_RESET_QUIET_START
+    )
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         (tmp_path / "url").write_text(_as_worker(connection_info))
