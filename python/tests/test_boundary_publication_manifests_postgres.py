@@ -714,7 +714,8 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
                 # One correction carries one army marker, however many jobs
                 # found the change.
                 assert connection.execute(
-                    "SELECT pending_inputs FROM boundary_publication_corrections"
+                    "SELECT clashlens_correction_inputs(correction)"
+                    " FROM boundary_publication_corrections AS correction"
                     " WHERE state IN ('queued', 'pending_inputs')"
                 ).fetchall() == [([{"kind": "decode"}],)]
                 # A player outside the changed battle reads nothing, though

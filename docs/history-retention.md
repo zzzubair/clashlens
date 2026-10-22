@@ -302,6 +302,71 @@ owner decision: each late correction still freezes a new generation, and each
 one still copies the generation's member list and board entries in full; only
 the manifest rows are reused.
 
+## Rewrites of unchanged rows
+
+Three worker writes saved unchanged data again. Each input added to a board
+correction rewrote the correction's whole input list; since migration 0124 each
+added input is one row of `boundary_publication_correction_inputs` and
+`clashlens_correction_inputs(correction)` returns them in arrival order. Each
+battle log rewrote every battle it repeated; a battle already saved is now
+locked but not rewritten. Each army recount deleted and saved its whole day
+again; it now deletes only count rows that no longer match and inserts only new
+ones. Results are unchanged (`test_no_rewrites_postgres.py`).
+
+Production was measured read-only with `pg_stat_statements`, `pg_stat_wal` and
+the autovacuum log from 19 Oct 19:18 to 20 Oct 22:11 UTC 2026, 26.88 hours
+including the 20 Oct Reset: 111.9 GB of change log (WAL), 99.9 GB a day. Of it,
+adding correction inputs wrote 5.41 GB a day, saving battles 3.04 GB a day and
+army recounts 1.01 GB a day, before their cleanup.
+
+The benchmark ran on Arch WSL with PostgreSQL 18.6 set up like production for
+the change log (full-page images on, `wal_compression` zstd, `wal_level`
+replica, data checksums), on real data copied read-only from the 14 Oct working
+copy. Each operation ran in its own transaction with a checkpoint every
+production checkpoint interval; change log is the `pg_current_wal_lsn()`
+difference. Main and the branch ran the same workload.
+
+| Fix | Workload (real data) | main | branch | Results same |
+|---|---|---:|---:|---|
+| Correction inputs | First 5,000 inputs of the 9 Oct Reset's correction (40,422 in all), then cleanup | 1,066 MB + 691 MB cleanup | 2.8 MB + 0.005 MB | All 5,001 inputs read back identical |
+| Battle saves | 15,440 battle logs of 30 battles, 2 hours at production's pace, then cleanup | 187.1 MB + 17.5 MB cleanup | 78.4 MB + 0.05 MB | Same battle ids every call |
+| Army recounts, 2% of facts changed | 13 Oct, both lenses (working copy, rolled back, full-page images off) | 5.31 MB | 0.80 MB | Identical saved counts |
+| Army recounts, no fact changed | Same | 5.77 MB | 0.0005 MB | Identical saved counts |
+
+Projected onto production:
+
+| Fix | Benchmark change log per hour at production's pace, main to branch | Production GB a day, main to branch | Saved GB a day | R2 saved per month |
+|---|---:|---:|---:|---:|
+| Correction inputs | 358.7 MB to 0.96 MB | 5.75 to 0.02 | 5.73 | $0.82 |
+| Battle saves | 93.5 MB to 39.2 MB | 3.09 to 1.27 | 1.82 | $0.26 |
+| Army recounts | 7.4 MB to 1.1 MB | 1.06 to 0.16 | 0.90 | $0.13 |
+| Total | | 9.90 to 1.45 | 8.44 (8.5% of 99.9) | $1.20 |
+
+Production GB a day is each writer's measured statement change log plus its
+measured cleanup; the branch figure applies the benchmark's branch/main ratio
+(corrections: production's additions times the benchmark's 568 bytes per
+addition). Backups keep change log 10 days (10.8 days on average in R2), WAL-G
+stores 88.8 GB per 101 GB written, and R2 costs $0.015 per GB-month; all change
+log in R2 costs about $14.23 a month today. The corrections per-hour figure
+uses the benchmark's lists (213 KB per addition); production's additions
+averaged 134 KB in the first sample and 41 KB in the second. Not in the total:
+battle statistics refreshes, 0.26 GB a day, not benchmarked. How much a day
+saves depends mostly on how many corrections its Reset needs: the 9 Oct
+correction alone wrote about 63 GB.
+
+A second read-only sample, 20 Oct 22:11 to 21 Oct 03:41 UTC (5.49 hours, the
+quietest hours, no Reset), measured 15.53 GB, a pace of 67.8 GB a day.
+
+| Writer, 22:11 to 03:41 UTC | main (measured) | branch (projected) | Saved |
+|---|---:|---:|---:|
+| Correction inputs, with cleanup | 234.6 MB | 2.8 MB | 231.8 MB |
+| Battle saves | 550.5 MB | 230.6 MB | 319.9 MB |
+| Army recounts, with cleanup | 188.2 MB | 28.3 MB | 159.9 MB |
+| Total | 973.3 MB | 261.6 MB | 711.7 MB (4.6%) |
+
+The new table adds about 11 MB a day (about 270 bytes per input with its two
+indexes), where the lists held the same inputs packed in about 3 MB.
+
 ## What remains
 
 - Battle reports are shared across changing rolling logs. Every returned row is

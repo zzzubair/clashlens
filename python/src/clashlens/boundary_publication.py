@@ -317,10 +317,10 @@ def _maybe_emit_boundary_signal(
             return
         queued = connection.execute(
             """
-            SELECT id, affected_artifacts, pending_inputs
-            FROM boundary_publication_corrections
+            SELECT id, affected_artifacts
+            FROM boundary_publication_corrections AS correction
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
-              AND NOT (%s AND pending_inputs @> %s::jsonb)
+              AND NOT (%s AND clashlens_correction_inputs(correction) @> %s::jsonb)
             ORDER BY requested_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
@@ -328,6 +328,16 @@ def _maybe_emit_boundary_signal(
             (row[0], operator_correction_waits(connection), Jsonb([OPERATOR_CORRECTION])),
         ).fetchone()
         if queued is not None:
+            # Read once the row is locked: an input added just before then
+            # is a row of its own, which the locking read's snapshot misses.
+            queued = (*queued, connection.execute(
+                """
+                SELECT clashlens_correction_inputs(correction)
+                FROM boundary_publication_corrections AS correction
+                WHERE id = %s
+                """,
+                (queued[0],),
+            ).fetchone()[0])
             source = connection.execute(
                 """
                 SELECT sweep_id, expected_population_count, expected_population_hash,
@@ -1139,11 +1149,13 @@ def _queue_boundary_army_correction(
         # the row by one entry per job.
         connection.execute(
             """
-            UPDATE boundary_publication_corrections
-            SET pending_inputs = pending_inputs || %s::jsonb
-            WHERE id = %s AND NOT pending_inputs @> %s::jsonb
+            INSERT INTO boundary_publication_correction_inputs (correction_id, input)
+            SELECT correction.id, %s
+            FROM boundary_publication_corrections AS correction
+            WHERE correction.id = %s
+              AND NOT clashlens_correction_inputs(correction) @> %s::jsonb
             """,
-            (Jsonb([{"kind": "decode"}]), queued[0], Jsonb([{"kind": "decode"}])),
+            (Jsonb({"kind": "decode"}), queued[0], Jsonb([{"kind": "decode"}])),
         )
         return
     current = connection.execute(

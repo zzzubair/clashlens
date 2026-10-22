@@ -74,7 +74,7 @@ def operator_generation(connection: Any, boundary_at: datetime, generation: Any)
             JOIN boundary_publication_generations AS rebuilt
               ON rebuilt.id = correction.generation_id
             WHERE rebuilt.boundary_at = %s AND rebuilt.generation = %s
-              AND correction.pending_inputs @> %s::jsonb
+              AND clashlens_correction_inputs(correction) @> %s::jsonb
         )
         """,
         (boundary_at, generation, Jsonb([OPERATOR_CORRECTION])),
@@ -122,9 +122,9 @@ def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = Fal
     elif arrival or connection.execute(
         """
         SELECT EXISTS (
-            SELECT FROM boundary_publication_corrections
+            SELECT FROM boundary_publication_corrections AS correction
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
-              AND pending_inputs @> %s::jsonb)
+              AND clashlens_correction_inputs(correction) @> %s::jsonb)
         """,
         (boundary_at, Jsonb([ARRIVAL])),
     ).fetchone()[0]:

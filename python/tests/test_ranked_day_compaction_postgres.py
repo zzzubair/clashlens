@@ -653,6 +653,26 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                     (DAY_END, generation, copies["#SIZE2", DAY_START, 5]),
                 )
                 kept.add(copies["#SIZE2", DAY_START, 5])
+                # And as many inputs added to them later, a row each, one of
+                # them a copy of #SIZE3's.
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_correction_inputs (correction_id, input)
+                    SELECT correction.id, jsonb_build_object(
+                        'player_id', n,
+                        'input_hash', encode(sha256(convert_to(
+                            n || ':added:' || correction.id, 'UTF8')), 'hex'),
+                        'ranked_day_version_id',
+                        CASE WHEN correction.id = first.id AND n = 3 THEN %s
+                             ELSE 2000000000 + correction.id * 1000 + n END
+                    )
+                    FROM boundary_publication_corrections AS correction
+                    CROSS JOIN (SELECT min(id) AS id FROM boundary_publication_corrections) AS first
+                    CROSS JOIN generate_series(1, 600) AS n
+                    """,
+                    (copies["#SIZE3", DAY_START, 4],),
+                )
+                kept.add(copies["#SIZE3", DAY_START, 4])
                 players = connection.execute("SELECT count(*) FROM players").fetchone()[0]
                 connection.commit()
                 connection.execute("ANALYZE")

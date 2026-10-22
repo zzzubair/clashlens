@@ -477,28 +477,53 @@ def _count_day(connection: Any, lens: str) -> dict[str, Any] | None:
     if day is None:
         return None
     ranked_day_start, season_id, day_number, marker = day
-    # This day's older count goes; earlier Seasons' counts stay.
-    for table in (counts_table, counted_table):
-        connection.execute(
-            f"DELETE FROM {table} WHERE ranked_day_start = %s", (ranked_day_start,)
-        )
-    # Attacks save the trophies they won, defenses the trophies they lost.
+    connection.execute(
+        f"DELETE FROM {counted_table} WHERE ranked_day_start = %s", (ranked_day_start,)
+    )
+    # This day's older count goes; earlier Seasons' counts stay. Only rows
+    # that changed are written: a recount mostly repeats the last one, and
+    # deleting and saving the whole day again wrote about 1 GB of change log
+    # a day on production. Attacks save the trophies they won, defenses the
+    # trophies they lost.
+    same = f"""saved.population_player_id = fresh.population_player_id
+              AND saved.exact_army_id = fresh.exact_army_id
+              AND saved.{battles} = fresh.{battles}
+              AND saved.one_star = fresh.one_star
+              AND saved.two_star = fresh.two_star
+              AND saved.three_star = fresh.three_star
+              AND saved.destruction = fresh.destruction
+              AND saved.{trophies} IS NOT DISTINCT FROM fresh.{trophies}"""
     inserted = connection.execute(
         f"""
-        INSERT INTO {counts_table} (
-            ranked_day_start, population_player_id, exact_army_id,
-            {battles}, one_star, two_star, three_star, destruction, {trophies}
+        WITH fresh AS MATERIALIZED (
+            SELECT ranked_day_start, population_player_id, exact_army_id,
+                   count(*) AS {battles},
+                   count(*) FILTER (WHERE fact.stars = 1) AS one_star,
+                   count(*) FILTER (WHERE fact.stars = 2) AS two_star,
+                   count(*) FILTER (WHERE fact.stars = 3) AS three_star,
+                   sum(destruction_percentage) AS destruction,
+                   COALESCE(sum(moved.trophies), 0) AS {trophies}
+            FROM ({_facts(lens)}) AS fact{_TROPHIES_JOIN}
+            GROUP BY 1, 2, 3
+        ), gone AS (
+            DELETE FROM {counts_table} AS saved
+            WHERE saved.ranked_day_start = %s
+              AND NOT EXISTS (SELECT FROM fresh WHERE {same})
+        ), added AS (
+            INSERT INTO {counts_table} (
+                ranked_day_start, population_player_id, exact_army_id,
+                {battles}, one_star, two_star, three_star, destruction, {trophies}
+            )
+            SELECT * FROM fresh
+            WHERE NOT EXISTS (
+                SELECT FROM {counts_table} AS saved
+                WHERE saved.ranked_day_start = fresh.ranked_day_start AND {same}
+            )
         )
-        SELECT ranked_day_start, population_player_id, exact_army_id, count(*),
-               count(*) FILTER (WHERE fact.stars = 1),
-               count(*) FILTER (WHERE fact.stars = 2),
-               count(*) FILTER (WHERE fact.stars = 3),
-               sum(destruction_percentage), COALESCE(sum(moved.trophies), 0)
-        FROM ({_facts(lens)}) AS fact{_TROPHIES_JOIN}
-        GROUP BY 1, 2, 3
+        SELECT count(*) FROM fresh
         """,
-        (season_id, [int(day_number)], *_trophies(lens)),
-    ).rowcount
+        (season_id, [int(day_number)], *_trophies(lens), ranked_day_start),
+    ).fetchone()[0]
     connection.execute(
         f"INSERT INTO {counted_table} (ranked_day_start, fact_input_hash) VALUES (%s, %s)",
         (ranked_day_start, marker),
