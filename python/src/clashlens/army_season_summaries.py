@@ -21,7 +21,6 @@ PROJECTION_VERSION = "army-unit-usage-v3"
 LENSES = ("offense", "defense")
 # Historical army reads cover the whole-season sample, never a
 # population-filtered cohort; per-cohort historical filters are out of scope.
-HISTORICAL_POPULATION = "all"
 _SEASON_DAYS = tuple(range(1, 29))
 
 _SUMMARY_COLUMNS = (

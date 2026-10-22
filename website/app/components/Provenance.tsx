@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import type { DataProvenance, Freshness } from "../lib/contracts";
-import { StateBadge } from "./StateBadge";
 
 const utcTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -12,56 +10,6 @@ const utcTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
 });
 let localTimestampFormatter: Intl.DateTimeFormat | null = null;
 let localTimeFormatter: Intl.DateTimeFormat | null = null;
-
-export function FreshnessText({ freshness }: { freshness: Freshness }) {
-  return (
-    <span className="freshness-text">
-      <span className="sr-only">Observation freshness: </span>
-      {capitalize(freshness.state)}; {formatAge(freshness.ageSeconds)} old
-    </span>
-  );
-}
-
-export function Provenance({ provenance }: { provenance: DataProvenance }) {
-  return (
-    <dl className="provenance" aria-label="Data provenance">
-      <div>
-        <dt>Source</dt>
-        <dd>{provenance.source}</dd>
-      </div>
-      <div>
-        <dt>Observed</dt>
-        <dd>
-          {provenance.observedAt ? (
-            <time dateTime={provenance.observedAt}>
-              {formatTimestamp(provenance.observedAt)}
-            </time>
-          ) : (
-            "Unknown"
-          )}
-        </dd>
-      </div>
-      <div>
-        <dt>Freshness</dt>
-        <dd>
-          <StateBadge state={provenance.freshness} />
-        </dd>
-      </div>
-      <div>
-        <dt>Coverage</dt>
-        <dd>{provenance.coverage}</dd>
-      </div>
-      <div>
-        <dt>Confidence</dt>
-        <dd>{provenance.confidence}</dd>
-      </div>
-      <div>
-        <dt>Contract</dt>
-        <dd>{provenance.version}</dd>
-      </div>
-    </dl>
-  );
-}
 
 export function formatAge(seconds: number): string {
   if (seconds < 60) return "less than 1 minute";
@@ -157,8 +105,4 @@ export function LocalTimestamp({
       {localTime ?? utcTime}
     </time>
   );
-}
-
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

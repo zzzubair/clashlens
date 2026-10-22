@@ -25,11 +25,7 @@ const UNAVAILABLE = {
 };
 
 // A page whose next read fails the way a phone's does after waking.
-async function openPage(
-  failure: () => unknown,
-  path = PAGE,
-  middleware: MiddlewareFunction[] = [keepPageOnLostConnection as MiddlewareFunction],
-) {
+async function openPage(failure: () => unknown, path = PAGE) {
   const read = (data: unknown) => {
     let reads = 0;
     return () => {
@@ -43,7 +39,7 @@ async function openPage(
       {
         id: "root",
         path: "/",
-        middleware,
+        middleware: [keepPageOnLostConnection as MiddlewareFunction],
         loader: read({ loggedIn: true, accountLabel: "A" }),
         children: [
           { id: "player", path: "players/:tag", loader: read({ trophies: 5_014 }) },
@@ -96,12 +92,6 @@ async function fetched(
   stop();
   return data;
 }
-
-it("showed the error page when a background re-read lost the connection", async () => {
-  const router = await openPage(() => new TypeError("Load failed"), PAGE, []);
-  await router.revalidate();
-  expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
-});
 
 it.each([
   ["the phone is offline", () => new TypeError("Load failed")],

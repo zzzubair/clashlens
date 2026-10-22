@@ -16,7 +16,6 @@ from typing import Any
 
 import psycopg
 
-GUARD_VERSION = "season-close-guard-v1"
 EXAMPLE_LIMIT = 5
 CHECK_TIMEOUT = "10s"
 # Work from the Legend day before the Season can still feed its opening Reset.

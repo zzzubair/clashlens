@@ -357,7 +357,6 @@ export interface RefreshStatus extends RefreshWork {
 }
 
 export type RefreshError = WebsiteErrorResponse;
-export type RefreshStatusResponse = RefreshStatus | RefreshError;
 
 /** Null when the reply has no proof state, for example an older summary. */
 export type EodProofState = "accepted" | "provisional" | null;
