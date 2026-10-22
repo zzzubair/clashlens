@@ -43,9 +43,12 @@ test("a streamer sets up the Stream overlay, OBS shows it live at stream size, a
   expect(firstLink).toMatch(/\/o\/[A-Za-z0-9_-]{22}$/);
   const saved = page.getByRole("status").filter({ hasText: /Saved|save by themselves/ });
 
-  // A slim strip along the top, with made-up battles on.
-  await page.locator(".obs-shape", { hasText: "Slim strip" }).click();
-  await expect(page.getByLabel("Width")).toHaveValue("1110");
+  // A slim strip along the top, with made-up battles on. A click before the
+  // page's script starts does nothing (CI, 22 Oct 2026), so click again.
+  await expect(async () => {
+    await page.locator(".obs-shape", { hasText: "Slim strip" }).click();
+    await expect(page.getByLabel("Width")).toHaveValue("1110", { timeout: 1_000 });
+  }).toPass();
   await page.getByRole("button", { name: "▶ Start demo" }).click();
   await expect(page.getByRole("button", { name: "■ Stop demo" })).toBeVisible();
   await expect(saved).toHaveText("Saved. Your overlay in OBS updates within 3 seconds.");
