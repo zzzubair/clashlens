@@ -789,11 +789,14 @@ def unplayed_profiles(
 ) -> dict[int, tuple[Any, ...]]:
     """The players among ``player_ids`` the board at ``boundary_at`` ranks at
     5,000 with their newest profile at the Reset, as the population freeze
-    reads a profile: a Legend I one at 5,000 when their saved days of the
-    Season hold no battle. They have not played yet, whatever Season it
-    names. On 11 October 2026, 1,374 such players' profiles named Season 0."""
+    reads a profile: a Legend I one at 5,000 when their saved days hold no
+    battle since the Season began or, if later, since the Monday Reset of
+    their newest week up to the ended day the weekly league record says they
+    entered Legend I. They have not played yet, whatever Season it names. On
+    11 October 2026, 1,374 such players' profiles named Season 0."""
     if not player_ids:
         return {}
+    day = boundary_at - RANKED_DAY_DURATION
     return {
         int(row[0]): row[1:]
         for row in connection.execute(
@@ -803,12 +806,17 @@ def unplayed_profiles(
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)
             JOIN player_profile_versions AS version ON version.id = newest.id
-            WHERE {unplayed_sql("newest.player_id", "version",
-                                "%(season_start)s", "%(boundary)s")}
+            WHERE {unplayed_sql("newest.player_id", "version", '''GREATEST(
+                %(season_start)s::timestamptz, (
+                    SELECT max(week.week_start) FROM player_league_weeks AS week
+                    WHERE week.player_id = newest.player_id
+                      AND week.week_start <= %(day)s
+                      AND week.league = 'legend_i'
+                      AND week.entry IN ('promoted', 'first_seen')))''',
+                                "%(boundary)s")}
             """,
-            {"players": player_ids, "boundary": boundary_at,
-             "season_start": ranked_day_for(
-                 boundary_at - RANKED_DAY_DURATION).season_start},
+            {"players": player_ids, "boundary": boundary_at, "day": day,
+             "season_start": ranked_day_for(day).season_start},
         ).fetchall()
     }
 

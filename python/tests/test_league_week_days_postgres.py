@@ -544,7 +544,7 @@ def test_players_the_game_no_longer_finds_are_left_off_as_not_found(
         UNANSWERED: "league_not_confirmed"})
 
 
-BOUNCED, IDLE_UP = "#2YY", "#8YY"
+BOUNCED, IDLE_UP, RETURNED = "#2YY", "#8YY", "#9YY"
 
 
 def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
@@ -567,23 +567,32 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
     at 5,000 naming Season 0, never accepted, and never plays, as the 135
     players left off the 15 October board as not Legend I were. The
     Tuesday board ranks it at 5,000, so the Season repair's boards check
-    finds no board to rebuild."""
+    finds no board to rebuild.
+
+    RETURNED plays Legend I on Saturday 10 October, ranking at 5,140 on the
+    12 October board, is read in Legend II naming the Season during the week
+    of 12 October and is promoted back at the Monday Reset of 19 October,
+    then reads Legend I at 5,000 naming Season 0 and never plays: its
+    Saturday battle is before its promotion, so the 20 October board ranks
+    it at 5,000 too."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     back, back_tuesday = day(15), day(16)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {
-            tag: Climber(tag) for tag in (BOUNCED, IDLE_UP)})
+            tag: Climber(tag) for tag in (BOUNCED, IDLE_UP, RETURNED)})
         bounced, idle_up = story.players[BOUNCED], story.players[IDLE_UP]
+        returned = story.players[RETURNED]
         # Sunday from 5,140 ends where it began.
         bounced.battles = _saturday(saturday) + attacks(sunday, *[40] * 6) + defenses(
             sunday, *[30] * 8)
         idle_up.battles = multiplayer(day(4), 3)
+        returned.battles = attacks(saturday, 40)
         idle_up.legend_ii = True
         for at, trophies in ((day(4) + timedelta(hours=9), 1400),
                              (saturday + timedelta(hours=9), 1450)):
             story.read(IDLE_UP, at, trophies)
-        story.reset(saturday, {BOUNCED: (5300, SEASON)})
-        story.reset(sunday, {BOUNCED: (5140, SEASON)})
+        story.reset(saturday, {BOUNCED: (5300, SEASON), RETURNED: (5100, SEASON)})
+        story.reset(sunday, {BOUNCED: (5140, SEASON), RETURNED: (5140, SEASON)})
         story.reads(sunday + timedelta(hours=9, minutes=15), {BOUNCED: 5140})
         story.reads(monday - timedelta(minutes=10), {BOUNCED: 5140})
 
@@ -598,6 +607,9 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
         for at in (timedelta(hours=1, minutes=10), timedelta(hours=9, minutes=15),
                    timedelta(hours=23, minutes=50)):
             story.reads(monday + at, {IDLE_UP: 5000}, None)
+        returned.legend_ii = True
+        for at in (timedelta(hours=9, minutes=15), timedelta(hours=33, minutes=15)):
+            story.read(RETURNED, monday + at, 1500)
         story.reset(tuesday, {IDLE_UP: (5000, None)})
         story.reads(tuesday + timedelta(minutes=20), {IDLE_UP: 5000}, None)
         story.wait(timedelta(hours=1))
@@ -618,12 +630,13 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
                 "defenseStars": 0, "maxBattles": 8,
             }]}).encode(),
         )
-        bounced.dropped = False
+        bounced.dropped = returned.legend_ii = False
         for at in (timedelta(hours=1, minutes=10), timedelta(hours=9, minutes=15),
                    timedelta(hours=23, minutes=50)):
-            story.reads(back + at, {BOUNCED: 5000}, None)
-        story.reset(back_tuesday, {BOUNCED: (5000, None)})
-        story.reads(back_tuesday + timedelta(minutes=20), {BOUNCED: 5000}, None)
+            story.reads(back + at, {BOUNCED: 5000, RETURNED: 5000}, None)
+        story.reset(back_tuesday, {BOUNCED: (5000, None), RETURNED: (5000, None)})
+        story.reads(back_tuesday + timedelta(minutes=20), {BOUNCED: 5000, RETURNED: 5000},
+                    None)
         # The 13 October board, which ranked BOUNCED's Monday while its week
         # was carried in Legend I, is rebuilt without it 6 hours on.
         story.wait(timedelta(hours=6))
@@ -648,8 +661,8 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
                  "residual": 0}
     assert mondays == {BOUNCED: from_5000, IDLE_UP: from_5000}
     assert {at: (_ranked(board), left_off) for at, (board, left_off) in boards.items()} == {
-        monday: ({BOUNCED: 5140}, {}),
+        monday: ({BOUNCED: 5140, RETURNED: 5140}, {}),
         tuesday: ({IDLE_UP: 5000}, {}),
-        back_tuesday: ({BOUNCED: 5000}, {}),
+        back_tuesday: ({BOUNCED: 5000, RETURNED: 5000}, {}),
     }
     assert rebuilds == []
