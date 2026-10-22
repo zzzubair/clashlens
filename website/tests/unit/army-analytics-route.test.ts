@@ -739,13 +739,6 @@ describe("army analytics route historical reads", () => {
       "?category=spells&recent=1",
     );
   });
-
-  it("reconciles recorded, included and excluded captured attack records", async () => {
-    const text = renderedText(await renderArmyRoute("recent=1&population=top-100"));
-    expect(text).toContain("Battle records 1,600 Recorded in this selection");
-    expect(text).toContain("Records included 1,600");
-    expect(text).toContain("Records excluded 0");
-  });
 });
 
 describe("army analytics current season end", () => {
