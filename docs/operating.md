@@ -88,7 +88,7 @@ Healthy looks like this:
 - `backup-status` succeeds and its timer has a next run matching the
   [backup schedule](deployment.md#postgresql-backups-and-recovery).
   A historical `failed_count` alone does not prove a current failure.
-  A warming-up ten-day window is not full recovery coverage.
+  A warming-up seven-day window is not full recovery coverage.
 - `clashlens-history-retention.timer` is active with a next run under a
   minute away. It deletes finished processing jobs 48 hours after they finish;
   see [finished-job cleanup failed](#finished-job-cleanup-failed).

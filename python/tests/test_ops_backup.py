@@ -678,7 +678,7 @@ up_stack
 
 
 def test_extra_manual_backups_do_not_shorten_recovery_window(runtime):
-    rows = [backup_row(i, days) for i, days in enumerate((21, 11, 10.5, 9.9, 6, 1, 0.1), 1)]
+    rows = [backup_row(i, days) for i, days in enumerate((21, 8, 7.5, 6.9, 4, 1, 0.1), 1)]
     result = run_ops(runtime, rows, "backup-prune", "--apply")
     assert result.returncode == 0, result.stderr
     assert json.loads(runtime[1].read_text()) == [r["backup_name"] for r in rows[2:]]
@@ -689,9 +689,9 @@ def test_retention_keeps_the_full_backup_a_kept_delta_builds_on(runtime):
         backup_row(1, 21),
         backup_row(2, 20, delta_of=1),
         backup_row(3, 14),
-        backup_row(4, 12, delta_of=3),
-        backup_row(5, 11, delta_of=4),
-        backup_row(6, 6, delta_of=5),
+        backup_row(4, 9, delta_of=3),
+        backup_row(5, 8, delta_of=4),
+        backup_row(6, 4, delta_of=5),
         backup_row(7, 1),
     ]
     result = run_ops(runtime, rows, "backup-prune", "--apply")
@@ -720,6 +720,26 @@ def test_status_reports_change_log_a_restore_replays(runtime):
     assert "replays" not in run_ops(runtime, rows, "backup-status").stdout
 
 
+@pytest.mark.parametrize(("oldest", "warming"), [(6.9, True), (7.1, False)])
+def test_status_reports_whether_seven_days_are_kept(runtime, oldest, warming):
+    result = run_ops(runtime, [backup_row(1, oldest), backup_row(2, 0.5)], "backup-status")
+    assert result.returncode == 0, result.stderr
+    assert ("Seven-day window is still warming up" in result.stdout) is warming
+
+
+def test_backups_pack_with_zstd(tmp_path):
+    credentials = tmp_path / "r2"
+    credentials.write_text(f"AWS_ACCESS_KEY_ID={'a' * 32}\nAWS_SECRET_ACCESS_KEY={'b' * 64}\n")
+    credentials.chmod(0o600)
+    script = 'source "$1" help >/dev/null; CONFIG[CLASHLENS_BACKUP_CREDENTIAL_FILE]=$2; backup_config_json'
+    result = subprocess.run(
+        ["bash", "-c", script, "walg-config-test", str(OPS), str(credentials)],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["WALG_COMPRESSION_METHOD"] == "zstd"
+
+
 def test_retention_preview_does_not_delete(runtime):
     result = run_ops(runtime, [backup_row(1, 20), backup_row(2, 10)], "backup-prune")
     assert result.returncode == 0, result.stderr
@@ -727,13 +747,13 @@ def test_retention_preview_does_not_delete(runtime):
 
 
 def test_backup_too_new_or_not_finished_before_boundary_is_kept(runtime):
-    rows = [backup_row(1, 11, duration_hours=48), backup_row(2, 1)]
+    rows = [backup_row(1, 8, duration_hours=48), backup_row(2, 1)]
     result = run_ops(runtime, rows, "backup-prune", "--apply")
     assert result.returncode == 0, result.stderr
     assert not runtime[1].exists()
 
 
-@pytest.mark.parametrize("rows", [[], [backup_row(1, 9.9)]])
+@pytest.mark.parametrize("rows", [[], [backup_row(1, 6.9)]])
 def test_initial_window_never_deletes(runtime, rows):
     result = run_ops(runtime, rows, "backup-prune", "--apply")
     assert result.returncode == 0, result.stderr
