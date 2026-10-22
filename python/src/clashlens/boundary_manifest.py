@@ -552,11 +552,17 @@ def _snapshot_rows(
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
+    # Every member whose accepted profile would leave them off, as
+    # boundary.queue_board_rebuilds asks of a frozen board: a player promoted
+    # at a Monday Reset who has not played since reads Legend I at 5,000
+    # naming Season 0, never accepted, after their last accepted profile in
+    # the lower league (135 such players left off the 15 October 2026 board).
     unplayed = unplayed_profiles(
         connection, boundary_at,
         [
             player_id for player_id in player_ids
             if player_id not in profiles
+            or _text_value(profiles[player_id][7]) != "eligible"
             or profiles[player_id][6] == SEASON_START_TROPHIES
             or not season_is_current(
                 _text_value(profiles[player_id][8]),

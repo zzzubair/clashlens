@@ -35,8 +35,11 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
+from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
+from clashlens.db import Database
+from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
 
 @dataclass
@@ -539,3 +542,114 @@ def test_players_the_game_no_longer_finds_are_left_off_as_not_found(
     assert boards[tuesday] == ({STAYING: 5220}, {
         GONE: "profile_not_found", NEVER_FOUND: "profile_not_found",
         UNANSWERED: "league_not_confirmed"})
+
+
+BOUNCED, IDLE_UP = "#2YY", "#8YY"
+
+
+def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """BOUNCED plays Legend I through Sunday 11 October 2026, drops to
+    Legend II at the Monday Reset, read in Legend II once that week, naming
+    Season 0, and is promoted back at the Monday Reset of 19 October, as 107 players on the
+    20 October board were. Its league history, read at 05:34 that Monday,
+    holds its Legend II week, labelled 12 October: the Monday that started
+    it. Until 22 October 2026 that label was read as the week before, so
+    the record found BOUNCED both in Legend I and below in the week of
+    5 October, deleted its Sunday and left the 12 October week unknown, and
+    its Monday of 19 October started at nothing. From 06:10 it reads Legend I
+    at 5,000 naming Season 0 and never plays: its Monday is Complete from
+    5,000 to 5,000 and it ranks at 5,000 on the 20 October board.
+
+    IDLE_UP, read twice in Legend II naming the Season the week before, is
+    promoted at the Monday Reset of 12 October and from 06:10 reads Legend I
+    at 5,000 naming Season 0, never accepted, and never plays, as the 135
+    players left off the 15 October board as not Legend I were. The
+    Tuesday board ranks it at 5,000, so the Season repair's boards check
+    finds no board to rebuild."""
+    saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
+    back, back_tuesday = day(15), day(16)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch, {
+            tag: Climber(tag) for tag in (BOUNCED, IDLE_UP)})
+        bounced, idle_up = story.players[BOUNCED], story.players[IDLE_UP]
+        # Sunday from 5,140 ends where it began.
+        bounced.battles = _saturday(saturday) + attacks(sunday, *[40] * 6) + defenses(
+            sunday, *[30] * 8)
+        idle_up.battles = multiplayer(day(4), 3)
+        idle_up.legend_ii = True
+        for at, trophies in ((day(4) + timedelta(hours=9), 1400),
+                             (saturday + timedelta(hours=9), 1450)):
+            story.read(IDLE_UP, at, trophies)
+        story.reset(saturday, {BOUNCED: (5300, SEASON)})
+        story.reset(sunday, {BOUNCED: (5140, SEASON)})
+        story.reads(sunday + timedelta(hours=9, minutes=15), {BOUNCED: 5140})
+        story.reads(monday - timedelta(minutes=10), {BOUNCED: 5140})
+
+        # Monday 12 October: BOUNCED reads Legend I naming Season 0 at the
+        # Reset and at 05:20, the game's display lagging, then once Legend II
+        # naming Season 0; IDLE_UP Legend I at 5,000 naming Season 0.
+        story.reset(monday, {BOUNCED: (5140, None)})
+        story.reads(monday + timedelta(minutes=20), {BOUNCED: 5140}, None)
+        bounced.dropped = True
+        story.read(BOUNCED, monday + timedelta(hours=16, minutes=4), 5140, None)
+        idle_up.legend_ii = False
+        for at in (timedelta(hours=1, minutes=10), timedelta(hours=9, minutes=15),
+                   timedelta(hours=23, minutes=50)):
+            story.reads(monday + at, {IDLE_UP: 5000}, None)
+        story.reset(tuesday, {IDLE_UP: (5000, None)})
+        story.reads(tuesday + timedelta(minutes=20), {IDLE_UP: 5000}, None)
+        story.wait(timedelta(hours=1))
+
+        # Monday 19 October: BOUNCED is back in Legend I.
+        story.clock = max(story.clock, back + timedelta(minutes=34))
+        store_observation(
+            connection_info, archive_server, occurrence_key=f"{BOUNCED}-history",
+            endpoint="league_history", normalized_tag=BOUNCED,
+            observed_at=back + timedelta(minutes=34),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(monday.timestamp())), "leagueTrophies": 1800,
+                "leagueTierId": 105000035, "placement": 40, "attackWins": 0,
+                "attackLosses": 0, "attackStars": 0, "defenseWins": 0, "defenseLosses": 0,
+                "defenseStars": 0, "maxBattles": 8,
+            }]}).encode(),
+        )
+        bounced.dropped = False
+        for at in (timedelta(hours=1, minutes=10), timedelta(hours=9, minutes=15),
+                   timedelta(hours=23, minutes=50)):
+            story.reads(back + at, {BOUNCED: 5000}, None)
+        story.reset(back_tuesday, {BOUNCED: (5000, None)})
+        story.reads(back_tuesday + timedelta(minutes=20), {BOUNCED: 5000}, None)
+        # The 13 October board, which ranked BOUNCED's Monday while its week
+        # was carried in Legend I, is rebuilt without it 6 hours on.
+        story.wait(timedelta(hours=6))
+
+        sunday_day = _public_days(connection_info, BOUNCED).get(sunday)
+        mondays = {BOUNCED: story.saved_day(BOUNCED, back),
+                   IDLE_UP: story.saved_day(IDLE_UP, monday)}
+        boards = {at: (story.served_board(at), _left_off(connection_info, at))
+                  for at in (monday, tuesday, back_tuesday)}
+        database = Database(connection_info)
+        try:
+            rebuilds = queue_board_rebuilds(
+                database, str(int(SEASON.timestamp())), queue=False)["boards"]
+        finally:
+            database.close()
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert sunday_day == {"state": "Complete", "reasons": [], "attacks": 6, "defenses": 8}
+    from_5000 = {"state": "Complete", "start": 5000, "end": 5000, "next_start": 5000,
+                 "automatic_loss": None, "raise": 0, "attacks": 0, "defenses": 0,
+                 "residual": 0}
+    assert mondays == {BOUNCED: from_5000, IDLE_UP: from_5000}
+    assert {at: (_ranked(board), left_off) for at, (board, left_off) in boards.items()} == {
+        monday: ({BOUNCED: 5140}, {}),
+        tuesday: ({IDLE_UP: 5000}, {}),
+        back_tuesday: ({BOUNCED: 5000}, {}),
+    }
+    assert rebuilds == []

@@ -305,13 +305,13 @@ def test_the_order_evidence_arrives_in_does_not_matter() -> None:
         # its last week.
         ("1791176400", 105000036, (W1 - timedelta(days=7), Claim(
             W1, 1, ProofKind.LEAGUE_HISTORY, League.LEGEND_I))),
-        # The Legend II week that ended at the 12 October 2026 Reset.
-        ("1791781200", 105000035, (W1, Claim(W2, 1, ProofKind.LEAGUE_HISTORY, League.BELOW))),
+        # The Legend II week that started at the 12 October 2026 Reset.
+        ("1791781200", 105000035, (W2, Claim(W3, 1, ProofKind.LEAGUE_HISTORY, League.BELOW))),
         ("1791781200", 999, None),
         ("1791781200", None, None),
     ],
 )
-def test_a_league_history_row_speaks_for_the_week_before_its_label(label, tier, expected) -> None:
+def test_a_league_history_row_speaks_for_its_seasons_last_week_or_its_own_week(label, tier, expected) -> None:
     assert history_claim(1, label, tier) == expected
 
 
