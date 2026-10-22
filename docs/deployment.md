@@ -1152,6 +1152,14 @@ Check it with `systemctl status clashlens-uptime.timer` and
 site is down each run exits unsuccessfully and logs one fixed line. The relay
 cannot alert if the relay itself or Discord is down.
 
+When `CLASHLENS_PUBLIC_ORIGIN` changes to `https://clashlens.net`, at the same
+time edit the relay's `/etc/systemd/system/clashlens-uptime.service` so
+`ExecStart` ends with `https://clashlens.net/ https://clashlens.net/healthz`,
+then run `systemctl daemon-reload`. Otherwise the preview addresses answer
+with a 301 redirect and the check alerts after two minutes. To roll back, put
+the two preview addresses back in `ExecStart` and run
+`systemctl daemon-reload`.
+
 ## Failed work
 
 While processing a claimed job, the worker handles database deadlocks, where
