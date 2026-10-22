@@ -4,9 +4,10 @@ A raw response becomes due 86 days after its latest sighting; every new sighting
 of the same body moves the deadline later. Upgraded records count from the later
 of their retained latest sighting and first verification. A due response is first
 marked 'retiring', which
-blocks every new use, and its bytes are deleted only after the promised
-ten-day recovery window plus a two-day restore allowance. A restore to any
-promised point therefore still finds every byte its catalogue calls usable.
+blocks every new use, and its bytes are deleted only after a twelve-day hold,
+longer than the promised seven-day recovery window plus a two-day restore
+allowance. A restore to any promised point therefore still finds every byte its
+catalogue calls usable.
 Run only on the collector host with its exact shared spool and a separate
 operator credential. Never configure an upload-age bucket lifecycle instead.
 """
@@ -16,9 +17,9 @@ import re
 import sys
 from typing import Any
 
-RECOVERY_WINDOW_DAYS = 10
-RESTORE_ALLOWANCE_DAYS = 2
-RECOVERY_HOLD = f"{RECOVERY_WINDOW_DAYS + RESTORE_ALLOWANCE_DAYS} days"
+RECOVERY_WINDOW_DAYS = 7
+# Set when the window was ten days; kept when it became seven on 2026-10-22.
+RECOVERY_HOLD = "12 days"
 
 # Unfinished uploads of the same bytes and unfinished processing or replay
 # keep a response usable.

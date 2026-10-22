@@ -1,7 +1,7 @@
 """End-to-end: a Reset's results come out as before without saving unchanged rows again.
 
 Production wrote about 100 GB of change log a day for about 6.4 GB of new
-data, and the backups keep every byte of it for 10 days. Three of the
+data, and the backups keep every byte of it for 7 days. Three of the
 writers saved again what had not changed: each input added to a board
 correction saved the correction's whole list again, 3.1 MB for 40,422
 inputs on 9 October 2026; each battle log re-saved every battle it repeated;

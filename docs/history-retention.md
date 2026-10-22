@@ -32,7 +32,7 @@ for deadlines and the full product map.
   must wait for the window, required summaries, verified coverage and existing
   safety checks. Failed or unfinished work blocks cleanup. Keeping raw bytes
   does not make a finalized season reopenable in the current code.
-- Keep raw responses available for every restore promised by the ten-day
+- Keep raw responses available for every restore promised by the seven-day
   backup window, including time to perform the restore. This is separate from
   the seven-day season-correction window. See
   [raw expiry and recovery protection](#implemented-raw-expiry-and-required-recovery-protection)
@@ -143,7 +143,7 @@ active schema (heap plus indexes/TOAST), row counts, compact-summary size
 distribution, relation-kind inclusions/exclusions, and the explicitly labeled
 migration metadata exclusion. Partition parents are cataloged with zero
 allocation so their children are not double-counted. The unmeasured list is:
-generated WAL, retained WAL and base backups (ten-day recovery
+generated WAL, retained WAL and base backups (seven-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day
 seasons) against measured usable capacity with headroom. Live detail and
@@ -345,7 +345,7 @@ Projected onto production:
 Production GB a day is each writer's measured statement change log plus its
 measured cleanup; the branch figure applies the benchmark's branch/main ratio
 (corrections: production's additions times the benchmark's 568 bytes per
-addition). Backups keep change log 10 days (10.8 days on average in R2), WAL-G
+addition). Backups kept change log 10 days then (10.8 days on average in R2), WAL-G
 stores 88.8 GB per 101 GB written, and R2 costs $0.015 per GB-month; all change
 log in R2 costs about $14.23 a month today. The corrections per-hour figure
 uses the benchmark's lists (213 KB per addition); production's additions
@@ -471,9 +471,10 @@ that is later.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,
 which blocks every new use, then deletes its bytes only **twelve days later**: the
-ten-day recovery window chosen on October 8 (seven days until then) plus a
-two-day allowance to carry out a restore. A restore can target any point from
-the last ten days.
+ten-day recovery window chosen on October 8 plus a two-day allowance to carry
+out a restore. The backup window became seven days on October 22 and this hold
+stayed at twelve days, so it is still longer than the window plus the
+allowance. A restore can target any point from the last seven days.
 Anything still usable at that point was marked after it, so its bytes survive at
 least two more days after the restore starts. For longer restores while
 production keeps running, follow the
@@ -503,7 +504,7 @@ key does not prove all provider storage was reclaimed.
 The owner approved production expiry on 2026-10-08 after the real-size restore
 rehearsal described in [deployment.md](deployment.md#restore-into-a-separate-database).
 That rehearsal restored a 4.4-day-old point and did not read raw references, so
-#122/#129 still owe a genuine ten-day-old restore that reads the raw references
+#122/#129 still owe a genuine seven-day-old restore that reads the raw references
 it needs. The code stays off by default; production turns it on in `app.env`.
 [`deployment.md`](deployment.md#raw-response-cleanup) owns the scheduled job,
 its credentials and the dry-run-first enablement steps. The command it runs is:

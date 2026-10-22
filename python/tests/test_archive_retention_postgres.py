@@ -185,8 +185,8 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
 
             assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 3
             assert _availability(connection) == ["retiring"] * 3 + ["verified"]
-            # A restore to any point in the last ten days, plus two days to
-            # perform it, must still find the bytes.
+            # A restore to any point in the last seven days, plus two days to
+            # perform it, must still find the bytes; the hold is twelve days.
             _hold_elapsed(connection, "11 days 23 hours 59 minutes")
             report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
             assert report["deleted_objects"] == report["marked_objects"] == 0

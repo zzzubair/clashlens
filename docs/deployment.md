@@ -716,19 +716,22 @@ The timer starts a full backup every 12 hours, at 00:00 and 12:00 UTC, well
 away from the 04:00–07:00 UTC Reset work. Missed calendar runs are
 caught up; restarting the stack does not add another full backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
-its change log, called WAL, with `archive_timeout=300`. A restore can target any
-point in the last ten days, chosen on 2026-10-08 so a weekly tournament's
-promotions and demotions leave about three spare days to notice and fix a
-problem. A successful full backup
-then prunes backups older than the newest backup completed before ten days and
+its change log, called WAL, with `archive_timeout=300`. WAL-G packs full
+backups and WAL with zstd at its default level, chosen on 2026-10-22 to cut
+storage (lz4 before then); it picks the unpacker from each file's extension, so
+older lz4 files still restore. A restore can target any point in the last seven
+days, chosen on 2026-10-22 to cut storage cost (ten days from 2026-10-08, which
+left about three spare days after a weekly tournament's promotions and
+demotions to notice and fix a problem). A successful full backup
+then prunes backups older than the newest backup completed before seven days and
 one hour ago. It retains that backup, all newer backups and WAL, and, when that
 backup is a WAL-G delta backup (only the pages changed since an earlier backup),
 the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
 full and delta backup names are accepted. Delta backups are not switched on.
 Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
 shorten the recovery window. The one-hour margin covers scheduling and backup
-duration; right after each prune this keeps about 21–22 full backups and about
-10.5–11 days of WAL.
+duration; right after each prune this keeps about 15–16 full backups and about
+7.5–8 days of WAL.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -865,7 +868,7 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    summaries. Read every retained raw object referenced by the sample and
    verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
-5. Repeat for the ten-day-old boundary, using a full backup from before it.
+5. Repeat for the seven-day-old boundary, using a full backup from before it.
    If the restore could take more than two days while production keeps
    running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
@@ -890,7 +893,7 @@ time target is about **1 hour** at today's change-log rate, with a full backup
 every 12 hours, chosen by the owner on 2026-10-08 over daily full backups with
 a 2-hour worst case (see
 [expected timings](#restore-into-a-separate-database)).
-Ten-day recovery starts only after ten days of uninterrupted archived history.
+Seven-day recovery starts only after seven days of uninterrupted archived history.
 
 On 8 October 2026 R2 held 707.87 GB of WAL, uploaded at 89.36 GB/day after
 compression, and the newest full backup was 15.55 GB compressed (37.47 GB
@@ -905,6 +908,8 @@ measured production growth. Manual backups add up to another full backup each
 until they age out; failed uploads can leave partial objects requiring separately
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
+These figures are for the ten-day window with lz4; on 2026-10-22, with R2
+holding about 2 TB, the owner moved to seven days and zstd to cut the bill.
 
 The raw-response retention rule, recovery protection and projected cost belong in
 [raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
@@ -930,7 +935,7 @@ The 8 October rehearsal measured restore time at production size by restoring
 a point 4.4 days old and reading its player count; it did not read raw objects.
 Before closing #122, measure data loss,
 verify restored raw references across protected expiry, restore a genuine
-ten-day-old point, and verify host reboot. Earlier small restores and service
+seven-day-old point, and verify host reboot. Earlier small restores and service
 checks do not prove those remaining gates. Keep real collection disabled until
 backups and #124 alerts are proven. This documentation update does not deploy
 or close #122.
