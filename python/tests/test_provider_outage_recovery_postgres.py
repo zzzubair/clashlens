@@ -11,7 +11,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
-from clashlens import boundary_publication, reset_baselines
+from clashlens import boundary_publication, collector_reset, reset_baselines
 from clashlens.archive import SpoolFirstReader
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorWork
@@ -113,10 +113,14 @@ def _reset_work(
 
 def _reset_intents(database: CollectorDatabase) -> list:
     # The sweep's settlement checks can be due too; these tests drive Reset work.
+    # Read as the collector does once the battle-log pass opens, 7 min 20 s
+    # after 05:00 UTC, so a run just after the Reset finds the same work.
     return [
         intent
         for intent in database.pending_intents(
-            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+            limit=10,
+            now=datetime.now(UTC) + collector_reset.BATTLE_LOG_PASS_FROM + timedelta(minutes=1),
+            interactive=False,
         )
         if intent.kind == "reset_baseline"
     ]
