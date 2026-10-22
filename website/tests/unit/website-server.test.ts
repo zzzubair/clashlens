@@ -18,6 +18,7 @@ vi.mock("../../app/server/config.server", () => ({
 }));
 
 let directory: string;
+let build: ServerBuild;
 let server: Server;
 let port: number;
 let releaseStream: () => void;
@@ -43,7 +44,7 @@ beforeEach(async () => {
   const streamFinished = new Promise<void>((resolve) => {
     releaseStream = resolve;
   });
-  const build = {
+  build = {
     entry: {
       module: {
         default: (_request: Request, status: number, headers: Headers) => {
@@ -130,12 +131,17 @@ beforeEach(async () => {
     assetsBuildDirectory: directory,
     routeDiscovery: { mode: "initial", manifestPath: "/__manifest" },
   } as unknown as ServerBuild;
-  server = await createWebsiteServer(build, directory);
+  await startServer(undefined);
+});
+
+async function startServer(publicOrigin: string | undefined) {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  server = await createWebsiteServer(build, directory, publicOrigin);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing test port");
   port = address.port;
-});
+}
 
 afterEach(async () => {
   releaseStream?.();
@@ -146,7 +152,7 @@ afterEach(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
-function getResponse(path: string, encoding = "gzip", method = "GET") {
+function getResponse(path: string, encoding = "gzip", method = "GET", host?: string) {
   return new Promise<{
     status: number | undefined;
     headers: import("node:http").IncomingHttpHeaders;
@@ -158,7 +164,7 @@ function getResponse(path: string, encoding = "gzip", method = "GET") {
         port,
         path,
         method,
-        headers: { "Accept-Encoding": encoding },
+        headers: { "Accept-Encoding": encoding, ...(host ? { Host: host } : {}) },
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -362,4 +368,77 @@ it("lets only the OBS overlay's preview show inside a Clash Lens page", async ()
   expect(preview.headers.get("x-frame-options")).toBe("SAMEORIGIN");
   const overlay = await fetch(`${url}/o/AAAAAAAAAAAAAAAAAAAAAA`);
   expect(overlay.headers.get("x-frame-options")).toBe("DENY");
+});
+
+it("keeps every host out of search engines while the public origin is the preview", async () => {
+  await startServer("https://preview.clashlens.net");
+  for (const host of ["preview.clashlens.net", "clashlens.net"]) {
+    for (const path of ["/players/%232PP", "/assets/app.js", "/players/%232PP.data"]) {
+      const response = await getResponse(path, "identity", "GET", host);
+      expect(response.status).toBe(200);
+      expect(response.headers["x-robots-tag"]).toBe("noindex, nofollow");
+    }
+    const robots = await getResponse("/robots.txt", "identity", "GET", host);
+    expect(robots.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(robots.body.toString()).toBe("User-agent: *\nDisallow: /\n");
+  }
+});
+
+it("lets search engines read clashlens.net once it is the public origin", async () => {
+  await startServer("https://clashlens.net");
+  for (const path of ["/players/%232PP", "/assets/app.js"]) {
+    const response = await getResponse(path, "identity", "GET", "clashlens.net");
+    expect(response.status).toBe(200);
+    expect(response.headers["x-robots-tag"]).toBeUndefined();
+  }
+  const robots = await getResponse("/robots.txt", "identity", "GET", "clashlens.net");
+  expect(robots.body.toString()).toContain("Allow: /\n");
+  expect(robots.body.toString()).not.toContain("Disallow: /\n");
+  expect(robots.body.toString()).toContain("Disallow: /account\n");
+  expect(robots.body.toString()).toContain(
+    "Sitemap: https://clashlens.net/sitemap.xml\n",
+  );
+  const head = await getResponse("/robots.txt", "identity", "HEAD", "clashlens.net");
+  expect(head.status).toBe(200);
+  expect(head.body.byteLength).toBe(0);
+  // Only the live host is indexed, whatever else reaches the website.
+  const loopback = await getResponse(
+    "/players/%232PP",
+    "identity",
+    "GET",
+    "127.0.0.1:3000",
+  );
+  expect(loopback.headers["x-robots-tag"]).toBe("noindex, nofollow");
+});
+
+it("moves every preview address to the same address on clashlens.net", async () => {
+  const path = "/leaderboards/tracked?view=live&page=2";
+  await startServer("https://preview.clashlens.net");
+  const page = await getResponse(
+    "/players/%232PP",
+    "identity",
+    "GET",
+    "preview.clashlens.net",
+  );
+  expect(page.status).toBe(200);
+  await startServer("https://clashlens.net");
+  for (const [request, location] of [
+    [path, `https://clashlens.net${path}`],
+    ["/players/%232PP", "https://clashlens.net/players/%232PP"],
+    ["/assets/app.js", "https://clashlens.net/assets/app.js"],
+    ["/robots.txt", "https://clashlens.net/robots.txt"],
+    // A path that looks like another host stays a path on clashlens.net.
+    ["//example.com/x?y=1", "https://clashlens.net/x?y=1"],
+  ]) {
+    for (const method of ["GET", "HEAD", "POST"]) {
+      const response = await getResponse(
+        request,
+        "identity",
+        method,
+        "Preview.ClashLens.net",
+      );
+      expect(response.status).toBe(301);
+      expect(response.headers.location).toBe(location);
+    }
+  }
 });

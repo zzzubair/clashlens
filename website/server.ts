@@ -44,7 +44,30 @@ const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html",
 };
 
-export async function createWebsiteServer(build: ServerBuild, clientDirectory: string) {
+// The live site. Search engines may index pages only there, and only once it
+// is the configured public origin; then every preview.clashlens.net address
+// moves to the same address on it. While the public origin is anything else,
+// such as the preview, every host stays out of search engines.
+const LIVE_ORIGIN = new URL("https://clashlens.net");
+const PREVIEW_HOST = "preview.clashlens.net";
+// Private, signed-in or data-only addresses, which have nothing to search for.
+const LIVE_ROBOTS = `User-agent: *
+Allow: /
+Disallow: /account
+Disallow: /auth/
+Disallow: /crews
+Disallow: /o/
+Disallow: /resources/
+Sitemap: ${LIVE_ORIGIN.origin}/sitemap.xml
+`;
+const CLOSED_ROBOTS = "User-agent: *\nDisallow: /\n";
+
+export async function createWebsiteServer(
+  build: ServerBuild,
+  clientDirectory: string,
+  publicOrigin = process.env.CLASHLENS_PUBLIC_ORIGIN,
+) {
+  const live = publicOrigin === LIVE_ORIGIN.origin;
   // Only files found in the built public directory can be served. No request
   // pathname is ever resolved against the filesystem, and symlinks are excluded.
   const files = new Map<string, string>();
@@ -67,13 +90,34 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
     // them to trick a click. X-Frame-Options covers older browsers.
     response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
     response.setHeader("X-Frame-Options", "DENY");
+    let url: URL;
     let pathname: string;
     try {
-      pathname = decodeURIComponent(
-        new URL(request.url ?? "/", "http://localhost").pathname,
-      );
+      url = new URL(request.url ?? "/", "http://localhost");
+      pathname = decodeURIComponent(url.pathname);
     } catch {
       response.writeHead(400).end();
+      return;
+    }
+    const host = request.headers.host?.toLowerCase();
+    if (live && host === PREVIEW_HOST) {
+      // An hour's caching keeps a rollback to the preview quick for browsers.
+      response.setHeader("Cache-Control", "max-age=3600");
+      response.writeHead(301, {
+        // A path is never read as another host: it always follows the origin.
+        Location: `${LIVE_ORIGIN.origin}${url.pathname}${url.search}`,
+      });
+      response.end();
+      return;
+    }
+    const indexable = live && host === LIVE_ORIGIN.host;
+    if (!indexable) response.setHeader("X-Robots-Tag", "noindex, nofollow");
+    if (pathname === "/robots.txt" && ["GET", "HEAD"].includes(request.method ?? "")) {
+      response.setHeader("Content-Type", "text/plain; charset=utf-8");
+      response.setHeader("Cache-Control", "public, max-age=3600");
+      response.end(
+        request.method === "HEAD" ? undefined : indexable ? LIVE_ROBOTS : CLOSED_ROBOTS,
+      );
       return;
     }
     // The OBS overlay's preview, which has nothing to click, shows inside its

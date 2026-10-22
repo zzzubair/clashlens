@@ -1,18 +1,18 @@
 import { useRouteLoaderData } from "react-router";
 
 import { AnalyticsChoicesButton, useAnalyticsChoice } from "../components/Analytics";
+import { publicPageMeta } from "../lib/blog";
 import { DISCORD_INVITE_URL } from "../lib/discord";
 import type { RootLoaderData } from "../root";
+import type { Route } from "./+types/privacy";
 
-export function meta() {
-  return [
-    { title: "Privacy · Clash Lens" },
-    {
-      name: "description",
-      content:
-        "What Clash Lens counts about visits if you accept, and how to change your choice.",
-    },
-  ];
+export function meta({ matches }: Route.MetaArgs) {
+  return publicPageMeta(matches, {
+    path: "/privacy",
+    title: "Privacy",
+    description:
+      "What Clash Lens counts about visits if you accept, and how to change your choice.",
+  });
 }
 
 const CHOICE_TEXT = {

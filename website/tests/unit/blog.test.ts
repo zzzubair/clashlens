@@ -49,6 +49,7 @@ import BlogPostRoute, {
 import BlogIndex, { loader as indexLoader } from "../../app/routes/blog";
 import { loader as mediaLoader } from "../../app/routes/blog.media";
 import { loader as feedLoader } from "../../app/routes/blog.rss";
+import { loader as sitemapLoader } from "../../app/routes/sitemap";
 import {
   BLOG_CACHE_MS,
   BlogPostError,
@@ -477,6 +478,33 @@ describe("blog feed", () => {
     expect(xml).toContain("<title>Gems &amp; &lt;Gold&gt;</title>");
     expect(xml).toContain("<description>&quot;Quotes&quot; &amp; more</description>");
     expect(blogFeed([], ORIGIN)).not.toContain("<item>");
+  });
+});
+
+describe("sitemap", () => {
+  it("lists the public pages and every published post, never a draft", async () => {
+    const response = (await sitemapLoader({
+      request: new Request(`${ORIGIN}/sitemap.xml`),
+    } as Parameters<typeof sitemapLoader>[0])) as Response;
+    expect(response.headers.get("Content-Type")).toBe("application/xml; charset=utf-8");
+    const xml = await response.text();
+    expect(xml).toMatch(
+      /^<\?xml version="1.0" encoding="UTF-8"\?>\n<urlset xmlns="http:\/\/www.sitemaps.org\/schemas\/sitemap\/0.9">/,
+    );
+    expect([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1])).toEqual([
+      `${ORIGIN}/`,
+      `${ORIGIN}/leaderboards/tracked?view=live&amp;page=1`,
+      `${ORIGIN}/analytics/armies`,
+      `${ORIGIN}/blog`,
+      `${ORIGIN}/privacy`,
+      `${ORIGIN}/blog/meta-after-balance-changes`,
+      `${ORIGIN}/blog/how-matchmaking-works`,
+      `${ORIGIN}/blog/unsafe-html`,
+    ]);
+    expect(xml).toContain(
+      `<loc>${ORIGIN}/blog/meta-after-balance-changes</loc>\n    <lastmod>2026-09-28</lastmod>`,
+    );
+    expect(xml).not.toContain("draft-preview");
   });
 });
 

@@ -54,5 +54,6 @@ export default [
   route("users/:username", "routes/users.$username.tsx"),
   route("privacy", "routes/privacy.tsx"),
   route("about", "routes/about.ts"),
+  route("sitemap.xml", "routes/sitemap.ts"),
   route("healthz", "routes/healthz.ts"),
 ] satisfies RouteConfig;

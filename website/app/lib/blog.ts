@@ -79,6 +79,33 @@ export function pageMeta(page: PageMeta): MetaDescriptor[] {
   ];
 }
 
+/**
+ * The tags for a public page at `path`, with the site's public origin from
+ * the root loader. Without it, the settings being unreadable, only the title
+ * and description.
+ */
+export function publicPageMeta(
+  matches: readonly ({ id: string; loaderData: unknown } | undefined)[],
+  page: { path: string; title: string; description: string },
+): MetaDescriptor[] {
+  const root = matches.find((match) => match?.id === "root")?.loaderData;
+  const origin = (root as { origin?: string | null } | undefined)?.origin;
+  if (!origin)
+    return [
+      { title: `${page.title} · Clash Lens` },
+      { name: "description", content: page.description },
+    ];
+  return pageMeta({
+    title: page.title,
+    description: page.description,
+    url: `${origin}${page.path}`,
+    origin,
+    type: "website",
+    image: "/images/og-clashlens.png",
+    imageAlt: "The Clash Lens logo",
+  });
+}
+
 /** The shared preview tags plus the blog's publish date and feed link. */
 export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
   return [

@@ -20,6 +20,7 @@ import {
 } from "../components/FrontPage";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
+import { publicPageMeta } from "../lib/blog";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   CARD_IDS,
@@ -68,15 +69,14 @@ export interface DashboardActionData {
   settings: DashboardSettings | null;
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
+export function meta({ loaderData, matches }: Route.MetaArgs) {
   return loaderData?.kind === "signed-out"
-    ? [
-        { title: "Clash Lens" },
-        {
-          name: "description",
-          content: "Legend League results, rankings and armies for all Legend I Players.",
-        },
-      ]
+    ? publicPageMeta(matches, {
+        path: "/",
+        title: "Clash of Clans Legend League tracker",
+        description:
+          "Legend League results, rankings and armies for all Legend I Players.",
+      })
     : [{ title: "Dashboard · Clash Lens" }];
 }
 

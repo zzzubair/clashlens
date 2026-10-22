@@ -379,6 +379,38 @@ export function blogFeed(posts: BlogPostSummary[], origin: string): string {
   ].join("\n");
 }
 
+// The pages anyone can open, as Rankings and the other tabs link them. Player
+// pages are found through Rankings and search.
+const PUBLIC_PAGES = [
+  "/",
+  "/leaderboards/tracked?view=live&page=1",
+  "/analytics/armies",
+  "/blog",
+  "/privacy",
+];
+
+/** A sitemap of the public pages and every published post, dated by its publication day. */
+export function siteMap(posts: BlogPostSummary[], origin: string): string {
+  const pages = [
+    ...PUBLIC_PAGES.map((path) => ({ path, date: null })),
+    ...posts.map((post) => ({ path: `/blog/${post.slug}`, date: post.date })),
+  ];
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...pages.map(({ path, date }) =>
+      [
+        "  <url>",
+        `    <loc>${escapeXml(`${origin}${path}`)}</loc>`,
+        ...(date ? [`    <lastmod>${date}</lastmod>`] : []),
+        "  </url>",
+      ].join("\n"),
+    ),
+    "</urlset>",
+    "",
+  ].join("\n");
+}
+
 /** A front matter value without its quotes or a trailing `# comment`. */
 function frontMatterValue(value: string): string {
   const quoted = /^"(.*?)"(?:\s+#.*)?$/.exec(value) ?? /^'(.*?)'(?:\s+#.*)?$/.exec(value);

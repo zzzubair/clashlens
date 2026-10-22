@@ -60,6 +60,8 @@ export interface RootLoaderData {
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
   analytics?: AnalyticsSettings | null;
+  /** The site's public origin, for each page's canonical address; null when unreadable. */
+  origin?: string | null;
 }
 
 /**
@@ -80,18 +82,23 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
       analytics: loadAnalyticsSettings(),
     }))
     .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
+  const origin = import("./server/config.server")
+    .then(({ getWebsiteConfig }) => getWebsiteConfig().publicOrigin.origin)
+    .catch(() => null);
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return {
       ...(await loadRootNavigation(request)),
       updateStatus: await updateStatus,
       ...(await switches),
+      origin: await origin,
     };
   } catch {
     return {
       ...LOGGED_OUT,
       updateStatus: await updateStatus,
       ...(await switches),
+      origin: await origin,
     };
   }
 }
@@ -117,7 +124,13 @@ export const clientMiddleware: Route.ClientMiddlewareFunction[] = [
   keepPageOnLostConnection,
 ];
 
-export function meta() {
+// Any address no route knows ends here; search engines leave it out.
+export function meta({ error }: Route.MetaArgs) {
+  if (isRouteErrorResponse(error) && error.status === 404)
+    return [
+      { title: "Page not found · Clash Lens" },
+      { name: "robots", content: "noindex" },
+    ];
   return [
     { title: "Clash Lens" },
     {
