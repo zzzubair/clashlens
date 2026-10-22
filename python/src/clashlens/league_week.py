@@ -317,18 +317,22 @@ def _decide(claims: Sequence[Claim], entry: Entry) -> Decision:
 
 
 def history_claim(row_id: int, label: str, tier_id: int | None) -> tuple[datetime, Claim] | None:
-    """The week a league history row speaks for, and its claim. A row is
-    labelled with the Monday Reset ending its tournament: a week in Legend II
-    or lower, the Season in Legend I, of which it proves the last week. A
-    tier the parser does not recognise claims nothing."""
+    """The week a league history row speaks for, and its claim, made when
+    that week ended. A Legend I row is labelled with the Monday Reset ending
+    its Season, of which it proves the last week; a row in Legend II or lower
+    with the Monday Reset starting its week. On the copy of 14 October 2026
+    the 1,903 Legend II rows labelled 5 October were first read at 05:34 on
+    12 October, and none of their players fought a Legend battle in the week
+    from 5 October; 1,570 did from 12 October. A tier the parser does not
+    recognise claims nothing."""
+    label_at = datetime.fromtimestamp(int(label), UTC)
     if tier_id == LEGEND_I_TIER_ID:
-        league = League.LEGEND_I
+        week, league = week_start(label_at - WEEK), League.LEGEND_I
     elif tier_id in RECOGNIZED_NON_LEGEND_TIERS_V1:
-        league = League.BELOW
+        week, league = week_start(label_at), League.BELOW
     else:
         return None
-    ends = datetime.fromtimestamp(int(label), UTC)
-    return week_start(ends - WEEK), Claim(ends, row_id, ProofKind.LEAGUE_HISTORY, league)
+    return week, Claim(week + WEEK, row_id, ProofKind.LEAGUE_HISTORY, league)
 
 
 def load_season(

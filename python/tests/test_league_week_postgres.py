@@ -45,6 +45,61 @@ def test_every_evidence_table_marks_the_weeks_it_changes(database_url: str) -> N
     assert tables == set(league_week.EVIDENCE_TABLES)
 
 
+def test_a_league_history_row_marks_the_week_it_speaks_for(database_url: str) -> None:
+    """A Legend I row labelled with the Monday Reset ending its Season marks
+    the Season's last week; a Legend II row labelled with the Monday Reset
+    starting its week marks that week (migration 0127). Until 22 October
+    2026 a Legend II row marked the week before its own."""
+    with domain_database(database_url) as connection_info, psycopg.connect(
+        connection_info
+    ) as connection:
+        player = connection.execute(
+            "INSERT INTO players (normalized_tag) VALUES ('#2PP') RETURNING id").fetchone()[0]
+        observation = connection.execute(
+            """
+            INSERT INTO collector_observations (
+                occurrence_key, scope, player_id, normalized_tag, endpoint,
+                request_started_at, response_completed_at, http_status, response_hash,
+                collector_version, key_label, evidence_headers, request_method,
+                request_path, request_query, paging_envelope_state, source_adapter_version
+            ) VALUES ('history', 'player', %s, '#2PP', 'league_history', %s, %s, 200,
+                      repeat('a', 64), 'test', 'normal-test', '{}'::jsonb, 'GET',
+                      '/v1/players/%%232PP/leaguehistory', '', 'not_applicable',
+                      'league-history-v1')
+            RETURNING id
+            """,
+            (player, W2, W2),
+        ).fetchone()[0]
+        payload = connection.execute(
+            """
+            INSERT INTO parsed_source_payloads (
+                endpoint, response_hash, parser_version, schema_version,
+                parse_outcome, parsed_json
+            ) VALUES ('league_history', repeat('a', 64), 'supercell-league-history-parser-v1',
+                      'league-history-schema-v1', 'valid', '{}'::jsonb)
+            RETURNING id
+            """
+        ).fetchone()[0]
+        marked = {}
+        for tier in (105000036, 105000035):
+            connection.execute("DELETE FROM league_week_dirty")
+            connection.execute(
+                """
+                INSERT INTO player_league_history_entries (
+                    player_id, league_season_id, observed_at, observation_id,
+                    parsed_payload_id, league_tier_id, source_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, '{}'::jsonb)
+                ON CONFLICT (player_id, league_season_id) DO UPDATE
+                SET league_tier_id = EXCLUDED.league_tier_id
+                """,
+                (player, str(int(W2.timestamp())), W2, observation, payload, tier),
+            )
+            marked[tier] = [row[0] for row in connection.execute(
+                "SELECT week_start FROM league_week_dirty").fetchall()]
+
+    assert marked == {105000036: [W1], 105000035: [W2]}
+
+
 def test_a_battle_moved_to_another_day_marks_both_weeks(database_url: str) -> None:
     """A repair moving a battle to another day (as migration 0057 did) marks
     the week it left and the week it joined, for both players; a second
