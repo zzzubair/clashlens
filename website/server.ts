@@ -67,7 +67,8 @@ export async function createWebsiteServer(
   clientDirectory: string,
   publicOrigin = process.env.CLASHLENS_PUBLIC_ORIGIN,
 ) {
-  const live = publicOrigin === LIVE_ORIGIN.origin;
+  // Read like the website config does, so "https://clashlens.net/" counts too.
+  const live = URL.parse(publicOrigin?.trim() ?? "")?.origin === LIVE_ORIGIN.origin;
   // Only files found in the built public directory can be served. No request
   // pathname is ever resolved against the filesystem, and symlinks are excluded.
   const files = new Map<string, string>();

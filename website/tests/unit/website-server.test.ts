@@ -384,32 +384,37 @@ it("keeps every host out of search engines while the public origin is the previe
   }
 });
 
-it("lets search engines read clashlens.net once it is the public origin", async () => {
-  await startServer("https://clashlens.net");
-  for (const path of ["/players/%232PP", "/assets/app.js"]) {
-    const response = await getResponse(path, "identity", "GET", "clashlens.net");
-    expect(response.status).toBe(200);
-    expect(response.headers["x-robots-tag"]).toBeUndefined();
-  }
-  const robots = await getResponse("/robots.txt", "identity", "GET", "clashlens.net");
-  expect(robots.body.toString()).toContain("Allow: /\n");
-  expect(robots.body.toString()).not.toContain("Disallow: /\n");
-  expect(robots.body.toString()).toContain("Disallow: /account\n");
-  expect(robots.body.toString()).toContain(
-    "Sitemap: https://clashlens.net/sitemap.xml\n",
-  );
-  const head = await getResponse("/robots.txt", "identity", "HEAD", "clashlens.net");
-  expect(head.status).toBe(200);
-  expect(head.body.byteLength).toBe(0);
-  // Only the live host is indexed, whatever else reaches the website.
-  const loopback = await getResponse(
-    "/players/%232PP",
-    "identity",
-    "GET",
-    "127.0.0.1:3000",
-  );
-  expect(loopback.headers["x-robots-tag"]).toBe("noindex, nofollow");
-});
+it.each(["https://clashlens.net", "https://clashlens.net/"])(
+  "lets search engines read clashlens.net once %s is the public origin",
+  async (publicOrigin) => {
+    await startServer(publicOrigin);
+    for (const path of ["/players/%232PP", "/assets/app.js"]) {
+      const response = await getResponse(path, "identity", "GET", "clashlens.net");
+      expect(response.status).toBe(200);
+      expect(response.headers["x-robots-tag"]).toBeUndefined();
+    }
+    const robots = await getResponse("/robots.txt", "identity", "GET", "clashlens.net");
+    expect(robots.body.toString()).toContain("Allow: /\n");
+    expect(robots.body.toString()).not.toContain("Disallow: /\n");
+    expect(robots.body.toString()).toContain("Disallow: /account\n");
+    expect(robots.body.toString()).toContain(
+      "Sitemap: https://clashlens.net/sitemap.xml\n",
+    );
+    const head = await getResponse("/robots.txt", "identity", "HEAD", "clashlens.net");
+    expect(head.status).toBe(200);
+    expect(head.body.byteLength).toBe(0);
+    // Only the live host is indexed, whatever else reaches the website.
+    const loopback = await getResponse(
+      "/players/%232PP",
+      "identity",
+      "GET",
+      "127.0.0.1:3000",
+    );
+    expect(loopback.headers["x-robots-tag"]).toBe("noindex, nofollow");
+    const preview = await getResponse("/x", "identity", "GET", "preview.clashlens.net");
+    expect(preview.headers.location).toBe("https://clashlens.net/x");
+  },
+);
 
 it("moves every preview address to the same address on clashlens.net", async () => {
   const path = "/leaderboards/tracked?view=live&page=2";
