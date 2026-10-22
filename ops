@@ -1323,7 +1323,7 @@ backup_config_json() {
     esac
   done < "$file"
   [[ -n "$access" && -n "$secret" ]] || die "backup credential file is incomplete"
-  printf '{"AWS_ACCESS_KEY_ID":"%s","AWS_SECRET_ACCESS_KEY":"%s","AWS_ENDPOINT":"%s","AWS_REGION":"auto","AWS_S3_FORCE_PATH_STYLE":"true","WALG_S3_PREFIX":"%s","WALG_COMPRESSION_METHOD":"zstd","WALG_UPLOAD_CONCURRENCY":"2","WALG_DOWNLOAD_CONCURRENCY":"2","WALG_PREVENT_WAL_OVERWRITE":"true"}' \
+  printf '{"AWS_ACCESS_KEY_ID":"%s","AWS_SECRET_ACCESS_KEY":"%s","AWS_ENDPOINT":"%s","AWS_REGION":"auto","AWS_S3_FORCE_PATH_STYLE":"true","WALG_S3_PREFIX":"%s","WALG_COMPRESSION_METHOD":"zstd","WALG_DELTA_MAX_STEPS":"1","WALG_UPLOAD_CONCURRENCY":"2","WALG_DOWNLOAD_CONCURRENCY":"2","WALG_PREVENT_WAL_OVERWRITE":"true"}' \
     "$access" "$secret" "$(setting CLASHLENS_BACKUP_ENDPOINT)" "$(setting CLASHLENS_BACKUP_PREFIX)"
 }
 
@@ -1344,7 +1344,9 @@ wal_g() {
 
 backup() {
   prepare_backup
-  wal_g backup-push /var/lib/postgresql/data/pgdata
+  # A delta (only pages changed since the newest backup) when that is a full copy, else a full copy.
+  # Runs before 12:00 UTC are always full, so failed or manual runs cannot move it off 00:00.
+  wal_g backup-push $( ((10#$(date -u +%H) >= 12)) || echo --full ) /var/lib/postgresql/data/pgdata
   backup_prune --apply
   printf 'Base backup uploaded and seven-day retention applied.\n'
 }
@@ -1358,12 +1360,18 @@ import datetime as dt, json, sys
 rows = json.load(sys.stdin)
 if not rows:
     sys.exit("No completed backup in remote storage")
+names = [r["backup_name"] for r in rows]
+fulls = {name: "base_" + name.split("_D_")[1] for name in names if "_D_" in name}
+for name, full in fulls.items():
+    if full not in names:
+        sys.exit(f"Delta backup {name} cannot restore: its full backup {full} is missing")
 times = [dt.datetime.fromisoformat(r["finish_time"].replace("Z", "+00:00")) for r in rows]
 now = dt.datetime.now(dt.timezone.utc)
-age = (now - max(times)).total_seconds()
-print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds\nOldest completed base backup: {min(times).isoformat()}")
-if min(times) > now - dt.timedelta(days=7):
-    print("Seven-day window is still warming up")
+age, newest = (now - max(times)).total_seconds(), names[times.index(max(times))]
+print(f"Remote backups: {len(rows) - len(fulls)} full, {len(fulls)} delta; newest age: {age:.0f} seconds\nOldest completed backup: {min(times).isoformat()}")
+if newest in fulls:
+    print(f"Newest restore point is a delta: restoring it fetches full backup {fulls[newest]} too")
+if min(times) > now - dt.timedelta(days=7): print("Seven-day window is still warming up")
 if "/" in sys.argv[1]:
     high, low = (int(part, 16) for part in sys.argv[1].split("/"))
     replay = (high << 32 | low) - rows[times.index(max(times))]["start_lsn"]
@@ -1380,11 +1388,8 @@ if not 0 <= age <= 86400:
 }
 
 backup_prune() {
-  local apply= anchor
-  if (($#)); then
-    [[ $# == 1 && "$1" == --apply ]] || die "backup-prune accepts only --apply"
-    apply=--confirm
-  fi
+  local apply=${1:+--confirm} anchor
+  [[ $# == 0 || $# == 1 && "$1" == --apply ]] || die "backup-prune accepts only --apply"
   prepare_backup
   # Keep the newest backup completed before the recovery boundary, the full
   # backup a delta backup builds on (FIND_FULL), and every later backup/WAL.
@@ -1476,14 +1481,8 @@ case "$command" in
   queue-status) (($# == 0)) || die "queue-status takes no arguments"; exec_service ;;
   ranked-day-compaction) (($# == 0)) || die "ranked-day-compaction takes no arguments"; require_host; prepare_managed_runtime worker; "$PODMAN_BIN" exec "$(container_name "$MANAGED_PREFIX" worker)" python -m clashlens.ranked_day_compaction ;;
   backup)
-    wait_for_lock=false
-    if (($#)); then
-      [[ $# == 1 && "$1" == --wait-for-lock ]] || die "backup accepts only --wait-for-lock"
-      wait_for_lock=true
-    fi
-    acquire_mutation_lock "$wait_for_lock"
-    backup
-    ;;
+    [[ $# == 0 || $# == 1 && "$1" == --wait-for-lock ]] || die "backup accepts only --wait-for-lock"
+    acquire_mutation_lock "${1:+true}"; backup ;;
   alert-check) (($# == 0)) || die "alert-check takes no arguments"; alert_check ;;
   backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
   backup-prune) acquire_mutation_lock; backup_prune "$@" ;;

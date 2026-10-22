@@ -727,7 +727,7 @@ def test_status_reports_whether_seven_days_are_kept(runtime, oldest, warming):
     assert ("Seven-day window is still warming up" in result.stdout) is warming
 
 
-def test_backups_pack_with_zstd(tmp_path):
+def test_backups_pack_with_zstd_and_take_one_delta_per_full(tmp_path):
     credentials = tmp_path / "r2"
     credentials.write_text(f"AWS_ACCESS_KEY_ID={'a' * 32}\nAWS_SECRET_ACCESS_KEY={'b' * 64}\n")
     credentials.chmod(0o600)
@@ -737,7 +737,36 @@ def test_backups_pack_with_zstd(tmp_path):
         capture_output=True, text=True, timeout=15, check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["WALG_COMPRESSION_METHOD"] == "zstd"
+    config = json.loads(result.stdout)
+    assert (config["WALG_COMPRESSION_METHOD"], config["WALG_DELTA_MAX_STEPS"]) == ("zstd", "1")
+
+
+# WAL-G alone alternates full and delta, so one failed or manual backup would move the full to noon.
+@pytest.mark.parametrize(("hour", "full"), [("00", True), ("08", True), ("12", False), ("23", False)])
+def test_backups_before_noon_are_always_full(runtime, tmp_path, hour, full):
+    clock = tmp_path / "date"
+    clock.write_text(f'#!/usr/bin/env bash\n[[ "$*" == "-u +%H" ]] && echo {hour} || PATH=/usr/bin:/bin exec date "$@"\n')
+    clock.chmod(0o700)
+    calls = tmp_path / "calls"
+    result = run_ops(runtime, [backup_row(1, 0.5)], "backup", CALLS=str(calls))
+    assert result.returncode == 0, result.stderr
+    push = next(line for line in calls.read_text().splitlines() if "backup-push" in line)
+    assert ("--full" in push.split()) is full
+
+
+def test_status_counts_deltas_and_names_the_full_backup_a_restore_needs(runtime):
+    rows = [backup_row(1, 1), backup_row(2, 0.5, delta_of=1)]
+    result = run_ops(runtime, rows, "backup-status")
+    assert result.returncode == 0, result.stderr
+    assert "Remote backups: 1 full, 1 delta" in result.stdout
+    assert f"Newest restore point is a delta: restoring it fetches full backup base_{1:024X} too" in result.stdout
+    assert "is a delta" not in run_ops(runtime, rows[:1], "backup-status").stdout
+
+
+def test_status_fails_when_a_delta_has_lost_its_full_backup(runtime):
+    result = run_ops(runtime, [backup_row(1, 1), backup_row(3, 0.5, delta_of=2)], "backup-status")
+    assert result.returncode != 0
+    assert f"its full backup base_{2:024X} is missing" in result.stderr
 
 
 def test_retention_preview_does_not_delete(runtime):

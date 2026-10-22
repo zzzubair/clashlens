@@ -712,9 +712,15 @@ protected copy off rogue so losing the host does not also lose recovery access.
 Rotate credentials by replacing the file, running the approved `ops up`,
 verifying backup and restore, then revoking the old key in Cloudflare.
 
-The timer starts a full backup every 12 hours, at 00:00 and 12:00 UTC, well
-away from the 04:00–07:00 UTC Reset work. Missed calendar runs are
-caught up; restarting the stack does not add another full backup. Run
+The timer starts a backup every 12 hours, at 00:00 and 12:00 UTC, well
+away from the 04:00–07:00 UTC Reset work. Since 2026-10-22 the 00:00 run makes a
+full copy and the 12:00 run a WAL-G delta backup of only the pages changed since
+it (about 17% per 12 hours, so about a sixth of the size, though it still reads
+the whole database). `WALG_DELTA_MAX_STEPS=1` makes WAL-G follow a delta with a
+full copy, and `ops backup` forces a full copy before 12:00 UTC, so a failed or
+manual backup cannot move it off 00:00. Restoring a delta also fetches its full
+copy. Missed calendar runs are caught up; restarting the stack does not add
+another backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
 its change log, called WAL, with `archive_timeout=300`. WAL-G packs full
 backups and WAL with zstd at its default level, chosen on 2026-10-22 to cut
@@ -722,16 +728,15 @@ storage (lz4 before then); it picks the unpacker from each file's extension, so
 older lz4 files still restore. A restore can target any point in the last seven
 days, chosen on 2026-10-22 to cut storage cost (ten days from 2026-10-08, which
 left about three spare days after a weekly tournament's promotions and
-demotions to notice and fix a problem). A successful full backup
+demotions to notice and fix a problem). A successful backup
 then prunes backups older than the newest backup completed before seven days and
 one hour ago. It retains that backup, all newer backups and WAL, and, when that
 backup is a WAL-G delta backup (only the pages changed since an earlier backup),
 the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
-full and delta backup names are accepted. Delta backups are not switched on.
-Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
+full and delta backup names are accepted. Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
 shorten the recovery window. The one-hour margin covers scheduling and backup
-duration; right after each prune this keeps about 15–16 full backups and about
-7.5–8 days of WAL.
+duration; right after each prune this keeps about 15–17 backups (about 8 of
+them full copies, the rest deltas) and about 7.5–8 days of WAL.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -751,8 +756,10 @@ Release fingerprints use byte-ordered filenames so terminal and scheduled-servic
 language settings cannot make unchanged code appear different. Rebuild and deploy
 after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
-missing/unreachable remote backups, a newest full backup older than 24 hours, disabled
-archiving, or completed WAL files waiting over ten minutes. No WAL activity during
+missing/unreachable remote backups, a newest backup older than 24 hours, a delta
+whose full copy is missing, disabled archiving, or completed WAL files waiting over
+ten minutes. It counts full and delta backups and, when the newest is a delta,
+names the full copy a restore of it also fetches. No WAL activity during
 an idle period is not itself failure. It also prints how many GB of WAL a restore
 to now would replay after the newest backup, the part of a restore that grows
 between backups; it does not fail on that number. `./ops alert-check` alerts on this command
@@ -847,7 +854,7 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 
 1. Run `wal-g --config /run/secrets/walg.json backup-list --detail --json`.
    Choose the newest backup whose **finish time precedes the desired recovery
-   time**; a delta backup fetches its chain itself. `LATEST` is unsuitable when
+   time**; a delta backup fetches its full copy, then its changed pages. `LATEST` is unsuitable when
    recovering an older point. Note its `start_lsn`.
 2. Run `wal-g --config /run/secrets/walg.json backup-fetch /var/lib/postgresql/data/pgdata BACKUP_NAME`
    against the new volume, timing it: that is the download time. Create
@@ -868,7 +875,7 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    summaries. Read every retained raw object referenced by the sample and
    verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
-5. Repeat for the seven-day-old boundary, using a full backup from before it.
+5. Repeat for the seven-day-old boundary, using the newest backup finished before it.
    If the restore could take more than two days while production keeps
    running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
@@ -877,21 +884,22 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 Expected timings, from the 8 October 2026 real-size rehearsal (2 processor
 cores at the lowest scheduling priority, beside live production): fetching a
 15.55 GB compressed full backup took 268 seconds, about 58 MB/s, and replay ran
-at about 51 GB of change log an hour. With a full backup every 12 hours, a
-restore replays at most about 12 hours of change log after its full backup:
+at about 51 GB of change log an hour. With a backup every 12 hours, a
+restore replays at most about 12 hours of change log after that backup:
 about 53 GB before upload compression (about 45 GB as stored, from 105 GB/day
 before compression and 89.36 GB/day stored), so about 1 hour of replay plus
-5–8 minutes to fetch a 16–27 GB compressed full backup, and about half that on
-average. The rehearsal did not measure
+5–8 minutes to fetch a 16–27 GB compressed full backup (plus a sixth more for a
+delta), and about half that on average. A 2026-10-22 throwaway-cluster rehearsal
+restored a delta plus WAL after `delete before FIND_FULL` and matched every row. The rehearsal did not measure
 an unthrottled replay or the raw-object check time.
 
 ### Targets, cost and remaining rollout checks
 
 The intended maximum data loss is **5 minutes plus upload delay**, not a hard
 five-minute guarantee. A provider outage can exceed it. The worst-case restore
-time target is about **1 hour** at today's change-log rate, with a full backup
+time target is about **1 hour** at today's change-log rate, with a backup
 every 12 hours, chosen by the owner on 2026-10-08 over daily full backups with
-a 2-hour worst case (see
+a 2-hour worst case and kept on 2026-10-22 by making the 12:00 one a delta (see
 [expected timings](#restore-into-a-separate-database)).
 Seven-day recovery starts only after seven days of uninterrupted archived history.
 
@@ -909,7 +917,8 @@ until they age out; failed uploads can leave partial objects requiring separatel
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
 These figures are for the ten-day window with lz4; on 2026-10-22, with R2
-holding about 2 TB, the owner moved to seven days and zstd to cut the bill.
+holding about 2 TB, the owner moved to seven days, zstd and a 12:00 delta
+backup to cut the bill.
 
 The raw-response retention rule, recovery protection and projected cost belong in
 [raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
