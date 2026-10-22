@@ -16,11 +16,22 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import { seasonStartAt } from "../components/SeasonReread";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
+import { publicPageMeta } from "../lib/blog";
 import { seasonDates } from "../lib/season-end";
+import type { Route } from "./+types/army-analytics";
 import detailsStyles from "../details.css?url";
 
 export function links() {
   return [{ rel: "stylesheet", href: detailsStyles }];
+}
+
+// Filters change the view, not the page, so every view shares one address.
+export function meta({ matches }: Route.MetaArgs) {
+  return publicPageMeta(matches, {
+    path: "/analytics/armies",
+    title: "Legend League army analytics",
+    description: "Compare usage and battle results across tracked Legend League armies.",
+  });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {

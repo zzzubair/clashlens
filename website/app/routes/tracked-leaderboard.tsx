@@ -22,9 +22,11 @@ import {
   OLD_UPDATE_SECONDS,
   useCurrentTime,
 } from "../components/Provenance";
+import { publicPageMeta } from "../lib/blog";
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
+import type { Route } from "./+types/tracked-leaderboard";
 import "../leaderboard-search.css";
 
 const PAGE_SIZE = 100;
@@ -63,6 +65,23 @@ function leaderboardUrl(
 
 function playerRankUrl(tag: string, rank: number) {
   return `${leaderboardUrl("live", Math.ceil(rank / PAGE_SIZE))}&player=${encodeURIComponent(tag)}`;
+}
+
+// Each board page is its own address; a search or a picked player is not.
+export function meta({ location, matches }: Route.MetaArgs) {
+  const query = new URLSearchParams(location.search);
+  const season = query.get("season");
+  const day = query.get("day");
+  return publicPageMeta(matches, {
+    path: leaderboardUrl(
+      query.get("view") === "daily" ? "daily" : "live",
+      Number(query.get("page")) || 1,
+      season && day ? { officialSeasonId: season, dayNumber: Number(day) } : undefined,
+    ),
+    title: "Legend League rankings",
+    description:
+      "Live and daily trophy rankings of the Legend I players Clash Lens tracks.",
+  });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {

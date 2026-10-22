@@ -388,6 +388,24 @@ tests only; production requires an exact HTTPS public origin. See
 [`docs/deployment.md`](../docs/deployment.md#production-configuration) for the
 operator configuration.
 
+### Search engines and the live address
+
+The website answers by the request's host. While `CLASHLENS_PUBLIC_ORIGIN` is
+anything but `https://clashlens.net`, such as the preview, every response
+carries `X-Robots-Tag: noindex, nofollow` and `/robots.txt` disallows
+everything. Once it is `https://clashlens.net`:
+
+- Host `clashlens.net` may be indexed: no such header, and `/robots.txt`
+  allows the public pages and names `/sitemap.xml`.
+- Host `preview.clashlens.net` gets a permanent (301) redirect to the same
+  path and query on `https://clashlens.net`.
+- Any other host, such as a loopback health check, keeps the header.
+
+`/sitemap.xml` lists the front page, Rankings, Analytics, Blog, Privacy and
+every published post, at the public origin. Each of those pages has a title,
+a description and a canonical address. An unknown address shows the normal
+top bar with "Page not found", status 404 and a `noindex` tag.
+
 ## Preview on Rogue
 
 ### Refresh address boundary
@@ -424,7 +442,8 @@ Before starting production with proxy trust, the operator must:
   website to that proxy. Never trust an address shared with untrusted connections.
 - Forward exactly Cloudflare's `CF-Connecting-IP`, for example nginx
   `proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;`. Strip `Forwarded`,
-  `X-Forwarded-For`, `X-Real-IP` and `True-Client-IP`, and pin the public host.
+  `X-Forwarded-For`, `X-Real-IP` and `True-Client-IP`. Pass the visitor's host
+  only for `clashlens.net` and `preview.clashlens.net`, and refuse any other.
   Those headers never supply the Refresh identity.
 - Verify the actual socket peer and header replacement through the deployed
   tunnel. Do not enable transforms or Workers that rewrite the visitor address.
