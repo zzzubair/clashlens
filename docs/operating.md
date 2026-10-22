@@ -337,8 +337,9 @@ to interpret `backup-status` errors. WAL is PostgreSQL's change log.
 `./ops logs postgres --since '1 hour ago' --no-pager`.
 
 **Fix or escalate:** repair the reported timer, storage, network or credential
-problem with approval. If a new full backup is needed, obtain approval for
-`./ops backup`; it also applies the existing retention deletion policy.
+problem with approval. If a new backup is needed, obtain approval for
+`./ops backup` (a full copy before 12:00 UTC, otherwise a delta when the newest
+backup is a full copy); it also applies the existing retention deletion policy.
 A failed scheduled service must also be recovered, not just hidden by a manual
 backup. A changed-release refusal needs an approved release repair; never bypass
 the check or edit its saved fingerprint. Follow [backup operations](deployment.md#postgresql-backups-and-recovery).
