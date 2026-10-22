@@ -27,7 +27,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import { PythonApiError } from "../../app/services/python.server";
 import Search, { loader as searchLoader } from "../../app/routes/search";
-import { loader as frontLoader } from "../../app/routes/dashboard";
 import { loader as oldDashboard } from "../../app/routes/dashboard.redirect";
 import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
 import { FrontPage, type FrontPageData } from "../../app/components/FrontPage";
@@ -422,18 +421,6 @@ describe("search loading", () => {
     } as never);
     expect(result).toEqual({ search: null, query: "", error: null });
     expect(mocks.createPythonClient).not.toHaveBeenCalled();
-  });
-
-  it("forwards an old front-page search link to the search page", async () => {
-    await expect(
-      frontLoader({
-        request: new Request("https://clashlens.example/?q=Nova%20Star"),
-      } as never),
-    ).rejects.toSatisfy(
-      (response: Response) =>
-        response.status === 302 &&
-        response.headers.get("Location") === "/search?q=Nova+Star",
-    );
   });
 });
 

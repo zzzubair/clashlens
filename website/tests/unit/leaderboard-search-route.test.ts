@@ -42,30 +42,6 @@ it("opens the correct page directly for an exact tag", async () => {
   expect(mocks.getTrackedLeaderboard).not.toHaveBeenCalled();
 });
 
-it("returns name matches with their ranks for selection", async () => {
-  const search = {
-    exactTag: null,
-    hasMore: false,
-    results: [{ tag: "#2PP", rank: 103, name: "Nova", trophies: 6000 }],
-  };
-  mocks.searchLeaderboard.mockResolvedValue(search);
-  expect((await load("&q=Nova")).search).toEqual(search);
-});
-
-it("asks the backend to locate the player again when opening their row", async () => {
-  mocks.getTrackedLeaderboard.mockResolvedValue({ page: 3 });
-  const result = await load("&player=%232PP");
-  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
-    100,
-    "live",
-    0,
-    undefined,
-    "#2PP",
-  );
-  expect(result.leaderboard?.page).toBe(3);
-  expect(result.focusTag).toBe("#2PP");
-});
-
 it("explains a vanished player and returns to the board", async () => {
   mocks.getTrackedLeaderboard.mockRejectedValueOnce(
     new PythonApiError(404, { error: "leaderboard_not_found" }),

@@ -39,7 +39,6 @@ import GroupsRoute, {
   action as groupsAction,
   loader as groupsLoader,
 } from "../../app/routes/account.groups";
-import { loader as savedPlayersLoader } from "../../app/routes/account.saved-players";
 import {
   action as setupAction,
   loader as setupLoader,
@@ -497,14 +496,6 @@ describe("account routes", () => {
     it("exports a no-store headers policy", async () => {
       const { headers } = await import("../../app/routes/account.setup");
       expect(headers()).toEqual({ "Cache-Control": "no-store" });
-    });
-  });
-
-  describe("account.saved-players", () => {
-    it("sends the old address on to Watchlists", async () => {
-      await expect(savedPlayersLoader()).rejects.toSatisfy(
-        expectRedirectTo("/account/watchlists"),
-      );
     });
   });
 

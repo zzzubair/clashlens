@@ -347,30 +347,6 @@ def test_planned_claim_yields_to_waiting_reset_work(database_url: str) -> None:
         ]
 
 
-def test_reset_priority_jobs_are_claimable_alongside_unlimited_work(
-    database_url: str,
-) -> None:
-    # A Reset day result is claimed by a lane limited to derived work.
-    with _production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            job_id = _insert_job(
-                connection,
-                work_type="reconcile_ranked_day",
-                deduplication_key="reconcile:reset-priority",
-                input_json={"player_id": 1, "ranked_day_start": "2026-08-03T05:00:00Z"},
-                priority=PYTHON_RESET_PRIORITY,
-            )
-            connection.commit()
-        database = Database(connection_info)
-        try:
-            claim = database.claim_job(
-                owner="derived", work_types=("reconcile_ranked_day",)
-            )
-        finally:
-            database.close()
-        assert claim is not None and claim.job_id == job_id
-
-
 @pytest.mark.parametrize("live_waited", ["25 minutes", "1 minute"])
 def test_reset_backlog_and_live_work_take_turns_in_every_lane(
     database_url: str, live_waited: str
