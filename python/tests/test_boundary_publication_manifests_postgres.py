@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -19,6 +20,7 @@ from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 from clashlens import (
     army_ingestion,
     boundary,
+    boundary_manifest,
     boundary_members,
     boundary_publication,
     past_reset_pacing,
@@ -441,6 +443,66 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
                         frozen["decode_ids"][0],
                     )
                 ]
+        finally:
+            database.close()
+
+
+def test_freezing_a_seasons_army_inputs_holds_no_copy_of_them(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # A full army manifest stores its Season's inputs, about 30 MB of JSON by
+    # 13 October 2026. Sealing it read its row as JSON about a dozen times at
+    # once: about 2.8 GB on that copy, and production's connection was killed
+    # for memory at 5.5 and 6.4 GB on 19 and 21 October.
+    season_inputs = boundary_manifest._season_inputs
+
+    def long_season(connection, members):
+        inputs = season_inputs(connection, members)
+        return {
+            **inputs,
+            "battle_ids": [*inputs["battle_ids"], *range(10**12, 10**12 + 250_000)],
+        }
+
+    freeze = boundary_manifest._freeze
+    growth: dict[str, int] = {}
+
+    def measured(connection, generation_id, artifact_kind, generation):
+        status = f"/proc/{connection.info.backend_pid}/status"
+
+        def peak_kb() -> int:
+            with psycopg.connect(database_url, autocommit=True) as admin:
+                found = re.search(
+                    r"VmHWM:\s+(\d+) kB",
+                    admin.execute("SELECT pg_read_file(%s)", (status,)).fetchone()[0],
+                )
+            assert found is not None
+            return int(found[1])
+
+        before = peak_kb()
+        result = freeze(connection, generation_id, artifact_kind, generation)
+        growth[artifact_kind] = peak_kb() - before
+        return result
+
+    monkeypatch.setattr(boundary_manifest, "_season_inputs", long_season)
+    monkeypatch.setattr(boundary_manifest, "_freeze", measured)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                sealed, stored = connection.execute(
+                    "SELECT rows_sealed, length(rule_versions::text)"
+                    " FROM boundary_publication_manifests WHERE id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchone()
+            assert sealed and stored > 3_000_000
+            # The inputs' JSON is about 3.5 MB: saving it holds about 36 MB,
+            # and the old seal held about 230 MB more.
+            assert set(growth) == {"snapshot", "army"}
+            assert max(growth.values()) < 96_000, growth
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
         finally:
             database.close()
 
