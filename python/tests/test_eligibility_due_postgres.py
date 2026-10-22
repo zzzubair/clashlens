@@ -98,6 +98,14 @@ def _discover(connection_info: str, player_ids: list[int]) -> None:
         database.close()
 
 
+def _clear_of_the_weekly_reset(span: timedelta) -> datetime:
+    """Now, or Monday's Reset when it comes within ``span``: a new week starts
+    new checks, so a test's steps stay inside one week whenever CI runs."""
+    now = datetime.now(UTC)
+    week_ends = league_week.week_start(now) + league_week.WEEK
+    return week_ends if now + span >= week_ends else now
+
+
 def test_a_full_queue_keeps_named_players_due_until_there_is_room(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         ids = _players(connection_info, 503)
@@ -131,7 +139,7 @@ def test_a_failed_check_is_retried_with_backoff_until_answered(database_url: str
     with domain_database(database_url) as connection_info:
         (player,) = _players(connection_info, 1)
         _discover(connection_info, [player])
-        now = datetime.now(UTC)
+        now = _clear_of_the_weekly_reset(timedelta(minutes=36))
         _admit(connection_info, now)
         assert _checks(connection_info, player) == [("week", "pending")]
         assert _due(connection_info, player) == (now + timedelta(minutes=5), 1)
@@ -185,6 +193,7 @@ def test_a_player_whose_waiting_check_fails_is_still_retried(
 ) -> None:
     with domain_database(database_url) as connection_info:
         imported, repaired = _players(connection_info, 2)
+        now = _clear_of_the_weekly_reset(timedelta(minutes=6))
         with psycopg.connect(connection_info) as connection:
             # This week's checks, added before the players were saved as due.
             connection.execute(
@@ -192,14 +201,14 @@ def test_a_player_whose_waiting_check_fails_is_still_retried(
                 INSERT INTO collector_work (
                     kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
                     profile_status, battle_log_status, league_history_status
-                ) SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, now(),
+                ) SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, %(now)s,
                          'discovery-profile:' || id || ':' || to_char(
-                             clashlens_eligibility_week(now()) AT TIME ZONE 'UTC',
+                             clashlens_eligibility_week(%(now)s) AT TIME ZONE 'UTC',
                              'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                          'pending', 'not_applicable', 'pending'
-                  FROM players WHERE id = ANY(%s::bigint[])
+                  FROM players WHERE id = ANY(%(players)s::bigint[])
                 """,
-                ([imported, repaired],),
+                {"now": now, "players": [imported, repaired]},
             )
             # A list import names one player; the repair finds the other.
             assert connection.execute(
@@ -207,7 +216,6 @@ def test_a_player_whose_waiting_check_fails_is_still_retried(
             ).fetchone()[0] == 0
         assert population.run_command(_as(connection_info, "clashlens_collector"), repair=True) == 0
         assert json.loads(capsys.readouterr().out)["repair"]["marked_due"] == 1
-        now = datetime.now(UTC)
         _admit(connection_info, now)
         assert _waiting(connection_info) == 2
         with psycopg.connect(connection_info) as connection:
