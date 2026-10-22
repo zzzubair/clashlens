@@ -33,7 +33,9 @@ ARMY_ANALYTICS_CACHE_CAPACITY = 128
 ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
 ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
 ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
-ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 0.1
+# Long enough for the pool to open a connection, or for the page's other
+# reads to finish, on a first open; the read keeps the rest of its budget.
+ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 2.0
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
 # Player writes that a worker may also lock fail at once with a retryable 503.
 # Any other lock wait gives up after this long instead of holding a pool
