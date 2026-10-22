@@ -124,7 +124,9 @@ def test_a_loops_own_slow_database_call_holds_off_stuck_for_twenty_minutes(
     monkeypatch,
 ) -> None:
     collector = _running_collector()
-    now = [time.monotonic()]
+    # A whole second: twenty minutes added to some uptimes reads back as
+    # 1,199.999… seconds, which is not yet stuck (CI, 21 Oct 2026).
+    now = [float(round(time.monotonic()))]
     monkeypatch.setattr(
         collector_liveness, "time", SimpleNamespace(monotonic=lambda: now[0])
     )
