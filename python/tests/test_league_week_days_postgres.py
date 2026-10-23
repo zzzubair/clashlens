@@ -29,18 +29,20 @@ from test_reset_scenarios_postgres import (
     Story,
     _ranked,
     _saturday,
+    _story,
     attacks,
     day,
     defenses,
     multiplayer,
 )
 
-from clashlens import reset_baselines
+from clashlens import board_deadline, league_days, reset_baselines
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+from clashlens.league_week import Below, Claim, League, ProofKind
 
 
 @dataclass
@@ -773,3 +775,101 @@ def test_days_saved_unfinished_before_the_fix_finish_at_the_next_reset(
     assert unfinished == []
     assert days == {number: ("Complete", [], 5000, 5000) for number in range(8, 17)}
     assert boards == {number: "complete" for number in range(9, 18)}
+
+
+STAYS, SAME, CHANGED, GONE = "#2GG", "#8GG", "#9GG", "#PGG"
+
+
+def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """At the deploy of 22 October 2026, 11:38, the record decided again
+    the week of 5 October of 456 players it had put below Legend I, and
+    the rebuilds already queued for the 7-12 October boards started at
+    once, before those players' days were calculated again. Each rebuild
+    took them as members waiting for their day: the record put their week
+    in Legend I, and their public days had gone with the wrong decision.
+    Most days came out different and reached the boards, but the days of
+    74 players came out the same, which saves nothing new, so no result
+    reached the board and the six rebuilds waited for them for good, the
+    boards keeping their versions without the 456.
+
+    SAME and CHANGED, Legend I and ranked at 5,140 on the Sunday 11 October
+    board, have their week of 5 October decided below Legend I, and the
+    board is rebuilt without them. GONE's week is decided below Legend I
+    too, which queues a rebuild. The record then decides SAME's and
+    CHANGED's week Legend I again while that rebuild is due, with CHANGED's
+    05:20 settlement check saved only now: CHANGED's Saturday comes out
+    different, SAME's the same. The rebuilt board must rank both, and not GONE."""
+    saturday, sunday = day(6), day(7)
+    tags = (STAYS, SAME, CHANGED, GONE)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *tags)
+        for tag in tags:
+            story.players[tag].battles = _saturday(saturday)
+        # From 5,300, 8 defenses of 30 by 08:30 and 2 attacks of 40 from
+        # 11:00: Saturday ends at 5,140. Only SAME is read at 04:50.
+        story.reset(saturday, {tag: (5300, SEASON) for tag in tags})
+        story.reads(saturday + timedelta(hours=9, minutes=15), dict.fromkeys(tags, 5060))
+        story.reads(sunday - timedelta(minutes=10), {SAME: 5140})
+        story.reset(sunday, {tag: (5140, SEASON) for tag in tags})
+        story.reads(sunday + timedelta(minutes=20), dict.fromkeys((STAYS, SAME, GONE), 5140))
+        story.run_worker()
+        first = story.served_board(sunday)
+
+        # The wrong decision, which the decider leaves until new evidence
+        # marks the week; then GONE's, which queues a rebuild.
+        story.decides = False
+        _decide_below(connection_info, (SAME, CHANGED), story.clock)
+        story.wait(timedelta(hours=6))
+        without = story.served_board(sunday)
+        _decide_below(connection_info, (GONE,), story.clock)
+
+        # The record decides the week again while GONE's rebuild is due.
+        story.decides = True
+        story.reads(sunday + timedelta(minutes=20), {CHANGED: 5140})
+        with psycopg.connect(connection_info) as connection:
+            for tag in (SAME, CHANGED):
+                connection.execute(
+                    "INSERT INTO league_week_dirty (player_id, week_start, source)"
+                    " VALUES (%s, %s, 'league_history')", (_player_id(connection, tag), SEASON))
+        # Until 23 October 2026 nothing gave SAME its saved day.
+        with monkeypatch.context() as patch:
+            patch.setattr(board_deadline, "take_saved_days", lambda *_: None)
+            story.run_worker()
+            stuck = (story.board_members(sunday), story.served_board(sunday))
+        # The first check since gives it, and the rebuild publishes.
+        story.run_worker()
+        members = story.board_members(sunday)
+        rebuilt = story.served_board(sunday)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert _ranked(first) == dict.fromkeys(tags, 5140)
+    assert _ranked(without) == {STAYS: 5140, GONE: 5140}
+    stuck_members, stuck_board = stuck
+    assert stuck_members == {STAYS: "complete", SAME: "pending", CHANGED: "complete"}
+    assert _ranked(stuck_board) == {STAYS: 5140, GONE: 5140}
+    assert members == dict.fromkeys((STAYS, SAME, CHANGED), "complete")
+    assert _ranked(rebuilt) == {STAYS: 5140, SAME: 5140, CHANGED: 5140}
+
+
+def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) -> None:
+    """Decide each player's week of 5 October below Legend I."""
+    database = Database(connection_info)
+    try:
+        with database.pool.connection() as connection, connection.transaction():
+            for tag in tags:
+                league_days.save_season(
+                    database, connection, _player_id(connection, tag), SEASON,
+                    {SEASON: Below(Claim(SEASON - timedelta(days=7), None,
+                                         ProofKind.PREVIOUS_WEEK, League.BELOW))},
+                    now, queue_days=False)
+    finally:
+        database.close()
+
+
+def _player_id(connection: psycopg.Connection, tag: str) -> int:
+    return connection.execute(
+        "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
+
