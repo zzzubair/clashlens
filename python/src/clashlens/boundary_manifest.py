@@ -24,7 +24,7 @@ from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
 from . import boundary_members
-from .analytics import latest_trophy_changes, unplayed_sql
+from .analytics import latest_trophy_changes, unplayed_since_sql, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -806,14 +806,8 @@ def unplayed_profiles(
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)
             JOIN player_profile_versions AS version ON version.id = newest.id
-            WHERE {unplayed_sql("newest.player_id", "version", '''GREATEST(
-                %(season_start)s::timestamptz, (
-                    SELECT max(week.week_start) FROM player_league_weeks AS week
-                    WHERE week.player_id = newest.player_id
-                      AND week.week_start <= %(day)s
-                      AND week.league = 'legend_i'
-                      AND week.entry IN ('promoted', 'first_seen')))''',
-                                "%(boundary)s")}
+            WHERE {unplayed_sql("newest.player_id", "version", unplayed_since_sql(
+                "newest.player_id", "%(season_start)s", "%(day)s"), "%(boundary)s")}
             """,
             {"players": player_ids, "boundary": boundary_at, "day": day,
              "season_start": ranked_day_for(day).season_start},

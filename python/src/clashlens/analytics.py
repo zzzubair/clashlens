@@ -153,6 +153,23 @@ def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -
         LIMIT 1) IS NULL)"""
 
 
+def unplayed_since_sql(player_id: str, season_start: str, day: str) -> str:
+    """SQL for when the player's "has not played yet" is counted from for
+    the Legend day starting at ``day``: the Season's start ``season_start``
+    or, if later, the Monday Reset of their newest week up to that day that
+    the weekly league record says they were promoted or first seen in
+    Legend I. So a player who played earlier in the Season, dropped and was
+    promoted back, or whose lower-league profiles named another total
+    before their promotion, has not played since. Daily boards and Reset
+    readings both count from it."""
+    return f"""GREATEST({season_start}::timestamptz, (
+        SELECT max(week.week_start) FROM player_league_weeks AS week
+        WHERE week.player_id = {player_id}
+          AND week.week_start <= {day}
+          AND week.league = 'legend_i'
+          AND week.entry IN ('promoted', 'first_seen')))"""
+
+
 # Each attacker's attacks and summed attack destruction on the battle days
 # from %(season_start)s up to %(cutoff)s, from their own battle log's record
 # of each attack. On 8 October 2026, 37 of 311,182 recorded battles of the

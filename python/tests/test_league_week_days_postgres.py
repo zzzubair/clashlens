@@ -35,6 +35,7 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
+from clashlens import reset_baselines
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -666,3 +667,109 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
         back_tuesday: ({BOUNCED: 5000, RETURNED: 5000}, {}),
     }
     assert rebuilds == []
+
+
+IDLE_ACROSS, ANCHOR = "#QYY", "#RYY"
+
+
+def _idle_across(story: Story, resets: range) -> None:
+    """IDLE_ACROSS, read twice in Legend II naming the Season the week
+    before, is promoted into Legend I at the Monday Reset of 12 October 2026
+    and never plays: each Reset of ``resets`` reads it in Legend I at 5,000
+    naming Season 0, as about 115 players promoted on 12 October were read
+    from 13 October on. ANCHOR, swept in Legend I naming the Season at every
+    Reset, dates the Season."""
+    idle = story.players[IDLE_ACROSS]
+    if resets.start == 9:
+        idle.battles = multiplayer(day(4), 3)
+        idle.legend_ii = True
+        story.read(IDLE_ACROSS, day(4) + timedelta(hours=9), 1400)
+        story.reset(day(6), {ANCHOR: (5300, SEASON)})
+        story.read(IDLE_ACROSS, day(6) + timedelta(hours=9), 1450)
+        for number in (7, 8):
+            story.reset(day(number), {ANCHOR: (5300, SEASON)})
+        idle.legend_ii = False
+        for at in (timedelta(hours=1, minutes=10), timedelta(hours=9, minutes=15)):
+            story.reads(day(8) + at, {IDLE_ACROSS: 5000}, None)
+    for number in resets:
+        story.reset(day(number), {IDLE_ACROSS: (5000, None), ANCHOR: (5300, SEASON)})
+        for at in (timedelta(minutes=20), timedelta(hours=9, minutes=15)):
+            story.reads(day(number) + at, {IDLE_ACROSS: 5000}, None)
+
+
+def _idle_days(story: Story, days: range) -> dict[int, tuple[object, ...]]:
+    """IDLE_ACROSS's Legend days of ``days`` as its page shows them and as
+    saved: state, unfinished reasons, start and end."""
+    public = _public_days(story.connection_info, IDLE_ACROSS)
+    return {number: (public[day(number)]["state"], public[day(number)]["reasons"],
+                     saved["start"], saved["end"])
+            for number in days
+            if (saved := story.saved_day(IDLE_ACROSS, day(number))) is not None}
+
+
+def test_a_promoted_player_idle_across_the_next_monday_stays_proven(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Until 23 October 2026 each Reset reading of IDLE_ACROSS (``_idle_across``)
+    was set aside: "has not played yet" was counted from the Season's start,
+    and the Legend II profiles at other totals came before it. The days
+    chained from the Monday's 5,000 through Saturday, but Sunday 18 October,
+    ending at the next Monday Reset, had no end and Monday 19 October no
+    start, so every board from then on showed the player unfinished.
+    Counted from the promotion, as Daily boards count it, each reading
+    starts its day at 5,000 and every board shows the player's day
+    Complete."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch,
+                      {tag: Climber(tag) for tag in (IDLE_ACROSS, ANCHOR)})
+        _idle_across(story, range(9, 17))
+        story.wait(timedelta(hours=1))
+
+        days = _idle_days(story, range(8, 16))
+        boards = {number: story.board_members(day(number)).get(IDLE_ACROSS)
+                  for number in range(9, 17)}
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert days == {number: ("Complete", [], 5000, 5000) for number in range(8, 16)}
+    assert boards == {number: "complete" for number in range(9, 17)}
+
+
+def test_days_saved_unfinished_before_the_fix_finish_at_the_next_reset(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """IDLE_ACROSS's days and boards to 20 October were saved by the rule
+    before 23 October 2026, counting from the Season's start: Sunday 18
+    October and every day after unfinished, as about 115 players' were on
+    production. From the Reset of 21 October the rule counts from the
+    promotion. That day's 5,000 start recalculates each day before it with
+    no end, back to Sunday, and each past board they change is rebuilt, so
+    no Season repair is needed."""
+    counted_from = reset_baselines.unplayed_since_sql
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = Story(connection_info, archive_server, monkeypatch,
+                      {tag: Climber(tag) for tag in (IDLE_ACROSS, ANCHOR)})
+        monkeypatch.setattr(reset_baselines, "unplayed_since_sql",
+                            lambda player, season_start, day: f"{season_start}::timestamptz")
+        _idle_across(story, range(9, 17))
+        story.wait(timedelta(hours=1))
+        before = (_idle_days(story, range(14, 16)),
+                  {number: story.board_members(day(number)).get(IDLE_ACROSS)
+                   for number in (15, 16)})
+        monkeypatch.setattr(reset_baselines, "unplayed_since_sql", counted_from)
+        _idle_across(story, range(17, 18))
+        # Each past board is rebuilt at most once in 6 hours.
+        story.wait(timedelta(hours=7))
+
+        days = _idle_days(story, range(8, 17))
+        boards = {number: story.board_members(day(number)).get(IDLE_ACROSS)
+                  for number in range(9, 18)}
+        unfinished = story.unfinished_jobs()
+
+    assert before == ({
+        14: ("Partial", ["missing_end_baseline"], 5000, 5000),
+        15: ("Partial", ["missing_start_baseline", "missing_end_baseline"], None, None),
+    }, {15: "partial", 16: "partial"})
+    assert unfinished == []
+    assert days == {number: ("Complete", [], 5000, 5000) for number in range(8, 17)}
+    assert boards == {number: "complete" for number in range(9, 18)}

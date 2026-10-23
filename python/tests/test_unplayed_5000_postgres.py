@@ -658,6 +658,43 @@ def test_only_a_battle_of_the_season_before_the_reading_shows_a_player_played(
     assert unplayed == {name: case[3] for name, case in cases.items()}
 
 
+def test_a_player_promoted_back_has_not_played_since_the_promotion(
+    database_url: str,
+) -> None:
+    # Each player attacks on Day 2 and reads Legend I at 5,000 at the
+    # Tuesday Reset of the Season's second week. A Monday promotion into
+    # Legend I starts the count again, as Daily boards count it; staying
+    # in Legend I does not.
+    monday = DAY_1 + timedelta(days=7)
+    reset = monday + timedelta(days=1)
+    cases = {"promoted back": ("promoted", True), "stayed": ("stayed", False)}
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET session_replication_role = replica")
+            readings = {}
+            for number, (name, (entry, _)) in enumerate(cases.items()):
+                player, profile = _reading_at_5000(
+                    connection, f"#BACK{number}", reset + READ_AFTER
+                )
+                seed_battles(connection, player, [(DAY_2 + timedelta(hours=1), WIN)])
+                connection.execute(
+                    """
+                    INSERT INTO player_league_weeks (
+                        player_id, week_start, league, entry, strength,
+                        proof_kind, proof_at, proof_source_id, rule_version)
+                    VALUES (%s, %s, 'legend_i', %s, 3, 'accepted_answer', %s, -1, 1)
+                    """,
+                    (player, monday, entry, monday + READ_AFTER),
+                )
+                readings[name] = (player, reset, profile, reset + READ_AFTER)
+            unplayed = {
+                name: reset_baselines._unplayed(connection, *reading)
+                for name, reading in readings.items()
+            }
+
+    assert unplayed == {name: case[1] for name, case in cases.items()}
+
+
 def test_the_never_played_check_reads_only_the_players_own_battles(
     database_url: str, monkeypatch
 ) -> None:
