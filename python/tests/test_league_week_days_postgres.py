@@ -41,7 +41,6 @@ from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database
-from clashlens.domain_repair import season_repair
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.league_week import Below, Claim, League, ProofKind
 
@@ -834,42 +833,25 @@ def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
                 connection.execute(
                     "INSERT INTO league_week_dirty (player_id, week_start, source)"
                     " VALUES (%s, %s, 'league_history')", (_player_id(connection, tag), SEASON))
-        # Until 23 October 2026 nothing gave SAME its saved day, and the
-        # Season repair's receipt did not show the rebuild waiting.
+        # Until 23 October 2026 nothing gave SAME its saved day.
         with monkeypatch.context() as patch:
             patch.setattr(board_deadline, "take_saved_days", lambda *_: None)
             story.run_worker()
-            stuck = (story.board_members(sunday), story.served_board(sunday),
-                     _rebuilds_waiting(connection_info))
+            stuck = (story.board_members(sunday), story.served_board(sunday))
         # The first check since gives it, and the rebuild publishes.
         story.run_worker()
         members = story.board_members(sunday)
         rebuilt = story.served_board(sunday)
-        waiting = _rebuilds_waiting(connection_info)
         unfinished = story.unfinished_jobs()
 
     assert unfinished == []
     assert _ranked(first) == dict.fromkeys(tags, 5140)
     assert _ranked(without) == {STAYS: 5140, GONE: 5140}
-    stuck_members, stuck_board, stuck_waiting = stuck
+    stuck_members, stuck_board = stuck
     assert stuck_members == {STAYS: "complete", SAME: "pending", CHANGED: "complete"}
     assert _ranked(stuck_board) == {STAYS: 5140, GONE: 5140}
-    # The Saturday board, ranking Friday, waited for both players' Fridays.
-    assert [(row["reset"], row["members_waiting"]) for row in stuck_waiting] == [
-        (saturday.isoformat(), 2), (sunday.isoformat(), 1)]
     assert members == dict.fromkeys((STAYS, SAME, CHANGED), "complete")
     assert _ranked(rebuilt) == {STAYS: 5140, SAME: 5140, CHANGED: 5140}
-    assert waiting == []
-
-
-def _rebuilds_waiting(connection_info: str) -> list[dict[str, object]]:
-    """The Season repair preview's rebuilds still waiting for members."""
-    database = Database(connection_info)
-    try:
-        return season_repair(
-            database, str(int(SEASON.timestamp())), "preview", max_jobs=100)["rebuilds_waiting"]
-    finally:
-        database.close()
 
 
 def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) -> None:

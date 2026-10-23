@@ -796,11 +796,7 @@ shows the saved before beside the same counts now, and checks that every
 published view agrees with the days: `boards_disagreeing` lists boards whose
 entries the rules would still change, and `summaries_disagreeing` counts
 saved summaries that differ from their days, as the Season's closure checks
-them, which reads every summary of a finished Season. `rebuilds_waiting`, in
-`preview` too, lists each Reset whose newest board is a rebuild not yet
-published that still waits for members' days, with how many and when it was
-made (`made_at`): one made over an hour ago, outside 04:30 to 07:00 UTC, has
-stopped. Rebuilt boards record
+them, which reads every summary of a finished Season. Rebuilt boards record
 the board rule that built them (`rule`). A board rebuild is finished once its
 Reset's newest generation shows `snapshot_state` and `army_state` as
 `published` (see [Reset publication missing](#reset-publication-missing)).

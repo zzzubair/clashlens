@@ -181,7 +181,6 @@ def season_repair(
                 "boards_queued_at": receipt[3].isoformat() if receipt[3] else None,
                 "days": {"before": receipt[0], "now": _day_counts(connection, start)},
                 "boards": {"before": receipt[1], "now": _board_counts(connection, start)},
-                "rebuilds_waiting": _rebuilds_waiting(connection, start),
                 # Checks that every published view now agrees with the days.
                 "boards_disagreeing": [
                     board for board in boundary.queue_board_rebuilds(
@@ -196,7 +195,6 @@ def season_repair(
                 "inputs": inputs,
                 "days": _day_counts(connection, start),
                 "boards": _board_counts(connection, start),
-                "rebuilds_waiting": _rebuilds_waiting(connection, start),
                 "boards_to_rebuild": boundary.queue_board_rebuilds(
                     database, season_id, queue=False
                 )["boards"],
@@ -664,37 +662,6 @@ def _board_counts(connection: Any, start: datetime) -> dict[str, Any]:
             (start, start + SEASON_DURATION),
         ).fetchall()
     }
-
-
-def _rebuilds_waiting(connection: Any, start: datetime) -> list[dict[str, Any]]:
-    """Each Reset of the Season whose newest board is a rebuild not yet
-    published that still waits for members' days: how many, and when it was
-    made. One made long ago has stopped, as the 7 to 12 October 2026 ones did
-    for 74 players from 22 October (``boundary_members.take_saved_days``)."""
-    return [
-        {"reset": boundary_at.astimezone(UTC).isoformat(), "generation": int(generation),
-         "made_at": made_at.astimezone(UTC).isoformat(), "members_waiting": int(waiting)}
-        for boundary_at, generation, made_at, waiting in connection.execute(
-            """
-            SELECT newest.boundary_at, newest.generation, newest.created_at, count(*)
-            FROM (
-                SELECT DISTINCT ON (boundary_at) id, boundary_at, generation, created_at,
-                       supersedes_id, snapshot_state, army_state
-                FROM boundary_publication_generations
-                WHERE boundary_at > %s AND boundary_at <= %s
-                ORDER BY boundary_at, generation DESC
-            ) AS newest
-            JOIN boundary_publication_generation_members AS member
-              ON member.generation_id = newest.id AND member.status = 'pending'
-            WHERE newest.supersedes_id IS NOT NULL
-              AND (newest.snapshot_state IN ('pending', 'ready', 'building')
-                   OR newest.army_state IN ('pending', 'ready', 'building'))
-            GROUP BY newest.boundary_at, newest.generation, newest.created_at
-            ORDER BY newest.boundary_at
-            """,
-            (start, start + SEASON_DURATION),
-        ).fetchall()
-    ]
 
 
 ACTIONS = ("preview", "register", "activate")
