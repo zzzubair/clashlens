@@ -664,18 +664,43 @@ def test_a_player_promoted_back_has_not_played_since_the_promotion(
     # Each player attacks on Day 2 and reads Legend I at 5,000 at the
     # Tuesday Reset of the Season's second week. A Monday promotion into
     # Legend I starts the count again, as Daily boards count it; staying
-    # in Legend I does not.
+    # in Legend I does not. A Legend II answer at 05:10 after the promotion
+    # is the game's display lagging, not a Legend I battle.
     monday = DAY_1 + timedelta(days=7)
     reset = monday + timedelta(days=1)
-    cases = {"promoted back": ("promoted", True), "stayed": ("stayed", False)}
+    cases = {
+        "promoted back": ("promoted", False, True),
+        "promoted back, Legend II shown after": ("promoted", True, True),
+        "stayed": ("stayed", False, False),
+    }
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             connection.execute("SET session_replication_role = replica")
             readings = {}
-            for number, (name, (entry, _)) in enumerate(cases.items()):
+            for number, (name, (entry, legend_ii, _)) in enumerate(cases.items()):
                 player, profile = _reading_at_5000(
                     connection, f"#BACK{number}", reset + READ_AFTER
                 )
+                if legend_ii:
+                    connection.execute(
+                        """
+                        INSERT INTO player_profile_versions (
+                            player_id, observation_id, normalized_tag,
+                            endpoint_version, schema_version, parser_version,
+                            observed_at, source_http_status, name, trophies,
+                            league_tier_id, league_tier_name, eligibility_state,
+                            current_league_season_id, eligibility_reason,
+                            source_contract_state, profile_json)
+                        SELECT player_id, observation_id - 1000000,
+                               normalized_tag, endpoint_version, schema_version,
+                               parser_version, %s, 200, name, 1450, 105000033,
+                               'Legend League II', 'ineligible',
+                               current_league_season_id, 'not_legend_i',
+                               'accepted', '{}'
+                        FROM player_profile_versions WHERE id = %s
+                        """,
+                        (monday + timedelta(minutes=10), profile),
+                    )
                 seed_battles(connection, player, [(DAY_2 + timedelta(hours=1), WIN)])
                 connection.execute(
                     """
@@ -692,7 +717,7 @@ def test_a_player_promoted_back_has_not_played_since_the_promotion(
                 for name, reading in readings.items()
             }
 
-    assert unplayed == {name: case[1] for name, case in cases.items()}
+    assert unplayed == {name: case[2] for name, case in cases.items()}
 
 
 def test_the_never_played_check_reads_only_the_players_own_battles(

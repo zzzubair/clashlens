@@ -1224,9 +1224,10 @@ def _unplayed(
     (``analytics.unplayed_since_sql``): from its Season's start or the
     player's latest promotion into Legend I. It can show a player who has
     not played yet (``analytics.unplayed_profile_sql``), no battle was
-    fought since then before it, and no accepted profile naming that Season
-    read since then, or, when it names another real Season, read in Legend
-    I during the ended day, showed another total before it. The game also
+    fought since then before it, and no accepted Legend I profile naming
+    that Season read since then, or, when it names another real Season,
+    read during the ended day, showed another total before it: a lower
+    league's total never shows a Legend I battle. The game also
     sends Season 0 to players already signed up, so a profile naming Season
     0 decides nothing more here. On 13 October 2026, 157 players promoted
     the day before read so, after accepted Legend II profiles at other
@@ -1249,14 +1250,14 @@ def _unplayed(
             LEFT JOIN player_profile_effects AS effect
               ON effect.profile_version_id = profile.id
             WHERE profile.player_id = %(player)s
+              AND profile.eligibility_state = 'eligible'
               AND (profile.current_league_season_id = %(season)s
                    AND COALESCE(effect.observed_at, profile.observed_at)
                        >= %(since)s
                    -- At a Season's opening Reset, a 5,000 naming the old
                    -- Season after a Legend I day at another total may
                    -- still be the old Season's.
-                   OR profile.eligibility_state = 'eligible'
-                   AND COALESCE(effect.observed_at, profile.observed_at)
+                   OR COALESCE(effect.observed_at, profile.observed_at)
                        >= %(ended_day)s
                    AND (SELECT reading.current_league_season_id
                         FROM player_profile_versions AS reading
