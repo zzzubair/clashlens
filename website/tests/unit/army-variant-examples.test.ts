@@ -34,6 +34,7 @@ const examplesPayload = {
   variant_id: 3,
   rule: "Thrower armies with Revenge Deck, without Fireball or Rocket Backpack.",
   selection: { season: "1776052800", start_day: 1, end_day: 6 },
+  covered_days: [1, 3, 4, 5, 6],
   groups: [
     { attacks: 5, armies: 3, example_attacks: 3, army_share_code: REVENGE_SIEGE },
     { attacks: 1, armies: 1, example_attacks: 1, army_share_code: REVENGE },
@@ -44,7 +45,7 @@ const examplesPayload = {
   },
 };
 
-const PAGE_DAYS = "population=top-1000&season=1776052800&start=1&end=6&type=3&variant=3";
+const PAGE_DAYS = "population=top-1000&season=1776052800&days=1,3,4,5,6&type=3&variant=3";
 
 function examplesRequest(query: string) {
   return {
@@ -92,9 +93,14 @@ describe("variant example armies", () => {
     pythonReplies({
       ...examplesPayload,
       selection: { ...examplesPayload.selection, end_day: 7 },
+      covered_days: [1, 3, 4, 5, 6, 7],
     });
     const later = await examplesLoader(examplesRequest(PAGE_DAYS));
     expect(later.data.examples).toBeNull();
+    // A missing day published since: the same first and last day, more days.
+    pythonReplies({ ...examplesPayload, covered_days: [1, 2, 3, 4, 5, 6] });
+    const filled = await examplesLoader(examplesRequest(PAGE_DAYS));
+    expect(filled.data.examples).toBeNull();
     pythonReplies({ error: "invalid_army_analytics_selection" }, 422);
     const refused = await examplesLoader(
       examplesRequest(PAGE_DAYS.replace("type=3", "type=99")),

@@ -333,14 +333,14 @@ def army_group(
     home_troops: Iterable[Any], spells: Iterable[Any], heroes: Iterable[Any]
 ) -> tuple[tuple[str, ...], ...]:
     """The group a saved distinct army falls in, for variant examples."""
-    troops = [(str(troop), int(count)) for troop, count in home_troops]
+    troops = [(str(troop[0]), int(troop[1])) for troop in home_troops]
     total = sum(CAMP_SPACE.get(troop, 0) * count for troop, count in troops)
     return (
         tuple(sorted(
             troop for troop, count in troops
             if CAMP_SPACE.get(troop, 0) * count * 100 >= FILLER_SHARE * total
         )),
-        tuple(sorted(str(spell) for spell, _count in spells)),
+        tuple(sorted(str(spell[0]) for spell in spells)),
         tuple(sorted(
             ":".join((str(hero.get("hero")), *sorted(map(str, hero.get("equipment") or ()))))
             for hero in heroes if isinstance(hero, dict)
@@ -750,71 +750,102 @@ def variant_examples(
 
     Each group has its attacks, how many distinct armies it holds, and its
     example: its most used distinct army, with that army's attacks and the
-    Copy army code its saved battles used most. Older partly read armies have
-    no distinct army and are in no group.
+    Copy army code its saved battles used most. An older partly read army has
+    no distinct army: its saved army is read back as ``read_type_rows`` does,
+    and each of its codes counts as one army, copied as it is.
     """
     source, params = _selected_counts(
         connection, season_id=season_id, days=days, member_ids=member_ids,
         trophy_range=trophy_range, boards=boards,
     )
-    groups: dict[tuple[tuple[str, ...], ...], list[int]] = {}
-    for army_id, attacks, troops, spells, heroes in connection.execute(
+    used = dict(connection.execute(
         f"""
-        WITH used AS MATERIALIZED (
-            SELECT source.exact_army_id, sum(source.attacks) AS attacks
-            FROM ({source}) AS source (
-                population_player_id, exact_army_id, attacks, one_star, two_star,
-                three_star, destruction, trophies)
-            JOIN army_package_types AS label
-              ON label.exact_army_id = source.exact_army_id
-             AND label.type_id = %s AND label.variant_id = %s
-            GROUP BY 1
-        )
-        SELECT army.id, used.attacks, army.home_troops, army.spells, army.heroes
-        FROM used JOIN exact_armies AS army ON army.id = used.exact_army_id
+        SELECT source.exact_army_id, sum(source.attacks)
+        FROM ({source}) AS source (
+            population_player_id, exact_army_id, attacks, one_star, two_star,
+            three_star, destruction, trophies)
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = source.exact_army_id
+        WHERE (label.type_id = %s AND label.variant_id = %s) OR source.exact_army_id < 0
+        GROUP BY 1
         """,
         [*params, type_id, variant_id],
+    ).fetchall())
+    distinct: dict[tuple[int, Any], list[Any]] = {}
+    for army_id, troops, spells, heroes in connection.execute(
+        "SELECT id, home_troops, spells, heroes FROM exact_armies WHERE id = ANY(%s::bigint[])",
+        ([army_id for army_id in used if army_id > 0],),
     ).fetchall():
-        group = groups.setdefault(army_group(troops, spells, heroes), [0, 0, 0, 0])
-        group[0] += int(attacks)
+        distinct[(0, int(army_id))] = [int(used[army_id]), troops, spells, heroes]
+    for decode_id, code, *saved in connection.execute(
+        """
+        SELECT id, raw_code, home_troops, spells, heroes, unresolved_components
+        FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
+        """,
+        ([-army_id for army_id in used if army_id < 0],),
+    ).fetchall():
+        army = army_analytics.with_unnamed_ids(dict(zip(
+            ("home_troops", "spells", "heroes", "unresolved_components"), saved, strict=True
+        )))
+        partial_type = classify(army["home_troops"] or [])
+        partial_variant = variant(partial_type, army["heroes"] or [])
+        if code is None or (partial_type or OTHER, partial_variant) != (type_id, variant_id):
+            continue
+        example = distinct.setdefault(
+            (1, str(code)), [0, army["home_troops"], army["spells"], army["heroes"]]
+        )
+        example[0] += int(used[-decode_id])
+    groups: dict[tuple[tuple[str, ...], ...], list[Any]] = {}
+    for key, (attacks, troops, spells, heroes) in distinct.items():
+        group = groups.setdefault(
+            army_group(troops or [], spells or [], heroes or []), [0, 0, None, 0]
+        )
+        group[0] += attacks
         group[1] += 1
-        # The most used distinct army is the example, the lowest id on a tie.
-        if (int(attacks), -int(army_id)) > (group[3], -group[2]):
-            group[2], group[3] = int(army_id), int(attacks)
+        # The most used distinct army is the example, the first by id on a tie.
+        if group[2] is None or (-attacks, key) < (-group[3], group[2]):
+            group[2], group[3] = key, attacks
     top = sorted(groups.values(), key=lambda group: (-group[0], group[2]))[:EXAMPLE_GROUPS]
-    codes = dict(connection.execute(
+    codes = {(1, key[1]): key[1] for _attacks, _armies, key, _used in top if key[0] == 1}
+    exact_ids = [key[1] for _attacks, _armies, key, _used in top if key[0] == 0]
+    for army_id, code in connection.execute(
         """
         SELECT army.id, code.raw_code FROM exact_armies AS army
         CROSS JOIN LATERAL (
             SELECT raw_code FROM (
-                SELECT DISTINCT ON (decode.battle_id) decode.raw_code
-                FROM battle_army_decodes AS decode
-                WHERE decode.identity_hash = army.identity_hash
-                  AND decode.status = 'decoded' AND decode.is_active
-                  AND decode.decoder_version = %s
-                  AND NOT EXISTS (
-                      SELECT 1 FROM battle_army_decodes AS newer
-                      WHERE newer.battle_id = decode.battle_id
-                        AND newer.perspective = decode.perspective
-                        AND newer.decoder_version = decode.decoder_version
-                        AND newer.is_active AND newer.id > decode.id)
-                ORDER BY decode.battle_id DESC, decode.id DESC
+                SELECT battle.raw_code FROM (
+                    SELECT DISTINCT ON (decode.battle_id) decode.raw_code, decode.evidence_id
+                    FROM battle_army_decodes AS decode
+                    WHERE decode.identity_hash = army.identity_hash
+                      AND decode.status = 'decoded' AND decode.is_active
+                      AND decode.decoder_version = %s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM battle_army_decodes AS newer
+                          WHERE newer.battle_id = decode.battle_id
+                            AND newer.perspective = decode.perspective
+                            AND newer.decoder_version = decode.decoder_version
+                            AND newer.is_active AND newer.id > decode.id)
+                    ORDER BY decode.battle_id, decode.id DESC
+                ) AS battle
+                JOIN battle_evidence AS evidence ON evidence.id = battle.evidence_id
+                ORDER BY evidence.battle_timestamp DESC, evidence.id DESC
                 LIMIT %s
-            ) AS used
+            ) AS recent
             GROUP BY raw_code ORDER BY count(*) DESC, raw_code LIMIT 1
         ) AS code
         WHERE army.id = ANY(%s::bigint[])
         """,
-        (DECODER_VERSION, EXAMPLE_CODE_BATTLES, [group[2] for group in top]),
-    ).fetchall()) if top else {}
+        (DECODER_VERSION, EXAMPLE_CODE_BATTLES, exact_ids),
+    ).fetchall():
+        codes[(0, int(army_id))] = code
     return {
         "kind": "army-variant-examples",
         "type_id": type_id, "variant_id": variant_id,
         "rule": variant_rule(type_id, variant_id),
         "groups": [
             {"attacks": attacks, "armies": armies, "example_attacks": example_attacks,
-             "army_share_code": str(codes[army_id])}
-            for attacks, armies, army_id, example_attacks in top if army_id in codes
+             "army_share_code": str(codes[key])}
+            for attacks, armies, key, example_attacks in top if key in codes
         ],
     }
 

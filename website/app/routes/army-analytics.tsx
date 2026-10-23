@@ -1007,8 +1007,7 @@ export default function ArmyAnalyticsRoute() {
                                     {
                                       population,
                                       season: analytics.selection.season,
-                                      start: String(analytics.selection.startDay),
-                                      end: String(analytics.selection.endDay),
+                                      days: coveredDays.join(","),
                                       type: String(row.typeId),
                                       variant: String(variant.variantId),
                                     },

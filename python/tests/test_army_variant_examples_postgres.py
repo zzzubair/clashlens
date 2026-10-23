@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from domain_test_support import as_api_role, domain_database, store_observation, text
 from test_army_analytics_publication_postgres import (
+    DAY_NUMBER,
     DAY_START,
     _army_job,
     _event,
@@ -138,6 +139,54 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                 assert connection.execute(
                     "SELECT sum(attacks) FROM army_package_day_counts"
                 ).fetchone()[0] == len(codes)
+
+            assert result["covered_days"] == [DAY_NUMBER]
+
+            # The Copy army code comes from the newest battles by battle
+            # time: the Wall Wrecker-less code's battle was the newest, and
+            # moved to before the others it no longer is.
+            monkeypatch.setattr(army_types, "EXAMPLE_CODE_BATTLES", 1)
+            assert examples("top-10")["groups"][0]["army_share_code"] == REVENGE
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE battle_evidence SET battle_timestamp = %s
+                    WHERE id IN (SELECT evidence_id FROM battle_army_decodes
+                                 WHERE raw_code = %s)
+                    """,
+                    (DAY_START, REVENGE),
+                )
+            assert examples("top-10")["groups"][0]["army_share_code"] == REVENGE_SIEGE
+            monkeypatch.setattr(army_types, "EXAMPLE_CODE_BATTLES", 200)
+
+            # An older partly read army, saved with its Revenge Deck unnamed
+            # and no distinct army, still makes its group, copied with its
+            # own code, counted or not.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE battle_army_decodes
+                    SET status = 'partial', exact_army_id = NULL, identity_hash = NULL,
+                        heroes = jsonb_set(heroes, '{0,equipment}', '["equipment:52"]'),
+                        unresolved_components = '[{"numeric_id": 60, "quantity": 1,
+                            "section": "h", "origin": "hero:7:equipment"}]'
+                    WHERE raw_code = %s
+                    """,
+                    (REVENGE_QUAKE,),
+                )
+                connection.execute(
+                    """
+                    UPDATE army_analytics_battle_facts SET army_state = 'partial'
+                    WHERE decode_id IN (SELECT id FROM battle_army_decodes
+                                        WHERE raw_code = %s)
+                    """,
+                    (REVENGE_QUAKE,),
+                )
+                connection.execute("DELETE FROM army_type_counted_days")
+            for _counted in (False, True):
+                for population in ("top-10", "trophies-5000-9000"):
+                    assert examples(population)["groups"] == expected
+                army_types.refresh_army_types(database, now=NOON)
 
             assert result["rule"] == (
                 "Thrower armies with Revenge Deck, without Fireball or Rocket Backpack."

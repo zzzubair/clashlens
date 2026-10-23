@@ -641,6 +641,7 @@ def get_army_analytics(
                         group["army_share_code"] for group in result["groups"]
                     )
                     result["selection"] = resolved.as_dict()
+                    result["covered_days"] = covered_days
                     database._army_cache_put(cache_key, result)
                     return deepcopy(result)
                 result, source_hash = army_types.type_result(

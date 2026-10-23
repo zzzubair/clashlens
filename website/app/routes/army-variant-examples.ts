@@ -8,21 +8,24 @@ export type VariantExamplesResponse = { examples: ArmyVariantExamples | null };
 const NO_STORE = { "Cache-Control": "no-store" };
 
 /**
- * GET /resources/analytics/armies/examples?population=&season=&start=&end=&type=&variant=
+ * GET /resources/analytics/armies/examples?population=&season=&days=&type=&variant=
  * — what a variant row on the Armies page loads when it opens: that variant's
- * most-used armies over the same current-Season Legend days as the page.
+ * most-used armies over the same current-Season Legend days as the page,
+ * listed in ``days`` (for example 1,3).
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const query = new URL(request.url).searchParams;
   const population = query.get("population") ?? "";
   const season = query.get("season") ?? "";
-  const [startDay, endDay, typeId, variantId] = ["start", "end", "type", "variant"].map(
-    (key) => Number(query.get(key) ?? ""),
+  const days = query.get("days") ?? "";
+  const [typeId, variantId] = ["type", "variant"].map((key) =>
+    Number(query.get(key) ?? ""),
   );
   if (
     !/^top-\d+$/.test(population) ||
     !/^\d+$/.test(season) ||
-    ![startDay, endDay, typeId, variantId].every(Number.isInteger)
+    !/^\d+(,\d+)*$/.test(days) ||
+    ![typeId, variantId].every(Number.isInteger)
   )
     return data<VariantExamplesResponse>(
       { examples: null },
@@ -32,7 +35,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Returned, not thrown: the row says its armies could not load, never the page.
   const examples = await getArmyVariantExamples(
     population,
-    { season, startDay, endDay },
+    { season, days: days.split(",").map(Number) },
     typeId,
     variantId,
   ).catch(() => null);

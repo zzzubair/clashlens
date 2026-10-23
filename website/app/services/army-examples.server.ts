@@ -8,14 +8,14 @@ import { isInteger, isRecord, isString, PythonApiError } from "./python-response
  * no longer resolve the same. */
 export async function getArmyVariantExamples(
   population: string,
-  days: { season: string; startDay: number; endDay: number },
+  page: { season: string; days: number[] },
   typeId: number,
   variantId: number,
 ): Promise<ArmyVariantExamples> {
   const query = new URLSearchParams({
     season: "current",
-    start_day: String(days.startDay),
-    end_day: String(days.endDay),
+    start_day: String(page.days[0]),
+    end_day: String(page.days[page.days.length - 1]),
     population,
     category: "army-types",
     type_id: String(typeId),
@@ -27,12 +27,12 @@ export async function getArmyVariantExamples(
     undefined,
     "army-variant-examples",
   );
-  const { groups, selection } = payload;
+  const { groups, selection, covered_days: covered } = payload;
   if (
     !isRecord(selection) ||
-    selection.season !== days.season ||
-    selection.start_day !== days.startDay ||
-    selection.end_day !== days.endDay ||
+    selection.season !== page.season ||
+    !Array.isArray(covered) ||
+    covered.join(",") !== page.days.join(",") ||
     !isString(payload.rule) ||
     !Array.isArray(groups) ||
     !groups.every(
