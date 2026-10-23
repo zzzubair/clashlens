@@ -247,6 +247,7 @@ describe("historical player-season client boundary", () => {
       const payload = {
         tag: "#2PP",
         name: "Nova",
+        clan_tag: "#2CLAN",
         trophies,
         season_reset_pending: pending,
         current_league_season_id: seasonId,
@@ -277,6 +278,7 @@ describe("historical player-season client boundary", () => {
       const { createPythonClient } = await import("../../app/services/python.server");
       const player = await createPythonClient().getPlayer("#2PP");
       expect(player.profile.seasonResetPending).toBe(pending);
+      expect(player.profile.clanTag).toBe("#2CLAN");
       expect(player.currentDay?.startTrophies).toBe(expected);
       expect(player.seasonDays[0].startTrophies).toBe(expected);
       expect(player.recentDays[0].startTrophies).toBe(expected);

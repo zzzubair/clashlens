@@ -577,7 +577,7 @@ describe("automatic tag lookup", () => {
     const html = await renderRoute(
       await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
     );
-    expect(html).toMatch(/<h1><bdi>Sloothy<\/bdi><\/h1>/);
+    expect(html).toMatch(/<h1><a [^>]*><bdi>Sloothy<\/bdi>/);
     expect(html).toContain(note);
     expect(html).not.toMatch(/Season summary|This Season|Current trophies|refresh-form/);
     expect(html).toContain(`<option value="${SEASON}"`);

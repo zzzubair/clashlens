@@ -1060,8 +1060,10 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
                     "SELECT name, trophies, profile_json FROM player_profile_versions ORDER BY id"
                 ).fetchall()
             assert profiles == [
-                (changed["name"], changed["trophies"], {"clan": {"name": "Synthetic Clan"}}),
-                (changed["name"], changed["trophies"], {"clan": {"name": "Changed Clan"}}),
+                (changed["name"], changed["trophies"],
+                 {"clan": {"name": "Synthetic Clan", "tag": "#2CLAN"}}),
+                (changed["name"], changed["trophies"],
+                 {"clan": {"name": "Changed Clan", "tag": "#2CLAN"}}),
             ]
         finally:
             database.close()

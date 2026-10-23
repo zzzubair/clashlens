@@ -52,6 +52,8 @@ async function lookupRequest(tag: string, method: "GET" | "POST"): Promise<Playe
       payload.profile === undefined ||
       (typeof payload.profile?.name === "string" &&
         (payload.profile.clan === null || typeof payload.profile.clan === "string") &&
+        (payload.profile.clan_tag == null ||
+          typeof payload.profile.clan_tag === "string") &&
         Number.isInteger(payload.profile.trophies) &&
         ["undefined", "string"].includes(typeof payload.profile.league))
     )

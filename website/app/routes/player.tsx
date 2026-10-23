@@ -20,6 +20,7 @@ import { FoldedBattles } from "../components/FoldedBattles";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
+import { PlayerHeading } from "../components/PlayerHeading";
 import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
@@ -34,6 +35,7 @@ import {
 } from "../components/Provenance";
 import type { ArmyUnitNames } from "../lib/army";
 import { pageMeta } from "../lib/blog";
+import { copyArmyLink } from "../lib/game-links";
 import { seasonDates } from "../lib/season-end";
 import {
   dayEnd,
@@ -563,17 +565,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {lookup?.profile ? (
           <header className="player-header">
             <div className="player-profile">
-              <h1>
-                <bdi>{lookup.profile.name}</bdi>
-              </h1>
-              <p className="player-identity">
-                <span className="player-tag prominent">{lookup.tag}</span>
-                {lookup.profile.clan ? (
-                  <span className="player-clan">
-                    <bdi>{lookup.profile.clan}</bdi>
-                  </span>
-                ) : null}
-              </p>
+              <PlayerHeading
+                name={lookup.profile.name}
+                tag={lookup.tag}
+                clan={lookup.profile.clan}
+                clanTag={lookup.profile.clan_tag}
+              />
               <PlayerCrews crews={data.crews} name={lookup.profile.name} />
             </div>
             <div className="player-summary">
@@ -658,17 +655,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     <main id="main-content" tabIndex={-1} className="page-shell player-page">
       <header className="player-header">
         <div className="player-profile">
-          <h1>
-            <bdi>{trackedPlayer.profile.name}</bdi>
-          </h1>
-          <p className="player-identity">
-            <span className="player-tag prominent">{trackedPlayer.tag}</span>
-            {trackedPlayer.profile.clan ? (
-              <span className="player-clan">
-                <bdi>{trackedPlayer.profile.clan}</bdi>
-              </span>
-            ) : null}
-          </p>
+          <PlayerHeading
+            name={trackedPlayer.profile.name}
+            tag={trackedPlayer.tag}
+            clan={trackedPlayer.profile.clan}
+            clanTag={trackedPlayer.profile.clanTag}
+          />
           <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
         </div>
         <div className="player-summary">
@@ -1405,7 +1397,7 @@ function BattleColumn({
                   </button>
                   <a
                     className="battle-army"
-                    href={`https://link.clashofclans.com/en?action=CopyArmy&army=${encodeURIComponent(event.armyShareCode)}`}
+                    href={copyArmyLink(event.armyShareCode)}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`Copy army from the battle against ${event.opponent.name ?? event.opponent.tag}, opens in a new tab`}

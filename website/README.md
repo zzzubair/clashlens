@@ -74,6 +74,8 @@ no Trophy trend section; for the unused
 [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 6 in the
 [dashboard design](../docs/dashboard.md). The player page explains
 itself with titles, labels and short counts rather than help paragraphs.
+The player's name and clan name in its heading open that player's or clan's
+profile in Clash of Clans; a clan name with no saved clan tag is plain text.
 
 The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
 trophy change, end of day and Reset rank. A finished day's end of day is the
