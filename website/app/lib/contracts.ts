@@ -134,6 +134,8 @@ export interface PlayerProfile {
   tag: string;
   name: string;
   clan: string;
+  /** Null when the saved profile names no clan. */
+  clanTag?: string | null;
   trophies: number;
   /** The profile still names an earlier Season, so `trophies` predates this player's Season reset. */
   seasonResetPending?: boolean;
@@ -301,7 +303,13 @@ export interface PlayerLookup {
     | "profile_rejected";
   // The newest profile: a tracked player's only on this page because its
   // Season is 0; for a player outside Legend I, with its league when known.
-  profile?: { name: string; clan: string | null; trophies: number; league?: string };
+  profile?: {
+    name: string;
+    clan: string | null;
+    clan_tag?: string | null;
+    trophies: number;
+    league?: string;
+  };
 }
 
 export interface PlayerPage {

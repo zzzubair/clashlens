@@ -376,8 +376,10 @@ indexes), where the lists held the same inputs packed in about 3 MB.
 - Shared battle identity stays Legend day/attacker/defender. Timestamps remain
   details, not a new unverified cross-perspective identity rule.
 - Profile versions keep the implemented semantic fields (name, trophies, league,
-  season, eligibility and clan name), rather than copying the full API body into
-  both parsed payloads and profile versions. Full raw profiles remain in the
+  season, eligibility and clan name), plus the clan tag for the player page's
+  in-game clan link (not a semantic field, so it never makes a new version),
+  rather than copying the full API body into both parsed payloads and profile
+  versions. Full raw profiles remain in the
   archive until expiry. Unused upstream profile fields are not permanent history.
 - Daily standings, published analytics, reset anchors and reconciliation evidence
   are not bulk-deleted. Old representations remain readable; migration does not

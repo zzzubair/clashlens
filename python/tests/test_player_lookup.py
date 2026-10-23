@@ -42,15 +42,15 @@ def test_confirmed_player_lookup_needs_no_collection_history(
     if active:
         # Its newest profile is the accepted current one.
         rows.append(
-            ("1783918800", "confirmed_legend_i", "eligible", "accepted", "Clasher", None, 6000, False, "Legend I")
+            ("1783918800", "confirmed_legend_i", "eligible", "accepted", "Clasher", None, 6000, False, "Legend I", None)
         )
     else:
         # Off the board, its newest profile still names it, and its league
         # when that profile is itself outside Legend I.
         rows.append(
-            ("1791176400", "confirmed_non_legend_i", eligibility, "accepted", "Clasher", None, 152, False, "Electro League 32")
+            ("1791176400", "confirmed_non_legend_i", eligibility, "accepted", "Clasher", None, 152, False, "Electro League 32", None)
         )
-        expected["profile"] = {"name": "Clasher", "clan": None, "trophies": 152}
+        expected["profile"] = {"name": "Clasher", "clan": None, "clan_tag": None, "trophies": 152}
         if state == "not_in_legend":
             expected["profile"]["league"] = "Electro League 32"
     database = lookup_database(*rows)

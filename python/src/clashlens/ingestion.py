@@ -69,6 +69,10 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
 
 def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -> None:
     projection = _profile_semantic_projection(profile)
+    # The clan tag links the clan in the game. It stays out of the projection,
+    # so it alone never makes a new profile version.
+    clan = profile.profile_json.get("clan")
+    clan_tag = clan.get("tag") if isinstance(clan, dict) else None
     if not getattr(database, "_supports_content_dedup", False):
         return _complete_profile_legacy(database, claim, profile)
     (
@@ -160,7 +164,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                         profile.previous_league_season_id,
                         profile.eligibility_reason, profile.source_contract_state,
                         profile.season_anchor_state,
-                        Jsonb({"clan": {"name": projection["clan_name"]}}),
+                        Jsonb({"clan": {"name": projection["clan_name"], "tag": clan_tag}}),
                         parsed_payload_id, Jsonb(projection),
                     ),
                 ).fetchone()

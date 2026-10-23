@@ -48,7 +48,7 @@ function onClick(event: MouseEvent, shown: Selection | null) {
   const link = target?.closest("a");
   const href = link?.getAttribute("href");
   if (!link || !href) return;
-  if (href.startsWith("https://link.clashofclans.com/")) {
+  if (href.startsWith("https://link.clashofclans.com/en?action=CopyArmy&")) {
     track("copy_army_clicked");
     return;
   }

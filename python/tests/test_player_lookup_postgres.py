@@ -770,12 +770,16 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
                 "state": "tracking",
                 "reason": "season_unconfirmed",
                 "profile": {
-                    "name": "Synthetic Legend I", "clan": "Synthetic Clan", "trophies": 5000,
+                    "name": "Synthetic Legend I", "clan": "Synthetic Clan",
+                    "clan_tag": "#2CLAN", "trophies": 5000,
                 },
             }
-            assert api_players.get_player_page(
+            page = api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
-            )["trophies"] == 5040
+            )
+            assert (page["trophies"], page["clan"], page["clan_tag"]) == (
+                5040, "Synthetic Clan", "#2CLAN"
+            )
         finally:
             worker.close()
             database.close()

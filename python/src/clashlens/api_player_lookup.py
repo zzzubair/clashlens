@@ -43,10 +43,15 @@ def _lookup(
             )
             # Off the board, the newest saved profile still names the player,
             # and its league when that profile is itself outside Legend I.
-            _, _, newest, _, name, clan, trophies, _, league = _newest_profile(
-                connection, player_id
+            _, _, newest, _, name, clan, trophies, _, league, clan_tag = (
+                _newest_profile(connection, player_id)
             )
-            profile = {"name": _text(name), "clan": _text(clan), "trophies": trophies}
+            profile = {
+                "name": _text(name),
+                "clan": _text(clan),
+                "clan_tag": _text(clan_tag),
+                "trophies": trophies,
+            }
             if _text(newest) == "ineligible" and league is not None:
                 profile["league"] = _text(league)
             return {"tag": tag, "state": state, "profile": profile}
@@ -121,12 +126,13 @@ def _newest_profile(
                              WHERE newer.player_id = day.player_id
                                AND newer.ranked_day_start = day.ranked_day_start
                                AND newer.version > day.version)),
-               profile.league_tier_name
+               profile.league_tier_name, profile.clan_tag
         FROM (
             SELECT profile.player_id, profile.current_league_season_id,
                    profile.eligibility_reason, profile.eligibility_state,
                    profile.source_contract_state, profile.name,
                    profile.profile_json->'clan'->>'name' AS clan_name,
+                   profile.profile_json->'clan'->>'tag' AS clan_tag,
                    profile.trophies, profile.league_tier_name
             FROM player_profile_versions AS profile
             CROSS JOIN LATERAL (
@@ -157,7 +163,7 @@ def _why_no_results(
     row = _newest_profile(connection, player_id, now)
     if row is None:
         return {"reason": "pending"}
-    season, reason, eligibility, contract, name, clan, trophies, battles, _league = row
+    season, reason, eligibility, contract, name, clan, trophies, battles, _, clan_tag = row
     if (
         _text(season) == "0"
         and _text(reason) == "confirmed_legend_i"
@@ -172,7 +178,12 @@ def _why_no_results(
             # Every such player checked on 2026-10-03 had no Legend battle
             # this Season, so a recorded battle means something else is wrong.
             "reason": "season_unconfirmed" if battles else "no_legend_battles",
-            "profile": {"name": _text(name), "clan": _text(clan), "trophies": trophies},
+            "profile": {
+                "name": _text(name),
+                "clan": _text(clan),
+                "clan_tag": _text(clan_tag),
+                "trophies": trophies,
+            },
         }
     if _text(eligibility) == "uncertain":
         return {"reason": "unknown_tier"}

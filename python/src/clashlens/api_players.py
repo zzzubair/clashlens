@@ -167,7 +167,8 @@ def get_player_page(
                       AND checked.identity_key = player.normalized_tag
                       AND checked.endpoint = 'profile'
                       AND (checked.last_success_at IS NULL
-                           OR checked.last_not_found_at > checked.last_success_at))
+                           OR checked.last_not_found_at > checked.last_success_at)),
+                   profile.profile_json -> 'clan' ->> 'tag'
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
@@ -417,6 +418,7 @@ def get_player_page(
             "schema_version": _text(row[8]),
             "parser_version": _text(row[9]),
             "clan": None if row[10] is None else _text(row[10]),
+            "clan_tag": None if row[17] is None else _text(row[17]),
             # A missing player's saved profile is not current; saved days
             # keep their own confidence.
             "public_confidence": "uncertain" if not_found_at else public_confidence,

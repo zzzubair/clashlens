@@ -47,6 +47,34 @@
   content: "Clan ";
   color: var(--cl-muted);
 }
+/* The name and clan open the game; they keep the header's text style. */
+.player-page .game-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-height: 2.75rem;
+  color: inherit;
+  font-weight: inherit;
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .game-link:hover {
+    color: var(--cl-accent-contrast);
+  }
+}
+.player-page .game-link svg {
+  flex: 0 0 auto;
+  width: 0.7em;
+  height: 0.7em;
+  fill: none;
+  stroke: var(--cl-muted);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.player-page .player-clan .game-link svg {
+  width: 0.9em;
+  height: 0.9em;
+}
 .player-page .player-crews {
   margin: 0.35rem 0 0;
   color: var(--cl-muted);
