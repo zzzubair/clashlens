@@ -483,7 +483,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
 }
 
 // A unit with a malformed entry is left out; its portrait shows its id.
-function mapArmyUnits(value: unknown): ArmyUnitNames {
+export function mapArmyUnits(value: unknown): ArmyUnitNames {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
     Object.entries(value).flatMap(([id, unit]) =>

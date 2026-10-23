@@ -25,6 +25,7 @@ from .api_db import (
     _season_reset_waiting_sql,
     _text,
 )
+from .api_players import army_units
 from .army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
@@ -213,8 +214,15 @@ def consistent_top_members(
 
 
 def get_army_analytics(
-    database, selection: ArmyAnalyticsSelection, *, now: datetime | None = None
+    database,
+    selection: ArmyAnalyticsSelection,
+    *,
+    now: datetime | None = None,
+    examples: tuple[int, int] | None = None,
 ) -> dict[str, Any] | None:
+    """The Armies page result for ``selection``, or with ``examples`` (a type
+    and variant id, army types only) that variant's example armies for the
+    same players and Legend days."""
     deadline = monotonic() + database._army_request_timeout_seconds
     # A bounded pre-checkout gate leaves one paired pool slot per admitted
     # troop request. Other categories never need the second connection.
@@ -554,6 +562,7 @@ def get_army_analytics(
                 tuple(boards.get(day) for day in covered_days),
                 streak_version_digest,
                 tuple(streak_gap_days),
+                examples,
             )
             cached = database._army_cache_get(cache_key)
             if cached is not None:
@@ -608,14 +617,11 @@ def get_army_analytics(
             elif resolved.category == army_types.CATEGORY:
                 if not army_types.rules_ready(connection):
                     raise ArmyTypesPreparing(covered_days)
-                result, source_hash = army_types.type_result(
-                    connection,
-                    resolved,
-                    days={day: day_starts[day] for day in covered_days},
-                    day_markers=dict(completed_day_signature),
-                    member_ids=member_ids,
-                    trophy_range=None if minimum is None else (minimum, maximum),
-                    boards=(
+                selected = {
+                    "days": {day: day_starts[day] for day in covered_days},
+                    "member_ids": member_ids,
+                    "trophy_range": None if minimum is None else (minimum, maximum),
+                    "boards": (
                         {
                             day_starts[day]: snapshot_id
                             for day, snapshot_id in zip(covered_days, snapshot_ids)
@@ -625,6 +631,23 @@ def get_army_analytics(
                     )
                     if banded
                     else None,
+                }
+                if examples is not None:
+                    result = army_types.variant_examples(
+                        connection, type_id=examples[0], variant_id=examples[1],
+                        season_id=resolved.season, **selected,
+                    )
+                    result["army_units"] = army_units(
+                        group["army_share_code"] for group in result["groups"]
+                    )
+                    result["selection"] = resolved.as_dict()
+                    database._army_cache_put(cache_key, result)
+                    return deepcopy(result)
+                result, source_hash = army_types.type_result(
+                    connection,
+                    resolved,
+                    day_markers=dict(completed_day_signature),
+                    **selected,
                 )
             elif resolved.category == "troops":
                 result, source_hash = _query_troops_aggregates(

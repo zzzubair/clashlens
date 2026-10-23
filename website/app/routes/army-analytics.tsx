@@ -15,6 +15,7 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import { seasonStartAt } from "../components/SeasonReread";
+import { VariantExamples } from "../components/VariantExamples";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
 import { publicPageMeta } from "../lib/blog";
 import { seasonDates } from "../lib/season-end";
@@ -430,7 +431,8 @@ function namedVariantCount(row: ArmyRow) {
 }
 
 // A type with variants opens on a tap anywhere on its row; its variant rows
-// follow it, each with its share of the type.
+// follow it, each with its share of the type, and open on a tap to their
+// most-used armies.
 const ArmyResultRow = memo(function ArmyResultRow({
   row,
   isHistorical,
@@ -448,29 +450,36 @@ const ArmyResultRow = memo(function ArmyResultRow({
 }) {
   const named = namedVariantCount(row);
   const variants = named ? row.variants : null;
+  const opens = variants !== null || (typeLabel !== undefined && onToggle !== undefined);
   return (
     <tr
       role="row"
       className={
         variants ? "analytics-type-row" : typeLabel ? "analytics-variant-row" : undefined
       }
-      data-open={variants ? open : undefined}
-      onClick={variants ? () => onToggle?.(row.key) : undefined}
+      data-open={opens ? open : undefined}
+      onClick={opens ? () => onToggle?.(row.key) : undefined}
     >
       <th scope="row" role="rowheader">
-        {variants ? (
+        {opens ? (
           <button
             type="button"
             className="analytics-type-toggle"
             aria-expanded={open}
-            title={`${open ? "Hide" : "Show"} ${row.label} variants`}
+            title={`${open ? "Hide" : "Show"} ${row.label} ${variants ? "variants" : "armies"}`}
           >
             <span className="analytics-type-chevron" aria-hidden="true" />
             <span>
               {row.label}
               <small>
-                {named} {named === 1 ? "variant" : "variants"}
-                {variants.length > named ? " + Other" : null}
+                {variants ? (
+                  <>
+                    {named} {named === 1 ? "variant" : "variants"}
+                    {variants.length > named ? " + Other" : null}
+                  </>
+                ) : (
+                  "Top armies"
+                )}
               </small>
             </span>
           </button>
@@ -607,6 +616,16 @@ export default function ArmyAnalyticsRoute() {
   const toggleType = useCallback(
     (key: string) =>
       setOpenTypes((open) => {
+        const next = new Set(open);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      }),
+    [],
+  );
+  const [openVariants, setOpenVariants] = useState<ReadonlySet<string>>(new Set());
+  const toggleVariant = useCallback(
+    (key: string) =>
+      setOpenVariants((open) => {
         const next = new Set(open);
         if (!next.delete(key)) next.add(key);
         return next;
@@ -916,7 +935,8 @@ export default function ArmyAnalyticsRoute() {
           {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
             <p className="section-note analytics-coverage-note">
               Tap an army to open its variants: the same army split by its heroes’
-              equipment, each with its share of that army.
+              equipment, each with its share of that army. Tap a variant for its most-used
+              armies.
             </p>
           ) : null}
           <div
@@ -966,15 +986,35 @@ export default function ArmyAnalyticsRoute() {
                         .sort(
                           (a, b) => Number(a.variantId === 0) - Number(b.variantId === 0),
                         )
-                        .map((variant) => (
+                        .flatMap((variant) => [
                           <ArmyResultRow
                             key={variant.key}
                             row={variant}
                             isHistorical={isHistorical}
                             trophies={armyTypes}
                             typeLabel={row.label}
-                          />
-                        ))
+                            open={openVariants.has(variant.key)}
+                            onToggle={toggleVariant}
+                          />,
+                          ...(openVariants.has(variant.key)
+                            ? [
+                                <VariantExamples
+                                  key={`${variant.key}:examples`}
+                                  id={variant.key}
+                                  label={variant.label}
+                                  attacks={variant.usageCount}
+                                  url={`/resources/analytics/armies/examples?${new URLSearchParams(
+                                    {
+                                      population,
+                                      type: String(row.typeId),
+                                      variant: String(variant.variantId),
+                                    },
+                                  )}`}
+                                  columns={columns.length}
+                                />,
+                              ]
+                            : []),
+                        ])
                     : []),
                 ])}
               </tbody>

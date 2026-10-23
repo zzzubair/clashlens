@@ -456,13 +456,13 @@
   gap: 0.3rem;
   padding-bottom: 0.6rem;
 }
-.player-page :is(.army-row, .army-castle, .army-hero) {
+:is(.player-page, .analytics-page) :is(.army-row, .army-castle, .army-hero) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.2rem;
 }
-.player-page .army-unit {
+:is(.player-page, .analytics-page) .army-unit {
   position: relative;
   display: inline-grid;
   place-items: center;
@@ -471,16 +471,16 @@
   background: var(--cl-panel);
   border-radius: 0.3rem;
 }
-.player-page .army-unit img {
+:is(.player-page, .analytics-page) .army-unit img {
   width: 100%;
   height: 100%;
   border-radius: inherit;
 }
-.player-page .army-unit-small {
+:is(.player-page, .analytics-page) .army-unit-small {
   width: 1.5rem;
   height: 1.5rem;
 }
-.player-page .army-unit-name {
+:is(.player-page, .analytics-page) .army-unit-name {
   width: auto;
   max-width: 6rem;
   padding: 0 0.3rem;
@@ -488,13 +488,13 @@
   font-size: 0.625rem;
   line-height: 1.1;
 }
-.player-page .army-unit-name > span {
+:is(.player-page, .analytics-page) .army-unit-name > span {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.player-page .army-count {
+:is(.player-page, .analytics-page) .army-count {
   position: absolute;
   right: 0;
   bottom: 0;
@@ -508,16 +508,16 @@
   line-height: 0.9rem;
   text-align: center;
 }
-.player-page .army-castle {
+:is(.player-page, .analytics-page) .army-castle {
   padding-left: 0.35rem;
   border-left: 1px solid var(--cl-border);
 }
-.player-page .army-castle-label {
+:is(.player-page, .analytics-page) .army-castle-label {
   color: var(--cl-muted);
   font-size: 0.625rem;
   font-weight: 700;
 }
-.player-page .army-hero {
+:is(.player-page, .analytics-page) .army-hero {
   gap: 0.1rem;
   padding: 0.1rem 0.25rem 0.1rem 0.1rem;
   background: color-mix(in srgb, var(--cl-panel) 60%, transparent);
@@ -802,8 +802,9 @@
   font-size: 0.75rem;
   white-space: nowrap;
 }
-/* Armies: a type row with variants opens on a tap anywhere on it. */
-.analytics-page .analytics-type-row {
+/* Armies: a type row with variants, and a variant row, open on a tap
+   anywhere on them. */
+.analytics-page :is(.analytics-type-row, .analytics-variant-row[data-open]) {
   cursor: pointer;
 }
 .analytics-page .analytics-type-toggle {
@@ -844,10 +845,14 @@
   transform: rotate(-45deg);
   transition: transform 160ms var(--cl-ease-out);
 }
-.analytics-page .analytics-type-row[data-open="true"] .analytics-type-chevron {
+.analytics-page
+  :is(.analytics-type-row, .analytics-variant-row)[data-open="true"]
+  .analytics-type-chevron {
   transform: rotate(45deg);
 }
-.analytics-page .analytics-type-row[data-open="true"] :is(th, td) {
+.analytics-page
+  :is(.analytics-type-row, .analytics-variant-row)[data-open="true"]
+  :is(th, td) {
   border-bottom-color: transparent;
 }
 .analytics-page .analytics-table .analytics-variant-row :is(th, td) {
@@ -857,6 +862,50 @@
   padding-left: 2.9rem;
   font-weight: 600;
   box-shadow: inset 3px 0 0 var(--cl-action);
+}
+/* An open variant's most-used armies, under its row. It stays in view while
+   the table scrolls sideways. */
+.analytics-page .analytics-table .analytics-examples-row td {
+  padding: 0.25rem 0.85rem 0.85rem;
+  text-align: left;
+  background: var(--cl-panel);
+  box-shadow: inset 3px 0 0 var(--cl-action);
+}
+.analytics-page .analytics-examples {
+  position: sticky;
+  left: 0.85rem;
+  display: grid;
+  gap: 0.6rem;
+  max-width: min(60rem, 100cqi - 2rem);
+  white-space: normal;
+}
+.analytics-page .analytics-examples p {
+  margin: 0;
+}
+.analytics-page .analytics-examples-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.analytics-page .analytics-examples-list > li {
+  display: grid;
+  /* Copy army sits at the foot of each card, level across a row of cards. */
+  grid-template-rows: auto 1fr auto;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+}
+.analytics-page .analytics-examples .army-portraits {
+  display: grid;
+  gap: 0.3rem;
+}
+.analytics-page .analytics-examples .battle-army {
+  margin: 0;
 }
 .analytics-page .analytics-share-bar {
   display: block;
@@ -969,6 +1018,7 @@
       1px 0 0 var(--cl-border);
   }
   .analytics-page .analytics-table-wrap {
+    container-type: inline-size;
     max-height: 70svh;
     scroll-padding: 3rem 0 0 12rem;
   }
@@ -1104,6 +1154,9 @@
   .analytics-page .analytics-results-table td[colspan] {
     flex: 1 0 auto;
     max-width: calc(100vw - 2rem - 2px);
+  }
+  .analytics-page .analytics-results-table .analytics-examples-row td {
+    max-width: none;
   }
   /* Variant names break between words, in the narrow pinned column. */
   .analytics-page .analytics-results-table .analytics-variant-row th {

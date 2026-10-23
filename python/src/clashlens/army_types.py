@@ -35,7 +35,7 @@ from typing import Any
 
 from . import army_analytics
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
+from .catalog import CATALOG_VERSION, unit_label
 from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
@@ -283,6 +283,68 @@ def variant(type_id: int, heroes: Iterable[Any]) -> int:
         if all(item in carried for item in items):
             return variant_id
     return OTHER_VARIANT
+
+
+def variant_rule(type_id: int, variant_id: int) -> str:
+    """One line saying what puts an army of ``type_id`` in this variant, from
+    ``VARIANTS``: the equipment it carries, and the equipment that would have
+    named it an earlier variant first. A type's Other carries none of them."""
+    listed = VARIANTS[type_id]
+    position = next(
+        (index for index, (listed_id, *_rest) in enumerate(listed) if listed_id == variant_id),
+        len(listed),
+    )
+    carries = listed[position][2] if position < len(listed) else ()
+    lacks: list[tuple[tuple[str, str], ...]] = []
+    for _id, _name, items in listed[:position]:
+        missing = tuple(item for item in items if item not in carries)
+        if missing not in lacks:
+            lacks.append(missing)
+    # Lacking Revenge already rules out Revenge with Backpack.
+    alone = {missing[0] for missing in lacks if len(missing) == 1}
+    without = [
+        " and ".join(unit_label(equipment) for _hero, equipment in missing)
+        for missing in lacks if len(missing) == 1 or not alone & set(missing)
+    ]
+    text = f"{TYPE_NAMES[type_id]} armies"
+    if carries:
+        text += " with " + " and ".join(unit_label(equipment) for _hero, equipment in carries)
+    if without:
+        listed_without = ", ".join(without[:-1]) + " or " if len(without) > 1 else ""
+        text += (", without " if carries else " without ") + listed_without + without[-1]
+    return text + ". Only hero equipment decides it; spells don't count."
+
+
+# Variant examples group a variant's distinct armies by what is in them: the
+# same troops, the same spells (not how many) and the same heroes with the
+# same equipment. A troop under FILLER_SHARE percent of the army's camp space
+# is a filler and is left out, so 4 or 5 Archers make no difference. Pets,
+# siege machines and Clan Castle troops are left out too (saved armies never
+# hold the last two); Clan Castle spells count with the army's spells.
+FILLER_SHARE = 5
+EXAMPLE_GROUPS = 3
+# An example's Copy army code is the one its saved battles used most, out of
+# at most this many of them.
+EXAMPLE_CODE_BATTLES = 200
+
+
+def army_group(
+    home_troops: Iterable[Any], spells: Iterable[Any], heroes: Iterable[Any]
+) -> tuple[tuple[str, ...], ...]:
+    """The group a saved distinct army falls in, for variant examples."""
+    troops = [(str(troop), int(count)) for troop, count in home_troops]
+    total = sum(CAMP_SPACE.get(troop, 0) * count for troop, count in troops)
+    return (
+        tuple(sorted(
+            troop for troop, count in troops
+            if CAMP_SPACE.get(troop, 0) * count * 100 >= FILLER_SHARE * total
+        )),
+        tuple(sorted(str(spell) for spell, _count in spells)),
+        tuple(sorted(
+            ":".join((str(hero.get("hero")), *sorted(map(str, hero.get("equipment") or ()))))
+            for hero in heroes if isinstance(hero, dict)
+        )),
+    )
 
 
 def label_new_army(
@@ -553,6 +615,67 @@ def read_type_rows(
     variant id, attacks, one-star, two-star, three-star, destruction, trophies
     won), by type and variant id.
     """
+    source, params = _selected_counts(
+        connection, season_id=season_id, days=days, member_ids=member_ids,
+        trophy_range=trophy_range, boards=boards,
+    )
+    rows = connection.execute(
+        f"""
+        SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
+                    ELSE label.type_id END,
+               COALESCE(label.variant_id, {OTHER_VARIANT}),
+               CASE WHEN source.exact_army_id < 0 THEN -source.exact_army_id END,
+               sum(attacks), sum(one_star), sum(two_star), sum(three_star),
+               sum(destruction), sum(trophies)
+        FROM ({source}) AS source (
+            population_player_id, exact_army_id, attacks, one_star, two_star,
+            three_star, destruction, trophies)
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = source.exact_army_id
+        GROUP BY 1, 2, 3
+        """,
+        params,
+    ).fetchall()
+    # An older partly read army has no distinct army: its saved decode is
+    # read once, after the totals, so the totals never join the decodes.
+    partial_ids = [row[2] for row in rows if row[2] is not None]
+    partial = {
+        decode_id: army_analytics.with_unnamed_ids({
+            "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
+        })
+        for decode_id, troops, unnamed, heroes in connection.execute(
+            """
+            SELECT id, home_troops, unresolved_components, heroes
+            FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
+            """,
+            (partial_ids,),
+        ).fetchall()
+    } if partial_ids else {}
+    totals: dict[tuple[int, int], list[int]] = {}
+    for type_id, variant_id, decode_id, *counts in rows:
+        if decode_id in partial:
+            army = partial[decode_id]
+            type_id = classify(army["home_troops"])
+            variant_id = variant(type_id, army["heroes"] or [])
+        total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
+        for index, value in enumerate(counts):
+            total[index] += int(value)
+    return [(*key, *total) for key, total in sorted(totals.items())]
+
+
+def _selected_counts(
+    connection: Any,
+    *,
+    season_id: str,
+    days: dict[int, Any],
+    member_ids: list[int] | None,
+    trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None,
+) -> tuple[str, list[Any]]:
+    """The selected attacks as rows of (player, distinct army, attacks,
+    one-star, two-star, three-star, destruction, trophies won), and their
+    parameters: saved counts for counted days, the attacks themselves
+    otherwise, as ``read_type_rows`` describes."""
     counted = {
         row[0]
         for row in connection.execute(
@@ -606,48 +729,84 @@ def read_type_rows(
             """
         )
         params += [season_id, fact_days, *filters, *_trophies("offense")]
-    rows = connection.execute(
+    return " UNION ALL ".join(parts), params
+
+
+def variant_examples(
+    connection: Any,
+    *,
+    type_id: int,
+    variant_id: int,
+    season_id: str,
+    days: dict[int, Any],
+    member_ids: list[int] | None,
+    trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None = None,
+) -> dict[str, Any]:
+    """One variant's ``EXAMPLE_GROUPS`` most used groups of armies
+    (``army_group``) in the selected attacks, most used first, and the line
+    saying what decides the variant.
+
+    Each group has its attacks, how many distinct armies it holds, and its
+    example: its most used distinct army, with that army's attacks and the
+    Copy army code its saved battles used most. Older partly read armies have
+    no distinct army and are in no group.
+    """
+    source, params = _selected_counts(
+        connection, season_id=season_id, days=days, member_ids=member_ids,
+        trophy_range=trophy_range, boards=boards,
+    )
+    groups: dict[tuple[tuple[str, ...], ...], list[int]] = {}
+    for army_id, attacks, troops, spells, heroes in connection.execute(
         f"""
-        SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
-                    ELSE label.type_id END,
-               COALESCE(label.variant_id, {OTHER_VARIANT}),
-               CASE WHEN source.exact_army_id < 0 THEN -source.exact_army_id END,
-               sum(attacks), sum(one_star), sum(two_star), sum(three_star),
-               sum(destruction), sum(trophies)
-        FROM ({" UNION ALL ".join(parts)}) AS source (
-            population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction, trophies)
-        LEFT JOIN army_package_types AS label
-          ON label.exact_army_id = source.exact_army_id
-        GROUP BY 1, 2, 3
+        WITH used AS MATERIALIZED (
+            SELECT source.exact_army_id, sum(source.attacks) AS attacks
+            FROM ({source}) AS source (
+                population_player_id, exact_army_id, attacks, one_star, two_star,
+                three_star, destruction, trophies)
+            JOIN army_package_types AS label
+              ON label.exact_army_id = source.exact_army_id
+             AND label.type_id = %s AND label.variant_id = %s
+            GROUP BY 1
+        )
+        SELECT army.id, used.attacks, army.home_troops, army.spells, army.heroes
+        FROM used JOIN exact_armies AS army ON army.id = used.exact_army_id
         """,
-        params,
-    ).fetchall()
-    # An older partly read army has no distinct army: its saved decode is
-    # read once, after the totals, so the totals never join the decodes.
-    partial_ids = [row[2] for row in rows if row[2] is not None]
-    partial = {
-        decode_id: army_analytics.with_unnamed_ids({
-            "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
-        })
-        for decode_id, troops, unnamed, heroes in connection.execute(
-            """
-            SELECT id, home_troops, unresolved_components, heroes
-            FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
-            """,
-            (partial_ids,),
-        ).fetchall()
-    } if partial_ids else {}
-    totals: dict[tuple[int, int], list[int]] = {}
-    for type_id, variant_id, decode_id, *counts in rows:
-        if decode_id in partial:
-            army = partial[decode_id]
-            type_id = classify(army["home_troops"])
-            variant_id = variant(type_id, army["heroes"] or [])
-        total = totals.setdefault((type_id or OTHER, int(variant_id)), [0] * 6)
-        for index, value in enumerate(counts):
-            total[index] += int(value)
-    return [(*key, *total) for key, total in sorted(totals.items())]
+        [*params, type_id, variant_id],
+    ).fetchall():
+        group = groups.setdefault(army_group(troops, spells, heroes), [0, 0, 0, 0])
+        group[0] += int(attacks)
+        group[1] += 1
+        # The most used distinct army is the example, the lowest id on a tie.
+        if (int(attacks), -int(army_id)) > (group[3], -group[2]):
+            group[2], group[3] = int(army_id), int(attacks)
+    top = sorted(groups.values(), key=lambda group: (-group[0], group[2]))[:EXAMPLE_GROUPS]
+    codes = dict(connection.execute(
+        """
+        SELECT army.id, code.raw_code FROM exact_armies AS army
+        CROSS JOIN LATERAL (
+            SELECT raw_code FROM (
+                SELECT decode.raw_code FROM battle_army_decodes AS decode
+                WHERE decode.identity_hash = army.identity_hash
+                  AND decode.status = 'decoded'
+                LIMIT %s
+            ) AS used
+            GROUP BY raw_code ORDER BY count(*) DESC, raw_code LIMIT 1
+        ) AS code
+        WHERE army.id = ANY(%s::bigint[])
+        """,
+        (EXAMPLE_CODE_BATTLES, [group[2] for group in top]),
+    ).fetchall()) if top else {}
+    return {
+        "kind": "army-variant-examples",
+        "type_id": type_id, "variant_id": variant_id,
+        "rule": variant_rule(type_id, variant_id),
+        "groups": [
+            {"attacks": attacks, "armies": armies, "example_attacks": example_attacks,
+             "army_share_code": str(codes[army_id])}
+            for attacks, armies, army_id, example_attacks in top if army_id in codes
+        ],
+    }
 
 
 def read_type_outcomes(

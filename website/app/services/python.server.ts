@@ -918,6 +918,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       averageMissTrophies: row.average_miss_trophies as number | null | undefined,
       unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
       variants: (row.variants as unknown[] | undefined)?.map(parseRow),
+      typeId: isInteger(row.type_id) ? row.type_id : undefined,
       variantId: isInteger(row.variant_id) ? row.variant_id : undefined,
     };
   };

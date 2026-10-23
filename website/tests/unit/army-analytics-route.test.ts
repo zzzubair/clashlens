@@ -1042,6 +1042,77 @@ describe("army analytics top-bar link", () => {
   });
 });
 
+describe("army analytics variant rows", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("opens a variant on a tap, loading its most-used armies", async () => {
+    const row = (key: string, label: string, usageCount: number) => ({
+      key,
+      label,
+      usageCount,
+      usageDenominator: 8,
+      usageRate: usageCount / 8,
+      starCounts: [0, 0, usageCount, 0],
+      averageStars: 2,
+      averageDestruction: 80,
+      averageTrophies: 26,
+      averageMissTrophies: 26,
+      unknownExcludedAttacks: 0,
+    });
+    const analytics = currentAnalytics("top-1000", [1], 1);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue({
+        ...analytics,
+        selection: { ...analytics.selection, category: "army-types" },
+        rows: [
+          {
+            ...row("army-type:3", "Thrower", 8),
+            typeId: 3,
+            variants: [
+              { ...row("army-variant:3:3", "Revenge Thrower", 6), variantId: 3 },
+              { ...row("army-variant:3:0", "Other Thrower", 2), variantId: 0 },
+            ],
+          },
+        ],
+      }),
+    });
+    const page = { states: [] as unknown[], next: 0 };
+    function OpenPage() {
+      page.next = 0;
+      mocks.openPage = page;
+      try {
+        return ArmyRoute();
+      } finally {
+        mocks.openPage = null;
+      }
+    }
+    const router = createMemoryRouter(
+      [{ path: "/analytics/armies", Component: OpenPage, loader: armyLoader }],
+      { initialEntries: ["/analytics/armies"] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const html = () => renderToString(createElement(RouterProvider, { router }));
+    html();
+    // The open types, then the open variants: the page's two sets.
+    const [openTypes, openVariants] = page.states.flatMap((state, index) =>
+      state instanceof Set ? [index] : [],
+    );
+    page.states[openTypes] = new Set(["army-type:3"]);
+    const closed = html();
+    expect(closed).toContain('title="Show Revenge Thrower armies"');
+    expect(renderedText(closed)).toContain("Revenge Thrower Top armies 6 / 8");
+    expect(closed).not.toContain("analytics-examples-row");
+
+    page.states[openVariants] = new Set(["army-variant:3:3"]);
+    expect(renderedText(html())).toContain(
+      "Revenge Thrower Top armies 6 / 8 75.0% of Thrower",
+    );
+    expect(html()).toContain("Loading armies…");
+  });
+});
+
 describe("army analytics worst-case data", () => {
   // Long Clan Castle mixes, unknown catalog IDs, six-figure counts and counts of 1.
   const worstRows = [
