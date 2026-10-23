@@ -361,7 +361,9 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     assert "if" not in job
     assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2]}}
     setup_node = next(
-        step for step in job["steps"] if step.get("uses") == "actions/setup-node@v4"
+        step
+        for step in job["steps"]
+        if step.get("uses", "").startswith("actions/setup-node@")
     )
     assert setup_node["with"] == {
         "node-version": "24",
@@ -392,7 +394,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     calls = _calls(command_workspace)
     operations = [(call["command"], call["args"]) for call in calls]
     assert operations[: 4 if shard == "1" else 1] == [
-        ("npm", ["ci"]),
+        ("npm", ["ci", "--ignore-scripts"]),
         *(
             [("npm", ["audit", "--omit=dev"]), ("npm", ["audit"]), ("npm", ["test"])]
             if shard == "1"

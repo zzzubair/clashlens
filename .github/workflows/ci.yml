@@ -56,9 +56,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.12.1"
           python-version: "3.12"
       - name: Sync locked dependencies
         working-directory: python
@@ -88,15 +89,15 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: website/package-lock.json
       - name: Install locked dependencies
         working-directory: website
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Runtime dependency audit (blocking)
         if: matrix.shard == 1
         working-directory: website
@@ -147,7 +148,7 @@ jobs:
     name: Container packaging and runtime checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install rootless Podman
         run: |
           sudo apt-get update && sudo apt-get install -y podman
@@ -184,7 +185,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install rootless Podman
         run: |
           sudo apt-get update && sudo apt-get install -y podman
@@ -208,7 +209,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install rootless Podman
         run: |
           sudo apt-get update && sudo apt-get install -y podman
