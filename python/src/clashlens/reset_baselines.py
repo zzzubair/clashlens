@@ -1137,8 +1137,9 @@ def _load_reset_baseline(
     # reason, starts at 5,000 when the game starts the player there
     # (``season_rule``). So does any
     # Reset whose reading is a Legend I profile at 5,000 taken before the
-    # player's first Legend battle of the Season, whatever Season it names:
-    # the player has not played yet, so 5,000 is their total. On 11 October
+    # player's first Legend battle of the Season, or since their latest
+    # promotion into Legend I, whatever Season it names: the player has not
+    # played yet, so 5,000 is their total. On 11 October
     # 2026, 1,374 tracked players read so named Season 0. The reading's
     # trophies stay unused; the Reset is complete only once its battle log
     # proves the day's battles from the Reset.

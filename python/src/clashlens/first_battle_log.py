@@ -126,7 +126,8 @@ def season_rule_start(
     (``at_5000``: a Season's first Monday, or a Monday they were promoted
     at, by the weekly league record), or once a Legend I profile at 5,000
     read from it in the Season, whatever Season it names, came before their
-    first Legend battle of the Season. ``complete`` is whether a battle log
+    first Legend battle of the Season or since their latest promotion into
+    Legend I (``reset_baselines._unplayed``). ``complete`` is whether a battle log
     proves the day's battles up to the Reset."""
     if not (at_5000 or reset_baselines._unplayed(
         connection, player_id, boundary_at,
