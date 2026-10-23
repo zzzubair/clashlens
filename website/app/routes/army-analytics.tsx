@@ -1006,6 +1006,9 @@ export default function ArmyAnalyticsRoute() {
                                   url={`/resources/analytics/armies/examples?${new URLSearchParams(
                                     {
                                       population,
+                                      season: analytics.selection.season,
+                                      start: String(analytics.selection.startDay),
+                                      end: String(analytics.selection.endDay),
                                       type: String(row.typeId),
                                       variant: String(variant.variantId),
                                     },

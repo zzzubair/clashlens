@@ -71,6 +71,26 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                 for opponent, ts in zip(opponents, times, strict=True)
             ])
             assert processor.process_job(_army_job(database), owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                # The one-Wall-Wrecker-less battle seen from its defender's
+                # side too, and an older saved version of it: still 1 battle
+                # against the Wall Wrecker code's 2.
+                connection.execute(
+                    """
+                    INSERT INTO battle_army_decodes (
+                        battle_id, evidence_id, perspective, raw_code, decoder_version,
+                        catalog_version, catalog_hash, status, exact_army_id,
+                        identity_hash, is_active)
+                    SELECT battle_id, evidence_id, side.perspective, raw_code,
+                           decoder_version, catalog_version, catalog_hash, status,
+                           exact_army_id, identity_hash, side.active
+                    FROM battle_army_decodes
+                    CROSS JOIN (VALUES ('defender', true), ('attacker', false))
+                        AS side (perspective, active)
+                    WHERE raw_code = %s
+                    """,
+                    (REVENGE,),
+                )
             _seed_frozen_snapshot_at(
                 database, DAY_START + timedelta(days=1), [(attacker, 1, "fresh", "confirmed")]
             )

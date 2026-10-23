@@ -33,6 +33,7 @@ const examplesPayload = {
   type_id: 3,
   variant_id: 3,
   rule: "Thrower armies with Revenge Deck, without Fireball or Rocket Backpack.",
+  selection: { season: "1776052800", start_day: 1, end_day: 6 },
   groups: [
     { attacks: 5, armies: 3, example_attacks: 3, army_share_code: REVENGE_SIEGE },
     { attacks: 1, armies: 1, example_attacks: 1, army_share_code: REVENGE },
@@ -42,6 +43,8 @@ const examplesPayload = {
     "troop:51": { name: "Wall Wrecker", siege: true },
   },
 };
+
+const PAGE_DAYS = "population=top-1000&season=1776052800&start=1&end=6&type=3&variant=3";
 
 function examplesRequest(query: string) {
   return {
@@ -59,13 +62,13 @@ afterEach(() => {
 describe("variant example armies", () => {
   it("asks for the variant's armies for the page's players this Season", async () => {
     const fetchMock = pythonReplies(examplesPayload);
-    const reply = await examplesLoader(
-      examplesRequest("population=top-1000&type=3&variant=3"),
-    );
+    const reply = await examplesLoader(examplesRequest(PAGE_DAYS));
     const target = new URL(fetchMock.mock.calls[0][0] as URL);
     expect(target.pathname).toBe("/v1/analytics/armies");
     expect(Object.fromEntries(target.searchParams)).toEqual({
       season: "current",
+      start_day: "1",
+      end_day: "6",
       population: "top-1000",
       category: "army-types",
       type_id: "3",
@@ -83,18 +86,23 @@ describe("variant example armies", () => {
 
   it("says the armies could not load instead of failing the page", async () => {
     pythonReplies({ ...examplesPayload, groups: [{ attacks: 5 }] });
-    const malformed = await examplesLoader(
-      examplesRequest("population=top-1000&type=3&variant=3"),
-    );
+    const malformed = await examplesLoader(examplesRequest(PAGE_DAYS));
     expect(malformed.data.examples).toBeNull();
+    // Days published since the page loaded: other days than the page's totals.
+    pythonReplies({
+      ...examplesPayload,
+      selection: { ...examplesPayload.selection, end_day: 7 },
+    });
+    const later = await examplesLoader(examplesRequest(PAGE_DAYS));
+    expect(later.data.examples).toBeNull();
     pythonReplies({ error: "invalid_army_analytics_selection" }, 422);
     const refused = await examplesLoader(
-      examplesRequest("population=top-1000&type=99&variant=3"),
+      examplesRequest(PAGE_DAYS.replace("type=3", "type=99")),
     );
     expect(refused.data.examples).toBeNull();
     const fetchMock = pythonReplies(examplesPayload);
     const invalid = await examplesLoader(
-      examplesRequest("population=all&type=3&variant=3"),
+      examplesRequest(PAGE_DAYS.replace("top-1000", "all")),
     );
     expect(invalid.init?.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();

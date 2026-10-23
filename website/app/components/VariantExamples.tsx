@@ -22,7 +22,7 @@ export function VariantExamples({
   url: string;
   columns: number;
 }) {
-  // Keyed by its address, a variant opened again shows its armies at once.
+  // Loaded again each time the variant opens; closing it drops what loaded.
   const fetcher = useFetcher<VariantExamplesResponse>({ key: url });
   const { load } = fetcher;
   useEffect(() => {

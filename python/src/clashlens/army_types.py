@@ -324,7 +324,8 @@ def variant_rule(type_id: int, variant_id: int) -> str:
 FILLER_SHARE = 5
 EXAMPLE_GROUPS = 3
 # An example's Copy army code is the one its saved battles used most, out of
-# at most this many of them.
+# at most this many of its newest saved battles, each counted once under its
+# current saved army.
 EXAMPLE_CODE_BATTLES = 200
 
 
@@ -786,16 +787,25 @@ def variant_examples(
         SELECT army.id, code.raw_code FROM exact_armies AS army
         CROSS JOIN LATERAL (
             SELECT raw_code FROM (
-                SELECT decode.raw_code FROM battle_army_decodes AS decode
+                SELECT DISTINCT ON (decode.battle_id) decode.raw_code
+                FROM battle_army_decodes AS decode
                 WHERE decode.identity_hash = army.identity_hash
-                  AND decode.status = 'decoded'
+                  AND decode.status = 'decoded' AND decode.is_active
+                  AND decode.decoder_version = %s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM battle_army_decodes AS newer
+                      WHERE newer.battle_id = decode.battle_id
+                        AND newer.perspective = decode.perspective
+                        AND newer.decoder_version = decode.decoder_version
+                        AND newer.is_active AND newer.id > decode.id)
+                ORDER BY decode.battle_id DESC, decode.id DESC
                 LIMIT %s
             ) AS used
             GROUP BY raw_code ORDER BY count(*) DESC, raw_code LIMIT 1
         ) AS code
         WHERE army.id = ANY(%s::bigint[])
         """,
-        (EXAMPLE_CODE_BATTLES, [group[2] for group in top]),
+        (DECODER_VERSION, EXAMPLE_CODE_BATTLES, [group[2] for group in top]),
     ).fetchall()) if top else {}
     return {
         "kind": "army-variant-examples",

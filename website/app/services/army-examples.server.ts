@@ -3,14 +3,19 @@ import { mapArmyUnits } from "./player-response.server";
 import { requestJson } from "./python.server";
 import { isInteger, isRecord, isString, PythonApiError } from "./python-response.server";
 
-/** A variant's most-used armies for the Armies page's current-Season players. */
+/** A variant's most-used armies for the Armies page's current-Season players,
+ * over exactly the Legend days the page showed, or an error once those days
+ * no longer resolve the same. */
 export async function getArmyVariantExamples(
   population: string,
+  days: { season: string; startDay: number; endDay: number },
   typeId: number,
   variantId: number,
 ): Promise<ArmyVariantExamples> {
   const query = new URLSearchParams({
     season: "current",
+    start_day: String(days.startDay),
+    end_day: String(days.endDay),
     population,
     category: "army-types",
     type_id: String(typeId),
@@ -22,8 +27,12 @@ export async function getArmyVariantExamples(
     undefined,
     "army-variant-examples",
   );
-  const groups = payload.groups;
+  const { groups, selection } = payload;
   if (
+    !isRecord(selection) ||
+    selection.season !== days.season ||
+    selection.start_day !== days.startDay ||
+    selection.end_day !== days.endDay ||
     !isString(payload.rule) ||
     !Array.isArray(groups) ||
     !groups.every(
