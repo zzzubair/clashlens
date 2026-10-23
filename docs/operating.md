@@ -171,7 +171,7 @@ list or used as `interactive-1` may be used for player discovery.
 | --- | --- | --- |
 | `normal-1` to `normal-4` | `clashlens-normal-1` to `clashlens-normal-4` | Regular collection |
 | `extra-1`, `extra-2` | `clashlens-extra-1`, `clashlens-extra-2` | Regular collection |
-| `interactive-1` | `clashlens-interactive-1` | Refresh, first-time lookups and player verification |
+| `interactive-1` | `clashlens-interactive-1` | Refresh, first-time lookups, player verification and the player page's live clan |
 
 Each configured slot needs a private mode-600 file containing only its key.
 
@@ -210,6 +210,14 @@ At the default, collection can use
 24 starts and verification one, for 25 combined. When the total is at least two,
 one start is reserved for verification; at a total of one, either caller can
 use the single start. API restarts preserve the collector's configured limit.
+The player page's live clan also asks the game through the API with this key.
+It takes starts from collection's 24, never verification's, and only while
+fewer than half of collection's starts (12 at the default) were used in the
+last second, so Refresh and first-time collection always keep the other half.
+When none is free it does not wait: the page shows the saved clan. The API
+keeps each player's answer, including a failed one, in memory for 60 seconds
+(at most 4,096 players), so repeat views send no request. It never saves the
+answer.
 Verification sends one request per permission and refuses redirects; collection
 obtains a new permission for each redirected request.
 
@@ -225,8 +233,8 @@ Each key has four lines, labelled by pool and slot name; key values never appear
 until the collector restarts. `key_paused` is 1 while the key waits after a rate
 refusal. `key_rate_limit_per_second` is the configured whole-key cap.
 `key_requests_started_total` counts collection requests, including redirected
-requests, since the collector started. It excludes player verification and
-operator recovery. Read it twice, 60 seconds apart, and divide the difference
+requests, since the collector started. It excludes player verification, live
+clan reads and operator recovery. Read it twice, 60 seconds apart, and divide the difference
 by 60 for the collection rate.
 
 ## Respond to alerts

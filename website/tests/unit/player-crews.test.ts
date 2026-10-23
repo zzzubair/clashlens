@@ -23,6 +23,10 @@ vi.mock("../../app/services/past-seasons.server", () => ({
   getPastSeasons: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("../../app/services/live-clan.server", () => ({
+  getLiveClan: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/python.server")>();

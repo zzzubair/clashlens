@@ -6,11 +6,16 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   getPlayerLookup: vi.fn(),
+  getLiveClan: vi.fn(),
+}));
+
+vi.mock("../../app/services/live-clan.server", () => ({
+  getLiveClan: mocks.getLiveClan,
 }));
 
 vi.mock("../../app/services/player-lookup.server", () => ({
@@ -74,8 +79,9 @@ const page = (clan: string, clanTag: string | null) =>
     },
   }) satisfies PlayerPage;
 
-// Only the first HTML sent, which is all a browser without JavaScript shows.
-async function renderPlayer(): Promise<string> {
+// Only the first HTML sent, which is all a browser without JavaScript shows,
+// or with `streamed`, the page once everything streaming in has arrived.
+async function renderPlayer(streamed = false): Promise<string> {
   const url = `https://clashlens.example/players/${encodeURIComponent(TAG)}`;
   const data = await playerLoader({
     request: new Request(url),
@@ -96,8 +102,12 @@ async function renderPlayer(): Promise<string> {
       createElement(StaticRouterProvider, { router, context }),
       {
         onShellReady: () => {
+          if (streamed) return;
           pipe(sink);
           abort();
+        },
+        onAllReady: () => {
+          if (streamed) pipe(sink);
         },
         onShellError: reject,
         onError: () => {},
@@ -127,6 +137,7 @@ describe("the player page header", () => {
   beforeEach(() => {
     vi.stubEnv("CLASHLENS_CREWS_ENABLED", "");
     mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    mocks.getLiveClan.mockReset().mockResolvedValue(null);
   });
 
   const tracked = (player: PlayerPage) =>
@@ -165,6 +176,35 @@ describe("the player page header", () => {
     expect(html).not.toContain("OpenClanProfile");
   });
 
+  it("links the clan the game reports now when the saved profile has no clan tag", async () => {
+    tracked(page("Titans2.0", null));
+    mocks.getLiveClan.mockResolvedValue({ clan: { name: "Titans3.0", tag: "#2CLAN" } });
+    const html = header(await renderPlayer(true));
+    expect(mocks.getLiveClan).toHaveBeenCalledWith(TAG);
+    expect(html).toContain(
+      `<span class="player-clan"><a class="game-link" href="${CLAN_LINK}" ` +
+        `target="_blank" rel="noopener noreferrer" ` +
+        `aria-label="Open Titans3.0 in Clash of Clans"><bdi>Titans3.0</bdi><svg`,
+    );
+    expect(html).not.toContain("Titans2.0");
+  });
+
+  it("shows no clan once the game says the player is in none", async () => {
+    tracked(page("Titans2.0", "#2CLAN"));
+    mocks.getLiveClan.mockResolvedValue({ clan: null });
+    const html = header(await renderPlayer(true));
+    expect(html).toContain(PLAYER_LINK);
+    expect(html).not.toContain("player-clan");
+  });
+
+  it("keeps the saved clan when the game gives no answer", async () => {
+    tracked(page("Titans2.0", null));
+    mocks.getLiveClan.mockResolvedValue(null);
+    const html = header(await renderPlayer(true));
+    expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(html).not.toContain("OpenClanProfile");
+  });
+
   it("links them for a player shown only from their newest profile", async () => {
     mocks.createPythonClient.mockReset().mockReturnValue({
       getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, { error: "missing" })),
@@ -183,5 +223,61 @@ describe("the player page header", () => {
     const html = header(await renderPlayer());
     expect(html).toContain(`href="${PLAYER_LINK}"`);
     expect(html).toContain(`href="${CLAN_LINK}"`);
+  });
+});
+
+describe("live clan client boundary", () => {
+  const saved = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_API_URL = "http://python-fixture.test/";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    delete process.env.CLASHLENS_PYTHON_HMAC_SECRET_FILE;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...saved };
+  });
+
+  async function readWith(status: number, payload: unknown) {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(payload), { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getLiveClan } = await vi.importActual<
+      typeof import("../../app/services/live-clan.server")
+    >("../../app/services/live-clan.server");
+    return { clan: await getLiveClan(TAG), fetchMock };
+  }
+
+  it("reads the player's clan right now from the private API", async () => {
+    const { clan, fetchMock } = await readWith(200, {
+      tag: TAG,
+      live: true,
+      clan: { name: "Titans2.0", tag: "#2CLAN" },
+    });
+    expect(clan).toEqual({ clan: { name: "Titans2.0", tag: "#2CLAN" } });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://python-fixture.test/v1/players/%23PC2QRC9QY/clan",
+    );
+  });
+
+  it("reads a player in no clan", async () => {
+    const { clan } = await readWith(200, { tag: TAG, live: true, clan: null });
+    expect(clan).toEqual({ clan: null });
+  });
+
+  it.each([
+    [200, { tag: TAG, live: false }],
+    [200, { tag: "#2PP", live: true, clan: null }],
+    [200, { tag: TAG, live: true, clan: { name: "Titans2.0", tag: "2CLAN" } }],
+    [503, { error: "unavailable" }],
+  ])("keeps the saved clan for HTTP %i %j", async (status, payload) => {
+    const { clan } = await readWith(status, payload);
+    expect(clan).toBeNull();
   });
 });

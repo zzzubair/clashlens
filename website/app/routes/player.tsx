@@ -72,6 +72,7 @@ import type {
   WebsiteErrorResponse,
 } from "../lib/contracts";
 import type { PlayerCrew } from "../lib/crew-contracts";
+import type { LiveClan } from "../services/live-clan.server";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
 import detailsStyles from "../details.css?url";
 
@@ -95,6 +96,8 @@ export interface PlayerLoaderData {
   lookupError: WebsiteErrorResponse | null;
   // Streams in after the page; null when the history response is unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
+  // Streams in after the page; null when the game gave no answer.
+  liveClan?: Promise<LiveClan | null>;
   // Null when the crews answer is unavailable or arrives after the other reads.
   crews?: PlayerCrew[] | null;
   // The site's public address, for absolute links in link previews.
@@ -150,6 +153,9 @@ export async function loader({
   const lookupClient = import("../services/player-lookup.server");
   const pastSeasons = import("../services/past-seasons.server")
     .then((api) => api.getPastSeasons(normalizedTag))
+    .catch(() => null);
+  const liveClan = import("../services/live-clan.server")
+    .then((api) => api.getLiveClan(normalizedTag))
     .catch(() => null);
   const crews = import("../services/crews.server")
     .then((api) => api.getPlayerCrews(normalizedTag))
@@ -244,6 +250,7 @@ export async function loader({
     lookup,
     lookupError,
     pastSeasons,
+    liveClan,
     crews: await Promise.race([crews, null]),
     origin: await origin,
   };
@@ -570,6 +577,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 tag={lookup.tag}
                 clan={lookup.profile.clan}
                 clanTag={lookup.profile.clan_tag}
+                liveClan={data.liveClan}
               />
               <PlayerCrews crews={data.crews} name={lookup.profile.name} />
             </div>
@@ -660,6 +668,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             tag={trackedPlayer.tag}
             clan={trackedPlayer.profile.clan}
             clanTag={trackedPlayer.profile.clanTag}
+            liveClan={data.liveClan}
           />
           <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
         </div>
