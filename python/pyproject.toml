@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Clash Lens Phase 1 Python application layer"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "certifi==2026.7.22",
+  "certifi==2026.10.19",
   "discord.py==2.7.1",
   "fastapi==0.141.1",
   "minio==7.2.20",
