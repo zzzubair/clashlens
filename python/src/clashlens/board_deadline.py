@@ -13,6 +13,10 @@ says how many (``alerts``), until ``HARD_DEADLINE``, when every member still
 waiting is Unavailable (owner decision, 14 Oct 2026). When such a member's
 day saves later, it changes the member as any new result does, which starts
 a correction, and the board is rebuilt with it.
+
+A rebuild of a published board waits for a member only until their day is
+saved: one whose day comes out as it was before gets no new result, so each
+check gives them the day saved (``boundary_members.take_saved_days``).
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .boundary_manifest import retry_wait
+from .boundary_members import take_saved_days
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -85,17 +90,22 @@ def overdue(connection: Any, boundary_at: datetime) -> bool:
     ).fetchone()[0]
 
 
-def settle_waiting_members(connection: Any, boundary_at: datetime, generation_id: int) -> None:
+def settle_waiting_members(
+    database: Any, connection: Any, boundary_at: datetime, generation_id: int
+) -> None:
     """Under the Reset's full lock, settle ``generation_id``'s waiting members
     as above while its board has not frozen."""
-    if connection.execute(
+    generation = connection.execute(
         """
-        SELECT FROM boundary_publication_generations
+        SELECT supersedes_id FROM boundary_publication_generations
         WHERE id = %s AND snapshot_state = 'pending' AND snapshot_manifest_id IS NULL
         """,
         (generation_id,),
-    ).fetchone() is None:
+    ).fetchone()
+    if generation is None:
         return
+    if generation[0] is not None:
+        take_saved_days(database, connection, generation_id, boundary_at)
     day = f"{(boundary_at - timedelta(days=1)).astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
     # Failed jobs are few, found through the queue's state index.
     failed = connection.execute(

@@ -204,8 +204,6 @@ def copy_members(
     members now. Replacing ``source_id``, each one still a member keeps its
     recorded result; in a first generation each swept one waits for theirs.
     Each other has the result of their saved day, or waits for it."""
-    from .boundary import _boundary_army_status, _boundary_snapshot_status
-
     sweep_id = connection.execute(
         "SELECT sweep_id FROM boundary_publication_generations WHERE id = %s", (generation_id,)
     ).fetchone()[0]
@@ -233,47 +231,71 @@ def copy_members(
         """,
         (generation_id, source_id or 0, player_ids),
     )
-    day = boundary_at - RANKED_DAY_DURATION
+    joined = [int(row[0]) for row in connection.execute(
+        """
+        INSERT INTO boundary_publication_generation_members (generation_id, player_id)
+        SELECT %s, unnest(%s::bigint[])
+        ON CONFLICT DO NOTHING
+        RETURNING player_id
+        """,
+        (generation_id, player_ids),
+    ).fetchall()]
+    take_saved_days(database, connection, generation_id, boundary_at, joined)
+    _recount(connection, generation_id)
+
+
+def take_saved_days(
+    database: Database, connection: Any, generation_id: int, boundary_at: datetime,
+    player_ids: list[int] | None = None,
+) -> None:
+    """Give each member of ``generation_id`` waiting with no day, or each of
+    ``player_ids``, the result of their saved day, when there is one. A
+    rebuild's member whose day is saved after its members were taken gets
+    no new result when the day comes out as it was before, which saves
+    nothing new: on 22 October 2026 six rebuilds waited for 74 such players
+    for good, so the publication check gives them their saved day too
+    (``board_deadline.settle_waiting_members``)."""
+    from .boundary import _boundary_army_status, _boundary_snapshot_status
+
     for player_id, version_id, input_hash in connection.execute(
         """
         SELECT member.player_id, saved.ranked_day_version_id, saved.input_hash
-        FROM unnest(%s::bigint[]) AS member (player_id)
-        LEFT JOIN LATERAL (
+        FROM boundary_publication_generation_members AS member
+        CROSS JOIN LATERAL (
             SELECT day.ranked_day_version_id, version.input_hash
             FROM api_player_daily_logs AS day
             JOIN ranked_day_versions AS version ON version.id = day.ranked_day_version_id
-            WHERE day.player_id = member.player_id AND day.ranked_day_start = %s
+            WHERE day.player_id = member.player_id AND day.ranked_day_start = %(day)s
             ORDER BY day.version DESC LIMIT 1
-        ) AS saved ON true
-        WHERE NOT EXISTS (
-            SELECT 1 FROM boundary_publication_generation_members AS kept
-            WHERE kept.generation_id = %s AND kept.player_id = member.player_id
-        )
+        ) AS saved
+        WHERE member.generation_id = %(generation)s AND member.status = 'pending'
+          AND member.ranked_day_version_id IS NULL
+          AND (%(players)s::bigint[] IS NULL OR member.player_id = ANY(%(players)s))
+        ORDER BY member.player_id
+        FOR UPDATE OF member
         """,
-        (player_ids, day, generation_id),
+        {"day": boundary_at - RANKED_DAY_DURATION, "generation": generation_id,
+         "players": player_ids},
     ).fetchall():
-        snapshot_status = army_status = "pending"
-        if version_id is not None:
-            snapshot_status = _boundary_snapshot_status(
-                connection, player_id=int(player_id),
-                ranked_day_version_id=int(version_id), boundary_at=boundary_at,
-            )
-            army_status = _boundary_army_status(
-                database, connection, player_id=int(player_id),
-                ranked_day_version_id=int(version_id), snapshot_status=snapshot_status,
-            )
+        snapshot_status = _boundary_snapshot_status(
+            connection, player_id=int(player_id),
+            ranked_day_version_id=int(version_id), boundary_at=boundary_at,
+        )
+        army_status = _boundary_army_status(
+            database, connection, player_id=int(player_id),
+            ranked_day_version_id=int(version_id), snapshot_status=snapshot_status,
+        )
         connection.execute(
             """
-            INSERT INTO boundary_publication_generation_members (
-                generation_id, player_id, ranked_day_version_id,
-                ranked_day_input_hash, status, snapshot_status, army_status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            UPDATE boundary_publication_generation_members
+            SET ranked_day_version_id = %s, ranked_day_input_hash = %s, status = %s,
+                snapshot_status = %s, army_status = %s, updated_at = clock_timestamp()
+            WHERE generation_id = %s AND player_id = %s
             """,
-            (generation_id, player_id, version_id, _text_value(input_hash) if input_hash else None,
+            (version_id, _text_value(input_hash),
              "terminal" if snapshot_status != "pending" else "pending",
-             snapshot_status, army_status),
+             snapshot_status, army_status, generation_id, player_id),
         )
-    _recount(connection, generation_id)
 
 
 def _recount(connection: Any, generation_id: int) -> None:

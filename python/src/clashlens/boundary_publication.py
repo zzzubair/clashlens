@@ -195,7 +195,8 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
                     """,
                     (army_status, int(generation_id), int(player_id)),
                 )
-        board_deadline.settle_waiting_members(connection, boundary_at, int(generation_id))
+        board_deadline.settle_waiting_members(
+            database, connection, boundary_at, int(generation_id))
         boundary._try_enqueue_boundary_artifacts(
             database,
             connection,
