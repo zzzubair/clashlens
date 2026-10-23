@@ -9,7 +9,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import boundary, boundary_members, ranked_day_inputs
-from .analytics import unplayed_profile_sql
+from .analytics import unplayed_profile_sql, unplayed_since_sql
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -1137,8 +1137,9 @@ def _load_reset_baseline(
     # reason, starts at 5,000 when the game starts the player there
     # (``season_rule``). So does any
     # Reset whose reading is a Legend I profile at 5,000 taken before the
-    # player's first Legend battle of the Season, whatever Season it names:
-    # the player has not played yet, so 5,000 is their total. On 11 October
+    # player's first Legend battle of the Season, or since their latest
+    # promotion into Legend I, whatever Season it names: the player has not
+    # played yet, so 5,000 is their total. On 11 October
     # 2026, 1,374 tracked players read so named Season 0. The reading's
     # trophies stay unused; the Reset is complete only once its battle log
     # proves the day's battles from the Reset.
@@ -1219,16 +1220,26 @@ def _unplayed(
     profile_id: int | None, read_at: datetime | None,
 ) -> bool:
     """Whether the profile ``profile_id``, read at ``read_at``, came before
-    the player's first Legend battle of the Season of the Legend day starting
-    at ``boundary_at``: it can show a player who has not played yet
-    (``analytics.unplayed_profile_sql``), no battle of that Season was fought
-    before it, and no accepted profile naming that Season, or, when it names
-    another real Season, read in Legend I during the ended day, showed
-    another total before it. The game also sends Season 0 to players already
-    signed up, so a profile naming Season 0 decides nothing more here."""
+    the player's first Legend battle of the Legend day starting at
+    ``boundary_at`` counted as Daily boards count it
+    (``analytics.unplayed_since_sql``): from its Season's start or the
+    player's latest promotion into Legend I. It can show a player who has
+    not played yet (``analytics.unplayed_profile_sql``), no battle was
+    fought since then before it, and no accepted Legend I profile naming
+    that Season read since then, or, when it names another real Season,
+    read during the ended day, showed another total before it: a lower
+    league's total never shows a Legend I battle. The game also
+    sends Season 0 to players already signed up, so a profile naming Season
+    0 decides nothing more here. On 13 October 2026, 157 players promoted
+    the day before read so, after accepted Legend II profiles at other
+    totals."""
     if profile_id is None or read_at is None:
         return False
     day = ranked_day_for(boundary_at)
+    since = connection.execute(
+        f"SELECT {unplayed_since_sql('%(player)s', '%(season_start)s', '%(day)s')}",
+        {"player": player_id, "season_start": day.season_start, "day": boundary_at},
+    ).fetchone()[0]
     return bool(connection.execute(
         f"""
         SELECT EXISTS (
@@ -1240,12 +1251,14 @@ def _unplayed(
             LEFT JOIN player_profile_effects AS effect
               ON effect.profile_version_id = profile.id
             WHERE profile.player_id = %(player)s
+              AND profile.eligibility_state = 'eligible'
               AND (profile.current_league_season_id = %(season)s
+                   AND COALESCE(effect.observed_at, profile.observed_at)
+                       >= %(since)s
                    -- At a Season's opening Reset, a 5,000 naming the old
                    -- Season after a Legend I day at another total may
                    -- still be the old Season's.
-                   OR profile.eligibility_state = 'eligible'
-                   AND COALESCE(effect.observed_at, profile.observed_at)
+                   OR COALESCE(effect.observed_at, profile.observed_at)
                        >= %(ended_day)s
                    AND (SELECT reading.current_league_season_id
                         FROM player_profile_versions AS reading
@@ -1256,17 +1269,17 @@ def _unplayed(
         )
         """,
         {"player": player_id, "profile": profile_id,
-         "season": day.official_season_id,
+         "season": day.official_season_id, "since": since,
          "start": SEASON_START_TROPHIES, "before": read_at,
          "ended_day": boundary_at - RANKED_DAY_DURATION},
-    ).fetchone()[0]) and not played_before(connection, player_id, day.season_start, read_at)
+    ).fetchone()[0]) and not played_before(connection, player_id, since, read_at)
 
 
 def played_before(
-    connection: Any, player_id: int, season_start: datetime, before: datetime
+    connection: Any, player_id: int, since: datetime, before: datetime
 ) -> bool:
-    """Whether the player fought a Legend battle, attack or defense, of the
-    Season starting at ``season_start`` before ``before``."""
+    """Whether the player fought a Legend battle, attack or defense, on a
+    Legend day from ``since`` before ``before``."""
     return bool(connection.execute(
         """
         SELECT EXISTS (
@@ -1275,7 +1288,7 @@ def played_before(
             SELECT 1 FROM legend_battles AS battle
             JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
             WHERE battle.attacker_player_id = %(player)s
-              AND battle.ranked_day_start >= %(season_start)s
+              AND battle.ranked_day_start >= %(since)s
               AND evidence.battle_timestamp < %(before)s
         ) OR EXISTS (
             -- A defense is found only by reading a day's battles in that
@@ -1286,7 +1299,7 @@ def played_before(
             -- 500 ms a call at the 12 October 2026 Reset.
             SELECT 1
             FROM generate_series(
-                %(season_start)s::timestamptz, %(before)s::timestamptz,
+                %(since)s::timestamptz, %(before)s::timestamptz,
                 interval '24 hours'
             ) AS day (start)
             CROSS JOIN LATERAL (
@@ -1300,7 +1313,7 @@ def played_before(
             ) AS defense
         )
         """,
-        {"player": player_id, "before": before, "season_start": season_start},
+        {"player": player_id, "before": before, "since": since},
     ).fetchone()[0])
 
 
