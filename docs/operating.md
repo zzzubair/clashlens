@@ -214,10 +214,10 @@ The player page's live clan also asks the game through the API with this key.
 It takes starts from collection's 24, never verification's, and only while
 fewer than half of collection's starts (12 at the default) were used in the
 last second, so Refresh and first-time collection always keep the other half.
-When none is free it does not wait: the page shows the saved clan. The API
-keeps each player's answer, including a failed one, in memory for 60 seconds
-(at most 4,096 players), so repeat views send no request. It never saves the
-answer.
+When none is free it does not wait: the page shows the saved clan name, without
+a link. The API keeps each player's answer, including a failed one, in memory for
+60 seconds (at most 4,096 players), so repeat views send no request; views of
+the same player at the same time share one request. It never saves the answer.
 Verification sends one request per permission and refuses redirects; collection
 obtains a new permission for each redirected request.
 

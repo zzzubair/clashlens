@@ -146,7 +146,7 @@ describe("the player page header", () => {
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
     });
 
-  it("links the name and the clan into the game", async () => {
+  it("links the name into the game and shows the saved clan as plain text first", async () => {
     tracked(page("Titans2.0", "#2CLAN"));
     const html = header(await renderPlayer());
     expect(html).toContain(
@@ -154,11 +154,8 @@ describe("the player page header", () => {
         `rel="noopener noreferrer" aria-label="Open VANGUARD in Clash of Clans">` +
         `<bdi>VANGUARD</bdi><svg`,
     );
-    expect(html).toContain(
-      `<span class="player-clan"><a class="game-link" href="${CLAN_LINK}" ` +
-        `target="_blank" rel="noopener noreferrer" ` +
-        `aria-label="Open Titans2.0 in Clash of Clans"><bdi>Titans2.0</bdi><svg`,
-    );
+    expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(html).not.toContain("OpenClanProfile");
   });
 
   it("shows no clan link for a player in no clan", async () => {
@@ -166,13 +163,6 @@ describe("the player page header", () => {
     const html = header(await renderPlayer());
     expect(html).toContain(PLAYER_LINK);
     expect(html).not.toContain("player-clan");
-    expect(html).not.toContain("OpenClanProfile");
-  });
-
-  it("keeps a clan without a saved tag as plain text", async () => {
-    tracked(page("Titans2.0", null));
-    const html = header(await renderPlayer());
-    expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
     expect(html).not.toContain("OpenClanProfile");
   });
 
@@ -197,15 +187,18 @@ describe("the player page header", () => {
     expect(html).not.toContain("player-clan");
   });
 
-  it("keeps the saved clan when the game gives no answer", async () => {
-    tracked(page("Titans2.0", null));
-    mocks.getLiveClan.mockResolvedValue(null);
+  it.each([
+    ["gives no answer", () => mocks.getLiveClan.mockResolvedValue(null)],
+    ["read fails", () => mocks.getLiveClan.mockRejectedValue(new Error("down"))],
+  ])("keeps the saved clan as plain text when the game %s", async (_case, answer) => {
+    tracked(page("Titans2.0", "#2CLAN"));
+    answer();
     const html = header(await renderPlayer(true));
     expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
     expect(html).not.toContain("OpenClanProfile");
   });
 
-  it("links them for a player shown only from their newest profile", async () => {
+  it("links the live clan for a player shown only from their newest profile", async () => {
     mocks.createPythonClient.mockReset().mockReturnValue({
       getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, { error: "missing" })),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
@@ -220,9 +213,13 @@ describe("the player page header", () => {
         trophies: 4900,
       },
     });
-    const html = header(await renderPlayer());
-    expect(html).toContain(`href="${PLAYER_LINK}"`);
-    expect(html).toContain(`href="${CLAN_LINK}"`);
+    const first = header(await renderPlayer());
+    expect(first).toContain(`href="${PLAYER_LINK}"`);
+    expect(first).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(first).not.toContain("OpenClanProfile");
+    mocks.getLiveClan.mockResolvedValue({ clan: { name: "Titans2.0", tag: "#2CLAN" } });
+    const streamed = header(await renderPlayer(true));
+    expect(streamed).toContain(`href="${CLAN_LINK}"`);
   });
 });
 

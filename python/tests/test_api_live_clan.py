@@ -197,3 +197,28 @@ def test_a_remembered_answer_lasts_a_minute(database_url: str) -> None:
         clans.read(TAGS[4])
 
         assert FakeGame.profile_reads == [TAGS[4], TAGS[4]]
+
+
+def test_views_of_one_player_at_once_share_one_request(database_url: str) -> None:
+    with live_clan_api(database_url) as (_client, database, _collector, origin):
+        FakeGame.answers[TAGS[5]] = "slow"
+        clans = api_live_clan.LiveClans(
+            database, game_client(origin), FINGERPRINT, cooldown_seconds=5
+        )
+        answers: list[api_live_clan.LiveClan] = []
+        views = [
+            threading.Thread(target=lambda: answers.append(clans.read(TAGS[5])))
+            for _ in range(3)
+        ]
+        for view in views:
+            view.start()
+        time.sleep(0.3)
+        # Another player is read meanwhile, not held behind the slow one.
+        started = time.monotonic()
+        assert clans.read(TAGS[6]).live
+        assert time.monotonic() - started < 1.0
+        for view in views:
+            view.join()
+
+        assert answers == [api_live_clan.UNAVAILABLE] * 3
+        assert sorted(FakeGame.profile_reads) == sorted([TAGS[5], TAGS[6]])

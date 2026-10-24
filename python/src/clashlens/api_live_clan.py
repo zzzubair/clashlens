@@ -11,6 +11,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
@@ -104,6 +105,7 @@ class LiveClans:
         self._clock = clock
         self._lock = Lock()
         self._answers: OrderedDict[str, tuple[float, LiveClan]] = OrderedDict()
+        self._reading: dict[str, Future[LiveClan]] = {}
 
     def read(self, normalized_tag: str) -> LiveClan:
         now = self._clock()
@@ -111,33 +113,49 @@ class LiveClans:
             remembered = self._answers.get(normalized_tag)
             if remembered is not None and remembered[0] > now:
                 return remembered[1]
+            # A view while the same player is being read waits for that answer.
+            reading = self._reading.get(normalized_tag)
+            if reading is None:
+                self._reading[normalized_tag] = Future()
+        if reading is not None:
+            return reading.result()
+        try:
+            answer = self._ask(normalized_tag)
+        except BaseException as error:
+            with self._lock:
+                self._reading.pop(normalized_tag).set_exception(error)
+            raise
+        with self._lock:
+            if answer is not None:
+                self._answers[normalized_tag] = (now + LIVE_CLAN_SECONDS, answer)
+                self._answers.move_to_end(normalized_tag)
+                while len(self._answers) > MAX_REMEMBERED_PLAYERS:
+                    self._answers.popitem(last=False)
+            answer = answer or UNAVAILABLE
+            self._reading.pop(normalized_tag).set_result(answer)
+        return answer
+
+    def _ask(self, normalized_tag: str) -> LiveClan | None:
+        """The game's answer, or None when no request was made, so nothing is remembered."""
         if self._reader is None or self._fingerprint is None:
-            return UNAVAILABLE
-        # No free start costs no request, so it is not remembered.
+            return None
         if not acquire_live_read_permit(self._database, self._fingerprint):
-            return UNAVAILABLE
+            return None
         try:
             response = self._reader.player(
                 normalized_tag, timeout_seconds=LIVE_CLAN_TIMEOUT_SECONDS
             )
         except VerificationTransportError:
-            answer = UNAVAILABLE
-        else:
-            action = classify_official_response(response.http_status, response.body).key_action
-            if action is not KeyAction.NONE:
-                api_verification.apply_official_key_action(
-                    self._database,
-                    self._fingerprint,
-                    action,
-                    cooldown_seconds=self._cooldown_seconds,
-                )
-            answer = _live_clan(response, normalized_tag)
-        with self._lock:
-            self._answers[normalized_tag] = (now + LIVE_CLAN_SECONDS, answer)
-            self._answers.move_to_end(normalized_tag)
-            while len(self._answers) > MAX_REMEMBERED_PLAYERS:
-                self._answers.popitem(last=False)
-        return answer
+            return UNAVAILABLE
+        action = classify_official_response(response.http_status, response.body).key_action
+        if action is not KeyAction.NONE:
+            api_verification.apply_official_key_action(
+                self._database,
+                self._fingerprint,
+                action,
+                cooldown_seconds=self._cooldown_seconds,
+            )
+        return _live_clan(response, normalized_tag)
 
 
 def _live_clan(response: OfficialVerificationResponse, normalized_tag: str) -> LiveClan:

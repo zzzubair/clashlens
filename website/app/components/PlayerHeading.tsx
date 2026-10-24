@@ -5,25 +5,23 @@ import { clanProfileLink, playerProfileLink } from "../lib/game-links";
 import type { LiveClan } from "../services/live-clan.server";
 
 /**
- * The player page's name, tag and clan. The name and the clan open their
- * profiles in Clash of Clans; a clan without a saved tag stays plain text.
- * The saved clan shows first; the game's answer for the clan right now
- * replaces it when it streams in, and leaves it when the game gave none.
+ * The player page's name, tag and clan. The name opens the player's profile
+ * in Clash of Clans. The saved clan shows first as plain text; the game's
+ * answer for the clan right now replaces it, linked to the clan's profile,
+ * when it streams in, and leaves it when the game gave none.
  */
 export function PlayerHeading({
   name,
   tag,
   clan,
-  clanTag,
   liveClan,
 }: {
   name: string;
   tag: string;
   clan: string | null;
-  clanTag: string | null | undefined;
   liveClan?: Promise<LiveClan | null>;
 }) {
-  const saved = <Clan name={clan} tag={clanTag} />;
+  const saved = <Clan name={clan} tag={null} />;
   return (
     <>
       <h1>

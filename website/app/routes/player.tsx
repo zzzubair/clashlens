@@ -576,7 +576,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 name={lookup.profile.name}
                 tag={lookup.tag}
                 clan={lookup.profile.clan}
-                clanTag={lookup.profile.clan_tag}
                 liveClan={data.liveClan}
               />
               <PlayerCrews crews={data.crews} name={lookup.profile.name} />
@@ -667,7 +666,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             name={trackedPlayer.profile.name}
             tag={trackedPlayer.tag}
             clan={trackedPlayer.profile.clan}
-            clanTag={trackedPlayer.profile.clanTag}
             liveClan={data.liveClan}
           />
           <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
