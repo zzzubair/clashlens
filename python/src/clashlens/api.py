@@ -24,6 +24,7 @@ from . import (
     api_discord_alerts,
     api_groups,
     api_leaderboard,
+    api_live_clan,
     api_player_lookup,
     api_players,
     api_status,
@@ -96,6 +97,10 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
 class OfficialVerifier(Protocol):
     def verify(
         self, normalized_tag: str, player_token: str
+    ) -> OfficialVerificationResponse: ...
+
+    def player(
+        self, normalized_tag: str, *, timeout_seconds: float
     ) -> OfficialVerificationResponse: ...
 
 
@@ -224,6 +229,12 @@ def create_app(
     dashboard_board = api_dashboard.DashboardBoard(live_board)
     dashboard_army_days = api_dashboard.ArmyDays()
     known_players = api_players.KnownPlayerNames()
+    live_clans = api_live_clan.LiveClans(
+        database,
+        verification_client,
+        official_credential_fingerprint,
+        cooldown_seconds=verification_cooldown_seconds,
+    )
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
 
@@ -425,6 +436,18 @@ def create_app(
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
+
+    @app.get("/v1/players/{tag}/clan")
+    async def player_live_clan(tag: str, request: Request) -> JSONResponse:
+        await asyncio.to_thread(_authorize, request, "player.read", production_database)
+        normalized_tag = _safe_tag(tag)
+        clan = await asyncio.to_thread(live_clans.read, normalized_tag)
+        content: dict[str, Any] = {"tag": normalized_tag, "live": clan.live}
+        if clan.live:
+            content["clan"] = (
+                None if clan.tag is None else {"name": clan.name, "tag": clan.tag}
+            )
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/players/{tag}/today")
     def player_today(

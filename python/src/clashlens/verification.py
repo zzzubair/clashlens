@@ -47,8 +47,9 @@ class OfficialVerificationRequest:
     url: str
     proxy_url: str
     authorization: str
-    body: bytes
+    body: bytes | None
     timeout_seconds: float
+    max_body_bytes: int = 8192
 
 
 class VerificationTransportError(RuntimeError):
@@ -193,6 +194,22 @@ class OfficialVerificationClient:
             )
         return response
 
+    def player(
+        self, normalized_tag: str, *, timeout_seconds: float
+    ) -> OfficialVerificationResponse:
+        """Read one player's profile through the same relay and redirect refusal."""
+        return self._send(
+            OfficialVerificationRequest(
+                method="GET",
+                url=f"{self._api_origin}/v1/players/{quote(normalized_tag, safe='')}",
+                proxy_url=self._proxy_url,
+                authorization=self._authorization,
+                body=None,
+                timeout_seconds=min(timeout_seconds, self._timeout_seconds),
+                max_body_bytes=256 * 1024,
+            )
+        )
+
 
 _VALID_BODY: Final = {"status": "ok"}
 _INVALID_BODY: Final = {"status": "invalid"}
@@ -320,15 +337,15 @@ def _urllib_transport(
     )
     try:
         with opener.open(http_request, timeout=request.timeout_seconds) as response:
-            body = response.read(8193)
-            if len(body) > 8192:
+            body = response.read(request.max_body_bytes + 1)
+            if len(body) > request.max_body_bytes:
                 raise VerificationTransportError(
                     "official verification response is too large"
                 )
             return OfficialVerificationResponse(int(response.status), body)
     except urllib.error.HTTPError as error:
-        body = error.read(8193)
-        if len(body) > 8192:
+        body = error.read(request.max_body_bytes + 1)
+        if len(body) > request.max_body_bytes:
             raise VerificationTransportError(
                 "official verification response is too large"
             ) from None

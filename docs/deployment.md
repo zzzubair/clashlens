@@ -261,7 +261,7 @@ The 96 connections are shared out:
 | Caller | At most | Why |
 | --- | ---: | --- |
 | Collector | 64 | Six per key: up to nine regular keys and the interactive key. It refuses to start with settings above 64. Eight regular keys use 54. |
-| Player verification in the API | 20 | Its calls run on the API's worker threads: 20 on rogue's 16 processor threads. |
+| Player verification and live clan reads in the API | 20 | Both run on the API's worker threads: 20 on rogue's 16 processor threads. |
 | Operator commands (`probe`, `recover-discord`) | 1 each | Run by hand, one request at a time. |
 
 That leaves at least 10 spare while a connection closes and another opens.
@@ -295,7 +295,8 @@ In `clashlens_collector_requests_total`, the same failures show as
 `outcome="proxy_failure"`, `outcome="proxy_timeout"` (the relay connection ran
 out of time) and `outcome="timeout"` per endpoint.
 
-The API's `/operatorz` shows player verification's side under
+The API's `/operatorz` shows player verification's side, live clan reads
+included, under
 `player_verification_relay`: `tunnels_open` (each verification opens its own
 tunnel, counted from when its connection is fully set up in the same way until
 the verification call returns), `requests`, `timeouts`, `admission_failures` and

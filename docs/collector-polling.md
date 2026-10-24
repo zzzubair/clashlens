@@ -623,7 +623,8 @@ either way.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
-due time. Player-token verification and interactive collection use the
+due time. Player-token verification, the player page's live clan and
+interactive collection use the
 [shared key allowance](operating.md#clash-api-keys).
 
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
