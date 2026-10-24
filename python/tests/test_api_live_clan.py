@@ -172,11 +172,22 @@ def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
     database_url: str,
 ) -> None:
     with live_clan_api(database_url) as (_client, database, collector, _origin):
-        live = [api_live_clan.acquire_live_read_permit(database, FINGERPRINT) for _ in range(30)]
-        collection = [collector.acquire_collector_permit(FINGERPRINT).granted for _ in range(30)]
-        verification = api_verification.acquire_official_permit(
-            database, FINGERPRINT, request_id=str(uuid4())
-        )
+        # The counts hold only when every request lands in one 1-second window,
+        # so a slow run waits for the window to empty and tries again.
+        for _attempt in range(3):
+            started = time.monotonic()
+            live = [
+                api_live_clan.acquire_live_read_permit(database, FINGERPRINT) for _ in range(30)
+            ]
+            collection = [
+                collector.acquire_collector_permit(FINGERPRINT).granted for _ in range(30)
+            ]
+            verification = api_verification.acquire_official_permit(
+                database, FINGERPRINT, request_id=str(uuid4())
+            )
+            if time.monotonic() - started < 0.8:
+                break
+            time.sleep(1.1)
 
         assert sum(live) == 12
         assert sum(collection) == 12
