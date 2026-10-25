@@ -644,7 +644,7 @@ def read_type_rows(
                sum(destruction), sum(trophies)
         FROM ({source}) AS source (
             population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction, trophies)
+            three_star, destruction, trophies, ranked_day_start)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
         GROUP BY 1, 2, 3
@@ -688,7 +688,7 @@ def _selected_counts(
     boards: tuple[dict[Any, int], int, int] | None,
 ) -> tuple[str, list[Any]]:
     """The selected attacks as rows of (player, distinct army, attacks,
-    one-star, two-star, three-star, destruction, trophies won), and their
+    one-star, two-star, three-star, destruction, trophies won, day), and their
     parameters: saved counts for counted days, the attacks themselves
     otherwise, as ``read_type_rows`` describes."""
     counted = {
@@ -713,7 +713,7 @@ def _selected_counts(
         parts.append(
             f"""
             SELECT population_player_id, exact_army_id, attacks, one_star,
-                   two_star, three_star, destruction, trophies
+                   two_star, three_star, destruction, trophies, ranked_day_start
             FROM army_package_day_counts
             WHERE ranked_day_start = ANY(%s::timestamptz[])
               AND {members.format("")}
@@ -729,7 +729,7 @@ def _selected_counts(
             f"""
             SELECT population_player_id, exact_army_id, 1, (fact.stars = 1)::int,
                    (fact.stars = 2)::int, (fact.stars = 3)::int,
-                   destruction_percentage, COALESCE(moved.trophies, 0)
+                   destruction_percentage, COALESCE(moved.trophies, 0), ranked_day_start
             FROM ({facts}) AS fact{_TROPHIES_JOIN}
             """
         )
@@ -803,7 +803,7 @@ def variant_examples(
         SELECT source.exact_army_id, sum(source.attacks)
         FROM ({source}) AS source (
             population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction, trophies)
+            three_star, destruction, trophies, ranked_day_start)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
         WHERE (label.type_id = %s AND label.variant_id = %s) OR source.exact_army_id < 0
@@ -847,20 +847,30 @@ def variant_examples(
             group[2], group[3] = composition, attacks
     top = sorted(groups.values(), key=lambda group: (-group[0], group[2]))[:EXAMPLE_GROUPS]
     examples = {group[2] for group in top}
-    facts, fact_params = _selected_facts(
-        season_id, list(days), member_ids=member_ids, trophy_range=trophy_range,
-        boards=boards,
+    example_ids = [army_id for army_id, composition in compositions.items()
+                   if composition in examples]
+    # Only the days and players whose selected attacks used an example are
+    # read battle by battle, so the read stays about as small as the examples.
+    trophies, trophy_params = (
+        ("", []) if trophy_range is None
+        else (" AND fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range])
     )
     votes: Counter[tuple[tuple[tuple[Any, ...], ...], str]] = Counter()
     for army_id, code, battles in connection.execute(
         f"""
+        WITH used AS MATERIALIZED (
+            SELECT DISTINCT ranked_day_start, population_player_id
+            FROM ({source}) AS source (
+                population_player_id, exact_army_id, attacks, one_star, two_star,
+                three_star, destruction, trophies, ranked_day_start)
+            WHERE exact_army_id = ANY(%s::bigint[]))
         SELECT fact.exact_army_id, fact.raw_code, count(*)
-        FROM ({facts}) AS fact
-        WHERE fact.exact_army_id = ANY(%s::bigint[])
+        FROM ({_FACTS}{trophies}) AS fact
+        JOIN used USING (ranked_day_start, population_player_id)
+        WHERE fact.exact_army_id = ANY(%s::bigint[]) AND fact.raw_code IS NOT NULL
         GROUP BY 1, 2
         """,
-        [*fact_params, [army_id for army_id, composition in compositions.items()
-                        if composition in examples]],
+        [*params, example_ids, season_id, list(days), *trophy_params, example_ids],
     ).fetchall():
         votes[(compositions[int(army_id)], str(code))] += int(battles)
     codes: dict[tuple[tuple[Any, ...], ...], str] = {}
