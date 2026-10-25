@@ -269,9 +269,10 @@ describe("live clan client boundary", () => {
     expect(clan).toEqual({ clan: null });
   });
 
-  // The private API logs the views it answered without the game itself.
   it.each([
-    [200, { tag: TAG, live: false }, []],
+    [200, { tag: TAG, live: false, reason: "cap" }, ["cap"]],
+    [200, { tag: TAG, live: false, reason: "timeout" }, ["timeout"]],
+    [200, { tag: TAG, live: false }, ["unusable_answer"]],
     [200, { tag: "#2PP", live: true, clan: null }, ["unusable_answer"]],
     [
       200,

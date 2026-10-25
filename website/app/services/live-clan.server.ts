@@ -10,10 +10,7 @@ export interface LiveClan {
 // under its five-second limit, so a slow answer never holds the page.
 const LIVE_CLAN_TIMEOUT_MS = 2_500;
 
-/**
- * Null when the game gave no answer: the page keeps the saved clan. A view the
- * private API answered without the game is logged there; this logs the rest.
- */
+/** Null when the game gave no answer: the page keeps the saved clan and logs why. */
 export async function getLiveClan(tag: string): Promise<LiveClan | null> {
   let payload: unknown;
   try {
@@ -35,7 +32,9 @@ export async function getLiveClan(tag: string): Promise<LiveClan | null> {
     return fallback(timedOut ? "website_timeout" : "api_error");
   }
   if (!isRecord(payload) || payload.tag !== tag) return fallback("unusable_answer");
-  if (payload.live !== true) return null;
+  if (payload.live !== true) {
+    return fallback(isString(payload.reason) ? payload.reason : "unusable_answer");
+  }
   const clan = payload.clan;
   if (clan === null) return { clan: null };
   if (

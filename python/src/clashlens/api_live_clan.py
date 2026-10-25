@@ -1,8 +1,8 @@
 """The player page's live clan, read from the game with the interactive key.
 
 It is shown only: the answer is never saved. Each player's answer is kept in
-memory for a minute, as long as the game's own player cache. Each view that
-keeps the saved clan logs one ``live_clan`` line saying why.
+memory for a minute, as long as the game's own player cache. An answer without
+the game's says why, so the website can log it.
 """
 
 from __future__ import annotations
@@ -117,17 +117,6 @@ class LiveClans:
         self._reading: dict[str, Future[LiveClan]] = {}
 
     def read(self, normalized_tag: str) -> LiveClan:
-        answer = self._read(normalized_tag)
-        if not answer.live:
-            print(
-                json.dumps(
-                    {"event": "live_clan", "status": "fallback", "reason": answer.reason}
-                ),
-                flush=True,
-            )
-        return answer
-
-    def _read(self, normalized_tag: str) -> LiveClan:
         now = self._clock()
         with self._lock:
             remembered = self._answers.get(normalized_tag)

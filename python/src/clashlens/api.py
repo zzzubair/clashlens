@@ -447,6 +447,8 @@ def create_app(
             content["clan"] = (
                 None if clan.tag is None else {"name": clan.name, "tag": clan.tag}
             )
+        else:
+            content["reason"] = clan.reason
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/players/{tag}/today")
