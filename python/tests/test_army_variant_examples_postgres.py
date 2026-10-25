@@ -25,7 +25,8 @@ from clashlens.api_db import ApiDatabase
 # armies leave out, so both codes are one distinct army.
 REVENGE = "h7p4e60_52u9x132-4x7s2x109"
 REVENGE_SIEGE = "h7p4e60_52u9x132-4x7-1x51s2x109"
-# 2 and 3 Archers are fillers, under 5% of the camp space: the same group.
+# 2 and 3 Archers are fillers, under 5% of the camp space: the same group,
+# as other distinct armies.
 REVENGE_ARCHERS = ("h7p4e60_52u9x132-4x7-2x1s2x109", "h7p4e60_52u9x132-4x7-3x1s2x109")
 # An Earthquake instead of Ice Blocks: another group.
 REVENGE_QUAKE = "h7p4e60_52u9x132-4x7s2x10"
@@ -36,8 +37,12 @@ BACKPACK = "h7p4e53_52u10x132-2x7s1x10"
 def test_variant_examples_from_saved_battles_to_the_armies_page(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    codes = [REVENGE_SIEGE, REVENGE_SIEGE, REVENGE, *REVENGE_ARCHERS, REVENGE_QUAKE, BACKPACK]
-    opponents = ["#8PP", "#9PP", "#PPP", "#YPP", "#LPP", "#QPP", "#GPP"]
+    codes = [
+        REVENGE_SIEGE, REVENGE_SIEGE, REVENGE, REVENGE, REVENGE_SIEGE,
+        *[REVENGE_ARCHERS[0]] * 4, REVENGE_ARCHERS[1], REVENGE_QUAKE, BACKPACK,
+    ]
+    opponents = ["#8PP", "#9PP", "#PPP", "#YPP", "#LPP", "#QPP", "#GPP", "#RPP", "#JPP",
+                 "#CPP", "#UPP", "#VPP"]
     times = [DAY_START + timedelta(hours=hour) for hour in range(1, len(codes) + 1)]
     with domain_database(database_url) as ci:
         job = store_observation(
@@ -73,9 +78,9 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
             ])
             assert processor.process_job(_army_job(database), owner="army").outcome == "processed"
             with database.pool.connection() as connection:
-                # The one-Wall-Wrecker-less battle seen from its defender's
-                # side too, and an older saved version of it: still 1 battle
-                # against the Wall Wrecker code's 2.
+                # The Wall Wrecker-less battles seen from their defenders'
+                # side too, and older saved versions of them: still 2 battles
+                # against the Wall Wrecker code's 3.
                 connection.execute(
                     """
                     INSERT INTO battle_army_decodes (
@@ -114,11 +119,11 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                 return next(row["usage_count"] for row in thrower["variants"]
                             if row["label"] == "Revenge Thrower")
 
-            # The 3 Ice Block armies are one group of 5 attacks, its example
-            # the army used 3 times, copied with the Wall Wrecker 2 of them
+            # The 3 Ice Block armies are one group of 10 attacks, its example
+            # the army used 5 times, copied with the Wall Wrecker 3 of them
             # took. The Earthquake army is the second group.
             expected = [
-                {"attacks": 5, "armies": 3, "example_attacks": 3,
+                {"attacks": 10, "armies": 3, "example_attacks": 5,
                  "army_share_code": REVENGE_SIEGE},
                 {"attacks": 1, "armies": 1, "example_attacks": 1,
                  "army_share_code": REVENGE_QUAKE},
@@ -142,45 +147,43 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
 
             assert result["covered_days"] == [DAY_NUMBER]
 
-            # The Copy army code comes from the newest battles by battle
-            # time: the Wall Wrecker-less code's battle was the newest, and
-            # moved to before the others it no longer is.
-            monkeypatch.setattr(army_types, "EXAMPLE_CODE_BATTLES", 1)
-            assert examples("top-10")["groups"][0]["army_share_code"] == REVENGE
+            # Older partly read armies, saved with their Revenge Deck unnamed
+            # and no distinct army, count with the same army saved the newer
+            # way, here with its Ice Blocks split between home and Clan
+            # Castle: 2 older Wall Wrecker attacks and 3 newer attacks, 2
+            # without it, are one army of 5 that beats the Archers army's 4,
+            # copied with the code most of all 5 took. The Earthquake army
+            # alone still makes its group.
+            older = [battles[opponent] for opponent in ("#8PP", "#9PP", "#UPP")]
             with database.pool.connection() as connection:
+                decodes = """(SELECT decode_id FROM army_analytics_battle_facts
+                              WHERE is_current AND lens = 'offense'
+                                AND battle_id = ANY(%s::bigint[]))"""
                 connection.execute(
-                    """
-                    UPDATE battle_evidence SET battle_timestamp = %s
-                    WHERE id IN (SELECT evidence_id FROM battle_army_decodes
-                                 WHERE raw_code = %s)
-                    """,
-                    (DAY_START, REVENGE),
-                )
-            assert examples("top-10")["groups"][0]["army_share_code"] == REVENGE_SIEGE
-            monkeypatch.setattr(army_types, "EXAMPLE_CODE_BATTLES", 200)
-
-            # An older partly read army, saved with its Revenge Deck unnamed
-            # and no distinct army, still makes its group, copied with its
-            # own code, counted or not.
-            with database.pool.connection() as connection:
-                connection.execute(
-                    """
+                    f"""
                     UPDATE battle_army_decodes
                     SET status = 'partial', exact_army_id = NULL, identity_hash = NULL,
-                        heroes = jsonb_set(heroes, '{0,equipment}', '["equipment:52"]'),
-                        unresolved_components = '[{"numeric_id": 60, "quantity": 1,
-                            "section": "h", "origin": "hero:7:equipment"}]'
-                    WHERE raw_code = %s
+                        heroes = jsonb_set(heroes, '{{0,equipment}}', '["equipment:52"]'),
+                        unresolved_components = '[{{"numeric_id": 60, "quantity": 1,
+                            "section": "h", "origin": "hero:7:equipment"}}]'
+                    WHERE id IN {decodes}
                     """,
-                    (REVENGE_QUAKE,),
+                    (older,),
+                )
+                connection.execute(
+                    f"""
+                    UPDATE battle_army_decodes
+                    SET spells = '[["spell:109", 1, "home"], ["spell:109", 1, "clan_castle"]]'
+                    WHERE id IN {decodes}
+                    """,
+                    (older[:2],),
                 )
                 connection.execute(
                     """
                     UPDATE army_analytics_battle_facts SET army_state = 'partial'
-                    WHERE decode_id IN (SELECT id FROM battle_army_decodes
-                                        WHERE raw_code = %s)
+                    WHERE is_current AND lens = 'offense' AND battle_id = ANY(%s::bigint[])
                     """,
-                    (REVENGE_QUAKE,),
+                    (older,),
                 )
                 connection.execute("DELETE FROM army_type_counted_days")
             for _counted in (False, True):
