@@ -605,29 +605,21 @@ class KeyPool:
             waiter.set_result(state)
 
     def _take(self) -> _KeyState | None:
-        """Reserve a free slot on the next ready key, or the least-paused key."""
-        healthy = [state for state in self._states if state.healthy]
+        """Reserve a free slot on the next healthy, unpaused key."""
         now = monotonic()
-        ready = [state for state in healthy if state.paused_until <= now]
-        free = [
-            state
-            for state in ready or healthy
-            if state.active < self.concurrency_per_key
-        ]
-        if not free:
-            return None
-        if ready:
-            count = len(self._states)
-            for offset in range(count):
-                index = (self._cursor + offset) % count
-                chosen = self._states[index]
-                if chosen in free:
-                    self._cursor = (index + 1) % count
-                    break
-        else:
-            chosen = min(free, key=lambda state: state.paused_until)
-        chosen.active += 1
-        return chosen
+        count = len(self._states)
+        for offset in range(count):
+            index = (self._cursor + offset) % count
+            state = self._states[index]
+            if (
+                state.healthy
+                and state.paused_until <= now
+                and state.active < self.concurrency_per_key
+            ):
+                self._cursor = (index + 1) % count
+                state.active += 1
+                return state
+        return None
 
     def quarantine(self, label: str) -> None:
         self._state(label).healthy = False
