@@ -4,6 +4,10 @@ WORKDIR /build
 ADD https://github.com/wal-g/wal-g/archive/refs/tags/v3.0.9.tar.gz /tmp/wal-g.tar.gz
 RUN echo 'b06bc26c4865c07d0c269101910f63c7eedd03790b7c054a7da0980a7a9cc31d  /tmp/wal-g.tar.gz' | sha256sum -c - \
     && tar -xzf /tmp/wal-g.tar.gz --strip-components=1
+# v3.0.9 is wal-g's latest release; raise its bundled modules past known advisories.
+RUN go get golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0 \
+    google.golang.org/grpc@v1.83.2 go.opentelemetry.io/otel/sdk@v1.45.0 \
+    && go mod tidy
 RUN CGO_ENABLED=0 GOEXPERIMENT=jsonv2 go build -mod=readonly -p=2 -trimpath \
     -ldflags='-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=v3.0.9' \
     -o /wal-g ./main/pg
