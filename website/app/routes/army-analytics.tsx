@@ -471,16 +471,12 @@ const ArmyResultRow = memo(function ArmyResultRow({
             <span className="analytics-type-chevron" aria-hidden="true" />
             <span>
               {row.label}
-              <small>
-                {variants ? (
-                  <>
-                    {named} {named === 1 ? "variant" : "variants"}
-                    {variants.length > named ? " + Other" : null}
-                  </>
-                ) : (
-                  "Top armies"
-                )}
-              </small>
+              {variants ? (
+                <small>
+                  {named} {named === 1 ? "variant" : "variants"}
+                  {variants.length > named ? " + Other" : null}
+                </small>
+              ) : null}
             </span>
           </button>
         ) : (
@@ -928,15 +924,10 @@ export default function ArmyAnalyticsRoute() {
           ) : null}
           {armyTypes ? (
             <p className="section-note analytics-coverage-note">
-              Avg. trophies counts every attack: a 3-star wins 40 and a miss still wins
-              some. Under it is what a miss won on average.
-            </p>
-          ) : null}
-          {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
-            <p className="section-note analytics-coverage-note">
-              Tap an army to open its variants: the same army split by its heroes’
-              equipment, each with its share of that army. Tap a variant for its most-used
-              armies.
+              {analytics.rows.some((row) => namedVariantCount(row) > 0)
+                ? "Tap an army for its variants, then a variant for its top armies. "
+                : null}
+              Avg. trophies counts every attack.
             </p>
           ) : null}
           <div

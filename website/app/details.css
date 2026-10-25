@@ -882,6 +882,23 @@
 .analytics-page .analytics-examples p {
   margin: 0;
 }
+.analytics-page .analytics-examples-rule {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+/* Each card leads with its share of the variant; its attacks follow, quieter. */
+.analytics-page .analytics-examples-share {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+}
+.analytics-page .analytics-examples-share strong {
+  color: var(--cl-ink);
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
 .analytics-page .analytics-examples-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));

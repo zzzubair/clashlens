@@ -32,7 +32,7 @@ const examplesPayload = {
   kind: "army-variant-examples",
   type_id: 3,
   variant_id: 3,
-  rule: "Thrower armies with Revenge Deck, without Fireball or Rocket Backpack.",
+  rule: "With Revenge Deck, without Fireball or Rocket Backpack.",
   selection: { season: "1776052800", start_day: 1, end_day: 6 },
   covered_days: [1, 3, 4, 5, 6],
   groups: [
@@ -138,9 +138,9 @@ describe("variant example armies panel", () => {
       .replace(/\s+/g, " ");
     expect(text).toContain(examplesPayload.rule);
     // Shares of the variant's 6 attacks, most used first.
-    expect(text).toContain("5 attacks · 83.3% of Revenge Thrower");
-    expect(text).toContain("1 attack · 16.7% of Revenge Thrower");
-    expect(text).toContain("troops under 5% of the camp space");
+    expect(text).toContain("83.3% 5 attacks");
+    expect(text).toContain("16.7% 1 attack");
+    expect(text).toContain("Near-identical armies count as one.");
     expect(html).toContain('title="9 × Thrower"');
     expect(html).toContain("Wall Wrecker");
     expect(

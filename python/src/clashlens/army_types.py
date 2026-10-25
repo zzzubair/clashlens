@@ -286,9 +286,10 @@ def variant(type_id: int, heroes: Iterable[Any]) -> int:
 
 
 def variant_rule(type_id: int, variant_id: int) -> str:
-    """One line saying what puts an army of ``type_id`` in this variant, from
-    ``VARIANTS``: the equipment it carries, and the equipment that would have
-    named it an earlier variant first. A type's Other carries none of them."""
+    """A short line saying what puts an army of ``type_id`` in this variant,
+    from ``VARIANTS``: the equipment it carries, and the equipment that would
+    have named it an earlier variant first. A type's Other carries none of
+    them."""
     listed = VARIANTS[type_id]
     position = next(
         (index for index, (listed_id, *_rest) in enumerate(listed) if listed_id == variant_id),
@@ -306,13 +307,14 @@ def variant_rule(type_id: int, variant_id: int) -> str:
         " and ".join(unit_label(equipment) for _hero, equipment in missing)
         for missing in lacks if len(missing) == 1 or not alone & set(missing)
     ]
-    text = f"{TYPE_NAMES[type_id]} armies"
+    parts = []
     if carries:
-        text += " with " + " and ".join(unit_label(equipment) for _hero, equipment in carries)
+        parts.append("with " + " and ".join(unit_label(equipment) for _hero, equipment in carries))
     if without:
         listed_without = ", ".join(without[:-1]) + " or " if len(without) > 1 else ""
-        text += (", without " if carries else " without ") + listed_without + without[-1]
-    return text + ". Only hero equipment decides it; spells don't count."
+        parts.append("without " + listed_without + without[-1])
+    text = ", ".join(parts) or f"any {TYPE_NAMES[type_id]} army"
+    return text[0].upper() + text[1:] + "."
 
 
 # Variant examples group a variant's distinct armies by what is in them: the

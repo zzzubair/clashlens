@@ -191,20 +191,14 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                     assert examples(population)["groups"] == expected
                 army_types.refresh_army_types(database, now=NOON)
 
-            assert result["rule"] == (
-                "Thrower armies with Revenge Deck, without Fireball or Rocket Backpack."
-                " Only hero equipment decides it; spells don't count."
-            )
+            assert result["rule"] == "With Revenge Deck, without Fireball or Rocket Backpack."
             assert result["army_units"]["troop:51"] == {"name": "Wall Wrecker", "siege": True}
             other = api_analytics.get_army_analytics(
                 api, _selection(category="army-types", population="top-10"),
                 examples=(army_types.HYDRA, army_types.OTHER_VARIANT),
             )
             assert other is not None and other["groups"] == []
-            assert other["rule"] == (
-                "Hydra armies without Revenge Deck or Rocket Backpack."
-                " Only hero equipment decides it; spells don't count."
-            )
+            assert other["rule"] == "Without Revenge Deck or Rocket Backpack."
         finally:
             api.close()
             database.close()

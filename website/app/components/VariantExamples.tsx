@@ -53,7 +53,7 @@ export function VariantExamples({
 }
 
 /** What decides the variant, then each group of alike armies with its
- * attacks, share of the variant's attacks and Copy army. */
+ * share of the variant's attacks, its attacks and Copy army. */
 export function ExampleArmies({
   id,
   label,
@@ -67,17 +67,19 @@ export function ExampleArmies({
 }) {
   return (
     <>
-      <p className="analytics-examples-rule">{examples.rule}</p>
+      <p className="analytics-examples-rule">
+        {examples.rule} Near-identical armies count as one.
+      </p>
       {examples.groups.length ? (
         <ol className="analytics-examples-list">
           {examples.groups.map((group, index) => (
             <li key={group.armyShareCode}>
-              <p>
+              <p className="analytics-examples-share">
                 <strong>
-                  {group.attacks.toLocaleString()}{" "}
-                  {group.attacks === 1 ? "attack" : "attacks"}
+                  {((attacks ? group.attacks / attacks : 0) * 100).toFixed(1)}%
                 </strong>{" "}
-                · {((attacks ? group.attacks / attacks : 0) * 100).toFixed(1)}% of {label}
+                {group.attacks.toLocaleString()}{" "}
+                {group.attacks === 1 ? "attack" : "attacks"}
               </p>
               <ArmyPortraits
                 id={`${id}-army-${index + 1}`}
@@ -99,11 +101,6 @@ export function ExampleArmies({
       ) : (
         <p className="section-note">No armies to show for these players.</p>
       )}
-      <p className="section-note">
-        Armies with the same troops, spells, heroes and equipment count as one, leaving
-        out troops under 5% of the camp space. Copy army copies the most-used army of
-        each.
-      </p>
     </>
   );
 }
