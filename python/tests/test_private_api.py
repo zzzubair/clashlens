@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from uuid import UUID, uuid4
 
 import pytest
@@ -791,6 +792,32 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
                 timed_out = client.get(target, headers=signed_headers(target))
                 assert timed_out.status_code == 503, setting
                 assert timed_out.json() == {"error": "timeout"}, setting
+
+
+def test_public_player_read_p95_is_below_200_milliseconds(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        seed_profile(database, "#2PP", 6000)
+        app = create_app(
+            database=database,
+            keys={("typescript-website", "current"): TS_CURRENT},
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+        target = "/v1/players/%232PP"
+        durations = []
+        with TestClient(app) as client:
+            for _index in range(100):
+                started = perf_counter()
+                response = client.get(target, headers=signed_headers(target))
+                durations.append((perf_counter() - started) * 1000)
+                assert response.status_code == 200
+        p95 = sorted(durations)[94]
+        assert p95 < 200, f"saved player read p95 was {p95:.2f} ms"
 
 
 def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
