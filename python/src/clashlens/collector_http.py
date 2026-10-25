@@ -108,11 +108,11 @@ class _StartLimiter:
 class _KeyState:
     key: ApiKey
     limiter: _StartLimiter
-    semaphore: asyncio.Semaphore
     start_lock: asyncio.Lock
     healthy: bool = True
     paused_until: float = 0.0
     starts: int = 0
+    active: int = 0
 
 
 T = TypeVar("T")
@@ -517,16 +517,11 @@ class KeyPool:
         if len(labels) != len(set(labels)):
             raise ValueError("API key labels must be unique")
         self._states = [
-            _KeyState(
-                key,
-                _StartLimiter(starts_per_second),
-                asyncio.Semaphore(concurrency_per_key),
-                asyncio.Lock(),
-            )
+            _KeyState(key, _StartLimiter(starts_per_second), asyncio.Lock())
             for key in keys
         ]
         self._cursor = 0
-        self._selection_lock = asyncio.Lock()
+        self._waiters: deque[asyncio.Future[_KeyState]] = deque()
         self._before_start = before_start
         self.starts_per_second = starts_per_second
         self.concurrency_per_key = concurrency_per_key
@@ -534,8 +529,7 @@ class KeyPool:
     async def run(
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]
     ) -> T:
-        state = await self._select()
-        await state.semaphore.acquire()
+        state = await self._acquire()
         release_immediately = True
         try:
             delay = state.paused_until - monotonic()
@@ -570,37 +564,84 @@ class KeyPool:
         except (_DetachedTimeout, _DetachedCancellation) as error:
             release_immediately = False
             error.release_when.add_done_callback(
-                lambda _finished: state.semaphore.release()
+                lambda _finished: self._release(state)
             )
             raise
         finally:
             if release_immediately:
-                state.semaphore.release()
+                self._release(state)
 
-    async def _select(self) -> _KeyState:
-        while True:
-            async with self._selection_lock:
-                healthy = [state for state in self._states if state.healthy]
-                if not healthy:
-                    raise ProviderFailure("no_healthy_api_key", retryable=False)
-                now = monotonic()
-                ready = [state for state in healthy if state.paused_until <= now]
-                if not ready:
-                    return min(healthy, key=lambda state: state.paused_until)
-                count = len(self._states)
-                for offset in range(count):
-                    index = (self._cursor + offset) % count
-                    state = self._states[index]
-                    if state in ready:
-                        self._cursor = (index + 1) % count
-                        return state
+    async def _acquire(self) -> _KeyState:
+        # Requests queue for the pool, not for one key: the oldest waiting
+        # request takes the next free slot on any eligible key.
+        waiter: asyncio.Future[_KeyState] = asyncio.get_running_loop().create_future()
+        self._waiters.append(waiter)
+        try:
+            self._dispatch()
+            return await waiter
+        except asyncio.CancelledError:
+            if waiter.done() and not waiter.cancelled() and not waiter.exception():
+                self._release(waiter.result())
+            raise
+        finally:
+            self._waiters.remove(waiter)
+
+    def _release(self, state: _KeyState) -> None:
+        state.active -= 1
+        self._dispatch()
+
+    def _dispatch(self) -> None:
+        for waiter in self._waiters:
+            if waiter.done():
+                continue
+            if not any(state.healthy for state in self._states):
+                waiter.set_exception(
+                    ProviderFailure("no_healthy_api_key", retryable=False)
+                )
+                continue
+            state = self._take()
+            if state is None:
+                return
+            waiter.set_result(state)
+
+    def _take(self) -> _KeyState | None:
+        """Reserve a free slot on the next ready key, or the least-paused key."""
+        healthy = [state for state in self._states if state.healthy]
+        now = monotonic()
+        ready = [state for state in healthy if state.paused_until <= now]
+        free = [
+            state
+            for state in ready or healthy
+            if state.active < self.concurrency_per_key
+        ]
+        if not free:
+            return None
+        if ready:
+            count = len(self._states)
+            for offset in range(count):
+                index = (self._cursor + offset) % count
+                chosen = self._states[index]
+                if chosen in free:
+                    self._cursor = (index + 1) % count
+                    break
+        else:
+            chosen = min(free, key=lambda state: state.paused_until)
+        chosen.active += 1
+        return chosen
 
     def quarantine(self, label: str) -> None:
         self._state(label).healthy = False
+        self._dispatch()
 
     def pause(self, label: str, seconds: float) -> None:
         state = self._state(label)
         state.paused_until = max(state.paused_until, monotonic() + max(1.0, seconds))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        # A waiting request may take this key's free slot once the pause ends.
+        loop.call_later(state.paused_until - monotonic(), self._dispatch)
 
     def _state(self, label: str) -> _KeyState:
         for state in self._states:
