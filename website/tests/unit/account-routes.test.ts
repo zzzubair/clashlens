@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import {
   createStaticHandler,
   createStaticRouter,
+  RouterContextProvider,
   StaticRouterProvider,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +35,8 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { clientAddressContext } from "../../app/server/client-address.server";
 import { loader as accountLoader } from "../../app/routes/account";
 import GroupsRoute, {
   action as groupsAction,
@@ -816,6 +819,14 @@ describe("account routes", () => {
   });
 
   describe("account.verify-player", () => {
+    beforeEach(() => clearPublicRefreshLimits());
+
+    const visitor = (address: string | undefined = "203.0.113.9") => {
+      const context = new RouterContextProvider();
+      context.set(clientAddressContext, address);
+      return context;
+    };
+
     it("exposes only a fresh idempotency key from the loader", async () => {
       const result = await verifyPlayerLoader({
         request: new Request(`${ORIGIN}/account/verify-player`),
@@ -829,6 +840,7 @@ describe("account routes", () => {
       async (status) => {
         client.verifyPlayerToken = vi.fn(async () => ({ status, tag: TAG }));
         const result = await verifyPlayerAction({
+          context: visitor(),
           request: formRequest("/account/verify-player", {
             idempotencyKey: IDEMPOTENCY_KEY,
             tag: TAG.toLowerCase(),
@@ -860,6 +872,7 @@ describe("account routes", () => {
       async (status) => {
         client.verifyPlayerToken = vi.fn(async () => ({ status, tag: TAG }));
         const result = await verifyPlayerAction({
+          context: visitor(),
           request: formRequest("/account/verify-player", {
             idempotencyKey: IDEMPOTENCY_KEY,
             tag: TAG,
@@ -887,6 +900,7 @@ describe("account routes", () => {
         verificationRequestId: "req-2026-0001",
       }));
       const result = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest("/account/verify-player", {
           idempotencyKey: IDEMPOTENCY_KEY,
           tag: TAG,
@@ -907,6 +921,7 @@ describe("account routes", () => {
 
     it("rejects invalid tags and tokens before calling Python", async () => {
       const badTag = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest("/account/verify-player", {
           idempotencyKey: IDEMPOTENCY_KEY,
           tag: "not a tag",
@@ -916,6 +931,7 @@ describe("account routes", () => {
       expect(dataOf(badTag).status).toBe(400);
 
       const badToken = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest("/account/verify-player", {
           idempotencyKey: IDEMPOTENCY_KEY,
           tag: TAG,
@@ -927,6 +943,7 @@ describe("account routes", () => {
       expect(tokenResult.data.fieldErrors.token).toBeTruthy();
 
       const longToken = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest("/account/verify-player", {
           idempotencyKey: IDEMPOTENCY_KEY,
           tag: TAG,
@@ -939,6 +956,7 @@ describe("account routes", () => {
 
     it("rejects cross-origin requests before calling Python", async () => {
       const result = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest(
           "/account/verify-player",
           { idempotencyKey: IDEMPOTENCY_KEY, tag: TAG, token: "TOKEN123" },
@@ -960,6 +978,7 @@ describe("account routes", () => {
       });
       await expect(
         verifyPlayerAction({
+          context: visitor(),
           request: formRequest("/account/verify-player", {
             idempotencyKey: IDEMPOTENCY_KEY,
             tag: TAG,
@@ -972,6 +991,7 @@ describe("account routes", () => {
         throw new PythonApiError(503, { error: "unavailable" });
       });
       const result = await verifyPlayerAction({
+        context: visitor(),
         request: formRequest("/account/verify-player", {
           idempotencyKey: IDEMPOTENCY_KEY,
           tag: TAG,
@@ -986,6 +1006,38 @@ describe("account routes", () => {
       assertNoStoreHeaders(headers);
       expect(JSON.stringify(data)).not.toContain("SECRET-TOKEN-789");
       assertNoProviderData(data);
+    });
+
+    it("stops one address's seventh attempt in a minute before calling Python", async () => {
+      client.verifyPlayerToken = vi.fn(async () => ({
+        status: "invalid_token" as const,
+        tag: TAG,
+      }));
+      const attempt = (address?: string) =>
+        verifyPlayerAction({
+          context: visitor(address),
+          request: formRequest("/account/verify-player", {
+            idempotencyKey: crypto.randomUUID(),
+            tag: TAG,
+            token: "SECRET-TOKEN-123",
+          }),
+        } as never);
+      for (let index = 0; index < 6; index += 1) {
+        expect(dataOf(await attempt()).status).toBe(200);
+      }
+      const refused = dataOf<{ generalError: { error: { code: string } } }>(
+        await attempt(),
+      );
+      expect(refused.status).toBe(429);
+      expect(refused.data.generalError.error.code).toBe("rate_limited");
+      assertNoStoreHeaders(refused.headers);
+      expect(JSON.stringify(refused.data)).not.toContain("SECRET-TOKEN-123");
+      expect(client.verifyPlayerToken).toHaveBeenCalledTimes(6);
+
+      expect(dataOf(await attempt("203.0.113.10")).status).toBe(200);
+      // No known address goes nowhere.
+      expect(dataOf(await attempt("")).status).toBe(503);
+      expect(client.verifyPlayerToken).toHaveBeenCalledTimes(7);
     });
 
     it("exports a no-store headers policy", async () => {

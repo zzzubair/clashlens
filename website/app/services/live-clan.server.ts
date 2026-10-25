@@ -1,3 +1,4 @@
+import { allowLiveClanRead } from "../server/abuse.server";
 import { PythonApiError, requestJson } from "./python.server";
 import { isRecord, isString } from "./python-response.server";
 
@@ -10,8 +11,15 @@ export interface LiveClan {
 // under its five-second limit, so a slow answer never holds the page.
 const LIVE_CLAN_TIMEOUT_MS = 2_500;
 
-/** Null when the game gave no answer: the page keeps the saved clan and logs why. */
-export async function getLiveClan(tag: string): Promise<LiveClan | null> {
+/**
+ * Null when the game gave no answer (logged with why), or this visitor asked
+ * too often: the page keeps the saved clan.
+ */
+export async function getLiveClan(
+  identity: string | undefined,
+  tag: string,
+): Promise<LiveClan | null> {
+  if (!identity || !allowLiveClanRead(identity)) return null;
   let payload: unknown;
   try {
     payload = await requestJson<unknown>(

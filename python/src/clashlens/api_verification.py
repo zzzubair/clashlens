@@ -13,6 +13,9 @@ from .api_db import (
 )
 from .verification import KeyAction, VerificationOutcome
 
+# New verification attempts one account may start in any minute.
+VERIFICATION_ATTEMPTS_PER_MINUTE = 6
+
 
 def register_official_credential(database: ApiDatabase, fingerprint: str) -> None:
     with database.pool.connection() as connection:
@@ -141,7 +144,41 @@ def reserve_verification(
 ) -> VerificationReservation:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, 
+            # One account's attempts take turns, so simultaneous ones see each other.
+            connection.execute(
+                "SELECT 1 FROM clash_lens_accounts WHERE id = %s FOR NO KEY UPDATE",
+                (binding.account_id,),
+            )
+            # A retry of a recorded request replays its answer without spending an attempt.
+            recorded = connection.execute(
+                "SELECT 1 FROM private_api_requests WHERE request_id = %s",
+                (binding.request_id,),
+            ).fetchone()
+            if recorded is None:
+                attempts, retry_after = connection.execute(
+                    """
+                    SELECT count(*),
+                           ceil(extract(epoch FROM
+                               min(created_at) + interval '1 minute' - clock_timestamp()
+                           ))::int
+                    FROM player_link_verification_audits
+                    WHERE account_id = %s
+                      AND created_at > clock_timestamp() - interval '1 minute'
+                    """,
+                    (binding.account_id,),
+                ).fetchone()
+                if attempts >= VERIFICATION_ATTEMPTS_PER_MINUTE:
+                    return VerificationReservation(
+                        False,
+                        OperationResult(
+                            429,
+                            {
+                                "error": "rate_limited",
+                                "retry_after_seconds": max(1, retry_after),
+                            },
+                        ),
+                    )
+            existing = api_db._reserve_request(database,
                 connection,
                 binding,
                 recover_expired_verification=True,

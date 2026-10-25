@@ -16,7 +16,7 @@ describe("safe website errors", () => {
     expect(result).toEqual({
       error: {
         code: "rate_limited",
-        message: "Refresh requests are temporarily limited. Try again shortly.",
+        message: "Requests are temporarily limited. Try again shortly.",
         retryAfterSeconds: 9,
       },
     });

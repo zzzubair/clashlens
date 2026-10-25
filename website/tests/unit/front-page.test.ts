@@ -4,10 +4,11 @@ import {
   createStaticHandler,
   createStaticRouter,
   MemoryRouter,
+  RouterContextProvider,
   StaticRouterProvider,
   useLoaderData,
 } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -27,6 +28,9 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import { PythonApiError } from "../../app/services/python.server";
 import Search, { loader as searchLoader } from "../../app/routes/search";
+import { loader as suggestionLoader } from "../../app/routes/player-search";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { clientAddressContext } from "../../app/server/client-address.server";
 import { loader as frontLoader } from "../../app/routes/dashboard";
 import { loader as oldDashboard } from "../../app/routes/dashboard.redirect";
 import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
@@ -398,9 +402,20 @@ it("counts a ranking as old once it passes 10 minutes while the page is open", a
   );
 });
 
+function visitor(address?: string) {
+  const context = new RouterContextProvider();
+  context.set(clientAddressContext, address);
+  return context;
+}
+
 describe("search loading", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
+    clearPublicRefreshLimits();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows a failed search as an error", async () => {
@@ -411,9 +426,55 @@ describe("search loading", () => {
     });
     const result = await searchLoader({
       request: new Request("https://clashlens.example/search?q=Nova"),
+      context: visitor("203.0.113.9"),
     } as never);
-    expect(result.search).toBeNull();
-    expect(result.error?.error.code).toBe("rate_limited");
+    expect("search" in result && result.search).toBeNull();
+    expect("error" in result && result.error?.error.code).toBe("rate_limited");
+  });
+
+  it("gives one visitor 60 searches a minute across the search page and the header box", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-25T12:00:00Z"), toFake: ["Date"] });
+    const searchPlayers = vi.fn().mockResolvedValue(search);
+    mocks.createPythonClient.mockReturnValue({ searchPlayers });
+    const page = (address?: string) =>
+      searchLoader({
+        request: new Request("https://clashlens.example/search?q=Nova"),
+        context: visitor(address),
+      } as never);
+    const box = (address?: string) =>
+      suggestionLoader({
+        request: new Request("https://clashlens.example/resources/players/search?q=Nova"),
+        context: visitor(address),
+      } as never);
+
+    for (let index = 0; index < 30; index += 1) {
+      expect(await page("203.0.113.9")).toMatchObject({ search, error: null });
+      expect((await box("203.0.113.9")).status).toBe(200);
+    }
+    expect(searchPlayers).toHaveBeenCalledTimes(60);
+
+    const refused = await box("203.0.113.9");
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("Retry-After")).toBe("60");
+    expect(await refused.json()).toMatchObject({
+      query: "Nova",
+      search: null,
+      error: { error: { code: "rate_limited", retryAfterSeconds: 60 } },
+    });
+    expect(await page("203.0.113.9")).toMatchObject({
+      data: { search: null, error: { error: { code: "rate_limited" } } },
+      init: { status: 429 },
+    });
+    expect(searchPlayers).toHaveBeenCalledTimes(60);
+
+    // No known address asks nothing; another address has its own allowance.
+    expect((await box()).status).toBe(503);
+    expect((await box("203.0.113.10")).status).toBe(200);
+    expect(searchPlayers).toHaveBeenCalledTimes(61);
+
+    vi.setSystemTime(new Date("2026-10-25T12:01:00Z"));
+    expect((await box("203.0.113.9")).status).toBe(200);
+    expect(searchPlayers).toHaveBeenCalledTimes(62);
   });
 
   it("asks nothing for an empty search", async () => {

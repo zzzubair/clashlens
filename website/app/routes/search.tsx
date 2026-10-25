@@ -1,9 +1,11 @@
 import {
+  data,
   Link,
   redirect,
   useLoaderData,
   useNavigation,
   type LoaderFunctionArgs,
+  type UNSAFE_DataWithResponseInit as DataWithResponseInit,
 } from "react-router";
 
 import { useBackState } from "../components/BackLink";
@@ -27,7 +29,12 @@ export function meta() {
  * GET /search?q= — every saved player and Clash Lens profile matching the
  * words. A complete #tag opens that player's page instead.
  */
-export async function loader({ request }: LoaderFunctionArgs): Promise<SearchLoaderData> {
+export async function loader({
+  request,
+  context,
+}: LoaderFunctionArgs): Promise<
+  SearchLoaderData | DataWithResponseInit<SearchLoaderData>
+> {
   const params = new URL(request.url).searchParams;
   const rawQuery = params.get("q") ?? "";
   const query = rawQuery.trim();
@@ -49,6 +56,16 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<SearchLoa
     throw redirect(`${canonicalPlayerPath(exactTag)}${retry}`);
   }
   if (query === "") return { search: null, query, error: null };
+  const { clientAddressContext } = await import("../server/client-address.server");
+  const { allowSearch, visitorRefusal } = await import("../server/abuse.server");
+  // Both search addresses share one allowance, checked before any backend search.
+  const refusal = visitorRefusal(context?.get(clientAddressContext), allowSearch);
+  if (refusal) {
+    return data(
+      { search: null, query, error: await safeError(refusal) },
+      { status: refusal.status },
+    );
+  }
   try {
     const { createPythonClient } = await import("../services/python.server");
     return {

@@ -105,7 +105,7 @@ async function linkReturnPath(value: string | null | undefined): Promise<string 
  * carries only safe status outcomes. A failed attempt returns a fresh
  * idempotency key for the retry.
  */
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
@@ -141,6 +141,25 @@ export async function action({ request }: Route.ActionArgs) {
         values: { tag: rawTag },
       },
       { status: 400, headers: NO_STORE },
+    );
+  }
+
+  // The private service also limits each account; this stops one address first.
+  const { clientAddressContext } = await import("../server/client-address.server");
+  const { allowPublicRefresh, visitorRefusal } = await import("../server/abuse.server");
+  const refusal = visitorRefusal(context?.get(clientAddressContext), allowPublicRefresh);
+  if (refusal) {
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return data<VerifyPlayerActionData>(
+      {
+        idempotencyKey: actions.freshIdempotencyKey(),
+        status: null,
+        verificationRequestId: null,
+        fieldErrors: {},
+        generalError: safeWebsiteError(refusal),
+        values: { tag: rawTag },
+      },
+      { status: refusal.status, headers: NO_STORE },
     );
   }
 
