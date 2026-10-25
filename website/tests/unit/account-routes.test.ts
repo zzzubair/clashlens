@@ -1040,6 +1040,30 @@ describe("account routes", () => {
       expect(client.verifyPlayerToken).toHaveBeenCalledTimes(7);
     });
 
+    it("answers 429 when Python refuses the account from a fresh address", async () => {
+      client.verifyPlayerToken = vi.fn(async () => {
+        throw new PythonApiError(429, { error: "rate_limited", retry_after_seconds: 42 });
+      });
+      const refused = dataOf<{
+        generalError: { error: { code: string; retryAfterSeconds?: number } };
+      }>(
+        await verifyPlayerAction({
+          context: visitor("198.51.100.7"),
+          request: formRequest("/account/verify-player", {
+            idempotencyKey: crypto.randomUUID(),
+            tag: TAG,
+            token: "SECRET-TOKEN-456",
+          }),
+        } as never),
+      );
+      expect(client.verifyPlayerToken).toHaveBeenCalledTimes(1);
+      expect(refused.status).toBe(429);
+      expect(refused.data.generalError.error.code).toBe("rate_limited");
+      expect(refused.data.generalError.error.retryAfterSeconds).toBe(42);
+      assertNoStoreHeaders(refused.headers);
+      expect(JSON.stringify(refused.data)).not.toContain("SECRET-TOKEN-456");
+    });
+
     it("exports a no-store headers policy", async () => {
       const { headers } = await import("../../app/routes/account.verify-player");
       expect(headers()).toEqual({ "Cache-Control": "no-store" });

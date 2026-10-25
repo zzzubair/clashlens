@@ -194,16 +194,20 @@ export async function action({ request, context }: Route.ActionArgs) {
   } catch (cause) {
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const { safeWebsiteError } = await import("../server/errors.server");
+    const generalError = safeWebsiteError(cause);
     return data<VerifyPlayerActionData>(
       {
         idempotencyKey: actions.freshIdempotencyKey(),
         status: null,
         verificationRequestId: null,
         fieldErrors: {},
-        generalError: safeWebsiteError(cause),
+        generalError,
         values: { tag: rawTag },
       },
-      { status: 422, headers: NO_STORE },
+      {
+        status: generalError.error.code === "rate_limited" ? 429 : 422,
+        headers: NO_STORE,
+      },
     );
   }
 }
