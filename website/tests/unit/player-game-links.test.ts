@@ -237,6 +237,7 @@ describe("live clan client boundary", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     process.env = { ...saved };
   });
 
@@ -269,12 +270,37 @@ describe("live clan client boundary", () => {
   });
 
   it.each([
-    [200, { tag: TAG, live: false }],
-    [200, { tag: "#2PP", live: true, clan: null }],
-    [200, { tag: TAG, live: true, clan: { name: "Titans2.0", tag: "2CLAN" } }],
-    [503, { error: "unavailable" }],
-  ])("keeps the saved clan for HTTP %i %j", async (status, payload) => {
+    [200, { tag: TAG, live: false, reason: "cap" }, ["cap"]],
+    [200, { tag: TAG, live: false, reason: "timeout" }, ["timeout"]],
+    [200, { tag: TAG, live: false }, ["unusable_answer"]],
+    [200, { tag: "#2PP", live: true, clan: null }, ["unusable_answer"]],
+    [
+      200,
+      { tag: TAG, live: true, clan: { name: "Titans2.0", tag: "2CLAN" } },
+      ["unusable_answer"],
+    ],
+    [503, { error: "unavailable" }, ["api_error"]],
+  ])("keeps the saved clan for HTTP %i %j", async (status, payload, reasons) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { clan } = await readWith(status, payload);
     expect(clan).toBeNull();
+    expect(loggedReasons(warn)).toEqual(reasons);
   });
+
+  it("keeps the saved clan and logs why when the private API is too slow", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new DOMException("too slow", "TimeoutError")),
+    );
+    const { getLiveClan } = await vi.importActual<
+      typeof import("../../app/services/live-clan.server")
+    >("../../app/services/live-clan.server");
+    expect(await getLiveClan(TAG)).toBeNull();
+    expect(loggedReasons(warn)).toEqual(["website_timeout"]);
+  });
+
+  function loggedReasons(warn: { mock: { calls: unknown[][] } }) {
+    return warn.mock.calls.map(([line]) => JSON.parse(String(line)).reason);
+  }
 });

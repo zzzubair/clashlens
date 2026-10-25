@@ -137,16 +137,27 @@ def test_a_player_in_no_clan_now_shows_no_clan(database_url: str) -> None:
         assert live_clan(client, TAGS[1]) == {"tag": TAGS[1], "live": True, "clan": None}
 
 
-@pytest.mark.parametrize("answer", ["slow", "maintenance", "throttled", "dropped"])
-def test_no_answer_from_the_game_keeps_the_saved_clan(database_url: str, answer: str) -> None:
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ("slow", "timeout"),
+        ("maintenance", "http_503"),
+        ("throttled", "http_429"),
+        ("dropped", "other"),
+    ],
+)
+def test_no_answer_from_the_game_keeps_the_saved_clan(
+    database_url: str, answer: str, reason: str
+) -> None:
     with live_clan_api(database_url) as (client, database, _collector, _origin):
         FakeGame.answers[TAGS[2]] = answer
         started = time.monotonic()
 
-        assert live_clan(client, TAGS[2]) == {"tag": TAGS[2], "live": False}
+        fallback = {"tag": TAGS[2], "live": False, "reason": reason}
+        assert live_clan(client, TAGS[2]) == fallback
         assert time.monotonic() - started < 2.5
         # The failed answer is remembered too, so the game is asked once a minute.
-        assert live_clan(client, TAGS[2]) == {"tag": TAGS[2], "live": False}
+        assert live_clan(client, TAGS[2]) == fallback
         assert FakeGame.profile_reads == [TAGS[2]]
         state = database.scalar("SELECT state FROM shared_api_credentials")
         assert state == ("cooldown" if answer == "throttled" else "active")
@@ -160,7 +171,7 @@ def test_no_free_start_keeps_the_saved_clan_without_asking_the_game(
         for _ in range(12):
             assert collector.acquire_collector_permit(FINGERPRINT).granted
 
-        assert live_clan(client, TAGS[3]) == {"tag": TAGS[3], "live": False}
+        assert live_clan(client, TAGS[3]) == {"tag": TAGS[3], "live": False, "reason": "cap"}
         assert FakeGame.profile_reads == []
         # Not remembered: the next view asks again once a start is free.
         time.sleep(1.1)
@@ -189,7 +200,8 @@ def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
                 break
             time.sleep(1.1)
 
-        assert sum(live) == 12
+        assert sum(refused is None for refused in live) == 12
+        assert set(live) == {None, "cap"}
         assert sum(collection) == 12
         assert verification.granted
 
@@ -231,5 +243,5 @@ def test_views_of_one_player_at_once_share_one_request(database_url: str) -> Non
         for view in views:
             view.join()
 
-        assert answers == [api_live_clan.UNAVAILABLE] * 3
+        assert answers == [api_live_clan.LiveClan(False, reason="timeout")] * 3
         assert sorted(FakeGame.profile_reads) == sorted([TAGS[5], TAGS[6]])
