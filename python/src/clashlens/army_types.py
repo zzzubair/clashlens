@@ -35,7 +35,7 @@ from typing import Any
 
 from . import army_analytics
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
+from .catalog import CATALOG_VERSION, unit_label
 from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
@@ -285,6 +285,85 @@ def variant(type_id: int, heroes: Iterable[Any]) -> int:
     return OTHER_VARIANT
 
 
+def variant_rule(type_id: int, variant_id: int) -> str:
+    """A short line saying what puts an army of ``type_id`` in this variant,
+    from ``VARIANTS``: the equipment it carries, and the equipment that would
+    have named it an earlier variant first. A type's Other carries none of
+    them."""
+    listed = VARIANTS[type_id]
+    position = next(
+        (index for index, (listed_id, *_rest) in enumerate(listed) if listed_id == variant_id),
+        len(listed),
+    )
+    carries = listed[position][2] if position < len(listed) else ()
+    lacks: list[tuple[tuple[str, str], ...]] = []
+    for _id, _name, items in listed[:position]:
+        missing = tuple(item for item in items if item not in carries)
+        if missing not in lacks:
+            lacks.append(missing)
+    # Lacking Revenge already rules out Revenge with Backpack.
+    alone = {missing[0] for missing in lacks if len(missing) == 1}
+    without = [
+        " and ".join(unit_label(equipment) for _hero, equipment in missing)
+        for missing in lacks if len(missing) == 1 or not alone & set(missing)
+    ]
+    parts = []
+    if carries:
+        parts.append("with " + " and ".join(unit_label(equipment) for _hero, equipment in carries))
+    if without:
+        listed_without = ", ".join(without[:-1]) + " or " if len(without) > 1 else ""
+        parts.append("without " + listed_without + without[-1])
+    text = ", ".join(parts) or f"any {TYPE_NAMES[type_id]} army"
+    return text[0].upper() + text[1:] + "."
+
+
+# Variant examples group a variant's distinct armies by what is in them: the
+# same troops, the same spells (not how many) and the same heroes with the
+# same equipment. A troop under FILLER_SHARE percent of the army's camp space
+# is a filler and is left out, so 4 or 5 Archers make no difference. Pets,
+# siege machines and Clan Castle troops are left out too (saved armies never
+# hold the last two); Clan Castle spells count with the army's spells.
+FILLER_SHARE = 5
+EXAMPLE_GROUPS = 3
+
+
+def army_composition(
+    home_troops: Iterable[Any], spells: Iterable[Any], heroes: Iterable[Any]
+) -> tuple[tuple[Any, ...], ...]:
+    """What makes a saved army distinct, the same for its older and newer
+    saved forms: each troop and each spell (home and Clan Castle pooled) with
+    its count added up, and each hero with its pet and equipment."""
+    troops: Counter[str] = Counter()
+    for entry in home_troops:
+        troops[str(entry[0])] += int(entry[1])
+    pooled: Counter[str] = Counter()
+    for entry in spells:
+        pooled[str(entry[0])] += int(entry[1])
+    return (
+        tuple(sorted(troops.items())),
+        tuple(sorted(pooled.items())),
+        tuple(sorted(
+            (str(hero.get("hero")), str(hero.get("pet") or ""),
+             tuple(sorted(map(str, hero.get("equipment") or ()))))
+            for hero in heroes if isinstance(hero, dict)
+        )),
+    )
+
+
+def army_group(composition: tuple[tuple[Any, ...], ...]) -> tuple[tuple[str, ...], ...]:
+    """The group an ``army_composition`` falls in, for variant examples."""
+    troops, spells, heroes = composition
+    total = sum(CAMP_SPACE.get(troop, 0) * count for troop, count in troops)
+    return (
+        tuple(
+            troop for troop, count in troops
+            if CAMP_SPACE.get(troop, 0) * count * 100 >= FILLER_SHARE * total
+        ),
+        tuple(spell for spell, _count in spells),
+        tuple(":".join((hero, *equipment)) for hero, _pet, equipment in heroes),
+    )
+
+
 def label_new_army(
     connection: Any, exact_army_id: int, home_troops: Iterable[Any], heroes: Iterable[Any]
 ) -> None:
@@ -401,14 +480,14 @@ def _label(connection: Any) -> dict[str, Any] | None:
 def _facts(lens: str) -> str:
     """One row per attack or defense of a completed Legend day: the tracked
     attacker or defender, the distinct army (0 when unreadable; minus its
-    decode id when an older partly read army has none), stars and
-    destruction."""
+    decode id when an older partly read army has none), stars, destruction
+    and the army's code."""
     return f"""
     SELECT fact.ranked_day_start, fact.population_player_id,
            COALESCE(CASE WHEN fact.army_state IN ('decoded', 'partial')
                          THEN COALESCE(decode.exact_army_id, -decode.id) END,
                     0) AS exact_army_id,
-           fact.stars, fact.destruction_percentage
+           fact.stars, fact.destruction_percentage, decode.raw_code
     FROM army_analytics_battle_facts AS fact
     LEFT JOIN battle_army_decodes AS decode ON decode.id = fact.decode_id
     WHERE fact.is_current AND fact.lens = '{lens}'
@@ -553,59 +632,10 @@ def read_type_rows(
     variant id, attacks, one-star, two-star, three-star, destruction, trophies
     won), by type and variant id.
     """
-    counted = {
-        row[0]
-        for row in connection.execute(
-            """
-            SELECT counted.ranked_day_start
-            FROM army_type_counted_days AS counted
-            JOIN army_analytics_completed_days AS day
-              ON day.ranked_day_start = counted.ranked_day_start
-             AND day.fact_input_hash = counted.fact_input_hash
-            WHERE counted.ranked_day_start = ANY(%s::timestamptz[])
-            """,
-            (list(days.values()),),
-        ).fetchall()
-    } if trophy_range is None else set()
-    saved_days = [start for start in days.values() if start in counted]
-    fact_days = [number for number, start in days.items() if start not in counted]
-    if boards is None:
-        members, member_params = "{0}population_player_id = ANY(%s::bigint[])", [member_ids]
-    else:
-        members = """({0}ranked_day_start, {0}population_player_id) IN (
-            SELECT board.ranked_day_start, entry.player_id
-            FROM unnest(%s::timestamptz[], %s::bigint[])
-                AS board (ranked_day_start, snapshot_id)
-            JOIN leaderboard_snapshot_entries AS entry
-              ON entry.snapshot_id = board.snapshot_id
-            WHERE entry.position BETWEEN %s AND %s)"""
-        member_params = [list(boards[0]), list(boards[0].values()), boards[1], boards[2]]
-    parts, params = [], []
-    if saved_days:
-        parts.append(
-            f"""
-            SELECT population_player_id, exact_army_id, attacks, one_star,
-                   two_star, three_star, destruction, trophies
-            FROM army_package_day_counts
-            WHERE ranked_day_start = ANY(%s::timestamptz[])
-              AND {members.format("")}
-            """
-        )
-        params += [saved_days, *member_params]
-    if fact_days:
-        if trophy_range is None:
-            fact_filter, filters = members.format("fact."), member_params
-        else:
-            fact_filter, filters = "fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range]
-        parts.append(
-            f"""
-            SELECT population_player_id, exact_army_id, 1, (fact.stars = 1)::int,
-                   (fact.stars = 2)::int, (fact.stars = 3)::int,
-                   destruction_percentage, COALESCE(moved.trophies, 0)
-            FROM ({_FACTS} AND {fact_filter}) AS fact{_TROPHIES_JOIN}
-            """
-        )
-        params += [season_id, fact_days, *filters, *_trophies("offense")]
+    source, params = _selected_counts(
+        connection, season_id=season_id, days=days, member_ids=member_ids,
+        trophy_range=trophy_range, boards=boards,
+    )
     rows = connection.execute(
         f"""
         SELECT CASE WHEN source.exact_army_id = 0 THEN {UNREADABLE}
@@ -614,9 +644,9 @@ def read_type_rows(
                CASE WHEN source.exact_army_id < 0 THEN -source.exact_army_id END,
                sum(attacks), sum(one_star), sum(two_star), sum(three_star),
                sum(destruction), sum(trophies)
-        FROM ({" UNION ALL ".join(parts)}) AS source (
+        FROM ({source}) AS source (
             population_player_id, exact_army_id, attacks, one_star, two_star,
-            three_star, destruction, trophies)
+            three_star, destruction, trophies, ranked_day_start)
         LEFT JOIN army_package_types AS label
           ON label.exact_army_id = source.exact_army_id
         GROUP BY 1, 2, 3
@@ -648,6 +678,218 @@ def read_type_rows(
         for index, value in enumerate(counts):
             total[index] += int(value)
     return [(*key, *total) for key, total in sorted(totals.items())]
+
+
+def _selected_counts(
+    connection: Any,
+    *,
+    season_id: str,
+    days: dict[int, Any],
+    member_ids: list[int] | None,
+    trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None,
+) -> tuple[str, list[Any]]:
+    """The selected attacks as rows of (player, distinct army, attacks,
+    one-star, two-star, three-star, destruction, trophies won, day), and their
+    parameters: saved counts for counted days, the attacks themselves
+    otherwise, as ``read_type_rows`` describes."""
+    counted = {
+        row[0]
+        for row in connection.execute(
+            """
+            SELECT counted.ranked_day_start
+            FROM army_type_counted_days AS counted
+            JOIN army_analytics_completed_days AS day
+              ON day.ranked_day_start = counted.ranked_day_start
+             AND day.fact_input_hash = counted.fact_input_hash
+            WHERE counted.ranked_day_start = ANY(%s::timestamptz[])
+            """,
+            (list(days.values()),),
+        ).fetchall()
+    } if trophy_range is None else set()
+    saved_days = [start for start in days.values() if start in counted]
+    fact_days = [number for number, start in days.items() if start not in counted]
+    members, member_params = _members(member_ids, boards)
+    parts, params = [], []
+    if saved_days:
+        parts.append(
+            f"""
+            SELECT population_player_id, exact_army_id, attacks, one_star,
+                   two_star, three_star, destruction, trophies, ranked_day_start
+            FROM army_package_day_counts
+            WHERE ranked_day_start = ANY(%s::timestamptz[])
+              AND {members.format("")}
+            """
+        )
+        params += [saved_days, *member_params]
+    if fact_days:
+        facts, fact_params = _selected_facts(
+            season_id, fact_days, member_ids=member_ids, trophy_range=trophy_range,
+            boards=boards,
+        )
+        parts.append(
+            f"""
+            SELECT population_player_id, exact_army_id, 1, (fact.stars = 1)::int,
+                   (fact.stars = 2)::int, (fact.stars = 3)::int,
+                   destruction_percentage, COALESCE(moved.trophies, 0), ranked_day_start
+            FROM ({facts}) AS fact{_TROPHIES_JOIN}
+            """
+        )
+        params += [*fact_params, *_trophies("offense")]
+    return " UNION ALL ".join(parts), params
+
+
+def _members(
+    member_ids: list[int] | None, boards: tuple[dict[Any, int], int, int] | None
+) -> tuple[str, list[Any]]:
+    """The selected players as a condition on a row's day and player, its
+    table prefix left as ``{0}``, and its parameters."""
+    if boards is None:
+        return "{0}population_player_id = ANY(%s::bigint[])", [member_ids]
+    return """({0}ranked_day_start, {0}population_player_id) IN (
+        SELECT board.ranked_day_start, entry.player_id
+        FROM unnest(%s::timestamptz[], %s::bigint[])
+            AS board (ranked_day_start, snapshot_id)
+        JOIN leaderboard_snapshot_entries AS entry
+          ON entry.snapshot_id = board.snapshot_id
+        WHERE entry.position BETWEEN %s AND %s)""", [
+        list(boards[0]), list(boards[0].values()), boards[1], boards[2],
+    ]
+
+
+def _selected_facts(
+    season_id: str,
+    day_numbers: list[int],
+    *,
+    member_ids: list[int] | None,
+    trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None,
+) -> tuple[str, list[Any]]:
+    """The selected players' attacks on these Legend days, one row each as
+    ``_facts`` gives them, and their parameters."""
+    if trophy_range is None:
+        members, filters = _members(member_ids, boards)
+        fact_filter = members.format("fact.")
+    else:
+        fact_filter, filters = "fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range]
+    return f"{_FACTS} AND {fact_filter}", [season_id, day_numbers, *filters]
+
+
+def variant_examples(
+    connection: Any,
+    *,
+    type_id: int,
+    variant_id: int,
+    season_id: str,
+    days: dict[int, Any],
+    member_ids: list[int] | None,
+    trophy_range: tuple[int, int] | None,
+    boards: tuple[dict[Any, int], int, int] | None = None,
+) -> dict[str, Any]:
+    """One variant's ``EXAMPLE_GROUPS`` most used groups of armies
+    (``army_group``) in the selected attacks, most used first, and the line
+    saying what decides the variant.
+
+    Each group has its attacks, how many distinct armies it holds, and its
+    example: its most used distinct army (``army_composition``), with that
+    army's attacks and the Copy army code most of those selected attacks
+    used. An older partly read army is read back as ``read_type_rows`` does
+    and counts with the same army saved the newer way.
+    """
+    source, params = _selected_counts(
+        connection, season_id=season_id, days=days, member_ids=member_ids,
+        trophy_range=trophy_range, boards=boards,
+    )
+    used = dict(connection.execute(
+        f"""
+        SELECT source.exact_army_id, sum(source.attacks)
+        FROM ({source}) AS source (
+            population_player_id, exact_army_id, attacks, one_star, two_star,
+            three_star, destruction, trophies, ranked_day_start)
+        LEFT JOIN army_package_types AS label
+          ON label.exact_army_id = source.exact_army_id
+        WHERE (label.type_id = %s AND label.variant_id = %s) OR source.exact_army_id < 0
+        GROUP BY 1
+        """,
+        [*params, type_id, variant_id],
+    ).fetchall())
+    # Each selected army, by its id as the attacks name it, as what is in it.
+    compositions: dict[int, tuple[tuple[Any, ...], ...]] = {}
+    for army_id, troops, spells, heroes in connection.execute(
+        "SELECT id, home_troops, spells, heroes FROM exact_armies WHERE id = ANY(%s::bigint[])",
+        ([army_id for army_id in used if army_id > 0],),
+    ).fetchall():
+        compositions[int(army_id)] = army_composition(troops, spells, heroes)
+    for decode_id, *saved in connection.execute(
+        """
+        SELECT id, home_troops, spells, heroes, unresolved_components
+        FROM battle_army_decodes WHERE id = ANY(%s::bigint[])
+        """,
+        ([-army_id for army_id in used if army_id < 0],),
+    ).fetchall():
+        army = army_analytics.with_unnamed_ids(dict(zip(
+            ("home_troops", "spells", "heroes", "unresolved_components"), saved, strict=True
+        )))
+        partial_type = classify(army["home_troops"] or [])
+        partial_variant = variant(partial_type, army["heroes"] or [])
+        if (partial_type or OTHER, partial_variant) == (type_id, variant_id):
+            compositions[-int(decode_id)] = army_composition(
+                army["home_troops"] or [], army["spells"] or [], army["heroes"] or []
+            )
+    distinct: Counter[tuple[tuple[Any, ...], ...]] = Counter()
+    for army_id, composition in compositions.items():
+        distinct[composition] += int(used[army_id])
+    groups: dict[tuple[tuple[str, ...], ...], list[Any]] = {}
+    for composition, attacks in distinct.items():
+        group = groups.setdefault(army_group(composition), [0, 0, None, 0])
+        group[0] += attacks
+        group[1] += 1
+        # The most used distinct army is the example, the first in order on a tie.
+        if group[2] is None or (-attacks, composition) < (-group[3], group[2]):
+            group[2], group[3] = composition, attacks
+    top = sorted(groups.values(), key=lambda group: (-group[0], group[2]))[:EXAMPLE_GROUPS]
+    examples = {group[2] for group in top}
+    example_ids = [army_id for army_id, composition in compositions.items()
+                   if composition in examples]
+    # Only the days and players whose selected attacks used an example are
+    # read battle by battle, so the read stays about as small as the examples.
+    trophies, trophy_params = (
+        ("", []) if trophy_range is None
+        else (" AND fact.battle_time_trophies BETWEEN %s AND %s", [*trophy_range])
+    )
+    votes: Counter[tuple[tuple[tuple[Any, ...], ...], str]] = Counter()
+    for army_id, code, battles in connection.execute(
+        f"""
+        WITH used AS MATERIALIZED (
+            SELECT DISTINCT ranked_day_start, population_player_id
+            FROM ({source}) AS source (
+                population_player_id, exact_army_id, attacks, one_star, two_star,
+                three_star, destruction, trophies, ranked_day_start)
+            WHERE exact_army_id = ANY(%s::bigint[]))
+        SELECT fact.exact_army_id, fact.raw_code, count(*)
+        FROM ({_FACTS}{trophies}) AS fact
+        JOIN used USING (ranked_day_start, population_player_id)
+        WHERE fact.exact_army_id = ANY(%s::bigint[]) AND fact.raw_code IS NOT NULL
+        GROUP BY 1, 2
+        """,
+        [*params, example_ids, season_id, list(days), *trophy_params, example_ids],
+    ).fetchall():
+        votes[(compositions[int(army_id)], str(code))] += int(battles)
+    codes: dict[tuple[tuple[Any, ...], ...], str] = {}
+    for (composition, code), _battles in sorted(
+        votes.items(), key=lambda vote: (-vote[1], vote[0][1])
+    ):
+        codes.setdefault(composition, code)
+    return {
+        "kind": "army-variant-examples",
+        "type_id": type_id, "variant_id": variant_id,
+        "rule": variant_rule(type_id, variant_id),
+        "groups": [
+            {"attacks": attacks, "armies": armies, "example_attacks": example_attacks,
+             "army_share_code": str(codes[key])}
+            for attacks, armies, key, example_attacks in top if key in codes
+        ],
+    }
 
 
 def read_type_outcomes(

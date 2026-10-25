@@ -29,6 +29,7 @@ from . import (
     api_players,
     api_status,
     api_verification,
+    army_types,
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
 from .api_db import (
@@ -669,6 +670,9 @@ def create_app(
         population: str = Query(default="top-100", max_length=40),
         category: str = Query(default="troops", max_length=40),
         sort: str = Query(default="usage-rate", max_length=40),
+        # Both together: that army type variant's example armies instead.
+        type_id: int | None = Query(default=None, ge=1, le=32_767),
+        variant_id: int | None = Query(default=None, ge=0, le=32_767),
     ) -> JSONResponse:
         _authorize(request, "analytics.read", production_database)
         try:
@@ -683,9 +687,16 @@ def create_app(
             )
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
+        examples = None
+        if type_id is not None or variant_id is not None:
+            if type_id not in army_types.VARIANTS or variant_id not in {
+                0, *(listed[0] for listed in army_types.VARIANTS[type_id])
+            } or selection.category != army_types.CATEGORY:
+                raise ApiError(422, "invalid_army_analytics_selection")
+            examples = (type_id, variant_id)
         try:
-            result = api_analytics.get_army_analytics(production_database,
-                selection, now=current_time()
+            result = api_analytics.get_army_analytics(
+                production_database, selection, now=current_time(), examples=examples
             )
         except CurrentSeasonEmpty as empty:
             content: dict[str, Any] = {"error": "no_completed_legend_days"}

@@ -220,9 +220,24 @@ export interface ArmyAnalytics {
     unknownExcludedAttacks?: number;
     /** Armies only: the type's variants by hero equipment, its Other last. */
     variants?: ArmyAnalytics["rows"];
+    /** Armies only: the type's id. */
+    typeId?: number;
     /** A variant: its id (0 for its type's Other). */
     variantId?: number;
   }>;
+}
+
+/** A variant's most-used armies, for the same players and Legend days as its row. */
+export interface ArmyVariantExamples {
+  /** What decides the variant, or what falls in its type's Other. */
+  rule: string;
+  /** Most used first, at most 3: armies alike but for small fillers. */
+  groups: Array<{
+    attacks: number;
+    /** The group's most-used exact army: a real army, as Copy army copies it. */
+    armyShareCode: string;
+  }>;
+  armyUnits: ArmyUnitNames;
 }
 
 export interface RankedBattleEvent {

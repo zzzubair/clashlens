@@ -471,7 +471,7 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("3-star ↕ Avg. trophies ↓ Avg. stars");
     expect(text).toContain("50.0% 2 battles 36.0 misses 32.1 2.50");
     expect(text).toContain("75.0% 3 battles 35.5 misses 22.0 2.75");
-    expect(text).toContain("a 3-star wins 40 and a miss still wins some");
+    expect(text).toContain("Avg. trophies counts every attack.");
 
     // A type with variants shows, closed, that it opens and how many named
     // variants it has, its Other (id 0) apart.
@@ -492,7 +492,7 @@ describe("army analytics route historical reads", () => {
     const closed = await renderArmyRoute("season=current");
     expect(closed).toContain('aria-expanded="false"');
     expect(renderedText(closed)).toContain("Hydra 1 variant + Other 4 / 8");
-    expect(renderedText(closed)).toContain("Tap an army to open its variants");
+    expect(renderedText(closed)).toContain("Tap an army for its variants");
     expect(closed).not.toContain("analytics-variant-row");
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
@@ -1039,6 +1039,75 @@ describe("army analytics top-bar link", () => {
       rows: ["Wizard", "Archer"],
       sorted: ["usage-rate", "descending"],
     });
+  });
+});
+
+describe("army analytics variant rows", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("opens a variant on a tap, loading its most-used armies", async () => {
+    const row = (key: string, label: string, usageCount: number) => ({
+      key,
+      label,
+      usageCount,
+      usageDenominator: 8,
+      usageRate: usageCount / 8,
+      starCounts: [0, 0, usageCount, 0],
+      averageStars: 2,
+      averageDestruction: 80,
+      averageTrophies: 26,
+      averageMissTrophies: 26,
+      unknownExcludedAttacks: 0,
+    });
+    const analytics = currentAnalytics("top-1000", [1], 1);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue({
+        ...analytics,
+        selection: { ...analytics.selection, category: "army-types" },
+        rows: [
+          {
+            ...row("army-type:3", "Thrower", 8),
+            typeId: 3,
+            variants: [
+              { ...row("army-variant:3:3", "Revenge Thrower", 6), variantId: 3 },
+              { ...row("army-variant:3:0", "Other Thrower", 2), variantId: 0 },
+            ],
+          },
+        ],
+      }),
+    });
+    const page = { states: [] as unknown[], next: 0 };
+    function OpenPage() {
+      page.next = 0;
+      mocks.openPage = page;
+      try {
+        return ArmyRoute();
+      } finally {
+        mocks.openPage = null;
+      }
+    }
+    const router = createMemoryRouter(
+      [{ path: "/analytics/armies", Component: OpenPage, loader: armyLoader }],
+      { initialEntries: ["/analytics/armies"] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const html = () => renderToString(createElement(RouterProvider, { router }));
+    html();
+    // The open types, then the open variants: the page's two sets.
+    const [openTypes, openVariants] = page.states.flatMap((state, index) =>
+      state instanceof Set ? [index] : [],
+    );
+    page.states[openTypes] = new Set(["army-type:3"]);
+    const closed = html();
+    expect(closed).toContain('title="Show Revenge Thrower armies"');
+    expect(renderedText(closed)).toContain("Revenge Thrower 6 / 8");
+    expect(closed).not.toContain("analytics-examples-row");
+
+    page.states[openVariants] = new Set(["army-variant:3:3"]);
+    expect(renderedText(html())).toContain("Revenge Thrower 6 / 8 75.0% of Thrower");
+    expect(html()).toContain("Loading armies…");
   });
 });
 

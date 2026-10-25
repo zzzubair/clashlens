@@ -13,6 +13,7 @@ export default [
   route("resources/players/:tag/bases", "routes/player-bases.ts"),
   route("leaderboards/tracked", "routes/tracked-leaderboard.tsx"),
   route("analytics/armies", "routes/army-analytics.tsx"),
+  route("resources/analytics/armies/examples", "routes/army-variant-examples.ts"),
   route("blog", "routes/blog.tsx"),
   route("blog/rss.xml", "routes/blog.rss.ts"),
   route("blog/media/:file", "routes/blog.media.ts"),

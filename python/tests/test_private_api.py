@@ -721,10 +721,13 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             },
             "rows": [],
         }
+        requested = []
         monkeypatch.setattr(
             api_analytics,
             "get_army_analytics",
-            lambda _database, _selection, now=None: payload,
+            lambda _database, _selection, now=None, examples=None: (
+                requested.append(examples) or payload
+            ),
         )
         app = create_app(
             database=database,
@@ -739,9 +742,17 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             success = client.get(target, headers=signed_headers(target))
             assert success.status_code == 200
             assert success.json() == payload
+            # Opening a variant asks for its examples: Revenge Thrower is
+            # variant 3 of type 3, and 0 is a type's Other.
+            examples = f"{target}&category=army-types&type_id=3&variant_id=3"
+            assert client.get(examples, headers=signed_headers(examples)).status_code == 200
+            assert requested == [None, (3, 3)]
             for invalid_target in (
                 "/v1/analytics/armies",
                 "/v1/analytics/armies?season=2026-08&lens=invalid",
+                f"{target}&category=army-types&type_id=3&variant_id=999",
+                f"{target}&category=army-types&type_id=999&variant_id=0",
+                f"{target}&category=troops&type_id=3&variant_id=3",
             ):
                 invalid = client.get(
                     invalid_target, headers=signed_headers(invalid_target)
@@ -751,7 +762,7 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             monkeypatch.setattr(
                 api_analytics,
                 "get_army_analytics",
-                lambda _database, _selection, now=None: (_ for _ in ()).throw(
+                lambda _database, _selection, now=None, examples=None: (_ for _ in ()).throw(
                     ArmyAnalyticsUnavailable([2, 4])
                 ),
             )
@@ -762,7 +773,7 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             monkeypatch.setattr(
                 api_analytics,
                 "get_army_analytics",
-                lambda _database, _selection, now=None: (_ for _ in ()).throw(
+                lambda _database, _selection, now=None, examples=None: (_ for _ in ()).throw(
                     CurrentSeasonEmpty("2026-07")
                 ),
             )
@@ -777,7 +788,7 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             }
 
             def cancelled(setting: str):
-                def read(_database, _selection, now=None):
+                def read(_database, _selection, now=None, examples=None):
                     with database.pool.connection() as connection:
                         with connection.transaction():
                             connection.execute(f"SET LOCAL {setting} = '50ms'")

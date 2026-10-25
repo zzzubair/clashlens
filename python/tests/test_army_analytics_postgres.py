@@ -1332,7 +1332,7 @@ def test_army_tables_have_only_required_runtime_privileges(database_url: str) ->
                     False,
                     True,
                     True,
-                    False,
+                    True,
                     True,
                     False,
                     False,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -450,7 +450,11 @@ def get_player_page(
                     ].isoformat(),
                 },
                 "data_quality": data_quality,
-                "army_units": _army_units(days.values()),
+                "army_units": army_units(
+                    event.get("army_share_code")
+                    for day in days.values()
+                    for event in (*day["offense_events"], *day["defense_events"])
+                ),
                 "provenance": {
                     "source": "api_player_daily_logs",
                     "observed_at": observed_at.isoformat(),
@@ -471,21 +475,21 @@ def get_player_page(
         }
 
 
-def _army_units(days: Any) -> dict[str, dict[str, Any]]:
-    """Each unit in the listed battles' armies, by its saved id: its name and
-    whether the army shows it as a siege machine, as the decoder sorts them."""
+def army_units(codes: Iterable[str | None]) -> dict[str, dict[str, Any]]:
+    """Each unit in these Copy army codes' armies, by its saved id: its name
+    and whether the army shows it as a siege machine, as the decoder sorts
+    them."""
     ids: set[str] = set()
-    for day in days:
-        for event in (*day["offense_events"], *day["defense_events"]):
-            army = decode_army_share_code(event.get("army_share_code"))
-            if not isinstance(army, DecodedArmy):
-                continue
-            for fact in (*army.home_troops, *army.cc_troops, *army.spells, *army.siege):
-                ids.add(fact.typed_id)
-            for hero in army.heroes:
-                ids.update((hero.hero_typed_id, *hero.equipment_typed_ids))
-                if hero.pet_typed_id is not None:
-                    ids.add(hero.pet_typed_id)
+    for code in codes:
+        army = decode_army_share_code(code)
+        if not isinstance(army, DecodedArmy):
+            continue
+        for fact in (*army.home_troops, *army.cc_troops, *army.spells, *army.siege):
+            ids.add(fact.typed_id)
+        for hero in army.heroes:
+            ids.update((hero.hero_typed_id, *hero.equipment_typed_ids))
+            if hero.pet_typed_id is not None:
+                ids.add(hero.pet_typed_id)
     return {
         typed_id: {"name": unit_label(typed_id), "siege": typed_id in SIEGE_TROOP_IDS}
         for typed_id in sorted(ids)
