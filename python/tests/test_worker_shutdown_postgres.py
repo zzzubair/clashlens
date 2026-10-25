@@ -4,7 +4,8 @@ On 24 Oct 2026 (and twice on 21 Oct) one worker process's lanes stopped at
 once on ``systemctl --user stop``, but it waited for its maintenance timer
 until systemd killed it at 70 s. This runs the real worker as its own process
 against PostgreSQL, holds a lock its first maintenance step needs, and stops
-it with SIGTERM.
+it with SIGTERM. The locked table is one an empty queue's claims never read,
+so the lanes stop at once at any time of day.
 """
 
 from __future__ import annotations
@@ -29,7 +30,8 @@ def _waiting_on_lock(connection_info: str) -> bool:
     with psycopg.connect(connection_info) as connection:
         return bool(connection.execute(
             "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()"
-            " AND wait_event_type = 'Lock' AND query LIKE '%%boundary_publication_generations%%')"
+            " AND wait_event_type = 'Lock' AND query LIKE"
+            " '%%SELECT work.id%%FROM collector_reset_sweeps AS sweep%%reset_baseline_evidence%%')"
         ).fetchone()[0])
 
 
@@ -39,7 +41,7 @@ def test_sigterm_during_a_stuck_maintenance_step_exits_promptly(
     endpoint, *_ = archive_server
     with domain_database(database_url) as connection_info:
         holder = psycopg.connect(connection_info)
-        holder.execute("LOCK TABLE boundary_publication_generations IN ACCESS EXCLUSIVE MODE")
+        holder.execute("LOCK TABLE reset_baseline_evidence IN ACCESS EXCLUSIVE MODE")
         worker = subprocess.Popen(
             [sys.executable, "-c",
              ("import sys; from clashlens import cli, worker_liveness;"
