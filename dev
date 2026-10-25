@@ -417,7 +417,7 @@ start_application() {
     --env CLASHLENS_PYTHON_HMAC_CALLER=typescript-website \
     --env CLASHLENS_PYTHON_HMAC_KEY_ID=current \
     --env CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/clashlens-dev/hmac-key \
-    --env CLASHLENS_TRUST_PROXY=true --env CLASHLENS_LOGIN_ENABLED=true \
+    --env CLASHLENS_TRUST_PROXY=true --env CLASHLENS_TRUSTED_PROXY_IP="${TRUSTED_PROXY_IP:-}" --env CLASHLENS_LOGIN_ENABLED=true \
     --env CLASHLENS_ARMY_PREVIEW=true --env CLASHLENS_DASHBOARD_ENABLED=true --env CLASHLENS_CREWS_ENABLED=true \
     --env CLASHLENS_PUBLIC_ORIGIN="http://127.0.0.1:$WEBSITE_PORT" \
     --env CLASHLENS_GOOGLE_ISSUER_URL="http://127.0.0.1:$OIDC_PORT" \
@@ -526,7 +526,7 @@ show_logs() {
 # its own PostgreSQL server, instead of beside this stack's collector load.
 run_checks() {
   local result=0
-  PLAYERS=200
+  PLAYERS=200 TRUSTED_PROXY_IP=127.0.0.1 # Browser tests name each Clasher's address.
   select_project check
   trap 'remove_stack true' EXIT
   trap 'status=$?; trap - ERR; show_logs; exit "$status"' ERR
@@ -547,7 +547,7 @@ run_checks() {
 }
 
 e2e_server() {
-  PLAYERS=200
+  PLAYERS=200 TRUSTED_PROXY_IP=127.0.0.1 # Browser tests name each Clasher's address.
   select_project e2e
   trap 'remove_stack true' EXIT INT TERM
   up_stack true

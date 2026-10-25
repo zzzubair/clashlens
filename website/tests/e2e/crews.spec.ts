@@ -14,14 +14,20 @@ import { websiteOrigin } from "../fixtures/test-values";
 const CAPTAIN_TAGS = ["#Q00UU", "#Q00UV"];
 const MATE_TAGS = ["#Q00V0", "#Q00V2", "#Q00V8"];
 
-/** A fresh browser signed in as its own Google account. */
+/**
+ * A fresh browser signed in as its own Google account, from its own address so
+ * its links do not share the website's six a minute per address.
+ */
 async function clasher(
   browser: Browser,
   subject: string,
   username: string,
   name: string,
 ) {
-  const context = await browser.newContext({ baseURL: websiteOrigin });
+  const context = await browser.newContext({
+    baseURL: websiteOrigin,
+    extraHTTPHeaders: { "CF-Connecting-IP": `203.0.113.${subject.slice(-3)}` },
+  });
   const page = await context.newPage();
   await page.route("**/authorize?*", async (route) => {
     const url = new URL(route.request().url());

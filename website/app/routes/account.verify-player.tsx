@@ -146,8 +146,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 
   // The private service also limits each account; this stops one address first.
   const { clientAddressContext } = await import("../server/client-address.server");
-  const { allowPublicRefresh, visitorRefusal } = await import("../server/abuse.server");
-  const refusal = visitorRefusal(context?.get(clientAddressContext), allowPublicRefresh);
+  const { allowVerification, visitorRefusal } = await import("../server/abuse.server");
+  const refusal = visitorRefusal(context?.get(clientAddressContext), allowVerification);
   if (refusal) {
     const { safeWebsiteError } = await import("../server/errors.server");
     return data<VerifyPlayerActionData>(

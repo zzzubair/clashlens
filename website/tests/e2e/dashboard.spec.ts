@@ -11,6 +11,10 @@ import {
 // A fake Clash API player in Legend League that no other browser test links.
 const TAG = "#Q00VJ";
 
+// These Clashers browse from their own address, so their links do not share the
+// website's six a minute per address with other browser tests.
+test.use({ extraHTTPHeaders: { "CF-Connecting-IP": "203.0.113.201" } });
+
 const ALL_CARDS = [
   "Legend day",
   "Legend clock",

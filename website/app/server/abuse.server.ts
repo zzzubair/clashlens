@@ -1,6 +1,7 @@
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 6;
 const MAX_AUTOMATIC_REQUESTS_PER_WINDOW = 3;
+const MAX_VERIFICATIONS_PER_WINDOW = 6;
 const MAX_LIVE_CLAN_REQUESTS_PER_WINDOW = 6;
 // Enough for typing in the header search box.
 const MAX_SEARCHES_PER_WINDOW = 60;
@@ -8,6 +9,7 @@ const MAX_TRACKED_IDENTITIES = 10_000;
 
 const attempts = new Map<string, { count: number; resetAt: number }>();
 const automaticAttempts = new Map<string, { count: number; resetAt: number }>();
+const verificationAttempts = new Map<string, { count: number; resetAt: number }>();
 const liveClanAttempts = new Map<string, { count: number; resetAt: number }>();
 const searchAttempts = new Map<string, { count: number; resetAt: number }>();
 
@@ -22,6 +24,10 @@ export function allowAutomaticRefresh(identity: string, now = Date.now()): boole
     identity,
     now,
   );
+}
+
+export function allowVerification(identity: string, now = Date.now()): boolean {
+  return allowRefresh(verificationAttempts, MAX_VERIFICATIONS_PER_WINDOW, identity, now);
 }
 
 export function allowLiveClanRead(identity: string, now = Date.now()): boolean {
@@ -71,6 +77,7 @@ function allowRefresh(
 export function clearPublicRefreshLimits(): void {
   attempts.clear();
   automaticAttempts.clear();
+  verificationAttempts.clear();
   liveClanAttempts.clear();
   searchAttempts.clear();
 }

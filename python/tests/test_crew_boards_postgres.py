@@ -384,6 +384,15 @@ def test_a_full_crew_season_board_reads_quickly(site: Site) -> None:
     tags = [f"#P{index:02d}".translate(str.maketrans("0123456789", "QRUVY289LC"))
             for index in range(100)]
     for tag in tags:
+        # Spread the links over earlier minutes, inside the six a minute per account.
+        site.sql(
+            """
+            UPDATE player_link_verification_audits
+            SET created_at = created_at - interval '1 minute'
+            WHERE account_id = %s
+            """,
+            (site.ids["akira"],),
+        )
         site.link("akira", tag)
     crew_id = site.make("akira", tags, size=100)
     with site.seed.pool.connection() as connection:

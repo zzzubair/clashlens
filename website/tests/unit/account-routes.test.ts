@@ -35,7 +35,10 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
-import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import {
+  allowPublicRefresh,
+  clearPublicRefreshLimits,
+} from "../../app/server/abuse.server";
 import { clientAddressContext } from "../../app/server/client-address.server";
 import { loader as accountLoader } from "../../app/routes/account";
 import GroupsRoute, {
@@ -1035,9 +1038,13 @@ describe("account routes", () => {
       expect(client.verifyPlayerToken).toHaveBeenCalledTimes(6);
 
       expect(dataOf(await attempt("203.0.113.10")).status).toBe(200);
+      // Refreshes and lookups from an address do not use up its linking.
+      for (let index = 0; index < 6; index += 1) allowPublicRefresh("203.0.113.11");
+      expect(allowPublicRefresh("203.0.113.11")).toBe(false);
+      expect(dataOf(await attempt("203.0.113.11")).status).toBe(200);
       // No known address goes nowhere.
       expect(dataOf(await attempt("")).status).toBe(503);
-      expect(client.verifyPlayerToken).toHaveBeenCalledTimes(7);
+      expect(client.verifyPlayerToken).toHaveBeenCalledTimes(8);
     });
 
     it("answers 429 when Python refuses the account from a fresh address", async () => {
