@@ -140,7 +140,7 @@ class OfficialVerificationClient:
             outcome = "answered"
             return response
         except VerificationTransportError as error:
-            outcome = _transport_outcome(error.__cause__)
+            outcome = transport_outcome(error.__cause__)
             raise
         finally:
             with self._relay_lock:
@@ -272,7 +272,7 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     return raw
 
 
-def _transport_outcome(cause: BaseException | None) -> str:
+def transport_outcome(cause: BaseException | None) -> str:
     # urllib wraps failures to connect, or to open the tunnel, in URLError.
     reason = getattr(cause, "reason", cause)
     wrapped = isinstance(cause, urllib.error.URLError)

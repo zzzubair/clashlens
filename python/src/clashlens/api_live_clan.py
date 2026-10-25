@@ -1,7 +1,8 @@
 """The player page's live clan, read from the game with the interactive key.
 
 It is shown only: the answer is never saved. Each player's answer is kept in
-memory for a minute, as long as the game's own player cache.
+memory for a minute, as long as the game's own player cache. Each view that
+keeps the saved clan logs one ``live_clan`` line saying why.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from .verification import (
     OfficialVerificationResponse,
     VerificationTransportError,
     classify_official_response,
+    transport_outcome,
 )
 
 LIVE_CLAN_SECONDS = 60
@@ -41,22 +43,28 @@ class PlayerReader(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class LiveClan:
-    """``live`` is false when the game gave no answer; the page then shows the saved clan."""
+    """``live`` is false when the game gave no answer; the page then shows the saved clan.
+
+    ``reason`` says why there was no answer.
+    """
 
     live: bool
     name: str | None = None
     tag: str | None = None
+    reason: str | None = None
 
 
-UNAVAILABLE = LiveClan(False)
+# Reasons no request was made, so the next view asks again.
+_NOT_ASKED = frozenset({"no_key", "key_not_registered", "cap", "key_not_ready"})
 
 
-def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> bool:
+def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> str | None:
     """Take one start from collection's share of the interactive key, never waiting.
 
     Live reads use collection's share, so verification's reserved start is
     never touched, and only while collection's share is less than half used,
-    so Refresh and first-time collection always keep the other half.
+    so Refresh and first-time collection always keep the other half. Returns
+    None with the start taken, otherwise why none was taken.
     """
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -69,7 +77,7 @@ def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> bool:
                 (fingerprint,),
             ).fetchone()
             if budget is None:
-                return False
+                return "key_not_registered"
             used = connection.execute(
                 """
                 SELECT count(*) FROM shared_api_permits
@@ -80,12 +88,13 @@ def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> bool:
             ).fetchone()
             assert used is not None
             if 2 * (int(used[0]) + 1) > int(budget[0]):
-                return False
+                return "cap"
             granted = connection.execute(
                 "SELECT granted FROM clashlens_acquire_shared_api_permit(%s, 'collector')",
                 (fingerprint,),
             ).fetchone()
-            return granted is not None and bool(granted[0])
+            # Refused while the key cools down or its whole window is used.
+            return None if granted is not None and bool(granted[0]) else "key_not_ready"
 
 
 class LiveClans:
@@ -108,6 +117,17 @@ class LiveClans:
         self._reading: dict[str, Future[LiveClan]] = {}
 
     def read(self, normalized_tag: str) -> LiveClan:
+        answer = self._read(normalized_tag)
+        if not answer.live:
+            print(
+                json.dumps(
+                    {"event": "live_clan", "status": "fallback", "reason": answer.reason}
+                ),
+                flush=True,
+            )
+        return answer
+
+    def _read(self, normalized_tag: str) -> LiveClan:
         now = self._clock()
         with self._lock:
             remembered = self._answers.get(normalized_tag)
@@ -126,27 +146,28 @@ class LiveClans:
                 self._reading.pop(normalized_tag).set_exception(error)
             raise
         with self._lock:
-            if answer is not None:
+            if answer.reason not in _NOT_ASKED:
                 self._answers[normalized_tag] = (now + LIVE_CLAN_SECONDS, answer)
                 self._answers.move_to_end(normalized_tag)
                 while len(self._answers) > MAX_REMEMBERED_PLAYERS:
                     self._answers.popitem(last=False)
-            answer = answer or UNAVAILABLE
             self._reading.pop(normalized_tag).set_result(answer)
         return answer
 
-    def _ask(self, normalized_tag: str) -> LiveClan | None:
-        """The game's answer, or None when no request was made, so nothing is remembered."""
+    def _ask(self, normalized_tag: str) -> LiveClan:
+        """The game's answer; one made without a request is not remembered."""
         if self._reader is None or self._fingerprint is None:
-            return None
-        if not acquire_live_read_permit(self._database, self._fingerprint):
-            return None
+            return LiveClan(False, reason="no_key")
+        refused = acquire_live_read_permit(self._database, self._fingerprint)
+        if refused is not None:
+            return LiveClan(False, reason=refused)
         try:
             response = self._reader.player(
                 normalized_tag, timeout_seconds=LIVE_CLAN_TIMEOUT_SECONDS
             )
-        except VerificationTransportError:
-            return UNAVAILABLE
+        except VerificationTransportError as error:
+            # timeout, relay_timeout, relay_failure or other
+            return LiveClan(False, reason=transport_outcome(error.__cause__))
         action = classify_official_response(response.http_status, response.body).key_action
         if action is not KeyAction.NONE:
             api_verification.apply_official_key_action(
@@ -160,18 +181,19 @@ class LiveClans:
 
 def _live_clan(response: OfficialVerificationResponse, normalized_tag: str) -> LiveClan:
     if response.http_status != 200:
-        return UNAVAILABLE
+        return LiveClan(False, reason=f"http_{response.http_status}")
+    unusable = LiveClan(False, reason="unusable_answer")
     try:
         profile = json.loads(response.body)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return UNAVAILABLE
+        return unusable
     if not isinstance(profile, dict) or profile.get("tag") != normalized_tag:
-        return UNAVAILABLE
+        return unusable
     clan = profile.get("clan")
     if clan is None:
         return LiveClan(True)
     if not isinstance(clan, dict):
-        return UNAVAILABLE
+        return unusable
     name, tag = clan.get("name"), clan.get("tag")
     if (
         not isinstance(name, str)
@@ -179,5 +201,5 @@ def _live_clan(response: OfficialVerificationResponse, normalized_tag: str) -> L
         or not isinstance(tag, str)
         or not _CLAN_TAG.fullmatch(tag)
     ):
-        return UNAVAILABLE
+        return unusable
     return LiveClan(True, name, tag)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import runpy
 import threading
 import time
@@ -113,6 +114,13 @@ def live_clan(client: TestClient, tag: str) -> dict[str, object]:
     return response.json()
 
 
+def fallbacks(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    """The reason on each logged view that kept the saved clan."""
+    lines = capsys.readouterr().out.splitlines()
+    logged = [json.loads(line) for line in lines if line.startswith("{")]
+    return [line["reason"] for line in logged if line.get("event") == "live_clan"]
+
+
 def test_the_games_clan_shows_and_a_repeat_view_costs_no_request(database_url: str) -> None:
     with live_clan_api(database_url) as (client, database, _collector, _origin):
         first = live_clan(client, TAGS[0])
@@ -137,8 +145,18 @@ def test_a_player_in_no_clan_now_shows_no_clan(database_url: str) -> None:
         assert live_clan(client, TAGS[1]) == {"tag": TAGS[1], "live": True, "clan": None}
 
 
-@pytest.mark.parametrize("answer", ["slow", "maintenance", "throttled", "dropped"])
-def test_no_answer_from_the_game_keeps_the_saved_clan(database_url: str, answer: str) -> None:
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ("slow", "timeout"),
+        ("maintenance", "http_503"),
+        ("throttled", "http_429"),
+        ("dropped", "other"),
+    ],
+)
+def test_no_answer_from_the_game_keeps_the_saved_clan(
+    database_url: str, answer: str, reason: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     with live_clan_api(database_url) as (client, database, _collector, _origin):
         FakeGame.answers[TAGS[2]] = answer
         started = time.monotonic()
@@ -150,10 +168,12 @@ def test_no_answer_from_the_game_keeps_the_saved_clan(database_url: str, answer:
         assert FakeGame.profile_reads == [TAGS[2]]
         state = database.scalar("SELECT state FROM shared_api_credentials")
         assert state == ("cooldown" if answer == "throttled" else "active")
+        # Each view that kept the saved clan says why.
+        assert fallbacks(capsys) == [reason, reason]
 
 
 def test_no_free_start_keeps_the_saved_clan_without_asking_the_game(
-    database_url: str,
+    database_url: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with live_clan_api(database_url) as (client, _database, collector, _origin):
         # Collection is using half of its 24 starts this second.
@@ -162,10 +182,12 @@ def test_no_free_start_keeps_the_saved_clan_without_asking_the_game(
 
         assert live_clan(client, TAGS[3]) == {"tag": TAGS[3], "live": False}
         assert FakeGame.profile_reads == []
+        assert fallbacks(capsys) == ["cap"]
         # Not remembered: the next view asks again once a start is free.
         time.sleep(1.1)
         assert live_clan(client, TAGS[3])["live"] is True
         assert FakeGame.profile_reads == [TAGS[3]]
+        assert fallbacks(capsys) == []
 
 
 def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
@@ -189,7 +211,8 @@ def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
                 break
             time.sleep(1.1)
 
-        assert sum(live) == 12
+        assert sum(refused is None for refused in live) == 12
+        assert set(live) == {None, "cap"}
         assert sum(collection) == 12
         assert verification.granted
 
@@ -231,5 +254,5 @@ def test_views_of_one_player_at_once_share_one_request(database_url: str) -> Non
         for view in views:
             view.join()
 
-        assert answers == [api_live_clan.UNAVAILABLE] * 3
+        assert answers == [api_live_clan.LiveClan(False, reason="timeout")] * 3
         assert sorted(FakeGame.profile_reads) == sorted([TAGS[5], TAGS[6]])

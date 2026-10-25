@@ -218,6 +218,15 @@ When none is free it does not wait: the page shows the saved clan name, without
 a link. The API keeps each player's answer, including a failed one, in memory for
 60 seconds (at most 4,096 players), so repeat views send no request; views of
 the same player at the same time share one request. It never saves the answer.
+Each view that shows the saved clan because the game gave no answer logs one
+`{"event": "live_clan", "status": "fallback", "reason": ...}` line, read with
+`podman logs clashlens-python-api` and `podman logs clashlens-website`. The
+API's reasons are `timeout`, `relay_timeout`, `relay_failure` and `other` (the
+request failed), `http_<status>` (the game refused), `unusable_answer`, `cap`
+(no free start), `key_not_ready` (key cooling down or its window full),
+`key_not_registered` and `no_key`; a remembered failure logs its reason again.
+The website logs `website_timeout` (no API answer in 2.5 seconds), `api_error`
+and `unusable_answer`.
 Verification sends one request per permission and refuses redirects; collection
 obtains a new permission for each redirected request.
 
