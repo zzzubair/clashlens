@@ -418,8 +418,11 @@ top bar with "Page not found", status 404 and a `noindex` tag.
 The intended production path is Cloudflare Tunnel → a local proxy → the website.
 `npm start` and the website image run `server.ts`, which passes the real socket
 peer to React Router. Manual Refresh and lookups share six requests per address
-per minute; automatic profile refreshes get a separate three per minute in this
-website process. Cookies, form fields, URL parameters and forwarding chains do
+per minute; automatic profile refreshes get a separate three per minute, player
+verification six, player-page live clan reads six (past that the page shows the
+saved clan), and the search page and header search share sixty, all in this
+website process. The private API separately lets each account start six player
+verifications per minute. Cookies, form fields, URL parameters and forwarding chains do
 not choose that address. Restarting the process resets its in-memory counters.
 Without a valid connection address, Refresh returns `503 service_unavailable`
 without requesting collection.

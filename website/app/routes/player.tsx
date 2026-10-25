@@ -154,8 +154,13 @@ export async function loader({
   const pastSeasons = import("../services/past-seasons.server")
     .then((api) => api.getPastSeasons(normalizedTag))
     .catch(() => null);
-  const liveClan = import("../services/live-clan.server")
-    .then((api) => api.getLiveClan(normalizedTag))
+  const liveClan = Promise.all([
+    import("../services/live-clan.server"),
+    import("../server/client-address.server"),
+  ])
+    .then(([api, { clientAddressContext }]) =>
+      api.getLiveClan(context?.get(clientAddressContext), normalizedTag),
+    )
     .catch(() => null);
   const crews = import("../services/crews.server")
     .then((api) => api.getPlayerCrews(normalizedTag))

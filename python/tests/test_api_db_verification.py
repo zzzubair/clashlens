@@ -701,6 +701,13 @@ def test_every_link_checks_the_players_profile_at_once(
                     WHERE normalized_tag = '#2PP'
                     """
                 )
+                # A minute on, so the account's six attempts a minute allow a seventh.
+                connection.execute(
+                    """
+                    UPDATE player_link_verification_audits
+                    SET created_at = created_at - interval '1 minute'
+                    """
+                )
             assert link("#2PP", VerificationOutcome.VERIFIED) == "already_linked"
             assert checks()[-1] == ("#2PP", "initial_collection", "interactive", True)
             assert len(checks()) == 4
@@ -749,5 +756,81 @@ def test_verifying_a_linked_player_again_keeps_the_first_linked_default(
             assert default() == "#2PP"
             assert link("#2PP", NOW + timedelta(minutes=2)) == "already_linked"
             assert default() == "#2PP"
+        finally:
+            database.close()
+
+
+def test_one_account_starts_at_most_six_verifications_a_minute(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info, max_size=16)
+        try:
+            account_id = create_account(database, "google-limit", "limitowner")
+            other_id = create_account(database, "google-other", "otherowner")
+            tags = ["#20Q", "#22Q", "#28Q", "#29Q", "#2PQ", "#2YQ", "#2LQ"]
+            bindings = [verification_binding(account_id, "google-limit", tag) for tag in tags]
+
+            def reserve(binding: RequestBinding):
+                tag = binding.identity["tag"]
+                return api_verification.reserve_verification(
+                    database, binding, normalized_tag=tag
+                )
+
+            # Seven at once: the account row makes them take turns.
+            with ThreadPoolExecutor(max_workers=7) as executor:
+                results = list(executor.map(reserve, bindings))
+
+            assert sum(result.fresh for result in results) == 6
+            [denied] = [result for result in results if not result.fresh]
+            assert denied.result is not None
+            assert denied.result.status_code == 429
+            assert denied.result.payload["error"] == "rate_limited"
+            assert 1 <= denied.result.payload["retry_after_seconds"] <= 60
+            denied_binding = bindings[results.index(denied)]
+            denied_tag = denied_binding.identity["tag"]
+            for query, value in (
+                ("SELECT count(*) FROM players WHERE normalized_tag = %s", denied_tag),
+                (
+                    "SELECT count(*) FROM private_api_requests WHERE request_id = %s",
+                    denied_binding.request_id,
+                ),
+                (
+                    "SELECT count(*) FROM player_link_verification_audits WHERE request_id = %s",
+                    denied_binding.request_id,
+                ),
+            ):
+                assert database.scalar(query, (value,)) == 0
+
+            # A retry of a recorded request still gets its answer, not the limit.
+            admitted = bindings[[result.fresh for result in results].index(True)]
+            admitted_tag = admitted.identity["tag"]
+            completed = api_verification.complete_verification(
+                database,
+                admitted,
+                normalized_tag=admitted_tag,
+                outcome=VerificationOutcome.INVALID_TOKEN,
+                account_id=account_id,
+                completed_at=NOW,
+            )
+            replay = reserve(admitted)
+            assert replay.result is not None
+            assert replay.result.payload == completed.payload
+            assert replay.result.replayed is True
+
+            # Another account has its own six.
+            assert reserve(verification_binding(other_id, "google-other", denied_tag)).fresh
+
+            # A minute later the account can try again.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_link_verification_audits
+                    SET created_at = created_at - interval '61 seconds'
+                    WHERE account_id = %s
+                    """,
+                    (account_id,),
+                )
+            assert reserve(verification_binding(account_id, "google-limit", denied_tag)).fresh
         finally:
             database.close()

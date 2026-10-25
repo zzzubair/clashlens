@@ -105,7 +105,7 @@ async function linkReturnPath(value: string | null | undefined): Promise<string 
  * carries only safe status outcomes. A failed attempt returns a fresh
  * idempotency key for the retry.
  */
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
@@ -144,6 +144,25 @@ export async function action({ request }: Route.ActionArgs) {
     );
   }
 
+  // The private service also limits each account; this stops one address first.
+  const { clientAddressContext } = await import("../server/client-address.server");
+  const { allowVerification, visitorRefusal } = await import("../server/abuse.server");
+  const refusal = visitorRefusal(context?.get(clientAddressContext), allowVerification);
+  if (refusal) {
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return data<VerifyPlayerActionData>(
+      {
+        idempotencyKey: actions.freshIdempotencyKey(),
+        status: null,
+        verificationRequestId: null,
+        fieldErrors: {},
+        generalError: safeWebsiteError(refusal),
+        values: { tag: rawTag },
+      },
+      { status: refusal.status, headers: NO_STORE },
+    );
+  }
+
   try {
     const { createPythonClient } = await import("../services/python.server");
     const result = await createPythonClient(identity).verifyPlayerToken(
@@ -175,16 +194,20 @@ export async function action({ request }: Route.ActionArgs) {
   } catch (cause) {
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const { safeWebsiteError } = await import("../server/errors.server");
+    const generalError = safeWebsiteError(cause);
     return data<VerifyPlayerActionData>(
       {
         idempotencyKey: actions.freshIdempotencyKey(),
         status: null,
         verificationRequestId: null,
         fieldErrors: {},
-        generalError: safeWebsiteError(cause),
+        generalError,
         values: { tag: rawTag },
       },
-      { status: 422, headers: NO_STORE },
+      {
+        status: generalError.error.code === "rate_limited" ? 429 : 422,
+        headers: NO_STORE,
+      },
     );
   }
 }

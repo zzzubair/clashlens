@@ -95,6 +95,31 @@ export async function ensureAccount(
   ).toBeVisible();
 }
 
+// When it was this test run's last attempt to link a player.
+let lastLinkAttempt = 0;
+
+/**
+ * Link a fake player on the open Link page, which the fixture verifies by its
+ * token, and wait to land on `done`. The game's verify call has a small budget
+ * a second that the collector shares, so a busy second is tried again. Every
+ * attempt counts toward six a minute per account and per address, so attempts
+ * across all tests stay 11 seconds apart.
+ */
+export async function linkPlayer(
+  page: Page,
+  tag: string,
+  done: RegExp | string = /\?linked=/,
+): Promise<void> {
+  await expect(async () => {
+    await page.waitForTimeout(Math.max(0, lastLinkAttempt + 11_000 - Date.now()));
+    await page.getByLabel("Player tag").fill(tag);
+    await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${tag.slice(1)}`);
+    lastLinkAttempt = Date.now();
+    await page.getByRole("button", { name: "Link player" }).click();
+    await expect(page).toHaveURL(done, { timeout: 3_000 });
+  }).toPass({ timeout: 90_000 });
+}
+
 export async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void> {
   const results = await new AxeBuilder({ page }).analyze();
   const seriousViolations = results.violations.filter((violation) =>

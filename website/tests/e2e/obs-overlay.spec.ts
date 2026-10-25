@@ -4,6 +4,7 @@ import { websiteOrigin } from "../fixtures/test-values";
 import {
   ensureAccount,
   expectNoPageErrors,
+  linkPlayer,
   signIn,
   trackPageErrors,
 } from "./helpers/account";
@@ -25,14 +26,8 @@ test("a streamer sets up the Stream overlay, OBS shows it live at stream size, a
   await signIn(page);
   await ensureAccount(page, "lensstream", "Lens Stream");
 
-  // The game's verify call has a small shared budget a second, so try again.
   await page.goto("/account/verify-player");
-  await expect(async () => {
-    await page.getByLabel("Player tag").fill(TAG);
-    await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${TAG.slice(1)}`);
-    await page.getByRole("button", { name: "Link player" }).click();
-    await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
-  }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+  await linkPlayer(page, TAG);
 
   // The profile's tools lead to it, next to Discord alerts.
   await page.getByRole("link", { name: /^Stream overlay/ }).click();

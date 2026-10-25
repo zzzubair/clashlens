@@ -9,7 +9,10 @@ export interface PlayerSearchLoaderData {
   error: WebsiteErrorResponse | null;
 }
 
-export async function loader({ request }: LoaderFunctionArgs): Promise<Response> {
+export async function loader({
+  request,
+  context,
+}: LoaderFunctionArgs): Promise<Response> {
   const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
   const query = rawQuery.trim();
 
@@ -28,6 +31,18 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Response>
 
   if (query === "") return noStoreJson({ query, search: null, error: null });
 
+  const { clientAddressContext } = await import("../server/client-address.server");
+  const { allowSearch, visitorRefusal } = await import("../server/abuse.server");
+  // Both search addresses share one allowance, checked before any backend search.
+  const refusal = visitorRefusal(context?.get(clientAddressContext), allowSearch);
+  if (refusal) {
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return noStoreJson(
+      { query, search: null, error: safeWebsiteError(refusal) },
+      refusal.status,
+    );
+  }
+
   try {
     const { createPythonClient } = await import("../services/python.server");
     return noStoreJson({
@@ -41,11 +56,14 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Response>
   }
 }
 
-function noStoreJson(payload: PlayerSearchLoaderData): Response {
+function noStoreJson(payload: PlayerSearchLoaderData, status = 200): Response {
+  const retryAfter = payload.error?.error.retryAfterSeconds;
   return new Response(JSON.stringify(payload), {
+    status,
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      ...(retryAfter ? { "Retry-After": String(retryAfter) } : {}),
     },
   });
 }

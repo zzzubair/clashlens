@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 import {
   ensureAccount,
   expectNoPageErrors,
+  linkPlayer,
   expectNoSeriousAccessibilityViolations,
   signIn,
   trackPageErrors,
@@ -10,6 +11,10 @@ import {
 
 // A fake Clash API player in Legend League that no other browser test links.
 const TAG = "#Q00VJ";
+
+// These Clashers browse from their own address, so their links do not share the
+// website's six a minute per address with other browser tests.
+test.use({ extraHTTPHeaders: { "CF-Connecting-IP": "203.0.113.201" } });
 
 const ALL_CARDS = [
   "Legend day",
@@ -47,14 +52,8 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await signIn(page);
   await ensureAccount(page, "lensboard", "Lens Board");
 
-  // The game's verify call has a small shared budget a second, so try again.
   await page.goto("/account/verify-player");
-  await expect(async () => {
-    await page.getByLabel("Player tag").fill(TAG);
-    await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${TAG.slice(1)}`);
-    await page.getByRole("button", { name: "Link player" }).click();
-    await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
-  }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+  await linkPlayer(page, TAG);
 
   // A first visit offers our layout or an empty one, once the player is tracked.
   const welcome = page.getByRole("dialog", { name: "Your dashboard" });
@@ -259,12 +258,7 @@ async function signInWithPlayers(
   await ensureAccount(page, username, "Lens Switch");
   for (const tag of tags) {
     await page.goto("/account/verify-player");
-    await expect(async () => {
-      await page.getByLabel("Player tag").fill(tag);
-      await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${tag.slice(1)}`);
-      await page.getByRole("button", { name: "Link player" }).click();
-      await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
-    }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+    await linkPlayer(page, tag);
   }
 }
 

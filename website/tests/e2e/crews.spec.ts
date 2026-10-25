@@ -5,6 +5,7 @@ import {
   ensureAccount,
   expectAccountButtonsRead,
   expectNoPageErrors,
+  linkPlayer,
   signIn,
   trackPageErrors,
 } from "./helpers/account";
@@ -14,14 +15,20 @@ import { websiteOrigin } from "../fixtures/test-values";
 const CAPTAIN_TAGS = ["#Q00UU", "#Q00UV"];
 const MATE_TAGS = ["#Q00V0", "#Q00V2", "#Q00V8"];
 
-/** A fresh browser signed in as its own Google account. */
+/**
+ * A fresh browser signed in as its own Google account, from its own address so
+ * its links do not share the website's six a minute per address.
+ */
 async function clasher(
   browser: Browser,
   subject: string,
   username: string,
   name: string,
 ) {
-  const context = await browser.newContext({ baseURL: websiteOrigin });
+  const context = await browser.newContext({
+    baseURL: websiteOrigin,
+    extraHTTPHeaders: { "CF-Connecting-IP": `203.0.113.${subject.slice(-3)}` },
+  });
   const page = await context.newPage();
   await page.route("**/authorize?*", async (route) => {
     const url = new URL(route.request().url());
@@ -33,23 +40,9 @@ async function clasher(
   return { context, page, errors: trackPageErrors(page) };
 }
 
-/**
- * Link a fake player on the open Link page, which the fixture verifies by
- * its token, and wait to land on `done`. The game's verify call has a small
- * shared budget a second, so a busy second is tried again.
- */
-async function linkOnPage(page: Page, tag: string, done: RegExp | string): Promise<void> {
-  await expect(async () => {
-    await page.getByLabel("Player tag").fill(tag);
-    await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${tag.slice(1)}`);
-    await page.getByRole("button", { name: "Link player" }).click();
-    await expect(page).toHaveURL(done, { timeout: 3_000 });
-  }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
-}
-
 async function link(page: Page, tag: string): Promise<void> {
   await page.goto("/account/verify-player");
-  await linkOnPage(page, tag, /\/users\/[a-z][a-z0-9_]+\?linked=/);
+  await linkPlayer(page, tag, /\/users\/[a-z][a-z0-9_]+\?linked=/);
 }
 
 const account = (page: Page, tag: string) =>
@@ -58,7 +51,8 @@ const account = (page: Page, tag: string) =>
 test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks inside, one is kicked, and places stay above those in use", async ({
   browser,
 }) => {
-  test.setTimeout(150_000);
+  // Five links, 11 seconds apart.
+  test.setTimeout(200_000);
   const captain = await clasher(browser, "3101", "crewcaptain", "Crew Captain");
   const mate = await clasher(browser, "3102", "crewmate", "Crew Mate");
   try {
@@ -88,7 +82,7 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     await expect(mate.page.getByRole("heading", { name: "Night Owls" })).toBeVisible();
     await mate.page.getByRole("link", { name: "Link another player" }).click();
     await expect(mate.page).toHaveURL(/\/account\/verify-player\?return=/);
-    await linkOnPage(mate.page, MATE_TAGS[2]!, invitePath);
+    await linkPlayer(mate.page, MATE_TAGS[2]!, invitePath);
 
     // 2 of 3 join.
     for (const tag of MATE_TAGS) await expect(account(mate.page, tag)).toBeEnabled();

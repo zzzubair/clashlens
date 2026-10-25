@@ -4,6 +4,7 @@ import { renderToPipeableStream } from "react-dom/server";
 import {
   createStaticHandler,
   createStaticRouter,
+  RouterContextProvider,
   StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +41,8 @@ import {
   playerProfileLink,
 } from "../../app/lib/game-links";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { clientAddressContext } from "../../app/server/client-address.server";
 import { PythonApiError } from "../../app/services/python.server";
 
 const TAG = "#PC2QRC9QY";
@@ -81,25 +84,31 @@ const page = (clan: string, clanTag: string | null) =>
 
 // Only the first HTML sent, which is all a browser without JavaScript shows,
 // or with `streamed`, the page once everything streaming in has arrived.
-async function renderPlayer(streamed = false): Promise<string> {
-  const url = `https://clashlens.example/players/${encodeURIComponent(TAG)}`;
+async function renderPlayer(
+  streamed = false,
+  { tag = TAG, address }: { tag?: string; address?: string } = {},
+): Promise<string> {
+  const url = `https://clashlens.example/players/${encodeURIComponent(tag)}`;
+  const context = new RouterContextProvider();
+  context.set(clientAddressContext, address);
   const data = await playerLoader({
     request: new Request(url),
-    params: { tag: TAG },
+    params: { tag },
+    context,
   } as never);
   const handler = createStaticHandler([
     { path: "/players/:tag", Component: PlayerRoute, loader: () => data },
   ]);
-  const context = await handler.query(new Request(url));
-  if (context instanceof Response) throw new Error("unexpected route response");
-  const router = createStaticRouter(handler.dataRoutes, context);
+  const routed = await handler.query(new Request(url));
+  if (routed instanceof Response) throw new Error("unexpected route response");
+  const router = createStaticRouter(handler.dataRoutes, routed);
   return new Promise((resolve, reject) => {
     const sink = new PassThrough();
     let html = "";
     sink.on("data", (chunk) => (html += chunk));
     sink.on("end", () => resolve(html.replaceAll("<!-- -->", "")));
     const { pipe, abort } = renderToPipeableStream(
-      createElement(StaticRouterProvider, { router, context }),
+      createElement(StaticRouterProvider, { router, context: routed }),
       {
         onShellReady: () => {
           if (streamed) return;
@@ -169,8 +178,8 @@ describe("the player page header", () => {
   it("links the clan the game reports now when the saved profile has no clan tag", async () => {
     tracked(page("Titans2.0", null));
     mocks.getLiveClan.mockResolvedValue({ clan: { name: "Titans3.0", tag: "#2CLAN" } });
-    const html = header(await renderPlayer(true));
-    expect(mocks.getLiveClan).toHaveBeenCalledWith(TAG);
+    const html = header(await renderPlayer(true, { address: "203.0.113.9" }));
+    expect(mocks.getLiveClan).toHaveBeenCalledWith("203.0.113.9", TAG);
     expect(html).toContain(
       `<span class="player-clan"><a class="game-link" href="${CLAN_LINK}" ` +
         `target="_blank" rel="noopener noreferrer" ` +
@@ -221,6 +230,46 @@ describe("the player page header", () => {
     const streamed = header(await renderPlayer(true));
     expect(streamed).toContain(`href="${CLAN_LINK}"`);
   });
+
+  it("asks the game for one visitor's live clans six times a minute, keeping the saved clan after", async () => {
+    vi.stubEnv("CLASHLENS_PYTHON_API_URL", "http://python-fixture.test/");
+    vi.stubEnv(
+      "CLASHLENS_PYTHON_HMAC_SECRET_B64",
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    );
+    clearPublicRefreshLimits();
+    const { getLiveClan } = await vi.importActual<
+      typeof import("../../app/services/live-clan.server")
+    >("../../app/services/live-clan.server");
+    mocks.getLiveClan.mockImplementation(getLiveClan);
+    const clanReads = vi.fn((input: string | URL | Request) => {
+      const tag = decodeURIComponent(String(input).split("/players/")[1].split("/")[0]);
+      const clan = { name: "Titans3.0", tag: "#2CLAN" };
+      return Promise.resolve(Response.json({ tag, live: true, clan }));
+    });
+    vi.stubGlobal("fetch", clanReads);
+    tracked(page("Titans2.0", "#2CLAN"));
+    try {
+      const tags = ["#2PP", "#8PY", "#9PY", "#2QQ", "#2LL", "#2GG", "#2RR"];
+      const headers = [];
+      for (const tag of tags) {
+        headers.push(header(await renderPlayer(true, { tag, address: "203.0.113.9" })));
+      }
+      expect(clanReads).toHaveBeenCalledTimes(6);
+      expect(headers[5]).toContain(`href="${CLAN_LINK}"`);
+      expect(headers[6]).toContain(PLAYER_LINK);
+      expect(headers[6]).toContain(
+        '<span class="player-clan"><bdi>Titans2.0</bdi></span>',
+      );
+      expect(headers[6]).not.toContain("OpenClanProfile");
+
+      const other = header(await renderPlayer(true, { address: "203.0.113.10" }));
+      expect(clanReads).toHaveBeenCalledTimes(7);
+      expect(other).toContain(`href="${CLAN_LINK}"`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("live clan client boundary", () => {
@@ -249,7 +298,7 @@ describe("live clan client boundary", () => {
     const { getLiveClan } = await vi.importActual<
       typeof import("../../app/services/live-clan.server")
     >("../../app/services/live-clan.server");
-    return { clan: await getLiveClan(TAG), fetchMock };
+    return { clan: await getLiveClan("203.0.113.9", TAG), fetchMock };
   }
 
   it("reads the player's clan right now from the private API", async () => {
@@ -296,11 +345,21 @@ describe("live clan client boundary", () => {
     const { getLiveClan } = await vi.importActual<
       typeof import("../../app/services/live-clan.server")
     >("../../app/services/live-clan.server");
-    expect(await getLiveClan(TAG)).toBeNull();
+    expect(await getLiveClan("203.0.113.9", TAG)).toBeNull();
     expect(loggedReasons(warn)).toEqual(["website_timeout"]);
   });
 
   function loggedReasons(warn: { mock: { calls: unknown[][] } }) {
     return warn.mock.calls.map(([line]) => JSON.parse(String(line)).reason);
   }
+
+  it("asks nothing for a visitor with no known address", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { getLiveClan } = await vi.importActual<
+      typeof import("../../app/services/live-clan.server")
+    >("../../app/services/live-clan.server");
+    expect(await getLiveClan(undefined, TAG)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

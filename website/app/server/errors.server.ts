@@ -10,7 +10,7 @@ const messages: Record<WebsiteErrorCode, string> = {
   missing: "The requested player data is not available.",
   forbidden: "This action is not allowed.",
   conflict: "The request conflicts with current saved data.",
-  rate_limited: "Refresh requests are temporarily limited. Try again shortly.",
+  rate_limited: "Requests are temporarily limited. Try again shortly.",
   uncertain: "The result is uncertain. Saved data remains visible.",
   malformed: "The private service returned malformed data. Saved data is unchanged.",
   unavailable: "Saved data is still available, but the live service is unavailable.",

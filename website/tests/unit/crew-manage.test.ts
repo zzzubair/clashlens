@@ -73,6 +73,7 @@ import VerifyPlayerRoute, {
 import { loader as setupLoader } from "../../app/routes/account.setup";
 import { loader as loginLoader } from "../../app/routes/login";
 import { loader as signupLoader } from "../../app/routes/signup";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 import { clientAddressContext } from "../../app/server/client-address.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
@@ -780,10 +781,14 @@ describe("linking an account from an invite", () => {
     verified.mockReset();
     verified.mockResolvedValue({ status: "linked", tag: "#2PP" });
     mocks.createPythonClient.mockReturnValue({ verifyPlayerToken: verified });
+    clearPublicRefreshLimits();
   });
 
+  const visitor = new RouterContextProvider();
+  visitor.set(clientAddressContext, "203.0.113.9");
   const link = (returnPath: string) =>
     verifyAction({
+      context: visitor,
       request: post("/account/verify-player", {
         tag: "#2PP",
         token: "SECRET-TOKEN-123",
