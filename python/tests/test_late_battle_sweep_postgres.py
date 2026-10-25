@@ -563,6 +563,75 @@ def test_failed_player_is_rolled_back_logged_and_retried_next_run(
             database.close()
 
 
+def test_restarted_worker_finishes_a_retrying_sweep_and_skips_a_finished_one(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    # 24 Oct 2026: a deploy at 21:05 ran the sweep that finished at 05:55
+    # again, correcting 2,192 players over 6 minutes.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            next_day = DAY + timedelta(days=1)
+            boundary = DAY + timedelta(days=2)
+            _finish_reset_sweep(connection_info, boundary)
+            recalculate = reconciliation_db.recalculate_ranked_day
+
+            def fail_on_next_day(*args, day_start, **kwargs):
+                if day_start == next_day:
+                    raise RuntimeError("next day failed")
+                recalculate(*args, day_start=day_start, **kwargs)
+
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", fail_on_next_day
+            )
+            LateBattleSweep(database).run_when_due(now=boundary + timedelta(minutes=31))
+            assert [line["status"] for line in _sweep_lines(capsys)] == [
+                "player_failed", "retrying"]
+
+            # A sweep still retrying runs to the end after a restart.
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", recalculate
+            )
+            LateBattleSweep(database).run_when_due(now=boundary + timedelta(minutes=33))
+            assert [line["status"] for line in _sweep_lines(capsys)] == ["complete"]
+            assert ("#QPP", 3, -40) in _published(connection_info, DAY)[0]
+
+            # A battle saved now would be corrected by another sweep of this
+            # Reset; a restarted worker leaves it for the next Reset's.
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="later-late-log",
+                rows=[
+                    _live_battle_row(
+                        attack=False,
+                        battle_timestamp=next_day - timedelta(seconds=30),
+                        opponent_tag="#CPP",
+                        opponent_name="Another Late Attacker",
+                    ),
+                    _late_defense(),
+                    _on_time_defense(),
+                ],
+                observed_at=boundary + timedelta(minutes=50),
+            )
+            LateBattleSweep(database).run_when_due(now=boundary + timedelta(minutes=55))
+            assert _sweep_lines(capsys) == []
+            assert ("#CPP", 3, -40) not in _published(connection_info, DAY)[0]
+
+            next_boundary = boundary + timedelta(days=1)
+            _finish_reset_sweep(connection_info, next_boundary)
+            LateBattleSweep(database).run_when_due(
+                now=next_boundary + timedelta(minutes=30))
+            assert [line["status"] for line in _sweep_lines(capsys)] == ["complete"]
+            assert ("#CPP", 3, -40) in _published(connection_info, DAY)[0]
+        finally:
+            database.close()
+
+
 @pytest.mark.parametrize("next_day_is_today", [False, True])
 def test_later_day_is_retried_after_an_existing_job_fixes_only_the_first_day(
     database_url: str, archive_server, monkeypatch, next_day_is_today: bool
