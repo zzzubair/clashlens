@@ -4,6 +4,7 @@ import {
   ensureAccount,
   expectNoPageErrors,
   expectNoSeriousAccessibilityViolations,
+  linkPlayer,
   signIn,
   trackPageErrors,
 } from "./helpers/account";
@@ -11,17 +12,9 @@ import {
 const KEPT = "#Q00V9";
 const UNLINKED = "#Q00VY";
 
-/** Link a fake player, which the fixture verifies by its token. The game's
- * verify call has a small shared budget a second, so a busy second is tried
- * again. */
 async function link(page: Page, tag: string): Promise<void> {
   await page.goto("/account/verify-player");
-  await expect(async () => {
-    await page.getByLabel("Player tag").fill(tag);
-    await page.getByLabel("API token", { exact: true }).fill(`VERIFY-${tag.slice(1)}`);
-    await page.getByRole("button", { name: "Link player" }).click();
-    await expect(page).toHaveURL(/\?linked=/, { timeout: 3_000 });
-  }).toPass({ intervals: [1_000, 2_000], timeout: 30_000 });
+  await linkPlayer(page, tag);
 }
 
 test("Settings saves the name and default player, and unlinks a player after a calm check", async ({

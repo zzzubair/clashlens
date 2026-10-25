@@ -5,6 +5,7 @@ import {
   expectAccountButtonsRead,
   expectNoPageErrors,
   expectNoPortRequests,
+  linkPlayer,
   signIn,
   trackPageErrors,
   trackRequests,
@@ -119,10 +120,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   await expect(page).toHaveURL(/\/account\/watchlists\/[^/]+\?days=14&sort=trophies$/);
 
   await page.goto("/account/verify-player");
-  await page.getByLabel("Player tag").fill("#2PP");
-  await page.getByLabel("API token", { exact: true }).fill("VERIFY-2PP");
-  await page.getByRole("button", { name: "Link player" }).click();
-  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+\?linked=%232PP$/);
+  await linkPlayer(page, "#2PP", /\/users\/[a-z][a-z0-9_]+\?linked=%232PP$/);
   await expect(page.getByRole("status")).toHaveText(/ linked\.$/);
   const linkedAccounts = page.getByRole("region", { name: "Clash players" });
   await expect(linkedAccounts.getByText("#2PP", { exact: true })).toBeVisible();
