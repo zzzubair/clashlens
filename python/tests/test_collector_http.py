@@ -201,6 +201,144 @@ def test_key_state_is_rechecked_after_waiting_to_start(state_change: str) -> Non
         assert elapsed >= 0.9
 
 
+class _TimedNetworkClient(OfficialApiClient):
+    """The real client with only its network call replaced by a timed wait."""
+
+    def _request(self, url, key_value, deadline, loop, start_request):
+        if not deadline.begin():
+            raise ProviderFailure("timeout", retryable=True)
+        # The slow request runs well past the 0.15 second limit and, like a real
+        # one, keeps its key's slot until the network call actually ends.
+        sleep({"%23SLOW": 0.4, "%23BRIEF": 0.05}.get(url.rsplit("/", 1)[1], 0.001))
+        return 200, b"{}", {}
+
+
+@pytest.mark.parametrize(
+    ("other_key", "expected"),
+    [
+        ("free", (200, "regular-2")),
+        ("frees_soon", (200, "regular-2")),
+        ("slow", ("timeout", "unassigned")),
+    ],
+)
+def test_waiting_request_takes_whichever_key_is_free(
+    other_key: str, expected: tuple[object, str]
+) -> None:
+    client = _TimedNetworkClient(
+        "https://example.invalid", max_connections=4, total_timeout_seconds=0.15
+    )
+    pool = KeyPool(
+        [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
+        starts_per_second=25,
+        concurrency_per_key=1,
+    )
+
+    async def fetch(tag: str) -> tuple[object, str]:
+        try:
+            response = await client.fetch_player(pool, tag, "profile")
+        except ProviderFailure as error:
+            return error.category, error.key_label or "unassigned"
+        return response.http_status, response.key_label
+
+    async def run() -> tuple[tuple[object, str], tuple[object, str]]:
+        holding = [asyncio.create_task(fetch("#SLOW"))]
+        await asyncio.sleep(0.005)
+        if other_key == "free":
+            assert await fetch("#FAST") == (200, "regular-2")
+        else:
+            tag = "#BRIEF" if other_key == "frees_soon" else "#SLOW"
+            holding.append(asyncio.create_task(fetch(tag)))
+            await asyncio.sleep(0.005)
+        queued = await fetch("#FAST")
+        await asyncio.gather(*holding)
+        await asyncio.sleep(0.3)
+        return queued, await fetch("#AFTER")
+
+    queued, after = asyncio.run(run())
+
+    # Old code tied the queued request to busy regular-1 and it expired unsent.
+    assert queued == expected
+    # Every slot, including a timed-out waiter's, came back for later work.
+    assert after[0] == 200
+
+
+def test_waiting_request_takes_a_key_when_its_pause_ends() -> None:
+    pool = KeyPool(
+        [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
+        starts_per_second=25,
+        concurrency_per_key=1,
+    )
+    used: list[str] = []
+
+    async def run() -> float:
+        release = asyncio.Event()
+
+        async def hold(_key: ApiKey, start_request) -> None:
+            await start_request()
+            await release.wait()
+
+        async def request(key: ApiKey, start_request) -> None:
+            await start_request()
+            used.append(key.label)
+
+        holding = asyncio.create_task(pool.run(hold))
+        await asyncio.sleep(0)
+        pool.pause("regular-2", 1)
+        started = monotonic()
+        await asyncio.wait_for(pool.run(request), timeout=3)
+        elapsed = monotonic() - started
+        release.set()
+        await holding
+        return elapsed
+
+    elapsed = asyncio.run(run())
+
+    # Old code queued it behind busy regular-1, which never freed in time.
+    assert used == ["regular-2"]
+    assert 0.9 <= elapsed < 2
+
+
+def test_queued_request_waits_for_the_first_key_to_leave_its_pause() -> None:
+    pool = KeyPool(
+        [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
+        starts_per_second=25,
+        concurrency_per_key=1,
+    )
+    used: list[str] = []
+
+    async def run() -> float:
+        releases = {"regular-1": asyncio.Event(), "regular-2": asyncio.Event()}
+
+        async def hold(key: ApiKey, start_request) -> None:
+            await start_request()
+            await releases[key.label].wait()
+
+        async def request(key: ApiKey, start_request) -> None:
+            await start_request()
+            used.append(key.label)
+
+        holding = [asyncio.create_task(pool.run(hold)) for _ in range(2)]
+        await asyncio.sleep(0.01)
+        queued = asyncio.create_task(pool.run(request))
+        await asyncio.sleep(0)
+        pool.pause("regular-1", 1)
+        pool.pause("regular-2", 60)
+        started = monotonic()
+        releases["regular-2"].set()
+        await holding[1]
+        releases["regular-1"].set()
+        await holding[0]
+        await asyncio.wait_for(queued, timeout=5)
+        return monotonic() - started
+
+    elapsed = asyncio.run(run())
+
+    # Old code handed the queued request to regular-2 the moment it freed,
+    # leaving it asleep for 60 seconds while regular-1 recovered after one.
+    assert used == ["regular-1"]
+    assert 0.9 <= elapsed < 2
+
+
 class _OfficialHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     authorization = ""

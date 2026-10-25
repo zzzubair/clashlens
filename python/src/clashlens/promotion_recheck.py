@@ -229,7 +229,7 @@ class Admission:
         keys = self._collector.regular_keys
         now = time.monotonic()
         idle = sum(
-            state.semaphore._value
+            keys.concurrency_per_key - state.active
             for state in keys._states
             if state.healthy and state.paused_until <= now
         )
