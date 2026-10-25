@@ -361,7 +361,10 @@ Stage 4: Legend days, Daily board members and tracking follow it. No page or cou
   creates a day that was never saved, and no job is queued, so a correction is
   never left half done. If any day fails, that player's changes are rolled
   back, logged with status `player_failed`, and retried at the next check 10
-  minutes later; checks for that Reset stop once every player has succeeded.
+  minutes later; checks for that Reset stop once every player has succeeded,
+  which is saved in `late_battle_sweeps`, so a worker restarted later does not
+  check that Reset again (on 24 October 2026 a 21:05 deploy repeated the check
+  finished at 05:55, correcting 2,192 players over 6 minutes).
   Each check reads, from their own indexes, only the reports saved late in
   those 7 days (about 300 a day) and a few index entries for each saved result of
   those days and today (about 100,000 at 12,500 players), so its cost does not

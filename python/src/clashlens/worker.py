@@ -149,6 +149,11 @@ SESSION_ENDED = (IdleInTransactionSessionTimeout, TransactionTimeout)
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
 MAINTENANCE_POOL_SIZE = 2
+# How long a stopping worker waits for the maintenance timer's, then the
+# league week thread's, current step. One still running is abandoned: the
+# process exits and the database rolls back its open transaction. On 24 Oct
+# 2026 waiting for one held a stop until systemd killed the worker at 70 s.
+MAINTENANCE_STOP_SECONDS = 5.0
 # Lane connections one worker process may open.
 MAX_WORKER_POOL_SIZE = 16
 # Connections all worker processes together may open: each process's lane
@@ -269,7 +274,7 @@ class TimedMaintenance:
     def close(self) -> None:
         self.stopping.set()
         if self.league_weeks is not None:
-            self.league_weeks.join()
+            self.league_weeks.join(MAINTENANCE_STOP_SECONDS)
         if self.permit is not None:
             self.permit.close()
 
@@ -516,8 +521,8 @@ def process_until_stopped(
     lane and no lane waits for it. A maintenance failure is reported by type
     only, never its message, and a later tick tries again. Each result goes to
     ``on_result`` as its job finishes, one at a time. Lane failures are
-    isolated as in ``_run_lanes``, and the call returns once every lane and
-    the timer have stopped.
+    isolated as in ``_run_lanes``, and the call returns once every lane has
+    stopped and the timer has too, or ``MAINTENANCE_STOP_SECONDS`` later.
 
     With two or more lanes, ``lane_work_types`` reserves ``response_lanes``
     for responses so long derived work can never hold them all. Each derived
@@ -614,7 +619,7 @@ def process_until_stopped(
         _run_lanes(concurrency, claim_loop)
     finally:
         stop_requested.set()
-        timer.join()
+        timer.join(MAINTENANCE_STOP_SECONDS)
         release = getattr(processor, "release_batched_claims", None)
         try:
             if callable(release):

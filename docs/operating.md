@@ -412,7 +412,8 @@ rules.
 A response fetched before the Reset sweep finished that is still waiting, other
 than a settlement check's, also holds back that day's [late-battle check](domain.md#6-ranked-day-and-leaderboard-snapshots);
 the worker logs a `late_battle_sweep` line with status `complete` once every
-player's correction for a Reset has succeeded, `retrying` after a
+player's correction for a Reset has succeeded (saved, so a restart does not
+repeat it), `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
 Every five minutes the worker also recounts each player's attacks and attack

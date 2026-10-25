@@ -286,7 +286,11 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
 
 
 class LateBattleSweep:
-    """Run the sweep from the worker loop until each Reset's corrections succeed."""
+    """Run the sweep from the worker loop until each Reset's corrections succeed.
+
+    A Reset whose sweep corrected every selected player is recorded in
+    late_battle_sweeps, so a restarted worker does not run it again.
+    """
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -303,7 +307,22 @@ class LateBattleSweep:
             return
         event = {"event": "late_battle_sweep", "boundary_at": boundary.isoformat()}
         try:
+            with self.database.pool.connection() as connection:
+                swept = connection.execute(
+                    "SELECT EXISTS (SELECT 1 FROM late_battle_sweeps WHERE boundary_at = %s)",
+                    (boundary,),
+                ).fetchone()[0]
+            if swept:
+                self.swept_boundary = boundary
+                return
             result = sweep_late_battles(self.database, now=now)
+            if result is not None and result[1] == 0:
+                with self.database.pool.connection() as connection:
+                    connection.execute(
+                        "INSERT INTO late_battle_sweeps (boundary_at) VALUES (%s)"
+                        " ON CONFLICT DO NOTHING",
+                        (boundary,),
+                    )
         except Exception as error:  # noqa: BLE001 - retry at the next check
             print(
                 json.dumps({**event, "status": "failed", "error": repr(error)[:300]}),
