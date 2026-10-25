@@ -159,11 +159,11 @@ def reserve_verification(
                     """
                     SELECT count(*),
                            ceil(extract(epoch FROM
-                               min(created_at) + interval '1 minute' - clock_timestamp()
+                               min(created_at) + interval '1 minute' - statement_timestamp()
                            ))::int
                     FROM player_link_verification_audits
                     WHERE account_id = %s
-                      AND created_at > clock_timestamp() - interval '1 minute'
+                      AND created_at > statement_timestamp() - interval '1 minute'
                     """,
                     (binding.account_id,),
                 ).fetchone()
