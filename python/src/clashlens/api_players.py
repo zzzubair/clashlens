@@ -835,9 +835,11 @@ def _lower(name: str) -> str:
     return "".join(character.lower()[0] for character in name)
 
 
-def _read_known_players(database: ApiDatabase, now: datetime) -> list[tuple[Any, ...]]:
-    """Every player a name search can find, each with its place in name order
-    and its name lower-cased."""
+def _read_known_players(
+    database: ApiDatabase, now: datetime
+) -> tuple[str, list[tuple[Any, ...]]]:
+    """The Season ``now`` is in, and every player a name search can find,
+    each with its place in name order and its name lower-cased."""
     opening_reset = season_opening_reset(now)
     with database.pool.connection() as connection:
         rows = connection.execute(
@@ -848,13 +850,16 @@ def _read_known_players(database: ApiDatabase, now: datetime) -> list[tuple[Any,
             """,
             {"opening_reset": opening_reset},
         ).fetchall()
-    return [(*row, _lower(_text(row[1]))) for row in rows]
+    season_id = ranked_day_for(now).official_season_id
+    return season_id, [(*row, _lower(_text(row[1]))) for row in rows]
 
 
-class KnownPlayerNames(SharedCopy[list[tuple[Any, ...]]]):
+class KnownPlayerNames(SharedCopy[tuple[str, list[tuple[Any, ...]]]]):
     """Every player the header search can find, held so a search reads no
-    database: read again in the background after a minute, never served past
-    two, and read anew for each Legend day."""
+    database: read again in the background after a minute, and still served,
+    across Resets too, while those reads fail or run late, but never past a
+    day. A full read can outlast the statement timeout under the load after
+    a Reset, so no search waits for one while any copy is held."""
 
     def __init__(
         self,
@@ -865,13 +870,24 @@ class KnownPlayerNames(SharedCopy[list[tuple[Any, ...]]]):
     ) -> None:
         super().__init__(
             _read_known_players,
-            key=lambda now: ranked_day_for(now).start,
+            # One key for every Legend day: a search hides the trophies of a
+            # copy read in an earlier Season instead of waiting for a new one.
+            key=lambda _now: None,
             seconds=seconds,
-            longest=2 * seconds,
+            longest=24 * 60 * 60,
             name="known_player_names_copy",
             clock=clock,
             start=start,
         )
+
+
+def _waits(row: tuple[Any, ...], now: datetime, earlier_season: bool) -> bool:
+    """Whether a known player's trophies wait for their Season reset. Every
+    one held from a copy read before this Season's opening Reset does: that
+    copy cannot show whose Season reset has come."""
+    return earlier_season or awaits_season_reset(
+        _text(row[6]), int(row[2]), row[7], row[8], now
+    )
 
 
 def search_known_players(
@@ -886,6 +902,7 @@ def search_known_players(
     if not 1 <= limit <= 50:
         raise ValueError("known player search limit is outside the supported range")
     season_id = ranked_day_for(now).official_season_id
+    earlier_season = False
     if names is None:
         opening_reset = season_opening_reset(now)
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -911,22 +928,22 @@ def search_known_players(
             ).fetchall()
     else:
         needle = _lower(query)
+        read_season, known = names.current(database, now)
+        earlier_season = read_season != season_id
 
         def order(row: tuple[Any, ...]) -> tuple[Any, ...]:
             # An exact name match first, then the strongest players, then by name.
-            ranked = _text(row[6]) == season_id and not row[9] and row[2] is not None
+            ranked = row[2] is not None and not _waits(row, now, earlier_season)
             return (row[11] != needle, -row[2] if ranked else math.inf, row[10])
 
         rows = heapq.nsmallest(
-            limit,
-            (row for row in names.current(database, now) if needle in row[11]),
-            key=order,
+            limit, (row for row in known if needle in row[11]), key=order
         )
     results = []
     for row in rows:
         observed_at = row[3].astimezone(UTC)
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
-        pending = awaits_season_reset(_text(row[6]), int(row[2]), row[7], row[8], now)
+        pending = _waits(row, now, earlier_season)
         results.append(
             {
                 "tag": _text(row[0]),
