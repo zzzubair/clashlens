@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .analytics import LIVE_TALLY_SECONDS, tie_order_sql, unplayed_sql
+from . import league_week
+from .analytics import (
+    LIVE_TALLY_SECONDS,
+    tie_order_sql,
+    unplayed_since_sql,
+    unplayed_sql,
+)
 from .api_db import (
     ApiDatabase,
     SharedCopy,
@@ -33,17 +39,25 @@ _FOCUS_NEIGHBORS = 5
 _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
     "player.id", "profile.trophies", "%(opening_reset)s"
 )
-# A tracked Legend I player at 5,000 with no Legend battle saved this Season
-# has not played yet, so they rank at 5,000 from their newest profile even
-# when it names no current Season, such as Season ID 0, or was rejected for
-# it. On 11 October 2026, 1,374 tracked players waited off the board so.
-_UNPLAYED_SQL = unplayed_sql(
-    "player.id", "version", "%(season_start)s", "%(season_end)s"
-)
-# The player's current accepted profile, and whether it ranks them this Season.
+# When the player last entered Legend I: the Season's start, or the Monday
+# Reset the weekly league record says they were promoted or first seen at,
+# as Daily boards count it.
+_ENTERED_SQL = unplayed_since_sql("player.id", "%(season_start)s", "%(week_start)s")
+# A tracked Legend I player at 5,000 with no Legend battle saved since they
+# entered Legend I has not played yet, so they rank at 5,000 from their
+# newest profile even when it names no current Season, such as Season ID 0,
+# or was rejected for it. On 11 October 2026, 1,374 tracked players waited
+# off the board so.
+_UNPLAYED_SQL = unplayed_sql("player.id", "version", _ENTERED_SQL, "%(season_end)s")
+# The player's current accepted profile, and whether it ranks them this Season:
+# a Legend I one read since they entered Legend I. On 26 October 2026, 317
+# players promoted into Legend I still had a current Legend II profile from
+# the Season's first week, whose Season ID passed, and 98 promoted back had a
+# Legend I one from before their drop; each ranked at those old trophies.
 _CURRENT_PROFILE_JOINS = f"""
 LEFT JOIN LATERAL (
-    SELECT name, trophies, profile_json, current_league_season_id
+    SELECT name, trophies, profile_json, current_league_season_id,
+           eligibility_state, observed_at
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
       AND source_contract_state = 'accepted'
@@ -51,7 +65,12 @@ LEFT JOIN LATERAL (
     OFFSET 0
 ) AS profile ON true
 CROSS JOIN LATERAL (
-    SELECT COALESCE(profile.current_league_season_id = %(season_id)s, false)
+    SELECT COALESCE(profile.current_league_season_id = %(season_id)s
+                    AND profile.eligibility_state = 'eligible'
+                    -- One read this week needs no lookup: on 26 October
+                    -- 2026 the lookup for every player added 250 ms.
+                    AND CASE WHEN profile.observed_at >= %(week_start)s THEN true
+                             ELSE profile.observed_at >= {_ENTERED_SQL} END, false)
            AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
 ) AS current
 """
@@ -149,6 +168,16 @@ LEFT JOIN live_attack_tallies AS tally
   ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
   AND (profile.name IS NOT NULL OR unplayed.name IS NOT NULL)
+  -- Still tracked while only unconfirmed profiles prove the drop
+  -- (league_days.track), but out of Legend I: on 26 October 2026, 2,047 of
+  -- that Reset's 2,079 dropped players stayed on the board at their last
+  -- Legend I trophies.
+  AND NOT EXISTS (
+      SELECT 1 FROM player_league_weeks AS week
+      WHERE week.player_id = player.id
+        AND week.week_start = %(week_start)s
+        AND week.league = 'below_legend_i'
+  )
   AND NOT EXISTS (
       SELECT 1 FROM collector_response_state AS checked
       WHERE checked.scope = 'player'
@@ -190,6 +219,7 @@ def _season_params(now: datetime) -> dict[str, Any]:
         "opening_reset": season_opening_reset(now),
         "season_start": day.season_start,
         "season_end": day.season_end,
+        "week_start": league_week.week_start(now),
     }
 
 
