@@ -274,7 +274,8 @@ def _upsert_army_decodes(
                 assert inserted is not None
                 exact_army_id = int(inserted[0])
                 army_types.label_new_army(
-                    connection, exact_army_id, sorted(troop_quantities.items()), heroes
+                    connection, exact_army_id, sorted(troop_quantities.items()),
+                    sorted(spell_quantities.items()), heroes,
                 )
             else:
                 exact_army_id = int(existing[0])
