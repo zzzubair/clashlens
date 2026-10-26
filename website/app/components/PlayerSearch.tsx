@@ -195,8 +195,9 @@ const searchIcon = (
 );
 
 /**
- * Compact search for every page but home: a quiet icon that opens a small
- * panel under the header (a full-width sheet on phones). Escape closes it.
+ * Compact search for every page but /search: a quiet icon that opens a small
+ * panel under the header (a full-width sheet on phones). "/" opens it from
+ * anywhere except while typing in another field; Escape closes it.
  */
 export function HeaderSearch() {
   const [expanded, setExpanded] = useState(false);
@@ -209,6 +210,25 @@ export function HeaderSearch() {
   useEffect(() => {
     if (expanded) inputRef.current?.focus();
   }, [expanded]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "/" || event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, select"))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (inputRef.current) inputRef.current.focus();
+      else setExpanded(true);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!expanded) return;
@@ -239,7 +259,8 @@ export function HeaderSearch() {
         aria-label="Search players"
         aria-expanded={expanded}
         aria-controls={expanded ? "header-search-panel" : undefined}
-        title="Search players"
+        aria-keyshortcuts="/"
+        title="Search players (press /)"
         onClick={() => (expanded ? collapse(false) : setExpanded(true))}
       >
         {searchIcon}
