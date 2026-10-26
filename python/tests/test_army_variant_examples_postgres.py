@@ -128,10 +128,35 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                 {"attacks": 1, "armies": 1, "example_attacks": 1,
                  "army_share_code": REVENGE_QUAKE},
             ]
+            # Each army is saved with its composition keys as it arrives, and
+            # the relabel after a rule change saves the same ones, so armies
+            # labelled before the keys were kept get them too.
+            with database.pool.connection() as connection:
+                saved = connection.execute(
+                    """
+                    SELECT exact_army_id, composition_key, group_key
+                    FROM army_package_types ORDER BY 1
+                    """
+                ).fetchall()
+                connection.execute(
+                    """
+                    UPDATE army_package_types
+                    SET composition_key = NULL, group_key = NULL,
+                        rules_version = 'army-types-older'
+                    """
+                )
+            assert saved and all(None not in row for row in saved)
             # Labelled, then counted: the same examples, from the day's
             # attacks and then from its saved counts, for a Top N and a
             # trophy range, and they add up to the variant's row.
             army_types.refresh_army_types(database, now=NOON)
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    """
+                    SELECT exact_army_id, composition_key, group_key
+                    FROM army_package_types ORDER BY 1
+                    """
+                ).fetchall() == saved
             for _counted in (False, True):
                 for population in ("top-10", "trophies-5000-9000"):
                     result = examples(population)
@@ -199,6 +224,88 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
             )
             assert other is not None and other["groups"] == []
             assert other["rule"] == "Without Revenge Deck or Rocket Backpack."
+        finally:
+            api.close()
+            database.close()
+
+
+def test_copy_army_code_comes_from_the_examples_newest_attacks(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # One example army, 7 attacks by two players on one day: the player who
+    # used it most took the Wall Wrecker code 3 times of 4, the other only
+    # the code without it, which most of all 7 attacks used.
+    logs = {
+        "#2PP": [("#8PP", REVENGE_SIEGE), ("#9PP", REVENGE_SIEGE),
+                 ("#PPP", REVENGE_SIEGE), ("#YPP", REVENGE)],
+        "#2LL": [("#8QQ", REVENGE), ("#9QQ", REVENGE), ("#PQQ", REVENGE)],
+    }
+    with domain_database(database_url) as ci:
+        jobs = []
+        for attacker, rows in logs.items():
+            times = [DAY_START + timedelta(hours=hour) for hour in range(1, len(rows) + 1)]
+            jobs.append((attacker, times, store_observation(
+                ci, archive_server, occurrence_key=f"log-{attacker}", endpoint="battle_log",
+                body=json.dumps({"items": [
+                    _row(True, opponent, code, ts, 2, 80)
+                    for (opponent, code), ts in zip(rows, times, strict=True)
+                ]}).encode(),
+                observed_at=times[-1] + timedelta(minutes=1), normalized_tag=attacker,
+            )[1]))
+        database, processor = _processor(ci, archive_server, monkeypatch)
+        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        try:
+            for _attacker, _times, job in jobs:
+                assert processor.process_job(job, owner="ingest").outcome in (
+                    "processed", "processed_with_gaps",
+                )
+            with database.pool.connection() as connection:
+                battles = {
+                    text(tag): int(battle)
+                    for tag, battle in connection.execute(
+                        """
+                        SELECT def.normalized_tag, b.id FROM legend_battles b
+                        JOIN players def ON def.id = b.defender_player_id
+                        """
+                    ).fetchall()
+                }
+                players = [
+                    connection.execute(
+                        "SELECT id FROM players WHERE normalized_tag = %s", (attacker,)
+                    ).fetchone()[0]
+                    for attacker in logs
+                ]
+            for attacker, times, _job in jobs:
+                _publish_day(database, attacker, [
+                    _event(battles[opponent], "offense", ts, 2, 80, 26)
+                    for (opponent, _code), ts in zip(logs[attacker], times, strict=True)
+                ])
+                assert processor.process_job(
+                    _army_job(database), owner="army"
+                ).outcome == "processed"
+            _seed_frozen_snapshot_at(
+                database, DAY_START + timedelta(days=1),
+                [(player, position, "fresh", "confirmed")
+                 for position, player in enumerate(players, start=1)],
+            )
+            army_rank_bands.refresh_rank_band_totals(database)
+            army_types.refresh_army_types(database, now=NOON)
+
+            def example() -> dict:
+                result = api_analytics.get_army_analytics(
+                    api, _selection(category="army-types", population="top-10"),
+                    examples=(army_types.THROWER, 3),
+                )
+                assert result is not None
+                (group,) = result["groups"]
+                return group
+
+            assert example()["army_share_code"] == REVENGE
+            # Counting stops once the player days read hold this many of its
+            # attacks, its keenest player first: only the first player's 4.
+            monkeypatch.setattr(army_types, "LINK_ATTACKS", 4)
+            assert example() == {"attacks": 7, "armies": 1, "example_attacks": 7,
+                                 "army_share_code": REVENGE_SIEGE}
         finally:
             api.close()
             database.close()
