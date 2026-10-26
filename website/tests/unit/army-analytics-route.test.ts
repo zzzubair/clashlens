@@ -590,14 +590,14 @@ describe("army analytics route historical reads", () => {
         .mockResolvedValueOnce(currentAnalytics("top-100", [1, 2, 3], 100)),
     });
     const html = await renderArmyRoute("season=current");
-    expect(renderedText(html)).toContain(
-      "Days 23, 25–26 of 28; days not tracked: 1–22, 24.",
-    );
+    expect(renderedText(html)).toContain("Days 23, 25–26 of 28");
+    expect(renderedText(html)).toContain("Days not tracked: 1–22, 24.");
     // There are no day fields to change; the page always reads the Season.
     expect(html).not.toContain('name="start_day"');
     expect(html).not.toContain('name="end_day"');
     const complete = await renderArmyRoute("season=current");
-    expect(renderedText(complete)).not.toContain("days not tracked");
+    expect(renderedText(complete)).toContain("Days 1–3 of 28");
+    expect(renderedText(complete)).not.toContain("not tracked");
   });
 
   it("keeps notes short: no old-rank warning or star-rate explanation", async () => {
@@ -911,7 +911,7 @@ describe("army analytics attacks and season picker", () => {
     expect(text).not.toContain("Defenses");
     expect(text).not.toContain("From Legend day");
     expect(text).toContain("usage in attacks by top-100 players");
-    expect(text).toContain("2 of 28 days");
+    expect(text).toContain("Days 1–2 of 28");
   });
 
   it("names the unit types as the owner asked, under Unit Type", async () => {

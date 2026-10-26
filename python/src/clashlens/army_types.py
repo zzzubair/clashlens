@@ -711,6 +711,25 @@ def read_type_rows(
     return [(*key, *total) for key, total in sorted(totals.items())]
 
 
+def counted_days(connection: Any, starts: list[Any]) -> set[Any]:
+    """Which of these Legend days (by ``ranked_day_start``) have saved attack
+    counts made from the day's current completed-day marker."""
+    return {
+        row[0]
+        for row in connection.execute(
+            """
+            SELECT counted.ranked_day_start
+            FROM army_type_counted_days AS counted
+            JOIN army_analytics_completed_days AS day
+              ON day.ranked_day_start = counted.ranked_day_start
+             AND day.fact_input_hash = counted.fact_input_hash
+            WHERE counted.ranked_day_start = ANY(%s::timestamptz[])
+            """,
+            (starts,),
+        ).fetchall()
+    }
+
+
 def _selected_counts(
     connection: Any,
     *,
@@ -724,20 +743,9 @@ def _selected_counts(
     one-star, two-star, three-star, destruction, trophies won, day), and their
     parameters: saved counts for counted days, the attacks themselves
     otherwise, as ``read_type_rows`` describes."""
-    counted = {
-        row[0]
-        for row in connection.execute(
-            """
-            SELECT counted.ranked_day_start
-            FROM army_type_counted_days AS counted
-            JOIN army_analytics_completed_days AS day
-              ON day.ranked_day_start = counted.ranked_day_start
-             AND day.fact_input_hash = counted.fact_input_hash
-            WHERE counted.ranked_day_start = ANY(%s::timestamptz[])
-            """,
-            (list(days.values()),),
-        ).fetchall()
-    } if trophy_range is None else set()
+    counted = (
+        counted_days(connection, list(days.values())) if trophy_range is None else set()
+    )
     saved_days = [start for start in days.values() if start in counted]
     fact_days = [number for number, start in days.items() if start not in counted]
     members, member_params = _members(member_ids, boards)

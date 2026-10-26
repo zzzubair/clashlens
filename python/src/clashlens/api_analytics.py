@@ -396,6 +396,21 @@ def get_army_analytics(
             if selection.season == "current" and banded:
                 # Days the worker has not counted yet are left out and named.
                 covered_days = [day for day in covered_days if day in boards]
+            if resolved.category == army_types.CATEGORY and not army_types.rules_ready(
+                connection
+            ):
+                raise ArmyTypesPreparing(covered_days)
+            if banded and resolved.category == army_types.CATEGORY:
+                # Army types too, so a page never adds up attacks as it loads.
+                counted = army_types.counted_days(
+                    connection, [day_starts[day] for day in covered_days]
+                )
+                uncounted = [
+                    day for day in covered_days if day_starts[day] not in counted
+                ]
+                if selection.season != "current" and uncounted:
+                    raise ArmyAnalyticsUnavailable(uncounted)
+                covered_days = [day for day in covered_days if day not in uncounted]
             if not covered_days:
                 raise ArmyAnalyticsUnavailable(requested_days)
             if selection.season == "current" and not streak:
@@ -615,8 +630,6 @@ def get_army_analytics(
                 result = finish_army_result(saved[0], resolved)
                 source_hash = _rank_band_source_hash(saved[1], requested, snapshot_ids)
             elif resolved.category == army_types.CATEGORY:
-                if not army_types.rules_ready(connection):
-                    raise ArmyTypesPreparing(covered_days)
                 selected = {
                     "days": {day: day_starts[day] for day in covered_days},
                     "member_ids": member_ids,

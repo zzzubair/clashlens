@@ -313,8 +313,10 @@ def test_each_day_counts_once_by_its_own_board(
                 fact_queries.clear()
                 view(population)
                 assert fact_queries == []
-            # Army types count the same players.
-            army_types.refresh_army_types(database, now=DAY_START.replace(hour=12))
+            # Army types count the same players, once the worker has labelled
+            # the armies and counted both days.
+            for _ in range(3):
+                army_types.refresh_army_types(database, now=DAY_START.replace(hour=12))
             assert view("top-5", category="army-types")["total_attacks"] == 2
             assert view("top-10", category="army-types")["total_attacks"] == 3
 

@@ -913,13 +913,14 @@ export default function ArmyAnalyticsRoute() {
             <span className="section-note">
               {snapshot
                 ? `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
-                : `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`}
+                : coveredDays.length
+                  ? `Days ${dayList(coveredDays)} of 28`
+                  : `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`}
             </span>
           </div>
           {!isHistorical && !snapshot && untrackedDays.length > 0 ? (
             <p className="section-note analytics-coverage-note">
-              Days {dayList(coveredDays)} of 28; days not tracked:{" "}
-              {dayList(untrackedDays)}.
+              Days not tracked: {dayList(untrackedDays)}.
             </p>
           ) : null}
           {armyTypes ? (

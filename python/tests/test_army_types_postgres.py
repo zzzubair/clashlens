@@ -27,7 +27,7 @@ from test_army_analytics_publication_postgres import (
 
 from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase
-from clashlens.army_analytics import ArmyTypesPreparing
+from clashlens.army_analytics import ArmyAnalyticsUnavailable, ArmyTypesPreparing
 
 # A Duke with Revenge Deck and 2 Ice Blocks; a Duke with Rocket Backpack and
 # an Earthquake.
@@ -56,6 +56,13 @@ def _types(api: ApiDatabase, population: str = "top-10") -> dict[str, tuple]:
                        row["average_trophies"], row["average_miss_trophies"])
         for row in _result(api, population)["rows"]
     }
+
+
+def _left_out(api: ApiDatabase) -> None:
+    """The top 10's only day is not counted, so the view is unavailable."""
+    with pytest.raises(ArmyAnalyticsUnavailable) as raised:
+        _result(api)
+    assert type(raised.value) is ArmyAnalyticsUnavailable
 
 
 def _variants(api: ApiDatabase) -> dict[str, list[tuple]]:
@@ -172,11 +179,12 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             with pytest.raises(ArmyTypesPreparing):
                 _types(api)
 
-            # Labelled: the page adds up the day's attacks until it is counted.
+            # Labelled: the page leaves the day out until it is counted. A
+            # trophy range, which saved counts cannot split, adds up its
+            # attacks.
             army_types.refresh_army_types(database, now=NOON)
-            assert _types(api) == expected
+            _left_out(api)
             assert _types(api, "trophies-5000-9000") == expected
-            assert _variants(api) == variants
 
             # Counted: the same numbers, from the saved daily counts.
             army_types.refresh_army_types(database, now=NOON)
@@ -194,13 +202,14 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             ]
 
             # Days counted before migration 0114 saved no trophies. The
-            # migration forgets they were counted, so the page adds them up
-            # from their attacks until the worker counts them again.
+            # migration forgets they were counted, so the page leaves them out
+            # until the worker counts them again.
             with psycopg.connect(ci, autocommit=True) as connection:
                 connection.execute("UPDATE army_package_day_counts SET trophies = NULL")
                 apply_migration(connection, ATTACK_TROPHIES_MIGRATION.read_text())
-            assert _types(api) == expected
+            _left_out(api)
             army_types.refresh_army_types(database, now=NOON)
+            assert _types(api) == expected
             with database.pool.connection() as connection:
                 assert connection.execute(
                     "SELECT sum(attacks), sum(trophies) FROM army_package_day_counts"
@@ -237,9 +246,8 @@ def test_army_types_from_saved_battles_to_the_armies_page(
                     (thrower_battle,),
                 )
                 connection.execute("DELETE FROM army_type_counted_days")
-            assert _types(api) == expected
+            _left_out(api)
             assert _types(api, "trophies-5000-9000") == expected
-            assert _variants(api) == variants
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
             assert _variants(api) == variants
@@ -294,14 +302,16 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             assert _types(api) == expected
             assert _variants(api) == variants
 
-            # A corrected day changes the evidence hash, even with the same
-            # numbers.
+            # A corrected day is left out until it is counted again, then
+            # changes the evidence hash, even with the same numbers.
             evidence = _result(api)["reproducibility"]["source_evidence_hash"]
             with database.pool.connection() as connection:
                 connection.execute(
                     "UPDATE army_analytics_completed_days SET fact_input_hash = %s",
                     ("a" * 64,),
                 )
+            _left_out(api)
+            army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
             assert _result(api)["reproducibility"]["source_evidence_hash"] != evidence
         finally:

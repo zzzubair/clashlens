@@ -526,7 +526,9 @@ these steps, all run by the worker:
    view's Avg. trophies, outside 04:30-07:00 UTC. Migration 0114 forgets
    which days were counted, so after that deploy the worker counts the
    current Season and the last 7 days again, one day each 10-second run,
-   about 3 minutes; the view adds up a day from its attacks until then.
+   about 3 minutes. Until a day's attack counts are saved, `season=current`
+   Top N and rank-band Armies views leave it out, so the day that ended at
+   the Reset joins them after 07:00 UTC.
    Once no attack count
    is due, it saves one completed day's defense counts per defender and
    distinct army in `army_package_defense_day_counts` (about 88,000 rows,
