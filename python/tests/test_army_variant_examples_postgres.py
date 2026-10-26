@@ -146,9 +146,10 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                     """
                 )
             assert saved and all(None not in row for row in saved)
-            # Labelled, then counted: the same examples, from the day's
-            # attacks and then from its saved counts, for a Top N and a
-            # trophy range, and they add up to the variant's row.
+            # Labelled, then counted: the same examples for a trophy range,
+            # from the day's attacks and then from its saved counts, and for
+            # a Top N, which leaves the day out until it is counted; they add
+            # up to the variant's row.
             army_types.refresh_army_types(database, now=NOON)
             with database.pool.connection() as connection:
                 assert connection.execute(
@@ -157,8 +158,8 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                     FROM army_package_types ORDER BY 1
                     """
                 ).fetchall() == saved
-            for _counted in (False, True):
-                for population in ("top-10", "trophies-5000-9000"):
+            for counted in (False, True):
+                for population in ("top-10",) * counted + ("trophies-5000-9000",):
                     result = examples(population)
                     assert result["groups"] == expected
                     assert sum(group["attacks"] for group in result["groups"]) == (
@@ -211,8 +212,8 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
                     (older,),
                 )
                 connection.execute("DELETE FROM army_type_counted_days")
-            for _counted in (False, True):
-                for population in ("top-10", "trophies-5000-9000"):
+            for counted in (False, True):
+                for population in ("top-10",) * counted + ("trophies-5000-9000",):
                     assert examples(population)["groups"] == expected
                 army_types.refresh_army_types(database, now=NOON)
 
@@ -289,7 +290,9 @@ def test_copy_army_code_comes_from_the_examples_newest_attacks(
                  for position, player in enumerate(players, start=1)],
             )
             army_rank_bands.refresh_rank_band_totals(database)
-            army_types.refresh_army_types(database, now=NOON)
+            # Labelled, then counted.
+            for _ in range(2):
+                army_types.refresh_army_types(database, now=NOON)
 
             def example() -> dict:
                 result = api_analytics.get_army_analytics(
