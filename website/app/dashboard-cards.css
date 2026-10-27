@@ -688,6 +688,23 @@
   font-weight: 900;
 }
 
+/* On a narrow card (phones, iPads) the rank change sits under the rank, so the
+   rank column stays narrow and the number columns keep room for their headings. */
+.dash-card:has(> .rival-table) {
+  container-type: inline-size;
+}
+
+@container (max-width: 40rem) {
+  .rival-table :is(th, td):first-child {
+    width: 4.4rem;
+  }
+
+  .rival-moved {
+    display: block;
+    margin-left: 0;
+  }
+}
+
 .group-picker {
   max-width: 14rem;
   padding: 0.15rem 0.4rem;
@@ -1064,17 +1081,23 @@
     text-overflow: ellipsis;
   }
 
+  /* Each number column fits its heading; the name takes what is left. */
   .rival-table :is(th, td):first-child {
-    width: 3.75rem;
+    width: 3.5rem;
   }
 
-  /* The rank change sits under the rank so it never runs into the name. */
-  .rival-moved {
-    display: block;
-    margin-left: 0;
+  .rival-table :is(th, td):nth-child(2) {
+    width: auto;
   }
 
-  .rival-table :is(th, td):nth-child(2),
+  .rival-table :is(th, td):nth-child(n + 3) {
+    width: 3rem;
+  }
+
+  .rival-table :is(th, td):nth-child(4) {
+    width: 2.75rem;
+  }
+
   .group-table :is(th, td):first-child {
     width: 23%;
   }
