@@ -320,11 +320,6 @@ export default function TrackedLeaderboardRoute() {
             Complete days show trophies after the automatic defense loss.
           </p>
         ) : null}
-        {!daily && newestObservedAt ? (
-          <p className="rankings-context">
-            Updated <LocalTimestamp value={newestObservedAt} />
-          </p>
-        ) : null}
         {!daily && leaderboard?.seasonResetPending ? (
           <p className="rankings-context" role="status">
             {leaderboard.seasonResetPending.toLocaleString()} tracked{" "}
@@ -443,8 +438,32 @@ export default function TrackedLeaderboardRoute() {
           <div className="standings-toolbar">
             <div>
               <h2 id="standings-table-title">Standings</h2>
-              <p>{range ?? "No listed players"}</p>
+              {/* The page arrows here save scrolling to the end of the list. */}
+              <p className="standings-range">
+                {range && leaderboard.hasPrevious ? (
+                  <Link
+                    aria-label={`Previous ${PAGE_SIZE}`}
+                    to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}
+                  >
+                    ‹
+                  </Link>
+                ) : null}
+                <span>{range ?? "No listed players"}</span>
+                {range && leaderboard.hasNext ? (
+                  <Link
+                    aria-label={`Next ${nextCount}`}
+                    to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
+                  >
+                    ›
+                  </Link>
+                ) : null}
+              </p>
             </div>
+            {!daily && newestObservedAt ? (
+              <p className="standings-updated">
+                Updated <LocalTimestamp value={newestObservedAt} />
+              </p>
+            ) : null}
           </div>
           {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
             <nav aria-label="Other days" className="snapshot-pagination">

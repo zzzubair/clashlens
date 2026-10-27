@@ -1,5 +1,5 @@
 /* Rankings: the heading with Live and At Reset, Find your rank, then the board
-   with its page buttons kept in thumb reach while it scrolls. */
+   with page arrows in its header and page buttons at its end. */
 
 .rankings-header {
   display: grid;
@@ -149,7 +149,7 @@
   margin-top: 1.25rem;
 }
 
-/* Clip rather than hide, so the page buttons can stick inside the card. */
+/* Clip rather than hide, so nothing in the card makes it scroll. */
 :root .rankings-page .standings-board {
   overflow: clip;
 }
@@ -177,6 +177,37 @@
   color: var(--cl-muted);
   font-size: 0.85rem;
   font-weight: 700;
+}
+
+.standings-range {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.standings-range a {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.25rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font-size: 1.35rem;
+  line-height: 1;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.standings-range a:hover {
+  border-color: var(--cl-outline);
+}
+
+.standings-toolbar .standings-updated {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  font-weight: 500;
 }
 
 /* Other days of a Daily board, either side of this one. */
@@ -263,26 +294,30 @@
   text-align: center;
 }
 
-/* On a tall enough screen the page buttons ride along at the bottom of the
-   board, above the phone tab bar, until the board ends. */
-@media (min-height: 36rem) {
-  .standings-pagination {
-    position: sticky;
-    z-index: 3;
-    bottom: calc(var(--cl-bottom-tabs, 0px) + 0.25rem);
-    margin: 0.25rem;
-    background: var(--cl-glass-strong);
-    border: 1px solid var(--cl-glass-edge);
-    border-radius: 1rem;
-    box-shadow:
-      var(--cl-glass-shine),
-      0 12px 28px -14px rgb(0 0 0 / 0.5);
-    -webkit-backdrop-filter: saturate(1.8) blur(20px);
-    backdrop-filter: saturate(1.8) blur(20px);
-  }
-}
-
 @media (max-width: 34rem) {
+  .rankings-header h1 {
+    font-size: 1.85rem;
+  }
+
+  .rankings-heading {
+    gap: 0.6rem;
+  }
+
+  .rankings-heading .leaderboard-view-switch {
+    width: auto;
+  }
+
+  .rankings-heading .leaderboard-view-switch .button {
+    min-width: 5.5rem;
+    min-height: 2.5rem;
+    padding-block: 0.35rem;
+    white-space: nowrap;
+  }
+
+  .leaderboard-search {
+    margin-block: 1rem;
+  }
+
   .standings-pagination {
     padding-inline: 0.5rem;
   }

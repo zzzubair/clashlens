@@ -105,7 +105,9 @@ it("keeps rank and update explanations off the page but in hover and screen-read
   expect(html).toMatch(/Updated <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
   expect(html).not.toContain("2026-10-02T11:30:00Z");
   expect(html).not.toContain("Tracked player rankings");
-  expect(html).toContain("<p>101–101 of 101</p>");
+  expect(html).toMatch(
+    /<p class="standings-range"><a aria-label="Previous 100" href="[^"]*page=1"[^>]*>‹<\/a><span>101–101 of 101<\/span><\/p>/,
+  );
   expect(html).toContain('<span class="pagination-status">101–101 of 101</span>');
   expect(html).toContain(">Previous 100</a>");
   expect(html).toContain('<span class="rank-mark">101</span>');
