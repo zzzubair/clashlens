@@ -19,6 +19,7 @@ from domain_test_support import domain_database
 from test_reset_scenarios_postgres import (
     PREVIOUS_SEASON,
     SEASON,
+    Story,
     _ranked,
     _story,
     attacks,
@@ -27,6 +28,7 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
+from clashlens import boundary_members
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.db import Database
 
@@ -135,6 +137,44 @@ def test_player_promoted_back_into_legend_i_after_a_demotion_this_season(
     assert members[RETURNED] == "complete"
 
 
+def _read_late(connection_info: str, archive_server, monkeypatch) -> Story:
+    """LATE_PROMOTED, read once in Legend II on Sunday, never plays Legend I
+    and is first read at 05:20 on Tuesday in Legend I at 5,000 naming
+    Season 0, as most were. LATE_FIRST, never read before, plays on Monday
+    and is first read at 05:20 on Tuesday. BELOW, swept at both Resets,
+    ends Monday below 5,000. LATE_UNFINISHED, never read before, is first
+    read at 05:20 on Tuesday at a total its battles do not reach."""
+    sunday, monday, tuesday = day(7), day(8), day(9)
+    story = _story(connection_info, archive_server, monkeypatch,
+                   LATE_PROMOTED, LATE_FIRST, LATE_UNFINISHED, BELOW)
+    story.players[LATE_PROMOTED].battles = multiplayer(sunday + timedelta(hours=1), 2)
+    story.players[LATE_FIRST].battles = multiplayer(sunday + timedelta(hours=1), 2) + attacks(
+        monday, 40, 40) + defenses(monday, 30, 30)
+    story.players[LATE_UNFINISHED].battles = multiplayer(
+        sunday + timedelta(hours=1), 2) + attacks(monday, 40)
+    story.players[BELOW].battles = defenses(monday, 30)
+    story.players[LATE_PROMOTED].dropped = True
+    story.reads(sunday + timedelta(hours=2), {LATE_PROMOTED: 1400})
+    story.players[LATE_PROMOTED].dropped = False
+    story.reset(sunday, {BELOW: (4960, SEASON)})
+    story.reset(monday, {BELOW: (5000, SEASON)})
+    story.reads(tuesday - timedelta(minutes=10), {BELOW: 4970})
+    story.reset(tuesday, {BELOW: (4970, SEASON)})
+    story.reads(tuesday + timedelta(minutes=20), {LATE_PROMOTED: 5000}, None)
+    story.reads(tuesday + timedelta(minutes=20), {LATE_FIRST: 5020, LATE_UNFINISHED: 5100})
+    story.wait(timedelta(hours=1))
+    return story
+
+
+def _rebuilds(connection_info: str, *, queue: bool) -> list[dict[str, object]]:
+    """The Season repair's board check (``republish-current-season --boards``)."""
+    database = Database(connection_info)
+    try:
+        return queue_board_rebuilds(database, str(int(SEASON.timestamp())), queue=queue)["boards"]
+    finally:
+        database.close()
+
+
 def test_players_read_only_after_the_next_reset_rank_by_their_complete_day(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -143,44 +183,16 @@ def test_players_read_only_after_the_next_reset_rank_by_their_complete_day(
     showed them in Legend II. Their Mondays were Complete, most from 5,000
     to 5,000, but no board took them, so the 2,295 players below 5,000 sat
     about 172 places above where the game ranked them. A Complete day proves
-    its own total, so the Tuesday board ranks them by it.
-
-    LATE_PROMOTED, read once in Legend II on Sunday, never plays Legend I
-    and is first read at 05:20 on Tuesday in Legend I at 5,000 naming
-    Season 0, as most were. LATE_FIRST, never read before, plays on Monday
-    and is first read at 05:20 on Tuesday. BELOW, swept at both Resets,
-    ends Monday at 4,970 and ranks below both. LATE_UNFINISHED, never read
-    before, is first read at 05:20 on Tuesday at a total its battles do not
-    reach: its Monday is not Complete, so the board leaves it off."""
-    sunday, monday, tuesday = day(7), day(8), day(9)
+    its own total, so the Tuesday board ranks LATE_PROMOTED and LATE_FIRST
+    by it, above BELOW, and leaves LATE_UNFINISHED, whose Monday is not
+    Complete, off (``_read_late``)."""
+    monday, tuesday = day(8), day(9)
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        story = _story(connection_info, archive_server, monkeypatch,
-                       LATE_PROMOTED, LATE_FIRST, LATE_UNFINISHED, BELOW)
-        story.players[LATE_PROMOTED].battles = multiplayer(sunday + timedelta(hours=1), 2)
-        story.players[LATE_FIRST].battles = multiplayer(sunday + timedelta(hours=1), 2) + attacks(
-            monday, 40, 40) + defenses(monday, 30, 30)
-        story.players[LATE_UNFINISHED].battles = multiplayer(
-            sunday + timedelta(hours=1), 2) + attacks(monday, 40)
-        story.players[BELOW].battles = defenses(monday, 30)
-        story.players[LATE_PROMOTED].dropped = True
-        story.reads(sunday + timedelta(hours=2), {LATE_PROMOTED: 1400})
-        story.players[LATE_PROMOTED].dropped = False
-        story.reset(sunday, {BELOW: (4960, SEASON)})
-        story.reset(monday, {BELOW: (5000, SEASON)})
-        story.reads(tuesday - timedelta(minutes=10), {BELOW: 4970})
-        story.reset(tuesday, {BELOW: (4970, SEASON)})
-        story.reads(tuesday + timedelta(minutes=20), {LATE_PROMOTED: 5000}, None)
-        story.reads(tuesday + timedelta(minutes=20), {LATE_FIRST: 5020, LATE_UNFINISHED: 5100})
-        story.wait(timedelta(hours=1))
+        story = _read_late(connection_info, archive_server, monkeypatch)
         mondays = {tag: story.saved_day(tag, monday) for tag in story.players}
         members = story.board_members(tuesday)
         board = story.served_board(tuesday)
-        database = Database(connection_info)
-        try:
-            rebuilds = queue_board_rebuilds(
-                database, str(int(SEASON.timestamp())), queue=False)["boards"]
-        finally:
-            database.close()
+        rebuilds = _rebuilds(connection_info, queue=False)
         unfinished = story.unfinished_jobs()
 
     assert unfinished == []
@@ -194,3 +206,33 @@ def test_players_read_only_after_the_next_reset_rank_by_their_complete_day(
     assert ranked[2][0] == BELOW and ranked[2][1] < 5000
     assert len(ranked) == 3
     assert rebuilds == []
+
+
+def test_a_board_frozen_before_the_rule_rebuilds_with_the_players_read_late(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The Day 22 board of 27 October 2026 froze before this rule: it left
+    off the players read only after its Reset, and LATE_PROMOTED-like
+    players, read before the week, were already members it left off as
+    Legend II. The Season repair's board check finds that board, and its
+    rebuild ranks them."""
+    tuesday = day(9)
+    first_readings = boundary_members.first_readings
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        monkeypatch.setattr(boundary_members, "first_readings", lambda *_: {})
+        story = _read_late(connection_info, archive_server, monkeypatch)
+        before = _ranked(story.served_board(tuesday))
+        monkeypatch.setattr(boundary_members, "first_readings", first_readings)
+        found = _rebuilds(connection_info, queue=True)
+        story.wait(timedelta(hours=1))
+        after = _ranked(story.served_board(tuesday))
+        again = _rebuilds(connection_info, queue=False)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert list(before) == [BELOW]
+    assert [(board["boundary_at"], board["correction"]) for board in found] == [
+        (tuesday.isoformat(), "queued")]
+    assert list(after.items())[:2] == [(LATE_FIRST, 5020), (LATE_PROMOTED, 5000)]
+    assert list(after)[2:] == [BELOW]
+    assert again == []
