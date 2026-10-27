@@ -413,7 +413,8 @@ function PageLoading() {
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
 
 // The same top bar on every page, error pages included. Without the root
-// data (the server failed before it), it shows the signed-out menu. Below
+// data (the server failed before it), it shows the signed-out menu. The
+// sign-in page drops its Sign in, which would only open itself. Below
 // 64rem the tabs move to a bar at the bottom of the screen, in thumb reach.
 function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
@@ -459,7 +460,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
             }
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
           />
-        ) : (
+        ) : location.pathname === "/login" ? null : (
           <Link className="nav-link nav-link-primary" to={signIn}>
             Sign in
           </Link>

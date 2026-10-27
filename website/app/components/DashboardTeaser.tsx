@@ -60,11 +60,19 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
           <Slots stars={ATTACKS} kind="attack" />
           <Slots stars={DEFENSES} kind="defense" />
           <span className="teaser-ranks">
-            <span>#1,288</span>
+            <span>
+              <small>Last Reset</small>#1,288
+            </span>
             <i />
-            <b>#1,188</b>
+            <span className="teaser-now">
+              <small>Now</small>
+              <b className="rank-mark">#1,188</b>
+            </span>
             <i />
-            <span>#1,140</span>
+            <span className="teaser-next">
+              <small>Next Reset</small>#1,140
+              <small>estimate</small>
+            </span>
           </span>
         </div>
         <div className="teaser-card teaser-clock">

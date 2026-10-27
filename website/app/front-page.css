@@ -222,24 +222,48 @@
   background: var(--cl-negative);
 }
 
+/* Last Reset, Now and Next Reset, read as the real Legend day card does. */
 .teaser-ranks {
-  display: flex;
-  gap: 0.3rem;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0.5rem, 1fr) auto minmax(0.5rem, 1fr) auto;
+  gap: 0 0.4rem;
+  align-items: start;
   color: var(--cl-muted);
   font-family: var(--cl-font-score);
   font-size: 0.95rem;
   font-weight: 700;
 }
 
-.teaser-ranks b {
-  color: var(--cl-ink);
+.teaser-ranks > span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.teaser-ranks small {
+  font-family: var(--cl-font);
+  font-size: 0.62rem;
+  font-weight: 600;
 }
 
 .teaser-ranks i {
-  flex: 1;
   height: 1px;
+  margin-top: 1.45rem;
   background: var(--cl-outline);
+}
+
+.teaser-now {
+  justify-items: center;
+}
+
+.teaser-ranks .rank-mark {
+  height: 1.45rem;
+  padding: 0 0.45rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.teaser-next {
+  justify-items: end;
+  text-align: right;
 }
 
 .teaser-clock {

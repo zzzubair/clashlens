@@ -2,6 +2,7 @@ import { Link, useLoaderData } from "react-router";
 
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/signup";
+import { ProviderMark } from "../components/ProviderMark";
 
 export function meta() {
   return [{ title: "Create account · Clash Lens" }];
@@ -39,12 +40,14 @@ export default function SignupRoute() {
               className="button button-primary"
               to={`/auth/google?returnPath=${back}&signup=1`}
             >
+              <ProviderMark provider="google" />
               Sign up with Google
             </Link>
             <Link
               className="button button-secondary"
               to={`/auth/discord?returnPath=${back}&signup=1`}
             >
+              <ProviderMark provider="discord" />
               Sign up with Discord
             </Link>
           </p>

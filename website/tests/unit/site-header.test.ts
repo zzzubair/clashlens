@@ -89,6 +89,10 @@ it("on a sign-in page, Sign in passes on where the Clasher was going", async () 
   ).toContain(
     'href="/login?returnPath=%2Fcrews%2Fjoin%2Fabc" data-discover="true">Sign in</a>',
   );
+  // The sign-in page itself is where that link goes, so it has none.
+  expect(await renderHeader(SIGNED_OUT, "/login?returnPath=%2Fcrews")).not.toContain(
+    ">Sign in</a>",
+  );
 });
 
 it("on phones puts the four most useful tabs and More in the bottom bar", async () => {
