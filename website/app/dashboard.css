@@ -760,6 +760,24 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* The player tab tightens and Page keeps only its arrow, so the tab and
+     Edit fit one row. */
+  .dash-account {
+    padding-inline: 0.75rem;
+  }
+
+  .dash-account-page {
+    min-width: 2.5rem;
+  }
+
+  .dash-account-page > span {
+    display: none;
+  }
+
+  .dash-customise {
+    padding-inline: 0.75rem;
+  }
+
   /* Link player shrinks to its + so the player tab beside it fits. */
   .dash-account-add {
     justify-content: center;
