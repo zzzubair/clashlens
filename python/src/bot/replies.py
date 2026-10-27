@@ -8,7 +8,7 @@ markup or an @mention in a name cannot ping anyone or break the layout.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -75,6 +75,8 @@ class Card:
     parts: tuple[str, ...]
     colour: int = GOLD
     button: Link | None = None
+    # The box's own small bold top line, in Discord's older layout only.
+    title: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -685,9 +687,9 @@ _GAP_CODES = frozenset({
     "battle_log_row_count_exceeds_fifty",
     "unclassified_rows",
 })
-# Discord shows at most 4,000 characters of text and 40 parts (each card,
-# text, button and row of buttons counts) in one message; a summary DM's
-# heading, small print and button take the rest.
+# Discord shows at most 10 boxes and 6,000 characters across them in one
+# message of its older layout; each box's top line and the settings link
+# take the rest.
 _SUMMARY_LENGTH = 3_700
 _SUMMARY_CARDS = 8
 # Players named in one "Not finished yet" card, so no card outgrows a DM.
@@ -718,11 +720,13 @@ def _adjustment(day: Mapping[str, Any], *kinds: str) -> Mapping[str, Any] | None
 
 
 def summary_day(
-    page: Mapping[str, Any], reset: datetime, place: int | None, unfinished: bool
+    page: Mapping[str, Any], reset: datetime, place: int | None, unfinished: bool,
+    before: int | None,
 ) -> dict[str, Any] | None:
     """The player's Legend day that ended at `reset`, as their page shows it:
-    its label, its saved "version", and `place`, its place on that Reset's
-    Daily board. Its "end" is None until set to the end of day saved with
+    its label, its saved "version", its Season day number, `place`, its place
+    on that Reset's Daily board, and `before`, its place on the board of the
+    Reset before, kept only when the day was not a Season's first. Its "end" is None until set to the end of day saved with
     that version, before any weekly or Season reset at `reset`. "finished"
     is False while its final result is not saved yet, as for a player that
     board went without (`unfinished`) with no saved day. None when the page
@@ -746,7 +750,7 @@ def summary_day(
         "finished": True,
         "status": _day_status(day),
         "version": day["version"],
-        "start": day["start_trophies"],
+        "day_number": day["season_day_number"],
         "end": None,
         "net": day["net_trophy_change"],
         "raised": _adjustment(day, "weekly_reset", "season_reset"),
@@ -756,40 +760,63 @@ def summary_day(
         "defense_loss": day["defense_loss"],
         "automatic_loss": None if automatic is None else -automatic["amount"],
         "place": place,
+        "before": before if day["season_day_number"] > 1 else None,
     }
 
 
+def _moved(day: Mapping[str, Any]) -> str | None:
+    if day["place"] is None or day["before"] is None:
+        return None
+    moved = day["before"] - day["place"]
+    if not moved:
+        return "Same place"
+    return f"{'▲' if moved > 0 else '▼'} {number(abs(moved))} place{'s' if abs(moved) > 1 else ''}"
+
+
+def _battles(count: int | None, most: int) -> str:
+    return "" if count in (most, None) else f" ({count} of {most})"
+
+
 def _summary_card(site: Site, day: Mapping[str, Any], key: str, colour: int) -> Card:
-    lines = [f"**{safe(day['name'])}** {day['tag']} · {day['status']}"]
-    if day["start"] is None and day["end"] is None and day["net"] is None:
-        lines.append("Trophies unavailable")
-    else:
-        change = "change unavailable" if day["net"] is None else signed(day["net"])
-        if day["raised"]:
-            kind = "weekly" if day["raised"]["type"] == "weekly_reset" else "Season"
-            change += f", {signed(day['raised']['amount'])} {kind} reset"
-        lines.append(
-            f"{_known(day['start'], number)} → {_known(day['end'], number)} ({change})"
-        )
-    defenses = f"Defenses {_known(day['defense_count'], number)} " + (
-        f"({_known(None if day['defense_loss'] is None else -day['defense_loss'], signed)})"
-    )
+    """A finished day's box: the player's Daily board place and end of day
+    first and largest, with the places moved and the trophy change under
+    them, then the day's attacks and defenses and a link to the day."""
+    place = "–" if day["place"] is None else f"#{number(day['place'])}"
+    end = "–" if day["end"] is None else number(day["end"])
+    change = [
+        *filter(None, [_moved(day)]),
+        "Trophy change unavailable" if day["net"] is None else f"{signed(day['net'])} trophies",
+    ]
+    if day["raised"]:
+        kind = "weekly" if day["raised"]["type"] == "weekly_reset" else "Season"
+        change.append(f"{signed(day['raised']['amount'])} {kind} reset")
+    lost = None if day["defense_loss"] is None else -day["defense_loss"]
+    lines = [
+        f"# 🌍 {place}   🏆 {end}",
+        f"-# {'   ·   '.join(change)}",
+        "",
+        "**Day summary**",
+        (
+            f"⚔️ Attacks **{_known(day['attack_gain'], signed)}**"
+            f"{_battles(day['attack_count'], MAX_DAILY_ATTACKS)}   "
+            f"🛡️ Defenses **{_known(lost, signed)}**"
+            f"{_battles(day['defense_count'], MAX_DAILY_DEFENSES)}"
+        ),
+    ]
     if day["automatic_loss"]:
-        defenses += f" · {signed(-day['automatic_loss'])} automatic loss"
-    lines.append(
-        f"Attacks {_known(day['attack_count'], number)} "
-        f"({_known(day['attack_gain'], signed)}) · {defenses}"
-    )
-    lines.append(f"Daily board place **{_known(day['place'], number)}**")
+        lines.append(f"-# {signed(-day['automatic_loss'])} automatic loss")
     if day["status"] == "Uncertain":
         lines.append(
             "-# Uncertain: some of this day's battles or readings may be missing, so these "
             "numbers may be off. The day on Clash Lens says why."
         )
+    lines.append(f"-# [Open day]({site.player(day['tag'])}?day={key}#legend-day-{key})")
+    title = " ".join(day["name"].split()) or "Unnamed"
     return Card(
         ("\n".join(lines),),
         colour,
-        Link("Open day", f"{site.player(day['tag'])}?day={key}#legend-day-{key}"),
+        # The box's top line shows no markup, so the name is not escaped.
+        title=isolated(title if day["status"] == "Verified" else f"{title} · {day['status']}"),
     )
 
 
@@ -800,10 +827,12 @@ def day_summary(
     colours: Mapping[str, int],
 ) -> list[tuple[Reply, tuple[str, ...]]]:
     """The Legend day summary DMs for the day that ended at `reset`, each with
-    the tags of the players it names: one card per finished day from
-    `summary_day`, in the player's colour, most trophies first, then the
-    players whose day is not finished yet, at most `_WAITING_NAMES` a card;
-    several DMs when too long for one, and none when no day is finished."""
+    the tags of the players it names. Each DM's first line, all a phone's
+    notification shows, is the day's Season day number and date; then one
+    box per finished day from `summary_day`, in the player's colour, most
+    trophies first, then the players whose day is not finished yet, at most
+    `_WAITING_NAMES` a box; several DMs when too long for one, and none when
+    no day is finished. The last box ends with a link to the settings."""
     finished = sorted(
         (day for day in days if day["finished"]),
         key=lambda day: (day["end"] is None, -(day["end"] or 0), day["tag"]),
@@ -821,9 +850,8 @@ def day_summary(
         line = waiting[first:first + _WAITING_NAMES]
         cards.append((
             Card((
-                "Not finished yet: "
-                + ", ".join(f"{safe(day['name'])} {day['tag']}" for day in line)
-                + ". Their day shows on Clash Lens once it is saved.",
+                "**Not finished yet:** " + ", ".join(safe(day["name"]) for day in line)
+                + "\n-# Their day shows on Clash Lens once it's saved.",
             ), GREY),
             tuple(day["tag"] for day in line),
         ))
@@ -836,16 +864,17 @@ def day_summary(
         ):
             parts.append([])
         parts[-1].append((card, tags))
-    title = f"Legend day summary · {start:%a} {start.day} {start:%b}"
+    last, tags = parts[-1][-1]
+    parts[-1][-1] = (
+        replace(last, parts=(f"{last.parts[0]}  ·  [Summary settings]({site.url(DISCORD_ALERTS)})",)),
+        tags,
+    )
+    notice = f"📅 Day {finished[0]['day_number']} ({start:%d-%m-%Y})"
     return [
         (
             Reply(
                 tuple(card for card, _ in part),
-                title=title if len(parts) == 1 else f"{title} ({index} of {len(parts)})",
-                footer="Places are from the Daily board at the 05:00 UTC Reset."
-                if index == len(parts) else None,
-                links=(Link("Summary settings", site.url(DISCORD_ALERTS)),)
-                if index == len(parts) else (),
+                notice=notice if len(parts) == 1 else f"{notice}  ·  {index} of {len(parts)}",
             ),
             tuple(tag for _, tags in part for tag in tags),
         )
