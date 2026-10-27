@@ -118,7 +118,7 @@ export function LogHead() {
     <div className="log-head" aria-hidden="true">
       <span>Date</span>
       <span>Day</span>
-      <span>EOD</span>
+      <span>End of day</span>
       <span />
       <span>Attacks</span>
       <span>Defenses</span>

@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+
 // One side of a Season's recorded battles. Averages are trophies moved, never
 // signed; null anywhere means that part is unknown.
 export interface SummarySide {
@@ -24,19 +26,14 @@ const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undef
 export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
 // Grid track sizes for a row's 3-, 2-, 1- and 0-star segments. A segment
-// with any battles stays wide enough for its count.
+// with any battles stays a visible sliver.
 const shares = (stars: Array<number | null>) =>
   Object.fromEntries(
     [3, 2, 1, 0].map((star) => [
       `--s${star}`,
-      stars[star] ? `minmax(2.25rem, ${stars[star]}fr)` : "0fr",
+      stars[star] ? `minmax(0.3rem, ${stars[star]}fr)` : "0fr",
     ]),
   ) as React.CSSProperties;
-// A segment under a fifth of the row shows its count without the star label.
-const narrow = (stars: Array<number | null>, star: number) => {
-  const total = stars.reduce<number>((sum, n) => sum + (n ?? 0), 0);
-  return total > 0 && (stars[star] ?? 0) / total < 0.2;
-};
 
 // The one Season box: rank and trophies first, then hit rate, battles by
 // stars and averages. Meta is one short line of dates and coverage. Without battles it shows only the headline. An ended
@@ -157,21 +154,38 @@ export function SeasonSummary({
                     ["Defenses", defense],
                   ] as const
                 ).map(([label, side]) => (
-                  // Each star count is a bar segment as wide as its share.
-                  <tr key={label} style={shares(side.stars)}>
-                    <th scope="row">{label}</th>
-                    <td>{count(side.count)}</td>
-                    {[3, 2, 1, 0].map((stars) => (
-                      <td
-                        key={stars}
-                        data-stars={stars}
-                        data-empty={side.stars[stars] ? undefined : ""}
-                        data-narrow={narrow(side.stars, stars) ? "" : undefined}
-                      >
-                        {count(side.stars[stars] ?? null)}
+                  // Each star count is a bar segment as wide as its share; the
+                  // line under the bar names every count, so none hides in a sliver.
+                  <Fragment key={label}>
+                    <tr data-side={label} style={shares(side.stars)}>
+                      <th scope="row">{label}</th>
+                      <td>{count(side.count)}</td>
+                      {[3, 2, 1, 0].map((stars) => (
+                        <td
+                          key={stars}
+                          data-stars={stars}
+                          data-empty={side.stars[stars] ? undefined : ""}
+                        >
+                          {count(side.stars[stars] ?? null)}
+                        </td>
+                      ))}
+                    </tr>
+                    <tr
+                      className="season-summary-key"
+                      data-side={label}
+                      aria-hidden="true"
+                    >
+                      <td colSpan={6}>
+                        {[3, 2, 1, 0].map((stars) => (
+                          <span key={stars} data-stars={stars}>
+                            {stars}
+                            <span className="summary-star">★</span>
+                            <b>{count(side.stars[stars] ?? null)}</b>
+                          </span>
+                        ))}
                       </td>
-                    ))}
-                  </tr>
+                    </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

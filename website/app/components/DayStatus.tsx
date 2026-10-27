@@ -1,6 +1,6 @@
-// A small dot for an ended day's status: filled when Verified, hollow when
-// Calculated, gold when Uncertain. Hover shows the status; opening the day
-// explains it.
+// A small dot for an ended day's status: hollow when Calculated, gold when
+// Uncertain, and none to see when Verified. Hover shows the status; opening
+// the day explains it.
 const MARK_CLASS: Record<string, string> = {
   Verified: "day-mark day-mark-verified",
   Calculated: "day-mark",

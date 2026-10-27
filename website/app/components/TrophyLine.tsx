@@ -7,7 +7,7 @@ const HEIGHT = 56;
 /**
  * The Season so far as one line: each finished Legend day's EOD, then the
  * trophies now. Days without a known EOD are skipped. Drawn only from two
- * points up.
+ * points up, with its first value and "Now" under its two ends.
  */
 export function TrophyLine({
   history,
@@ -75,9 +75,15 @@ export function TrophyLine({
         style={{ top: `${(y(current) / HEIGHT) * 100}%` }}
         aria-hidden="true"
       />
-      <figcaption className="sr-only">
-        This Season: {first.toLocaleString("en-GB")} to {current.toLocaleString("en-GB")}{" "}
-        trophies
+      <figcaption>
+        <span aria-hidden="true">
+          This Season <b>{first.toLocaleString("en-GB")}</b>
+        </span>
+        <span aria-hidden="true">Now</span>
+        <span className="sr-only">
+          This Season: {first.toLocaleString("en-GB")} to{" "}
+          {current.toLocaleString("en-GB")} trophies
+        </span>
       </figcaption>
     </figure>
   );

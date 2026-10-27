@@ -182,13 +182,55 @@
   position: relative;
   grid-area: line;
   height: 3.5rem;
-  margin: 0.85rem 0 0;
+  margin: 0.85rem 0 1.4rem;
+}
+.player-page .trophy-line figcaption {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.player-page .trophy-line figcaption b {
+  margin-left: 0.2rem;
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 .player-page .trophy-line svg {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+/* The line draws once, left to right, when the page opens; its dot lands last. */
+@media (prefers-reduced-motion: no-preference) {
+  .player-page .trophy-line svg {
+    animation: trophy-line-draw 700ms var(--cl-ease-out) backwards;
+  }
+  .player-page .trophy-line-now {
+    animation: trophy-line-now 220ms 560ms var(--cl-ease-out) backwards;
+  }
+}
+@keyframes trophy-line-draw {
+  from {
+    clip-path: inset(-50% 100% -50% -10%);
+  }
+  to {
+    clip-path: inset(-50% -10% -50% -10%);
+  }
+}
+@keyframes trophy-line-now {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.3);
+  }
 }
 .player-page .trophy-line-path {
   fill: none;
@@ -342,8 +384,8 @@
 
 /* ---------- Status dots ---------- */
 
-/* An ended day's status: filled green when Verified, hollow when Calculated,
-   gold when Uncertain. */
+/* An ended day's status: hollow when Calculated, gold when Uncertain. Verified
+   is the usual case, so it has no dot, only its screen-reader word. */
 .player-page .day-mark {
   position: relative;
   display: inline-block;
@@ -356,8 +398,13 @@
   vertical-align: middle;
 }
 .player-page .day-mark-verified {
-  background: var(--cl-positive);
-  border-color: var(--cl-positive);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
 }
 .player-page .day-mark-gap {
   background: var(--cl-gold);
@@ -486,8 +533,9 @@
   font-size: 2.75rem;
 }
 /* Battles by stars: each row is one bar, its 3-, 2-, 1- and 0-star parts as
-   wide as their share (the --s* tracks SeasonSummary sets). Huge counts
-   scroll inside instead of widening the page. */
+   wide as their share (the --s* tracks SeasonSummary sets), with a line under
+   it naming every count. Huge counts scroll inside instead of widening the
+   page. */
 .player-page .season-summary-table {
   position: relative;
   margin-top: 1.1rem;
@@ -497,7 +545,7 @@
 }
 .player-page .season-summary-table table {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.35rem;
   width: 100%;
   font-variant-numeric: tabular-nums;
 }
@@ -528,68 +576,93 @@
   font-size: 1rem;
   font-weight: 700;
 }
+/* The counts stay in the table for screen readers; the key shows them. */
 .player-page .season-summary-table td[data-stars] {
-  display: flex;
-  gap: 0.2rem;
-  align-items: baseline;
-  justify-content: center;
   min-width: 0;
-  height: 1.9rem;
-  padding: 0.45rem 0.35rem 0;
+  height: 0.7rem;
   overflow: hidden;
-  color: var(--cl-ink);
   background: var(--seg);
   box-shadow: inset -2px 0 0 var(--cl-surface);
-  font-family: var(--cl-font-score);
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-}
-.player-page .season-summary-table td[data-stars]::after {
-  color: color-mix(in srgb, currentColor 62%, transparent);
-  font-size: 0.72rem;
-  content: attr(data-stars) "★";
-}
-.player-page .season-summary-table td[data-empty] {
-  padding: 0;
   font-size: 0;
 }
-.player-page .season-summary-table :is(td[data-empty], td[data-narrow])::after {
-  content: none;
+.player-page .season-summary-table td[data-empty] {
+  width: 0;
+  padding: 0;
 }
-.player-page .season-summary-table td[data-stars="3"] {
-  border-radius: 5px 0 0 5px;
+/* The bar's rounded ends sit on its first and last parts with battles. */
+.player-page
+  .season-summary-table
+  td[data-stars]:not(td[data-stars]:not([data-empty]) ~ td) {
+  border-radius: 4px 0 0 4px;
 }
-.player-page .season-summary-table td[data-stars="0"] {
-  border-radius: 0 5px 5px 0;
+.player-page .season-summary-table td[data-stars]:not(:has(~ td:not([data-empty]))) {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
   box-shadow: none;
+}
+.player-page .season-summary-table tr.season-summary-key {
+  grid-template-columns: 7rem minmax(0, 1fr);
+  margin-bottom: 0.45rem;
+}
+.player-page .season-summary-key td {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.85rem;
+  justify-content: space-between;
+  max-width: 18rem;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.player-page .season-summary-key span[data-stars] {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.player-page .season-summary-key span[data-stars]::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  align-self: center;
+  border-radius: 2px;
+  background: var(--seg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-ink) 14%, transparent);
+  content: "";
+}
+.player-page .season-summary-key .summary-star {
+  margin-left: -0.2rem;
+}
+.player-page .season-summary-key b {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 0.98rem;
+  font-weight: 700;
 }
 /* Attacks: gold for three stars fading to grey; defenses: red for three
    stars given up, green for a clean hold. */
-.player-page .season-summary-table tr:first-child td[data-stars="3"] {
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="3"] {
   --seg: var(--cl-star);
-  color: var(--cl-brand-night);
 }
-.player-page .season-summary-table tr:first-child td[data-stars="2"] {
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="2"] {
   --seg: color-mix(in srgb, var(--cl-star) 55%, var(--cl-raised));
 }
-.player-page .season-summary-table tr:first-child td[data-stars="1"] {
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="1"] {
   --seg: color-mix(in srgb, var(--cl-star) 28%, var(--cl-raised));
 }
-.player-page .season-summary-table tr:first-child td[data-stars="0"] {
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="0"] {
   --seg: var(--cl-raised);
 }
-.player-page .season-summary-table tr:last-child td[data-stars="3"] {
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="3"] {
   --seg: color-mix(in srgb, var(--cl-negative) 80%, var(--cl-raised));
 }
-.player-page .season-summary-table tr:last-child td[data-stars="2"] {
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="2"] {
   --seg: color-mix(in srgb, var(--cl-negative) 45%, var(--cl-raised));
 }
-.player-page .season-summary-table tr:last-child td[data-stars="1"] {
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="1"] {
   --seg: color-mix(in srgb, var(--cl-negative) 22%, var(--cl-raised));
 }
-.player-page .season-summary-table tr:last-child td[data-stars="0"] {
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="0"] {
   --seg: color-mix(in srgb, var(--cl-positive) 70%, var(--cl-raised));
 }
 /* Averages: two by two on a phone, four across where there is room. */
@@ -607,6 +680,15 @@
 .player-page .season-summary > .section-note {
   margin: 0.6rem 0 0;
   font-size: 0.8rem;
+}
+@media (max-width: 29.99rem) {
+  .player-page .season-summary-table tr.season-summary-key {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .player-page .season-summary-key td {
+    grid-column: 1;
+    max-width: none;
+  }
 }
 @media (min-width: 48rem) {
   .player-page .season-summary {
