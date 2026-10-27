@@ -120,7 +120,7 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     Reset like 83222770 and 83226079 were, is first read on Tuesday at
     06:25, its battle log reaching back to its Monday battles: its Monday
     starts at 5,000. With no reading at or before the Tuesday Reset, the
-    Tuesday board has no trophies to rank it by. Three STEADY players stay
+    Tuesday board ranks it by its Complete Monday. Three STEADY players stay
     in Legend I throughout.
 
     That night's re-check of the Season's days, with STEADY_1's Monday lost
@@ -324,7 +324,7 @@ def test_a_mid_season_monday_moves_players_between_leagues(
         STALE: 5020, STALE_LATE: 4980, DROPPED: 4940}
     assert _ranked(tuesday_board) == {
         STEADY_3: 5420, STEADY_2: 5320, STEADY_1: 5220, FAILED: 5060, FAILED_TWICE: 5060,
-        PROMOTED: 5050, IDLE_PROMOTED: 5000}
+        PROMOTED: 5050, FIRST_SEEN: 5040, IDLE_PROMOTED: 5000}
     # The re-check expects a Legend day exactly where the record puts the
     # week in Legend I, as the day's calculation does: STALE_LATE, read at
     # the Tuesday Reset but out of Legend I that week, has no Monday to

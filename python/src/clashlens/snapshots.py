@@ -291,6 +291,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                             str(row[1]["observed_at"])
                         ).astimezone(UTC),
                         _text_value(row[1]["eligibility_state"]),
+                        bool(row[1].get("read_after_reset")),
                     )
                     for row in manifest_profiles
                     if isinstance(row[1], dict)
@@ -389,6 +390,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     else (int(row[2]), True)
                 )
                 age_seconds = int((boundary_at - row[4]).total_seconds())
+                # A player read only after the Reset ranks by their Complete
+                # day, named by that reading (boundary_members.first_readings).
+                if age_seconds < 0 and row[6:7] == (True,):
+                    age_seconds = 0
                 if age_seconds < 0:
                     raise ValueError("snapshot selected future profile evidence")
                 freshness = (

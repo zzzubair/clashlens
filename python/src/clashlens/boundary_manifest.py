@@ -41,6 +41,7 @@ from .domain import (
     ranked_day_for,
     season_is_current,
 )
+from .league_week import week_start
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -571,6 +572,14 @@ def _snapshot_rows(
         ],
     )
     profiles.update(unplayed)
+    # A member not read in the ended day's week before the Reset ranks by
+    # their Complete day, named by their first Legend I reading since.
+    week = week_start(boundary_at - RANKED_DAY_DURATION)
+    late = boundary_members.first_readings(connection, boundary_at, {
+        int(row[0]): int(row[1]) for row in members
+        if row[1] is not None and (int(row[0]) not in profiles or profiles[int(row[0])][2] < week)
+    })
+    profiles.update(late)
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
@@ -628,7 +637,8 @@ def _snapshot_rows(
         # missing, as boundary._boundary_snapshot_status finds no accepted
         # profile.
         if _rechecks(status, version_id) or (
-            status == "missing" and player_id in unplayed and version_id is not None
+            status == "missing" and (player_id in unplayed or player_id in late)
+            and version_id is not None
         ):
             # The member's status, checked again against its ranked day and
             # accepted profile now, as boundary._boundary_snapshot_status.
@@ -677,12 +687,14 @@ def _snapshot_rows(
                 "eligibility_state": _text_value(profile[7]),
                 "profile_json": profile[3],
             }
+            if player_id in late:
+                identity["profile_snapshot"]["read_after_reset"] = True
             # Whether the player was in Legend I is the board's membership
             # (boundary_members); a lower-league profile's trophies still
             # rank on no Legend I board.
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif player_id not in unplayed and not season_is_current(
+            elif player_id not in unplayed and player_id not in late and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
