@@ -671,5 +671,16 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
             )
             # Day 2 compares the Season id alone.
             check(season_start + timedelta(days=1, minutes=20), {"#PH2"})
+            # The header search's copy held from the Season's last Legend day
+            # is served after the opening Reset with every player waiting.
+            names = api_players.KnownPlayerNames(start=lambda _read: None)
+            names.current(database, season_start - timedelta(minutes=10))
+            held = api_players.search_known_players(
+                database, "Player", now=season_start + timedelta(minutes=20),
+                freshness_seconds=900, names=names,
+            )
+            assert {r["tag"] for r in held} == set(players)
+            assert all(r["season_reset_pending"] for r in held)
+            assert all(r["trophies"] is None for r in held)
         finally:
             database.close()

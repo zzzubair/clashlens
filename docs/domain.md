@@ -79,9 +79,16 @@ A domain change is complete only when every affected source observation, derived
   actively tracked players and players with recorded history. The website's
   player name search, in the header and on Home, reads them, with their names,
   clans and trophies, from one shared copy, reread in the background once a
-  minute old, never served once two minutes old and reread at once at each
-  Reset, so a new or renamed player or new trophies can take up to about two
-  minutes to appear there; Discord's player suggestions read them at once.
+  minute old. Searches keep getting the last copy while that reread runs,
+  fails or times out, as under the database load after a Reset, across Resets
+  too, until the copy is a day old; only with no copy or a day-old one does a
+  search wait for a full read. So a new or renamed player or new trophies
+  usually take a minute or two to appear there, and longer while rereads
+  fail or after a spell with no searches, when the first search gets the old
+  copy. Each result's age still counts from when that player was last read.
+  After a Season's opening Reset, a copy read before it shows every player
+  as waiting for their Season reset until a reread lands. Discord's player
+  suggestions read them at once.
   Other known tags remain directly accessible. A non-Legend-I page shows the
   eligibility explanation and any history, without a full current profile
   section.

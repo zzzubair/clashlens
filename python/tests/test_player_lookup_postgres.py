@@ -391,7 +391,7 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
 
 
 def test_header_search_holds_names_and_refreshes_them_in_the_background(
-    database_url, monkeypatch
+    database_url, monkeypatch, capsys
 ):
     with migrated_production_database(
         database_url, include_compact_collector=True
@@ -440,10 +440,31 @@ def test_header_search_holds_names_and_refreshes_them_in_the_background(
             refreshes.pop()()
             assert found("Player") == [("#2PP", 6200), ("#8PY", 6100)]
             assert reads == [NOW, NOW]
-            # A new Legend day is read at once, not served from the old one.
+            # Past the next Reset every read of the new Legend day fails, as
+            # under the load after a Reset, yet searches answer from the last
+            # copy at once while reads are retried behind them.
             tomorrow = NOW + timedelta(days=1)
+            clock[0] = 300.0
+            with psycopg.connect(info) as blocker:
+                blocker.execute("LOCK TABLE players IN ACCESS EXCLUSIVE MODE")
+                for _attempt in range(2):
+                    assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
+                    refreshes.pop()()
+                    assert '"status": "refresh_failed"' in capsys.readouterr().out
+                assert reads == [NOW, NOW, tomorrow, tomorrow]
+            seed_profile(database, "#9PY", 6300)
             assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
-            assert reads == [NOW, NOW, tomorrow] and refreshes == []
+            refreshes.pop()()
+            assert found("Player", tomorrow) == [
+                ("#9PY", 6300), ("#2PP", 6200), ("#8PY", 6100)
+            ]
+            # A day after its read, while reads keep failing, the copy is
+            # no longer served and the search fails instead.
+            clock[0] = 300.0 + 24 * 60 * 60
+            with psycopg.connect(info) as blocker:
+                blocker.execute("LOCK TABLE players IN ACCESS EXCLUSIVE MODE")
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    found("Player", tomorrow)
         finally:
             database.close()
 
