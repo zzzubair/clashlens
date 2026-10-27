@@ -735,7 +735,8 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             assert publish_day(2, "[]") is None
             # A recorded Legend battle this Season means the Season is the problem.
             assert publish_day(3, "[{}]") == "season_unconfirmed"
-            # A Legend battle in the board's Season takes it off the board.
+            # A Legend battle since they were first seen in Legend I takes it
+            # off the board.
             with database.pool.connection() as connection:
                 connection.execute(
                     """
@@ -744,7 +745,7 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
                     )
                     SELECT id, %s, 1, 'Live', 'partial', '[{}]' FROM players
                     """,
-                    (ranked_day_for(NOW).season_start,),
+                    (ranked_day_for(NOW).start,),
                 )
             assert not on_board()
 
