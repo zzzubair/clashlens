@@ -34,6 +34,8 @@ from clashlens.db import Database
 
 FULL, LATE = "#2PP", "#8PP"
 NAME = "Synthetic Legend I"
+# How the last box of a summary ends.
+SETTINGS = "  ·  [Summary settings](https://clashlens.test/account/discord-alerts)"
 
 
 def _loop(api: ApiDatabase, discord: FakeDiscord, at: datetime,
@@ -118,6 +120,7 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
             story.run_worker()
             story.wait(timedelta(hours=1))
             board = story.served_board(day_3)
+            earlier_board = story.served_board(day_2)
             unasked = asyncio.run(_loop(api, discord, after_reset).tick())
             for tag in (FULL, LATE):
                 assert _summary_switch(api, mine, tag, True) == 200
@@ -156,53 +159,54 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
 
     places = {entry["tag"]: entry["position"] for entry in board["entries"]}
     assert (before_board, unasked, sent, restarted) == (0, 0, [1, 0], 0)
-    assert [(user, reply.title) for user, reply in day_3_dms] == [
-        (DISCORD_ID, "Legend day summary · Tue 6 Oct"),
+    assert [(user, reply.notice) for user, reply in day_3_dms] == [
+        (DISCORD_ID, "📅 Day 2 (06-10-2026)"),
     ]
     link = "https://clashlens.test/players/%23{}?day=2026-10-06#legend-day-2026-10-06"
     # LATE's Day 2 has no start reading, so it has no trophy numbers and is
-    # left off the board, as on the player page.
+    # left off the board, as on the player page. FULL was 1st on the Day 2
+    # Reset's board too.
     assert places == {FULL: 1}
+    assert earlier_board is not None
+    assert {entry["tag"]: entry["position"] for entry in earlier_board["entries"]} == {FULL: 1}
     cards = day_3_dms[0][1].cards
-    assert [card.parts[0] for card in cards] == [
-        "\n".join([
-            f"**{NAME}** {FULL} · Verified",
-            "5,070 → 5,060 (−10)",
-            "Attacks 3 (+100) · Defenses 8 (−110)",
-            "Daily board place **1**",
-        ]),
-        "\n".join([
-            f"**{NAME}** {LATE} · Uncertain",
-            "Trophies unavailable",
-            "Attacks 2 (+80) · Defenses 8 (−160)",
-            "Daily board place **Unavailable**",
+    assert [(card.title, card.parts[0]) for card in cards] == [
+        (f"\u2068{NAME}\u2069", "\n".join([
+            "# 🌍 #1   🏆 5,060",
+            "-# Same place   ·   −10 trophies",
+            "",
+            "**Day summary**",
+            "⚔️ Attacks **+100** (3 of 8)   🛡️ Defenses **−110**",
+            f"-# [Open day]({link.format('2PP')})",
+        ])),
+        (f"\u2068{NAME} · Uncertain\u2069", "\n".join([
+            "# 🌍 –   🏆 –",
+            "-# Trophy change unavailable",
+            "",
+            "**Day summary**",
+            "⚔️ Attacks **+80** (2 of 8)   🛡️ Defenses **−160**",
             ("-# Uncertain: some of this day's battles or readings may be missing, so these "
              "numbers may be off. The day on Clash Lens says why."),
-        ]),
-    ]
-    assert [card.button.url for card in cards if card.button] == [
-        link.format("2PP"), link.format("8PP")
+            f"-# [Open day]({link.format('8PP')}){SETTINGS}",
+        ])),
     ]
     # Each player's card in the colour of the order they were linked.
     assert [card.colour for card in cards] == [PLAYER_COLOURS[0], PLAYER_COLOURS[1]]
-    assert day_3_dms[0][1].footer == "Places are from the Daily board at the 05:00 UTC Reset."
-    assert [link.label for link in day_3_dms[0][1].links] == ["Summary settings"]
 
     assert [(player["tag"], player["on"], player["summary_on"])
             for player in settings["players"]] == [(FULL, True, True), (LATE, False, False)]
     assert day_4_sent == 1
-    assert [reply.title for _, reply in day_4_dms] == ["Legend day summary · Wed 7 Oct"]
-    assert day_4_dms[0][1].cards[0].parts[0] == "\n".join([
-        f"**{NAME}** {FULL} · Verified",
-        "5,060 → 5,140 (+80)",
-        "Attacks 8 (+320) · Defenses 8 (−240)",
-        "Daily board place **1**",
-    ])
-    assert day_4_dms[0][1].cards[0].button is not None
-    assert day_4_dms[0][1].cards[0].button.url == (
-        "https://clashlens.test/players/%232PP?day=2026-10-07#legend-day-2026-10-07"
-    )
-    assert LATE not in day_4_dms[0][1].text
+    assert [reply.notice for _, reply in day_4_dms] == ["📅 Day 3 (07-10-2026)"]
+    day_4_link = "https://clashlens.test/players/%232PP?day=2026-10-07#legend-day-2026-10-07"
+    assert day_4_dms[0][1].cards[0].parts[0].split("\n") == [
+        "# 🌍 #1   🏆 5,140",
+        "-# Same place   ·   +80 trophies",
+        "",
+        "**Day summary**",
+        "⚔️ Attacks **+320**   🛡️ Defenses **−240**",
+        f"-# [Open day]({day_4_link}){SETTINGS}",
+    ]
+    assert "%238PP" not in day_4_dms[0][1].text
 
     assert (day_5_sent, len(fifth.tries), fifth.sent) == (0, 1, [])
     assert logged == [(day_3, "sent"), (day_4, "sent"), (day_5, "failed")]
@@ -241,7 +245,8 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
     It names WAITING as not finished; right after WAITING's page is read the
     fix lands, WAITING's day saves and the board is corrected with WAITING
     below RAISED, and RAISED keeps its place from the board the round began
-    with."""
+    with: one place below its place on the Sunday Reset's board. KNOWN_START,
+    not on that board, shows no places moved."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday = day(20, season), day(21, season), day(22, season)
     calculate, broken = reconciliation_db.recalculate_ranked_day, [0]
@@ -283,6 +288,7 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
         story.wait(timedelta(hours=1))
         known = story.saved_day(KNOWN_START, sunday)
         members = story.board_members(monday)
+        earlier_board = story.served_board(sunday)
         board = story.served_board(monday)
         corrected: list[dict[str, Any] | None] = []
 
@@ -321,23 +327,34 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
     after = {entry["tag"]: entry["position"] for entry in corrected[0]["entries"]}
     assert before[RAISED] == before[WAITING] + 1 and after[WAITING] == after[RAISED] + 1
     assert sent == 1
-    assert [(user, reply.title) for user, reply in discord.sent] == [
-        (DISCORD_ID, "Legend day summary · Sun 27 Sep"),
+    # RAISED was 2nd on the Sunday Reset's board, tied with WAITING;
+    # KNOWN_START was not on it.
+    assert earlier_board is not None
+    assert {entry["tag"]: entry["position"] for entry in earlier_board["entries"]} == {
+        WAITING: 1, RAISED: 2}
+    assert [(user, reply.notice) for user, reply in discord.sent] == [
+        (DISCORD_ID, "📅 Day 21 (27-09-2026)"),
     ]
     link = "https://clashlens.test/players/%23{}?day=2026-09-27#legend-day-2026-09-27"
-    place = {tag: before.get(tag, "Unavailable") for tag in (RAISED, KNOWN_START)}
     cards = discord.sent[0][1].cards
-    assert [
-        (lines[0].split(" · ")[0], lines[1], lines[-1], card.button and card.button.url)
-        for card in cards[:2]
-        for lines in [card.parts[0].split("\n")]
-    ] == [
-        (f"**{NAME}** {RAISED}", "5,140 → 4,940 (−200, +60 weekly reset)",
-         f"Daily board place **{place[RAISED]}**", link.format("8PP")),
-        (f"**{NAME}** {KNOWN_START}", "5,400 → Unavailable (+80)",
-         f"Daily board place **{place[KNOWN_START]}**", link.format("PPP")),
+    assert [(card.title, card.parts[0].split("\n")) for card in cards[:2]] == [
+        (f"\u2068{NAME} · Calculated\u2069", [
+            f"# 🌍 #{before[RAISED]}   🏆 4,940",
+            "-# ▼ 1 place   ·   −200 trophies   ·   +60 weekly reset",
+            "",
+            "**Day summary**",
+            "⚔️ Attacks **+40** (1 of 8)   🛡️ Defenses **−240**",
+            f"-# [Open day]({link.format('8PP')})",
+        ]),
+        (f"\u2068{NAME} · Calculated\u2069", [
+            f"# 🌍 #{before[KNOWN_START]}   🏆 –",
+            "-# +80 trophies",
+            "",
+            "**Day summary**",
+            "⚔️ Attacks **+320**   🛡️ Defenses **−240**",
+            f"-# [Open day]({link.format('PPP')})",
+        ]),
     ]
     assert [card.parts for card in cards[2:]] == [(
-        f"Not finished yet: {NAME} {WAITING}. Their day shows on Clash Lens once it is saved.",
+        f"**Not finished yet:** {NAME}\n-# Their day shows on Clash Lens once it's saved.{SETTINGS}",
     )]
-    assert discord.sent[0][1].footer == "Places are from the Daily board at the 05:00 UTC Reset."

@@ -18,9 +18,11 @@ page shows; the end of day is the one the worker saved with that version of
 the day, as its Season page shows it, before any weekly or Season reset,
 which is shown beside it, and unavailable when the worker saved none. Every
 place in a round's summaries is read from one version of the Reset's Daily
-board. A player whose day is not saved yet, or whom that board went without,
-is named as not finished; one with no Legend day that day is left out, and a
-Clasher with no finished day gets no DM.
+board, and each place moved from that player's place on the Daily board of
+the Reset before, unless the day was a Season's first. A player whose day
+is not saved yet, or whom that board went without, is named as not
+finished; one with no Legend day that day is left out, and a Clasher with
+no finished day gets no DM.
 
 Summaries are sent by their own loop, beside the attack alert loop and
 through the same Discord messenger, so a slow summary never holds up an
@@ -108,6 +110,27 @@ class Summary:
         return self.reset + timedelta(days=1)
 
 
+def _board(connection: Any, reset: datetime) -> int | None:
+    """The id of the Reset's published Daily board, as the player page finds
+    it (season_summaries.reset_board_ranks); None before it is published."""
+    row = connection.execute(
+        """
+        SELECT snapshot.id FROM leaderboard_snapshots AS snapshot
+        WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+          AND snapshot.boundary_at = %s
+          AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                           WHERE g.snapshot_id = snapshot.id)
+               OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                          WHERE g.snapshot_id = snapshot.id
+                            AND g.snapshot_state <> 'superseded'))
+        ORDER BY snapshot.version DESC, snapshot.id DESC
+        LIMIT 1
+        """,
+        (reset,),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
 class Summaries:
     """The summary reads and the summary delivery log."""
 
@@ -131,25 +154,11 @@ class Summaries:
         now = self.now()
         reset = ranked_day_for(now).start
         with self.database.pool.connection() as connection:
-            # The Reset's Daily board, as the player page finds it
-            # (season_summaries.reset_board_ranks).
-            board = connection.execute(
-                """
-                SELECT snapshot.id FROM leaderboard_snapshots AS snapshot
-                WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-                  AND snapshot.boundary_at = %s
-                  AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                                   WHERE g.snapshot_id = snapshot.id)
-                       OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                                  WHERE g.snapshot_id = snapshot.id
-                                    AND g.snapshot_state <> 'superseded'))
-                ORDER BY snapshot.version DESC, snapshot.id DESC
-                LIMIT 1
-                """,
-                (reset,),
-            ).fetchone()
+            board = _board(connection, reset)
             if board is None:
                 return []
+            # The Daily board of the Reset before, for each place moved.
+            previous = _board(connection, reset - timedelta(days=1))
             accounts = connection.execute(
                 """
                 SELECT account.id, identity.provider_subject,
@@ -172,11 +181,12 @@ class Summaries:
                 """,
                 {"reset": reset, "batch": BATCH},
             ).fetchall()
-            # Each player's place on that board, and whether it went without
-            # them as their day's result was not saved in time.
+            # Each player's place on that board, whether it went without them
+            # as their day's result was not saved in time, and their place on
+            # the board before.
             standing = {
-                tag: (position, unfinished)
-                for tag, position, unfinished in connection.execute(
+                tag: (position, unfinished, earlier)
+                for tag, position, unfinished, earlier in connection.execute(
                     """
                     SELECT player.normalized_tag, entry.position, EXISTS (
                         SELECT 1 FROM boundary_publication_generations AS g
@@ -184,13 +194,16 @@ class Summaries:
                             ON member.generation_id = g.id
                         WHERE g.snapshot_id = %(board)s AND member.player_id = player.id
                           AND member.snapshot_status IN ('pending', 'unavailable', 'failed')
-                    )
+                    ), earlier.position
                     FROM players AS player
                     LEFT JOIN leaderboard_snapshot_entries AS entry
                         ON entry.snapshot_id = %(board)s AND entry.player_id = player.id
+                    LEFT JOIN leaderboard_snapshot_entries AS earlier
+                        ON earlier.snapshot_id = %(previous)s AND earlier.player_id = player.id
                     WHERE player.normalized_tag = ANY(%(tags)s::text[])
                     """,
-                    {"board": board[0], "tags": [tag for _, _, tags in accounts for tag in tags]},
+                    {"board": board, "previous": previous,
+                     "tags": [tag for _, _, tags in accounts for tag in tags]},
                 ).fetchall()
             }
         due = []
