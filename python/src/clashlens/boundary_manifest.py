@@ -911,9 +911,21 @@ def reset_trophies(
     October 2026, 42 battles ending 05:00:00 to 05:03:10 moved 83 players'
     totals, and taking them off cut order breaks against the game's country
     Reset ranks from 400 to 40 of 342,472 pairs.
+
+    A Season's last Reset is the exception: the game's official Season-end
+    total, in each player's league history, includes the automatic defense
+    loss and the battles that ended after the Reset, so there a Complete
+    day gives its EOD itself. On the 5 October 2026 Season end the board's
+    Complete EODs and other readings matched that total for 10,144 of the
+    11,970 players with one, the totals before the loss for 9,282; the EOD
+    matched for 30 of the 35 Complete days with a battle ending after the
+    Reset, and less those battles for none. The EOD is proven when the
+    official total it was checked against is the same, or as the total
+    before the loss is.
     """
     if not readings:
         return {}
+    season_end = ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_end == boundary_at
     days = {
         int(row[0]): row[1:]
         for row in connection.execute(
@@ -929,7 +941,9 @@ def reset_trophies(
                    AND NOT ranked.failure_reasons ?| %s::text[]
                    AND battles.every_battle_proven IS NOT FALSE,
                    battles.after_reading, battles.after_reset,
-                   battles.after_reset_after_reading, battles.end_unknown
+                   battles.after_reset_after_reading, battles.end_unknown,
+                   (ranked.input_evidence -> 'end_baseline_evidence'
+                    ->> 'official_final_trophies')::integer
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -1014,12 +1028,12 @@ def reset_trophies(
         ).fetchall()
     }
     return {
-        player_id: _reset_total(reading[3], days.get(player_id))
+        player_id: _reset_total(reading[3], days.get(player_id), season_end)
         for player_id, reading in readings.items()
     }
 
 
-def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
+def _reset_total(reading: int, day: Any, season_end: bool) -> tuple[int, bool]:
     """A player's trophies at the Reset and whether they are proven, from
     their reading and their day as ``reset_trophies`` reads it."""
     if day is None:
@@ -1027,11 +1041,15 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
         battles_proven, after_reading, after_reset, after_reset_after_reading,
-        end_unknown,
+        end_unknown, official,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
+        if season_end:
+            return int(final), official == int(final) or total == settled and (
+                _text_value(confidence) == "exact" or bool(read_clean)
+            )
         # The game resets trophies at a Season's end, and raises a total at
         # or below 5,000 at a weekly one, so that Reset's reading proves
         # nothing and the reading must agree, unless the weekly one was read

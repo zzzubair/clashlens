@@ -23,8 +23,9 @@ worker's own calculation:
    saved day, though the weekly league record puts the day's week in Legend
    I: the day's calculation saves one exactly then (``league_days.day_league``);
 6. ``board``: a confirmed Daily board row against its day's end plus its
-   automatic loss, less the battles that ended after the Reset. Rows not
-   confirmed are left to later board corrections.
+   automatic loss, less the battles that ended after the Reset, or at a
+   Season's last Reset its end alone. Rows not confirmed are left to later
+   board corrections.
 
 Each problem is a row in ``reconcile_findings`` (migration 0110); one its
 check judged again and did not find is resolved and kept, as is a board
@@ -338,9 +339,11 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
                 if ends.get(int(row[0]), (None, None))[1] is not None]
     after_reset = dict(connection.execute(
         _AFTER_RESET, {"versions": versions}).fetchall()) if versions else {}
+    # A Season's last board shows the EOD itself (``boundary_manifest.reset_trophies``).
+    season_end = ranked_day.season_end == params["reset"]
     for player, board, trophies in rows:
         version, end, automatic = ends.get(int(player), (None, None, None))
-        expected = None if end is None else (
+        expected = None if end is None else end if season_end else (
             end + (automatic or 0) - after_reset.get(version, 0))
         if expected != trophies:
             findings.append(Finding("board", int(player), int(board), version,
