@@ -380,7 +380,8 @@ function AccountTabs({
         );
       })}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
-        <DashboardIcon name="plus" /> Link player
+        <DashboardIcon name="plus" />{" "}
+        <span className="dash-account-add-text">Link player</span>
       </Link>
     </nav>
   );

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router";
 
 import type { ArmyUnitNames } from "../lib/army";
 import type { PlayerPage, RankedBattleEvent, RankedDaySummary } from "../lib/contracts";
@@ -9,6 +9,7 @@ import { canonicalPlayerPath } from "../lib/player-tag";
 import { ArmyPortraits } from "./ArmyPortraits";
 import { DayMark, DayStatusNote } from "./DayStatus";
 import { FoldedBattles } from "./FoldedBattles";
+import { linkedBattleId } from "./LinkedBattle";
 import { LocalTimestamp } from "./Provenance";
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -144,6 +145,18 @@ function LegendDay({
   const { battleNet } = shown;
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
   const soFar = isCurrentDay && day.trophyChange === null && day.battlesComplete;
+  // Phones show one side of an open day at a time: Attacks, unless only
+  // defenses are saved yet. A link to a defense opens on Defenses; the server
+  // never sees the #battle- part, so it is read after hydration.
+  const [side, setSide] = useState<"attack" | "defense">(() =>
+    day.offenseEvents.length === 0 && day.defenseEvents.length > 0 ? "defense" : "attack",
+  );
+  const { hash } = useLocation();
+  const defenseIds = day.defenseEvents.map((event) => event.battleId).join(" ");
+  useEffect(() => {
+    const linked = linkedBattleId(hash);
+    if (linked && defenseIds.split(" ").includes(linked)) setSide("defense");
+  }, [hash, defenseIds]);
   const facts = [
     day.startTrophiesSource ? (
       <span
@@ -254,11 +267,35 @@ function LegendDay({
         {facts.length > 0 ? <p className="log-facts">{facts}</p> : null}
         {isCurrentDay ? (
           reasons.length > 0 ? (
-            <p className="log-note">{reasons.join(" ")}</p>
+            // Today's why-not-final waits behind one line.
+            <details className="log-note">
+              <summary>Final result confirmed after Reset</summary>
+              <p>{reasons.join(" ")}</p>
+            </details>
           ) : null
         ) : (
           <DayStatusNote status={status} reasons={reasons} />
         )}
+        <fieldset className="battle-switch">
+          <legend className="sr-only">Show</legend>
+          {(
+            [
+              ["attack", "Attacks", day.offense.trophyGain],
+              ["defense", "Defenses", defense],
+            ] as const
+          ).map(([value, title, total]) => (
+            <label key={value}>
+              <input
+                type="radio"
+                name={`side-${dayKey}`}
+                value={value}
+                checked={side === value}
+                onChange={() => setSide(value)}
+              />
+              {title} <strong className={valueTone(total)}>{formatSigned(total)}</strong>
+            </label>
+          ))}
+        </fieldset>
         <FoldedBattles open={openDay === dayKey} day={day}>
           <BattleList
             title="Attacks"
@@ -343,7 +380,7 @@ export function DayBattles({
 /**
  * One side of a day: its total, then one short row per battle. A day has 8
  * of each; the slots not recorded share one line. Each army, the opponent's
- * tag and Copy army stay one tap away, so the result leads the row.
+ * tag, their log and Copy army stay one tap away, so the result leads the row.
  */
 function BattleList({
   title,
@@ -423,41 +460,36 @@ function BattleRow({
   onToggle: () => void;
 }) {
   const opponent = event.opponent.name ?? event.opponent.tag;
-  // A nameless opponent shows its tag once, as the name.
-  const more = event.armyShareCode || event.opponent.name;
-  const what = event.armyShareCode ? "army" : "tag";
+  const what = event.armyShareCode ? "army" : "opponent";
+  // The whole line opens the army; their log is one more tap, so a thumb on
+  // the name never leaves the page by accident.
   return (
     <li className={`battle-row battle-row-${side}`} id={`battle-${event.battleId}`}>
-      <span className="sr-only">
-        {event.stars} stars, {event.destructionPercentage}% destruction,{" "}
-        {formatSigned(event.trophyChange)} trophies
-      </span>
-      <span className="battle-score" aria-hidden="true">
-        <Stars count={event.stars} />
-        <small>{event.destructionPercentage}%</small>
-      </span>
-      <span className="battle-who">
-        <Link
-          className="battle-link"
-          to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
-          aria-label={`View ${opponent}'s Legend log for ${dayLabel}`}
+      <div className="battle-line">
+        <span className="sr-only">
+          {event.stars} stars, {event.destructionPercentage}% destruction,{" "}
+          {formatSigned(event.trophyChange)} trophies
+        </span>
+        <span className="battle-score" aria-hidden="true">
+          <Stars count={event.stars} />
+          <small>{event.destructionPercentage}%</small>
+        </span>
+        <span className="battle-who">
+          {/* A nameless opponent shows its tag once, as the name. */}
+          <bdi className="battle-name">{opponent}</bdi>
+          <small>
+            <LocalTimestamp value={event.battleTimestamp} timeOnly />
+            {event.perspectiveDisagreement ? (
+              <span className="battle-disagreement">Result awaiting confirmation</span>
+            ) : null}
+          </small>
+        </span>
+        <strong
+          className={`battle-change ${valueTone(event.trophyChange)}`}
+          aria-hidden="true"
         >
-          <bdi>{opponent}</bdi>
-        </Link>
-        <small>
-          <LocalTimestamp value={event.battleTimestamp} timeOnly />
-          {event.perspectiveDisagreement ? (
-            <span className="battle-disagreement">Result awaiting confirmation</span>
-          ) : null}
-        </small>
-      </span>
-      <strong
-        className={`battle-change ${valueTone(event.trophyChange)}`}
-        aria-hidden="true"
-      >
-        {formatSigned(event.trophyChange)}
-      </strong>
-      {more ? (
+          {formatSigned(event.trophyChange)}
+        </strong>
         <button
           type="button"
           className="battle-toggle"
@@ -475,34 +507,40 @@ function BattleRow({
           </svg>
           <span className="sr-only">{open ? `Hide ${what}` : `Show ${what}`}</span>
         </button>
-      ) : null}
-      {more && open ? (
-        <div className="battle-more" id={`more-${event.battleId}`}>
-          <p>
-            {event.opponent.name ? (
-              <span className="player-tag">{event.opponent.tag}</span>
-            ) : null}
-            {event.armyShareCode ? (
-              <a
-                className="battle-copy"
-                href={copyArmyLink(event.armyShareCode)}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Copy army from the battle against ${opponent}, opens in a new tab`}
-              >
-                Copy army
-              </a>
-            ) : null}
-          </p>
-          {event.armyShareCode ? (
-            <ArmyPortraits
-              id={`army-${event.battleId}`}
-              code={event.armyShareCode}
-              names={units}
-            />
+      </div>
+      {/* Their log link is always in the page, so it is there before scripts run. */}
+      <div className="battle-more" id={`more-${event.battleId}`} hidden={!open}>
+        <p>
+          {event.opponent.name ? (
+            <span className="player-tag">{event.opponent.tag}</span>
           ) : null}
-        </div>
-      ) : null}
+          <Link
+            className="battle-link"
+            to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
+            aria-label={`View ${opponent}'s Legend log for ${dayLabel}`}
+          >
+            Their Legend log
+          </Link>
+          {open && event.armyShareCode ? (
+            <a
+              className="battle-copy"
+              href={copyArmyLink(event.armyShareCode)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Copy army from the battle against ${opponent}, opens in a new tab`}
+            >
+              Copy army
+            </a>
+          ) : null}
+        </p>
+        {open && event.armyShareCode ? (
+          <ArmyPortraits
+            id={`army-${event.battleId}`}
+            code={event.armyShareCode}
+            names={units}
+          />
+        ) : null}
+      </div>
     </li>
   );
 }

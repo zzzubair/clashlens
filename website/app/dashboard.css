@@ -66,13 +66,10 @@
 }
 
 .dash-estimate {
-  display: inline-block;
-  padding: 0 0.35rem;
+  display: block;
   color: var(--cl-muted);
-  border: 1.5px dashed var(--cl-muted);
-  border-radius: 6px;
-  font-size: 0.72rem;
-  font-weight: 900;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .dash-chip {
@@ -240,17 +237,9 @@
 
 .dash-divider {
   display: flex;
-  align-items: center;
-  gap: 0.8rem;
+  justify-content: flex-end;
   min-height: 2.6rem;
   margin-bottom: 1rem;
-}
-
-.dash-divider::before {
-  flex: 1;
-  height: 2px;
-  background: var(--cl-border);
-  content: "";
 }
 
 .dash-customise {
@@ -263,7 +252,6 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
-  align-items: start;
 }
 
 .dash-card {
@@ -280,10 +268,11 @@
   flex-shrink: 0;
 }
 
-/* Small and Medium cards are a fixed 360 px tall; every design fits inside. */
+/* Small and Medium cards are at most 360 px tall and every design fits inside;
+   cards in a row match the tallest, so a nearly empty row stays short. */
 .dash-card-s,
 .dash-card-m {
-  height: 360px;
+  max-height: 360px;
   overflow: hidden auto;
 }
 
@@ -697,79 +686,6 @@
   font-weight: 900;
 }
 
-/* ---------- Signed out ---------- */
-
-.dash-teaser {
-  position: relative;
-  min-height: 34rem;
-}
-
-.dash-teaser-behind {
-  filter: blur(6px);
-  opacity: 0.6;
-  pointer-events: none;
-  user-select: none;
-}
-
-.dash-teaser-panel {
-  position: absolute;
-  top: 3rem;
-  left: 50%;
-  width: min(100%, 38rem);
-  padding: 1.5rem;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
-  transform: translateX(-50%);
-}
-
-.dash-teaser-panel h1 {
-  margin: 0 0 1rem;
-  font-size: clamp(1.5rem, 4vw, 2rem);
-}
-
-.dash-teaser-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin: 0 0 1rem;
-  padding: 0;
-  list-style: none;
-}
-
-.dash-teaser-tiles li {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.8rem;
-  border: 2px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  font-size: 0.9rem;
-  font-weight: 800;
-}
-
-.dash-teaser-tiles .dash-icon {
-  width: 1.5rem;
-  height: 1.5rem;
-  color: var(--cl-accent);
-}
-
-.dash-teaser-panel .button-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.dash-note {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0.8rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-}
-
 /* ---------- Phone ---------- */
 
 /* On a phone every card is full width, one under another, as tall as its content. */
@@ -783,7 +699,7 @@
   .dash-card-m,
   .dash-card-l {
     grid-column: 1 / -1;
-    height: auto;
+    max-height: none;
     overflow: visible;
   }
 
@@ -816,12 +732,19 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .dash-teaser-panel {
-    top: 1rem;
-    padding: 1rem;
+  /* Link player shrinks to its + so the player tab beside it fits. */
+  .dash-account-add {
+    justify-content: center;
+    min-width: 3.6rem;
+    padding: 0;
   }
 
-  .dash-teaser-tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .dash-account-add-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }

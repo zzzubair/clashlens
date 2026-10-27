@@ -6,10 +6,13 @@ import {
   redirect,
   useLoaderData,
   useLocation,
+  useNavigate,
+  useNavigationType,
   useSearchParams,
   useNavigation,
   useSubmit,
   type LoaderFunctionArgs,
+  type ShouldRevalidateFunctionArgs,
 } from "react-router";
 
 import { UnitArt } from "../components/ArmyPortraits";
@@ -41,6 +44,17 @@ export function meta({ matches }: Route.MetaArgs) {
     title: "Legend League army analytics",
     description: "Compare usage and battle results across tracked Legend League armies.",
   });
+}
+
+// Opening or closing an army's sheet stays at the same address and reads nothing again.
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (!formMethod && currentUrl.href === nextUrl.href) return false;
+  return defaultShouldRevalidate;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -455,11 +469,14 @@ function ResultCell({
   column,
   sorted,
   topRate,
+  topSorted,
 }: {
   row: ArmyRow;
   column: Exclude<SortColumn, "name">;
   sorted: boolean;
   topRate: number;
+  /** The sorted column's highest value. */
+  topSorted: number;
 }) {
   const stars =
     column === "three-star-rate"
@@ -495,6 +512,15 @@ function ResultCell({
                   row.usageCount.toLocaleString(),
                   `of ${row.usageDenominator.toLocaleString()}`,
                 ];
+  // Usage's bar, and the sorted number's on a phone, beside the row with the most.
+  const bar =
+    column === "usage-rate"
+      ? topRate
+        ? row.usageRate / topRate
+        : 0
+      : sorted && topSorted
+        ? Number(sortColumns[column].value(row)) / topSorted
+        : null;
   return (
     <td
       role="cell"
@@ -503,16 +529,9 @@ function ResultCell({
       data-sorted={sorted || undefined}
     >
       <strong className="analytics-value">{value}</strong>
-      {column === "usage-rate" ? (
-        // The bar is the row's use beside the most-used row's.
+      {bar !== null ? (
         <span className="meter" aria-hidden="true">
-          <span
-            style={
-              {
-                "--value": `${topRate ? (row.usageRate / topRate) * 100 : 0}%`,
-              } as CSSProperties
-            }
-          />
+          <span style={{ "--value": `${bar * 100}%` } as CSSProperties} />
         </span>
       ) : null}
       {note ? <span className="analytics-note-value"> {note}</span> : null}
@@ -527,6 +546,7 @@ function ArmyResultRow({
   columns,
   sort,
   topRate,
+  topSorted,
   more,
   open,
   onOpen,
@@ -535,6 +555,7 @@ function ArmyResultRow({
   columns: SortColumn[];
   sort: SortColumn;
   topRate: number;
+  topSorted: number;
   more: boolean;
   open: boolean;
   onOpen: (key: string) => void;
@@ -582,6 +603,7 @@ function ArmyResultRow({
             column={column}
             sorted={sort === column}
             topRate={topRate}
+            topSorted={topSorted}
           />
         ),
       )}
@@ -662,18 +684,36 @@ export default function ArmyAnalyticsRoute() {
   const excludedBattleRecords = recordedBattleRecords - includedBattleRecords;
   const partialArmies = analytics?.armyStates.partial ?? 0;
   const location = useLocation();
+  const navigationType = useNavigationType();
+  const navigate = useNavigate();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
-  const [openArmy, setOpenArmy] = useState<string | null>(null);
   const [shownAll, setShownAll] = useState<string | null>(null);
   const [defaultVisit, setDefaultVisit] = useState(location.key);
-  // The top-bar link opens the defaults again, sorted by Usage.
-  if (!location.search && defaultVisit !== location.key) {
+  // An open army's sheet is its own step in history, so Back closes it and
+  // keeps the filters, sort and scroll.
+  const sheet = location.state as { army?: unknown } | null;
+  const openArmy = typeof sheet?.army === "string" ? sheet.army : null;
+  // The top-bar link opens the defaults again, sorted by Usage. Opening an
+  // army, or Back from it, is not a new visit.
+  if (
+    !location.search &&
+    !openArmy &&
+    navigationType === "PUSH" &&
+    defaultVisit !== location.key
+  ) {
     setDefaultVisit(location.key);
     setChosenSort(null);
-    setOpenArmy(null);
     setShownAll(null);
   }
-  const closeArmy = useCallback(() => setOpenArmy(null), []);
+  const openSheet = useCallback(
+    (army: string) =>
+      navigate(`${location.pathname}${location.search}`, {
+        state: { army },
+        preventScrollReset: true,
+      }),
+    [navigate, location.pathname, location.search],
+  );
+  const closeArmy = useCallback(() => navigate(-1), [navigate]);
   const defaultColumn =
     selected?.sort && Object.hasOwn(sortColumns, selected.sort)
       ? (selected.sort as SortColumn)
@@ -695,6 +735,13 @@ export default function ArmyAnalyticsRoute() {
       : { column: defaultColumn, direction: "descending" };
   const rows = analytics ? sortedRows(analytics.rows, tableSort) : [];
   const topRate = Math.max(0, ...rows.map((row) => row.usageRate));
+  const topSorted =
+    tableSort.column === "name"
+      ? 0
+      : Math.max(
+          0,
+          ...rows.map((row) => Number(sortColumns[tableSort.column].value(row))),
+        );
   const listKey = `${category} ${population} ${requestedSeason}`;
   const collapsed = rows.length > FIRST_ROWS + 5 && shownAll !== listKey;
   const opened = rows.find((row) => row.key === openArmy && namedVariantCount(row));
@@ -966,7 +1013,9 @@ export default function ArmyAnalyticsRoute() {
             </span>
           </div>
           {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
-            <p className="analytics-note">Tap an army for its variants and top armies.</p>
+            <p className="analytics-note analytics-tap-hint">
+              Tap an army for its variants and top armies.
+            </p>
           ) : null}
           <div className="tab-row analytics-sort-chips" role="group" aria-label="Sort">
             {chipOrder
@@ -993,6 +1042,7 @@ export default function ArmyAnalyticsRoute() {
               aria-label="Army analytics results"
               aria-describedby="army-selection-help"
               data-view={armyTypes ? "armies" : "units"}
+              data-sort={tableSort.column}
               // Ranks and the top three show for a highest-first number sort.
               data-ranked={
                 (tableSort.column !== "name" && tableSort.direction === "descending") ||
@@ -1035,9 +1085,10 @@ export default function ArmyAnalyticsRoute() {
                     columns={columns}
                     sort={tableSort.column}
                     topRate={topRate}
+                    topSorted={topSorted}
                     more={index >= FIRST_ROWS}
                     open={opened?.key === row.key}
-                    onOpen={setOpenArmy}
+                    onOpen={openSheet}
                   />
                 ))}
               </tbody>

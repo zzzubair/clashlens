@@ -22,19 +22,19 @@ function BattleRow({
   noun: string;
   kind: "attack" | "defense";
 }) {
-  const shown =
-    count === null ? `– ${noun}s` : `${count} ${noun}${count === 1 ? "" : "s"}`;
+  const shown = `${count ?? "–"} of ${SLOTS} ${noun}s`;
   return (
     <div className="legend-day-battles">
-      <div>
-        {total !== null ? (
+      <div className="legend-day-battles-head">
+        <span className="dash-label">{noun === "attack" ? "Attacks" : "Defenses"}</span>
+        <span className="dash-muted">
+          {count ?? "–"} of {SLOTS}
+        </span>
+        {total !== null && count ? (
           <b className={total > 0 ? "positive" : total < 0 ? "negative" : ""}>
             {signed(total)}
           </b>
-        ) : (
-          <b>–</b>
-        )}
-        <span className="dash-muted">{shown}</span>
+        ) : null}
       </div>
       <ol className="dash-star-boxes" aria-label={shown}>
         {Array.from({ length: SLOTS }, (_, index) => {

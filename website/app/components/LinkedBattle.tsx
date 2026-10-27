@@ -110,7 +110,7 @@ export function LinkedBattle({
   );
 }
 
-function linkedBattleId(hash: string): string | null {
+export function linkedBattleId(hash: string): string | null {
   if (!hash.startsWith("#battle-")) return null;
   try {
     return decodeURIComponent(hash.slice("#battle-".length));

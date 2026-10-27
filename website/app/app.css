@@ -178,21 +178,12 @@ h3 {
   background: #fff;
   border-color: #a8b6c8;
 }
-
-.search-panel,
-.saved-summary,
 .metric-card,
-.notice,
-.quality-section {
+.notice {
   border: 1px solid #d5deea;
   border-radius: 0.8rem;
   background: #fff;
   box-shadow: 0 0.35rem 1.4rem rgba(25, 53, 80, 0.06);
-}
-
-.search-panel {
-  margin-bottom: 2.4rem;
-  padding: 1.2rem;
 }
 
 .search-form label {
@@ -221,26 +212,6 @@ h3 {
   border-top: 1px solid #e0e7f0;
 }
 
-.result-list {
-  display: grid;
-  gap: 0.6rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.result-list li {
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.8rem;
-  border: 1px solid #d5deea;
-  border-radius: 0.55rem;
-}
-
-.content-section {
-  margin-top: 2.4rem;
-}
-
 .section-heading {
   align-items: flex-start;
   justify-content: space-between;
@@ -250,18 +221,9 @@ h3 {
 .section-heading > * {
   min-width: 0;
 }
-
-.observation-note,
-.muted,
-.subvalue {
+.muted {
   color: #53657c;
   font-size: 0.9rem;
-}
-
-.observation-note {
-  max-width: 30ch;
-  margin: 0;
-  text-align: right;
 }
 
 .table-wrap {
@@ -305,8 +267,7 @@ h3 {
   display: block;
 }
 
-.tag,
-.subvalue {
+.tag {
   display: block;
 }
 
@@ -314,23 +275,6 @@ h3 {
   color: #53657c;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88rem;
-}
-
-.tag-large {
-  font-size: 1rem;
-}
-
-.table-detail {
-  display: block;
-  margin-top: 0.25rem;
-  color: #42546b;
-  font-size: 0.78rem;
-}
-
-.state-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
 }
 
 .notice {
@@ -351,81 +295,12 @@ h3 {
   margin-top: 2rem;
 }
 
-.quality-section {
-  margin-top: 2.5rem;
-  padding: 1.2rem;
-}
-
-.quality-summary {
-  margin-top: 0.8rem;
-}
-
-.saved-summary {
-  padding: 1.2rem;
-}
-
-.stats-grid,
-.metrics-grid {
-  display: grid;
-  gap: 0.9rem;
-}
-
-.stats-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.stats-grid > div,
-.compact-stats > div {
-  min-width: 0;
-  padding: 0.8rem;
-  background: #f5f7fb;
-  border-radius: 0.5rem;
-}
-
-.stats-grid dt,
-.compact-stats dt,
-.detail-list dt {
-  color: #53657c;
-  font-size: 0.8rem;
-  font-weight: 750;
-}
-
-.stats-grid dd,
-.compact-stats dd,
-.detail-list dd {
-  margin: 0.2rem 0 0;
-  font-weight: 750;
-}
-
 .day-range {
   color: #53657c;
 }
 
-.metrics-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 1.2rem;
-}
-
 .metric-card {
   padding: 1.1rem;
-}
-
-.compact-stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.6rem;
-  margin: 1rem 0;
-}
-
-.detail-list {
-  display: grid;
-  gap: 0.8rem;
-  margin: 1.2rem 0 0;
-}
-
-.detail-list > div {
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid #e0e7f0;
 }
 
 .page-footer {
@@ -554,15 +429,6 @@ body {
     align-items: flex-start;
     flex-direction: column;
   }
-
-  .observation-note {
-    text-align: left;
-  }
-
-  .stats-grid,
-  .metrics-grid {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 @media (max-width: 34rem) {
@@ -578,12 +444,6 @@ body {
   .search-controls input,
   .search-controls .button {
     width: 100%;
-  }
-
-  .stats-grid,
-  .metrics-grid,
-  .compact-stats {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -620,7 +480,6 @@ body {
 }
 
 .search-controls button,
-.saved-data-panel button,
 .search-controls input + button {
   min-height: 2.8rem;
   padding: 0.6rem 1rem;
@@ -632,13 +491,11 @@ body {
   font-weight: 750;
 }
 
-.search-controls button:hover,
-.saved-data-panel button:hover {
+.search-controls button:hover {
   background: #145c8d;
 }
 
-.search-controls button:disabled,
-.saved-data-panel button:disabled {
+.search-controls button:disabled {
   cursor: wait;
   opacity: 0.62;
 }
@@ -649,22 +506,18 @@ body {
   border-color: #a8b6c8;
 }
 
-.empty-state,
-.saved-data-panel,
-.quality-panel {
+.empty-state {
   padding: 1.1rem;
   border: 1px solid #d5deea;
   border-radius: 0.8rem;
   background: #fff;
 }
 
-.empty-state p,
-.quality-panel p {
+.empty-state p {
   margin-bottom: 0;
 }
 
-.search-result-list,
-.quality-list {
+.search-result-list {
   display: grid;
   gap: 0.7rem;
   margin: 0;
@@ -672,8 +525,7 @@ body {
   list-style: none;
 }
 
-.search-result,
-.quality-list li {
+.search-result {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -753,15 +605,6 @@ body {
   margin: 0;
   font-weight: 750;
   text-align: right;
-}
-
-.quality-list li {
-  justify-content: flex-start;
-}
-
-.quality-list p {
-  margin: 0.25rem 0 0;
-  color: #53657c;
 }
 
 .narrow-page {

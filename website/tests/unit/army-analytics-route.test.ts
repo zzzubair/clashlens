@@ -1047,7 +1047,7 @@ describe("army analytics variant rows", () => {
     mocks.createPythonClient.mockReset();
   });
 
-  it("opens a variant on a tap, loading its most-used armies", async () => {
+  it("opens an army in a sheet with every variant closed, Other last", async () => {
     const row = (key: string, label: string, usageCount: number) => ({
       key,
       label,
@@ -1095,26 +1095,34 @@ describe("army analytics variant rows", () => {
     await vi.waitFor(() => expect(router.state.initialized).toBe(true));
     const html = () => renderToString(createElement(RouterProvider, { router }));
     html();
-    // The chosen sort, then the open army: the page's first two empty states.
-    const [, openArmy] = page.states.flatMap((state, index) =>
-      state === null ? [index] : [],
-    );
+    // Sorted by Name on the default page, which opening the army keeps.
+    page.states[page.states.indexOf(null)] = { column: "name", direction: "ascending" };
+    const sorted = (markup: string) =>
+      markup.match(/data-column="([^"]+)" aria-sort="([^"]+)"/)?.slice(1);
     const closed = html();
+    expect(sorted(closed)).toEqual(["name", "ascending"]);
     expect(closed).toContain('title="Show Thrower variants"');
     expect(closed).toContain('aria-expanded="false"');
     expect(closed).not.toContain("<dialog");
 
-    // The sheet opens on its most-used variant, loading its armies; Other is last.
-    page.states[openArmy] = "army-type:3";
+    // The sheet opens with every variant closed; Other is last.
+    // It is a step in history at the same address, so Back closes it.
+    await router.navigate("/analytics/armies", { state: { army: "army-type:3" } });
     const open = html();
+    expect(sorted(open)).toEqual(["name", "ascending"]);
     expect(open).toContain('aria-expanded="true"');
     expect(open).toContain("<dialog");
     expect(renderedText(open)).toContain(
       "Variants Each variant’s share of Thrower attacks. Revenge Thrower 75.0% 3-star 0.0% · 26.0 trophies · 6 battles",
     );
-    expect(open).toContain('title="Hide Revenge Thrower armies"');
+    expect(open).toContain('title="Show Revenge Thrower armies"');
     expect(open).toContain('title="Show Other Thrower armies"');
-    expect(open).toContain("Loading armies…");
+    expect(open).not.toContain("Loading armies…");
+
+    await router.navigate(-1);
+    const back = html();
+    expect(back).not.toContain("<dialog");
+    expect(sorted(back)).toEqual(["name", "ascending"]);
   });
 });
 

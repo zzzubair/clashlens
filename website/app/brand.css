@@ -194,14 +194,14 @@
 
 /* ---------- Tabs: a sunken track with the current tab lifted out of it ---------- */
 
-:root :is(.leaderboard-view-switch, .segmented-control) {
+:root .leaderboard-view-switch {
   padding: 0.25rem;
   background: var(--cl-panel);
   border: 1px solid var(--cl-border);
   border-radius: calc(var(--cl-radius) + 2px);
   box-shadow: none;
 }
-:root :is(.leaderboard-view-switch .button, .segmented-control span) {
+:root .leaderboard-view-switch .button {
   color: var(--cl-muted);
   background: transparent;
   border: 0;
@@ -210,11 +210,7 @@
   text-shadow: none;
   font-weight: 800;
 }
-:root
-  :is(
-    .leaderboard-view-switch .button[aria-current="page"],
-    .segmented-control input:checked + span
-  ) {
+:root .leaderboard-view-switch .button[aria-current="page"] {
   color: var(--cl-ink);
   background: var(--cl-surface);
   border-color: transparent;
@@ -223,11 +219,7 @@
     inset 0 0 0 1px var(--cl-outline);
   font-weight: 800;
 }
-:root[data-theme="dark"]
-  :is(
-    .leaderboard-view-switch .button[aria-current="page"],
-    .segmented-control input:checked + span
-  ) {
+:root[data-theme="dark"] .leaderboard-view-switch .button[aria-current="page"] {
   background: var(--cl-raised);
 }
 
@@ -239,7 +231,6 @@
     .standings-board,
     .season-summary,
     .metric-card,
-    .search-panel,
     .notice,
     .empty-state,
     .form-panel,
@@ -272,11 +263,9 @@
     .home-leaderboard,
     .standings-board,
     .season-summary,
-    .search-panel,
     .form-panel,
     .group-card,
     .compare-board,
-    .analytics-kpis,
     .search-results
   )
   :is(
@@ -419,7 +408,7 @@
     [aria-pressed="true"],
     [aria-selected="true"]
   ) {
-  color: var(--cl-ink);
+  color: var(--cl-action-text);
   background: var(--cl-action-soft);
   border-color: var(--cl-action-border);
 }
@@ -471,7 +460,7 @@
 }
 :root .meter > span {
   display: block;
-  width: var(--value, 0%);
+  width: min(var(--value, 0%), 100%);
   height: 100%;
   background: var(--cl-brand-fill);
   background: linear-gradient(90deg, var(--cl-brand-yellow), var(--cl-brand-orange));

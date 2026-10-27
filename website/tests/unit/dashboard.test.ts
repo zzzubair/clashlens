@@ -471,8 +471,8 @@ describe("Legend day card", () => {
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
     expect(html).toContain("Next Reset #95 – #760 estimate · narrows as the day goes on");
-    expect(html).toContain("+71 2 attacks");
-    expect(html).toContain("−5 1 defense");
+    expect(html).toContain("Attacks 2 of 8 +71");
+    expect(html).toContain("Defenses 1 of 8 −5");
     expect(html).toContain("7 defenses remain · auto defense −21 each");
   });
 
@@ -480,7 +480,8 @@ describe("Legend day card", () => {
     const html = render(
       emptyDay({ attacks: 3, defenses: 2, openDefenses: 6, battles: [] }),
     );
-    expect(html).toContain("– 3 attacks");
+    expect(html).toContain("Attacks 3 of 8 ");
+    expect(html).not.toContain("Attacks 3 of 8 –");
     expect(html).toContain("6 defenses remain");
     expect(html).not.toContain("auto defense");
     expect(render(null)).toContain("Trophies 5,696 Net today –");
@@ -490,9 +491,9 @@ describe("Legend day card", () => {
     // Today's battles not saved yet, or the player page not read at all.
     for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
       const html = render(day);
-      expect(html).toContain("– – attacks");
-      expect(html).toContain("– – defenses");
-      expect(html).not.toContain("0 attacks");
+      expect(html).toContain("Attacks – of 8");
+      expect(html).toContain("Defenses – of 8");
+      expect(html).not.toContain("0 of 8");
       expect(html).toContain("Trophies 5,696");
       expect(html).toContain("Now #318");
       expect(html).toContain("Next Reset #95 – #760");

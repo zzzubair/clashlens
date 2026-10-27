@@ -399,8 +399,12 @@
   color: var(--cl-action-text);
   font-size: 2.2rem;
 }
+/* Huge counts scroll inside the table instead of widening the page; its
+   screen-reader labels stay inside it too. */
 .player-page .season-summary-table {
+  position: relative;
   margin-top: 0.9rem;
+  overflow-x: auto;
 }
 .player-page .season-summary-table table {
   width: 100%;
@@ -795,6 +799,36 @@
   font-size: 0.8rem;
   line-height: 1.4;
 }
+.player-page .log-note > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+.player-page .log-note > summary::-webkit-details-marker {
+  display: none;
+}
+/* An "i" in a ring: there is more to read. */
+.player-page .log-note > summary::after {
+  display: inline-grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  content: "i";
+  font-size: 0.65rem;
+  font-weight: 900;
+}
+.player-page .log-note[open] > summary {
+  color: var(--cl-ink);
+}
+.player-page .log-note > p {
+  margin: 0 0 0.25rem;
+}
 .player-page .log-open > .section-note strong {
   color: var(--cl-ink);
 }
@@ -847,6 +881,10 @@
 .player-page .battle-side {
   min-width: 0;
 }
+/* Attacks | Defenses for an open day on a phone; wider screens show both. */
+.player-page .battle-switch {
+  display: none;
+}
 .player-page .battle-side h3 {
   display: flex;
   flex-wrap: wrap;
@@ -869,23 +907,24 @@
 }
 
 /* One battle: stars and destruction, opponent and time, the trophy change
-   and a toggle for the army, tag and Copy army. */
+   and a toggle that covers the whole line for the army, tag, their log and
+   Copy army. */
 .player-page .battle-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: 2.6rem minmax(0, 1fr) auto 2.5rem;
-  grid-template-areas:
-    "score who change toggle"
-    "more more more more";
-  align-items: center;
-  column-gap: 0.5rem;
-  min-height: 2.75rem;
-  padding-left: 0.1rem;
   border-top: 1px solid var(--cl-border);
   scroll-margin-block: 5rem;
   transition:
     background-color 0.5s ease-out,
     box-shadow 0.5s ease-out;
+}
+.player-page .battle-line {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr) auto 3.75rem;
+  grid-template-areas: "score who change toggle";
+  align-items: center;
+  column-gap: 0.5rem;
+  min-height: 2.75rem;
+  padding-left: 0.1rem;
 }
 .player-page .battle-score {
   grid-area: score;
@@ -912,23 +951,16 @@
 .player-page .battle-who {
   grid-area: who;
   display: grid;
+  gap: 0.15rem;
   min-width: 0;
   line-height: 1.2;
 }
-.player-page .battle-link {
+.player-page .battle-name {
   overflow: hidden;
-  color: var(--cl-ink);
   font-size: 0.9rem;
   font-weight: 700;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-@media (hover: hover) and (pointer: fine) {
-  .player-page .battle-link:hover {
-    color: var(--cl-action-text);
-    text-decoration: underline;
-  }
 }
 .player-page .battle-who small {
   display: flex;
@@ -970,6 +1002,12 @@
   box-shadow: none;
   cursor: pointer;
 }
+.player-page .battle-toggle::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  content: "";
+}
 .player-page .battle-toggle svg {
   width: 1rem;
   height: 1rem;
@@ -987,22 +1025,40 @@
   transform: rotate(180deg);
 }
 .player-page .battle-toggle-word {
-  display: none;
   font-size: 0.75rem;
   font-weight: 800;
 }
+.player-page .battle-toggle:active::after {
+  background: var(--cl-panel);
+}
+/* The press shades the line instead of shrinking the button, which would pull
+   the covering layer in with it; the focus ring circles the whole line too. */
+.player-page .battle-line .battle-toggle:active {
+  transform: none;
+}
+.player-page .battle-line .battle-toggle:focus-visible {
+  outline: none;
+}
+.player-page .battle-line .battle-toggle:focus-visible::after {
+  outline: 3px solid var(--cl-orange);
+  outline-offset: -3px;
+}
 @media (hover: hover) and (pointer: fine) {
-  .player-page .battle-toggle:hover {
+  .player-page .battle-line:hover .battle-toggle {
     color: var(--cl-action-text);
-    background: var(--cl-action-soft);
+  }
+  .player-page .battle-line:hover .battle-toggle::after {
+    background: color-mix(in srgb, var(--cl-panel) 60%, transparent);
   }
 }
 .player-page .battle-more {
-  grid-area: more;
   display: grid;
   gap: 0.5rem;
   min-width: 0;
   padding: 0.1rem 0 0.7rem 3.1rem;
+}
+.player-page .battle-more[hidden] {
+  display: none;
 }
 .player-page .battle-more p {
   display: flex;
@@ -1016,6 +1072,12 @@
   color: var(--cl-muted);
   font-size: 0.8rem;
   font-weight: 700;
+}
+.player-page .battle-link {
+  margin-right: auto;
+  color: var(--cl-action-text);
+  font-size: 0.8rem;
+  font-weight: 800;
 }
 .player-page .battle-copy {
   display: inline-flex;
@@ -1087,16 +1149,13 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 1.5rem;
   }
-  .player-page .battle-row {
+  .player-page .battle-line {
     grid-template-columns: 4.25rem minmax(0, 1fr) auto 4.25rem;
   }
   .player-page .battle-score {
     display: flex;
     align-items: baseline;
     gap: 0.35rem;
-  }
-  .player-page .battle-toggle-word {
-    display: inline;
   }
   .player-page .battle-more,
   .player-page .battle-missing {
@@ -1107,6 +1166,71 @@
 /* Phones: today's day comes before the Season summary. The log section
    steps aside so today's card can be ordered on its own. */
 @media (max-width: 47.99rem) {
+  /* An open day's switch carries its totals. */
+  .player-page .log-day[open] > .log-row .log-battles {
+    display: none;
+  }
+  .player-page .battle-switch {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
+    margin: 0;
+    padding: 3px;
+    background: var(--cl-panel);
+    border: 1px solid var(--cl-border);
+    border-radius: var(--cl-radius);
+  }
+  .player-page .battle-switch label {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-height: 2.5rem;
+    color: var(--cl-muted);
+    border-radius: 9px;
+    font-size: 0.875rem;
+    font-weight: 800;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .player-page .battle-switch input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .player-page .battle-switch label:has(:checked) {
+    color: var(--cl-ink);
+    background: var(--cl-surface);
+    box-shadow:
+      0 1px 3px rgb(13 22 38 / 0.12),
+      inset 0 0 0 1px var(--cl-outline);
+  }
+  :root[data-theme="dark"] .player-page .battle-switch label:has(:checked) {
+    background: var(--cl-raised);
+  }
+  .player-page .battle-switch label:has(:focus-visible) {
+    outline: 3px solid var(--cl-orange);
+    outline-offset: -3px;
+  }
+  .player-page
+    .log-open:has(.battle-switch [value="defense"]:checked)
+    .battle-side-attack,
+  .player-page
+    .log-open:has(.battle-switch [value="attack"]:checked)
+    .battle-side-defense {
+    display: none;
+  }
+  /* The switch names the list and its total. */
+  .player-page .log-open .battle-side h3 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   .player-page:has(> .legend-log .log-today) {
     display: flex;
     flex-direction: column;
@@ -1120,7 +1244,6 @@
   }
   .player-page > .legend-log > .log-today {
     order: 0;
-    margin-bottom: 2rem;
   }
   .player-page > .legend-log:has(.log-today) > h2 {
     margin-top: 2rem;

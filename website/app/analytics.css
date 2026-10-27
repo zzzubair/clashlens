@@ -10,6 +10,23 @@
 
 /* ---------- Heading and view switch ---------- */
 
+/* Phones go straight to the list: the intro hides, the record counts move under
+   the list and the rows' arrows say they open. */
+@media (max-width: 47.99rem) {
+  .analytics-head p,
+  .analytics-tap-hint {
+    display: none;
+  }
+  .analytics-results {
+    display: flex;
+    flex-direction: column;
+  }
+  .analytics-results > .analytics-coverage {
+    order: 1;
+    margin-top: 0.75rem;
+  }
+}
+
 .analytics-head p {
   order: 1;
 }
@@ -326,26 +343,22 @@
 [data-ranked] .analytics-rank::before {
   content: counter(analytics-rank);
 }
-[data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank {
-  color: #111318;
-}
+/* The top three: a medal and a stripe down the row's edge in its colour. */
 [data-ranked] .analytics-row:nth-child(1) {
-  background: color-mix(in srgb, var(--cl-medal-gold) 9%, transparent);
-}
-[data-ranked] .analytics-row:nth-child(1) .analytics-rank {
-  background: var(--cl-medal-gold);
+  --podium: var(--cl-medal-gold);
 }
 [data-ranked] .analytics-row:nth-child(2) {
-  background: color-mix(in srgb, var(--cl-silver) 9%, transparent);
-}
-[data-ranked] .analytics-row:nth-child(2) .analytics-rank {
-  background: var(--cl-silver);
+  --podium: var(--cl-silver);
 }
 [data-ranked] .analytics-row:nth-child(3) {
-  background: color-mix(in srgb, var(--cl-bronze) 9%, transparent);
+  --podium: var(--cl-bronze);
 }
-[data-ranked] .analytics-row:nth-child(3) .analytics-rank {
-  background: var(--cl-bronze);
+[data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank {
+  color: #111318;
+  background: var(--podium);
+}
+[data-ranked] .analytics-row:nth-child(-n + 3) > :first-child {
+  box-shadow: inset 3px 0 0 var(--podium);
 }
 
 /* Name: rank, unit art, the name and its variants, an arrow when it opens. */
@@ -462,8 +475,14 @@
   .analytics-results-table tbody > tr {
     flex-wrap: wrap;
     align-items: start;
-    gap: 0.55rem 0.75rem;
-    padding: 0.85rem 1rem 0.95rem;
+    gap: 0.4rem 0.9rem;
+    padding: 0.7rem 1rem 0.75rem;
+  }
+  [data-ranked] .analytics-row:nth-child(-n + 3) {
+    box-shadow: inset 3px 0 0 var(--podium);
+  }
+  [data-ranked] .analytics-row:nth-child(-n + 3) > :first-child {
+    box-shadow: none;
   }
   .analytics-results-table tbody th {
     display: block;
@@ -475,48 +494,69 @@
     flex: 1;
     justify-content: space-between;
   }
+  /* The other numbers share one short line: label, then value. */
   .analytics-results-table td {
-    display: grid;
-    flex: 1 1 0;
-    align-content: start;
+    display: flex;
+    flex: 0 1 auto;
+    align-items: baseline;
+    gap: 0.3rem;
     min-width: 0;
     padding: 0;
+    font-size: 0.85rem;
     order: 2;
   }
   .analytics-results-table td::before {
     content: attr(data-label);
     color: var(--cl-muted);
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    line-height: 1.3;
   }
-  /* Usage: the big number beside its bar. */
-  .analytics-results-table td[data-column="usage-rate"] {
-    display: flex;
+  /* The sorted number leads, big beside its bar; sorted by name or Usage,
+     Usage leads. The rest share the line under it. */
+  .analytics-results-table:not([data-sort="usage-rate"], [data-sort="name"])
+    td[data-sorted],
+  .analytics-results-table:is([data-sort="usage-rate"], [data-sort="name"])
+    td[data-column="usage-rate"] {
     flex: 1 1 100%;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.6rem;
     order: 1;
   }
-  .analytics-results-table td[data-column="usage-rate"]::before {
-    content: none;
-  }
-  .analytics-results-table td[data-column="usage-rate"] .analytics-value {
+  .analytics-results-table:not([data-sort="usage-rate"], [data-sort="name"])
+    td[data-sorted]
+    .analytics-value,
+  .analytics-results-table:is([data-sort="usage-rate"], [data-sort="name"])
+    td[data-column="usage-rate"]
+    .analytics-value {
     min-width: 4.2ch;
-    font-size: 1.6rem;
+    color: var(--cl-ink);
+    font-family: var(--cl-font-heading);
+    font-size: 1.45rem;
+    font-weight: 400;
     line-height: 1;
   }
-  .analytics-results-table td[data-column="usage-rate"] .meter {
+  .analytics-results-table td[data-column] .analytics-value {
+    font-family: var(--cl-font);
+    font-size: inherit;
+    font-weight: 800;
+    letter-spacing: 0;
+  }
+  .analytics-results-table td .meter {
+    display: none;
+  }
+  .analytics-results-table:not([data-sort="usage-rate"], [data-sort="name"])
+    td[data-sorted]
+    .meter,
+  .analytics-results-table:is([data-sort="usage-rate"], [data-sort="name"])
+    td[data-column="usage-rate"]
+    .meter {
+    display: block;
     flex: 1;
     height: 0.5rem;
   }
-  /* Misses stay under Avg. trophies; the other notes wait for a wider screen. */
+  /* Notes such as misses wait for the army's sheet or a wider screen. */
   .analytics-note-value {
     display: none;
-  }
-  .analytics-results-table td[data-column="average-trophies"] .analytics-note-value {
-    display: block;
-    font-size: 0.72rem;
   }
   /* A phone keeps 3-star, the view's second number and Battles, plus the sort. */
   .analytics-results-table
@@ -591,6 +631,10 @@
   .analytics-results-table td[data-column="usage-rate"] .meter {
     width: 6.5rem;
     margin: 0.35rem 0 0 auto;
+  }
+  /* The table's headings name each column, so only Usage keeps a bar. */
+  .analytics-results-table td:not([data-column="usage-rate"]) .meter {
+    display: none;
   }
   .analytics-results-table [data-column="usage-count"] {
     padding-right: 1rem;
@@ -914,6 +958,9 @@
   color: var(--cl-muted);
   font-size: 0.8rem;
 }
+.analytics-examples-more {
+  justify-self: start;
+}
 .analytics-examples-list {
   display: grid;
   margin: 0;
@@ -924,6 +971,9 @@
   display: grid;
   gap: 0.5rem;
   padding: 0.75rem 0;
+}
+.analytics-examples-list > li[hidden] {
+  display: none;
 }
 .analytics-examples-list > li + li {
   border-top: 1px solid var(--cl-border);

@@ -50,8 +50,8 @@ body {
   --cl-header-muted: #9aabc4;
   --cl-header-soft: #18233a;
   --cl-action-text: #ffb547;
-  --cl-action-soft: #2b2a2f;
-  --cl-action-border: #6b4a22;
+  --cl-action-soft: #3a2c17;
+  --cl-action-border: #7a5320;
   --cl-gold: #f6c445;
   --cl-sky: #6cc4ff;
   --cl-sky-soft: #15304d;
@@ -173,9 +173,7 @@ main {
   }
 }
 .lede,
-.table-detail,
-.day-range,
-.quality-list p {
+.day-range {
   color: var(--cl-muted);
 }
 :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
@@ -191,12 +189,6 @@ main {
   outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
 }
-.segmented-control input:focus-visible + span {
-  outline-color: var(--cl-action-text);
-}
-.segmented-control input:checked + span {
-  box-shadow: inset 0 0 0 1px var(--cl-action-text);
-}
 .button[aria-current="page"] {
   border-color: var(--cl-action-border);
 }
@@ -207,15 +199,6 @@ main {
 .search-controls,
 .home-page .search-controls {
   border-color: var(--cl-input-border);
-}
-.fixed-field,
-.fixed-field dd {
-  margin: 0;
-}
-.fixed-value {
-  color: var(--cl-ink);
-  font-weight: 650;
-  overflow-wrap: anywhere;
 }
 .table-wrap {
   max-width: 100%;
@@ -265,22 +248,12 @@ main {
 [data-theme="dark"] .field-error {
   color: #ffb2b2;
 }
-[data-theme="dark"] .empty-chart span {
-  background: var(--cl-accent);
-}
-[data-theme="dark"] .empty-chart span:nth-child(2) {
-  background: var(--cl-accent-contrast);
-}
-[data-theme="dark"] .empty-chart span:nth-child(3) {
-  background: var(--cl-action);
-}
 
 @media (forced-colors: active) {
   .home-page .search-controls:focus-within,
   :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
     outline-color: Highlight;
   }
-  .segmented-control input:checked + span,
   .button[aria-current="page"] {
     outline: 2px solid Highlight;
   }

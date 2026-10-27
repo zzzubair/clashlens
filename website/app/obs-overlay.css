@@ -699,7 +699,6 @@ html.obs-page body {
   font-size: 16px;
   background: var(--cl-brand-fill);
   color: var(--cl-brand-night);
-  border: 2px solid var(--cl-brand-night);
 }
 .obs-settings .obs-help {
   color: var(--cl-muted);
@@ -724,16 +723,15 @@ html.obs-page body {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 12px;
   padding: 9px 12px;
   cursor: pointer;
   background: var(--cl-surface);
 }
 .obs-settings .obs-player:has(input:checked) {
-  border-color: var(--cl-card-line);
-  background: var(--cl-panel);
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  border-color: var(--cl-action-border);
+  background: var(--cl-action-soft);
 }
 .obs-settings .obs-player input,
 .obs-settings .obs-checks input,
@@ -755,7 +753,7 @@ html.obs-page body {
   font-weight: 900;
   border-radius: 999px;
   padding: 1px 9px;
-  border: 2px solid currentColor;
+  border: 1px solid currentColor;
   white-space: nowrap;
   color: var(--cl-muted);
 }
@@ -777,7 +775,7 @@ html.obs-page body {
   width: 86px;
   font: 800 15px var(--cl-font);
   padding: 5px 8px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-surface);
   color: var(--cl-ink);
@@ -803,9 +801,15 @@ html.obs-page body {
 .obs-settings .obs-fonts {
   grid-template-columns: repeat(3, 1fr);
 }
+/* Phones: the four layouts two by two, so their names fit. */
+@media (max-width: 37.5rem) {
+  .obs-settings .obs-shapes {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 .obs-settings :is(.obs-shape, .obs-font) {
   position: relative;
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 12px;
   text-align: center;
   cursor: pointer;
@@ -820,9 +824,8 @@ html.obs-page body {
   padding: 8px 6px 6px;
 }
 .obs-settings :is(.obs-shape, .obs-font):has(input:checked) {
-  border-color: var(--cl-card-line);
-  background: var(--cl-panel);
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  border-color: var(--cl-action-border);
+  background: var(--cl-action-soft);
 }
 .obs-settings :is(.obs-shape, .obs-font):has(input:focus-visible) {
   outline: 3px solid var(--cl-brand-orange);
@@ -863,10 +866,11 @@ html.obs-page body {
 }
 .obs-settings .obs-seg {
   display: inline-flex;
-  border: 2px solid var(--cl-card-line);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  gap: 2px;
+  padding: 3px;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: 12px;
 }
 .obs-settings .obs-seg label {
   position: relative;
@@ -874,15 +878,18 @@ html.obs-page body {
   font-weight: 800;
   font-size: 14px;
   cursor: pointer;
-  background: var(--cl-surface);
-  border-right: 2px solid var(--cl-card-line);
-}
-.obs-settings .obs-seg label:last-child {
-  border-right: 0;
+  color: var(--cl-muted);
+  border-radius: 9px;
 }
 .obs-settings .obs-seg label:has(input:checked) {
-  background: var(--cl-brand-fill);
-  color: var(--cl-brand-night);
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  box-shadow:
+    0 1px 3px rgb(13 22 38 / 0.12),
+    inset 0 0 0 1px var(--cl-outline);
+}
+:root[data-theme="dark"] .obs-settings .obs-seg label:has(input:checked) {
+  background: var(--cl-raised);
 }
 .obs-settings .obs-seg label:has(input:focus-visible) {
   outline: 3px solid var(--cl-brand-orange);
@@ -936,7 +943,7 @@ html.obs-page body {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 12px;
   overflow: hidden;
   background: #333;
@@ -1108,7 +1115,7 @@ html.obs-page body {
 .obs-settings .obs-place select {
   font: 800 14px var(--cl-font);
   padding: 6px 8px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-surface);
   color: var(--cl-ink);
@@ -1149,7 +1156,7 @@ html.obs-page body {
   min-width: 0;
   font: 600 13px var(--cl-font-mono);
   padding: 8px 10px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-panel);
   color: var(--cl-ink);
@@ -1162,7 +1169,7 @@ html.obs-page body {
 .obs-settings .obs-dim {
   flex: 1;
   background: var(--cl-panel);
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 10px;
   padding: 6px 10px;
 }
@@ -1174,8 +1181,6 @@ html.obs-page body {
   font-size: 12px;
   font-weight: 800;
   color: var(--cl-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 .obs-settings ol.obs-steps {
   margin: 12px 0 0;
@@ -1187,8 +1192,8 @@ html.obs-page body {
 .obs-settings kbd {
   font: 700 13px var(--cl-font);
   background: var(--cl-panel);
-  border: 2px solid var(--cl-border);
-  border-bottom-width: 3px;
+  border: 1px solid var(--cl-outline);
+  border-bottom-width: 2px;
   border-radius: 6px;
   padding: 0 6px;
 }
@@ -1196,8 +1201,8 @@ html.obs-page body {
   margin-top: 12px;
   font-size: 13px;
   color: var(--cl-muted);
-  border-left: 4px solid var(--cl-brand-orange);
-  padding: 4px 10px;
+  border-left: 3px solid var(--cl-accent);
+  padding: 6px 12px;
   background: var(--cl-panel);
   border-radius: 0 8px 8px 0;
 }
@@ -1208,10 +1213,9 @@ html.obs-page body {
 }
 /* Start demo is the bright button; Stop demo turns dark. */
 :root .obs-settings .obs-demo[aria-pressed="true"] {
-  background: #1d1426;
-  color: #fff4e2;
-  border-color: #000;
-  box-shadow: 0 3px 0 #000;
+  background: var(--cl-ink);
+  color: var(--cl-paper);
+  border-color: transparent;
   text-shadow: none;
 }
 .obs-settings .obs-demonote {

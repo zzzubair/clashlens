@@ -186,37 +186,16 @@ h3 {
 .hero-copy,
 .section-note,
 .form-help,
-.muted,
-.observation-note,
-.subvalue {
+.muted {
   color: var(--cl-muted);
 }
-
-.search-panel,
-.saved-summary,
 .metric-card,
 .notice,
-.quality-section,
-.empty-state,
-.saved-data-panel,
-.quality-panel {
+.empty-state {
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-radius);
   background: var(--cl-surface);
   box-shadow: none;
-}
-
-.search-panel {
-  margin-bottom: 2rem;
-  padding: clamp(1.25rem, 4vw, 2.5rem);
-  box-shadow: var(--cl-shadow);
-}
-
-.search-panel h2 {
-  margin-bottom: 1rem;
-  font-size: 1.25rem;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .search-form label {
@@ -260,7 +239,6 @@ h3 {
 }
 
 .search-controls button,
-.saved-data-panel button,
 .button,
 .button.secondary,
 .button-primary,
@@ -312,8 +290,6 @@ h3 {
   color: var(--cl-on-action, white);
   background: var(--cl-action-hover);
 }
-
-.saved-data-panel button:hover,
 .button:hover,
 .button.secondary:hover,
 .button-primary:hover,
@@ -428,9 +404,7 @@ h3 {
   border-top: 1px solid var(--cl-border);
 }
 
-.search-result,
-.quality-list li,
-.result-list li {
+.search-result {
   padding: 0.85rem;
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-radius);
@@ -445,10 +419,6 @@ h3 {
 .hero-actions {
   margin-top: 1rem;
 }
-
-.stats-grid dt,
-.compact-stats dt,
-.detail-list dt,
 .metric-row dt {
   color: var(--cl-muted);
   font-family: var(--cl-font);
@@ -457,15 +427,7 @@ h3 {
   text-transform: none;
 }
 
-.stats-grid > div,
-.compact-stats > div {
-  background: var(--cl-paper);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-}
-
-.metric-row,
-.detail-list > div {
+.metric-row {
   border-color: var(--cl-border);
 }
 
@@ -584,8 +546,7 @@ h3 {
 /* Raised actions; pressing shrinks them and drops the shadow. */
 .search-controls button,
 .button:not(.secondary, .button-secondary),
-.button-primary,
-.filter-footer .button {
+.button-primary {
   box-shadow: var(--cl-button-shadow);
 }
 
@@ -595,24 +556,12 @@ h3 {
     box-shadow: none;
   }
 }
-
-.login-panel,
 .form-panel {
   padding: 1.25rem;
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-radius);
   background: var(--cl-surface);
   box-shadow: var(--cl-shadow);
-}
-
-.login-panel {
-  display: grid;
-  gap: 1rem;
-  justify-items: start;
-}
-
-.login-panel .button {
-  min-height: 3.25rem;
 }
 
 .stack-form {
@@ -630,8 +579,7 @@ h3 {
   gap: 0.4rem;
 }
 
-.form-field label,
-.fixed-field dt {
+.form-field label {
   color: var(--cl-ink);
   font-family: var(--cl-font);
   font-size: 0.84rem;
@@ -708,8 +656,6 @@ h3 {
   font-family: var(--cl-font-mono);
   font-size: 0.82rem;
 }
-
-.group-name-list,
 .group-card-list,
 .player-action-list {
   display: grid;
@@ -718,8 +664,6 @@ h3 {
   padding: 0;
   list-style: none;
 }
-
-.group-name-list li,
 .player-action-list li {
   display: flex;
   flex-wrap: wrap;
@@ -758,8 +702,6 @@ h3 {
   .page-back {
     width: calc(100% - 2rem);
   }
-
-  .login-panel,
   .form-panel {
     box-shadow: var(--cl-shadow);
   }

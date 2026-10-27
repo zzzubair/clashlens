@@ -141,6 +141,9 @@ describe("variant example armies panel", () => {
     expect(text).toContain("83.3% 5 attacks");
     expect(text).toContain("16.7% 1 attack");
     expect(text).toContain("Near-identical armies count as one.");
+    // The first group shows; the other waits for Show more.
+    expect(html.match(/<li hidden=""/g)).toHaveLength(1);
+    expect(text).toContain("Show 1 more army");
     expect(html).toContain('title="9 × Thrower"');
     expect(html).toContain("Wall Wrecker");
     expect(

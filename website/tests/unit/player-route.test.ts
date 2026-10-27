@@ -427,7 +427,7 @@ describe("player route historical independence", () => {
       historicalError: null,
     });
     expect(html.match(/<details class="log-day/g)).toHaveLength(28);
-    expect(html.match(/class="battle-link"/g)).toHaveLength(448);
+    expect(html.match(/class="battle-row /g)).toHaveLength(448);
     expect(html.match(/>Show army</g)).toHaveLength(448);
     expect(html).not.toContain("army-portraits");
     expect(html).toContain("Synthetic Clasher 448");
@@ -466,7 +466,7 @@ describe("player route historical independence", () => {
       },
       "",
     );
-    expect(html.match(/class="battle-link"/g)).toHaveLength(9);
+    expect(html.match(/class="battle-row /g)).toHaveLength(9);
     expect(html).toContain("Opponent 9");
     expect(html).not.toContain("Empty attack slot 9");
     expect(html).toContain(
@@ -1175,7 +1175,7 @@ describe("player day honesty", () => {
   }
 
   function dayHtml(html: string, key: string) {
-    return html.split(`id="legend-day-${key}"`)[1].split("</details>")[0];
+    return html.split(`id="legend-day-${key}"`)[1].split("</div></details>")[0];
   }
 
   const net = (value: string) =>

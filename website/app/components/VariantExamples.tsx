@@ -8,8 +8,8 @@ import { ArmyPortraits } from "./ArmyPortraits";
 
 /**
  * An opened army on the Armies page: a sheet over the list (from the bottom
- * on a phone, the side when wide) with the army's numbers, then its variants.
- * The first variant opens with its most-used armies; a tap opens another.
+ * on a phone, the side when wide) with the army's numbers, then its variants,
+ * all closed so every choice shows. A tap opens one with its most-used armies.
  */
 export function ArmyDetail({
   row,
@@ -27,7 +27,7 @@ export function ArmyDetail({
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [openVariant, setOpenVariant] = useState<string | null>(variants[0]?.key ?? null);
+  const [openVariant, setOpenVariant] = useState<string | null>(null);
   useEffect(() => {
     const sheet = dialog.current;
     if (sheet && !sheet.open) sheet.showModal();
@@ -198,7 +198,8 @@ function VariantExamples({
 }
 
 /** What decides the variant, then each group of alike armies with its
- * share of the variant's attacks, its attacks and Copy army. */
+ * share of the variant's attacks, its attacks and Copy army. The first group
+ * shows; the rest wait for Show more, so the next variant stays near. */
 export function ExampleArmies({
   id,
   label,
@@ -210,6 +211,8 @@ export function ExampleArmies({
   attacks: number;
   examples: ArmyVariantExamples;
 }) {
+  const [all, setAll] = useState(false);
+  const more = examples.groups.length - 1;
   return (
     <>
       <p className="analytics-examples-rule">
@@ -218,7 +221,7 @@ export function ExampleArmies({
       {examples.groups.length ? (
         <ol className="analytics-examples-list">
           {examples.groups.map((group, index) => (
-            <li key={group.armyShareCode}>
+            <li key={group.armyShareCode} hidden={index > 0 && !all}>
               <div className="analytics-example-head">
                 <p className="analytics-examples-share">
                   <strong>
@@ -248,6 +251,15 @@ export function ExampleArmies({
       ) : (
         <p className="analytics-examples-rule">No armies to show for these players.</p>
       )}
+      {more > 0 && !all ? (
+        <button
+          type="button"
+          className="button button-secondary analytics-examples-more"
+          onClick={() => setAll(true)}
+        >
+          Show {more} more {more === 1 ? "army" : "armies"}
+        </button>
+      ) : null}
     </>
   );
 }

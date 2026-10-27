@@ -521,7 +521,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await expect(page.getByText(/1,284 days old/)).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
   const nameless = page.locator(".battle-row-attack").nth(8);
-  await expect(nameless.locator(".battle-link")).toHaveText("#P0Y");
+  await expect(nameless.locator(".battle-name")).toHaveText("#P0Y");
   await expect(nameless.locator(".player-tag")).toHaveCount(0);
   for (const size of [
     { width: 320, height: 568 },
@@ -539,7 +539,10 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await refuseRefreshes(page);
   await openWorstCasePlayer(page);
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
-  const link = page.locator(".battle-link").first();
+  // The whole battle line opens it; their log is inside.
+  const row = page.locator(".battle-row").first();
+  await row.locator(".battle-toggle").click();
+  const link = row.locator(".battle-link");
   const href = (await link.getAttribute("href"))!;
   const target = new URL(href, page.url());
   const opponent = decodeURIComponent(target.pathname.split("/").pop()!);
