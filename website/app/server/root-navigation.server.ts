@@ -3,8 +3,10 @@ import {
   isAccountNotFoundError,
   readLoginIdentity,
 } from "./actions.server";
+import type { LoginIdentity } from "./auth-cookies.server";
 import { getWebsiteConfig } from "./config.server";
 import { createPythonClient } from "../services/python.server";
+import { PythonApiError } from "../services/python-response.server";
 
 export const NAVIGATION_ACCOUNT_TIMEOUT_MS = 250;
 
@@ -19,11 +21,17 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
   try {
     const config = getWebsiteConfig();
     if (!config.loginEnabled) return loggedOutNavigation();
-    const identity = await readLoginIdentity(
-      request,
-      config,
-      NAVIGATION_ACCOUNT_TIMEOUT_MS,
-    );
+    let identity: LoginIdentity | null;
+    try {
+      identity = await readLoginIdentity(request, config, NAVIGATION_ACCOUNT_TIMEOUT_MS);
+    } catch (cause) {
+      // The cookie is ours and unexpired, but the logout check did not answer
+      // in time: a busy moment, not a sign-out. The menu stays, without the
+      // account's name; every account page still checks for itself.
+      if (cause instanceof PythonApiError && cause.status >= 500)
+        return signedInNavigation(null, null);
+      throw cause;
+    }
     if (identity === null) return loggedOutNavigation();
 
     let accountLabel: string | null = null;
@@ -40,15 +48,22 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
       if (isAccountNotFoundError(cause)) return loggedOutNavigation();
       accountLabel = null;
     }
-    return {
-      loggedIn: true,
-      accountLabel,
-      accountUsername,
-      logoutIdempotencyKey: freshIdempotencyKey(),
-    };
+    return signedInNavigation(accountLabel, accountUsername);
   } catch {
     return loggedOutNavigation();
   }
+}
+
+function signedInNavigation(
+  accountLabel: string | null,
+  accountUsername: string | null,
+): RootNavigationData {
+  return {
+    loggedIn: true,
+    accountLabel,
+    accountUsername,
+    logoutIdempotencyKey: freshIdempotencyKey(),
+  };
 }
 
 function loggedOutNavigation(): RootNavigationData {

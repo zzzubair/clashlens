@@ -1,0 +1,93 @@
+import { beforeEach, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  getWebsiteConfig: vi.fn(),
+  isLoginRevoked: vi.fn(),
+  getAccount: vi.fn(),
+}));
+
+vi.mock("../../app/server/login-session.server", () => ({
+  isLoginRevoked: mocks.isLoginRevoked,
+}));
+
+vi.mock("../../app/server/config.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../app/server/config.server")>();
+  return { ...actual, getWebsiteConfig: mocks.getWebsiteConfig };
+});
+
+vi.mock("../../app/services/python.server", () => ({
+  createPythonClient: () => ({ getAccount: mocks.getAccount }),
+}));
+
+import {
+  LOGIN_COOKIE_NAME,
+  createLoginCookieValue,
+} from "../../app/server/auth-cookies.server";
+import { loadWebsiteConfig } from "../../app/server/config.server";
+import { loadRootNavigation } from "../../app/server/root-navigation.server";
+import { PythonApiError } from "../../app/services/python-response.server";
+
+const CONFIG = loadWebsiteConfig({
+  NODE_ENV: "test",
+  CLASHLENS_LOGIN_ENABLED: "true",
+  CLASHLENS_PUBLIC_ORIGIN: "https://clashlens.example",
+  CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+  CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+  CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+  CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
+  CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+});
+const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
+
+function signedInVisit(): Request {
+  const cookie = createLoginCookieValue(IDENTITY, CONFIG.loginSecret, Date.now());
+  return new Request("https://clashlens.example/leaderboards/tracked", {
+    headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
+  });
+}
+
+beforeEach(() => {
+  mocks.getWebsiteConfig.mockReturnValue(CONFIG);
+  mocks.isLoginRevoked.mockReset();
+  mocks.isLoginRevoked.mockResolvedValue(false);
+  mocks.getAccount.mockReset();
+  mocks.getAccount.mockResolvedValue({ displayName: "Nav Scout", username: "navscout" });
+});
+
+it("names the signed-in account", async () => {
+  expect(await loadRootNavigation(signedInVisit())).toMatchObject({
+    loggedIn: true,
+    accountLabel: "Nav Scout",
+    accountUsername: "navscout",
+  });
+});
+
+it("keeps a signed-in browser signed in when the logout check does not answer", async () => {
+  for (const status of [503, 502, 500]) {
+    mocks.isLoginRevoked.mockRejectedValueOnce(
+      new PythonApiError(status, { error: "timeout" }),
+    );
+    const navigation = await loadRootNavigation(signedInVisit());
+    expect(navigation).toMatchObject({
+      loggedIn: true,
+      accountLabel: null,
+      accountUsername: null,
+    });
+    expect(navigation.logoutIdempotencyKey).toEqual(expect.any(String));
+  }
+});
+
+it("signs out only on an answer: logged out, refused, no account, or no cookie", async () => {
+  mocks.isLoginRevoked.mockResolvedValueOnce(true);
+  expect((await loadRootNavigation(signedInVisit())).loggedIn).toBe(false);
+  mocks.isLoginRevoked.mockRejectedValueOnce(
+    new PythonApiError(403, { error: "caller_operation_not_authorized" }),
+  );
+  expect((await loadRootNavigation(signedInVisit())).loggedIn).toBe(false);
+  mocks.getAccount.mockRejectedValueOnce(
+    new PythonApiError(404, { error: "account_not_found" }),
+  );
+  expect((await loadRootNavigation(signedInVisit())).loggedIn).toBe(false);
+  const noCookie = new Request("https://clashlens.example/");
+  expect((await loadRootNavigation(noCookie)).loggedIn).toBe(false);
+});

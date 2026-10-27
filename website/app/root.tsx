@@ -374,6 +374,12 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
     ? new URLSearchParams(location.search).get("returnPath")
     : location.pathname;
   const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
+  // A busy moment can leave the account's name unread (see
+  // loadRootNavigation); the menu keeps the name it already showed.
+  const named = useRef<RootLoaderData | undefined>(undefined);
+  if (!data?.loggedIn) named.current = undefined;
+  else if (data.accountLabel !== null) named.current = data;
+  const account = named.current ?? data;
   return (
     <header className="site-header">
       <Link className="site-brand" to="/" aria-label="Clash Lens">
@@ -396,10 +402,10 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         <ThemeToggle />
         {data?.loggedIn ? (
           <AccountMenu
-            label={data.accountLabel ?? "Account"}
+            label={account?.accountLabel ?? "Account"}
             accountPath={
-              data.accountUsername
-                ? `/users/${encodeURIComponent(data.accountUsername)}`
+              account?.accountUsername
+                ? `/users/${encodeURIComponent(account.accountUsername)}`
                 : "/account"
             }
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
