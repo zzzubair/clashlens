@@ -5,8 +5,10 @@ players swept at the Reset, tracked as the record had it, unless the record
 decided their ended day's week below Legend I or unknown, and the players
 whose ended day's week it decided Legend I with that day's result saved
 since, never one still Live, read at or before the Reset, as a board ranks
-a player by their last reading before it, so a board never waits for a
-player its Reset did not sweep (``board_members``). A Monday's board ranks Sunday, whose week
+a player by their last reading before it, or with that day Complete, as a
+Complete day proves its own total (``first_readings``), so a board never
+waits for a player its Reset did not sweep (``board_members``). A Monday's
+board ranks Sunday, whose week
 was decided days earlier, so no board waits for a new week's decisions; a
 swept player whose week is not decided yet stays a member, so a board never
 loses its players while the record catches up. Before the record
@@ -69,15 +71,68 @@ def board_members(
               SELECT 1 FROM api_player_daily_logs AS day
               WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
                 AND day.state <> 'Live')
-          AND EXISTS (
+          AND (EXISTS (
               SELECT 1 FROM player_profile_versions AS version
               WHERE version.normalized_tag = player.normalized_tag
                 AND version.observed_at <= %(reset)s)
+            OR (SELECT day.state FROM api_player_daily_logs AS day
+                WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
+                ORDER BY day.version DESC LIMIT 1) = 'Complete')
         ORDER BY 1
         """.format(only="" if only is None else "AND week.player_id = %(only)s"),
         {"week": week_start(day), "swept": swept, "day": day, "reset": boundary_at,
          "only": only},
     ).fetchall()]
+
+
+# Whether the player was read in the ended day's week, from %(week)s, up to
+# its Reset at %(reset)s, as a new profile or a sighting of an older one.
+_READ_THIS_WEEK = """EXISTS (
+    SELECT 1 FROM player_profile_versions AS version_read
+    WHERE version_read.normalized_tag = {tag} AND version_read.observed_at <= %(reset)s
+      AND (version_read.observed_at >= %(week)s OR EXISTS (
+          SELECT 1 FROM player_profile_effects AS seen
+          WHERE seen.profile_version_id = version_read.id
+            AND seen.observed_at BETWEEN %(week)s AND %(reset)s)))"""
+
+
+def first_readings(
+    connection: Any, boundary_at: datetime, days: dict[int, int]
+) -> dict[int, tuple[Any, ...]]:
+    """Each player of ``days``, a player and their ranked day ending at the
+    Reset, whose day is Complete and who was not read in its week before
+    the Reset, with their first Legend I profile read after it, in any
+    source state, as ``boundary_manifest`` reads a newest profile. On 27
+    October 2026, 173 players promoted at the Monday Reset were read only
+    from 05:01: on Monday the game still showed them in Legend II. Their
+    Complete Mondays give their totals; the reading only names them."""
+    if not days:
+        return {}
+    return {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            f"""
+            SELECT member.player_id, earliest.id, earliest.observation_id, earliest.observed_at,
+                   earliest.profile_json, earliest.normalized_tag, earliest.name, earliest.trophies,
+                   earliest.eligibility_state, earliest.current_league_season_id
+            FROM unnest(%(players)s::bigint[], %(versions)s::bigint[])
+                AS member (player_id, version_id)
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = member.version_id AND ranked.state = 'Complete'
+            JOIN players AS player ON player.id = member.player_id
+            CROSS JOIN LATERAL (
+                SELECT * FROM player_profile_versions AS version
+                WHERE version.normalized_tag = player.normalized_tag
+                  AND version.observed_at > %(reset)s
+                  AND version.eligibility_state = 'eligible'
+                ORDER BY version.observed_at, version.id LIMIT 1
+            ) AS earliest
+            WHERE NOT {_READ_THIS_WEEK.format(tag="player.normalized_tag")}
+            """,
+            {"players": list(days), "versions": list(days.values()), "reset": boundary_at,
+             "week": week_start(boundary_at - RANKED_DAY_DURATION)},
+        ).fetchall()
+    }
 
 
 def joins_late(boundary_at: datetime) -> bool:

@@ -550,7 +550,12 @@ def _boundary_snapshot_status(
         """,
         (player_id, boundary_at, boundary_at),
     ).fetchone()
-    return "complete" if profile is not None else "missing"
+    # A player not read in the ended day's week before the Reset ranks by
+    # their Complete day, named by their first Legend I reading since.
+    return "complete" if profile is not None or boundary_at is not None and (
+        boundary_members.first_readings(
+            connection, boundary_at, {player_id: ranked_day_version_id})
+    ) else "missing"
 
 
 def _army_decode_selection(
