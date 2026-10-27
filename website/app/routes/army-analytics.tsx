@@ -369,8 +369,8 @@ const sortColumns = {
 } as const;
 type SortColumn = keyof typeof sortColumns;
 type TableSort = { column: SortColumn; direction: "ascending" | "descending" };
-// The phone's sort chips, most asked-for first.
-const chipOrder: SortColumn[] = [
+// The phone's Sort menu, most asked-for first.
+const menuOrder: SortColumn[] = [
   "usage-rate",
   "three-star-rate",
   "average-trophies",
@@ -403,7 +403,7 @@ function sortedRows(rows: ArmyRow[], sort: TableSort) {
   });
 }
 
-/** The sort a tap on a column's heading or chip asks for. */
+/** The sort a tap on a column's heading, or a pick in the Sort menu, asks for. */
 function nextSort(column: SortColumn, sort: TableSort): TableSort {
   const direction =
     sort.column === column
@@ -432,12 +432,10 @@ function SortButton({
   column,
   sort,
   onSort,
-  chip = false,
 }: {
   column: SortColumn;
   sort: TableSort;
   onSort: (sort: TableSort) => void;
-  chip?: boolean;
 }) {
   const next = nextSort(column, sort);
   const active = sort.column === column;
@@ -446,7 +444,6 @@ function SortButton({
       type="button"
       className="analytics-sort-button"
       data-column={column}
-      aria-pressed={chip ? active : undefined}
       aria-label={sortName(next)}
       title={sortName(next)}
       onClick={() => onSort(next)}
@@ -1010,18 +1007,39 @@ export default function ArmyAnalyticsRoute() {
               Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
             </span>
           </div>
-          <div className="tab-row analytics-sort-chips" role="group" aria-label="Sort">
-            {chipOrder
-              .filter((column) => columns.includes(column))
-              .map((column) => (
-                <SortButton
-                  key={column}
-                  column={column}
-                  sort={tableSort}
-                  onSort={setChosenSort}
-                  chip
-                />
-              ))}
+          {/* Phones and iPads: one Sort menu and its direction. */}
+          <div className="analytics-sort-menu">
+            <label className="analytics-field">
+              <span>Sort</span>
+              <select
+                value={tableSort.column}
+                onChange={(event) =>
+                  setChosenSort(
+                    nextSort(event.currentTarget.value as SortColumn, tableSort),
+                  )
+                }
+              >
+                {menuOrder
+                  .filter((column) => columns.includes(column))
+                  .map((column) => (
+                    <option key={column} value={column}>
+                      {sortColumns[column].label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="analytics-sort-button analytics-sort-direction"
+              data-column={tableSort.column}
+              aria-label={sortName(nextSort(tableSort.column, tableSort))}
+              title={sortName(nextSort(tableSort.column, tableSort))}
+              onClick={() => setChosenSort(nextSort(tableSort.column, tableSort))}
+            >
+              <span aria-hidden="true">
+                {tableSort.direction === "ascending" ? "↑" : "↓"}
+              </span>
+            </button>
           </div>
           <div
             className="analytics-table-wrap"

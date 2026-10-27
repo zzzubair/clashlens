@@ -32,7 +32,7 @@ function currentRoute(): string {
 // themselves carry no tracking code. `shown` is what the page shows now.
 function onClick(event: MouseEvent, shown: Selection | null) {
   const target = event.target instanceof Element ? event.target : null;
-  // The Armies page's sort headings and sort chips.
+  // The Armies page's sort headings and Sort direction.
   const column = target?.closest<HTMLElement>(".analytics-sort-button")?.dataset.column;
   if (column) {
     track("armies_changed", {
@@ -70,6 +70,17 @@ function onClick(event: MouseEvent, shown: Selection | null) {
 }
 
 // Only the Home and Rankings search forms; the header search is not counted.
+// The Armies page's phone Sort menu.
+function onChange(event: Event, shown: Selection | null) {
+  const menu = event.target instanceof HTMLSelectElement ? event.target : null;
+  if (!menu?.closest(".analytics-sort-menu")) return;
+  track("armies_changed", {
+    ...shown?.labels,
+    changed: "sort",
+    sort: armySort(menu.value),
+  });
+}
+
 function onSubmit(event: SubmitEvent) {
   const form = event.target instanceof HTMLFormElement ? event.target : null;
   if (form?.getAttribute("role") !== "search" || form.closest(".site-header")) return;
@@ -125,7 +136,9 @@ export function Analytics() {
     if (!token) return;
     startAnalytics({ token });
     const click = (event: MouseEvent) => onClick(event, shown.current?.selection ?? null);
+    const change = (event: Event) => onChange(event, shown.current?.selection ?? null);
     document.addEventListener("click", click, true);
+    document.addEventListener("change", change, true);
     document.addEventListener("submit", onSubmit, true);
     const timing = () => {
       const measured = performance.getEntriesByType?.("navigation")[0] as
@@ -141,6 +154,7 @@ export function Analytics() {
     else window.addEventListener("load", afterLoad, { once: true });
     return () => {
       document.removeEventListener("click", click, true);
+      document.removeEventListener("change", change, true);
       document.removeEventListener("submit", onSubmit, true);
       window.removeEventListener("load", afterLoad);
     };

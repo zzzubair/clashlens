@@ -221,23 +221,40 @@
   font-weight: 800;
 }
 
-/* ---------- Sort chips (phones and iPads; wide screens sort by heading) ---------- */
+/* ---------- Sort menu (phones and iPads; wide screens sort by heading) ---------- */
 
-.analytics-sort-chips {
-  margin: 1rem -1rem 0.75rem;
-  padding-inline: 1rem;
+.analytics-sort-menu {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0 0.75rem;
 }
-.analytics-sort-chips button span {
-  white-space: pre;
+.analytics-sort-menu .analytics-field {
+  flex: 0 1 15rem;
 }
-@media (min-width: 40rem) {
-  .analytics-sort-chips {
-    margin-inline: 0;
-    padding-inline: 0;
+.analytics-sort-direction {
+  flex: none;
+  width: 3.25rem;
+  min-height: 3.25rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font-family: var(--cl-font-score);
+  font-size: 1.35rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.analytics-sort-direction:focus-visible {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .analytics-sort-direction:hover {
+    border-color: var(--cl-outline);
   }
 }
 @media (min-width: 64rem) {
-  .analytics-results .analytics-sort-chips {
+  .analytics-results .analytics-sort-menu {
     display: none;
   }
 }
@@ -252,7 +269,7 @@
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
 }
-.analytics-sort-chips + .analytics-table-wrap {
+.analytics-sort-menu + .analytics-table-wrap {
   margin-top: 0;
 }
 .analytics-table-wrap:focus-visible {
