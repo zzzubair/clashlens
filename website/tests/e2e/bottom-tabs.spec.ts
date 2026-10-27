@@ -220,3 +220,39 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
     await stillSignedIn(path);
   }
 });
+
+test("tapping a player shows the page loading until their page shows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  const player = page.locator('main a[href^="/players/"]').first();
+  const line = page.locator(".page-loading");
+  await expect(line).toHaveCount(0);
+
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => url.pathname.startsWith("/players/") && url.pathname.endsWith(".data"),
+    async (route) => {
+      await held;
+      await route.continue();
+    },
+  );
+  await player.click();
+  await expect.poll(() => line.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+  release();
+  await expect(page).toHaveURL(/\/players\//);
+  await expect(line).toHaveCount(0);
+});
+
+test("a Rankings visit downloads the player and Analytics styles before any tap", async ({
+  page,
+}) => {
+  const detailsStyles = page.waitForRequest((request) =>
+    /\/details[^/]*\.css$/.test(new URL(request.url()).pathname),
+  );
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  await detailsStyles;
+  await expect(page).toHaveURL(/\/leaderboards\/tracked/);
+});
