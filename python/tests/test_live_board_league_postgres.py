@@ -57,7 +57,8 @@ def test_the_live_board_follows_the_weekly_league_record(
     Monday Reset, which proves the drop but keeps them tracked. BACK is
     promoted back at the third Monday Reset and reads Legend I naming Season
     0 at 5,000, as #L8J0JRC22 did on 26 October 2026 after its 4,951 of 19
-    October. STALE_II and PROMOTED read Legend II naming the Season in its
+    October, then signs up, wins an attack and reads 5,040 again, the same
+    profile it read in the first week. STALE_II and PROMOTED read Legend II naming the Season in its
     first week, which passes, as #JUVP8Y89's 783 of 9 October did, and are
     promoted at the second Monday Reset: STALE_II reads Legend I naming
     Season 0 at 5,000; PROMOTED signs up, wins an attack and reads 5,040."""
@@ -97,6 +98,8 @@ def test_the_live_board_follows_the_weekly_league_record(
         players[BACK].dropped = False
         story.reads(next_monday + timedelta(hours=2), {STEADY: 5020, DROPPED: 60})
         story.reads(next_monday + timedelta(hours=2), {BACK: 5000}, None)
+        players[BACK].battles += attacks(next_monday + timedelta(hours=2, minutes=30), 40)
+        story.reads(next_monday + timedelta(hours=3), {BACK: 5040})
         story.wait(timedelta(minutes=5))
         third_week = _live(story, next_monday + timedelta(hours=4))
 
@@ -105,5 +108,5 @@ def test_the_live_board_follows_the_weekly_league_record(
     assert second_week == {PROMOTED: 5040, STEADY: 5020, STALE_II: 5000}
     # Polling goes on until stronger proof settles DROPPED's week.
     assert dropped_tracked
-    # BACK played in the first week, but not since its promotion back.
-    assert third_week == {STEADY: 5020, STALE_II: 5000, PROMOTED: 5040, BACK: 5000}
+    # BACK ranks at its fresh reading, though it matches a first-week profile.
+    assert third_week == {STEADY: 5020, STALE_II: 5000, PROMOTED: 5040, BACK: 5040}

@@ -57,7 +57,7 @@ _UNPLAYED_SQL = unplayed_sql("player.id", "version", _ENTERED_SQL, "%(season_end
 _CURRENT_PROFILE_JOINS = f"""
 LEFT JOIN LATERAL (
     SELECT name, trophies, profile_json, current_league_season_id,
-           eligibility_state, observed_at
+           eligibility_state
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
       AND source_contract_state = 'accepted'
@@ -69,8 +69,8 @@ CROSS JOIN LATERAL (
                     AND profile.eligibility_state = 'eligible'
                     -- One read this week needs no lookup: on 26 October
                     -- 2026 the lookup for every player added 250 ms.
-                    AND CASE WHEN profile.observed_at >= %(week_start)s THEN true
-                             ELSE profile.observed_at >= {_ENTERED_SQL} END, false)
+                    AND CASE WHEN player.current_observed_at >= %(week_start)s THEN true
+                             ELSE player.current_observed_at >= {_ENTERED_SQL} END, false)
            AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
 ) AS current
 """
