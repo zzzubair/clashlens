@@ -533,6 +533,45 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   }
 });
 
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 1280, height: 900 },
+]) {
+  test(`today's Legend day sits first in the log, folded, at ${viewport.width}px`, async ({
+    browser,
+  }) => {
+    const phone = viewport.width < 600;
+    const context = await browser.newContext({ viewport, hasTouch: phone });
+    try {
+      const page = await context.newPage();
+      await refuseRefreshes(page);
+      await openWorstCasePlayer(page);
+      const summary = page.getByRole("region", { name: "Season summary" });
+      const log = page.getByRole("region", { name: "Daily Legend log" });
+      const today = log.locator("details.legend-day").first();
+      await expect(today.locator(".legend-day-live")).toBeVisible();
+      const below = async (upper: typeof today, lower: typeof today) => {
+        const [a, b] = [await upper.boundingBox(), await lower.boundingBox()];
+        expect(b!.y).toBeGreaterThanOrEqual(a!.y + a!.height);
+      };
+      await below(summary, log.getByRole("heading", { name: "Daily Legend log" }));
+      await below(log.getByRole("heading", { name: "Daily Legend log" }), today);
+      await below(today, log.locator("details.legend-day").nth(1));
+
+      await expect(today).not.toHaveAttribute("open");
+      const header = today.locator("summary");
+      expect((await header.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await (phone ? header.tap() : header.click());
+      await expect(today).toHaveAttribute("open");
+      await expect(today.locator(".battle-slot-attack").first()).toBeVisible();
+      await (phone ? header.tap() : header.click());
+      await expect(today).not.toHaveAttribute("open");
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 test("an opponent's Legend day opens in the page at the battle, and Back returns", async ({
   page,
 }) => {
