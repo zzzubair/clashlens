@@ -20,21 +20,21 @@ const NAMES: ArmyUnitNames = {
 };
 
 describe("readArmy", () => {
-  it("reads every part of a real army in the order it was trained", () => {
+  it("reads every part of a real army, each group by game unit id", () => {
     const army = readArmy(CODE, NAMES);
     expect(army?.troops.slice(0, 2)).toEqual([
-      { id: "troop:55", count: 5 },
-      { id: "troop:132", count: 9 },
+      { id: "troop:1", count: 4 },
+      { id: "troop:5", count: 2 },
     ]);
     expect(army?.troops).toHaveLength(8);
     expect(army?.siege).toEqual([{ id: "troop:135", count: 1 }]);
     expect(army?.spells.map((spell) => spell.id)).toEqual([
+      "spell:5",
       "spell:9",
       "spell:10",
-      "spell:120",
       "spell:17",
-      "spell:5",
       "spell:35",
+      "spell:120",
     ]);
     expect(army?.clanCastle).toEqual({
       troops: [
@@ -84,6 +84,51 @@ describe("ArmyPortraits", () => {
     );
     expect(html).toContain('aria-label="Clan Castle"');
     expect(html).toContain('alt="1 × Balloon"');
+  });
+
+  it("draws one army the same whatever order its code lists the units in", () => {
+    // Two attacks one Clasher made 3 minutes apart on 26 Oct 2026 with the
+    // same army, saved with troops and spells in different orders.
+    const first =
+      "h1p9e17_48-2m1p16e4_34-6p17e49_43-7p4e53_52i1x63-1x76d1x70-1x98" +
+      "u3x1-1x76-8x8-1x188-5x65-3x57s1x9-1x2-3x10-3x120-2x5";
+    const second =
+      "h1p9e17_48-2m1p16e4_34-6p17e49_43-7p4e53_52i1x63-1x76d1x70-1x98" +
+      "u3x1-3x57-1x76-8x8-1x188-5x65s3x10-1x9-3x120-1x2-2x5";
+    // The same army again with its heroes, equipment and Clan Castle reordered.
+    const third =
+      "h7p4e52_53-6p17e43_49-2m1p16e34_4-1p9e48_17i1x76-1x63d1x98-1x70" +
+      "u5x65-1x188-8x8-1x76-3x57-3x1s2x5-3x120-3x10-1x2-1x9";
+    const draw = (code: string) =>
+      renderToStaticMarkup(
+        createElement(ArmyPortraits, { id: "army", code, names: NAMES }),
+      );
+    expect(draw(second)).toBe(draw(first));
+    expect(draw(third)).toBe(draw(first));
+    expect(
+      [...draw(first).matchAll(/title="([^"]*)"/g)].map((match) => match[1]),
+    ).toEqual([
+      "3 × troop:1",
+      "8 × troop:8",
+      "3 × troop:57",
+      "5 × troop:65",
+      "1 × troop:76",
+      "1 × troop:188",
+      "1 × spell:2",
+      "2 × spell:5",
+      "1 × spell:9",
+      "3 × spell:10",
+      "3 × spell:120",
+      "Clan Castle",
+      "1 × troop:63",
+      "1 × troop:76",
+      "1 × spell:70",
+      "1 × spell:98",
+      ...["hero:1", "equipment:17", "equipment:48", "pet:9"],
+      ...["hero:2", "equipment:4", "equipment:34", "pet:16"],
+      ...["hero:6", "equipment:43", "equipment:49", "pet:17"],
+      ...["hero:7", "equipment:52", "equipment:53", "pet:4"],
+    ]);
   });
 
   it("draws nothing for an unreadable code", () => {
