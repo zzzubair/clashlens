@@ -1315,10 +1315,16 @@ def test_player_page_shows_the_newest_copy_of_each_of_the_latest_28_days(
                     (player_id,),
                 )
                 # Thirty days, each saved three times; only the newest copy
-                # carries the day's own attack gain.
+                # carries the day's own attack gain. Yesterday's newest copy
+                # names another Season, so the Season lists only today.
                 for day_number in range(1, 31):
                     start = today - timedelta(days=30 - day_number)
                     for version in (1, 2, 3):
+                        season = (
+                            "other-season"
+                            if day_number == 29 and version == 3
+                            else "current-season"
+                        )
                         connection.execute(
                             """
                             INSERT INTO api_player_daily_logs (
@@ -1330,12 +1336,12 @@ def test_player_page_shows_the_newest_copy_of_each_of_the_latest_28_days(
                                 net_trophy_change, adjustments, battles,
                                 partial_reasons, published_at
                             ) VALUES (
-                                %s, %s, %s, 'current-season', %s, %s, 'Complete',
+                                %s, %s, %s, %s, %s, %s, 'Complete',
                                 'complete', 'exact', 1, 0, %s, 0, 0, 0, NULL,
                                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s
                             )
                             """,
-                            (player_id, start, start + timedelta(days=1),
+                            (player_id, start, start + timedelta(days=1), season,
                              (day_number - 1) % 28 + 1, version,
                              day_number if version == 3 else 0, NOW),
                         )
@@ -1354,5 +1360,6 @@ def test_player_page_shows_the_newest_copy_of_each_of_the_latest_28_days(
                 (today - timedelta(days=30 - day_number)).isoformat(): day_number
                 for day_number in range(30, 2, -1)
             }
+            assert player["screen_ready"]["season_day_starts"] == [today.isoformat()]
         finally:
             database.close()

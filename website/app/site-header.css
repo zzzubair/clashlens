@@ -156,6 +156,51 @@
   display: none;
 }
 
+/* The page-change loading line along the top bar's bottom edge. It waits
+   0.1 s, so a page that shows at once does not flash it. */
+.page-loading {
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 3px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  animation: page-loading-show 1ms 100ms forwards;
+}
+
+.page-loading::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: var(--cl-brand-fill);
+  border-radius: 999px;
+  content: "";
+  animation: page-loading-run 1100ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-loading::before {
+    width: 100%;
+    animation: bottom-tab-loading-still 900ms ease-in-out infinite alternate;
+  }
+}
+
+@keyframes page-loading-show {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes page-loading-run {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(250%);
+  }
+}
+
 /* More rises from the bottom bar as a sheet, in the bar's own dark colours,
    over a dimmed page that closes it when tapped. Open, it covers everything
    else, the analytics question included. */

@@ -279,7 +279,25 @@ def get_player_page(
                 "anchor_observed_at": current_day_raw[20].astimezone(UTC),
             }
         season_rows = []
-        if season_context is not None and not season_anchor_conflict:
+        if (
+            season_context is not None
+            and not season_anchor_conflict
+            and (len(daily_rows) < 28 or daily_rows[-1][0] <= season_context["start"])
+        ):
+            # The 28 latest days hold every day from the oldest of them on,
+            # so here they hold all of the Season's: its days are these rows,
+            # each already the newest copy, without reading them again.
+            season_rows = sorted(
+                (
+                    day
+                    for day in daily_rows
+                    if season_context["start"] <= day[0] < season_context["end"]
+                    and _text(day[2]) == season_context["id"]
+                ),
+                key=lambda day: (day[3] is not None, day[3] or 0, day[0]),
+                reverse=True,
+            )
+        elif season_context is not None and not season_anchor_conflict:
             # A season is exactly 28 ranked days. Bound this read to the
             # confirmed season while retaining the latest frozen
             # publication for each ranked-day start. Filtering before the
