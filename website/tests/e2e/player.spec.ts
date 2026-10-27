@@ -578,6 +578,7 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await refuseRefreshes(page);
   await openWorstCasePlayer(page);
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
+  await page.locator("details.legend-day").first().locator("summary").click();
   const link = page.locator(".battle-profile-link").first();
   const href = (await link.getAttribute("href"))!;
   const target = new URL(href, page.url());
