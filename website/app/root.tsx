@@ -1,4 +1,5 @@
-import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { useContext, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { preload, preloadModule } from "react-dom";
 import {
   Link,
   NavLink,
@@ -10,6 +11,7 @@ import {
   useNavigation,
   type LoaderFunctionArgs,
   type ShouldRevalidateFunctionArgs,
+  UNSAFE_FrameworkContext,
   Links,
   Meta,
   Outlet,
@@ -218,6 +220,7 @@ export default function App() {
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
   usePreloadInlineAnswerCode();
+  usePreloadTabCode(data.crewsEnabled === true);
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });
@@ -233,6 +236,32 @@ export default function App() {
       <Outlet />
     </>
   );
+}
+
+// The pages a tap most often opens: the tabs and a player.
+const TAB_ROUTES = [
+  "routes/dashboard",
+  "routes/tracked-leaderboard",
+  "routes/army-analytics",
+  "routes/player",
+];
+
+// Once the page has loaded, download the code and styles of the pages a tap
+// most often opens, so a first tap on one waits only for its data.
+function usePreloadTabCode(crews: boolean) {
+  const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
+  useEffect(() => {
+    if (manifest === undefined) return;
+    const timer = setTimeout(() => {
+      for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
+        const route = manifest.routes[id];
+        if (route === undefined) continue;
+        for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
+        for (const href of route.css ?? []) preload(href, { as: "style" });
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [manifest, crews]);
 }
 
 // The tabs, most useful first. Dashboard and Crews follow their switches.
@@ -362,6 +391,14 @@ function DiscordLink() {
   );
 }
 
+// Any tap that changes page shows a loading line along the top bar until the
+// new page shows, so a slow page never looks like a missed tap.
+function PageLoading() {
+  return useNavigation().state === "loading" ? (
+    <span className="page-loading" aria-hidden="true" />
+  ) : null;
+}
+
 // Sign-in pages already offer both ways in, so they pass on where the
 // Clasher was going (their own returnPath) instead of coming back to themselves.
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
@@ -384,6 +421,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const account = named.current ?? data;
   return (
     <header className="site-header">
+      <PageLoading />
       <Link className="site-brand" to="/" aria-label="Clash Lens">
         <img
           className="site-brand-logo"
