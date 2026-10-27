@@ -261,7 +261,8 @@ function usePreloadTabCode(crews: boolean) {
         void import(/* @vite-ignore */ route.module).then(
           (module: { links?: () => { rel?: string; href?: string }[] }) => {
             for (const link of module.links?.() ?? []) {
-              if (link.rel === "stylesheet" && link.href) preload(link.href, { as: "style" });
+              if (link.rel === "stylesheet" && link.href)
+                preload(link.href, { as: "style" });
             }
           },
           () => {},
