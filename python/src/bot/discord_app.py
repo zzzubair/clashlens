@@ -77,13 +77,15 @@ def lay_out(view: discord.ui.LayoutView, reply: Reply) -> None:
 def lay_out_notice(reply: Reply) -> dict[str, Any]:
     """`reply` in Discord's older layout, the only one whose message can
     carry the line a phone's notification shows: `notice`, then each card as
-    a box with its coloured edge, the first topped by `title` in small bold,
-    which keeps a large first line in the box from leaving a gap, and the
-    last ending in `footer` as small print, then any buttons."""
-    embeds = [
-        discord.Embed(description="\n\n".join(card.parts), colour=card.colour)
-        for card in reply.cards
-    ]
+    a box with its coloured edge, topped by its own title in small bold, the
+    first by `title` when given, which keeps a large first line in the box
+    from leaving a gap, and the last ending in `footer` as small print, then
+    any buttons."""
+    embeds = []
+    for card in reply.cards:
+        embeds.append(discord.Embed(description="\n\n".join(card.parts), colour=card.colour))
+        if card.title:
+            embeds[-1].set_author(name=card.title)
     if reply.title:
         embeds[0].set_author(name=reply.title)
     if reply.footer:

@@ -18,6 +18,7 @@ export const LOGGED_OUT: RootLoaderData = {
   accountLabel: null,
   accountUsername: null,
   logoutIdempotencyKey: null,
+  loginKey: null,
   updateStatus: null,
 };
 

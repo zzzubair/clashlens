@@ -96,9 +96,12 @@ automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
 weekly reset.
-Today's end of day and Reset rank read After Reset, and its empty battle slots
-read —, where a finished day's read Not recorded. On a phone, today's day
-comes before the Season summary.
+Today's end of day and Reset rank read After Reset, and the battles it has
+not saved yet are counted in one line, such as 7 attacks not recorded yet,
+where a finished day's say 7 attacks not recorded. Today's day sits first in
+the log on every screen and starts folded. On a phone an opened day shows its
+attacks or its defenses, picked with an Attacks | Defenses switch that carries
+each side's total; wider screens show both side by side.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
@@ -187,9 +190,9 @@ that the page stops checking, says so, and ignores any later answer.
 The Dashboard is `/` for signed-in users while
 `CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
 there. Everyone else, and everyone while the switch is off, gets the front
-page at `/`: the Dashboard preview with Create account and Sign in (only while
-the switch is on), the big search, Rankings and Analytics buttons, and the top
-10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+page at `/`: the big search, Rankings and Analytics buttons and the top 10
+right now, then, only while the switch is on, what an account adds, with
+Create account and Sign in ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
 Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
 screens, they move to a bar at the bottom of the screen: Home (Dashboard when
@@ -294,7 +297,9 @@ see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at
 `/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,
 Best defenders, Worst defenders and Highest streaks, the last four switched
-between Today, Last 7 days and Season (the default). Each card shows its top 5
+between Today, Last 7 days and Season (the default). Best and Worst defenders
+share one card with a Best | Worst switch. On a phone a row of tabs (Live,
+Reset, Attack, Defense, Streaks) shows one board at a time. Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
 who is not on it and why. Anyone, signed in or not, can open a crew's page and
 its boards; below the boards it lists every account in the crew by name and
@@ -663,9 +668,9 @@ which the site footer links to.
 (fankit.supercell.com, checked on October 13, 2026), also used under the Fan
 Content Policy: 159 images, 64 × 64 pixels, 348 KB in all, each named after the
 unit's saved id (`troop:23` is `troop-23.webp`). The build gives them
-fingerprinted names under `/assets/`, cached for a year. Every attack and defense
-on a player page has a Show army button beside Copy army. It draws that battle's
-army from its Copy army code, using the unit names the player response sends once
+fingerprinted names under `/assets/`, cached for a year. Tapping an attack or defense
+on a player page opens it: the opponent's tag, a link to their Legend log, Copy
+army, and that battle's army drawn from its Copy army code, using the unit names the player response sends once
 per page. Units the Fan Kit has no art for, such as Noble Iron, show their name
 instead.
 

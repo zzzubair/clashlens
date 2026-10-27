@@ -1205,7 +1205,7 @@ describe("player day honesty", () => {
     expect(today).toContain(">8 attacks not recorded yet</li>");
     expect(today).toContain(">8 defenses not recorded yet</li>");
     expect(today).not.toContain("not recorded<");
-    expect(html).toContain('id="legend-day-2026-10-03" open=""');
+    expect(html).not.toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
     expect(

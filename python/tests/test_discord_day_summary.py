@@ -7,11 +7,9 @@ import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-import discord
-
 from bot import replies
 from bot.alerts import AlertLoop, Unreachable
-from bot.discord_app import DiscordMessenger, lay_out
+from bot.discord_app import DiscordMessenger, lay_out_notice
 from bot.replies import GREY, Reply, Site, say
 from bot.summaries import Summary, SummaryLoop
 
@@ -23,7 +21,7 @@ def _day(start: datetime, **fields: object) -> dict:
     """A player page day as the private API sends it: a Complete, exact day
     with all 8 of each battle, 5,000 to 5,080."""
     return {
-        "ranked_day_start": start.isoformat(), "version": 1,
+        "ranked_day_start": start.isoformat(), "version": 1, "season_day_number": 2,
         "state": "Complete", "confidence": "exact", "coverage": "complete",
         "completeness": {"state": "complete"}, "uncertainty_reasons": [],
         "battles_complete": True, "adjustments": [],
@@ -46,118 +44,126 @@ def test_a_finished_day_reads_as_its_page_shows_it() -> None:
     went without before their day saved; a day the player had not signed up
     for is no Legend day."""
     yesterday = RESET - timedelta(days=1)
-    verified = replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1234, False)
+    verified = replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1234, False, None)
     assert verified is not None
     assert (verified["status"], verified["version"], verified["end"], verified["place"]) == (
         "Verified", 1, None, 1234)
     calculated = replies.summary_day(
-        _page("#2PP", _day(yesterday, confidence="inferred")), RESET, 1234, False)
+        _page("#2PP", _day(yesterday, confidence="inferred")), RESET, 1234, False, None)
     assert calculated is not None and calculated["status"] == "Calculated"
-    live = replies.summary_day(_page("#2PP", _day(yesterday, state="Live")), RESET, None, False)
+    live = replies.summary_day(_page("#2PP", _day(yesterday, state="Live")), RESET, None, False, None)
     assert live == {"tag": "#2PP", "name": "Wanderer", "finished": False}
     # A player Clash Lens knows with no saved day at all.
     unsaved = {"tag": "#2PP", "name": "Wanderer"}
-    assert replies.summary_day(unsaved, RESET, None, True) == live
-    assert replies.summary_day(unsaved, RESET, None, False) is None
+    assert replies.summary_day(unsaved, RESET, None, True, None) == live
+    assert replies.summary_day(unsaved, RESET, None, False, None) is None
     unenrolled = _day(yesterday, uncertainty_reasons=["not_enrolled"],
                       offense_events=[], defense_events=[])
-    assert replies.summary_day(_page("#2PP", unenrolled), RESET, None, False) is None
-    assert replies.summary_day(_page("#2PP", _day(RESET)), RESET, None, False) is None
+    assert replies.summary_day(_page("#2PP", unenrolled), RESET, None, False, None) is None
+    assert replies.summary_day(_page("#2PP", _day(RESET)), RESET, None, False, None) is None
 
 
 def test_the_end_of_day_is_the_saved_one_before_any_weekly_or_season_reset() -> None:
     """A Season's last day from 5,440 loses 120, and the Season reset takes
     the 5,320 saved as its end of day to 5,000: the end shown is 5,320, as
     its Season page shows, with the reset beside the change, and the next
-    day starting at 5,000 leaves it Verified. A day lost 20 before a Monday
-    raise, and the worker saved no end of day for it: its end stays
-    unavailable."""
+    day starting at 5,000 leaves it Verified. It moved from 5th to 3rd on
+    the Daily board. A day lost 20 before a Monday raise, and the worker
+    saved no end of day for it: its end stays unavailable. A Season's first
+    day shows no places moved, as the board before was the last Season's."""
     yesterday = RESET - timedelta(days=1)
     season_end = replies.summary_day(_page("#2PP", _day(
-        yesterday, start_trophies=5440, net_trophy_change=-120,
+        yesterday, start_trophies=5440, net_trophy_change=-120, season_day_number=28,
         adjustments=[{"type": "season_reset", "amount": -320}],
-    ), _day(RESET)), RESET, 3, False)
+    ), _day(RESET)), RESET, 3, False, 5)
     weekly = replies.summary_day(_page("#8PP", _day(
         yesterday, net_trophy_change=-20, adjustments=[{"type": "weekly_reset", "amount": 20}],
-    ), _day(RESET)), RESET, 4, False)
-    assert season_end is not None and weekly is not None
+    ), _day(RESET)), RESET, 4, False, None)
+    first = replies.summary_day(
+        _page("#PPP", _day(yesterday, season_day_number=1)), RESET, 9, False, 2)
+    assert season_end is not None and weekly is not None and first is not None
     assert season_end["status"] == "Verified"
     season_end["end"] = 5320
-    cards = replies.day_summary(SITE, RESET, [weekly, season_end], {})[0][0].cards
-    assert [card.parts[0].split("\n")[1] for card in cards] == [
-        "5,440 → 5,320 (−120, −320 Season reset)",
-        "5,000 → Unavailable (−20, +20 weekly reset)",
+    first["end"] = 5080
+    [(reply, _)] = replies.day_summary(SITE, RESET, [weekly, season_end, first], {})
+    assert reply.notice == "📅 Day 28 (06-10-2026)"
+    assert [card.parts[0].split("\n")[:2] for card in reply.cards] == [
+        ["# 🌍 #3   🏆 5,320", "-# ▲ 2 places   ·   −120 trophies   ·   −320 Season reset"],
+        ["# 🌍 #9   🏆 5,080", "-# +80 trophies"],
+        ["# 🌍 #4   🏆 –", "-# −20 trophies   ·   +20 weekly reset"],
     ]
     # Each card opens that player's day on Clash Lens.
-    assert cards[0].button is not None and cards[0].button.url == (
-        "https://clashlens.test/players/%232PP?day=2026-10-06#legend-day-2026-10-06"
+    assert (
+        "[Open day](https://clashlens.test/players/%232PP?day=2026-10-06#legend-day-2026-10-06)"
+        in reply.cards[0].parts[0]
     )
 
 
 def test_a_long_summary_is_split_between_dms_and_cannot_ping_anyone() -> None:
     """40 players' days do not fit one Discord message: each goes in exactly
-    one DM, in order, each DM under Discord's 4,000 characters, numbered,
-    and the settings button ends the last; each DM carries the tags of the
-    players it names. Names are escaped. Each player's card has its own
-    colour, the not-finished one grey, and each DM keeps inside Discord's 40
-    parts and 4,000 characters a message."""
+    one DM, in order, each DM numbered, and the settings link ends the last;
+    each DM carries the tags of the players it names. Names never reach the
+    notification line, and are escaped where they would show as formatting.
+    Each player's card has its own colour, the not-finished one grey, and
+    each DM keeps inside Discord's 10 boxes and 6,000 characters a message."""
     yesterday = RESET - timedelta(days=1)
     days = [
         replies.summary_day(
             _page(f"#{n:04d}", _day(yesterday, start_trophies=6000 - n),
                   name=f"@everyone **{n}**"),
-            RESET, n + 1, False,
+            RESET, n + 1, False, None,
         )
         for n in range(40)
     ]
-    days.append({"tag": "#WAIT", "name": "Slow", "finished": False})
+    days.append({"tag": "#WAIT", "name": "**Slow**", "finished": False})
     colours = replies.colours([day["tag"] for day in days])
     summary = replies.day_summary(SITE, RESET, days, colours)
     parts = [part for part, _ in summary]
     assert len(parts) > 1
-    assert [part.title for part in parts] == [
-        f"Legend day summary · Tue 6 Oct ({n} of {len(parts)})"
-        for n in range(1, len(parts) + 1)
+    assert [part.notice for part in parts] == [
+        f"📅 Day 2 (06-10-2026)  ·  {n} of {len(parts)}" for n in range(1, len(parts) + 1)
     ]
-    assert [len(part.links) for part in parts] == [0] * (len(parts) - 1) + [1]
+    assert ["[Summary settings](" in part.text for part in parts] == (
+        [False] * (len(parts) - 1) + [True])
     for part in parts:
-        view = discord.ui.LayoutView()
-        lay_out(view, part)
-        items = list(view.walk_children())
-        assert len(items) <= 40
-        shown = [item.content for item in items if isinstance(item, discord.ui.TextDisplay)]
-        assert sum(map(len, shown)) <= 4000
+        embeds = lay_out_notice(part)["embeds"]
+        assert len(embeds) <= 10
+        assert sum(len(embed) for embed in embeds) <= 6000
+    def tag(card: replies.Card) -> str:
+        return "#" + re.search(r"%23(\d{4})\?", card.parts[0])[1]
     assert {
-        re.search(r"#\d{4}", card.parts[0])[0]: card.colour
-        for part in parts for card in part.cards if card.colour != GREY
+        tag(card): card.colour for part in parts for card in part.cards if card.colour != GREY
     } == {day["tag"]: colours[day["tag"]] for day in days[:40]}
+    titles = [card.title for part in parts for card in part.cards if card.colour != GREY]
+    assert titles == [f"\u2068@everyone **{n}**\u2069" for n in range(40)]
     text = "\n\n".join(part.text for part in parts)
-    assert [text.count(f"** #{n:04d} ·") for n in range(40)] == [1] * 40
-    assert text.index("#0000 ·") < text.index("#0039 ·")
-    assert "@everyone" not in text and "\\*\\*0\\*\\*" in text
-    assert "Not finished yet: Slow #WAIT." in text
+    assert "@everyone" not in text
+    assert "**Not finished yet:** \\*\\*Slow\\*\\*\n" in text
     assert [tags for _, tags in summary] == [
-        tuple(day["tag"] for day in days if day["tag"] in part.text) for part in parts
+        tuple(tag(card) if card.colour != GREY else "#WAIT" for card in part.cards)
+        for part in parts
     ]
     assert replies.day_summary(SITE, RESET, days[-1:], colours) == []
 
 
 def test_a_long_not_finished_list_is_split_between_dms() -> None:
     """150 players whose day is not finished, with long names, are named at
-    most 40 a line, so no DM goes over Discord's 4,000 characters."""
+    most 40 a box, so no DM goes over Discord's 6,000 characters."""
     yesterday = RESET - timedelta(days=1)
     waiting = [
         {"tag": f"#{n:07d}", "name": f"Still playing {n:06d}", "finished": False}
         for n in range(150)
     ]
-    days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1, False), *waiting]
+    days = [replies.summary_day(_page("#2PP", _day(yesterday)), RESET, 1, False, None), *waiting]
     summary = replies.day_summary(SITE, RESET, days, {})
-    assert all(len(part.text) <= 4000 for part, _ in summary)
+    assert all(sum(map(len, lay_out_notice(part)["embeds"])) <= 6000 for part, _ in summary)
     text = "\n\n".join(part.text for part, _ in summary)
-    assert text.count("Not finished yet: ") == 4
-    assert [text.count(day["tag"]) for day in waiting] == [1] * 150
+    assert text.count("Not finished yet:") == 4
+    assert [text.count(day["name"]) for day in waiting] == [1] * 150
     assert [tags for _, tags in summary] == [
-        tuple(day["tag"] for day in days if day["tag"] in part.text) for part, _ in summary
+        (*(("#2PP",) if index == 0 else ()),
+         *(day["tag"] for day in waiting if day["name"] in part.text))
+        for index, (part, _) in enumerate(summary)
     ]
 
 

@@ -56,6 +56,7 @@ export interface RootLoaderData {
   accountLabel: string | null;
   accountUsername: string | null;
   logoutIdempotencyKey: string | null;
+  loginKey: string | null;
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
@@ -374,6 +375,13 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
     ? new URLSearchParams(location.search).get("returnPath")
     : location.pathname;
   const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
+  // A busy moment can leave the account's name unread (see
+  // loadRootNavigation); the menu keeps the name it already showed for the
+  // same login.
+  const named = useRef<RootLoaderData | undefined>(undefined);
+  if (data?.loggedIn && data.accountLabel !== null) named.current = data;
+  else if (named.current?.loginKey !== data?.loginKey) named.current = undefined;
+  const account = named.current ?? data;
   return (
     <header className="site-header">
       <Link className="site-brand" to="/" aria-label="Clash Lens">
@@ -396,10 +404,10 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         <ThemeToggle />
         {data?.loggedIn ? (
           <AccountMenu
-            label={data.accountLabel ?? "Account"}
+            label={account?.accountLabel ?? "Account"}
             accountPath={
-              data.accountUsername
-                ? `/users/${encodeURIComponent(data.accountUsername)}`
+              account?.accountUsername
+                ? `/users/${encodeURIComponent(account.accountUsername)}`
                 : "/account"
             }
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}

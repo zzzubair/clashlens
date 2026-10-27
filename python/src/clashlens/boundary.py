@@ -550,7 +550,12 @@ def _boundary_snapshot_status(
         """,
         (player_id, boundary_at, boundary_at),
     ).fetchone()
-    return "complete" if profile is not None else "missing"
+    # A player not read in the ended day's week before the Reset ranks by
+    # their Complete day, named by their first Legend I reading since.
+    return "complete" if profile is not None or boundary_at is not None and (
+        boundary_members.first_readings(
+            connection, boundary_at, {player_id: ranked_day_version_id})
+    ) else "missing"
 
 
 def _army_decode_selection(
@@ -1128,15 +1133,23 @@ def queue_board_rebuilds(
                     rule is not None
                     and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
                 )
+                left_off = connection.execute(
+                    "SELECT player_id, ranked_day_version_id, input_identity->>'snapshot_quality'"
+                    " FROM boundary_publication_manifest_entries(%s)"
+                    " WHERE input_identity->>'snapshot_quality' <> 'eligible'",
+                    (manifest_id,),
+                ).fetchall()
                 # Players left out whom the board now ranks at 5,000, unless
                 # "player not found" since keeps them out of the rebuild too.
                 added = unplayed_profiles(connection, boundary_at, [
-                    int(row[0]) for row in connection.execute(
-                        "SELECT player_id FROM boundary_publication_manifest_entries(%s)"
-                        " WHERE input_identity->>'snapshot_quality' <> 'eligible'",
-                        (manifest_id,),
-                    )
-                ])
+                    int(row[0]) for row in left_off])
+                # Members left out, not for their league, whom their Complete
+                # day now ranks, named by a reading after the Reset.
+                late = len(boundary_members.first_readings(connection, boundary_at, {
+                    int(row[0]): int(row[1]) for row in left_off
+                    if row[1] is not None
+                    and row[2] not in ("below_legend_i", "league_not_confirmed")
+                }))
                 unplayed = len(added) - len(profiles_not_found(
                     connection, boundary_at,
                     {player_id: row[2] for player_id, row in added.items()},
@@ -1156,7 +1169,8 @@ def queue_board_rebuilds(
                         (generation_id,),
                     ).fetchone()[0] or []],
                 )))
-                if not (not_found or late_battles or reordered or unplayed or moved_members):
+                if not (not_found or late_battles or reordered or unplayed or late
+                        or moved_members):
                     continue
                 queued = connection.execute(
                     """

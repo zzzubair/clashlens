@@ -405,10 +405,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     player?.currentDay != null &&
     Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
   const today = todayEnded ? null : (player?.currentDay ?? null);
+  // Today's day starts folded; an ended day with a real problem starts open.
   const openDay =
     selectedDay ??
-    (player?.currentDay &&
-    (!todayEnded || !liveDay(dayEvidence(player.currentDay)).routine)
+    (player?.currentDay && todayEnded && !liveDay(dayEvidence(player.currentDay)).routine
       ? legendDayKey(player.currentDay.period)
       : null);
   // A linked day outside the current Season's log, such as an ended Season's,

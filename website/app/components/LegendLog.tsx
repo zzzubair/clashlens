@@ -78,9 +78,8 @@ export function LogHead() {
 }
 
 /**
- * The current Season's Legend days: today's day on its own card, open while
- * it is in progress, then every other day as one short row that opens to its
- * battles.
+ * The current Season's Legend days: today's day first on its own card, then
+ * every other day, each one short row that opens to its battles.
  */
 export function LegendLog({
   history,

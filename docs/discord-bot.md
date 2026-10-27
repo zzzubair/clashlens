@@ -85,14 +85,18 @@ each viewer sees in their own local time.
 Once a minute the bot checks whether the Daily board for the latest Reset is
 published. Once it is, each Clash Lens account with Discord connected and a
 player's summary turned on gets one DM summing up the Legend day that Reset
-ended, for each verified player whose summary is on: starting and end-of-day
-trophies, the trophy change, attacks and defenses with their trophies, the
-day's label (Verified, Calculated, Uncertain) and its place on that Daily
-board, with a link to the day on the player page. The numbers come from the
+ended. Its first line, which a phone's notification shows, is the Season day
+and date, such as "📅 Day 22 (26-10-2026)". Then each verified player whose
+summary is on gets a box in their colour, headed by their name and the day's
+label when it isn't Verified (Calculated, Uncertain): their place on that
+Daily board and end-of-day trophies in large text; the places moved since
+the Daily board of the Reset before (not on a Season's Day 1) and the trophy
+change; then the day's attack and defense trophies, with the count when it
+isn't 8, and a link to the day on the player page. The numbers come from the
 player page's own read, so they match it. The end of day is the one the worker
 saved with that version of the day, as the Season page shows it, before any
 weekly or Season reset at that Reset, which is shown beside the change; it
-shows as Unavailable when the worker saved none. Every place in one round of
+shows as a dash when the worker saved none. Every place in one round of
 summaries comes from the same version of that Daily board. A player whose day
 is not saved yet, or whom that board went without, is named as not finished; a
 player with no Legend day that day is left out, and an account with no
