@@ -74,6 +74,7 @@
 .teaser-board {
   position: relative;
   display: grid;
+  padding-top: 0.7rem;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   gap: 0.5rem;
   color: inherit;
@@ -88,7 +89,7 @@
 .teaser-example {
   position: absolute;
   z-index: 1;
-  top: -0.6rem;
+  top: 0.05rem;
   left: 0.75rem;
   padding: 0.1rem 0.45rem;
   color: var(--cl-muted);
