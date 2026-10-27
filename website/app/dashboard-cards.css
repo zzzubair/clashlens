@@ -1043,15 +1043,18 @@
 
   .rival-table th,
   .group-table th {
+    padding-inline: 0.25rem;
     font-size: 0.64rem;
+    font-weight: 650;
+    line-height: 1.15;
     letter-spacing: 0;
     text-transform: none;
     white-space: normal;
     vertical-align: bottom;
   }
 
-  .rival-table :is(th, td),
-  .group-table :is(th, td) {
+  .rival-table td,
+  .group-table td {
     padding-inline: 0.15rem;
   }
 
@@ -1062,7 +1065,7 @@
   }
 
   .rival-table :is(th, td):first-child {
-    width: 4.4rem;
+    width: 3.75rem;
   }
 
   /* The rank change sits under the rank so it never runs into the name. */
@@ -1073,7 +1076,7 @@
 
   .rival-table :is(th, td):nth-child(2),
   .group-table :is(th, td):first-child {
-    width: 25%;
+    width: 23%;
   }
 
   .legend-day-battles {
