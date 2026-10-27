@@ -22,6 +22,7 @@ vi.mock("../../app/services/python.server", () => ({
 import {
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
+  createLoginSessionBinding,
 } from "../../app/server/auth-cookies.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { loadRootNavigation } from "../../app/server/root-navigation.server";
@@ -39,8 +40,9 @@ const CONFIG = loadWebsiteConfig({
 });
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
 
-function signedInVisit(): Request {
-  const cookie = createLoginCookieValue(IDENTITY, CONFIG.loginSecret, Date.now());
+function signedInVisit(
+  cookie = createLoginCookieValue(IDENTITY, CONFIG.loginSecret, Date.now()),
+): Request {
   return new Request("https://clashlens.example/leaderboards/tracked", {
     headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
   });
@@ -90,4 +92,38 @@ it("signs out only on an answer: logged out, refused, no account, or no cookie",
   expect((await loadRootNavigation(signedInVisit())).loggedIn).toBe(false);
   const noCookie = new Request("https://clashlens.example/");
   expect((await loadRootNavigation(noCookie)).loggedIn).toBe(false);
+});
+
+it("keys each login so a busy moment never shows another login's name", async () => {
+  const first = createLoginCookieValue(IDENTITY, CONFIG.loginSecret, Date.now() - 2000);
+  const named = await loadRootNavigation(signedInVisit(first));
+  expect(named.loginKey).toEqual(expect.any(String));
+  expect(JSON.stringify(named)).not.toContain(IDENTITY.providerSubject);
+  expect(JSON.stringify(named)).not.toContain(createLoginSessionBinding(first));
+
+  const renewed = createLoginCookieValue(IDENTITY, CONFIG.loginSecret, Date.now(), {
+    sessionBinding: createLoginSessionBinding(first),
+    signedInAtMs: Date.now() - 2000,
+  });
+  mocks.isLoginRevoked.mockRejectedValueOnce(
+    new PythonApiError(503, { error: "timeout" }),
+  );
+  const sameLogin = await loadRootNavigation(signedInVisit(renewed));
+  expect(sameLogin).toMatchObject({ loggedIn: true, accountLabel: null });
+  expect(sameLogin.loginKey).toBe(named.loginKey);
+
+  const other = createLoginCookieValue(
+    { provider: "discord", providerSubject: "998877665544332211" },
+    CONFIG.loginSecret,
+    Date.now() - 1000,
+  );
+  mocks.isLoginRevoked.mockRejectedValueOnce(
+    new PythonApiError(503, { error: "timeout" }),
+  );
+  const otherLogin = await loadRootNavigation(signedInVisit(other));
+  expect(otherLogin).toMatchObject({ loggedIn: true, accountLabel: null });
+  expect(otherLogin.loginKey).not.toBe(named.loginKey);
+  expect(
+    (await loadRootNavigation(new Request("https://clashlens.example/"))).loginKey,
+  ).toBeNull();
 });

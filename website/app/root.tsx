@@ -56,6 +56,7 @@ export interface RootLoaderData {
   accountLabel: string | null;
   accountUsername: string | null;
   logoutIdempotencyKey: string | null;
+  loginKey: string | null;
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
@@ -375,10 +376,11 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
     : location.pathname;
   const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
   // A busy moment can leave the account's name unread (see
-  // loadRootNavigation); the menu keeps the name it already showed.
+  // loadRootNavigation); the menu keeps the name it already showed for the
+  // same login.
   const named = useRef<RootLoaderData | undefined>(undefined);
-  if (!data?.loggedIn) named.current = undefined;
-  else if (data.accountLabel !== null) named.current = data;
+  if (data?.loggedIn && data.accountLabel !== null) named.current = data;
+  else if (named.current?.loginKey !== data?.loginKey) named.current = undefined;
   const account = named.current ?? data;
   return (
     <header className="site-header">
