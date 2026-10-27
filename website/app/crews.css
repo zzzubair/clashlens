@@ -356,11 +356,11 @@
 /* ---------- Boards ---------- */
 
 /* A phone picks one board from these; wider screens show every board. They
-   stick under the phone's 3.5rem top bar (site-header.css). */
+   stick under the top bar (--cl-header-h, site-header.css). */
 .crew-page .crew-tabs {
   position: sticky;
   z-index: 5;
-  top: 3.5rem;
+  top: var(--cl-header-h);
   margin: 0.5rem -1rem 0;
   padding: 0.5rem 1rem;
   background: var(--cl-paper);

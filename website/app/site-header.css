@@ -3,6 +3,11 @@
    the screen and Discord into its More sheet, so the top bar keeps to one
    row: logo, search, theme and account. */
 
+:root {
+  /* The sticky top bar's height, for things that stick just under it. */
+  --cl-header-h: 4rem;
+}
+
 .site-header {
   position: sticky;
   top: 0;
@@ -12,7 +17,7 @@
   gap: 2rem;
   align-items: center;
   width: 100%;
-  min-height: 4rem;
+  min-height: var(--cl-header-h);
   margin: 0;
   padding: 0.4rem max(1.5rem, calc((100% - 72rem) / 2));
   color: var(--cl-header-ink);
@@ -266,7 +271,7 @@
   .site-header {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.5rem;
-    min-height: 3.5rem;
+    min-height: var(--cl-header-h);
     padding-block: 0.25rem;
   }
 
@@ -283,6 +288,7 @@
 
   /* Room at the bottom of every page, so nothing hides behind the bar. */
   :root {
+    --cl-header-h: 3.5rem;
     --cl-bottom-tabs: calc(4rem + env(safe-area-inset-bottom, 0px));
     scroll-padding-bottom: var(--cl-bottom-tabs);
   }

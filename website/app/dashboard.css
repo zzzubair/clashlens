@@ -29,8 +29,6 @@
   color: var(--cl-muted);
   font-size: 0.72rem;
   font-weight: 900;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .dash-big {
@@ -81,12 +79,11 @@
   display: inline-block;
   justify-self: start;
   margin: 0;
-  padding: 0.15rem 0.5rem;
-  /* The same warm chip in both themes, as in the mock. */
-  color: var(--cl-brand-night);
-  background: #ffe9c7;
-  border: 1.5px solid #c98a00;
-  border-radius: 6px;
+  padding: 0.15rem 0.6rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 700;
 }
@@ -100,11 +97,11 @@
 
 .dash-size-chip {
   display: inline-block;
-  padding: 0 0.4rem;
-  color: var(--cl-brand-night);
-  background: var(--cl-brand-yellow);
-  border: 2px solid var(--cl-brand-night);
-  border-radius: 6px;
+  padding: 0 0.45rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 900;
 }
@@ -114,30 +111,31 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-self: flex-start;
+  gap: 0.15rem;
+  padding: 0.15rem;
   overflow: hidden;
-  border: 2px solid var(--cl-card-line);
-  border-radius: 8px;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: 10px;
 }
 
 .dash-switch button {
   min-height: 1.8rem;
-  padding: 0.1rem 0.55rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
+  padding: 0.1rem 0.6rem;
+  color: var(--cl-muted);
+  background: transparent;
   border: 0;
+  border-radius: 8px;
   font: inherit;
   font-size: 0.8rem;
   font-weight: 900;
   cursor: pointer;
 }
 
-.dash-switch button + button {
-  border-left: 2px solid var(--cl-card-line);
-}
-
 .dash-switch button[aria-pressed="true"] {
-  color: var(--cl-brand-night);
-  background: var(--cl-brand-yellow);
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  box-shadow: inset 0 0 0 1px var(--cl-outline);
 }
 
 /* ---------- Account tabs and the Customise divider ---------- */
@@ -161,7 +159,7 @@
   padding: 0.4rem 1rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
   box-shadow: var(--cl-card-drop);
   text-decoration: none;
@@ -179,12 +177,9 @@
 }
 
 .dash-account[aria-current="page"] {
-  color: var(--cl-brand-night);
-  background: var(--cl-brand-fill);
-}
-
-.dash-account[aria-current="page"] :is(.dash-account-line, .dash-account-line b) {
-  color: var(--cl-brand-night);
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
 }
 
 /* Page sits on the tab's right edge and opens that player's page. */
@@ -212,7 +207,7 @@
   padding: 0.3rem 0.5rem;
   color: var(--cl-accent);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-left-width: 1px;
   border-radius: 0 var(--cl-radius) var(--cl-radius) 0;
   font-size: 0.72rem;
@@ -230,9 +225,8 @@
 }
 
 .dash-account[aria-current="page"] + .dash-account-page {
-  color: var(--cl-brand-night);
-  background: var(--cl-brand-fill);
-  border-left-color: rgb(0 0 0 / 0.25);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
 }
 
 .dash-account-add {
@@ -363,7 +357,7 @@
   justify-items: start;
   padding: 2.5rem 1.5rem;
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
 }
@@ -411,18 +405,18 @@
 .dash-editbar {
   position: sticky;
   z-index: 5;
-  top: 0.5rem;
+  top: calc(var(--cl-header-h) + 0.5rem);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   margin-bottom: 1rem;
   padding: 0.75rem 1rem;
-  color: #fff4e2;
-  background: var(--cl-brand-night);
-  border: 2px solid #000;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-action-border);
   border-radius: var(--cl-card-radius);
-  box-shadow: 0 4px 0 var(--cl-brand-orange);
+  box-shadow: var(--cl-overlay-shadow);
 }
 
 .dash-editbar-title {
@@ -433,7 +427,7 @@
 
 .dash-editbar-state {
   flex: 1 1 auto;
-  color: #cdbfae;
+  color: var(--cl-muted);
   font-size: 0.85rem;
   font-weight: 700;
 }
@@ -496,7 +490,7 @@
   padding: 0;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
   cursor: pointer;
 }
@@ -543,7 +537,7 @@
   padding: 1rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
 }
@@ -594,7 +588,7 @@
   padding: 0.3rem 0.5rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 8px;
   font: inherit;
   font-size: 1.2rem;
@@ -611,7 +605,7 @@
   padding: 0.25rem 0.6rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 999px;
   font: inherit;
   font-size: 0.85rem;
@@ -680,7 +674,7 @@
   padding: 1rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
   font: inherit;
@@ -724,7 +718,7 @@
   width: min(100%, 38rem);
   padding: 1.5rem;
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
   transform: translateX(-50%);

@@ -66,7 +66,6 @@
   border: 1px solid var(--cl-input-border);
   border-radius: var(--cl-radius);
   font: inherit;
-  text-transform: uppercase;
 }
 
 .add-player-row input::placeholder {

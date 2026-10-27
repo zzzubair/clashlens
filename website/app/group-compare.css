@@ -47,8 +47,6 @@
   background: var(--cl-panel);
   font-size: 0.74rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   vertical-align: bottom;
 }
 
@@ -90,7 +88,6 @@
   font-family: var(--cl-font);
   font-size: 0.72rem;
   font-weight: 700;
-  text-transform: uppercase;
 }
 
 .compare-badge-note,
@@ -300,8 +297,6 @@
     font-size: 0.7rem;
     font-weight: 700;
     line-height: 1rem;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
   }
 
   /* The number sits under its label across the detail rows, so the detail
