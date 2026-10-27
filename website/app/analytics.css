@@ -10,25 +10,14 @@
 
 /* ---------- Heading and view switch ---------- */
 
-/* Phones go straight to the list: the intro hides, the record counts move under
-   the list and the rows' arrows say they open. */
-@media (max-width: 47.99rem) {
-  .analytics-head p,
-  .analytics-tap-hint {
-    display: none;
-  }
-  .analytics-results {
-    display: flex;
-    flex-direction: column;
-  }
-  .analytics-results > .analytics-coverage {
-    order: 1;
-    margin-top: 0.75rem;
-  }
+/* Straight to the list: the record counts sit under it. */
+.analytics-results {
+  display: flex;
+  flex-direction: column;
 }
-
-.analytics-head p {
+.analytics-results > .analytics-coverage {
   order: 1;
+  margin-top: 0.75rem;
 }
 .analytics-view-switch {
   display: flex;
@@ -42,9 +31,6 @@
   font-size: 0.95rem;
 }
 @media (min-width: 40rem) {
-  .analytics-head p {
-    order: 2;
-  }
   .analytics-view-switch {
     order: 1;
     width: auto;
@@ -217,9 +203,6 @@
 .analytics-note:empty {
   display: none;
 }
-.analytics-note strong {
-  font-weight: inherit;
-}
 .analytics-footnote {
   margin: 0.75rem 0 0;
   color: var(--cl-muted);
@@ -246,16 +229,6 @@
 .analytics-sort-chips {
   margin: 1rem -1rem 0.75rem;
   padding-inline: 1rem;
-}
-.analytics-sort-chips::before {
-  content: "Sort";
-  content: "Sort" / "";
-  flex: none;
-  align-self: center;
-  padding-right: 0.15rem;
-  color: var(--cl-muted);
-  font-size: 0.8rem;
-  font-weight: 700;
 }
 .analytics-sort-chips button span {
   white-space: pre;
@@ -327,38 +300,8 @@
 .analytics-rank {
   display: none;
 }
-[data-ranked] .analytics-rank {
-  display: grid;
-  flex: none;
-  place-items: center;
-  min-width: 1.75rem;
-  height: 1.75rem;
-  padding-inline: 0.3rem;
-  color: var(--cl-muted);
-  background: var(--cl-panel);
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 800;
-}
 [data-ranked] .analytics-rank::before {
   content: counter(analytics-rank);
-}
-/* The top three: a medal and a stripe down the row's edge in its colour. */
-[data-ranked] .analytics-row:nth-child(1) {
-  --podium: var(--cl-medal-gold);
-}
-[data-ranked] .analytics-row:nth-child(2) {
-  --podium: var(--cl-silver);
-}
-[data-ranked] .analytics-row:nth-child(3) {
-  --podium: var(--cl-bronze);
-}
-[data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank {
-  color: #111318;
-  background: var(--podium);
-}
-[data-ranked] .analytics-row:nth-child(-n + 3) > :first-child {
-  box-shadow: inset 3px 0 0 var(--podium);
 }
 
 /* Name: rank, unit art, the name and its variants, an arrow when it opens. */
@@ -447,8 +390,8 @@
 .analytics-results-table [data-column="usage-rate"] .analytics-value {
   font-family: var(--cl-font-heading);
   font-size: 1.25rem;
-  font-weight: 400;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .analytics-results-table
   td[data-sorted]:not([data-column="usage-rate"])
@@ -477,12 +420,6 @@
     align-items: start;
     gap: 0.4rem 0.9rem;
     padding: 0.7rem 1rem 0.75rem;
-  }
-  [data-ranked] .analytics-row:nth-child(-n + 3) {
-    box-shadow: inset 3px 0 0 var(--podium);
-  }
-  [data-ranked] .analytics-row:nth-child(-n + 3) > :first-child {
-    box-shadow: none;
   }
   .analytics-results-table tbody th {
     display: block;
@@ -532,7 +469,7 @@
     color: var(--cl-ink);
     font-family: var(--cl-font-heading);
     font-size: 1.45rem;
-    font-weight: 400;
+    font-weight: 700;
     line-height: 1;
   }
   .analytics-results-table td[data-column] .analytics-value {
@@ -713,7 +650,7 @@
   animation: analytics-sheet-up 280ms var(--cl-ease-out);
 }
 .analytics-sheet::backdrop {
-  background: rgb(5 9 18 / 0.6);
+  background: rgb(10 6 4 / 0.6);
 }
 .analytics-sheet[open]::backdrop {
   animation: analytics-fade 200ms ease-out;
@@ -850,7 +787,7 @@
   font-family: var(--cl-font-heading);
   font-size: 1.25rem;
   line-height: 1.1;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 .analytics-sheet-section {
   margin: 1.25rem 0 0.15rem;
@@ -913,8 +850,8 @@
   grid-area: share;
   font-family: var(--cl-font-heading);
   font-size: 1.2rem;
-  font-weight: 400;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 .analytics-variant-toggle .meter {
@@ -993,7 +930,7 @@
   color: var(--cl-ink);
   font-family: var(--cl-font-heading);
   font-size: 1.2rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 .analytics-example-head .battle-army {
   flex: none;

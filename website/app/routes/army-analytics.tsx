@@ -817,7 +817,6 @@ export default function ArmyAnalyticsRoute() {
             </Link>
           ))}
         </nav>
-        <p>Compare usage and battle results across tracked Legend League armies.</p>
       </div>
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
@@ -995,10 +994,12 @@ export default function ArmyAnalyticsRoute() {
             </span>
           </div>
           <p className="analytics-note" id="army-selection-help">
-            {usageLabels[category]} usage in attacks <strong>by</strong>{" "}
-            {populationDescription(population)}.
+            <span className="sr-only">
+              {usageLabels[category]} usage in attacks by{" "}
+              {populationDescription(population)}.
+            </span>
             {!isHistorical && !snapshot && untrackedDays.length > 0
-              ? ` Days not tracked: ${dayList(untrackedDays)}.`
+              ? `Days not tracked: ${dayList(untrackedDays)}.`
               : null}
           </p>
           <div className="analytics-coverage" role="group" aria-label="Battle coverage">
@@ -1012,11 +1013,6 @@ export default function ArmyAnalyticsRoute() {
               Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
             </span>
           </div>
-          {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
-            <p className="analytics-note analytics-tap-hint">
-              Tap an army for its variants and top armies.
-            </p>
-          ) : null}
           <div className="tab-row analytics-sort-chips" role="group" aria-label="Sort">
             {chipOrder
               .filter((column) => columns.includes(column))

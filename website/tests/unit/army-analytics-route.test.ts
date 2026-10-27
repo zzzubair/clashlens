@@ -498,7 +498,6 @@ describe("army analytics route historical reads", () => {
     const closed = await renderArmyRoute("season=current");
     expect(closed).toContain('aria-expanded="false"');
     expect(renderedText(closed)).toContain("Hydra 1 variant + Other 50.0%");
-    expect(renderedText(closed)).toContain("Tap an army for its variants");
     expect(closed).not.toContain("<dialog");
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(

@@ -359,7 +359,9 @@ export default function TrackedLeaderboardRoute() {
           <Form method="get" role="search" aria-label="Find your leaderboard rank">
             <input type="hidden" name="view" value="live" />
             <input type="hidden" name="page" value="1" />
-            <label htmlFor="rank-query">Find your rank</label>
+            <label htmlFor="rank-query" className="sr-only">
+              Find your rank
+            </label>
             <div className="search-controls rank-search-controls">
               <SearchIcon className="search-field-icon" />
               <input
@@ -369,7 +371,7 @@ export default function TrackedLeaderboardRoute() {
                 name="q"
                 defaultValue={query}
                 key={query}
-                placeholder="Player name or #tag"
+                placeholder="Your name or #tag"
                 maxLength={MAX_SEARCH_QUERY_LENGTH}
                 autoCapitalize="none"
                 autoCorrect="off"

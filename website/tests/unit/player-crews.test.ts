@@ -139,7 +139,7 @@ describe("crews on the player page", () => {
     expect(mocks.requestJson.mock.calls[0]?.[0]).toBe("/v1/players/%232PP/crews");
     expect(html).toMatch(
       new RegExp(
-        `Crews: <span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>` +
+        `Crews: </span><span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>` +
           `<span> · <a href="/crews/${OTHER_ID}"[^>]*><bdi>Owls</bdi></a></span>`,
       ),
     );
@@ -160,7 +160,7 @@ describe("crews on the player page", () => {
     expect(html).toContain(`<h1>${TAG}</h1>`);
     expect(html).toMatch(
       new RegExp(
-        `Crew: <span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>`,
+        `<span class="sr-only">Crew: </span><span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>`,
       ),
     );
   });

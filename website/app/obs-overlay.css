@@ -6,6 +6,19 @@
  */
 
 /* The streamer's font choices beside Clash Lens's own; SIL OFL, see /fonts. */
+/* The Clash Lens overlay style keeps the old in-game faces. */
+@font-face {
+  font-family: "Lilita One";
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/lilita-one-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Nunito;
+  font-weight: 400 900;
+  font-display: block;
+  src: url("/fonts/nunito-latin.woff2") format("woff2");
+}
 @font-face {
   font-family: Inter;
   font-weight: 400 900;
@@ -885,7 +898,7 @@ html.obs-page body {
   color: var(--cl-ink);
   background: var(--cl-surface);
   box-shadow:
-    0 1px 3px rgb(13 22 38 / 0.12),
+    0 1px 3px rgb(30 18 10 / 0.12),
     inset 0 0 0 1px var(--cl-outline);
 }
 :root[data-theme="dark"] .obs-settings .obs-seg label:has(input:checked) {

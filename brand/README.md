@@ -1,6 +1,6 @@
 # Clash Lens brand
 
-Decided by the owner on 2026-10-08. The brand comes from the logo: its thick dark outline, its yellow-to-orange letters, the ember-red base under them and the gold lens. Since the 2026-10-27 redesign the site around it is calm and cool so the logo and the one main action on each page carry the colour.
+Decided by the owner on 2026-10-08. The brand comes from the logo: its thick dark outline, its yellow-to-orange letters, the ember-red base under them and the gold lens. Since the 2026-10-27 UI/UX redesign the whole site takes its colours from the logo too: warm ember browns, with the yellow-to-orange kept for the one main action on each page.
 
 ## Logo
 
@@ -25,7 +25,7 @@ At 16 pixels the CL mark reads as two orange blocks rather than letters.
 
 ## Colours
 
-Changed on 2026-10-27 by the UI/UX redesign: the warm cream and purple-night pages were replaced by a cooler, calmer look so the logo's yellow and orange stand out. The logo itself is unchanged.
+Chosen by the owner on 2026-10-27 ("Warm ember", because it goes with the logo). It replaced a navy look that read as generic. The logo itself is unchanged.
 
 Brand colours, the same in both themes:
 
@@ -37,38 +37,40 @@ Brand colours, the same in both themes:
 | Ember red   | `#b3261e`             | Never body text                                    |
 | Button fill | `#ffd447` → `#ff8a1f` | The one main action on a page, and the current tab |
 
-The site has a light theme (cool daylight grey) and a dark theme (night-sky navy). A first-time visitor gets whichever theme their device is set to; the moon/sun button overrides it and the choice is remembered in that browser.
+The site has a light theme (warm paper) and a dark theme (ember night: brown-blacks like the logo's outline). A first-time visitor gets whichever theme their device is set to; the moon/sun button overrides it and the choice is remembered in that browser.
 
-| Role                 | Light              | Dark                     |
-| -------------------- | ------------------ | ------------------------ |
-| Page                 | `#eef2f7`          | `#0b1220`                |
-| Card                 | `#ffffff`          | `#121b2d`                |
-| Panel, table head    | `#f3f6fa`          | `#18233a`                |
-| Text                 | `#0d1626`          | `#edf2fa`                |
-| Muted text           | `#55627a`          | `#9aabc4`                |
-| Link, accent text    | `#a34a07`          | `#ffb547`                |
-| Divider, card edge   | `#e1e7ef`          | `#1f2b44`                |
-| Trophies, stars      | `#8a5a00`          | `#f6c445`                |
-| You, in progress     | `#0b6bb5`          | `#6cc4ff`                |
-| Win, trophies gained | `#137a3a`          | `#4cd98b`                |
-| Loss, trophies lost  | `#c62828`          | `#ff7b7b`                |
-| Top bar background   | white, see-through | page colour, see-through |
+| Role                 | Light          | Dark                 |
+| -------------------- | -------------- | -------------------- |
+| Page                 | `#f5efe8`      | `#120d0a`            |
+| Card                 | `#fffcf8`      | `#1c1511`            |
+| Panel, table head    | `#f8f2ea`      | `#221a15`            |
+| Raised (rank plate)  | `#ede3d8`      | `#30251e`            |
+| Text                 | `#1c130d`      | `#fbf3ea`            |
+| Muted text           | `#6e5e52`      | `#b8a596`            |
+| Link, accent, you    | `#b53a0a`      | `#ff9a3c`            |
+| Divider, card edge   | `#ebe1d6`      | `#2a201a`            |
+| Trophies             | `#865800`      | `#ffc53d`            |
+| Win, trophies gained | `#127436`      | `#4ade80`            |
+| Loss, trophies lost  | `#c81e1e`      | `#ff6b5b`            |
+| Top bar, tab bar     | paper, frosted | ember night, frosted |
 
-Every text colour above reaches at least 4.5:1 contrast on the page, card and panel colours of its theme (the usual minimum for readable text). Text on the yellow-to-orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
+Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the yellow-to-orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
 
 ## Fonts
 
-- **Lilita One** for page titles, section headings and big numbers. One weight. SIL Open Font Licence.
-- **Nunito** for everything else, with numbers lined up in columns. Card titles are Nunito extra-bold. Labels are sentence case, never ALL CAPS. SIL Open Font Licence.
+- **Inter** for words: names, headings, labels and body text, from regular to black weight. SIL Open Font Licence.
+- **Barlow Condensed** (semi-bold and bold) for scoreboard numbers: trophies, ranks, scores and the Reset clock. Its narrow figures line up in columns and read like a game scoreboard. SIL Open Font Licence.
+- Labels are sentence case, never ALL CAPS. The stream overlay keeps **Lilita One** and **Nunito**, its own look on stream.
 
-Both are served from the site itself.
+All are served from the site itself.
 
 ## Look
 
-- **Top bar:** see-through over the page, with the logo, search, theme button and account. On phones and iPads a tab bar sits at the bottom of the screen, and the current tab has a soft orange pill behind its icon.
-- **Cards:** a 1px edge in the divider colour and 16px corners, with no hard shadow. Pop-ups and sheets get a soft shadow to lift them off the page.
-- **Buttons:** the main action uses the yellow-to-orange fill with Night text; everything else is a quiet panel-coloured button with a thin outline. Controls have 12px corners.
-- **Switches and tabs:** a sunken track with the chosen option lifted out of it.
-- **Badges and chips:** rounded pills.
+- **Less text:** a label shows only when the number or icon beside it is not clear on its own. Explanations for screen readers stay in the page, hidden from view.
+- **Glass, used sparingly:** only the top bar, the floating tab bar on phones and iPads, sheets and dropdowns are frosted. Cards are solid, with a faint top light and a hairline edge.
+- **Rank plates:** every rank (Rankings, Crew boards, Armies) sits on a slanted plate; the top three are gold, silver and bronze.
+- **Scoreboard numbers:** big numbers use Barlow Condensed; the player page draws the Season as a trophy line, Season stars as proportional bars, and each day's attacks against defenses as a swing bar.
+- **Buttons:** the main action uses the yellow-to-orange fill with Night text and a soft orange glow; everything else is a quiet card-coloured button with a thin edge. Controls have 8px corners, cards 12px.
+- **Dashboard teaser:** signed-out visitors see a locked example dashboard on the front page, with Create account and Sign in.
 - **Phones first:** nothing scrolls sideways except a row of tabs or chips; long lists show a first chunk and a "Show all" button.
 - **Consistency:** every page uses the same edges, corners and colours. Nothing gets a one-off style.

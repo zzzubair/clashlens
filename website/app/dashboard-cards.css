@@ -31,7 +31,7 @@
   display: block;
   font-family: var(--cl-font-heading);
   font-size: 1.4rem;
-  font-weight: 400;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -53,7 +53,7 @@
   color: var(--cl-accent);
   font-family: var(--cl-font-heading);
   font-size: 1.1rem;
-  font-weight: 400;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -103,7 +103,7 @@
 .legend-day-battles-head b {
   font-family: var(--cl-font-heading);
   font-size: 1.1rem;
-  font-weight: 400;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -136,8 +136,8 @@
 
 .dash-star-box-empty {
   min-height: 2.3rem;
-  border-style: dashed;
-  opacity: 0.45;
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
 }
 
 /* ---------- Card 2: Legend clock ---------- */
@@ -302,8 +302,9 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.3rem;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .clock-detail-head b {
@@ -500,7 +501,7 @@
 .form-big {
   font-family: var(--cl-font-heading);
   font-size: 1.9rem;
-  font-weight: 400;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -622,7 +623,7 @@
 .cutoff-rows b {
   font-family: var(--cl-font-heading);
   font-size: 1.05rem;
-  font-weight: 400;
+  font-weight: 700;
   text-align: right;
 }
 
@@ -859,7 +860,7 @@
 .graph-foot b {
   font-family: var(--cl-font-heading);
   font-size: 1.15rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 /* ---------- Recent form ---------- */
@@ -930,7 +931,7 @@
   margin-right: 0.25rem;
   font-family: var(--cl-font-heading);
   font-size: 1rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .stars-3 {
@@ -1012,7 +1013,7 @@
   color: var(--cl-ink);
   font-family: var(--cl-font-heading);
   font-size: 0.85rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 /* ---------- Narrow screens ---------- */

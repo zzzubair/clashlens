@@ -358,10 +358,7 @@ export default function GroupsRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="groups-title">
         <h1 id="groups-title">Watchlists</h1>
-        <p className="lede">
-          Watchlists are private lists of players you compare side by side. Only you can
-          see them. Up to 20 players each.
-        </p>
+        <p className="lede">Private lists of up to 20 players, side by side.</p>
       </section>
 
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
@@ -378,7 +375,7 @@ export default function GroupsRoute() {
             help={
               atLimit
                 ? GROUP_LIMIT
-                : `You add players one at a time once the watchlist exists. Up to ${MAX_GROUPS} watchlists.`
+                : `Up to ${MAX_GROUPS} watchlists. Add players once it exists.`
             }
           />
           <button
@@ -416,7 +413,6 @@ export default function GroupsRoute() {
         ) : (
           <div className="empty-state">
             <h3>No watchlists yet</h3>
-            <p>Create a watchlist above to compare players by their tags.</p>
           </div>
         )}
       </section>

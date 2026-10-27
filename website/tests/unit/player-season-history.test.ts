@@ -296,7 +296,7 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Partial Season history");
     // The summary drops the Season trophy change; it is ending trophies minus 5,000.
     expect(html).not.toContain("Sum of daily trophy changes");
-    expect(html).toContain("50.0%<small>20 of 40 attacks</small>");
+    expect(html).toContain("50.0%<small>20 of 40</small>");
     expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
     expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");

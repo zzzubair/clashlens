@@ -159,7 +159,7 @@ export default function CrewRoute() {
         <div className="crew-title">
           <h1 id="crew-title">{crew.name}</h1>
           {myRole === null ? (
-            <p className="crew-meta">Joining is by invite only.</p>
+            <p className="crew-meta">By invite only</p>
           ) : clashers === null ? null : (
             <p className="crew-meta">
               {clashers} {clashers === 1 ? "clasher" : "clashers"}

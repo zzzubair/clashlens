@@ -78,7 +78,7 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
         {pickedDay
           ? `Day ${pickedDay.day} · ended on ${count(pickedDay.endTrophies)}${isShieldDay(pickedDay) ? " · no battles" : ""}`
           : data.today !== null && data.today > 1
-            ? "Tap a day for details"
+            ? null
             : FIRST_DAY_NOTE}
       </p>
       <dl className="heat-summary">

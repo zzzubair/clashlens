@@ -398,7 +398,7 @@ describe("Legend clock", () => {
       }),
     );
     expect(html).toContain("to Reset at 05:00");
-    expect(text(html)).toContain("RESET 05:00");
+    expect(text(html)).toContain("Reset 05:00");
     expect(text(html)).toContain("3h 00m");
     expect(text(html)).not.toContain("now ");
   });
@@ -438,9 +438,7 @@ describe("Legend day card", () => {
 
   it("shows the projected place beside the outer range, labelled an estimate", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain(
-      "Next Reset #1 – #12,270 estimate · narrows as the day goes on Projected #3,000 at Reset",
-    );
+    expect(html).toContain("Next Reset #1 – #12,270 estimate Projected #3,000 at Reset");
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
     );
@@ -470,7 +468,7 @@ describe("Legend day card", () => {
     expect(html).toContain("Net today +66");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
-    expect(html).toContain("Next Reset #95 – #760 estimate · narrows as the day goes on");
+    expect(html).toContain("Next Reset #95 – #760 estimate");
     expect(html).toContain("Attacks 2 of 8 +71");
     expect(html).toContain("Defenses 1 of 8 −5");
     expect(html).toContain("7 defenses remain · auto defense −21 each");
@@ -1397,10 +1395,10 @@ describe("dashboard page", () => {
     });
     const plain = text(html);
     expect(plain.indexOf("Find any Legend League player")).toBeLessThan(
-      plain.indexOf("Your Legend day, on one page"),
+      plain.indexOf("Your Legend day, live"),
     );
-    expect(plain).toContain("Your Legend day, on one page");
-    expect(plain).toContain("Legend clock in your time");
+    expect(plain).toContain("Your Legend day, live");
+    expect(plain).toContain("Rank, rivals, Reset clock and goal on one page.");
     expect(plain).toContain("Create account Already have one? Sign in");
   });
 });

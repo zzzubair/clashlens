@@ -91,10 +91,10 @@
 :is(.home-page, .leaderboard-search) .search-controls input + button {
   flex: 0 0 auto;
   width: auto;
-  min-width: 5.5rem;
+  min-width: 4.75rem;
   height: auto;
   min-height: 2.75rem;
-  padding-inline: 1rem;
+  padding-inline: 0.85rem;
   font-size: 0.9rem;
 }
 
@@ -287,43 +287,7 @@
   text-align: center;
 }
 
-.rank-mark {
-  display: inline-grid;
-  place-items: center;
-  min-width: 2.1rem;
-  height: 2.1rem;
-  padding-inline: 0.3rem;
-  color: var(--cl-ink);
-  border-radius: 999px;
-  font-size: 0.9rem;
-  font-weight: 800;
-}
-
-/* Gold, silver and bronze: a medal, a tinted row and a stripe down its edge. */
-.leaderboard-table .leaderboard-row[data-podium-rank] {
-  --podium: var(--cl-medal-gold);
-  background: color-mix(in srgb, var(--podium) 15%, transparent);
-}
-
-.leaderboard-table .leaderboard-row[data-podium-rank="2"] {
-  --podium: var(--cl-silver);
-  background: color-mix(in srgb, var(--podium) 18%, transparent);
-}
-
-.leaderboard-table .leaderboard-row[data-podium-rank="3"] {
-  --podium: var(--cl-bronze);
-}
-
-.leaderboard-row[data-podium-rank] > :first-child {
-  box-shadow: inset 4px 0 0 var(--podium);
-}
-
-.leaderboard-row[data-podium-rank] .rank-mark {
-  background: var(--podium);
-  font-family: var(--cl-font-heading);
-  font-size: 1.05rem;
-  font-weight: 400;
-}
+/* Gold, silver and bronze plates are in brand.css; the row itself stays plain. */
 
 /* The player Find your rank opened: the "you" colour. */
 .leaderboard-table .leaderboard-row[data-selected="true"] {
@@ -409,8 +373,8 @@
   color: var(--cl-ink);
   font-family: var(--cl-font-heading);
   font-size: 1.15rem;
-  font-weight: 400;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 /* Every row keeps room for the Tie pill after its trophies, so trophies line
@@ -648,7 +612,7 @@
 }
 
 @media (forced-colors: active) {
-  .leaderboard-row[data-podium-rank] .rank-mark,
+  .rank-mark,
   .leaderboard-view-switch .button[aria-current="page"] {
     border: 1px solid CanvasText;
   }

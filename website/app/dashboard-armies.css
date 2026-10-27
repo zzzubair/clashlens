@@ -108,7 +108,7 @@
 .army-offense-row b {
   font-family: var(--cl-font-heading);
   font-size: 1.15rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .army-one {
@@ -123,8 +123,9 @@
 }
 
 .army-one-name .dash-name {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.4rem;
+  font-weight: 700;
 }
 
 .army-one-big {
@@ -137,7 +138,7 @@
   display: block;
   font-family: var(--cl-font-heading);
   font-size: 2.6rem;
-  font-weight: 400;
+  font-weight: 700;
   line-height: 1.05;
 }
 

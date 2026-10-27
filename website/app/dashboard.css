@@ -5,9 +5,23 @@
  * both work.
  */
 
+/* The player tabs and Customise share the top row; everything else spans it. */
 .dash-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  column-gap: 0.75rem;
   width: min(100% - 2rem, 76rem);
   padding-top: 1rem;
+}
+
+.dash-page > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.dash-page > .dash-accounts {
+  grid-column: 1;
 }
 
 .dash-icon {
@@ -27,14 +41,15 @@
 .dash-label {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.72rem;
-  font-weight: 900;
+  font-size: 0.75rem;
+  font-weight: 650;
 }
 
 .dash-big {
   display: block;
-  font-family: var(--cl-font-heading);
-  font-size: 2.1rem;
+  font-family: var(--cl-font-score);
+  font-size: 2.6rem;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -163,8 +178,9 @@
 }
 
 .dash-account > .dash-name {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
+  font-weight: 700;
 }
 
 .dash-account-line {
@@ -237,13 +253,20 @@
 
 .dash-divider {
   display: flex;
+  grid-column: 2;
+  align-items: flex-start;
   justify-content: flex-end;
-  min-height: 2.6rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.8rem;
+  padding-top: 0.2rem;
+}
+
+.dash-divider:empty {
+  display: none;
 }
 
 .dash-customise {
   gap: 0.4rem;
+  min-height: 3.6rem;
 }
 
 /* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
@@ -381,8 +404,9 @@
   padding: 2.5rem 1rem;
   border: 2px dashed var(--cl-border);
   border-radius: var(--cl-card-radius);
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.25rem;
+  font-weight: 700;
 }
 
 .dash-new-day {
@@ -409,9 +433,9 @@
 }
 
 .dash-editbar-title {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.1rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .dash-editbar-state {
@@ -672,9 +696,9 @@
 }
 
 .dash-welcome-option b {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .dash-welcome-badge {
@@ -739,7 +763,8 @@
     padding: 0;
   }
 
-  .dash-account-add-text {
+  .dash-account-add-text,
+  .dash-customise-text {
     position: absolute;
     width: 1px;
     height: 1px;

@@ -1,6 +1,6 @@
 /*
  * The Clash Lens look: fonts and the shared style of headings, the top bar,
- * buttons, tabs, cards, tables and badges. Colours are the --cl-* tokens in
+ * buttons, tabs, panels, tables and badges. Colours are the --cl-* tokens in
  * theme.css (light) and appearance.css (dark). See brand/README.md.
  *
  * Rules start with :root so they win over the older per-page styles, which
@@ -8,86 +8,66 @@
  */
 
 @font-face {
-  font-family: "Lilita One";
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/lilita-one-latin.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
-    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@font-face {
-  font-family: "Lilita One";
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/lilita-one-latin-ext.woff2") format("woff2");
-  unicode-range:
-    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
-    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4,
-    U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
-@font-face {
-  font-family: Nunito;
+  font-family: Inter;
   font-weight: 400 900;
   font-display: swap;
-  src: url("/fonts/nunito-latin.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
-    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: Nunito;
-  font-weight: 400 900;
+  font-family: "Barlow Condensed";
+  font-weight: 600;
   font-display: swap;
-  src: url("/fonts/nunito-latin-ext.woff2") format("woff2");
-  unicode-range:
-    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
-    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4,
-    U+2113, U+2C60-2C7F, U+A720-A7FF;
+  src: url("/fonts/barlow-condensed-600-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/barlow-condensed-700-latin.woff2") format("woff2");
 }
 
 /* ---------- Type ---------- */
 
-/* Lilita One, the chunky in-game face, is kept for page titles, section titles
-   and the big numbers; everything else is Nunito. */
-:root :is(h1, h2, .site-brand) {
-  font-family: var(--cl-font-heading);
-  font-weight: 400;
-  letter-spacing: 0.01em;
+/* Inter for words, tight and dark; Barlow Condensed for the scoreboard
+   numbers (trophies, ranks, results), like a broadcast's score line. */
+:root :is(h1, h2, h3) {
+  font-family: var(--cl-font);
+  text-wrap: balance;
 }
 :root h1 {
-  font-size: clamp(1.75rem, 1.2rem + 2.2vw, 2.5rem);
-  line-height: 1.1;
-  letter-spacing: 0.005em;
+  font-size: clamp(1.85rem, 1.3rem + 2.4vw, 2.75rem);
+  font-weight: 760;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
   text-shadow: none;
 }
 :root h2 {
-  font-size: clamp(1.2rem, 1.05rem + 0.6vw, 1.45rem);
+  font-size: clamp(1.15rem, 1.05rem + 0.45vw, 1.35rem);
+  font-weight: 700;
   line-height: 1.2;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.02em;
 }
 :root h3 {
-  font-family: var(--cl-font);
-  font-size: 1.02rem;
-  font-weight: 800;
-  letter-spacing: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 :root .eyebrow {
-  color: var(--cl-action-text);
-  font-weight: 800;
-  letter-spacing: 0.02em;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0;
 }
-:root :is(table, .metric-card, .season-summary) {
+:root :is(table, .metric-card, .season-summary, .stat, .score) {
   font-variant-numeric: tabular-nums;
 }
-/* Big numbers read like the in-game counters. */
-:root :is(.metric-card strong, .season-summary-headline strong) {
-  font-family: var(--cl-font-heading);
-  font-weight: 400;
-  letter-spacing: 0.01em;
+/* Big numbers read like a scoreboard. */
+:root :is(.metric-card strong, .season-summary-headline strong, .score) {
+  font-family: var(--cl-font-score);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 /* ---------- Top bar ---------- */
@@ -97,26 +77,39 @@
   border-bottom: 0;
 }
 :root .primary-nav a {
+  position: relative;
   color: var(--cl-header-muted);
   border: 0;
-  border-radius: 999px;
-  font-weight: 800;
+  border-radius: var(--cl-radius);
+  font-weight: 560;
 }
 :root .primary-nav a:hover {
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);
 }
+/* The current tab: bright text and a short gold bar under it. */
 :root .primary-nav a[aria-current="page"] {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
+  color: var(--cl-header-ink);
+  background: transparent;
   box-shadow: none;
+}
+:root .primary-nav a[aria-current="page"]::after {
+  position: absolute;
+  right: 0.9rem;
+  bottom: -0.55rem;
+  left: 0.9rem;
+  height: 2px;
+  background: var(--cl-brand-fill);
+  background: linear-gradient(90deg, var(--cl-brand-yellow), var(--cl-brand-orange));
+  border-radius: 2px;
+  content: "";
 }
 :root :is(.site-nav, .site-menu-extras) .nav-link:not(.nav-link-primary),
 :root .site-header :is(.theme-toggle, .header-search-toggle) {
   color: var(--cl-header-ink);
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--cl-radius);
   box-shadow: none;
 }
 :root
@@ -129,7 +122,7 @@
 
 /* ---------- Buttons ---------- */
 
-/* Primary: the logo's yellow-to-orange, dark text, a pressed-in bottom edge. */
+/* Primary: the logo's yellow-to-orange, dark text, a lit top edge. */
 :root
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
@@ -141,8 +134,12 @@
   background: var(--cl-brand-fill);
   border: 0;
   border-radius: var(--cl-radius);
-  box-shadow: var(--cl-button-shadow);
-  font-weight: 800;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.45),
+    inset 0 -1px 0 rgb(120 40 0 / 0.25),
+    0 6px 18px -8px rgb(255 120 20 / 0.55);
+  font-weight: 650;
+  letter-spacing: -0.005em;
   text-shadow: none;
 }
 :root
@@ -155,7 +152,7 @@
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill-hover);
 }
-/* Secondary: a quiet filled button in the page's own colours. */
+/* Secondary: a quiet glass button with a hairline edge. */
 :root
   :is(
     .button.secondary,
@@ -165,11 +162,11 @@
     .snapshot-pagination a
   ) {
   color: var(--cl-ink);
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-outline);
+  background: var(--cl-card-fill, var(--cl-surface));
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
-  box-shadow: none;
-  font-weight: 800;
+  box-shadow: var(--cl-glass-shine);
+  font-weight: 600;
 }
 :root
   :is(
@@ -180,7 +177,7 @@
     .snapshot-pagination a
   ):is(:hover, :focus-visible) {
   color: var(--cl-ink);
-  background: var(--cl-raised);
+  background: var(--cl-panel);
   border-color: var(--cl-outline);
 }
 :root .danger-button {
@@ -188,18 +185,18 @@
   background: #c62828;
   border: 0;
   border-radius: var(--cl-radius);
-  box-shadow: var(--cl-button-shadow);
-  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2);
+  font-weight: 650;
 }
 
-/* ---------- Tabs: a sunken track with the current tab lifted out of it ---------- */
+/* ---------- Switches: a sunken track, the chosen option lifted out ---------- */
 
 :root .leaderboard-view-switch {
-  padding: 0.25rem;
+  padding: 3px;
   background: var(--cl-panel);
   border: 1px solid var(--cl-border);
-  border-radius: calc(var(--cl-radius) + 2px);
-  box-shadow: none;
+  border-radius: calc(var(--cl-radius) + 3px);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.06);
 }
 :root .leaderboard-view-switch .button {
   color: var(--cl-muted);
@@ -208,23 +205,37 @@
   border-radius: var(--cl-radius);
   box-shadow: none;
   text-shadow: none;
-  font-weight: 800;
+  font-weight: 600;
+}
+:root .leaderboard-view-switch .button:hover {
+  color: var(--cl-ink);
+  background: transparent;
 }
 :root .leaderboard-view-switch .button[aria-current="page"] {
   color: var(--cl-ink);
   background: var(--cl-surface);
   border-color: transparent;
   box-shadow:
-    0 1px 3px rgb(13 22 38 / 0.12),
-    inset 0 0 0 1px var(--cl-outline);
-  font-weight: 800;
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 0 0 1px var(--cl-card-line);
+  font-weight: 650;
 }
 :root[data-theme="dark"] .leaderboard-view-switch .button[aria-current="page"] {
   background: var(--cl-raised);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.5);
 }
 
-/* ---------- Cards: one hairline edge, one corner size ---------- */
+/* ---------- Panels: one hairline edge, a lit top, one corner size ---------- */
 
+:root {
+  --cl-card-fill: var(--cl-surface);
+}
+:root[data-theme="dark"] {
+  /* Dark panels are smoked glass: lighter at the top, lit along the edge. */
+  --cl-card-fill: linear-gradient(180deg, #211913 0%, #1b1410 100%);
+}
 :root
   :is(
     .home-leaderboard,
@@ -246,18 +257,22 @@
     .header-search-panel,
     .home-page .search-controls
   ) {
-  background: var(--cl-surface);
+  background: var(--cl-card-fill);
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
+  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
 }
+/* Pop-ups are real frosted glass over the page. */
 :root :is(.search-dropdown, .header-search-panel) {
+  background: var(--cl-glass-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: var(--cl-overlay-shadow);
 }
 :root :is(.home-leaderboard, .standings-board, .season-summary) {
   overflow: hidden;
 }
-/* A card inside a card is just a section of it. */
+/* A panel inside a panel is just a section of it. */
 :root
   :is(
     .home-leaderboard,
@@ -276,11 +291,12 @@
     .search-results,
     .search-controls
   ) {
+  background: transparent;
   border-width: 0;
   border-radius: 0;
   box-shadow: none;
 }
-/* Small items in a list share the card edge. */
+/* Small items in a list share the panel edge. */
 :root :is(.search-result, .player-action-list li) {
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
@@ -290,34 +306,85 @@
 /* ---------- Tables ---------- */
 
 :root :is(.leaderboard-table, .data-table) thead th {
-  color: var(--cl-muted);
-  background: var(--cl-panel);
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0;
+  color: var(--cl-faint);
+  background: transparent;
+  border-bottom: 1px solid var(--cl-border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   text-transform: none;
 }
+:root :is(.leaderboard-table, .data-table) tbody tr:nth-child(even) {
+  background: transparent;
+}
 :root :is(.leaderboard-table, .data-table) tbody tr:hover {
-  background: var(--cl-panel);
+  background: var(--cl-header-soft);
 }
 :root .leaderboard-table .player-name {
-  font-weight: 800;
+  font-weight: 650;
 }
-:root .rank-mark {
-  font-weight: 800;
+
+/* Rank plates: a slanted scoreboard tab, gold, silver and bronze on the podium. */
+:root :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: 2.35rem;
+  height: 1.65rem;
+  padding: 0 0.55rem;
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+  border: 0;
+  border-radius: 3px;
+  clip-path: polygon(0.4rem 0, 100% 0, calc(100% - 0.4rem) 100%, 0 100%);
+  font-family: var(--cl-font-score);
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: none;
 }
-:root .leaderboard-row[data-podium-rank] .rank-mark {
+:root
+  :is(
+    .leaderboard-row[data-podium-rank] .rank-mark,
+    .crew-rank[data-podium-rank],
+    [data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank
+  ) {
   color: var(--cl-brand-night);
   border: 0;
-  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.18);
+  box-shadow: none;
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="1"] .rank-mark,
+    .crew-rank[data-podium-rank="1"],
+    [data-ranked] .analytics-row:nth-child(1) .analytics-rank
+  ) {
+  background: linear-gradient(180deg, #ffe38a, #f2b51d);
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="2"] .rank-mark,
+    .crew-rank[data-podium-rank="2"],
+    [data-ranked] .analytics-row:nth-child(2) .analytics-rank
+  ) {
+  background: linear-gradient(180deg, #eef0f4, #b9bec8);
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="3"] .rank-mark,
+    .crew-rank[data-podium-rank="3"],
+    [data-ranked] .analytics-row:nth-child(3) .analytics-rank
+  ) {
+  background: linear-gradient(180deg, #f4c19c, #c9814f);
 }
 
 /* ---------- Badges ---------- */
 
 :root :is(.profile-badge) {
   border: 1px solid currentColor;
-  border-radius: 999px;
-  font-weight: 800;
+  border-radius: 4px;
+  font-weight: 650;
 }
 
 /* ---------- Form fields ---------- */
@@ -341,7 +408,7 @@
   }
 }
 
-/* ---------- Shared building blocks for the phone-first pages ---------- */
+/* ---------- Shared building blocks ---------- */
 
 /* Page heading: title, one line of help, actions on the right when wide. */
 :root .page-head {
@@ -350,23 +417,24 @@
   gap: 0.5rem 1rem;
   align-items: end;
   justify-content: space-between;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.5rem;
 }
 :root .page-head h1 {
   margin: 0;
 }
 :root .page-head p {
   flex-basis: 100%;
+  max-width: 40rem;
   margin: 0;
   color: var(--cl-muted);
 }
 
 /* Tabs and filter chips: one row that scrolls sideways on a phone instead of
    wrapping. Links or buttons; the current one has aria-current or
-   aria-pressed/aria-selected. */
+   aria-pressed/aria-selected, and turns solid. */
 :root .tab-row {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.375rem;
   margin: 0 0 1rem;
   padding: 0;
   overflow-x: auto;
@@ -382,15 +450,15 @@
   flex: 0 0 auto;
   gap: 0.35rem;
   align-items: center;
-  min-height: 2.5rem;
-  padding: 0.4rem 0.95rem;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.85rem;
   color: var(--cl-muted);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-border);
-  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
   font: inherit;
-  font-size: 0.9rem;
-  font-weight: 800;
+  font-size: 0.875rem;
+  font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
@@ -408,66 +476,71 @@
     [aria-pressed="true"],
     [aria-selected="true"]
   ) {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
+  color: var(--cl-paper);
+  background: var(--cl-ink);
+  border-color: var(--cl-ink);
 }
 
-/* Stat tiles: a small label over a big in-game number. */
+/* Stat tiles: a small label over a big scoreboard number, split by hairlines
+   rather than boxed. */
 :root .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(8.5rem, 100%), 1fr));
+  gap: 0;
   margin: 0;
 }
 :root .stat {
   display: grid;
-  gap: 0.1rem;
+  gap: 0.15rem;
   align-content: start;
   min-width: 0;
   margin: 0;
-  padding: 0.75rem 0.85rem;
-  background: var(--cl-panel);
-  border-radius: var(--cl-radius);
+  padding: 0.25rem 1rem 0.25rem 0;
+  background: transparent;
+  border-radius: 0;
+}
+:root .stat + .stat {
+  padding-left: 1rem;
+  border-left: 1px solid var(--cl-border);
 }
 :root .stat :is(dt, .stat-label) {
   color: var(--cl-muted);
-  font-size: 0.8rem;
-  font-weight: 700;
+  font-size: 0.78rem;
+  font-weight: 550;
 }
 :root .stat :is(dd, .stat-value) {
   margin: 0;
-  font-family: var(--cl-font-heading);
-  font-size: 1.45rem;
-  line-height: 1.15;
+  font-family: var(--cl-font-score);
+  font-size: 1.85rem;
+  font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 :root .stat .stat-note {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: 0.76rem;
+  font-weight: 500;
 }
 
 /* A thin bar for a share or a rate: <span class="meter"><span style="--value: 28%"></span></span> */
 :root .meter {
   display: block;
-  height: 0.4rem;
+  height: 4px;
   overflow: hidden;
   background: var(--cl-raised);
-  border-radius: 999px;
+  border-radius: 2px;
 }
 :root .meter > span {
   display: block;
   width: min(var(--value, 0%), 100%);
   height: 100%;
-  background: var(--cl-brand-fill);
   background: linear-gradient(90deg, var(--cl-brand-yellow), var(--cl-brand-orange));
   border-radius: inherit;
 }
 
-/* Lists of rows inside a card: a divider between rows, a press state on links. */
+/* Lists of rows inside a panel: a divider between rows. */
 :root .row-list {
   margin: 0;
   padding: 0;

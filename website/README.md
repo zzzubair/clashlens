@@ -190,9 +190,10 @@ that the page stops checking, says so, and ignores any later answer.
 The Dashboard is `/` for signed-in users while
 `CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
 there. Everyone else, and everyone while the switch is off, gets the front
-page at `/`: the big search, Rankings and Analytics buttons and the top 10
-right now, then, only while the switch is on, what an account adds, with
-Create account and Sign in ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+page at `/`: the big search, then, only while the switch is on, a locked
+example dashboard with Create account and Sign in
+([`DashboardTeaser.tsx`](app/components/DashboardTeaser.tsx)), then the top 10
+now with a link to all rankings ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
 Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
 screens, they move to a bar at the bottom of the screen: Home (Dashboard when
@@ -626,17 +627,16 @@ The root repository `Containerfile` builds the Python asyncio collector; this
 
 ## Font assets
 
-Headings and big numbers use Lilita One; everything else uses Nunito, as decided
-in [`../brand/README.md`](../brand/README.md). Both are WOFF2 files as published
-by Google Fonts, split into Latin and Latin Extended so a browser only downloads
-the part a page needs: 12 KB for Lilita One and 75 KB for Nunito, which is one
-variable file covering weights 400 to 900. Other scripts fall back to the system
-font. Their SIL Open Font Licences are in `public/fonts/OFL-LilitaOne.txt` and
-`public/fonts/OFL-Nunito.txt`. The OBS overlay's other font choices, used only by
-its setup page and the overlay itself, are Inter (Clean), Barlow Condensed
-(Esports), Rajdhani (Tech) and Bungee with Rubik for smaller text (Arcade):
-Latin-only WOFF2 files, 206 KB in all, with their licences in the matching
-`public/fonts/OFL-*.txt` files. The fonts are served by the site itself and add no
+Words use Inter and scoreboard numbers use Barlow Condensed (semi-bold and bold),
+as decided in [`../brand/README.md`](../brand/README.md). Both are Latin-only WOFF2
+files as published by Google Fonts and already shipped for the OBS overlay, so the
+redesign added no font files: Inter is one variable file covering weights 400 to
+900, and the two Barlow Condensed weights are one file each. Other scripts fall
+back to the system font. The OBS overlay keeps Lilita One and Nunito (split into
+Latin and Latin Extended) for its own look, and its other font choices are Inter
+(Clean), Barlow Condensed (Esports), Rajdhani (Tech) and Bungee with Rubik for
+smaller text (Arcade). Every font's SIL Open Font Licence is in the matching
+`public/fonts/OFL-*.txt` file. The fonts are served by the site itself and add no
 application or build dependency.
 
 ## Game art and brand icons

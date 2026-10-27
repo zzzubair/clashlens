@@ -37,7 +37,10 @@ export function ClockCard({
     <>
       <CardHead title="Legend clock" meta={updatedAgo(data.observedAtMs, nowMs)} />
       <LegendClock battles={data.battles} nowMs={nowMs} timeZone={timeZone} />
-      <p className="dash-card-foot">Times in your zone: {timeZone}</p>
+      <p className="dash-card-foot">
+        <span className="sr-only">Times in your zone: </span>
+        {timeZone}
+      </p>
     </>
   );
 }

@@ -773,19 +773,19 @@ describe("automatic tag lookup", () => {
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
     expect(await render(stale)).toContain(
-      "Updated 7 Sep 2026, 12:00 UTC · 2 hours old · Battle history 7 Sep 2026, 11:40 UTC · 2 hours old",
+      "Updated 7 Sep 2026, 12:00 UTC · 2 hours old · Battles 7 Sep 2026, 11:40 UTC · 2 hours old",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
-    expect(fresh).toContain("Updated 12:00 UTC · Battle history not updated yet");
+    expect(fresh).toContain("Updated 12:00 UTC · Battles not updated yet");
     const oldHistory = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 12:00 UTC · Battle history 7 Sep 2026, 11:40 UTC · 20 minutes old",
+      "Updated 12:00 UTC · Battles 7 Sep 2026, 11:40 UTC · 20 minutes old",
     );
   });
 

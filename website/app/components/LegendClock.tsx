@@ -251,7 +251,7 @@ export function LegendClock({
           rx="5"
         />
         <text className="clock-reset-label" x="0" y="-117">
-          RESET {resetLabel}
+          Reset {resetLabel}
         </text>
         {marks.map((mark, index) => {
           const [x, y] = point(mark.minutes, mark.kind === "attack" ? 78 : 56);

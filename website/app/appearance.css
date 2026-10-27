@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   /* Field edges keep 3:1 against every surface, as form controls need. */
-  --cl-input-border: #7b889e;
+  --cl-input-border: #a08d7c;
   /* Buttons press like the game's: a darker bottom edge, no outline. */
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.16);
   --cl-raise: none;
@@ -10,17 +10,14 @@
   -webkit-text-size-adjust: 100%;
 }
 
+/* The logo's warm light falls from the top of every page. */
 body {
-  background: var(--cl-paper);
+  background:
+    radial-gradient(56rem 28rem at 50% -14rem, var(--cl-glow), transparent 72%) no-repeat,
+    var(--cl-paper);
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
-}
-
-/* Headings use Lilita One, which ships one weight. */
-:is(h1, h2, .site-brand) {
-  font-weight: 400;
-  letter-spacing: 0.01em;
 }
 
 /* Switch text and surfaces together, without a low-contrast intermediate frame. */
@@ -32,36 +29,44 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Night-sky navy, not black: easier on the eyes and the orange reads warm on it. */
-  --cl-ink: #edf2fa;
-  --cl-paper: #0b1220;
-  --cl-surface: #121b2d;
-  --cl-panel: #18233a;
-  --cl-raised: #22304d;
-  --cl-muted: #9aabc4;
-  --cl-border: #1f2b44;
-  --cl-outline: #2f3f5f;
-  --cl-input-border: #62769a;
-  --cl-accent: #ffb547;
-  --cl-accent-contrast: #ffb547;
-  --cl-header-bg: rgb(11 18 32 / 0.86);
-  --cl-header-solid: #0b1220;
-  --cl-header-ink: #edf2fa;
-  --cl-header-muted: #9aabc4;
-  --cl-header-soft: #18233a;
-  --cl-action-text: #ffb547;
-  --cl-action-soft: #3a2c17;
-  --cl-action-border: #7a5320;
-  --cl-gold: #f6c445;
-  --cl-sky: #6cc4ff;
-  --cl-sky-soft: #15304d;
-  --cl-positive: #4cd98b;
-  --cl-positive-soft: #123326;
-  --cl-negative: #ff7b7b;
-  --cl-negative-soft: #3a1c26;
-  --cl-card-line: var(--cl-border);
-  --cl-card-drop: none;
-  --cl-overlay-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--cl-outline);
+  /* Ember night: warm brown-blacks that match the logo's outline, so its
+     yellow and orange glow on them. */
+  --cl-ink: #fbf3ea;
+  --cl-paper: #120d0a;
+  --cl-surface: #1c1511;
+  --cl-panel: #221a15;
+  --cl-raised: #30251e;
+  --cl-muted: #b8a596;
+  --cl-faint: #a08d7c;
+  --cl-border: #2a201a;
+  --cl-outline: #3d3027;
+  --cl-input-border: #7d6a5a;
+  --cl-accent: #ff9a3c;
+  --cl-accent-contrast: #ff9a3c;
+  --cl-header-bg: rgb(18 13 10 / 0.72);
+  --cl-header-solid: #120d0a;
+  --cl-header-ink: #fbf3ea;
+  --cl-header-muted: #b8a596;
+  --cl-header-soft: rgb(255 220 190 / 0.08);
+  --cl-action-text: #ff9a3c;
+  --cl-action-soft: #33200f;
+  --cl-action-border: #7a4a1a;
+  --cl-gold: #ffc53d;
+  --cl-star: #ffc53d;
+  --cl-sky: #ff9a3c;
+  --cl-sky-soft: #33200f;
+  --cl-positive: #4ade80;
+  --cl-positive-soft: #13291a;
+  --cl-negative: #ff6b5b;
+  --cl-negative-soft: #3a1812;
+  --cl-card-line: rgb(255 220 190 / 0.09);
+  --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.4), 0 16px 40px -24px rgb(0 0 0 / 0.8);
+  --cl-glass: rgb(34 26 21 / 0.6);
+  --cl-glass-strong: rgb(30 22 18 / 0.9);
+  --cl-glass-edge: rgb(255 220 190 / 0.09);
+  --cl-glass-shine: inset 0 1px 0 rgb(255 230 200 / 0.06);
+  --cl-glow: rgb(255 110 20 / 0.2);
+  --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.75), 0 0 0 1px var(--cl-outline);
   --cl-header-shadow: 0 1px 0 var(--cl-border);
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.22);
 }

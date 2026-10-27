@@ -47,6 +47,12 @@ export function valueTone(value: number | null): string {
   return value > 0 ? "score-positive" : "score-negative";
 }
 
+// A day's attacks and defenses as shares of the most 8 battles can move.
+function swing(attacks: number | null, defenses: number | null) {
+  const share = (value: number | null) => Math.min(Math.abs(value ?? 0) / 320, 1);
+  return { "--att": share(attacks), "--def": share(defenses) } as React.CSSProperties;
+}
+
 function recordedCount(value: number | null): string {
   return value === null ? "Count unknown" : `${formatCount(value)} recorded`;
 }
@@ -188,7 +194,7 @@ function LegendDay({
       id={`legend-day-${dayKey}`}
       open={openDay === dayKey}
     >
-      <summary className="log-row">
+      <summary className="log-row" style={swing(day.offense.trophyGain, defense)}>
         <span className="log-when">
           <LogDate period={day.period} />
           <span className="log-day-meta">

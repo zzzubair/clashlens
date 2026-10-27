@@ -721,7 +721,8 @@ export function Dashboard({
               setStatus("");
             }}
           >
-            <DashboardIcon name="gear" /> Customise dashboard
+            <DashboardIcon name="gear" />{" "}
+            <span className="dash-customise-text">Customise dashboard</span>
           </button>
         ) : null}
       </div>

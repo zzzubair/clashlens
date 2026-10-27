@@ -307,7 +307,7 @@ describe("crew page", () => {
       undefined,
     );
     expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
-    expect(html).toContain("Joining is by invite only.");
+    expect(html).toContain("By invite only");
     expect(html).toContain("Players (1)");
     expect(html).toMatch(/Player 2<\/a><span>#2QQ · [^]*?5,390/);
     for (const hidden of ["Invite", "Members", "Edit", "clasher", "Owner"]) {

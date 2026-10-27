@@ -332,7 +332,7 @@ export function HeaderSearch() {
                 name="q"
                 type="search"
                 value={suggestions.query}
-                placeholder="Search player, @username or #tag"
+                placeholder="Name, @username or #tag"
                 autoComplete="off"
                 autoCapitalize="none"
                 enterKeyHint="search"

@@ -49,9 +49,10 @@
 
 .linked-player-name {
   flex-basis: 100%;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   overflow-wrap: anywhere;
+  font-weight: 700;
 }
 
 .linked-player-clan {
@@ -171,8 +172,9 @@
 }
 
 .profile-tool strong {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .profile-tool span {

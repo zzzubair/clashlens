@@ -147,9 +147,9 @@
 
 .crew-list-name b {
   overflow: hidden;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.25rem;
-  font-weight: 400;
+  font-weight: 700;
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -653,38 +653,6 @@
   box-shadow: inset 3px 0 0 var(--cl-sky);
 }
 
-.crew-rank {
-  display: inline-grid;
-  place-items: center;
-  width: 1.85rem;
-  height: 1.85rem;
-  color: var(--cl-muted);
-  border-radius: 50%;
-  font-size: 0.88rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.crew-rank[data-podium-rank] {
-  color: var(--cl-brand-night);
-  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.18);
-  font-family: var(--cl-font-heading);
-  font-size: 1rem;
-  font-weight: 400;
-}
-
-.crew-rank[data-podium-rank="1"] {
-  background: var(--cl-medal-gold);
-}
-
-.crew-rank[data-podium-rank="2"] {
-  background: var(--cl-silver);
-}
-
-.crew-rank[data-podium-rank="3"] {
-  background: var(--cl-bronze);
-}
-
 .crew-who {
   min-width: 0;
 }
@@ -713,7 +681,7 @@
   line-height: 1.1;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -885,7 +853,7 @@
 }
 
 .crew-sheet::backdrop {
-  background: rgb(5 9 18 / 0.55);
+  background: rgb(10 6 4 / 0.55);
 }
 
 .crew-sheet-body {

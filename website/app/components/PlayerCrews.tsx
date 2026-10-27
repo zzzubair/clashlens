@@ -15,7 +15,7 @@ export function PlayerCrews({
   if (!crews || crews.length === 0) return null;
   return (
     <span className="player-crews">
-      {crews.length === 1 ? "Crew" : "Crews"}:{" "}
+      <span className="sr-only">{crews.length === 1 ? "Crew" : "Crews"}: </span>
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
           {index > 0 ? " · " : null}

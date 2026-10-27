@@ -24,6 +24,7 @@ import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
 import { SelectedSeason } from "../components/SelectedSeason";
+import { TrophyLine } from "../components/TrophyLine";
 import { TagSearchAgain } from "../components/TagSearchAgain";
 import {
   LocalTimestamp,
@@ -660,7 +661,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
         </PlayerHeading>
         <div className="player-trophies">
-          <span className="metric-label">Current trophies</span>
+          <span className="metric-label sr-only">Current trophies</span>
           {seasonExpired || trackedPlayer.profile.seasonResetPending ? (
             <>
               <strong className="player-trophy-count player-reset-pending">
@@ -678,6 +679,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </strong>
           )}
         </div>
+        {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
+          <TrophyLine
+            history={history}
+            player={trackedPlayer}
+            now={statisticsTime}
+            current={trackedPlayer.profile.trophies}
+          />
+        )}
         <PlayerFreshness profile={trackedPlayer.profile} />
         <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
@@ -708,9 +717,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
               </svg>
-              {refreshFetcher.state === "submitting" || refreshing
-                ? "Refreshing…"
-                : "Refresh"}
+              <span className="sr-only">
+                {refreshFetcher.state === "submitting" || refreshing
+                  ? "Refreshing…"
+                  : "Refresh"}
+              </span>
             </button>
           </refreshFetcher.Form>
         </PlayerActions>
@@ -864,7 +875,7 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
     <p className="player-freshness">
       <span>Updated {time(observedAt, "player-updated")}</span>
       <span>
-        <span className="player-freshness-dot"> · </span>Battle history{" "}
+        <span className="player-freshness-dot"> · </span>Battles{" "}
         {profile.battleHistoryUpdatedAt
           ? time(profile.battleHistoryUpdatedAt, "player-history-updated")
           : "not updated yet"}

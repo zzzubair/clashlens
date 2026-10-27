@@ -254,7 +254,6 @@ export default function AccountSettingsRoute() {
       ) : null}
       <section className="hero" aria-labelledby="settings-title">
         <h1 id="settings-title">Settings</h1>
-        <p className="lede">Your name, your Clash players and how you sign in.</p>
       </section>
       {answer?.error ? <ErrorNotice error={answer.error} /> : null}
 

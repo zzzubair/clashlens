@@ -269,10 +269,16 @@
   .standings-pagination {
     position: sticky;
     z-index: 3;
-    bottom: var(--cl-bottom-tabs, 0px);
-    background: var(--cl-header-bg);
-    -webkit-backdrop-filter: saturate(1.6) blur(14px);
-    backdrop-filter: saturate(1.6) blur(14px);
+    bottom: calc(var(--cl-bottom-tabs, 0px) + 0.25rem);
+    margin: 0.25rem;
+    background: var(--cl-glass-strong);
+    border: 1px solid var(--cl-glass-edge);
+    border-radius: 1rem;
+    box-shadow:
+      var(--cl-glass-shine),
+      0 12px 28px -14px rgb(0 0 0 / 0.5);
+    -webkit-backdrop-filter: saturate(1.8) blur(20px);
+    backdrop-filter: saturate(1.8) blur(20px);
   }
 }
 

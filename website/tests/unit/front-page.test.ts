@@ -137,7 +137,7 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
     "?q=Nova",
   );
   expect(html).not.toContain("To look someone up");
-  expect(html).toContain('placeholder="Search player, @username or #tag"');
+  expect(html).toContain('placeholder="Name, @username or #tag"');
   expect(html).toContain("<h3>No players or profiles found</h3>");
   expect(html).toContain("<p>Enter a full #tag to look up anyone.</p>");
   const dropdown = renderToString(
@@ -168,7 +168,7 @@ it("says a complete #tag with letters the game never uses is not a tag", async (
   expect(html).not.toContain("Enter a full #tag");
 });
 
-it("shows the tagline and explains a logout the server could not record", async () => {
+it("shows the search heading and explains a logout the server could not record", async () => {
   const data = {
     leaderboard: { entries: [], totalTracked: 13263 },
     query: "",
@@ -177,9 +177,7 @@ it("shows the tagline and explains a logout the server could not record", async 
   };
   expect(await renderHome(data, "")).not.toContain("could not record it");
   const html = await renderHome(data, "?logout=unrecorded");
-  expect(html).toContain(
-    "Legend League results, rankings and armies for all Legend I Players.",
-  );
+  expect(html).toContain("Find any Legend League player");
   expect(html).not.toContain("13,263 tracked players.");
   expect(html).not.toContain("Top 0");
   expect(html).toContain("<h3>No standings available yet</h3>");
@@ -218,8 +216,7 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
     },
     "",
   );
-  expect(html).toContain("Top 1 of 1 tracked player<");
-  expect(html).toContain("Top 1 of 1 tracked player<");
+  expect(html).toContain("Top 10 now<");
   // Isolated so right-to-left names and clans do not reorder the text around them.
   expect(html).toContain("<bdi>محمد الأسطورة 👑</bdi>");
   expect(html).toContain("<bdi>العائلة الملكية</bdi>");
@@ -365,7 +362,7 @@ it("counts the shown rankings that are more than 10 minutes old", async () => {
     },
     "",
   );
-  expect(html).toContain("Newest player update");
+  expect(html).toContain("Updated <");
   expect(html).not.toContain("Last updated <");
   expect(html).toContain("2 of 3 more than 10 minutes old");
 });

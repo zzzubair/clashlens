@@ -254,10 +254,7 @@ export default function ObsOverlayRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell obs-settings">
       <section className="hero" aria-labelledby="obs-overlay-title">
         <h1 id="obs-overlay-title">Stream overlay</h1>
-        <p className="lede">
-          Show your live Legend day on stream. Pick a player, make it fit your layout,
-          then paste one address into OBS.
-        </p>
+        <p className="lede">Your live Legend day, on stream.</p>
       </section>
       {data.overlay === null ? (
         <aside className="notice notice-unavailable" role="alert">
@@ -553,9 +550,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           <h2 id="obs-player">
             <span className="obs-step">1</span> Player
           </h2>
-          <p className="obs-help">
-            Your verified players. The overlay follows the one you pick.
-          </p>
           <div className="obs-players">
             {overlay.players.map((player) => (
               <label className="obs-player" key={player.tag}>
@@ -587,10 +581,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           <h2 id="obs-layout">
             <span className="obs-step">2</span> Layout
           </h2>
-          <p className="obs-help">
-            Start from a shape, then drag the overlay&apos;s edges or corners in the
-            preview to any size. What&apos;s inside rearranges to fit.
-          </p>
+          <p className="obs-help">Pick a shape, then drag its edges in the preview.</p>
           <div className="obs-shapes" role="radiogroup" aria-label="Shape">
             {SHAPES.map(([value, label, hint, [pw, ph]]) => (
               <label className="obs-shape" key={value}>

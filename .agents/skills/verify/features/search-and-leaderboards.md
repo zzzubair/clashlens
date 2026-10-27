@@ -6,7 +6,7 @@ A Clasher finds players by name or tag from the header search, sees the front pa
 
 - `search-header` opens the header search and suggests players and Clash Lens profiles while typing.
 - `search-submit` runs a full search on `/search?q=` and lists results.
-- `front-top` shows `Top 10 right now` (table `Latest saved standings`) on the signed-out front page at `/`.
+- `front-top` shows `Top 10 now` (table `Latest saved standings`) on the signed-out front page at `/`.
 - `board-pages` pages through `/leaderboards/tracked?view=live`.
 - `board-find` finds a player's rank with the `Find your rank` search box, and `Reset` clears it.
 - `board-out-of-range` handles a page past the end.
@@ -25,7 +25,7 @@ Preconditions:
 
 - **Header search.** On `/blog`, click `page.getByRole("button", { name: "Search players" })`, fill `page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" })` with `Synthetic Clasher 001`. The region `Player and profile search suggestions` lists `Synthetic Clasher 001`.
 - **Search by tag.** Fill the same searchbox with `#2PP` and press Enter. The page shows the heading `Synthetic Clasher 001`.
-- **Front page.** On `/` signed out, the heading `Top 10 right now` and `page.getByRole("table", { name: "Latest saved standings" })` are visible and contain `#2PP`.
+- **Front page.** On `/` signed out, the heading `Top 10 now` and `page.getByRole("table", { name: "Latest saved standings" })` are visible and contain `#2PP`.
 - **Full rankings.** Click the link `Full rankings`. The URL starts `/leaderboards/tracked`.
 - **Find your rank.** On `/leaderboards/tracked?view=live&page=1`, fill `page.getByRole("searchbox", { name: "Find your rank" })` with `2pp`, click `page.getByRole("button", { name: "Search", exact: true })`. The `Live leaderboard table` region shows `#2PP`. Click the link `Reset`; the query is gone from the URL.
 - **No match.** Search `NoSuchClasherForThisTest`. The page says nothing matched and shows no error.

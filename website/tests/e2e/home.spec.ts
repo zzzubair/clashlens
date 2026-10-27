@@ -67,9 +67,9 @@ test("the front page and the full leaderboard show collected synthetic players",
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Your Legend day, on one page" }),
+    page.getByRole("heading", { name: "Your Legend day, live" }),
   ).toBeVisible();
-  const preview = page.getByRole("region", { name: "Your Legend day, on one page" });
+  const preview = page.getByRole("region", { name: "Your Legend day, live" });
   await expect(preview.getByRole("link", { name: "Create account" })).toHaveAttribute(
     "href",
     "/signup?returnPath=%2F",
@@ -78,7 +78,7 @@ test("the front page and the full leaderboard show collected synthetic players",
     "href",
     "/login?returnPath=%2F",
   );
-  await expect(page.getByRole("heading", { name: "Top 10 right now" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Top 10 now" })).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),
   ).toBeVisible();
@@ -87,10 +87,7 @@ test("the front page and the full leaderboard show collected synthetic players",
   await expect(homeTable.getByText("Synthetic Clasher 001")).toBeVisible();
   await expect(homeTable.getByText("#2PP", { exact: true })).toBeVisible();
 
-  await page
-    .getByRole("navigation", { name: "Rankings and Analytics" })
-    .getByRole("link", { name: /^Rankings/ })
-    .click();
+  await page.getByRole("link", { name: "All rankings" }).click();
   await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
   await expect(page.getByRole("heading", { name: "Live Leaderboard" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Live Leaderboard" })).toBeVisible();

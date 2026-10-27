@@ -141,13 +141,13 @@ export function LegendDayCard({
         <div className="legend-day-range">
           <span className="dash-label">Next Reset</span>
           <b>{range ? `${rankText(range.best)} – ${rankText(range.worst)}` : "–"}</b>
-          <span className="dash-estimate">estimate · narrows as the day goes on</span>
+          <span className="dash-estimate">estimate</span>
         </div>
         {projected ? (
           <div className="legend-day-projected">
             <span className="dash-label">Projected</span>
             <strong>{rankText(projected)} at Reset</strong>
-            <span className="dash-muted">
+            <span className="sr-only">
               An estimate from how players in your spot finished on recent days. It can be
               hundreds of places out while battles are left, and gets closer through the
               day.
