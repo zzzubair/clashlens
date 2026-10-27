@@ -343,7 +343,7 @@ test("public pages render without browser JavaScript", async ({ browser }) => {
   await context.close();
 });
 
-test("header search opens from its icon away from the search page, suggests players and closes on Escape", async ({
+test("header search opens from its icon or / away from the search page, suggests players and closes on Escape", async ({
   page,
 }) => {
   const searches: string[] = [];
@@ -368,9 +368,28 @@ test("header search opens from its icon away from the search page, suggests play
   await expect(toggle).toBeFocused();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
 
-  // "/" is not a page-wide shortcut: single-key shortcuts fail WCAG 2.1.4.
+  // "/" opens it too, and with Ctrl, Cmd or Alt held it does not.
+  for (const modifier of ["Control", "Meta", "Alt"]) {
+    await page.keyboard.press(`${modifier}+/`);
+    await expect(input).toHaveCount(0);
+  }
   await page.keyboard.press("/");
-  await expect(input).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("");
+});
+
+test("typing / in another field does not open the header search", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  // Prove the shortcut is live on this page before typing elsewhere.
+  await openHeaderSearch(page, () => page.keyboard.press("/"));
+  await page.keyboard.press("Escape");
+  const rankSearch = page.getByRole("searchbox", { name: "Find your rank" });
+  await rankSearch.pressSequentially("a/b");
+  await expect(rankSearch).toHaveValue("a/b");
+  await expect(page.getByRole("button", { name: "Search players" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
 });
 
 test("header search is a full-width sheet on phones and jumps to an exact tag", async ({

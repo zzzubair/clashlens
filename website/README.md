@@ -564,7 +564,7 @@ names, usernames and linked-account counts, never private groups.
 Clash Lens profiles in suggestions and results have a tinted background and a
 "Clash Lens profile" label so they are not mistaken for game players.
 Every page except `/search`, including error pages, has the same search behind a
-header icon. Enter on an exact player tag opens that player; other
+header icon (or `/`). Enter on an exact player tag opens that player; other
 text opens the full results at `/search?q=`.
 
 Two bounded official profile requests fetched the names of `sloothy`'s linked

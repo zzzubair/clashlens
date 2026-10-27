@@ -1,7 +1,7 @@
 import { devices, expect, test, type Locator, type Page } from "@playwright/test";
 
-// WebKit with an iPhone screen and a finger instead of a mouse.
-test.use({ ...devices["iPhone 13"] });
+// WebKit with an iPhone or iPad screen and a finger instead of a mouse.
+test.use({ defaultBrowserType: "webkit" });
 
 // iPhone Safari never focuses a tapped link, so the search box loses focus to
 // nothing. The Linux WebKit these tests run on does focus it, so act like Safari.
@@ -27,26 +27,33 @@ async function tapSuggestion(page: Page, input: Locator) {
   await expect(page).toHaveURL(href);
 }
 
-test("tapping a home search suggestion opens that player", async ({ page }) => {
-  await tapLikeSafari(page);
-  await page.goto("/");
-  const input = page.getByRole("searchbox", {
-    name: "Search players and Clash Lens profiles",
-  });
-  await input.tap();
-  await tapSuggestion(page, input);
-});
+for (const name of ["iPhone 13", "iPad Mini"] as const) {
+  test.describe(`on ${name}`, () => {
+    const { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch } = devices[name];
+    test.use({ viewport, userAgent, deviceScaleFactor, isMobile, hasTouch });
 
-test("tapping a header search suggestion opens that player", async ({ page }) => {
-  await tapLikeSafari(page);
-  await page.goto("/blog");
-  const input = page.getByRole("searchbox", {
-    name: "Search players and Clash Lens profiles",
+    test("tapping a home search suggestion opens that player", async ({ page }) => {
+      await tapLikeSafari(page);
+      await page.goto("/");
+      const input = page.getByRole("searchbox", {
+        name: "Search players and Clash Lens profiles",
+      });
+      await input.tap();
+      await tapSuggestion(page, input);
+    });
+
+    test("tapping a header search suggestion opens that player", async ({ page }) => {
+      await tapLikeSafari(page);
+      await page.goto("/blog");
+      const input = page.getByRole("searchbox", {
+        name: "Search players and Clash Lens profiles",
+      });
+      await expect(async () => {
+        if (!(await input.isVisible()))
+          await page.getByRole("button", { name: "Search players" }).tap();
+        await expect(input).toBeFocused({ timeout: 1_000 });
+      }).toPass();
+      await tapSuggestion(page, input);
+    });
   });
-  await expect(async () => {
-    if (!(await input.isVisible()))
-      await page.getByRole("button", { name: "Search players" }).tap();
-    await expect(input).toBeFocused({ timeout: 1_000 });
-  }).toPass();
-  await tapSuggestion(page, input);
-});
+}
