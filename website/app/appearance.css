@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   /* Field edges keep 3:1 against every surface, as form controls need. */
-  --cl-input-border: #a08d7c;
+  --cl-input-border: #8f7b6a;
   /* Buttons press like the game's: a darker bottom edge, no outline. */
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.16);
   --cl-raise: none;
