@@ -1,123 +1,246 @@
-/* The signed-out front page: the Dashboard preview, then search with big
-   Rankings and Analytics buttons, then the top players. */
+/* The signed-out front page: search and the Top 10 first, then what a free
+   account adds. Wide screens put the account card beside them. */
 
-/* The preview's cards and its panel share one grid cell, so the taller of
-   the two sets the height and nothing below slides under the panel. */
-.front-page .dash-teaser {
+.front-grid,
+.front-main {
   display: grid;
-  min-height: 0;
-  margin-bottom: 0.5rem;
+  gap: 1.5rem;
+  align-items: start;
 }
 
-.front-page .dash-teaser > * {
-  grid-area: 1 / 1;
-}
-
-.front-page .dash-teaser-behind {
-  max-height: 26rem;
-  overflow: hidden;
-}
-
-.front-page .dash-teaser-panel {
-  position: relative;
-  top: auto;
-  left: auto;
-  align-self: start;
-  justify-self: center;
-  margin: 3rem 0 1.5rem;
-  transform: none;
-}
-
-.front-section {
-  display: grid;
-  gap: 1rem;
-  padding-top: clamp(1.5rem, 4vw, 2.25rem);
-}
-
-.front-section h2 {
+.front-grid > *,
+.front-main > * {
+  min-width: 0;
   margin: 0;
-  font-size: clamp(1.4rem, 3vw, 1.9rem);
+}
+
+@media (min-width: 64rem) {
+  .front-grid-pitch {
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    gap: 2rem;
+  }
+
+  .front-grid-pitch .front-pitch {
+    position: sticky;
+    top: 5.5rem;
+    margin-top: 0.5rem;
+  }
+}
+
+/* ---------- Search first ---------- */
+
+.front-hero {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.front-hero h1 {
+  margin: 0;
 }
 
 .front-lede {
-  margin: 0;
+  max-width: 44rem;
+  margin: -0.25rem 0 0.25rem;
   color: var(--cl-muted);
-  font-size: 1.05rem;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
+.front-lede b {
+  color: var(--cl-ink);
+  font-weight: 800;
+}
+
+/* Rankings and Analytics: two small cards side by side. */
 .front-links {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .front-link {
   display: flex;
+  gap: 0.65rem;
   align-items: center;
-  gap: 0.85rem;
-  min-height: 4.5rem;
-  padding: 1rem 1.25rem;
+  min-height: 3.5rem;
+  padding: 0.55rem 0.85rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
   text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.front-link:is(:hover, :focus-visible) {
+.front-link:is(:focus-visible, :active) {
   color: var(--cl-ink);
   background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
 }
 
 .front-link .dash-icon {
-  width: 1.75rem;
-  height: 1.75rem;
-  color: var(--cl-accent);
+  flex: 0 0 auto;
+  width: 1.4rem;
+  height: 1.4rem;
+  color: var(--cl-action-text);
 }
 
 .front-link span {
   display: grid;
-  gap: 0.15rem;
   min-width: 0;
 }
 
 .front-link b {
-  font-family: var(--cl-font-heading);
-  font-size: 1.3rem;
-  font-weight: 400;
+  font-size: 0.95rem;
+  font-weight: 800;
 }
 
 .front-link small {
   color: var(--cl-muted);
-  font-size: 0.9rem;
-  font-weight: 650;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-@media (max-width: 40rem) {
-  .front-page .dash-teaser-panel {
-    margin: 1rem 0;
+@media (hover: hover) {
+  .front-link:hover {
+    color: var(--cl-ink);
+    background: var(--cl-panel);
+    border-color: var(--cl-outline);
   }
 }
 
-@media (max-width: 34rem) {
-  .front-link {
-    gap: 0.55rem;
-    min-height: 4rem;
-    padding: 0.75rem;
+/* ---------- Top 10 right now ---------- */
+
+/* The title and Full rankings share the top line; the facts run under both. */
+.home-leaderboard > .section-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.75rem 0.85rem 0.85rem 1rem;
+  border-bottom: 1px solid var(--cl-border);
+}
+
+.home-leaderboard > .section-heading > div {
+  display: contents;
+}
+
+.home-leaderboard h2 {
+  margin: 0;
+}
+
+.home-leaderboard .leaderboard-more {
+  grid-area: 1 / 2;
+}
+
+.standings-context {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.standings-context span + span::before {
+  content: " · ";
+}
+
+.home-leaderboard .table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.home-leaderboard .empty-state {
+  padding: 1.25rem 1rem;
+}
+
+/* ---------- What an account adds ---------- */
+
+.front-pitch {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--cl-brand-yellow) 14%, transparent),
+      transparent 55%
+    ),
+    var(--cl-surface);
+  border: 1px solid var(--cl-action-border);
+  border-radius: var(--cl-card-radius);
+}
+
+.front-pitch h2 {
+  margin: 0;
+}
+
+.front-pitch-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.front-pitch-list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.front-pitch-list .dash-icon {
+  flex: 0 0 auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.05rem;
+  color: var(--cl-action-text);
+}
+
+.front-pitch .account-buttons .button {
+  min-height: 2.75rem;
+}
+
+.front-pitch-note {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+}
+
+.front-pitch-note .dash-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+@media (min-width: 40rem) {
+  .front-pitch-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 64rem) {
+  .front-pitch {
+    padding: 1.25rem;
   }
 
-  .front-link .dash-icon {
-    width: 1.4rem;
-    height: 1.4rem;
+  .front-pitch-list {
+    grid-template-columns: minmax(0, 1fr);
   }
+}
 
-  .front-link b {
-    font-size: 1.1rem;
-  }
-
-  .front-link small {
-    font-size: 0.8rem;
+@media (max-width: 22rem) {
+  .front-links,
+  .front-pitch-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

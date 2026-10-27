@@ -1386,7 +1386,7 @@ describe("dashboard page", () => {
     expect(html).not.toContain("data-card=");
   });
 
-  it("previews the default cards behind sign-in", async () => {
+  it("puts search first and says what an account adds after it", async () => {
     const html = await renderPage({
       kind: "signed-out",
       loginAvailable: true,
@@ -1395,10 +1395,11 @@ describe("dashboard page", () => {
       error: null,
     });
     const plain = text(html);
-    expect(plain).toContain("Your Legend day, on one page");
-    expect(plain).toContain("Create account Already have one? Sign in");
-    expect(plain).toContain(
-      "Legend day Legend clock Bases you attacked Goal Armies on defense Rivals watch Season heat map",
+    expect(plain.indexOf("Find any Legend League player")).toBeLessThan(
+      plain.indexOf("Your Legend day, on one page"),
     );
+    expect(plain).toContain("Your Legend day, on one page");
+    expect(plain).toContain("Legend clock in your time");
+    expect(plain).toContain("Create account Already have one? Sign in");
   });
 });

@@ -99,6 +99,15 @@ export function SeasonSummary({
                   {count(triples)} of {count(total)} attacks
                 </small>
               )}
+              {triples === null || !total ? null : (
+                <span className="meter" aria-hidden="true">
+                  <span
+                    style={
+                      { "--value": `${(100 * triples) / total}%` } as React.CSSProperties
+                    }
+                  />
+                </span>
+              )}
             </dd>
           </div>
         ) : null}
@@ -118,7 +127,10 @@ export function SeasonSummary({
                   <th scope="col">Total</th>
                   {[3, 2, 1, 0].map((stars) => (
                     <th scope="col" key={stars}>
-                      <span aria-hidden="true">{stars}★</span>
+                      <span aria-hidden="true">
+                        {stars}
+                        <span className="summary-star">★</span>
+                      </span>
                       <span className="sr-only">{stars}-star</span>
                     </th>
                   ))}

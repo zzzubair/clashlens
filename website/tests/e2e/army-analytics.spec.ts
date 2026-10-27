@@ -29,11 +29,14 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
 
   expect(response?.status()).toBe(200);
   const coverage = page.getByLabel("Battle coverage");
-  await expect(coverage).toContainText(/Battle records\s*1,600\s*Recorded/);
-  await expect(coverage).toContainText(/Records included\s*1,600/);
-  await expect(coverage).toContainText(/Records excluded\s*0/);
+  await expect(coverage).toContainText(/Battle records\s*1,600/);
+  await expect(coverage).toContainText(/Included\s*1,600/);
+  await expect(coverage).toContainText(/Excluded\s*0/);
 
-  await page.getByLabel("Unit Type").selectOption("spells");
+  await page
+    .getByRole("navigation", { name: "Unit type" })
+    .getByRole("link", { name: "Spells", exact: true })
+    .click();
   await expect(page).toHaveURL(/category=spells/);
   await expect(page.getByRole("heading", { name: "Spells", exact: true })).toBeVisible();
 
@@ -101,26 +104,38 @@ test("the saved-data page shows attacks over the whole season with no day range"
   const season = form.getByRole("combobox", { name: "Season", exact: true });
   await expect(season).toBeVisible();
   await expect(season).toHaveValue("current");
-  await expect(form.getByLabel("Unit Type")).toContainText("Hero + Equipment");
-  await expect(form.getByLabel("Unit Type")).toContainText("Hero + Both Equipments");
+  await page
+    .getByRole("navigation", { name: "Armies view" })
+    .getByRole("link", { name: "Unit usage" })
+    .click();
+  const unitTypes = form.getByRole("navigation", { name: "Unit type" });
+  await expect(
+    unitTypes.getByRole("link", { name: "Hero + Equipment", exact: true }),
+  ).toBeVisible();
+  await expect(
+    unitTypes.getByRole("link", { name: "Hero + Both Equipments", exact: true }),
+  ).toBeVisible();
 });
 
 test("Clan Castle Troops is a unit type of its own", async ({ page }) => {
   await page.goto("/analytics/armies?recent=1&category=troops");
-  const unitType = page.getByLabel("Unit Type");
+  const unitType = page.getByRole("navigation", { name: "Unit type" });
   const rows = page
     .getByRole("table", { name: "Army analytics results" })
     .getByRole("row");
   await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
+  // A long list opens on its first 20 rows.
+  await expect(rows).toHaveCount(21);
+  await page.getByRole("button", { name: "Show all 31" }).click();
   await expect(rows).toHaveCount(32);
   await expect(page.getByRole("checkbox")).toHaveCount(0);
 
-  await unitType.selectOption("cc-troops");
+  await unitType.getByRole("link", { name: "Clan Castle Troops" }).click();
   await expect(page).toHaveURL(/category=cc-troops/);
   await expect(page.getByRole("heading", { name: "Clan Castle Troops" })).toBeVisible();
   await expect(rows).toHaveCount(24);
 
-  await unitType.selectOption("troops");
+  await unitType.getByRole("link", { name: "Troops", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
   await expect(rows).toHaveCount(32);
 });
@@ -130,11 +145,18 @@ test("unit types change when JavaScript is off", async ({ browser }) => {
   try {
     const page = await context.newPage();
     await page.goto("/analytics/armies?recent=1&category=troops");
-    const apply = page.getByRole("button", { name: "Apply filters" });
-    await expect(apply).toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply filters" })).toBeVisible();
+    const rows = page
+      .getByRole("table", { name: "Army analytics results" })
+      .getByRole("row");
+    // Every row shows, with no Show all to press.
+    await expect(rows).toHaveCount(32);
+    await expect(page.getByRole("button", { name: /^Show all/ })).toBeHidden();
 
-    await page.getByLabel("Unit Type").selectOption("cc-troops");
-    await apply.click();
+    await page
+      .getByRole("navigation", { name: "Unit type" })
+      .getByRole("link", { name: "Clan Castle Troops" })
+      .click();
     await expect(page).toHaveURL(/category=cc-troops/);
     await expect(page.getByRole("heading", { name: "Clan Castle Troops" })).toBeVisible();
   } finally {
@@ -151,6 +173,7 @@ test("large army view keeps every row and shows the browser's local time", async
     await page.goto(
       "/analytics/armies?recent=1&population=top-200&category=cc-composition&sort=usage-rate",
     );
+    await page.getByRole("button", { name: /^Show all/ }).click();
     await expect(
       page.getByRole("table", { name: "Army analytics results" }).getByRole("row"),
     ).toHaveCount(49);
@@ -192,10 +215,12 @@ test("missing historical summary stays unavailable with legacy filters in the UR
   await expect(page.getByRole("table")).toHaveCount(0);
 
   await page.goto("/analytics/armies?season=missing-history-126&category=troops&cc=1");
-  const unitType = page.getByLabel("Unit Type");
-  await expect(unitType).toHaveValue("cc-troops");
+  const unitType = page.getByRole("navigation", { name: "Unit type" });
+  await expect(
+    unitType.getByRole("link", { name: "Clan Castle Troops" }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("table")).toHaveCount(0);
-  await unitType.selectOption("troops");
+  await unitType.getByRole("link", { name: "Troops", exact: true }).click();
   await expect(page).not.toHaveURL(/cc=1/);
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -228,12 +253,13 @@ test("retired IDs render honest labels, quantities and stars before and after na
       category === "troops" || category === "siege" ? "troop or siege" : namespace;
     const label = unknown ? `Unknown ${kind} (ID ${id})` : `Named ${namespace}`;
     const row = page.getByRole("row").filter({ hasText: label });
-    await expect(row).toContainText("1 / 2");
+    await expect(row).toContainText("1 of 2");
     await expect(row).toContainText("50.0%");
+    // Quantity, Usage, then 3-star, 2-star and 1-star.
     await expect(row.getByRole("cell").first()).toHaveText(String(quantity));
-    await expect(row.getByRole("cell").nth(3)).toContainText("0 battles");
-    await expect(row.getByRole("cell").nth(4)).toContainText("1 battle");
-    await expect(row.getByRole("cell").nth(5)).toContainText("0 battles");
+    await expect(row.getByRole("cell").nth(2)).toContainText("0 battles");
+    await expect(row.getByRole("cell").nth(3)).toContainText("1 battle");
+    await expect(row.getByRole("cell").nth(4)).toContainText("0 battles");
     await expect(page.getByRole("columnheader", { name: "Quantity" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: /Avg\. stars/ })).toHaveCount(0);
     await expect(page.getByLabel("From Legend day")).toHaveCount(0);

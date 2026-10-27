@@ -5,6 +5,7 @@ import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/pla
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../routes/player-search";
 import { moveFocusWithArrows } from "./ArrowKeys";
+import { TrophyMark } from "./LeaderboardShared";
 
 const SEARCH_DEBOUNCE_MS = 180;
 
@@ -127,13 +128,12 @@ export function SearchSuggestions({
                   <strong>
                     <bdi>{user.displayName}</bdi>
                   </strong>
-                  <small>@{user.username}</small>
-                  <span className="profile-badge">Clash Lens profile</span>
+                  <small>
+                    @{user.username} · {user.linkedPlayerCount} linked{" "}
+                    {user.linkedPlayerCount === 1 ? "account" : "accounts"}
+                  </small>
                 </span>
-                <span className="search-suggestion-meta">
-                  {user.linkedPlayerCount} linked{" "}
-                  {user.linkedPlayerCount === 1 ? "account" : "accounts"}
-                </span>
+                <span className="profile-badge">Clash Lens profile</span>
               </Link>
             </li>
           ))}
@@ -148,13 +148,25 @@ export function SearchSuggestions({
                   <strong>
                     <bdi>{result.name}</bdi>
                   </strong>
-                  <small>{result.tag}</small>
+                  <small>
+                    {result.tag}
+                    {result.clan ? (
+                      <>
+                        {" · "}
+                        <bdi>{result.clan}</bdi>
+                      </>
+                    ) : null}
+                  </small>
                 </span>
                 <span className="search-suggestion-meta">
-                  <bdi>{result.clan}</bdi> ·{" "}
-                  {result.trophies === null
-                    ? "Waiting for Season reset"
-                    : result.trophies.toLocaleString()}
+                  {result.trophies === null ? (
+                    "Waiting for Season reset"
+                  ) : (
+                    <>
+                      <TrophyMark />
+                      {result.trophies.toLocaleString()}
+                    </>
+                  )}
                 </span>
               </a>
             </li>
@@ -179,20 +191,24 @@ export function SearchSuggestions({
   );
 }
 
-const searchIcon = (
-  <svg
-    aria-hidden="true"
-    viewBox="0 0 24 24"
-    width="20"
-    height="20"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.7"
-    strokeLinecap="round"
-  >
-    <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
-  </svg>
-);
+/** The magnifier on every search box. */
+export function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+    >
+      <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
+    </svg>
+  );
+}
 
 /**
  * Compact search for every page but /search: a quiet icon that opens a small
@@ -263,7 +279,7 @@ export function HeaderSearch() {
         title="Search players (press /)"
         onClick={() => (expanded ? collapse(false) : setExpanded(true))}
       >
-        {searchIcon}
+        <SearchIcon />
       </button>
       {expanded ? (
         <div
@@ -325,7 +341,7 @@ export function HeaderSearch() {
                 onChange={(event) => suggestions.change(event.currentTarget.value)}
               />
               <button type="submit" aria-label="Search">
-                {searchIcon}
+                <SearchIcon />
               </button>
             </div>
             <span className="sr-only" id="header-search-help">
@@ -339,14 +355,14 @@ export function HeaderSearch() {
                 loading={suggestions.loading}
               />
             ) : null}
+            <button
+              type="button"
+              className="header-search-close"
+              onClick={() => collapse(true)}
+            >
+              Close
+            </button>
           </form>
-          <button
-            type="button"
-            className="header-search-close"
-            onClick={() => collapse(true)}
-          >
-            Close
-          </button>
         </div>
       ) : null}
     </div>

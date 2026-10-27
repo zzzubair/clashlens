@@ -255,7 +255,8 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
       }),
     ),
   ).replaceAll("<!-- -->", "");
-  expect(dropdown).toContain("<bdi>العائلة الملكية</bdi> · 6,455");
+  expect(dropdown).toContain("#P0Y8URGQ2 · <bdi>العائلة الملكية</bdi>");
+  expect(dropdown).toMatch(/<\/svg>6,455<\/span>/);
   expect(dropdown).toContain("<bdi>محمد 👑</bdi>");
   expect(dropdown).toContain("1 linked account<");
 });

@@ -85,6 +85,13 @@ function renderedText(html: string) {
     .trim();
 }
 
+/** The results' row names, in the order shown. */
+function rowNames(html: string) {
+  return [...html.matchAll(/role="rowheader"[^>]*>(.*?)<\/th>/g)].map(([, name]) =>
+    renderedText(name),
+  );
+}
+
 function currentAnalytics(
   population: string,
   coveredDays: number[],
@@ -232,7 +239,7 @@ describe("army analytics route historical reads", () => {
     const html = await renderArmyRoute(`season=${SEASON}&category=troops`);
     const text = renderedText(html);
     // The view picker stays on a past Season.
-    expect(html).toMatch(/aria-current="page"[^>]*><strong>Unit usage</);
+    expect(html).toMatch(/aria-current="page"[^>]*>Unit usage</);
     expect(html).toContain(
       `href="/analytics/armies?season=${SEASON}&amp;category=army-types"`,
     );
@@ -241,7 +248,7 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("2-star");
     expect(text).toContain("3-star");
     expect(text).toContain("Ice Golem");
-    expect(text).toContain("5 / 10");
+    expect(text).toContain("5 of 10");
     expect(text).toContain("50.0%");
     expect(text).toContain("1 battle");
     expect(text).toContain("2 battles");
@@ -408,18 +415,18 @@ describe("army analytics route historical reads", () => {
     const text = renderedText(html);
     // Attacks only: the Armies view offers no Attacks/Defenses choice.
     expect(html).not.toContain('name="lens"');
-    expect(text).toContain(
-      "Armies The army each attack used Unit usage Troops, spells, heroes and more",
-    );
-    expect(html).toMatch(/aria-current="page"[^>]*><strong>Armies</);
-    expect(text).toContain("Thrower 6 / 12 50.0%");
+    expect(text).toContain("Analytics Armies Unit usage");
+    expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
+    expect(text).toContain("Thrower 50.0%");
+    expect(text).toContain("6 of 12");
     expect(text).not.toContain("not which army is best");
     // Unreadable attacks are a row of their own, not excluded.
+    expect(text).toContain("Battle records 12 Included 12 Excluded 0");
     expect(text).toContain(
-      "Records included 12 Every attack, including ones whose army could not be read",
+      "Every attack is included, even if its army could not be read.",
     );
-    expect(text).toContain("Records excluded 0");
-    expect(text).toContain("Unreadable 2 / 12 16.7%");
+    expect(text).toContain("Unreadable 16.7%");
+    expect(text).toContain("2 of 12");
     expect(html).toContain(
       'href="/analytics/armies?season=current&amp;lens=defense&amp;category=troops"',
     );
@@ -464,13 +471,12 @@ describe("army analytics route historical reads", () => {
     const text = renderedText(html);
     const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
     expect(query.get("sort")).toBe("average-trophies");
-    expect(
-      [...html.matchAll(/role="rowheader">(.*?)<\/th>/g)].map(([, name]) => name),
-    ).toEqual(["Thrower", "Hydra"]);
+    expect(rowNames(html)).toEqual(["Thrower", "Hydra"]);
     expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
-    expect(text).toContain("3-star ↕ Avg. trophies ↓ Avg. stars");
-    expect(text).toContain("50.0% 2 battles 36.0 misses 32.1 2.50");
-    expect(text).toContain("75.0% 3 battles 35.5 misses 22.0 2.75");
+    // The table's headings: Avg. trophies after 3-star, sorted highest first.
+    expect(text).toContain("3-star Avg. trophies ↓ 2-star");
+    expect(text).toContain("50.0% 2 battles 36.0 misses 32.1");
+    expect(text).toContain("75.0% 3 battles 35.5 misses 22.0");
     expect(text).toContain("Avg. trophies counts every attack.");
 
     // A type with variants shows, closed, that it opens and how many named
@@ -491,19 +497,19 @@ describe("army analytics route historical reads", () => {
     getArmyAnalytics.mockResolvedValue(hydra([1, 0]));
     const closed = await renderArmyRoute("season=current");
     expect(closed).toContain('aria-expanded="false"');
-    expect(renderedText(closed)).toContain("Hydra 1 variant + Other 4 / 8");
+    expect(renderedText(closed)).toContain("Hydra 1 variant + Other 50.0%");
     expect(renderedText(closed)).toContain("Tap an army for its variants");
-    expect(closed).not.toContain("analytics-variant-row");
+    expect(closed).not.toContain("<dialog");
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "Hydra 2 variants 4 / 8",
+      "Hydra 2 variants 50.0%",
     );
     // Only its Other: a plain row with nothing to open.
     getArmyAnalytics.mockResolvedValue(hydra([0]));
     const otherOnly = await renderArmyRoute("season=current");
     expect(otherOnly).not.toContain("aria-expanded");
-    expect(otherOnly).not.toContain("analytics-type-row");
-    expect(renderedText(otherOnly)).toContain("Hydra 4 / 8");
+    expect(otherOnly).not.toContain("data-opens");
+    expect(renderedText(otherOnly)).toContain("Hydra 50.0%");
     expect(renderedText(otherOnly)).not.toContain("Tap an army");
 
     getArmyAnalytics.mockResolvedValue({
@@ -524,7 +530,7 @@ describe("army analytics route historical reads", () => {
     const unitUsage = (page: string) =>
       requestFor(
         page
-          .match(/href="[^"?]*\?([^"]*)"[^>]*><strong>Unit usage</)![1]
+          .match(/href="[^"?]*\?([^"]*)"[^>]*>Unit usage</)![1]
           .replaceAll("&amp;", "&"),
       );
     await armyLoader({ request: unitUsage(html), params: {} } as never);
@@ -554,7 +560,7 @@ describe("army analytics route historical reads", () => {
     expect(getArmySeasonSummary).not.toHaveBeenCalled();
     const text = renderedText(html);
     expect(text).toContain("Armies are not available for this season");
-    expect(html).toMatch(/aria-current="page"[^>]*><strong>Armies</);
+    expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
     expect(html).toMatch(new RegExp(`<option value="${SEASON}" selected="">`));
   });
 
@@ -632,7 +638,7 @@ describe("army analytics route historical reads", () => {
 
     getArmyAnalytics.mockResolvedValue(currentAnalytics("top-100", [1], 0));
     const html = await renderArmyRoute("season=current&category=troops");
-    expect(html).toContain('<option value="cc-troops">Clan Castle Troops</option>');
+    expect(html).toMatch(/href="[^"]*category=cc-troops"[^>]*>Clan Castle Troops</);
     expect(html).not.toContain('type="checkbox"');
   });
 
@@ -742,9 +748,7 @@ describe("army analytics route historical reads", () => {
 
   it("reconciles recorded, included and excluded captured attack records", async () => {
     const text = renderedText(await renderArmyRoute("recent=1&population=top-100"));
-    expect(text).toContain("Battle records 1,600 Recorded in this selection");
-    expect(text).toContain("Records included 1,600");
-    expect(text).toContain("Records excluded 0");
+    expect(text).toContain("Battle records 1,600 Included 1,600 Excluded 0");
   });
 });
 
@@ -810,7 +814,7 @@ describe("army analytics player groups", () => {
     // An empty group still shows the page, with zero records and no rows.
     const text = renderedText(html);
     expect(text).toContain("by top-10,000 players");
-    expect(text).toContain("Battle records 0 Recorded in this selection");
+    expect(text).toContain("Battle records 0 Included 0 Excluded 0");
     expect(text).toContain("No recognized components in this selection.");
   });
 
@@ -914,17 +918,13 @@ describe("army analytics attacks and season picker", () => {
     expect(text).toContain("Days 1–2 of 28");
   });
 
-  it("names the unit types as the owner asked, under Unit Type", async () => {
+  it("names the unit types as the owner asked, in the Unit type row", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
     });
     const html = await renderArmyRoute("season=current&category=troops");
-    const picker = html.match(
-      /Unit Type<select name="category"[^>]*>(.*?)<\/select>/,
-    )?.[1];
-    expect(
-      [...(picker ?? "").matchAll(/<option[^>]*>([^<]+)</g)].map((m) => m[1]),
-    ).toEqual([
+    const picker = html.match(/aria-label="Unit type"[^>]*>(.*?)<\/nav>/)?.[1];
+    expect([...(picker ?? "").matchAll(/<a[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual([
       "Troops",
       "Spells",
       "Siege Machines",
@@ -1018,7 +1018,7 @@ describe("army analytics top-bar link", () => {
     const shown = () => {
       const html = renderToString(createElement(RouterProvider, { router }));
       return {
-        rows: [...html.matchAll(/role="rowheader">(.*?)<\/th>/g)].map(([, name]) => name),
+        rows: rowNames(html),
         sorted: html.match(/data-column="([^"]+)" aria-sort="([^"]+)"/)?.slice(1),
       };
     };
@@ -1095,19 +1095,26 @@ describe("army analytics variant rows", () => {
     await vi.waitFor(() => expect(router.state.initialized).toBe(true));
     const html = () => renderToString(createElement(RouterProvider, { router }));
     html();
-    // The open types, then the open variants: the page's two sets.
-    const [openTypes, openVariants] = page.states.flatMap((state, index) =>
-      state instanceof Set ? [index] : [],
+    // The chosen sort, then the open army: the page's first two empty states.
+    const [, openArmy] = page.states.flatMap((state, index) =>
+      state === null ? [index] : [],
     );
-    page.states[openTypes] = new Set(["army-type:3"]);
     const closed = html();
-    expect(closed).toContain('title="Show Revenge Thrower armies"');
-    expect(renderedText(closed)).toContain("Revenge Thrower 6 / 8");
-    expect(closed).not.toContain("analytics-examples-row");
+    expect(closed).toContain('title="Show Thrower variants"');
+    expect(closed).toContain('aria-expanded="false"');
+    expect(closed).not.toContain("<dialog");
 
-    page.states[openVariants] = new Set(["army-variant:3:3"]);
-    expect(renderedText(html())).toContain("Revenge Thrower 6 / 8 75.0% of Thrower");
-    expect(html()).toContain("Loading armies…");
+    // The sheet opens on its most-used variant, loading its armies; Other is last.
+    page.states[openArmy] = "army-type:3";
+    const open = html();
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain("<dialog");
+    expect(renderedText(open)).toContain(
+      "Variants Each variant’s share of Thrower attacks. Revenge Thrower 75.0% 3-star 0.0% · 26.0 trophies · 6 battles",
+    );
+    expect(open).toContain('title="Hide Revenge Thrower armies"');
+    expect(open).toContain('title="Show Other Thrower armies"');
+    expect(open).toContain("Loading armies…");
   });
 });
 
@@ -1159,7 +1166,7 @@ describe("army analytics worst-case data", () => {
     });
     const text = renderedText(await renderArmyRoute("season=current&population=top-100"));
     expect(text).toContain("1 of the included armies is partly readable.");
-    expect(text).toContain("128,473 / 131,020");
+    expect(text).toContain("128,473 of 131,020");
     expect(text).toContain("71.1% 91,388 battles");
     expect(text).toContain("Unknown ID 4000123");
     expect(text).toContain("100.0% 1 battle");

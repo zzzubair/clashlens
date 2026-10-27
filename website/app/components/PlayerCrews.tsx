@@ -14,7 +14,7 @@ export function PlayerCrews({
   const backState = useBackState(name);
   if (!crews || crews.length === 0) return null;
   return (
-    <p className="player-crews">
+    <span className="player-crews">
       {crews.length === 1 ? "Crew" : "Crews"}:{" "}
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
@@ -24,6 +24,6 @@ export function PlayerCrews({
           </Link>
         </span>
       ))}
-    </p>
+    </span>
   );
 }

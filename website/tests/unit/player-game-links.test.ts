@@ -125,8 +125,7 @@ async function renderPlayer(
   });
 }
 
-const header = (html: string) =>
-  html.match(/<header class="player-header">.*?<\/p>/s)?.[0];
+const header = (html: string) => html.match(/<header class="player-hero">.*?<\/p>/s)?.[0];
 
 describe("in-game links", () => {
   it("opens the player's and the clan's profile by tag, keeping the #", () => {

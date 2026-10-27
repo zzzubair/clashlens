@@ -340,7 +340,7 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     if (day.period === player.currentDay!.period) day.offenseEvents.unshift(attack);
   }
   const processedData = encodePageData(processed);
-  const attacks = page.locator(".battle-slot-attack", { hasText: "Catch-up Clasher" });
+  const attacks = page.locator(".battle-row-attack", { hasText: "Catch-up Clasher" });
 
   // Before processing, page reads return the earlier check. Completion carries
   // the processed profile without its battles; only later reads include them.
@@ -520,8 +520,8 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
   await expect(page.getByText(/1,284 days old/)).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
-  const nameless = page.locator(".battle-slot-attack").nth(8);
-  await expect(nameless.locator(".battle-opponent strong")).toHaveText("#P0Y");
+  const nameless = page.locator(".battle-row-attack").nth(8);
+  await expect(nameless.locator(".battle-link")).toHaveText("#P0Y");
   await expect(nameless.locator(".player-tag")).toHaveCount(0);
   for (const size of [
     { width: 320, height: 568 },
@@ -539,7 +539,7 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await refuseRefreshes(page);
   await openWorstCasePlayer(page);
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
-  const link = page.locator(".battle-profile-link").first();
+  const link = page.locator(".battle-link").first();
   const href = (await link.getAttribute("href"))!;
   const target = new URL(href, page.url());
   const opponent = decodeURIComponent(target.pathname.split("/").pop()!);
@@ -567,10 +567,7 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await expect(battle).toBeInViewport();
   await page.goBack();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
-  await expect(page.locator(".battle-profile-link").first()).toHaveAttribute(
-    "href",
-    href,
-  );
+  await expect(page.locator(".battle-link").first()).toHaveAttribute("href", href);
   // Both moves stayed in the open page: no page was downloaded again.
   expect(documents).toEqual([]);
 });
@@ -581,7 +578,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
   browser,
 }) => {
   test.setTimeout(120_000);
-  const battles = "details.legend-day:not([open]) .battle-slot[id]";
+  const battles = "details.log-day:not([open]) .battle-row[id]";
   const noScript = await browser.newContext({ javaScriptEnabled: false });
   let sent: string[] = [];
   try {
@@ -663,13 +660,13 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
     );
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(
-      page.locator("details.legend-day:not([open]) .battle-slot-attack", {
+      page.locator("details.log-day:not([open]) .battle-row-attack", {
         hasText: "After Refresh",
       }),
     ).toHaveCount(1);
 
     const folded = page
-      .locator("details.legend-day:not([open])")
+      .locator("details.log-day:not([open])")
       .filter({
         has: page.getByRole("button", { name: "Show army", includeHidden: true }),
       })
@@ -678,7 +675,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
     await day.locator("summary").click();
     await day.getByRole("button", { name: "Show army" }).first().click();
     await expect(day.getByRole("button", { name: "Hide army" })).toBeVisible();
-    await expect(day.locator(".battle-slot[id]")).not.toHaveCount(0);
+    await expect(day.locator(".battle-row[id]")).not.toHaveCount(0);
   } finally {
     await context.close();
   }

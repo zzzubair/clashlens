@@ -79,8 +79,7 @@ input:focus-visible {
   width: min(100% - 2rem, 50rem);
 }
 
-.hero,
-.player-header {
+.hero {
   max-width: 52rem;
   margin-bottom: 2rem;
 }
@@ -723,28 +722,6 @@ body {
   color: #53657c;
 }
 
-.player-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.player-trophy-card {
-  display: grid;
-  gap: 0.25rem;
-  min-width: 10rem;
-  padding: 0.9rem;
-  border: 1px solid #d5deea;
-  border-radius: 0.65rem;
-  background: #fff;
-}
-
-.player-trophy-card strong {
-  color: #0b3b61;
-  font-size: 1.6rem;
-}
-
 .metric-label {
   color: #53657c;
   font-size: 0.78rem;
@@ -801,7 +778,6 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .player-header,
   .search-result {
     align-items: flex-start;
     flex-direction: column;

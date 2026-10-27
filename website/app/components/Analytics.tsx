@@ -32,7 +32,8 @@ function currentRoute(): string {
 // themselves carry no tracking code. `shown` is what the page shows now.
 function onClick(event: MouseEvent, shown: Selection | null) {
   const target = event.target instanceof Element ? event.target : null;
-  const column = target?.closest(".analytics-sort-button")?.closest("th")?.dataset.column;
+  // The Armies page's sort headings and sort chips.
+  const column = target?.closest<HTMLElement>(".analytics-sort-button")?.dataset.column;
   if (column) {
     track("armies_changed", {
       ...shown?.labels,

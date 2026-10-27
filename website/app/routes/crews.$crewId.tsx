@@ -1,10 +1,21 @@
-import { data, Link, useActionData, useLoaderData, useSearchParams } from "react-router";
+import {
+  data,
+  Link,
+  useActionData,
+  useLoaderData,
+  useSearchParams,
+  type ShouldRevalidateFunctionArgs,
+} from "react-router";
 
 import { type BackHandle, useBackState } from "../components/BackLink";
 import {
   BoardRows,
+  crewSearch,
+  DEFENSE_BOARDS,
+  DefenseOrder,
   emptyBoardText,
   PeriodSwitch,
+  PlacesMeter,
   RoleChip,
 } from "../components/CrewBoards";
 import { CrewInvite } from "../components/CrewForms";
@@ -12,9 +23,9 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { SavedLine } from "../components/SavedLine";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
-  BOARD_KEYS,
   BOARDS,
   boardDescription,
+  boardFromSlug,
   crewPeriod,
   NOW_BOARDS,
   type BoardKey,
@@ -30,6 +41,17 @@ import "../crews.css";
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each card shows the top of its board; the board's own page shows the rest. */
 const CARD_ROWS = 5;
+/** The players list shows this many, then Show all. */
+const PLAYER_ROWS = 10;
+
+/** A phone shows one board at a time, picked from these tabs. */
+const TABS: readonly { label: string; boards: readonly BoardKey[] }[] = [
+  { label: "Live", boards: ["live"] },
+  { label: "Reset", boards: ["top"] },
+  { label: "Attack", boards: ["attackers"] },
+  { label: "Defense", boards: DEFENSE_BOARDS },
+  { label: "Streaks", boards: ["streaks"] },
+];
 
 /** Back leads members to their crews; anyone else back where they came from. */
 export const handle: BackHandle = {
@@ -42,7 +64,8 @@ export const handle: BackHandle = {
 /**
  * GET /crews/:crewId — one crew's boards and accounts, for anyone. Only its
  * members see Invite, Members and Edit; `?saved=joined`, after an invite, tells a
- * member they joined.
+ * member they joined. `?board=` picks the board a phone shows, and whether
+ * defenders read best or worst first.
  */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const period = crewPeriod(new URL(request.url).searchParams.get("period"));
@@ -77,6 +100,22 @@ export function headers() {
   return NO_STORE;
 }
 
+/** Every board is already loaded, so picking another one reads nothing new. */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  const rest = (url: URL) => {
+    const params = new URLSearchParams(url.search);
+    params.delete("board");
+    return `${url.pathname}?${params.toString()}`;
+  };
+  if (!formMethod && rest(currentUrl) === rest(nextUrl)) return false;
+  return defaultShouldRevalidate;
+}
+
 export function meta({ loaderData: loaded }: Route.MetaArgs) {
   return [
     { title: loaded?.crew ? `${loaded.crew.name} · Clash Lens` : "Crew · Clash Lens" },
@@ -86,8 +125,10 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 export default function CrewRoute() {
   const { crew, boards, period, error, idempotencyKey } = useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
+  const [searchParams] = useSearchParams();
   // Set by joining from an invite link.
-  const joined = useSearchParams()[0].get("saved") === "joined";
+  const joined = searchParams.get("saved") === "joined";
+  const shown = boardFromSlug(searchParams.get("board") ?? undefined) ?? "live";
   if (crew === null || boards === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
@@ -98,29 +139,44 @@ export default function CrewRoute() {
   }
   const open = Math.max(0, crew.size - crew.used);
   const { clashers, myRole } = crew;
+  const defense = shown === "worst_defenders" ? shown : "best_defenders";
+  const card = (board: BoardKey) => (
+    <BoardCard
+      board={board}
+      current={board === shown}
+      crew={crew}
+      boards={boards}
+      period={period}
+    />
+  );
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+    <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       {joined && myRole !== null ? <SavedLine>You joined {crew.name}.</SavedLine> : null}
       <section className="crew-panel crew-head" aria-labelledby="crew-title">
-        <h1 id="crew-title">{crew.name}</h1>
-        {clashers === null || myRole === null ? null : (
-          <p className="crew-meta">
-            {clashers} {clashers === 1 ? "clasher" : "clashers"}
-            <RoleChip role={myRole} />
-          </p>
-        )}
-        <div className="crew-bar" aria-hidden="true">
-          <i style={{ width: `${Math.min(100, (crew.used / crew.size) * 100)}%` }} />
+        <span className="crew-icon" aria-hidden="true">
+          {Array.from(crew.name)[0]}
+        </span>
+        <div className="crew-title">
+          <h1 id="crew-title">{crew.name}</h1>
+          {myRole === null ? (
+            <p className="crew-meta">Joining is by invite only.</p>
+          ) : clashers === null ? null : (
+            <p className="crew-meta">
+              {clashers} {clashers === 1 ? "clasher" : "clashers"}
+              <RoleChip role={myRole} />
+            </p>
+          )}
         </div>
-        <p className="crew-places">
-          <span>
-            {crew.used} of {crew.size} places
-          </span>
-          {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
-        </p>
-        {myRole === null ? (
-          <p className="crew-lede">Joining is by invite only.</p>
-        ) : (
+        <div className="crew-places">
+          <p>
+            <span>
+              {crew.used} of {crew.size} places
+            </span>
+            {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
+          </p>
+          <PlacesMeter used={crew.used} size={crew.size} />
+        </div>
+        {myRole === null ? null : (
           <div className="crew-actions">
             {open > 0 ? (
               <CrewInvite
@@ -142,53 +198,109 @@ export default function CrewRoute() {
         )}
       </section>
 
-      {/* The live boards speak for themselves; the heading only keeps the outline whole. */}
-      <h2 className="sr-only">Right now</h2>
-      <div className="crew-boards">
-        {NOW_BOARDS.map((key) => (
-          <BoardCard key={key} board={key} crew={crew} boards={boards} period={period} />
-        ))}
-      </div>
+      <nav aria-label="Boards" className="tab-row crew-tabs">
+        {TABS.map(({ label, boards: keys }) => {
+          const current = keys.includes(shown);
+          return (
+            <Link
+              key={label}
+              to={{ search: crewSearch(period, current ? shown : keys[0]) }}
+              aria-current={current ? "page" : undefined}
+              replace
+              preventScrollReset
+              onClick={showBoardTop}
+            >
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
 
-      <h2 className="crew-section-title">Averages and streaks</h2>
-      <PeriodSwitch period={period} />
-      <div className="crew-boards">
-        {BOARD_KEYS.filter((key) => !NOW_BOARDS.includes(key)).map((key) => (
-          <BoardCard key={key} board={key} crew={crew} boards={boards} period={period} />
-        ))}
+      {/* A phone shows only the picked board (crews.css); wider screens show them all. */}
+      <div className="crew-boards" id="crew-boards">
+        {/* The live boards speak for themselves; the heading only keeps the outline whole. */}
+        <h2 className="sr-only">Right now</h2>
+        {card("live")}
+        {card("top")}
+        <div
+          className="crew-period-bar"
+          data-current={NOW_BOARDS.includes(shown) ? undefined : ""}
+        >
+          <h2>Averages and streaks</h2>
+          <PeriodSwitch period={period} board={shown} />
+        </div>
+        {card("attackers")}
+        <BoardCard
+          board={defense}
+          current={defense === shown}
+          crew={crew}
+          boards={boards}
+          period={period}
+          order={
+            <DefenseOrder
+              board={defense}
+              to={(key) => ({ search: crewSearch(period, key) })}
+            />
+          }
+        />
+        {card("streaks")}
+        <CrewAccounts crew={crew} />
       </div>
-
-      <CrewAccounts crew={crew} />
     </main>
   );
+}
+
+/**
+ * A tab tapped while scrolled down the page, the tabs stuck at the top,
+ * brings the new board's top up under them rather than leaving its middle.
+ */
+function showBoardTop(event: React.MouseEvent<HTMLAnchorElement>) {
+  const tabs = event.currentTarget.parentElement?.getBoundingClientRect();
+  const boards = document.getElementById("crew-boards")?.getBoundingClientRect();
+  if (tabs && boards && boards.top < tabs.bottom) {
+    window.scrollBy({ top: boards.top - tabs.bottom });
+  }
 }
 
 /** Every Clash of Clans account in the crew, most trophies first. */
 function CrewAccounts({ crew }: { crew: CrewView }) {
   const backState = useBackState(crew.name);
   if (crew.players.length === 0) return null;
+  const item = (player: CrewView["players"][number]) => (
+    <li key={player.tag}>
+      <Link to={canonicalPlayerPath(player.tag)} state={backState}>
+        {player.name ?? player.tag}
+      </Link>
+      <span>
+        {player.tag}
+        {player.trophies === null ? null : (
+          <>
+            {" · "}
+            <TrophyMark />
+            {player.trophies.toLocaleString("en-GB")}
+          </>
+        )}
+      </span>
+    </li>
+  );
+  const rest = crew.players.slice(PLAYER_ROWS);
   return (
-    <section className="crew-panel crew-missing" aria-labelledby="crew-accounts-title">
-      <h2 id="crew-accounts-title">Players ({crew.players.length})</h2>
-      <ul>
-        {crew.players.map((player) => (
-          <li key={player.tag}>
-            <Link to={canonicalPlayerPath(player.tag)} state={backState}>
-              {player.name ?? player.tag}
-            </Link>
-            <span>
-              {player.tag}
-              {player.trophies === null ? null : (
-                <>
-                  {" · "}
-                  <TrophyMark />
-                  {player.trophies.toLocaleString("en-GB")}
-                </>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <section
+      className="crew-panel crew-board crew-players"
+      aria-labelledby="crew-accounts-title"
+    >
+      <div className="crew-board-head">
+        <h2 id="crew-accounts-title">Players ({crew.players.length})</h2>
+      </div>
+      <ul className="crew-player-list">{crew.players.slice(0, PLAYER_ROWS).map(item)}</ul>
+      <div className="crew-board-foot">
+        {rest.length > 0 ? (
+          <details className="crew-more">
+            <summary className="button secondary">Show all {crew.players.length}</summary>
+            <ul className="crew-player-list">{rest.map(item)}</ul>
+          </details>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -200,14 +312,20 @@ function CrewAccounts({ crew }: { crew: CrewView }) {
  */
 function BoardCard({
   board,
+  current,
   crew,
   boards,
   period,
+  order,
 }: {
   board: BoardKey;
+  /** The board a phone shows. */
+  current: boolean;
   crew: CrewView;
   boards: CrewBoards;
   period: CrewPeriod;
+  /** Defenders' Best and Worst switch. */
+  order?: React.ReactNode;
 }) {
   const { rows, missing } = boards.boards[board];
   const fixed = NOW_BOARDS.includes(board);
@@ -215,10 +333,17 @@ function BoardCard({
     fixed || period === "season" ? "" : `?period=${period}`
   }`;
   return (
-    <section className="crew-panel crew-board" aria-labelledby={`board-${board}`}>
+    <section
+      className={`crew-panel crew-board crew-board-${BOARDS[board].slug}`}
+      aria-labelledby={`board-${board}`}
+      data-current={current ? "" : undefined}
+    >
       <div className="crew-board-head">
-        <h3 id={`board-${board}`}>{BOARDS[board].title}</h3>
-        <p>{boardDescription(board, period)}</p>
+        <div>
+          <h3 id={`board-${board}`}>{BOARDS[board].title}</h3>
+          <p>{boardDescription(board, period)}</p>
+        </div>
+        {order}
       </div>
       {rows.length > 0 ? (
         <BoardRows

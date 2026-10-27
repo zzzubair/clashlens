@@ -80,12 +80,11 @@
   font-weight: 800;
   letter-spacing: 0.02em;
 }
-:root :is(table, .player-trophy-card, .metric-card, .season-summary) {
+:root :is(table, .metric-card, .season-summary) {
   font-variant-numeric: tabular-nums;
 }
 /* Big numbers read like the in-game counters. */
-:root
-  :is(.player-trophy-card strong, .metric-card strong, .season-summary-headline strong) {
+:root :is(.metric-card strong, .season-summary-headline strong) {
   font-family: var(--cl-font-heading);
   font-weight: 400;
   letter-spacing: 0.01em;
@@ -136,8 +135,7 @@
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
-    .search-controls button,
-    .saved-data-panel button
+    .search-controls button
   ) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill);
@@ -152,8 +150,7 @@
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
-    .search-controls button,
-    .saved-data-panel button
+    .search-controls button
   ):is(:hover, :focus-visible) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill-hover);
@@ -240,28 +237,18 @@
   :is(
     .home-leaderboard,
     .standings-board,
-    .player-header,
     .season-summary,
-    .legend-day,
     .metric-card,
     .search-panel,
-    .saved-summary,
     .notice,
-    .quality-section,
     .empty-state,
-    .saved-data-panel,
-    .quality-panel,
-    .login-panel,
     .form-panel,
     .group-card,
     .compare-board,
     .linked-player-card,
     .dash-card,
     .blog-list article,
-    .analytics-filters,
-    .analytics-kpis,
     .analytics-empty,
-    .leading-players,
     .search-results,
     .table-wrap,
     .search-dropdown,
@@ -276,7 +263,7 @@
 :root :is(.search-dropdown, .header-search-panel) {
   box-shadow: var(--cl-overlay-shadow);
 }
-:root :is(.home-leaderboard, .standings-board, .season-summary, .legend-day) {
+:root :is(.home-leaderboard, .standings-board, .season-summary) {
   overflow: hidden;
 }
 /* A card inside a card is just a section of it. */
@@ -284,13 +271,8 @@
   :is(
     .home-leaderboard,
     .standings-board,
-    .player-header,
     .season-summary,
-    .legend-day,
     .search-panel,
-    .saved-data-panel,
-    .quality-panel,
-    .login-panel,
     .form-panel,
     .group-card,
     .compare-board,
@@ -302,9 +284,6 @@
     .notice,
     .empty-state,
     .table-wrap,
-    .quality-section,
-    .saved-summary,
-    .player-trophy-card,
     .search-results,
     .search-controls
   ) {
@@ -313,7 +292,7 @@
   box-shadow: none;
 }
 /* Small items in a list share the card edge. */
-:root :is(.search-result, .group-name-list li, .player-action-list li) {
+:root :is(.search-result, .player-action-list li) {
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
   box-shadow: none;
@@ -359,9 +338,6 @@
 }
 :root .home-page .search-controls input {
   border-radius: var(--cl-radius);
-}
-:root[data-theme="dark"] .home-page .search-controls {
-  border-color: var(--cl-outline);
 }
 
 /* A button never shrinks past its own text. Narrow phones let short buttons wrap

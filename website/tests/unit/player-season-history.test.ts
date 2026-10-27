@@ -275,8 +275,8 @@ describe("past-Season view", () => {
       if (source === "tracked_summary") {
         expect(html).not.toContain("Final trophies:");
         expect(html).not.toContain("A Legend day runs from 05:00 to 05:00 UTC.");
-        expect(html).toContain('<th scope="col">Trophy change</th>');
-        expect(html).not.toContain('<th scope="col">Net</th>');
+        expect(html).toContain("<small>Trophy change</small>");
+        expect(html).not.toContain(">Net<");
       }
     },
   );
@@ -308,7 +308,7 @@ describe("past-Season view", () => {
     // Missing days alone do not make any known total unavailable.
     expect(html).not.toContain("Some daily totals are unavailable.");
     // The day's -30 trophy change stays apart from its +10 recorded battle net.
-    expect(html).toContain("<td>-30</td><td>+10</td>");
+    expect(html).toMatch(/change<\/small><strong[^>]*>-30<.*battle net<\/dt><dd>\+10</s);
   });
 
   it("averages over played days only, leaving out quiet days and days before sign-up", async () => {
@@ -358,10 +358,10 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain('<th scope="col">Reset rank</th>');
-    // EOD change, then Reset rank, then attacks recorded.
-    expect(html).toContain("<td>Unknown</td><td>1,042</td><td>8</td>");
-    expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
+    expect(html).toContain("<span>Reset rank</span>");
+    // Each day's row says its Reset rank, or Unknown.
+    expect(html).toContain("<small>Reset rank</small><strong>1,042</strong>");
+    expect(html).toMatch(/Reset rank<\/small><strong class="stat-unavailable">Unknown</);
   });
 
   it("keeps a saved day Verified when its Reset reading matched exactly", async () => {
@@ -377,7 +377,9 @@ describe("past-Season view", () => {
       SEASON,
     );
     expect(html).toContain('title="Verified"');
-    expect(html).toContain("<strong>Verified.</strong> A reading from the game matched");
+    expect(html).toContain(
+      "<strong>Verified.</strong> A reading from the game confirmed",
+    );
     expect(html).not.toContain('title="Calculated"');
   });
 
@@ -394,7 +396,7 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("<td>Unknown</td>");
+    expect(html).toMatch(/Trophy change<\/small><strong class="score-neutral">Unknown</);
     expect(html).not.toContain("Some daily totals are unavailable.");
   });
 
@@ -429,7 +431,7 @@ describe("past-Season view", () => {
     expect(html).toContain(CURRENT_LINK);
     expect(html).toContain("Season history could not be loaded.");
     expect(html).toContain(`href="/players/%232PP?season=${SEASON}">Try again</a>`);
-    expect(html).toContain("<td>-30</td>");
+    expect(html).toContain(">-30</strong>");
   });
 
   it.each([
@@ -544,7 +546,7 @@ describe("past-Season view", () => {
 
     const past = await loadAndRender(client, SEASON);
     for (const number of [24, 25, 26, 27, 28])
-      expect(past).toContain(`<summary>${number}<span class="day-mark`);
+      expect(past).toContain(`<small>Day ${number}</small><span class="day-mark`);
     expect(past).toContain(
       `<option value="${SEASON}" selected="">7 Sep – 4 Oct 2026</option>`,
     );
@@ -579,8 +581,8 @@ describe("past-Season view", () => {
     const html = await loadAndRender(client, null, "2026-10-04");
     expect(client.getPlayerSeason).toHaveBeenCalledWith(TAG, SEASON);
     expect(html.match(/aria-current="date"/g)).toHaveLength(1);
-    expect(html).toContain(
-      '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
+    expect(html).toMatch(
+      /id="legend-day-2026-10-04" aria-current="date" open=""><summary.*?<small>Day 28</,
     );
     expect(html).toContain(
       `<option value="${SEASON}" selected="">7 Sep – 4 Oct 2026</option>`,
@@ -617,7 +619,7 @@ describe("past-Season view", () => {
     expect(html).toContain(
       "Attacks and defenses from this day are no longer shown here.",
     );
-    expect(html).not.toContain("battle-slot");
+    expect(html).not.toContain("battle-row");
   });
 
   it("shows no battles for a linked ended-Season day the Season table lacks", async () => {
@@ -629,7 +631,7 @@ describe("past-Season view", () => {
     const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
     expect(html).toContain("No saved Legend log for 15 Sep 2026.");
     expect(html).not.toContain('aria-current="date"');
-    expect(html).toContain('<details class="day-status"><summary>28<');
+    expect(html).toContain("<small>Day 28</small>");
   });
 
   it("opens a current Season day link in the Daily Legend log", async () => {

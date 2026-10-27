@@ -15,10 +15,9 @@ export function DayMark({ status }: { status: string }) {
 }
 
 const STATUS_TEXT: Record<string, string> = {
-  Verified:
-    "A reading from the game matched this day's start, battles and automatic defense loss. ",
+  Verified: "A reading from the game confirmed every part of this day. ",
   Calculated:
-    "Added up from the recorded battles. A reading from the game has not confirmed every part of this number yet. ",
+    "Added up from recorded battles, not yet confirmed by a reading from the game. ",
 };
 
 export function DayStatusNote({

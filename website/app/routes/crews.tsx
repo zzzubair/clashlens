@@ -1,6 +1,6 @@
 import { data, Link, redirect, useLoaderData } from "react-router";
 
-import { RoleChip } from "../components/CrewBoards";
+import { PlacesMeter, RoleChip } from "../components/CrewBoards";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { MAX_CREWS, type CrewList } from "../lib/crew-contracts";
@@ -46,11 +46,14 @@ export default function CrewsRoute() {
   const max = list?.maxCrews ?? MAX_CREWS;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
-      <h1>Crews</h1>
-      <p className="lede">
-        Crews are like clans for Legend League: anyone can look inside, but joining is by
-        invite only. Up to 100 accounts each. Start a crew and compete with your friends!
-      </p>
+      <header className="page-head">
+        <h1>Crews</h1>
+        <p>
+          Crews are like clans for Legend League: anyone can look inside, but joining is
+          by invite only. Up to 100 accounts each. Start a crew and compete with your
+          friends!
+        </p>
+      </header>
       {error ? (
         <ErrorNotice error={error} />
       ) : (
@@ -82,6 +85,7 @@ export default function CrewsRoute() {
                   <span>
                     {crew.used} of {crew.size} places
                   </span>
+                  <PlacesMeter used={crew.used} size={crew.size} />
                 </span>
                 <RoleChip role={crew.role} />
               </Link>

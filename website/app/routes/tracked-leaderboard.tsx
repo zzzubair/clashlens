@@ -14,6 +14,7 @@ import {
 import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { SearchIcon } from "../components/PlayerSearch";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
@@ -61,6 +62,11 @@ function leaderboardUrl(
   }
   query.set("page", String(page));
   return `/leaderboards/tracked?${query.toString()}`;
+}
+
+// Phones fit "4 min ago" beside a tag, not "4 minutes ago".
+function shortAge(seconds: number) {
+  return seconds < 60 ? "<1 min" : formatAge(seconds).replace(/ minutes?$/, " min");
 }
 
 function playerRankUrl(tag: string, rank: number) {
@@ -303,7 +309,7 @@ export default function TrackedLeaderboardRoute() {
               aria-current={view === "daily" ? "page" : undefined}
               to="/leaderboards/tracked?view=daily&page=1"
             >
-              Reset
+              At Reset
             </Link>
           </nav>
         </div>
@@ -354,7 +360,8 @@ export default function TrackedLeaderboardRoute() {
             <input type="hidden" name="view" value="live" />
             <input type="hidden" name="page" value="1" />
             <label htmlFor="rank-query">Find your rank</label>
-            <div className="rank-search-controls">
+            <div className="search-controls rank-search-controls">
+              <SearchIcon className="search-field-icon" />
               <input
                 ref={rankInput}
                 id="rank-query"
@@ -404,7 +411,7 @@ export default function TrackedLeaderboardRoute() {
                         <small>{entry.tag}</small>
                       </span>
                       <span>
-                        Rank {entry.rank.toLocaleString()}
+                        <strong>Rank {entry.rank.toLocaleString()}</strong>
                         <small>{entry.trophies.toLocaleString()} trophies</small>
                       </span>
                     </Link>
@@ -527,24 +534,32 @@ export default function TrackedLeaderboardRoute() {
                           >
                             <bdi>{entry.name}</bdi>
                           </Link>
-                          <span className="player-tag">{entry.tag}</span>
-                          <details className="player-update-mobile">
-                            <summary>
-                              Last updated{" "}
-                              {view === "live" ? (
-                                `${formatAge(ageSeconds(entry.freshness.observedAt))} ago`
-                              ) : (
-                                <LocalTimestamp value={entry.freshness.observedAt} />
-                              )}
-                              {view === "live" &&
-                              ageSeconds(entry.freshness.observedAt) >
-                                OLD_UPDATE_SECONDS ? (
-                                <span className="player-update-age">Over 10 min old</span>
-                              ) : null}
-                              {savedBeforeReset(entry.freshness.observedAt)}
-                            </summary>
-                            <LocalTimestamp value={entry.freshness.observedAt} />
-                          </details>
+                          {/* Phones show the tag and update age on one line. */}
+                          <div className="player-meta">
+                            <span className="player-tag">{entry.tag}</span>
+                            <details className="player-update-mobile">
+                              <summary>
+                                <span className="sr-only">Last updated </span>
+                                {view === "live" ? (
+                                  `${shortAge(ageSeconds(entry.freshness.observedAt))} ago`
+                                ) : (
+                                  <LocalTimestamp
+                                    value={entry.freshness.observedAt}
+                                    timeOnly
+                                  />
+                                )}
+                                {view === "live" &&
+                                ageSeconds(entry.freshness.observedAt) >
+                                  OLD_UPDATE_SECONDS ? (
+                                  <span className="player-update-age">
+                                    Over 10 min old
+                                  </span>
+                                ) : null}
+                                {savedBeforeReset(entry.freshness.observedAt)}
+                              </summary>
+                              <LocalTimestamp value={entry.freshness.observedAt} />
+                            </details>
+                          </div>
                         </th>
                         <td data-label="Clan">{entry.clan}</td>
                         <td className="trophy-cell" data-label="Trophies">

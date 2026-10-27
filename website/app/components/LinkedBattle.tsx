@@ -62,7 +62,7 @@ export function LinkedBattle({
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
           const card = document.getElementById(id);
-          if (!card?.matches(".battle-slot")) return;
+          if (!card?.matches(".battle-row")) return;
           const details = card.closest("details");
           if (details) details.open = true;
           card.scrollIntoView({ block: "center", behavior: "instant" });

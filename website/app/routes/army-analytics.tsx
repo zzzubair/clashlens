@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   data,
   Form,
@@ -12,18 +12,26 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { UnitArt } from "../components/ArmyPortraits";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import { seasonStartAt } from "../components/SeasonReread";
-import { VariantExamples } from "../components/VariantExamples";
-import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
+import { ArmyDetail } from "../components/VariantExamples";
+import {
+  battles,
+  formatRate,
+  starCount,
+  starRate,
+  type ArmyRow,
+} from "../lib/army-stats";
+import type { WebsiteErrorResponse } from "../lib/contracts";
 import { publicPageMeta } from "../lib/blog";
 import { seasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
-import detailsStyles from "../details.css?url";
+import analyticsStyles from "../analytics.css?url";
 
 export function links() {
-  return [{ rel: "stylesheet", href: detailsStyles }];
+  return [{ rel: "stylesheet", href: analyticsStyles }];
 }
 
 // Filters change the view, not the page, so every view shares one address.
@@ -325,19 +333,17 @@ function populationDescription(population: string) {
   return "the selected players";
 }
 
-type ArmyRow = ArmyAnalytics["rows"][number];
 const sortColumns = {
   name: { label: "Name", value: (row: ArmyRow) => row.label },
   quantity: { label: "Quantity", value: (row: ArmyRow) => row.quantity ?? 0 },
-  "usage-count": { label: "Battles / included", value: (row: ArmyRow) => row.usageCount },
   "usage-rate": { label: "Usage", value: (row: ArmyRow) => row.usageRate },
-  "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
-  "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
   "three-star-rate": { label: "3-star", value: (row: ArmyRow) => starRate(row, 3) },
   "average-trophies": {
     label: "Avg. trophies",
     value: (row: ArmyRow) => row.averageTrophies ?? 0,
   },
+  "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
+  "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
   "average-stars": {
     label: "Avg. stars",
     value: (row: ArmyRow) => row.averageStars ?? 0,
@@ -346,18 +352,26 @@ const sortColumns = {
     label: "Avg. destruction",
     value: (row: ArmyRow) => row.averageDestruction ?? 0,
   },
+  "usage-count": { label: "Battles", value: (row: ArmyRow) => row.usageCount },
 } as const;
 type SortColumn = keyof typeof sortColumns;
 type TableSort = { column: SortColumn; direction: "ascending" | "descending" };
+// The phone's sort chips, most asked-for first.
+const chipOrder: SortColumn[] = [
+  "usage-rate",
+  "three-star-rate",
+  "average-trophies",
+  "usage-count",
+  "name",
+  "quantity",
+  "two-star-rate",
+  "one-star-rate",
+  "average-stars",
+  "average-destruction",
+];
 const nameOrder = new Intl.Collator("en", { sensitivity: "base", numeric: true });
-
-function starRate(row: ArmyRow, stars: number) {
-  const count =
-    row.starCounts?.[stars] ??
-    [0, row.oneStarCount, row.twoStarCount, row.threeStarCount][stars] ??
-    0;
-  return row.usageCount ? count / row.usageCount : 0;
-}
+// A long list shows its first rows, then Show all.
+const FIRST_ROWS = 20;
 
 function sortedRows(rows: ArmyRow[], sort: TableSort) {
   const value = sortColumns[sort.column].value;
@@ -376,24 +390,20 @@ function sortedRows(rows: ArmyRow[], sort: TableSort) {
   });
 }
 
-function SortHeading({
-  column,
-  sort,
-  onSort,
-}: {
-  column: SortColumn;
-  sort: TableSort;
-  onSort: (sort: TableSort) => void;
-}) {
-  const active = sort.column === column;
-  const direction = active
-    ? sort.direction === "ascending"
-      ? "descending"
-      : "ascending"
-    : column === "name"
-      ? "ascending"
-      : "descending";
-  const label = sortColumns[column].label;
+/** The sort a tap on a column's heading or chip asks for. */
+function nextSort(column: SortColumn, sort: TableSort): TableSort {
+  const direction =
+    sort.column === column
+      ? sort.direction === "ascending"
+        ? "descending"
+        : "ascending"
+      : column === "name"
+        ? "ascending"
+        : "descending";
+  return { column, direction };
+}
+
+function sortName({ column, direction }: TableSort) {
   const order =
     column === "name"
       ? direction === "ascending"
@@ -402,27 +412,37 @@ function SortHeading({
       : direction === "ascending"
         ? "lowest first"
         : "highest first";
+  return `Sort by ${sortColumns[column].label}, ${order}`;
+}
+
+function SortButton({
+  column,
+  sort,
+  onSort,
+  chip = false,
+}: {
+  column: SortColumn;
+  sort: TableSort;
+  onSort: (sort: TableSort) => void;
+  chip?: boolean;
+}) {
+  const next = nextSort(column, sort);
+  const active = sort.column === column;
   return (
-    <th
-      scope="col"
-      role="columnheader"
+    <button
+      type="button"
+      className="analytics-sort-button"
       data-column={column}
-      aria-sort={active ? sort.direction : undefined}
-      className="analytics-sort-heading"
+      aria-pressed={chip ? active : undefined}
+      aria-label={sortName(next)}
+      title={sortName(next)}
+      onClick={() => onSort(next)}
     >
-      <button
-        type="button"
-        className="analytics-sort-button"
-        aria-label={`Sort by ${label}, ${order}`}
-        title={`Sort by ${label}, ${order}`}
-        onClick={() => onSort({ column, direction })}
-      >
-        {label}
-        <span aria-hidden="true">
-          {active ? (sort.direction === "ascending" ? "↑" : "↓") : "↕"}
-        </span>
-      </button>
-    </th>
+      {sortColumns[column].label}
+      {active ? (
+        <span aria-hidden="true">{sort.direction === "ascending" ? " ↑" : " ↓"}</span>
+      ) : null}
+    </button>
   );
 }
 
@@ -430,117 +450,144 @@ function namedVariantCount(row: ArmyRow) {
   return row.variants?.filter((variant) => variant.variantId !== 0).length ?? 0;
 }
 
-// A type with variants opens on a tap anywhere on its row; its variant rows
-// follow it, each with its share of the type, and open on a tap to their
-// most-used armies.
-const ArmyResultRow = memo(function ArmyResultRow({
+function ResultCell({
   row,
-  isHistorical,
-  trophies,
-  open = false,
-  onToggle,
-  typeLabel,
+  column,
+  sorted,
+  topRate,
 }: {
   row: ArmyRow;
-  isHistorical: boolean;
-  trophies: boolean;
-  open?: boolean;
-  onToggle?: (key: string) => void;
-  typeLabel?: string;
+  column: Exclude<SortColumn, "name">;
+  sorted: boolean;
+  topRate: number;
+}) {
+  const stars =
+    column === "three-star-rate"
+      ? 3
+      : column === "two-star-rate"
+        ? 2
+        : column === "one-star-rate"
+          ? 1
+          : null;
+  const [value, note] = stars
+    ? [formatRate(starRate(row, stars)), battles(starCount(row, stars))]
+    : column === "usage-rate"
+      ? [formatRate(row.usageRate), null]
+      : column === "average-trophies"
+        ? [
+            row.averageTrophies?.toFixed(1) ?? "–",
+            row.averageMissTrophies == null
+              ? "no misses"
+              : `misses ${row.averageMissTrophies.toFixed(1)}`,
+          ]
+        : column === "average-stars"
+          ? [row.averageStars?.toFixed(2) ?? "–", null]
+          : column === "average-destruction"
+            ? [
+                row.averageDestruction == null
+                  ? "–"
+                  : `${row.averageDestruction.toFixed(1)}%`,
+                null,
+              ]
+            : column === "quantity"
+              ? [row.quantity?.toLocaleString() ?? "–", null]
+              : [
+                  row.usageCount.toLocaleString(),
+                  `of ${row.usageDenominator.toLocaleString()}`,
+                ];
+  return (
+    <td
+      role="cell"
+      data-column={column}
+      data-label={sortColumns[column].label}
+      data-sorted={sorted || undefined}
+    >
+      <strong className="analytics-value">{value}</strong>
+      {column === "usage-rate" ? (
+        // The bar is the row's use beside the most-used row's.
+        <span className="meter" aria-hidden="true">
+          <span
+            style={
+              {
+                "--value": `${topRate ? (row.usageRate / topRate) * 100 : 0}%`,
+              } as CSSProperties
+            }
+          />
+        </span>
+      ) : null}
+      {note ? <span className="analytics-note-value"> {note}</span> : null}
+    </td>
+  );
+}
+
+// An army with variants opens on a tap anywhere on its row, into a sheet with
+// its variants and their most-used armies.
+function ArmyResultRow({
+  row,
+  columns,
+  sort,
+  topRate,
+  more,
+  open,
+  onOpen,
+}: {
+  row: ArmyRow;
+  columns: SortColumn[];
+  sort: SortColumn;
+  topRate: number;
+  more: boolean;
+  open: boolean;
+  onOpen: (key: string) => void;
 }) {
   const named = namedVariantCount(row);
-  const variants = named ? row.variants : null;
-  const opens = variants !== null || (typeLabel !== undefined && onToggle !== undefined);
   return (
     <tr
       role="row"
-      className={
-        variants ? "analytics-type-row" : typeLabel ? "analytics-variant-row" : undefined
-      }
-      data-open={opens ? open : undefined}
-      onClick={opens ? () => onToggle?.(row.key) : undefined}
+      className={more ? "analytics-row analytics-row-more" : "analytics-row"}
+      data-opens={named > 0 || undefined}
+      onClick={named ? () => onOpen(row.key) : undefined}
     >
-      <th scope="row" role="rowheader">
-        {opens ? (
-          <button
-            type="button"
-            className="analytics-type-toggle"
-            aria-expanded={open}
-            title={`${open ? "Hide" : "Show"} ${row.label} ${variants ? "variants" : "armies"}`}
-          >
-            <span className="analytics-type-chevron" aria-hidden="true" />
-            <span>
-              {row.label}
-              {variants ? (
+      <th scope="row" role="rowheader" data-sorted={sort === "name" || undefined}>
+        <div className="analytics-name-cell">
+          <span className="analytics-rank" aria-hidden="true" />
+          <UnitArt unitKey={row.key} />
+          {named ? (
+            <button
+              type="button"
+              className="analytics-row-open"
+              aria-haspopup="dialog"
+              aria-expanded={open}
+              title={`Show ${row.label} variants`}
+            >
+              <span className="analytics-name">
+                {row.label}
                 <small>
+                  {" "}
                   {named} {named === 1 ? "variant" : "variants"}
-                  {variants.length > named ? " + Other" : null}
+                  {row.variants!.length > named ? " + Other" : null}
                 </small>
-              ) : null}
-            </span>
-          </button>
-        ) : (
-          row.label
-        )}
+              </span>
+              <span className="analytics-chevron" aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="analytics-name">{row.label}</span>
+          )}
+        </div>
       </th>
-      {isHistorical ? <td role="cell">{row.quantity?.toLocaleString()}</td> : null}
-      <td role="cell" data-column="usage-count">
-        {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
-      </td>
-      <td role="cell" data-column="usage-rate">
-        {typeLabel ? (
-          <>
-            <strong className="analytics-star-rate">{formatRate(row.usageRate)}</strong>
-            <span className="analytics-star-count">of {typeLabel}</span>
-            <span className="analytics-share-bar" aria-hidden="true">
-              <span style={{ width: formatRate(row.usageRate) }} />
-            </span>
-          </>
-        ) : (
-          formatRate(row.usageRate)
-        )}
-      </td>
-      {[1, 2, 3].map((stars) => {
-        const count =
-          row.starCounts?.[stars] ??
-          [row.oneStarCount, row.twoStarCount, row.threeStarCount][stars - 1] ??
-          0;
-        return (
-          <td
-            key={stars}
-            role="cell"
-            data-column={stars === 3 ? "three-star-rate" : undefined}
-          >
-            <strong className="analytics-star-rate">
-              {formatRate(row.usageCount ? count / row.usageCount : 0)}
-            </strong>
-            <span className="analytics-star-count">
-              {count.toLocaleString()} {count === 1 ? "battle" : "battles"}
-            </span>
-          </td>
-        );
-      })}
-      {trophies ? (
-        <td role="cell" data-column="average-trophies">
-          <strong className="analytics-star-rate">
-            {row.averageTrophies?.toFixed(1) ?? "–"}
-          </strong>
-          <span className="analytics-star-count">
-            {row.averageMissTrophies == null
-              ? "no misses"
-              : `misses ${row.averageMissTrophies.toFixed(1)}`}
-          </span>
-        </td>
-      ) : null}
-      {!isHistorical ? (
-        <>
-          <td role="cell">{row.averageStars!.toFixed(2)}</td>
-          <td role="cell">{row.averageDestruction!.toFixed(1)}%</td>
-        </>
-      ) : null}
+      {columns.map((column) =>
+        column === "name" ? null : (
+          <ResultCell
+            key={column}
+            row={row}
+            column={column}
+            sorted={sort === column}
+            topRate={topRate}
+          />
+        ),
+      )}
     </tr>
   );
-});
+}
 
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
@@ -564,6 +611,7 @@ export default function ArmyAnalyticsRoute() {
   const navigation = useNavigation();
   const submit = useSubmit();
   const filterForm = useRef<HTMLFormElement>(null);
+  const unitTypeRow = useRef<HTMLElement>(null);
   const selected = analytics?.selection;
   const isHistorical = historicalSummary === true;
   const coveredDays = analytics?.collectionCoverage.coveredDays ?? [];
@@ -591,6 +639,13 @@ export default function ArmyAnalyticsRoute() {
     query.set("category", view);
     return `?${query}`;
   };
+  // Another unit type keeps the players, Season and sort.
+  const unitTypeQuery = (unitType: string) => {
+    const query = new URLSearchParams(params);
+    for (const key of ["cc", "offset", "sample"]) query.delete(key);
+    query.set("category", unitType);
+    return `?${query}`;
+  };
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const preparing = "armyTypesPreparing" in result && result.armyTypesPreparing;
   const armiesNotAvailable = "armiesNotAvailable" in result && result.armiesNotAvailable;
@@ -608,32 +663,17 @@ export default function ArmyAnalyticsRoute() {
   const partialArmies = analytics?.armyStates.partial ?? 0;
   const location = useLocation();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
-  const [openTypes, setOpenTypes] = useState<ReadonlySet<string>>(new Set());
-  const toggleType = useCallback(
-    (key: string) =>
-      setOpenTypes((open) => {
-        const next = new Set(open);
-        if (!next.delete(key)) next.add(key);
-        return next;
-      }),
-    [],
-  );
-  const [openVariants, setOpenVariants] = useState<ReadonlySet<string>>(new Set());
-  const toggleVariant = useCallback(
-    (key: string) =>
-      setOpenVariants((open) => {
-        const next = new Set(open);
-        if (!next.delete(key)) next.add(key);
-        return next;
-      }),
-    [],
-  );
+  const [openArmy, setOpenArmy] = useState<string | null>(null);
+  const [shownAll, setShownAll] = useState<string | null>(null);
   const [defaultVisit, setDefaultVisit] = useState(location.key);
   // The top-bar link opens the defaults again, sorted by Usage.
   if (!location.search && defaultVisit !== location.key) {
     setDefaultVisit(location.key);
     setChosenSort(null);
+    setOpenArmy(null);
+    setShownAll(null);
   }
+  const closeArmy = useCallback(() => setOpenArmy(null), []);
   const defaultColumn =
     selected?.sort && Object.hasOwn(sortColumns, selected.sort)
       ? (selected.sort as SortColumn)
@@ -641,19 +681,23 @@ export default function ArmyAnalyticsRoute() {
   const columns: SortColumn[] = [
     "name",
     ...(isHistorical ? ["quantity" as const] : []),
-    "usage-count",
     "usage-rate",
-    "one-star-rate",
-    "two-star-rate",
     "three-star-rate",
     ...(armyTypes ? ["average-trophies" as const] : []),
+    "two-star-rate",
+    "one-star-rate",
     ...(!isHistorical ? ["average-stars" as const, "average-destruction" as const] : []),
+    "usage-count",
   ];
   const tableSort: TableSort =
     chosenSort && columns.includes(chosenSort.column)
       ? chosenSort
       : { column: defaultColumn, direction: "descending" };
   const rows = analytics ? sortedRows(analytics.rows, tableSort) : [];
+  const topRate = Math.max(0, ...rows.map((row) => row.usageRate));
+  const listKey = `${category} ${population} ${requestedSeason}`;
+  const collapsed = rows.length > FIRST_ROWS + 5 && shownAll !== listKey;
+  const opened = rows.find((row) => row.key === openArmy && namedVariantCount(row));
 
   useEffect(() => {
     if (!Number.isFinite(currentSeasonEnd) || seasonEnded) return;
@@ -663,6 +707,17 @@ export default function ArmyAnalyticsRoute() {
     );
     return () => clearTimeout(timer);
   }, [currentSeasonEnd, seasonEnded, clock]);
+
+  // The chosen unit type scrolls into view in its sideways row.
+  useEffect(() => {
+    const row = unitTypeRow.current;
+    const chosen = row?.querySelector<HTMLElement>("[aria-current]");
+    if (row && chosen)
+      row.scrollLeft +=
+        chosen.getBoundingClientRect().left -
+        row.getBoundingClientRect().left -
+        (row.clientWidth - chosen.offsetWidth) / 2;
+  }, [category]);
 
   // Update existing controls after URL navigation without replacing the form,
   // which would lose keyboard focus.
@@ -692,31 +747,31 @@ export default function ArmyAnalyticsRoute() {
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell analytics-page">
-      <section className="hero" aria-labelledby="army-analytics-title">
+      <div className="page-head analytics-head">
         <h1 id="army-analytics-title">Analytics</h1>
-        <p className="hero-copy">
-          Compare usage and battle results across tracked Legend League armies.
-        </p>
-      </section>
-      <nav aria-label="Armies view" className="army-view-picker">
-        {(
-          [
-            ["army-types", "Armies", "The army each attack used"],
-            ["troops", "Unit usage", "Troops, spells, heroes and more"],
-          ] as const
-        ).map(([view, title, note]) => (
-          <Link
-            key={view}
-            className="army-view-choice"
-            to={viewQuery(view)}
-            aria-current={(view === "army-types") === armyTypes ? "page" : undefined}
-            preventScrollReset
-          >
-            <strong>{title}</strong>
-            <small>{note}</small>
-          </Link>
-        ))}
-      </nav>
+        <nav
+          aria-label="Armies view"
+          className="leaderboard-view-switch analytics-view-switch"
+        >
+          {(
+            [
+              ["army-types", "Armies"],
+              ["troops", "Unit usage"],
+            ] as const
+          ).map(([view, title]) => (
+            <Link
+              key={view}
+              className="button"
+              to={viewQuery(view)}
+              aria-current={(view === "army-types") === armyTypes ? "page" : undefined}
+              preventScrollReset
+            >
+              {title}
+            </Link>
+          ))}
+        </nav>
+        <p>Compare usage and battle results across tracked Legend League armies.</p>
+      </div>
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
           <div>
@@ -734,7 +789,7 @@ export default function ArmyAnalyticsRoute() {
         ref={filterForm}
         replace
         preventScrollReset
-        className="search-panel analytics-filters"
+        className="analytics-controls"
         aria-label="Army analytics filters"
         onChange={(event) => {
           void submit(new FormData(event.currentTarget), {
@@ -749,35 +804,41 @@ export default function ArmyAnalyticsRoute() {
           name="sort"
           value={selected?.sort ?? params.get("sort") ?? "usage-rate"}
         />
+        <input type="hidden" name="category" value={category} />
         {snapshot ? <input type="hidden" name="recent" value="1" /> : null}
         {params.get("saved") === "1" ? (
           <input type="hidden" name="saved" value="1" />
         ) : null}
-        <div className="analytics-filter-row">
-          <label className="filter-field" hidden={armyTypes}>
-            Unit Type
-            <select name="category" defaultValue={category}>
-              {armyTypes ? <option value="army-types">Armies</option> : null}
-              {unitTypes
+        {armyTypes ? null : (
+          <nav
+            ref={unitTypeRow}
+            aria-label="Unit type"
+            className="tab-row analytics-unit-types"
+          >
+            {[
+              ...unitTypes
                 // Past Seasons keep the first six, plus the one in the link.
                 .filter(
                   (value) =>
                     !isHistorical || unitTypes.indexOf(value) < 6 || value === category,
-                )
-                .map((value) => (
-                  <option key={value} value={value}>
-                    {filterLabels[value]}
-                  </option>
-                ))}
-              {category === "cc-composition" ? (
-                <option value="cc-composition" hidden>
-                  Clan Castle army
-                </option>
-              ) : null}
-            </select>
-          </label>
-          <label className="filter-field">
-            Players
+                ),
+              ...(category === "cc-composition" ? ["cc-composition"] : []),
+            ].map((value) => (
+              <Link
+                key={value}
+                to={unitTypeQuery(value)}
+                aria-current={value === category ? "page" : undefined}
+                replace
+                preventScrollReset
+              >
+                {filterLabels[value]}
+              </Link>
+            ))}
+          </nav>
+        )}
+        <div className="analytics-filter-row">
+          <label className="analytics-field">
+            <span>Players</span>
             <select
               name="population"
               defaultValue={isHistorical ? "all" : population}
@@ -796,16 +857,9 @@ export default function ArmyAnalyticsRoute() {
               )}
             </select>
           </label>
-          <span className="analytics-season" role="status">
-            {navigation.state !== "idle"
-              ? "Updating…"
-              : snapshot
-                ? "Recent real battles"
-                : null}
-          </span>
           {snapshot ? null : (
-            <label className="filter-field analytics-season-picker">
-              Season
+            <label className="analytics-field analytics-season-field">
+              <span>Season</span>
               <select name="season" defaultValue={requestedSeason}>
                 <option value="current">
                   {`This Season · ${seasonDates(seasonStartAt(Date.now()) / 1000)}`}
@@ -824,6 +878,13 @@ export default function ArmyAnalyticsRoute() {
               </select>
             </label>
           )}
+          <span className="analytics-status" role="status">
+            {navigation.state !== "idle"
+              ? "Updating…"
+              : snapshot
+                ? "Recent real battles"
+                : null}
+          </span>
         </div>
         <noscript>
           <button type="submit" className="button button-secondary">
@@ -876,41 +937,9 @@ export default function ArmyAnalyticsRoute() {
           aria-label="Army statistics"
           aria-busy={navigation.state !== "idle"}
         >
-          <p className="section-note analytics-coverage-note" id="army-selection-help">
-            {usageLabels[category]} usage in attacks <strong>by</strong>{" "}
-            {populationDescription(population)}.
-          </p>
-          <div className="analytics-kpis" aria-label="Battle coverage">
-            <article className="analytics-kpi analytics-kpi-primary">
-              <span>Battle records</span>
-              <strong>{recordedBattleRecords.toLocaleString()}</strong>
-              <small>Recorded in this selection</small>
-            </article>
-            <article className="analytics-kpi">
-              <span>Records included</span>
-              <strong>{includedBattleRecords.toLocaleString()}</strong>
-              <small>
-                {armyTypes
-                  ? "Every attack, including ones whose army could not be read"
-                  : "Enough army details to use in these stats"}
-              </small>
-            </article>
-            <article className="analytics-kpi">
-              <span>Records excluded</span>
-              <strong>{excludedBattleRecords.toLocaleString()}</strong>
-              <small>Opponent or army details missing</small>
-            </article>
-          </div>
-          {partialArmies > 0 ? (
-            <p className="section-note analytics-coverage-note">
-              {partialArmies.toLocaleString()} of the included armies{" "}
-              {partialArmies === 1 ? "is" : "are"} partly readable. Known troops, spells
-              and equipment count; unknown items do not.
-            </p>
-          ) : null}
-          <div className="section-heading">
+          <div className="analytics-results-head">
             <h2>{filterLabels[analytics.selection.category]}</h2>
-            <span className="section-note">
+            <span className="analytics-days">
               {snapshot
                 ? `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
                 : coveredDays.length
@@ -918,110 +947,139 @@ export default function ArmyAnalyticsRoute() {
                   : `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`}
             </span>
           </div>
-          {!isHistorical && !snapshot && untrackedDays.length > 0 ? (
-            <p className="section-note analytics-coverage-note">
-              Days not tracked: {dayList(untrackedDays)}.
-            </p>
+          <p className="analytics-note" id="army-selection-help">
+            {usageLabels[category]} usage in attacks <strong>by</strong>{" "}
+            {populationDescription(population)}.
+            {!isHistorical && !snapshot && untrackedDays.length > 0
+              ? ` Days not tracked: ${dayList(untrackedDays)}.`
+              : null}
+          </p>
+          <div className="analytics-coverage" role="group" aria-label="Battle coverage">
+            <span>
+              Battle records <strong>{recordedBattleRecords.toLocaleString()}</strong>
+            </span>
+            <span>
+              Included <strong>{includedBattleRecords.toLocaleString()}</strong>
+            </span>
+            <span>
+              Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
+            </span>
+          </div>
+          {armyTypes && analytics.rows.some((row) => namedVariantCount(row) > 0) ? (
+            <p className="analytics-note">Tap an army for its variants and top armies.</p>
           ) : null}
-          {armyTypes ? (
-            <p className="section-note analytics-coverage-note">
-              {analytics.rows.some((row) => namedVariantCount(row) > 0)
-                ? "Tap an army for its variants, then a variant for its top armies. "
-                : null}
-              Avg. trophies counts every attack.
-            </p>
-          ) : null}
+          <div className="tab-row analytics-sort-chips" role="group" aria-label="Sort">
+            {chipOrder
+              .filter((column) => columns.includes(column))
+              .map((column) => (
+                <SortButton
+                  key={column}
+                  column={column}
+                  sort={tableSort}
+                  onSort={setChosenSort}
+                  chip
+                />
+              ))}
+          </div>
           <div
-            className="table-wrap analytics-table-wrap"
+            className="analytics-table-wrap"
             tabIndex={0}
             role="region"
             aria-label="Army results table"
           >
             <table
-              className="data-table analytics-table analytics-results-table"
+              className="analytics-results-table"
               role="table"
               aria-label="Army analytics results"
               aria-describedby="army-selection-help"
+              data-view={armyTypes ? "armies" : "units"}
+              // Ranks and the top three show for a highest-first number sort.
+              data-ranked={
+                (tableSort.column !== "name" && tableSort.direction === "descending") ||
+                undefined
+              }
             >
               <thead role="rowgroup">
                 <tr role="row">
                   {columns.map((column) => (
-                    <SortHeading
+                    <th
                       key={column}
-                      column={column}
-                      sort={tableSort}
-                      onSort={setChosenSort}
-                    />
+                      scope="col"
+                      role="columnheader"
+                      data-column={column}
+                      aria-sort={
+                        tableSort.column === column ? tableSort.direction : undefined
+                      }
+                    >
+                      <SortButton
+                        column={column}
+                        sort={tableSort}
+                        onSort={setChosenSort}
+                      />
+                    </th>
                   ))}
                 </tr>
               </thead>
-              <tbody role="rowgroup">
+              <tbody role="rowgroup" data-collapsed={collapsed || undefined}>
                 {analytics.rows.length === 0 ? (
-                  <tr role="row">
+                  <tr role="row" className="analytics-row-empty">
                     <td role="cell" colSpan={columns.length}>
                       No recognized components in this selection.
                     </td>
                   </tr>
                 ) : null}
-                {rows.flatMap((row) => [
+                {rows.map((row, index) => (
                   <ArmyResultRow
                     key={row.key}
                     row={row}
-                    isHistorical={isHistorical}
-                    trophies={armyTypes}
-                    open={openTypes.has(row.key)}
-                    onToggle={toggleType}
-                  />,
-                  ...(row.variants && namedVariantCount(row) > 0 && openTypes.has(row.key)
-                    ? sortedRows(row.variants, tableSort)
-                        // A type's Other stays last.
-                        .sort(
-                          (a, b) => Number(a.variantId === 0) - Number(b.variantId === 0),
-                        )
-                        .flatMap((variant) => [
-                          <ArmyResultRow
-                            key={variant.key}
-                            row={variant}
-                            isHistorical={isHistorical}
-                            trophies={armyTypes}
-                            typeLabel={row.label}
-                            open={openVariants.has(variant.key)}
-                            onToggle={toggleVariant}
-                          />,
-                          ...(openVariants.has(variant.key)
-                            ? [
-                                <VariantExamples
-                                  key={`${variant.key}:examples`}
-                                  id={variant.key}
-                                  label={variant.label}
-                                  attacks={variant.usageCount}
-                                  url={`/resources/analytics/armies/examples?${new URLSearchParams(
-                                    {
-                                      population,
-                                      season: analytics.selection.season,
-                                      days: coveredDays.join(","),
-                                      type: String(row.typeId),
-                                      variant: String(variant.variantId),
-                                    },
-                                  )}`}
-                                  columns={columns.length}
-                                />,
-                              ]
-                            : []),
-                        ])
-                    : []),
-                ])}
+                    columns={columns}
+                    sort={tableSort.column}
+                    topRate={topRate}
+                    more={index >= FIRST_ROWS}
+                    open={opened?.key === row.key}
+                    onOpen={setOpenArmy}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
+          {collapsed ? (
+            <>
+              <button
+                type="button"
+                className="button button-secondary analytics-show-all"
+                onClick={() => setShownAll(listKey)}
+              >
+                Show all {rows.length.toLocaleString()}
+              </button>
+              {/* Without JavaScript every row shows. */}
+              <noscript>
+                <style>
+                  {
+                    ".analytics-results-table tbody[data-collapsed] > .analytics-row-more{display:var(--row-display)}.analytics-show-all{display:none}"
+                  }
+                </style>
+              </noscript>
+            </>
+          ) : null}
+          <p className="analytics-footnote">
+            {armyTypes
+              ? "Avg. trophies counts every attack. Every attack is included, even if its army could not be read. "
+              : excludedBattleRecords > 0
+                ? "Excluded: opponent or army details missing. "
+                : null}
+            {partialArmies > 0
+              ? `${partialArmies.toLocaleString()} of the included armies ${partialArmies === 1 ? "is" : "are"} partly readable. Known troops, spells and equipment count; unknown items do not.`
+              : null}
+          </p>
           {analytics.pagination ? (
-            <div className="hero-actions">
+            <div className="analytics-pages">
               <span>
                 Showing {analytics.rows.length.toLocaleString()} of{" "}
                 {analytics.pagination.totalRows.toLocaleString()}{" "}
                 {analytics.pagination.totalRows === 1 ? "result" : "results"}
                 {analytics.pagination.totalRows > analytics.rows.length
-                  ? ". Heading sorts apply to this page."
+                  ? ". Sorting applies to this page."
                   : ""}
               </span>
               {analytics.pagination.nextOffset !== null ? (
@@ -1033,6 +1091,26 @@ export default function ArmyAnalyticsRoute() {
                 </Link>
               ) : null}
             </div>
+          ) : null}
+          {opened ? (
+            <ArmyDetail
+              key={opened.key}
+              row={opened}
+              variants={sortedRows(opened.variants ?? [], tableSort)
+                // A type's Other stays last.
+                .sort((a, b) => Number(a.variantId === 0) - Number(b.variantId === 0))}
+              audience={populationDescription(population)}
+              examplesUrl={(variant) =>
+                `/resources/analytics/armies/examples?${new URLSearchParams({
+                  population,
+                  season: analytics.selection.season,
+                  days: coveredDays.join(","),
+                  type: String(opened.typeId),
+                  variant: String(variant.variantId),
+                })}`
+              }
+              onClose={closeArmy}
+            />
           ) : null}
         </section>
       ) : null}
@@ -1057,8 +1135,4 @@ function shortDate(value: string) {
     month: "short",
     timeZone: "UTC",
   }).format(new Date(value));
-}
-
-function formatRate(value: number) {
-  return `${(value * 100).toFixed(1)}%`;
 }

@@ -42,6 +42,25 @@ function Portrait({
   );
 }
 
+/** A list row's unit art, from its key ("troop:23", "hero:1|equipment:15",
+ * "cc:troop:58,troop:1", "troop:58@5"): beside the row's name, so decorative. */
+export function UnitArt({ unitKey }: { unitKey: string }) {
+  const art = unitKey
+    .replace(/@\d+$/, "")
+    .replace(/^cc:/, "")
+    .split(/[|,]/)
+    .flatMap((id) => ART[`../units/${id.replace(":", "-")}.webp`] ?? [])
+    .slice(0, 5);
+  if (!art.length) return null;
+  return (
+    <span className="unit-art" aria-hidden="true">
+      {art.map((src, index) => (
+        <img key={`${src}-${index}`} src={src} alt="" loading="lazy" />
+      ))}
+    </span>
+  );
+}
+
 function Units({ units, names }: { units: ArmyUnit[]; names: ArmyUnitNames }) {
   return units.map((unit, index) => (
     <Portrait key={`${unit.id}-${index}`} id={unit.id} count={unit.count} names={names} />

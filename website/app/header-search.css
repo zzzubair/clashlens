@@ -1,4 +1,106 @@
-/* Compact header search: a quiet icon that opens a small panel. */
+/* Search suggestions (header search and the big search box) and the header
+   search: a quiet icon that opens a panel under the top bar, or a sheet
+   across the top of the screen on phones. */
+
+/* ---------- Suggestion rows ---------- */
+
+.search-dropdown-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-dropdown-list li + li {
+  border-top: 1px solid var(--cl-border);
+}
+
+/* Name with its tag or @username under it; trophies or the profile label on
+   the right. */
+.search-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 3.5rem;
+  padding: 0.55rem 0.9rem;
+  color: var(--cl-ink);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.search-suggestion:is(:focus-visible, :active) {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+
+.search-suggestion:focus-visible {
+  outline-offset: -3px;
+}
+
+.search-suggestion-player {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.search-suggestion-player strong {
+  overflow: hidden;
+  font-family: var(--cl-font);
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-suggestion-player small {
+  min-width: 0;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.search-suggestion-meta {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-heading);
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* "Waiting for Season reset" in place of trophies. */
+.search-suggestion-meta:not(:has(svg)) {
+  max-width: 8rem;
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: right;
+  white-space: normal;
+}
+
+.search-suggestion-meta .trophy-mark {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.search-dropdown-status {
+  margin: 0;
+  padding: 0.9rem;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+@media (hover: hover) {
+  .search-suggestion:hover {
+    color: var(--cl-ink);
+    background: var(--cl-panel);
+  }
+}
+
+/* ---------- Header search ---------- */
+
 .header-search-toggle[aria-expanded="true"] {
   background: var(--cl-header-soft);
 }
@@ -13,40 +115,36 @@
   color: var(--cl-ink);
   background: var(--cl-surface);
   border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-shadow);
+  border-radius: var(--cl-card-radius);
 }
 
-/* Same focus ring as the home search: around the whole box, not the bare input. */
+/* The box's edge keeps 3:1 contrast with its fill; the ring goes round the
+   whole box, not the bare input. */
+.header-search-panel .search-controls {
+  padding: 0.3rem 0.3rem 0.3rem 0.85rem;
+  background: var(--cl-surface);
+  border-color: color-mix(in srgb, var(--cl-muted) 72%, var(--cl-surface));
+  border-radius: var(--cl-radius);
+}
+
 .header-search-panel .search-controls:focus-within {
   outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
 }
 
 .header-search-panel .search-controls input {
+  padding: 0;
   font-size: 1rem;
   outline: none;
 }
 
 /* Suggestions stay inside the panel instead of floating over the page. */
-.header-search-panel .search-dropdown {
+:root .header-search-panel .search-dropdown {
   position: static;
-  margin-top: 0.5rem;
+  margin: 0.5rem -0.6rem -0.6rem;
+  border-width: 1px 0 0;
+  border-radius: 0 0 var(--cl-card-radius) var(--cl-card-radius);
   box-shadow: none;
-}
-
-/* The panel is narrow, so details sit under the name instead of squeezing it. */
-.header-search-panel .search-suggestion {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.25rem;
-}
-
-.header-search-panel .search-suggestion-profile {
-  background: var(--cl-panel);
-}
-
-.header-search-panel .search-suggestion:is(:hover, :focus-visible) {
-  background: var(--cl-action-soft);
 }
 
 .header-search-close {
@@ -81,41 +179,61 @@
   }
 }
 
-/* Phones: a full-width sheet over the header. */
+/* Phones: a sheet across the top of the screen with Close beside the box,
+   the suggestions edge to edge under both, and the page dimmed below. */
 @media (max-width: 34rem) {
   .header-search-panel {
     position: absolute;
     top: 0;
     right: 0;
     left: 0;
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
     width: auto;
-    padding: 0.5rem 1rem 0.75rem;
+    padding: 0.6rem 1rem;
+    background: var(--cl-header-solid);
     border-width: 0 0 1px;
+    border-radius: 0 0 var(--cl-card-radius) var(--cl-card-radius);
+  }
+
+  .header-search-panel::after {
+    position: fixed;
+    z-index: -1;
+    inset: 0;
+    background: rgb(5 9 18 / 0.45);
+    content: "";
+    pointer-events: none;
   }
 
   .header-search-panel .search-form {
-    flex: 1 1 auto;
-    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0 0.5rem;
   }
 
-  .header-search-panel .search-dropdown {
-    max-height: min(28rem, 70dvh);
+  .header-search-panel .search-controls {
+    grid-area: 1 / 1;
   }
 
   .header-search-close {
     display: inline-flex;
-    flex: 0 0 auto;
+    grid-area: 1 / 2;
     align-items: center;
-    min-height: 3.45rem;
+    min-height: 3.4rem;
     padding: 0 0.25rem;
     color: var(--cl-action-text);
     background: transparent;
     border: 0;
-    font-size: 0.875rem;
-    font-weight: 650;
+    font-size: 0.9rem;
+    font-weight: 800;
     cursor: pointer;
+  }
+
+  :root .header-search-panel .search-dropdown {
+    grid-area: 2 / 1 / 3 / -1;
+    max-height: calc(100dvh - 5rem - var(--cl-bottom-tabs, 0px));
+    margin: 0.6rem -1rem -0.6rem;
+  }
+
+  .header-search-panel .search-suggestion {
+    padding-inline: 1rem;
   }
 }

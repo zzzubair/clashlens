@@ -87,7 +87,10 @@ export default function Search() {
   const searching = useNavigation().state !== "idle";
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page search-page">
-      <h1>Search players</h1>
+      <div className="page-head">
+        <h1>Search players</h1>
+        <p>Any Legend player by name or #tag, or a Clash Lens profile by @username.</p>
+      </div>
       <PageSearch
         query={data.query}
         results={

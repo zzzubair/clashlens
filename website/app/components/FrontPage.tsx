@@ -15,7 +15,6 @@ import type {
   TrackedPlayerEntry,
   WebsiteErrorResponse,
 } from "../lib/contracts";
-import { CARDS, DEFAULT_LAYOUT } from "../lib/dashboard";
 import { canonicalPlayerPath } from "../lib/player-tag";
 
 export const FRONT_PAGE_PLAYERS = 10;
@@ -23,13 +22,13 @@ const RANKINGS_PATH = "/leaderboards/tracked?view=live&page=1";
 
 export interface FrontPageData {
   loginAvailable: boolean;
-  /** Off, the page leaves out the Dashboard preview. */
+  /** Off, the page leaves out what an account adds. */
   dashboardEnabled: boolean;
   leaderboard: TrackedLeaderboard | null;
   error: WebsiteErrorResponse | null;
 }
 
-const TEASER_TILES = [
+const PITCH_POINTS = [
   { icon: "clock", label: "Legend clock in your time" },
   { icon: "flag", label: "Your goal, on pace or not" },
   { icon: "list", label: "Rivals just above and below you" },
@@ -39,9 +38,8 @@ const TEASER_TILES = [
 ] as const;
 
 /**
- * What `/` shows anyone not signed in, and search engines: the Dashboard
- * preview first, then search, Rankings and Analytics, which need no account,
- * then the top players right now.
+ * What `/` shows anyone not signed in, and search engines: search and the
+ * top players first, which need no account, then what an account adds.
  */
 export function FrontPage({ data }: { data: FrontPageData }) {
   // Set by /logout: logged out, or logged out here but not recorded.
@@ -57,74 +55,69 @@ export function FrontPage({ data }: { data: FrontPageData }) {
       ) : loggedOut ? (
         <SavedLine>You&apos;re logged out.</SavedLine>
       ) : null}
-      {data.dashboardEnabled ? (
-        <DashboardPreview loginAvailable={data.loginAvailable} />
-      ) : (
-        <h1 className="sr-only">Clash Lens</h1>
-      )}
-      <section className="front-section" aria-labelledby="front-open-title">
-        <h2 id="front-open-title">No account needed</h2>
-        <p className="front-lede">
-          Legend League results, rankings and armies for all Legend I Players.
-        </p>
-        <PageSearch />
-        <nav className="front-links" aria-label="Rankings and Analytics">
-          <Link className="front-link" to={RANKINGS_PATH}>
-            <DashboardIcon name="trophy" />
-            <span>
-              <b>Rankings</b>
-              <small>Live and at each Reset</small>
-            </span>
-          </Link>
-          <Link className="front-link" to="/analytics/armies">
-            <DashboardIcon name="swords" />
-            <span>
-              <b>Analytics</b>
-              <small>Which armies win</small>
-            </span>
-          </Link>
-        </nav>
-      </section>
-      {data.error ? <ErrorNotice error={data.error} /> : null}
-      <TopPlayers leaderboard={data.leaderboard} />
+      <div
+        className={data.dashboardEnabled ? "front-grid front-grid-pitch" : "front-grid"}
+      >
+        <div className="front-main">
+          <section className="front-hero" aria-labelledby="front-title">
+            <h1 id="front-title">Find any Legend League player</h1>
+            <p className="front-lede">
+              Legend League results, rankings and armies for all Legend I Players.{" "}
+              <b>No account needed.</b>
+            </p>
+            <PageSearch />
+            <nav className="front-links" aria-label="Rankings and Analytics">
+              <Link className="front-link" to={RANKINGS_PATH}>
+                <DashboardIcon name="trophy" />
+                <span>
+                  <b>Rankings</b>
+                  <small>Live and at each Reset</small>
+                </span>
+              </Link>
+              <Link className="front-link" to="/analytics/armies">
+                <DashboardIcon name="swords" />
+                <span>
+                  <b>Analytics</b>
+                  <small>Which armies win</small>
+                </span>
+              </Link>
+            </nav>
+          </section>
+          {data.error ? <ErrorNotice error={data.error} /> : null}
+          <TopPlayers leaderboard={data.leaderboard} />
+        </div>
+        {data.dashboardEnabled ? (
+          <AccountPitch loginAvailable={data.loginAvailable} />
+        ) : null}
+      </div>
     </main>
   );
 }
 
-function DashboardPreview({ loginAvailable }: { loginAvailable: boolean }) {
+/** What a free account adds, kept short so it never pushes search down. */
+function AccountPitch({ loginAvailable }: { loginAvailable: boolean }) {
   return (
-    <div className="dash-teaser">
-      <div className="dash-teaser-behind" aria-hidden="true" inert>
-        <div className="dash-grid">
-          {DEFAULT_LAYOUT.filter((card) => CARDS[card].built).map((card) => (
-            <section key={card} className={`dash-card dash-card-${CARDS[card].size}`}>
-              <h2>{CARDS[card].title}</h2>
-            </section>
-          ))}
-        </div>
-      </div>
-      <section className="dash-teaser-panel" aria-labelledby="dash-teaser-title">
-        <h1 id="dash-teaser-title">Your Legend day, on one page</h1>
-        <ul className="dash-teaser-tiles">
-          {TEASER_TILES.map((tile) => (
-            <li key={tile.label}>
-              <DashboardIcon name={tile.icon} />
-              {tile.label}
-            </li>
-          ))}
-        </ul>
-        {loginAvailable ? (
-          <AccountButtons returnPath="/" />
-        ) : (
-          <p className="dash-note" role="status">
-            Sign-in is not available right now.
-          </p>
-        )}
-        <p className="dash-note">
-          <DashboardIcon name="info" /> Free. Player pages stay public.
+    <section className="front-pitch" aria-labelledby="front-pitch-title">
+      <h2 id="front-pitch-title">Your Legend day, on one page</h2>
+      <ul className="front-pitch-list">
+        {PITCH_POINTS.map((point) => (
+          <li key={point.label}>
+            <DashboardIcon name={point.icon} />
+            {point.label}
+          </li>
+        ))}
+      </ul>
+      {loginAvailable ? (
+        <AccountButtons returnPath="/" />
+      ) : (
+        <p className="front-pitch-note" role="status">
+          Sign-in is not available right now.
         </p>
-      </section>
-    </div>
+      )}
+      <p className="front-pitch-note">
+        <DashboardIcon name="info" /> Free. Player pages stay public.
+      </p>
+    </section>
   );
 }
 

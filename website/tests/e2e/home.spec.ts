@@ -55,7 +55,9 @@ test("old About links open home, and no page links to About", async ({ page }) =
 
   await page.goto("/about");
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "No account needed" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Find any Legend League player" }),
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: "About", exact: true })).toHaveCount(0);
 });
 

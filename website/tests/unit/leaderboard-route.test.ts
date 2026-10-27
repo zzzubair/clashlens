@@ -109,7 +109,8 @@ it("keeps rank and update explanations off the page but in hover and screen-read
   expect(html).toContain('<span class="pagination-status">101–101 of 101</span>');
   expect(html).toContain(">Previous 100</a>");
   expect(html).toContain('<span class="rank-mark">101</span>');
-  expect(html).toMatch(/<summary>Last updated 20 minutes ago/);
+  // Phones show the age beside the tag; "Last updated" is read out, not shown.
+  expect(html).toMatch(/<summary><span class="sr-only">Last updated <\/span>20 min ago/);
   expect(html).toContain("Over 10 min old");
   expect(html).toMatch(/<details[^>]*>.*dateTime="2026-10-02T11:40:00Z".*<\/details>/);
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
@@ -132,7 +133,9 @@ it.each([
     fixture.entries[0].freshness = { ...fixture.entries[0].freshness, observedAt };
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render();
-    expect(html).toContain(`<summary>Last updated ${age}`);
+    expect(html).toContain(
+      `<summary><span class="sr-only">Last updated </span>${age.replace("minutes", "min")}`,
+    );
     expect(html).toContain(`${age}${stale ? " · Over 10 min old" : ""}</span>`);
     expect(html.includes("Over 10 min old")).toBe(stale);
   },

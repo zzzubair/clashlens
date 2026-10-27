@@ -35,7 +35,7 @@ export function SeasonMenu({
   return (
     <Form method="get" action={path} className="season-menu">
       <label className="filter-field">
-        Season
+        <span className="sr-only">Season</span>
         <select
           name="season"
           value={selectedSeason ?? ""}
