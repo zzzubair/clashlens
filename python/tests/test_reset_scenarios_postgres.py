@@ -33,6 +33,7 @@ from clashlens import (
     league_days,
     league_week,
     past_reset_pacing,
+    reconcile_pass,
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsSelection
@@ -795,6 +796,7 @@ def test_season_end_reset_and_its_first_day(
         for tag in (LATE_RESET, DISAGREES):
             story.read(tag, day_1 + timedelta(hours=1), 5000)
         story.run_worker()
+        published_board = story.served_board(day_1)
         # The official final totals arrive at 11:00 and include each
         # automatic loss; DISAGREES's is 30 below the calculated end.
         finals = {**ends, END_LOSS: 5240, DISAGREES: 5290}
@@ -804,6 +806,11 @@ def test_season_end_reset_and_its_first_day(
         story.wait(timedelta(hours=1))
         season_end_members = story.board_members(day_1)
         season_end_board = story.served_board(day_1)
+        # The nightly re-check reads Day 28's rows against the same rule.
+        with psycopg.connect(story.connection_info) as connection:
+            players = [int(row[0]) for row in connection.execute("SELECT id FROM players")]
+            board_checks = [finding for finding in reconcile_pass.judge(
+                connection, day_28, players)[0] if finding.check == "board"]
 
         playing = [tag for tag in story.players if tag != DROPPED]
         day_1_ends = {tag: 4880 for tag in playing}
@@ -834,10 +841,20 @@ def test_season_end_reset_and_its_first_day(
     }
     assert season_end_members == {
         tag: "inconsistent" if tag == DISAGREES else "complete" for tag in story.players}
-    assert _ranked(season_end_board) == {
-        END_LOSS: 5420, LATE_RESET: 5400, SHIELDED: 5400, OFFICIAL: 5320,
+    # The Season's last board shows a Complete day's EOD, after its automatic
+    # loss, as the official total does: END_LOSS at 5,240, not 5,420. On
+    # 5 October 2026, 1,976 of 11,961 board values were higher by exactly
+    # that loss. DISAGREES's day is not Complete, so its reading stays.
+    season_end_totals = {
+        END_LOSS: 5240, LATE_RESET: 5400, SHIELDED: 5400, OFFICIAL: 5320,
         NO_DEFENSE: 5320, DAY_1_LOSS: 5320, DISAGREES: 5320, DROPPED: 5320,
     }
+    assert _ranked(published_board) == season_end_totals
+    assert _ranked(season_end_board) == season_end_totals
+    # The official total proves it, and the re-check agrees.
+    assert {entry["tag"]: entry["confidence"] for entry in season_end_board["entries"]
+            }[END_LOSS] == "confirmed"
+    assert board_checks == []
     # Day 1 starts at 5,000 by the Season rule, whatever its Reset read.
     day_1_played = {
         "state": "Complete", "start": 5000, "end": 4880, "next_start": 4880,
@@ -857,6 +874,8 @@ def test_season_end_reset_and_its_first_day(
                      "automatic_loss": 60, "attacks": 3, "defenses": 1},
     }
     assert first_day_members == {tag: "complete" for tag in playing}
+    # Every other board keeps the total before the automatic loss: DAY_1_LOSS
+    # at 5,090, not its EOD of 5,030.
     assert _ranked(first_day_board) == {
         DAY_1_LOSS: 5090, NO_DEFENSE: 5080, LATE_RESET: 4960, DISAGREES: 4960,
         OFFICIAL: 4880, SHIELDED: 4880, END_LOSS: 4880,

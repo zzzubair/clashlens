@@ -323,7 +323,7 @@ it.each([
   },
 );
 
-it("heads a Daily board with its Reset time and no explanation", async () => {
+it("heads a Daily board with its Reset time and, at the Season end, its automatic loss line", async () => {
   const fixture = structuredClone(board);
   fixture.view = "daily";
   fixture.seasonResetPending = 40;
@@ -344,6 +344,9 @@ it("heads a Daily board with its Reset time and no explanation", async () => {
   // The server writes UTC; the browser then switches it to the viewer's time.
   expect(html).toMatch(
     /id="leaderboard-title">Leaderboard at(<!-- -->)? <time class="local-time" datetime="2026-10-05T05:00:00Z"[^>]*>5 Oct 2026, 05:00 UTC<\/time><\/h1>/i,
+  );
+  expect(html).toContain(
+    '<p class="rankings-context">Complete days show trophies after the automatic defense loss.</p>',
   );
   expect(html).not.toContain("not rebuilt since");
   expect(html).not.toContain("Legend season");
@@ -387,6 +390,8 @@ it.each([
     const explanation = `Equal trophies are marked Tie and ${order}`;
     expect(html).toContain(`<p class="sr-only" id="rank-explanation">Rank among players`);
     expect(html.match(new RegExp(explanation, "g"))).toHaveLength(2);
+    // Only the Season's last board takes off the automatic loss.
+    expect(html).not.toContain("automatic defense loss");
   },
 );
 

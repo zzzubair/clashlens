@@ -307,6 +307,13 @@ export default function TrackedLeaderboardRoute() {
             </Link>
           </nav>
         </div>
+        {/* The Season's last board shows Complete days' EODs, as the game's
+            Season-end result does. */}
+        {daily && Date.parse(daily.resetAt) === Date.parse(daily.seasonEndAt) ? (
+          <p className="rankings-context">
+            Complete days show trophies after the automatic defense loss.
+          </p>
+        ) : null}
         {!daily && newestObservedAt ? (
           <p className="rankings-context">
             Updated <LocalTimestamp value={newestObservedAt} />
