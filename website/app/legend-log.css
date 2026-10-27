@@ -1,0 +1,884 @@
+/* The player page's Daily Legend log, an open day's battles and older
+   history; loaded after player.css. Phone first; wider screens add columns. */
+
+/* ---------- Daily Legend log ---------- */
+
+/* Days share one card, divided by lines; today has a card of its own. */
+.player-page .log-card {
+  overflow: clip;
+  background: var(--cl-card-fill);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
+}
+.player-page .log-card:empty {
+  display: none;
+}
+.player-page .log-today + .log-days {
+  margin-top: 0.75rem;
+}
+.player-page .log-days > .log-day + .log-day {
+  border-top: 1px solid var(--cl-border);
+}
+
+/* One row per day, two short lines: the date over Day N on the left, attacks
+   over defenses, the change over the EOD, then the Reset rank on its plate
+   over its move. Wide screens put it all on one line. Labels are for screen
+   readers; icons, plates and colours say which number is which. */
+.player-page .log-head {
+  display: none;
+}
+@media (min-width: 48rem) {
+  .player-page .log-head {
+    display: grid;
+    grid-template-columns: var(--log-columns);
+    column-gap: 0.75rem;
+    padding: 0 1rem 0.4rem 1.25rem;
+    color: var(--cl-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+  .player-page .log-head > :nth-child(n + 5) {
+    text-align: right;
+  }
+}
+.player-page .log-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto 0.75rem;
+  grid-template-areas:
+    "date att net rank chev"
+    "meta def eod rank chev";
+  align-items: center;
+  gap: 0.1rem 0.7rem;
+  min-height: 3.75rem;
+  padding: 0.6rem 0.85rem 0.6rem 1rem;
+  font-variant-numeric: tabular-nums;
+  list-style: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease;
+}
+.player-page .log-row::-webkit-details-marker {
+  display: none;
+}
+.player-page .log-row :is(.log-when, .log-trophies, .log-battles) {
+  display: contents;
+}
+.player-page .log-row .log-stat > small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* A chevron that turns when the day opens. */
+.player-page .log-row::after {
+  grid-area: chev;
+  justify-self: end;
+  width: 0.45rem;
+  height: 0.45rem;
+  content: "";
+  border-right: 2px solid var(--cl-faint);
+  border-bottom: 2px solid var(--cl-faint);
+  transform: translateY(-25%) rotate(45deg);
+  transition: transform 160ms var(--cl-ease-out);
+}
+.player-page .log-day[open] > .log-row::after {
+  transform: translateY(25%) rotate(-135deg);
+}
+.player-page .log-row:active,
+.player-page .log-day[open] > .log-row {
+  background: var(--cl-header-soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .log-row:hover {
+    background: var(--cl-header-soft);
+  }
+}
+.player-page .log-when > strong {
+  grid-area: date;
+  font-size: 0.95rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.player-page .log-day-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.player-page .log-day-meta small {
+  font-size: inherit;
+}
+.player-page .log-day-meta .day-mark {
+  margin-left: 0;
+}
+/* The day's start is the day before's EOD, so only the EOD shows. */
+.player-page .log-trophies > .log-stat:first-child {
+  display: none;
+}
+.player-page .log-end {
+  grid-area: eod;
+  justify-self: end;
+  color: var(--cl-muted);
+  font-family: var(--cl-font-score);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+/* The EOD after a trophy, like trophies everywhere else. */
+.player-page .log-end strong:not(.stat-unavailable)::before {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.2em;
+  background: var(--cl-gold);
+  -webkit-mask: var(--trophy) center / contain no-repeat;
+  mask: var(--trophy) center / contain no-repeat;
+  content: "";
+  --trophy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z'/%3E%3Cpath d='M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5'/%3E%3C/svg%3E");
+}
+.player-page .log-end .stat-unavailable {
+  font-size: 0.75rem;
+}
+.player-page .log-net {
+  grid-area: net;
+  display: grid;
+  justify-items: end;
+  text-align: right;
+}
+.player-page .log-net strong {
+  font-family: var(--cl-font-score);
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.player-page .log-net strong.score-neutral {
+  color: var(--cl-ink);
+}
+.player-page .log-net > span,
+.player-page .log-battles > span:not(.log-stat) {
+  color: var(--cl-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+.player-page .log-battles > span:not(.log-stat) {
+  grid-column: 1 / -2;
+}
+.player-page .log-rank {
+  grid-area: rank;
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+  min-width: 3.6rem;
+  color: var(--cl-muted);
+  font-family: var(--cl-font-score);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+/* The Reset rank on the rank plate Rankings and Crew boards use, smaller. */
+.player-page .log-rank strong.rank-mark {
+  display: inline-flex;
+  height: 1.5rem;
+  padding: 0 0.5rem 0 0.55rem;
+  font-size: 0.98rem;
+}
+.player-page .log-rank strong:not(.stat-unavailable)::before {
+  content: "#";
+}
+.player-page .log-rank-move {
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+}
+/* Attacks over defenses, each after its icon. */
+.player-page .log-battles > .log-stat {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: flex-end;
+  font-family: var(--cl-font-score);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.player-page .log-battles > .log-stat:first-child {
+  grid-area: att;
+}
+.player-page .log-battles > .log-stat:nth-child(2) {
+  grid-area: def;
+}
+.player-page .log-battles > .log-stat::before {
+  width: 0.8rem;
+  height: 0.8rem;
+  background: var(--cl-faint);
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+  content: "";
+}
+.player-page .log-battles > .log-stat:first-child::before,
+.player-page .battle-switch label:first-of-type::before {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2'/%3E%3C/svg%3E");
+}
+.player-page .log-battles > .log-stat:nth-child(2)::before,
+.player-page .battle-switch label:last-of-type::before {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
+}
+@media (min-width: 48rem) {
+  .player-page {
+    --log-columns: [date] 4.25rem [meta] 4.5rem [eod] 4.75rem [swing] minmax(0, 1fr) [att]
+      4rem [def] 4rem [net] 4.5rem [rank] 5rem [chev] 0.75rem;
+  }
+  .player-page .log-row {
+    grid-template-columns: var(--log-columns);
+    grid-template-areas: "date meta eod swing att def net rank chev";
+    padding-inline: 1.25rem 1rem;
+  }
+  /* The day's swing: defenses lost to the left of the middle, attacks won to
+     the right, each as long as its share of 320. */
+  .player-page .log-row::before {
+    grid-area: swing;
+    height: 0.4rem;
+    margin-inline: 1rem;
+    background:
+      linear-gradient(
+          90deg,
+          transparent calc(50% - var(--def) * 50%),
+          var(--cl-negative) 0 50%,
+          var(--cl-positive) 0 calc(50% + var(--att) * 50%),
+          transparent 0
+        )
+        center / 100% 100% no-repeat,
+      linear-gradient(var(--cl-border), var(--cl-border)) center / 100% 1px no-repeat;
+    border-radius: 2px;
+    opacity: 0.85;
+    content: "";
+  }
+  .player-page .log-end {
+    font-size: 1rem;
+  }
+}
+
+/* Today: a card of its own that says it is live. */
+.player-page .log-day-live > .log-row {
+  grid-template-columns: minmax(0, 1fr) auto auto 0.75rem;
+  grid-template-areas:
+    "date att net chev"
+    "meta def net chev";
+}
+.player-page .log-day-live :is(.log-end, .log-rank) {
+  display: none;
+}
+.player-page .log-day-live .log-net strong {
+  font-size: 1.85rem;
+}
+@media (min-width: 48rem) {
+  .player-page .log-day-live > .log-row {
+    grid-template-columns: 4.25rem 8.5rem minmax(0, 1fr) 4rem 4rem 4.5rem 4.5rem 0.75rem;
+    grid-template-areas: "date meta swing att def net net chev";
+  }
+}
+.player-page .log-today .log-day[open] > .log-row {
+  background: transparent;
+}
+.player-page .log-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  /* Amber, not red: red means lost trophies everywhere else on the page. */
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.player-page .log-live-dot {
+  position: relative;
+  width: 0.4rem;
+  height: 0.4rem;
+  background: currentColor;
+  border-radius: 50%;
+}
+.player-page .log-live-dot::after {
+  position: absolute;
+  inset: -3px;
+  content: "";
+  background: currentColor;
+  border-radius: inherit;
+  opacity: 0.2;
+  /* Half of a 2.6-second breath each way, eased like a sine wave. */
+  animation: log-live-pulse 1.3s cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
+}
+@keyframes log-live-pulse {
+  to {
+    opacity: 0.45;
+    transform: scale(1.3);
+  }
+}
+
+/* ---------- An open day ---------- */
+
+.player-page .log-open {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+}
+.player-page .log-day:not(.log-day-live)[open] > .log-open {
+  background: color-mix(in srgb, var(--cl-panel) 45%, var(--cl-surface));
+}
+.player-page .log-open > :is(.section-note, .log-note) {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+/* Its tap area reaches up into the open day's top padding. */
+.player-page .log-open > .log-note:first-child {
+  margin-top: -0.6rem;
+}
+.player-page .log-note > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+.player-page .log-note > summary::-webkit-details-marker {
+  display: none;
+}
+/* An "i" in a ring: there is more to read. */
+.player-page .log-note > summary::after {
+  display: inline-grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  content: "i";
+  font-size: 0.65rem;
+  font-weight: 900;
+}
+.player-page .log-note[open] > summary {
+  color: var(--cl-ink);
+}
+.player-page .log-note > p {
+  margin: 0 0 0.25rem;
+}
+.player-page .log-open > .section-note strong {
+  color: var(--cl-ink);
+}
+.player-page .log-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+}
+.player-page .log-facts > span {
+  padding: 0.15rem 0.5rem;
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+/* A saved Season day's other numbers. */
+.player-page .log-more {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+.player-page .log-more > div {
+  padding: 0.45rem 0.6rem;
+  background: var(--cl-raised);
+  border-radius: var(--cl-radius);
+}
+.player-page .log-more dt {
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.player-page .log-more dd {
+  margin: 0.1rem 0 0;
+  font-size: 0.9rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Attacks and defenses: stacked on phones, side by side when there is room. */
+.player-page .battle-sides {
+  display: grid;
+  gap: 0.75rem;
+}
+.player-page .day-battles .battle-sides {
+  padding: 0.75rem;
+}
+.player-page .battle-side {
+  min-width: 0;
+}
+/* Attacks | Defenses for an open day on a phone; wider screens show both. */
+.player-page .battle-switch {
+  display: none;
+}
+.player-page .battle-side h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.45rem;
+  margin: 0 0 0.15rem;
+  font-family: var(--cl-font);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+.player-page .battle-side h3 strong {
+  font-family: var(--cl-font-score);
+  font-size: 1.05rem;
+}
+.player-page .battle-side h3 small {
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.player-page .battle-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One battle: stars and destruction, opponent and time, the trophy change
+   and a toggle that covers the whole line for the army, tag, their log and
+   Copy army. */
+.player-page .battle-row {
+  border-top: 1px solid var(--cl-border);
+  scroll-margin-block: 5rem;
+  transition:
+    background-color 0.5s ease-out,
+    box-shadow 0.5s ease-out;
+}
+.player-page .battle-line {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr) auto 1.75rem;
+  grid-template-areas: "score who change toggle";
+  align-items: center;
+  column-gap: 0.5rem;
+  min-height: 2.75rem;
+  padding-left: 0.1rem;
+}
+.player-page .battle-score {
+  grid-area: score;
+  display: grid;
+  line-height: 1.15;
+}
+.player-page .battle-stars {
+  width: 2.4rem;
+  height: 0.8rem;
+  fill: var(--cl-outline);
+  stroke: var(--cl-outline);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+}
+.player-page .battle-stars .star-won {
+  fill: var(--cl-gold);
+  stroke: var(--cl-gold);
+}
+.player-page .battle-score small {
+  color: var(--cl-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.player-page .battle-who {
+  grid-area: who;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  line-height: 1.2;
+}
+.player-page .battle-name {
+  overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-page .battle-who small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.player-page .battle-who time {
+  font: inherit;
+}
+.player-page .battle-disagreement {
+  color: var(--cl-gold);
+  font-weight: 700;
+}
+.player-page .battle-change {
+  grid-area: change;
+  font-family: var(--cl-font-score);
+  font-size: 1.15rem;
+  font-weight: 700;
+  text-align: right;
+}
+.player-page .battle-change.score-neutral {
+  color: var(--cl-muted);
+}
+.player-page .battle-toggle {
+  grid-area: toggle;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0;
+  color: var(--cl-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--cl-radius);
+  box-shadow: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.player-page .battle-toggle::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  content: "";
+}
+.player-page .battle-toggle svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms var(--cl-ease-out);
+}
+.player-page .battle-toggle[aria-expanded="true"] {
+  color: var(--cl-action-text);
+}
+.player-page .battle-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+/* The chevron says there is more; the word is not needed. */
+.player-page .battle-toggle-word {
+  display: none;
+}
+.player-page .battle-toggle:active::after {
+  background: var(--cl-panel);
+}
+/* The press shades the line instead of shrinking the button, which would pull
+   the covering layer in with it; the focus ring circles the whole line too. */
+.player-page .battle-line .battle-toggle:active {
+  transform: none;
+}
+.player-page .battle-line .battle-toggle:focus-visible {
+  outline: none;
+}
+.player-page .battle-line .battle-toggle:focus-visible::after {
+  outline: 3px solid var(--cl-orange);
+  outline-offset: -3px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .battle-line:hover .battle-toggle {
+    color: var(--cl-action-text);
+  }
+  .player-page .battle-line:hover .battle-toggle::after {
+    background: color-mix(in srgb, var(--cl-panel) 60%, transparent);
+  }
+}
+.player-page .battle-more {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.1rem 0 0.7rem 3.1rem;
+}
+.player-page .battle-more[hidden] {
+  display: none;
+}
+.player-page .battle-more p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+}
+.player-page .battle-more .player-tag {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.player-page .battle-link {
+  margin-right: auto;
+  color: var(--cl-action-text);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.player-page .battle-copy {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 0.85rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+.player-page .battle-more .army-portraits {
+  display: grid;
+  gap: 0.3rem;
+}
+.player-page .battle-missing {
+  padding: 0.6rem 0 0.6rem 3.1rem;
+  color: var(--cl-muted);
+  border-top: 1px dashed var(--cl-outline);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+/* The battle a link points to, for two seconds after it arrives. */
+.player-page .battle-row.battle-arrival {
+  background: var(--cl-sky-soft);
+  box-shadow: inset 3px 0 0 var(--cl-sky);
+  transition: none;
+}
+@media (min-width: 48rem) {
+  .player-page .log-open {
+    padding: 0.75rem 1rem 1rem;
+  }
+  .player-page .battle-sides {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+  }
+  .player-page .battle-line {
+    grid-template-columns: 4.25rem minmax(0, 1fr) auto 1.75rem;
+  }
+  .player-page .battle-score {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+  .player-page .battle-more,
+  .player-page .battle-missing {
+    padding-left: 4.75rem;
+  }
+}
+
+/* Phones: today's day comes before the Season summary. The log section
+   steps aside so today's card can be ordered on its own. */
+@media (max-width: 47.99rem) {
+  /* An open day's switch carries its totals. */
+  .player-page .log-day[open] > .log-row .log-battles {
+    display: none;
+  }
+  .player-page .battle-switch {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
+    margin: 0;
+    padding: 3px;
+    background: var(--cl-panel);
+    border: 1px solid var(--cl-border);
+    border-radius: var(--cl-radius);
+  }
+  .player-page .battle-switch label {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-height: 2.5rem;
+    color: var(--cl-muted);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .player-page .battle-switch label::before {
+    width: 0.85rem;
+    height: 0.85rem;
+    background: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat;
+    mask: var(--icon) center / contain no-repeat;
+    content: "";
+  }
+  .player-page .battle-switch strong {
+    font-family: var(--cl-font-score);
+    font-size: 1.05rem;
+  }
+  .player-page .battle-switch input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .player-page .battle-switch label:has(:checked) {
+    color: var(--cl-ink);
+    background: var(--cl-surface);
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.12),
+      0 0 0 1px var(--cl-card-line);
+  }
+  :root[data-theme="dark"] .player-page .battle-switch label:has(:checked) {
+    background: var(--cl-raised);
+  }
+  .player-page .battle-switch label:has(:focus-visible) {
+    outline: 3px solid var(--cl-orange);
+    outline-offset: -3px;
+  }
+  .player-page
+    .log-open:has(.battle-switch [value="defense"]:checked)
+    .battle-side-attack,
+  .player-page
+    .log-open:has(.battle-switch [value="attack"]:checked)
+    .battle-side-defense {
+    display: none;
+  }
+  /* The switch names the list and its total; only the count shows here. */
+  .player-page .log-open .battle-side h3 {
+    font-size: 0;
+  }
+  .player-page .log-open .battle-side h3 strong {
+    font-size: 0;
+  }
+  /* An open day names its numbers, its start included. */
+  .player-page .log-day:not(.log-day-live)[open] > .log-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto 0.75rem;
+    grid-template-areas:
+      "date date date date chev"
+      "meta meta meta meta chev"
+      "start eod net rank chev";
+    align-items: end;
+  }
+  .player-page
+    .log-day:not(.log-day-live)[open]
+    > .log-row
+    :is(.log-trophies > *, .log-net, .log-rank) {
+    margin-top: 0.45rem;
+  }
+  .player-page .log-day:not(.log-day-live)[open] > .log-row .log-stat > small {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    color: var(--cl-muted);
+    font: 500 0.7rem/1.15 var(--cl-font);
+    white-space: normal;
+  }
+  .player-page .log-day:not(.log-day-live)[open] .log-trophies > .log-stat:first-child {
+    display: block;
+    grid-area: start;
+    font: 600 1rem var(--cl-font-score);
+  }
+  .player-page .log-day:not(.log-day-live)[open] :is(.log-net, .log-rank) {
+    justify-self: start;
+    justify-items: start;
+    text-align: left;
+  }
+  /* Its rank plate sits on the numbers' line, the move beside it. */
+  .player-page .log-day:not(.log-day-live)[open] .log-rank {
+    grid-template-columns: auto auto;
+    align-items: center;
+    column-gap: 0.35rem;
+  }
+  .player-page .log-day:not(.log-day-live)[open] .log-rank > small {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-page .log-live-dot::after {
+    animation: none;
+    opacity: 0.3;
+  }
+  .player-page :is(.log-row, .log-row::after, .battle-row, .battle-toggle svg) {
+    transition: none;
+  }
+}
+
+/* ---------- Older history ---------- */
+
+.player-page .past-seasons > details {
+  overflow: clip;
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+}
+.player-page .past-seasons summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0.75rem;
+  align-items: center;
+  gap: 0.1rem 0.75rem;
+  min-height: 3.5rem;
+  padding: 0.7rem 1rem;
+  list-style: none;
+  cursor: pointer;
+}
+.player-page .past-seasons summary::-webkit-details-marker {
+  display: none;
+}
+.player-page .past-seasons summary::after {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  width: 0.45rem;
+  height: 0.45rem;
+  content: "";
+  border-right: 2px solid var(--cl-muted);
+  border-bottom: 2px solid var(--cl-muted);
+  transform: rotate(45deg);
+}
+.player-page .past-seasons details[open] > summary::after {
+  transform: rotate(-135deg);
+}
+.player-page .past-seasons summary h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+.player-page .past-seasons summary span {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.player-page .past-seasons .section-note {
+  margin: 0;
+  padding: 0 1rem 0.5rem;
+  font-size: 0.8rem;
+}
+.player-page .past-seasons .table-wrap {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--cl-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+.player-page .past-seasons .data-table {
+  min-width: 0;
+  font-size: 0.875rem;
+}
+.player-page .past-seasons .data-table :is(th, td) {
+  padding: 0.55rem 1rem;
+}
+/* The final rank is an ended Season's standout number. */
+.player-page .past-seasons .past-season-rank {
+  color: var(--cl-action-text);
+  font-family: var(--cl-font-heading);
+  font-size: 1.1rem;
+}

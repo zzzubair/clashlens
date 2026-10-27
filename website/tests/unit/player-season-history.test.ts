@@ -351,6 +351,7 @@ describe("past-Season view", () => {
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
           dailyEntries: [
+            { ...DAY, dayNumber: 25, resetRank: 2 },
             { ...DAY, resetRank: 1042 },
             { ...DAY, dayNumber: 23 },
           ],
@@ -359,9 +360,15 @@ describe("past-Season view", () => {
       SEASON,
     );
     expect(html).toContain("<span>Reset rank</span>");
-    // Each day's row says its Reset rank, or Unknown.
-    expect(html).toContain("<small>Reset rank</small><strong>1,042</strong>");
+    // Each day's row says its Reset rank on a rank plate, or Unknown.
+    expect(html).toContain(
+      '<small>Reset rank</small><strong class="rank-mark">1,042</strong>',
+    );
     expect(html).toMatch(/Reset rank<\/small><strong class="stat-unavailable">Unknown</);
+    // A climb from the day before shows under the rank; a top-3 finish gets its podium plate.
+    expect(html).toMatch(
+      /data-podium-rank="2"><small>Reset rank<\/small><strong class="rank-mark">2<\/strong><span class="log-rank-move score-positive"><span aria-hidden="true">▲(<!-- -->)?1,040<\/span><span class="sr-only">, up 1,040 since the day before</,
+    );
   });
 
   it("keeps a saved day Verified when its Reset reading matched exactly", async () => {

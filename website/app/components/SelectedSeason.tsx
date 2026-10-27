@@ -13,9 +13,11 @@ import { ErrorNotice } from "./ErrorNotice";
 import {
   LogDate,
   LogHead,
+  LogRank,
   formatCount,
   formatSigned,
   legendDayDate,
+  rankMoves,
   validDay,
   valueTone,
 } from "./LegendLog";
@@ -123,6 +125,7 @@ function finalRank(summary: HistoricalSeasonSummary): string {
 // its evidence and the rest of its numbers. A day link opens its day.
 function SeasonDays({ summary }: { summary: HistoricalSeasonSummary }) {
   const selectedDay = validDay(useSearchParams()[0].get("day"));
+  const moves = rankMoves(summary.dailyEntries);
   const { hash } = useLocation();
   // A day link opens at its row unless the link names a place on the page.
   useEffect(() => {
@@ -143,6 +146,7 @@ function SeasonDays({ summary }: { summary: HistoricalSeasonSummary }) {
             key={`${day.period}-${day.dayNumber ?? "unknown"}`}
             day={day}
             selected={legendDayKey(day.period) === selectedDay}
+            rankMove={day.dayNumber === null ? undefined : moves.get(day.dayNumber)}
           />
         ))}
       </div>
@@ -153,9 +157,11 @@ function SeasonDays({ summary }: { summary: HistoricalSeasonSummary }) {
 function SeasonDay({
   day,
   selected,
+  rankMove,
 }: {
   day: HistoricalSeasonDayEntry;
   selected: boolean;
+  rankMove?: number;
 }) {
   const { status, reasons, battleNet } = presentDay(
     {
@@ -207,12 +213,7 @@ function SeasonDay({
             {formatSigned(day.netChange)}
           </strong>
         </span>
-        <span className="log-stat log-rank">
-          <small>Reset rank</small>
-          <strong className={day.resetRank == null ? "stat-unavailable" : undefined}>
-            {formatCount(day.resetRank ?? null)}
-          </strong>
-        </span>
+        <LogRank rank={day.resetRank ?? null} move={rankMove} />
         <span className="log-battles">
           <span className="log-stat">
             <small>Attacks</small>

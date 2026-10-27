@@ -68,7 +68,7 @@ All are served from the site itself.
 
 - **Less text:** a label shows only when the number or icon beside it is not clear on its own. Explanations for screen readers stay in the page, hidden from view.
 - **Glass, used sparingly:** only the top bar, the floating tab bar on phones and iPads, sheets and dropdowns are frosted. Cards are solid, with a faint top light and a hairline edge.
-- **Rank plates:** every rank (Rankings, Crew boards, Armies) sits on a slanted plate; the top three are gold, silver and bronze.
+- **Rank plates:** every rank (Rankings, Crew boards, Armies, each day of the Daily Legend log) sits on a slanted plate; the top three are gold, silver and bronze. A day's plate shows how far it moved since the day before ("▲478").
 - **Scoreboard numbers:** big numbers use Barlow Condensed; the player page draws the Season as a trophy line, Season stars as proportional bars, and each day's attacks against defenses as a swing bar.
 - **Buttons:** the main action uses the yellow-to-orange fill with Night text and a soft orange glow; everything else is a quiet card-coloured button with a thin edge. Controls have 8px corners, cards 12px.
 - **Dashboard teaser:** signed-out visitors see a locked example dashboard on the front page, with Create account and Sign in.

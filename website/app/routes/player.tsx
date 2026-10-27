@@ -67,6 +67,7 @@ import type { LiveClan } from "../services/live-clan.server";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
 import detailsStyles from "../details.css?url";
 import "../player.css";
+import "../legend-log.css";
 
 export function links() {
   return [{ rel: "stylesheet", href: detailsStyles }];

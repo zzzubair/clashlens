@@ -360,6 +360,7 @@
 :root
   :is(
     .leaderboard-row[data-podium-rank] .rank-mark,
+    .log-rank[data-podium-rank] .rank-mark,
     .crew-rank[data-podium-rank],
     [data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank
   ) {
@@ -370,6 +371,7 @@
 :root
   :is(
     .leaderboard-row[data-podium-rank="1"] .rank-mark,
+    .log-rank[data-podium-rank="1"] .rank-mark,
     .crew-rank[data-podium-rank="1"],
     [data-ranked] .analytics-row:nth-child(1) .analytics-rank
   ) {
@@ -378,6 +380,7 @@
 :root
   :is(
     .leaderboard-row[data-podium-rank="2"] .rank-mark,
+    .log-rank[data-podium-rank="2"] .rank-mark,
     .crew-rank[data-podium-rank="2"],
     [data-ranked] .analytics-row:nth-child(2) .analytics-rank
   ) {
@@ -386,6 +389,7 @@
 :root
   :is(
     .leaderboard-row[data-podium-rank="3"] .rank-mark,
+    .log-rank[data-podium-rank="3"] .rank-mark,
     .crew-rank[data-podium-rank="3"],
     [data-ranked] .analytics-row:nth-child(3) .analytics-rank
   ) {

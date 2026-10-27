@@ -71,6 +71,47 @@ export function LogDate({ period }: { period: string }) {
   );
 }
 
+/** Places a day's Reset rank climbed since the day before's (a fall is negative). */
+export function rankMoves(
+  days: Array<{ dayNumber: number | null; resetRank?: number | null }>,
+): Map<number, number> {
+  const ranks = new Map(days.map((day) => [day.dayNumber, day.resetRank ?? null]));
+  const moves = new Map<number, number>();
+  for (const { dayNumber, resetRank } of days) {
+    const before = dayNumber === null ? null : ranks.get(dayNumber - 1);
+    if (dayNumber !== null && before != null && resetRank != null)
+      moves.set(dayNumber, before - resetRank);
+  }
+  return moves;
+}
+
+/** A day's Reset rank on a rank plate, gold to bronze in the top 3, over its move. */
+export function LogRank({ rank, move }: { rank: number | null; move?: number }) {
+  const places = formatCount(Math.abs(move ?? 0));
+  return (
+    <span
+      className="log-stat log-rank"
+      data-podium-rank={rank !== null && rank <= 3 ? rank : undefined}
+    >
+      <small>Reset rank</small>
+      <strong className={rank === null ? "stat-unavailable" : "rank-mark"}>
+        {formatCount(rank)}
+      </strong>
+      {move ? (
+        <span className={`log-rank-move ${valueTone(move)}`}>
+          <span aria-hidden="true">
+            {move > 0 ? "▲" : "▼"}
+            {places}
+          </span>
+          <span className="sr-only">
+            {`, ${move > 0 ? "up" : "down"} ${places} since the day before`}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** The labels over a log's rows, for sighted readers; each row names its own values. */
 export function LogHead() {
   return (
@@ -105,6 +146,7 @@ export function LegendLog({
   openDay: string | null;
 }) {
   const todayKey = today ? legendDayKey(today.period) : null;
+  const moves = rankMoves(history.map(({ day }) => day));
   const day = ({ day, seasonDay }: (typeof history)[number]) => (
     <LegendDay
       key={legendDayKey(day.period)}
@@ -114,6 +156,7 @@ export function LegendLog({
       seasonDay={seasonDay}
       isCurrentDay={legendDayKey(day.period) === todayKey}
       openDay={openDay}
+      rankMove={day.dayNumber === null ? undefined : moves.get(day.dayNumber)}
     />
   );
   const current = history.filter(({ day }) => legendDayKey(day.period) === todayKey);
@@ -138,6 +181,7 @@ function LegendDay({
   seasonDay,
   isCurrentDay,
   openDay,
+  rankMove,
 }: {
   day: RankedDaySummary;
   player: PlayerPage;
@@ -145,6 +189,7 @@ function LegendDay({
   seasonDay: string;
   isCurrentDay: boolean;
   openDay: string | null;
+  rankMove?: number;
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
@@ -250,12 +295,14 @@ function LegendDay({
             </strong>
           )}
         </span>
-        <span className="log-stat log-rank">
-          <small>Reset rank</small>
-          <strong className={day.resetRank == null ? "stat-unavailable" : undefined}>
-            {isCurrentDay ? "After Reset" : formatCount(day.resetRank ?? null)}
-          </strong>
-        </span>
+        {isCurrentDay ? (
+          <span className="log-stat log-rank">
+            <small>Reset rank</small>
+            <strong className="stat-unavailable">After Reset</strong>
+          </span>
+        ) : (
+          <LogRank rank={day.resetRank ?? null} move={rankMove} />
+        )}
         <span className="log-battles">
           <span className="log-stat">
             <small>Attacks</small>

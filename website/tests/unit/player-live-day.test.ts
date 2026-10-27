@@ -219,6 +219,30 @@ describe("today's Legend day wording", () => {
     expect(rank("2026-10-08")).toMatch(/>After Reset$/);
   });
 
+  it("shows how far each day's Reset rank moved since the day before", async () => {
+    const ended = (day: number, resetRank: number): RankedDaySummary => ({
+      ...TODAY,
+      dayNumber: day,
+      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      state: "Complete",
+      resetRank,
+    });
+    const html = await page(WAITING, undefined, [
+      ended(7, 1234),
+      ended(6, 1500),
+      ended(5, 1000),
+    ]);
+    const move = (key: string) =>
+      html
+        .split(`id="legend-day-${key}"`)[1]
+        .split("</details>")[0]
+        .match(/class="sr-only">, ([^<]+)</)?.[1];
+    expect(move("2026-10-07")).toBe("up 266 since the day before");
+    expect(move("2026-10-06")).toBe("down 500 since the day before");
+    // Day 4 isn't saved, so day 5 has nothing to compare with.
+    expect(move("2026-10-05")).toBeUndefined();
+  });
+
   it("ends each finished day on the next day's start and shows the automatic loss", async () => {
     const html = await page(WAITING, undefined, [
       // 40 from attacks, 0 on defense, 32 taken at Reset: +8.
