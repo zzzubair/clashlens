@@ -237,3 +237,14 @@ test("tapping a player shows the page loading until their page shows", async ({
   await expect(page).toHaveURL(/\/players\//);
   await expect(line).toHaveCount(0);
 });
+
+test("a Rankings visit downloads the player and Analytics styles before any tap", async ({
+  page,
+}) => {
+  const detailsStyles = page.waitForRequest((request) =>
+    /\/details[^/]*\.css$/.test(new URL(request.url()).pathname),
+  );
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  await detailsStyles;
+  await expect(page).toHaveURL(/\/leaderboards\/tracked/);
+});

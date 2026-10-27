@@ -258,6 +258,14 @@ function usePreloadTabCode(crews: boolean) {
         if (route === undefined) continue;
         for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
         for (const href of route.css ?? []) preload(href, { as: "style" });
+        void import(/* @vite-ignore */ route.module).then(
+          (module: { links?: () => { rel?: string; href?: string }[] }) => {
+            for (const link of module.links?.() ?? []) {
+              if (link.rel === "stylesheet" && link.href) preload(link.href, { as: "style" });
+            }
+          },
+          () => {},
+        );
       }
     }, 1000);
     return () => clearTimeout(timer);
