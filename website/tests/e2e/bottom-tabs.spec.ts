@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { ensureAccount, signIn } from "./helpers/account";
+
 const tabs = (page: Page) => page.locator("nav.bottom-tabs");
 
 test("on a phone the bottom bar opens each tab and More, and hides nothing", async ({
@@ -162,4 +164,51 @@ test("tapping the open tab again shows it loading, also with reduced motion", as
   release();
   await expect(page).toHaveURL(/view=live/);
   await expect.poll(loading).toBe(false);
+});
+
+test("signed in on a phone, every bottom tab keeps the account in the top bar", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Its own identity with no linked player, so the dashboard's first-visit
+  // pop-up, which other tests' players can bring up, never covers the bar.
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", "fixture-google-subject-3501");
+    await route.continue({ url: url.href });
+  });
+  await signIn(page);
+  await ensureAccount(page, "lenstabs", "Lens Tabs");
+  await page.goto("/");
+  const header = page.getByRole("banner");
+  const name = header.locator(".nav-account-name");
+  await expect(name).toBeVisible();
+  const shown = (await name.textContent())!;
+  const bar = tabs(page);
+  const more = page.locator("details.site-menu");
+  const stillSignedIn = async (path: RegExp) => {
+    await expect(page).toHaveURL(path);
+    await expect(header.getByRole("link", { name: "Sign in", exact: true })).toHaveCount(
+      0,
+    );
+    await expect(name).toHaveText(shown);
+    await expect(bar.locator(":scope > a").first()).toHaveText("Dashboard");
+  };
+  for (const [tab, path] of [
+    ["Rankings", /\/leaderboards\/tracked\?view=live/],
+    ["Dashboard", /\/$/],
+    ["Analytics", /\/analytics\/armies$/],
+    ["Crews", /\/crews$/],
+  ] as const) {
+    await bar.getByRole("link", { name: tab }).click();
+    await stillSignedIn(path);
+  }
+  for (const [item, path] of [
+    ["Watchlists", /\/account\/watchlists$/],
+    ["Blog", /\/blog$/],
+  ] as const) {
+    await more.locator("summary").click();
+    await more.getByRole("link", { name: item }).click();
+    await stillSignedIn(path);
+  }
 });
