@@ -766,6 +766,11 @@
     padding-inline: 0.75rem;
   }
 
+  /* The day card below already shows the chosen player's numbers. */
+  .dash-account[aria-current="page"] .dash-account-line {
+    display: none;
+  }
+
   .dash-account-page {
     min-width: 2.5rem;
   }

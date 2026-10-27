@@ -4,39 +4,122 @@
  */
 /* ---------- Card 1: Legend day ---------- */
 
-.legend-day-card {
-  display: grid;
-  gap: 0.5rem;
+/* The card it sits in is measured, so a wide card can rearrange this grid. */
+.dash-card:has(> .legend-day-card) {
   container-type: inline-size;
 }
 
+.legend-day-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Trophies with today's change on a chip, and the time left in the Legend day. */
 .legend-day-numbers {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
 }
 
-/* Last Reset → Now → Next Reset in one row; on a narrow card Next Reset gets its own. */
+.legend-day-score {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.legend-day-score .trophy-mark {
+  width: 1.7rem;
+  height: 1.7rem;
+  margin: 0;
+  fill: color-mix(in srgb, var(--cl-gold) 22%, transparent);
+  stroke-width: 1.5;
+}
+
+.legend-day-net {
+  padding: 0.2rem 0.5rem;
+  background: var(--cl-panel);
+  border-radius: 6px;
+  font: 700 1.15rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-net.positive {
+  background: color-mix(in srgb, var(--cl-positive) 13%, var(--cl-surface));
+}
+
+.legend-day-net.negative {
+  background: color-mix(in srgb, var(--cl-negative) 13%, var(--cl-surface));
+}
+
+.legend-day-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+}
+
+.legend-day-countdown svg {
+  width: 1.6rem;
+  height: 1.6rem;
+  transform: rotate(-90deg);
+}
+
+.legend-day-countdown circle {
+  fill: none;
+  stroke: var(--cl-border);
+  stroke-width: 4;
+}
+
+.legend-day-countdown .legend-day-countdown-left {
+  stroke: var(--cl-action);
+  stroke-linecap: round;
+}
+
+.legend-day-countdown b {
+  color: var(--cl-ink);
+  font: 700 1.1rem var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Last Reset, Now on its rank plate, Next Reset: one line, joined like a track. */
 .legend-day-ranks {
   display: grid;
-  grid-template-columns: auto auto auto auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.4rem 0.75rem;
-  padding: 0.75rem 1rem;
-  background: var(--cl-panel);
-  border-radius: var(--cl-radius);
+  grid-template-columns: auto minmax(0.75rem, 1fr) auto minmax(0.75rem, 1fr) auto;
+  align-items: start;
+  gap: 0 0.5rem;
+}
+
+.legend-day-ranks > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.legend-day-ranks > i {
+  height: 1px;
+  margin-top: 1.7rem;
+  background: var(--cl-border);
 }
 
 .legend-day-ranks b {
-  display: block;
-  font-family: var(--cl-font-heading);
-  font-size: 1.4rem;
-  font-weight: 700;
+  font: 700 1.2rem/1.3 var(--cl-font-score);
   font-variant-numeric: tabular-nums;
+}
+
+.legend-day-now {
+  justify-items: center;
+}
+
+.legend-day-range {
+  justify-items: end;
+  text-align: right;
 }
 
 .legend-day-range b {
   color: var(--cl-accent);
+  font-size: 1.05rem;
 }
 
 .legend-day-projected {
@@ -45,66 +128,77 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.2rem 0.5rem;
+  margin-top: 0.6rem;
   padding-top: 0.5rem;
   border-top: 1.5px dashed var(--cl-card-line);
 }
 
 .legend-day-projected strong {
   color: var(--cl-accent);
-  font-family: var(--cl-font-heading);
-  font-size: 1.1rem;
-  font-weight: 700;
+  font: 700 1.1rem var(--cl-font-score);
   font-variant-numeric: tabular-nums;
 }
 
-.legend-day-projected .dash-muted {
-  flex-basis: 100%;
-  font-size: 0.75rem;
-}
-
-.legend-day-arrow {
-  color: var(--cl-action);
-  font-size: 1.4rem;
-  font-weight: 900;
-}
-
-@container (max-width: 28rem) {
-  .legend-day-ranks {
-    grid-template-columns: auto auto minmax(0, 1fr);
-  }
-
-  .legend-day-ranks > .legend-day-arrow:nth-of-type(2) {
-    display: none;
-  }
-
-  .legend-day-range {
-    grid-column: 1 / -1;
-  }
-}
-
+/* Each battle row: its icon, how many of 8 and the total, over its 8 slots. */
 .legend-day-battles {
   display: grid;
-  grid-template-columns: 5.5rem minmax(0, 1fr);
-  gap: 0.5rem;
-  align-items: center;
+  gap: 0.35rem;
 }
 
 .legend-day-battles-head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 0.4rem;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .legend-day-battles-head .dash-label {
-  flex-basis: 100%;
+  display: inline-flex;
+  color: var(--cl-faint);
+}
+
+.legend-day-battles-head .dash-icon {
+  width: 1rem;
+  height: 1rem;
 }
 
 .legend-day-battles-head b {
-  font-family: var(--cl-font-heading);
-  font-size: 1.1rem;
-  font-weight: 700;
+  margin-left: auto;
+  font: 700 1.05rem var(--cl-font-score);
   font-variant-numeric: tabular-nums;
+}
+
+/* A wide card puts the slots beside the numbers, as the front page shows them. */
+@container (min-width: 36rem) {
+  .legend-day-card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "head head" "numbers attacks" "ranks defenses" "chip chip";
+    column-gap: 2rem;
+  }
+
+  .legend-day-card > .dash-card-head {
+    grid-area: head;
+  }
+
+  .legend-day-numbers {
+    grid-area: numbers;
+  }
+
+  .legend-day-ranks {
+    grid-area: ranks;
+  }
+
+  .legend-day-attacks {
+    grid-area: attacks;
+  }
+
+  .legend-day-defenses {
+    grid-area: defenses;
+  }
+
+  .legend-day-card > .dash-chip {
+    grid-area: chip;
+    justify-self: start;
+  }
 }
 
 /* Eight boxes stay on one line, narrowing to fit the card. */
@@ -1100,14 +1194,6 @@
 
   .group-table :is(th, td):first-child {
     width: 23%;
-  }
-
-  .legend-day-battles {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .legend-day-battles-head .dash-label {
-    flex-basis: auto;
   }
 
   /* Your hit sets the right column's width and the strength line wraps under

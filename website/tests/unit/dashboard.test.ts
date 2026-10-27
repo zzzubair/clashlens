@@ -423,6 +423,9 @@ describe("Legend day card", () => {
     // The older of the day's reads and the range's shows.
     expect(updated(emptyDay({ observedAtMs: at(2) }))).toContain("updated 9 min ago");
     expect(updated(emptyDay({ observedAtMs: at(12) }))).toContain("updated 12 min ago");
+    // 09:00 UTC is 20 hours before the 05:00 Reset; the title leaves the name to the tab.
+    expect(updated(emptyDay({ dayNumber: 9 }))).toContain("Legend day 9 updated");
+    expect(updated(emptyDay({}))).toContain("20h 00m to Reset");
   });
 
   const render = (

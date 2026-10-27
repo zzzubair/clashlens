@@ -299,8 +299,10 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
             </td>
             <td>{count(row.trophies)}</td>
             <td>{percent(row.hitRate)}</td>
-            <td className="positive">{signedOr(row.offense)}</td>
-            <td className="negative">{signedOr(row.defense)}</td>
+            <td className={tone(row.offense)}>{signedOr(row.offense)}</td>
+            <td className={tone(row.defense === null ? null : -Math.abs(row.defense))}>
+              {signedOr(row.defense)}
+            </td>
           </tr>
         ))}
       </tbody>

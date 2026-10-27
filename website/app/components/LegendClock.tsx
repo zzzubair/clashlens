@@ -24,6 +24,15 @@ export function signed(value: number): string {
 }
 
 /** "★★☆" for two stars. */
+/** Whole minutes left in the Legend day, and the "9h 05m" the clocks show for them. */
+export function resetCountdown(nowMs: number): { left: number; text: string } {
+  const left = Math.ceil((nextResetMs(nowMs) - nowMs) / 60_000);
+  return {
+    left,
+    text: `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`,
+  };
+}
+
 export function starText(stars: number): string {
   const shown = Math.max(0, Math.min(3, stars));
   return "★".repeat(shown) + "☆".repeat(3 - shown);
@@ -196,11 +205,8 @@ export function LegendClock({
   const format = timeFormatter(timeZone);
   const elapsed =
     nowMs === null || dayStart === null ? null : (nowMs - dayStart) / 60_000;
-  const left = elapsed === null ? null : Math.ceil(DAY_MINUTES - elapsed);
-  const countdown =
-    left === null
-      ? "–"
-      : `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`;
+  const left = nowMs === null ? null : resetCountdown(nowMs).left;
+  const countdown = nowMs === null ? "–" : resetCountdown(nowMs).text;
   const resetLabel = resetMs === null ? "--:--" : format.format(resetMs);
   const marks = dayStart === null ? [] : clockMarks(battles, dayStart);
   const [arcX, arcY] = point(elapsed ?? 0, RING - 8);

@@ -1,7 +1,9 @@
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { ClockBattle, PlayerDay, RankRange } from "../lib/dashboard";
-import { CardHead, Name, updatedAgo } from "./DashboardParts";
-import { signed, starText } from "./LegendClock";
+import { DashboardIcon } from "./DashboardIcon";
+import { CardHead, updatedAgo } from "./DashboardParts";
+import { TrophyMark } from "./LeaderboardShared";
+import { resetCountdown, signed, starText } from "./LegendClock";
 
 const SLOTS = 8;
 
@@ -24,9 +26,12 @@ function BattleRow({
 }) {
   const shown = `${count ?? "–"} of ${SLOTS} ${noun}s`;
   return (
-    <div className="legend-day-battles">
+    <div className={`legend-day-battles legend-day-${kind}s`}>
       <div className="legend-day-battles-head">
-        <span className="dash-label">{noun === "attack" ? "Attacks" : "Defenses"}</span>
+        <span className="dash-label">
+          <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
+          <span className="sr-only">{noun === "attack" ? "Attacks" : "Defenses"}</span>
+        </span>
         <span className="dash-muted">
           {count ?? "–"} of {SLOTS}
         </span>
@@ -92,52 +97,59 @@ export function LegendDayCard({
   const observed = [day?.observedAtMs ?? null, rangeAtMs].filter(
     (at): at is number => at !== null,
   );
-  const meta = [
-    day?.dayNumber && day.dayCount ? `Day ${day.dayNumber} of ${day.dayCount}` : null,
-    updatedAgo(observed.length ? Math.min(...observed) : null, nowMs),
-  ].filter(Boolean);
+  const countdown = nowMs === null ? null : resetCountdown(nowMs);
   return (
     <div className="legend-day-card">
       <CardHead
-        title={
-          <>
-            {"Legend day · "}
-            <Name>{player.name ?? player.tag}</Name>
-          </>
-        }
-        meta={meta.length ? meta.join(" · ") : null}
+        title={day?.dayNumber ? `Legend day ${day.dayNumber}` : "Legend day"}
+        meta={updatedAgo(observed.length ? Math.min(...observed) : null, nowMs)}
       />
       <div className="legend-day-numbers">
-        <div>
-          <span className="dash-label">Trophies</span>
-          <span className="dash-big">
+        <span className="legend-day-score">
+          <span className="sr-only">Trophies</span>
+          <TrophyMark />
+          <strong className="dash-big">
             {trophies === null ? "–" : trophies.toLocaleString("en-US")}
+          </strong>
+          <span className="sr-only">Net today</span>
+          {net === null ? (
+            <span className="sr-only">–</span>
+          ) : (
+            <span
+              className={`legend-day-net ${net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
+            >
+              {signed(net)}
+            </span>
+          )}
+        </span>
+        {countdown ? (
+          <span className="legend-day-countdown">
+            <svg viewBox="0 0 36 36" aria-hidden="true">
+              <circle cx="18" cy="18" r="15" />
+              <circle
+                className="legend-day-countdown-left"
+                cx="18"
+                cy="18"
+                r="15"
+                pathLength="1440"
+                strokeDasharray={`${countdown.left} 1440`}
+              />
+            </svg>
+            <b>{countdown.text}</b> to Reset
           </span>
-        </div>
-        <div>
-          <span className="dash-label">Net today</span>
-          <span
-            className={`dash-big ${net === null ? "" : net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
-          >
-            {net === null ? "–" : signed(net)}
-          </span>
-        </div>
+        ) : null}
       </div>
       <div className="legend-day-ranks">
         <div>
           <span className="dash-label">Last Reset</span>
           <b>{rankText(day?.lastResetRank ?? null)}</b>
         </div>
-        <span className="legend-day-arrow" aria-hidden="true">
-          →
-        </span>
-        <div>
+        <i aria-hidden="true" />
+        <div className="legend-day-now">
           <span className="dash-label">Now</span>
-          <b>{rankText(player.rank)}</b>
+          <b className="rank-mark">{rankText(player.rank)}</b>
         </div>
-        <span className="legend-day-arrow" aria-hidden="true">
-          →
-        </span>
+        <i aria-hidden="true" />
         <div className="legend-day-range">
           <span className="dash-label">Next Reset</span>
           <b>{range ? `${rankText(range.best)} – ${rankText(range.worst)}` : "–"}</b>
