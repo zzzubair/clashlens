@@ -156,9 +156,6 @@
   display: none;
 }
 
-/* More rises from the bottom bar as a sheet, in the bar's own dark colours,
-   over a dimmed page that closes it when tapped. Open, it covers everything
-   else, the analytics question included. */
 /* The page-change loading line along the top bar's bottom edge. It waits
    0.1 s, so a page that shows at once does not flash it. */
 .page-loading {
@@ -204,6 +201,9 @@
   }
 }
 
+/* More rises from the bottom bar as a sheet, in the bar's own dark colours,
+   over a dimmed page that closes it when tapped. Open, it covers everything
+   else, the analytics question included. */
 .site-header:has(.site-menu[open]) {
   z-index: 60;
 }
