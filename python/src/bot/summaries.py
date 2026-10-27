@@ -20,8 +20,9 @@ which is shown beside it, and unavailable when the worker saved none. Every
 place in a round's summaries is read from one version of the Reset's Daily
 board, and each place moved from that player's place on the Daily board of
 the Reset before, unless the day was a Season's first. A player whose day
-is not saved yet, or whom that board went without, is named as not finished; one with no Legend day that day is left out, and a
-Clasher with no finished day gets no DM.
+is not saved yet, or whom that board went without, is named as not
+finished; one with no Legend day that day is left out, and a Clasher with
+no finished day gets no DM.
 
 Summaries are sent by their own loop, beside the attack alert loop and
 through the same Discord messenger, so a slow summary never holds up an

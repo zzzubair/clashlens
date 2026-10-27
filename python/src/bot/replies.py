@@ -726,11 +726,12 @@ def summary_day(
     """The player's Legend day that ended at `reset`, as their page shows it:
     its label, its saved "version", its Season day number, `place`, its place
     on that Reset's Daily board, and `before`, its place on the board of the
-    Reset before, kept only when the day was not a Season's first. Its "end" is None until set to the end of day saved with
-    that version, before any weekly or Season reset at `reset`. "finished"
-    is False while its final result is not saved yet, as for a player that
-    board went without (`unfinished`) with no saved day. None when the page
-    has no such Legend day."""
+    Reset before, kept only when the day was not a Season's first. Its "end"
+    is None until set to the end of day saved with that version, before any
+    weekly or Season reset at `reset`. "finished" is False while its final
+    result is not saved yet, as for a player that board went without
+    (`unfinished`) with no saved day. None when the page has no such Legend
+    day."""
     ready = page.get("screen_ready") or {}
     days = {datetime.fromisoformat(day["ranked_day_start"]): day for day in ready.get("days", [])}
     day = days.get(reset - timedelta(days=1))
