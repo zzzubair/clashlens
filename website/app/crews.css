@@ -75,12 +75,13 @@
   place-items: center;
   width: 2.75rem;
   height: 2.75rem;
+  padding-bottom: 0.15em;
   color: var(--cl-brand-night);
-  background: var(--cl-brand-fill);
-  border-radius: var(--cl-radius);
-  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.16);
-  font-family: var(--cl-font-heading);
+  background: linear-gradient(180deg, var(--cl-brand-yellow), var(--cl-brand-orange));
+  clip-path: polygon(50% 0, 100% 16%, 100% 68%, 50% 100%, 0 68%, 0 16%);
+  font-family: var(--cl-font-score);
   font-size: 1.3rem;
+  font-weight: 700;
   line-height: 1;
 }
 

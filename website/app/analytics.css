@@ -84,9 +84,6 @@
   flex: 1 1 8rem;
   min-width: 0;
 }
-.analytics-season-field {
-  flex: 1.6 1 12rem;
-}
 @media (min-width: 40rem) {
   .analytics-field {
     flex: 0 1 11rem;

@@ -23,11 +23,20 @@ const signed = (value: number | null, sign: 1 | -1, digits = 0) =>
 const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undefined);
 export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
-// Grid track sizes for a row's 3-, 2-, 1- and 0-star segments.
+// Grid track sizes for a row's 3-, 2-, 1- and 0-star segments. A segment
+// with any battles stays wide enough for its count.
 const shares = (stars: Array<number | null>) =>
   Object.fromEntries(
-    [3, 2, 1, 0].map((star) => [`--s${star}`, `${stars[star] ?? 0}fr`]),
+    [3, 2, 1, 0].map((star) => [
+      `--s${star}`,
+      stars[star] ? `minmax(2.25rem, ${stars[star]}fr)` : "0fr",
+    ]),
   ) as React.CSSProperties;
+// A segment under a fifth of the row shows its count without the star label.
+const narrow = (stars: Array<number | null>, star: number) => {
+  const total = stars.reduce<number>((sum, n) => sum + (n ?? 0), 0);
+  return total > 0 && (stars[star] ?? 0) / total < 0.2;
+};
 
 // The one Season box: rank and trophies first, then hit rate, battles by
 // stars and averages. Meta is one short line of dates and coverage. Without battles it shows only the headline. An ended
@@ -157,6 +166,7 @@ export function SeasonSummary({
                         key={stars}
                         data-stars={stars}
                         data-empty={side.stars[stars] ? undefined : ""}
+                        data-narrow={narrow(side.stars, stars) ? "" : undefined}
                       >
                         {count(side.stars[stars] ?? null)}
                       </td>

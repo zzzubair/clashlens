@@ -554,7 +554,7 @@
   padding: 0;
   font-size: 0;
 }
-.player-page .season-summary-table td[data-empty]::after {
+.player-page .season-summary-table :is(td[data-empty], td[data-narrow])::after {
   content: none;
 }
 .player-page .season-summary-table td[data-stars="3"] {
@@ -680,6 +680,19 @@
    colours say which number is which. */
 .player-page .log-head {
   display: none;
+}
+@media (min-width: 48rem) {
+  .player-page .log-head {
+    display: grid;
+    grid-template-columns: var(--log-columns);
+    padding: 0 1rem 0.4rem 1.25rem;
+    color: var(--cl-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+  .player-page .log-head > :nth-child(n + 5) {
+    text-align: right;
+  }
 }
 .player-page .log-row {
   display: grid;
@@ -839,10 +852,12 @@
   --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
 }
 @media (min-width: 48rem) {
+  .player-page {
+    --log-columns: [date] 4.25rem [meta] 4.5rem [eod] 4rem [swing] minmax(0, 1fr) [att]
+      4rem [def] 4rem [net] 4.5rem [rank] 4.5rem [chev] 0.75rem;
+  }
   .player-page .log-row {
-    grid-template-columns:
-      [date] 4.25rem [meta] 4.5rem [eod] 4rem [swing] minmax(0, 1fr)
-      [att] 4rem [def] 4rem [net] 4.5rem [rank] 4.5rem [chev] 0.75rem;
+    grid-template-columns: var(--log-columns);
     grid-template-areas: "date meta eod swing att def net rank chev";
     padding-inline: 1.25rem 1rem;
   }
@@ -1360,14 +1375,38 @@
     .battle-side-defense {
     display: none;
   }
-  /* The switch names the list and its total. */
+  /* The switch names the list and its total; only the count shows here. */
   .player-page .log-open .battle-side h3 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+    font-size: 0;
+  }
+  .player-page .log-open .battle-side h3 strong {
+    font-size: 0;
+  }
+  /* An open day names its numbers, its start included. */
+  .player-page .log-day:not(.log-day-live)[open] > .log-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 0.75rem;
+    grid-template-areas: "date date meta meta chev" "start eod net rank chev";
+    row-gap: 0.55rem;
+  }
+  .player-page .log-day:not(.log-day-live)[open] > .log-row .log-stat > small {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    color: var(--cl-muted);
+    font: 500 0.7rem/1.15 var(--cl-font);
+    white-space: normal;
+  }
+  .player-page .log-day:not(.log-day-live)[open] .log-trophies > .log-stat:first-child {
+    display: block;
+    grid-area: start;
+    font: 600 1rem var(--cl-font-score);
+  }
+  .player-page .log-day:not(.log-day-live)[open] :is(.log-net, .log-rank) {
+    justify-self: start;
+    justify-items: start;
+    text-align: left;
   }
 }
 

@@ -398,7 +398,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         seasons={data.seasons}
         selectedSeason={data.selectedSeason}
         currentAvailable={currentAvailable}
-        now={statisticsTime}
       />
     );
   const history = selectPlayerHistory(player, statisticsTime);

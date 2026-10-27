@@ -75,8 +75,12 @@ export function LogDate({ period }: { period: string }) {
 export function LogHead() {
   return (
     <div className="log-head" aria-hidden="true">
+      <span>Date</span>
       <span>Day</span>
-      <span>Trophies</span>
+      <span>EOD</span>
+      <span />
+      <span>Attacks</span>
+      <span>Defenses</span>
       <span>Change</span>
       <span>Reset rank</span>
     </div>

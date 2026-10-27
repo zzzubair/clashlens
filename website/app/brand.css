@@ -127,7 +127,6 @@
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
-    .nav-link-primary,
     .search-controls button
   ) {
   color: var(--cl-brand-night);
@@ -146,12 +145,26 @@
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
-    .nav-link-primary,
     .search-controls button
   ):is(:hover, :focus-visible) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill-hover);
 }
+/* The top bar's Sign in: an outline, so the page's own main action stays the
+   only filled one on screen. */
+:root .site-header .nav-link-primary {
+  color: var(--cl-action-text);
+  background: transparent;
+  border: 1px solid var(--cl-action-border);
+  border-radius: var(--cl-radius);
+  box-shadow: none;
+  font-weight: 650;
+}
+:root .site-header .nav-link-primary:is(:hover, :focus-visible) {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+}
+
 /* Secondary: a quiet glass button with a hairline edge. */
 :root
   :is(

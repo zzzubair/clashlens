@@ -18,7 +18,6 @@ import {
 import { UnitArt } from "../components/ArmyPortraits";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
-import { seasonStartAt } from "../components/SeasonReread";
 import { ArmyDetail } from "../components/VariantExamples";
 import {
   battles,
@@ -907,9 +906,7 @@ export default function ArmyAnalyticsRoute() {
             <label className="analytics-field analytics-season-field">
               <span>Season</span>
               <select name="season" defaultValue={requestedSeason}>
-                <option value="current">
-                  {`This Season · ${seasonDates(seasonStartAt(Date.now()) / 1000)}`}
-                </option>
+                <option value="current">This Season</option>
                 {[
                   ...pastSeasons,
                   ...(requestedSeason !== "current" &&

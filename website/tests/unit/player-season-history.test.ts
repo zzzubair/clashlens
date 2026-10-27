@@ -114,7 +114,7 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
-const CURRENT_LINK = '<option value="">This Season · 5 Oct – 1 Nov 2026</option>';
+const CURRENT_LINK = '<option value="">This Season</option>';
 
 // The names in the Season menu, or none when there is no menu.
 function seasonOptions(html: string) {
@@ -470,9 +470,7 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(seasonOptions(recoveredHtml)).toEqual(
-        player ? ["This Season · 5 Oct – 1 Nov 2026"] : [],
-      );
+      expect(seasonOptions(recoveredHtml)).toEqual(player ? ["This Season"] : []);
     },
   );
 
@@ -485,7 +483,7 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(seasonOptions(html)).toEqual(["This Season · 5 Oct – 1 Nov 2026"]);
+    expect(seasonOptions(html)).toEqual(["This Season"]);
   });
 
   // Day 1 of the Season starting 5 Oct, after the September Season ended.
@@ -537,9 +535,7 @@ describe("past-Season view", () => {
     expect(current).toContain("Day 1");
     for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026"])
       expect(current).not.toContain(hidden);
-    expect(current).toMatch(
-      /Season\s+This Season · 5 Oct – 1 Nov 2026\s+7 Sep – 4 Oct 2026/,
-    );
+    expect(current).toMatch(/Season\s+This Season\s+7 Sep – 4 Oct 2026/);
     // The ended Season's last day is only the end of its name in the menu.
     expect(current.match(/4 Oct 2026/g)).toHaveLength(1);
     expect(current).not.toContain("7 Sep 2026");

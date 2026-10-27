@@ -949,7 +949,7 @@ describe("army analytics attacks and season picker", () => {
     // The first season: nothing to pick but the current one.
     const first = picker(await renderArmyRoute("season=current"));
     expect(first.match(/<option/g)).toHaveLength(1);
-    expect(first).toContain(">This Season · 10 Aug – 6 Sep 2026</option>");
+    expect(first).toContain(">This Season</option>");
 
     // A later season lists each finished season the API reports.
     getArmySeasons.mockResolvedValue([SEASON]);

@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { DashboardIcon } from "./DashboardIcon";
 import { AccountButtons } from "./NeedsAccount";
 
@@ -48,7 +49,8 @@ const HEAT = [
 export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean }) {
   return (
     <section className="front-teaser" aria-labelledby="front-teaser-title">
-      <div className="teaser-board" aria-hidden="true">
+      <Board link={loginAvailable}>
+        <span className="teaser-example">Example</span>
         <div className="teaser-card teaser-day">
           <span className="teaser-label">Legend day 23</span>
           <span className="teaser-score">
@@ -99,7 +101,7 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
             />
           ))}
         </div>
-      </div>
+      </Board>
       <div className="teaser-lock">
         <span className="teaser-lock-icon">
           <DashboardIcon name="lock" />
@@ -113,6 +115,25 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
         )}
       </div>
     </section>
+  );
+}
+
+// The example itself, a second way into Create account for a tap or click;
+// keyboards and screen readers use the buttons below it.
+function Board({ link, children }: { link: boolean; children: React.ReactNode }) {
+  return link ? (
+    <Link
+      className="teaser-board"
+      to="/signup?returnPath=%2F"
+      tabIndex={-1}
+      aria-hidden="true"
+    >
+      {children}
+    </Link>
+  ) : (
+    <div className="teaser-board" aria-hidden="true">
+      {children}
+    </div>
   );
 }
 

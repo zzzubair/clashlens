@@ -1,25 +1,20 @@
 import { Form, useLocation, useNavigate } from "react-router";
 import type { SummarizedSeasonRef } from "../lib/contracts";
 import { seasonDates } from "../lib/season-end";
-import { seasonStartAt } from "./SeasonReread";
 import { canonicalPlayerPath } from "../lib/player-tag";
 
-// A player's Season menu: the current Season and each past Season with Clash
-// Lens days, each named by its dates, in the same bold style as the Analytics
-// filters.
+// A player's Season menu: This Season, then each past Season with Clash Lens
+// days named by its dates, in the same bold style as the Analytics filters.
 export function SeasonMenu({
   tag,
   seasons,
   selectedSeason,
   currentAvailable = true,
-  now,
 }: {
   tag: string;
   seasons: SummarizedSeasonRef[];
   selectedSeason: string | null;
   currentAvailable?: boolean;
-  /** The page's time in milliseconds, or 0 when it has none to date this Season by. */
-  now: number;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -51,11 +46,7 @@ export function SeasonMenu({
           }}
         >
           {currentAvailable || selectedSeason !== null ? (
-            <option value="">
-              {now
-                ? `This Season · ${seasonDates(seasonStartAt(now) / 1000)}`
-                : "This Season"}
-            </option>
+            <option value="">This Season</option>
           ) : (
             <option value="" disabled>
               Choose a Season

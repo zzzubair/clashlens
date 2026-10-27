@@ -269,6 +269,10 @@
   min-height: 3.6rem;
 }
 
+.dash-customise-short {
+  display: none;
+}
+
 /* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
 
 .dash-grid {
@@ -761,6 +765,10 @@
     justify-content: center;
     min-width: 3.6rem;
     padding: 0;
+  }
+
+  .dash-customise-short {
+    display: inline;
   }
 
   .dash-account-add-text,
