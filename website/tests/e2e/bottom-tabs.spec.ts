@@ -170,8 +170,15 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  // Its own identity with no linked player, so the dashboard's first-visit
+  // pop-up, which other tests' players can bring up, never covers the bar.
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", "fixture-google-subject-3501");
+    await route.continue({ url: url.href });
+  });
   await signIn(page);
-  await ensureAccount(page, "lensscout", "Lens Scout");
+  await ensureAccount(page, "lenstabs", "Lens Tabs");
   await page.goto("/");
   const header = page.getByRole("banner");
   const name = header.locator(".nav-account-name");
