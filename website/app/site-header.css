@@ -9,15 +9,28 @@
   z-index: 30;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 2.75rem;
+  gap: 2rem;
   align-items: center;
   width: 100%;
-  min-height: 4.5rem;
+  min-height: 4rem;
   margin: 0;
-  padding: 0.5rem max(1.5rem, calc((100% - 72rem) / 2));
+  padding: 0.4rem max(1.5rem, calc((100% - 72rem) / 2));
   color: var(--cl-header-ink);
+  background: transparent;
+  border-bottom: 0;
+  isolation: isolate;
+}
+
+/* The see-through, blurred bar sits on its own layer: a blur on the header
+   itself would pin the fixed bottom bar inside it. */
+.site-header::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
   background: var(--cl-header-bg);
-  border-bottom: 1px solid var(--cl-border);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  backdrop-filter: saturate(1.6) blur(14px);
+  content: "";
 }
 
 .site-brand {
@@ -50,13 +63,13 @@
 .primary-nav a {
   display: inline-flex;
   align-items: center;
-  min-height: 2.75rem;
-  padding: 0.6rem 0.9rem;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.9rem;
   color: var(--cl-header-muted);
-  border: 2px solid transparent;
-  border-radius: var(--cl-radius);
-  font-size: 0.9rem;
-  font-weight: 600;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .primary-nav a:hover {
@@ -105,7 +118,7 @@
 
 :is(.site-nav, .site-menu-extras) .nav-link:not(.nav-link-primary) {
   color: var(--cl-header-ink);
-  border-color: var(--cl-header-soft);
+  border-color: transparent;
 }
 
 .nav-link:hover,
@@ -166,7 +179,7 @@
 .site-menu[open]::before {
   position: fixed;
   inset: 0 0 var(--cl-bottom-tabs);
-  background: rgb(10 6 14 / 0.55);
+  background: rgb(5 9 18 / 0.5);
   content: "";
 }
 
@@ -176,57 +189,70 @@
   bottom: var(--cl-bottom-tabs);
   left: 0;
   display: grid;
-  gap: 0.6rem;
+  gap: 0.5rem;
   max-height: calc(100svh - var(--cl-bottom-tabs) - 5rem);
   overflow-y: auto;
-  padding: 0.75rem 1rem 1rem;
-  color: var(--cl-header-ink);
-  background: var(--cl-header-bg);
-  border: 2px solid var(--cl-card-line);
+  padding: 0.5rem 0.75rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-outline);
   border-bottom: 0;
-  border-radius: var(--cl-card-radius) var(--cl-card-radius) 0 0;
-  box-shadow: var(--cl-header-shadow);
+  border-radius: 20px 20px 0 0;
+  box-shadow: var(--cl-overlay-shadow);
+}
+
+/* The grab handle says it is a sheet. */
+.site-menu-panel::before {
+  justify-self: center;
+  width: 2.25rem;
+  height: 0.3rem;
+  margin-bottom: 0.25rem;
+  background: var(--cl-outline);
+  border-radius: 999px;
+  content: "";
 }
 
 .site-menu-tabs {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.15rem;
 }
 
 .site-menu-tabs a {
   display: flex;
   align-items: center;
   min-height: 3.25rem;
-  padding: 0.5rem 0.9rem;
-  color: var(--cl-header-ink);
-  border: 2px solid transparent;
-  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  color: var(--cl-ink);
+  border-radius: var(--cl-radius);
   font-weight: 800;
   text-decoration: none;
 }
 
 .site-menu-tabs a:focus-visible {
-  background: var(--cl-header-soft);
+  background: var(--cl-panel);
 }
 
 /* Touch screens keep a tapped link's hover look until the next tap, so the
    bar and its sheet hover only for a mouse and show a press instead. */
 @media (hover: hover) {
   .site-menu-tabs a:hover {
-    background: var(--cl-header-soft);
+    background: var(--cl-panel);
   }
 }
 
+.site-menu-tabs a:active {
+  background: var(--cl-panel);
+}
+
 .site-menu-tabs a[aria-current="page"] {
-  color: var(--cl-brand-night);
-  background: var(--cl-brand-fill);
-  border-color: var(--cl-brand-night);
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
 }
 
 .site-menu-extras {
   display: grid;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--cl-header-soft);
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--cl-border);
 }
 
 .site-menu-extras .nav-link {
@@ -239,13 +265,15 @@
 @media (max-width: 64rem), (hover: none) and (pointer: coarse) {
   .site-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.65rem;
-    min-height: 0;
+    gap: 0.5rem;
+    min-height: 3.5rem;
+    padding-block: 0.25rem;
   }
 
   .site-nav {
     grid-column: 2;
     flex-wrap: nowrap;
+    gap: 0.25rem;
   }
 
   .primary-nav,
@@ -255,7 +283,7 @@
 
   /* Room at the bottom of every page, so nothing hides behind the bar. */
   :root {
-    --cl-bottom-tabs: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+    --cl-bottom-tabs: calc(4rem + env(safe-area-inset-bottom, 0px));
     scroll-padding-bottom: var(--cl-bottom-tabs);
   }
 
@@ -267,58 +295,73 @@
     display: grid;
     grid-auto-columns: minmax(0, 1fr);
     grid-auto-flow: column;
-    gap: 0.15rem;
     height: var(--cl-bottom-tabs);
-    padding: 0.375rem 0.375rem calc(0.375rem + env(safe-area-inset-bottom, 0px));
-    background: var(--cl-header-bg);
-    border-top: 2px solid var(--cl-card-line);
-    box-shadow: 0 -6px 18px rgb(0 0 0 / 0.18);
+    padding: 0.3rem 0.25rem calc(0.3rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--cl-border);
+    isolation: isolate;
   }
 
+  /* Blurred on its own layer, so the More sheet is not pinned inside the bar. */
+  .bottom-tabs::before {
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    background: var(--cl-header-bg);
+    -webkit-backdrop-filter: saturate(1.6) blur(14px);
+    backdrop-filter: saturate(1.6) blur(14px);
+    content: "";
+  }
+
+  /* Each tab: an icon in a pill that fills when chosen, the name below. */
   .bottom-tab {
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 0.15rem;
     align-items: center;
     justify-content: center;
     height: 100%;
     min-height: 2.75rem;
-    padding: 0 0.15rem;
+    padding: 0;
     color: var(--cl-header-muted);
-    border-radius: 14px;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 800;
     line-height: 1.1;
     text-decoration: none;
     text-align: center;
-    transition:
-      transform 140ms var(--cl-ease-out),
-      background-color 140ms ease;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
 
+  .bottom-tab svg {
+    box-sizing: content-box;
+    padding: 0.2rem 1rem;
+    border-radius: 999px;
+    transition:
+      background-color 160ms ease,
+      transform 160ms var(--cl-ease-out);
+  }
+
   .bottom-tab:focus-visible {
-    color: var(--cl-header-ink);
-    background: var(--cl-header-soft);
+    outline-offset: -2px;
   }
 
   @media (hover: hover) {
     .bottom-tab:hover {
       color: var(--cl-header-ink);
+    }
+    .bottom-tab:hover svg {
       background: var(--cl-header-soft);
     }
   }
 
-  .bottom-tab:active {
-    color: var(--cl-header-ink);
+  .bottom-tab:active svg {
     background: var(--cl-header-soft);
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .bottom-tab:active {
-      transform: scale(0.94);
+    .bottom-tab:active svg {
+      transform: scale(0.92);
     }
   }
 
@@ -328,8 +371,14 @@
   .bottom-tab.pending,
   .site-menu[open] > .bottom-tab,
   .site-menu:has(.pending) > .bottom-tab {
-    color: var(--cl-brand-night);
-    background: var(--cl-brand-fill);
+    color: var(--cl-action-text);
+  }
+
+  .bottom-tab[aria-current="page"] svg,
+  .bottom-tab.pending svg,
+  .site-menu[open] > .bottom-tab svg,
+  .site-menu:has(.pending) > .bottom-tab svg {
+    background: var(--cl-action-soft);
   }
 
   .bottom-tabs:has(.pending:not([aria-current]))
@@ -338,6 +387,15 @@
     .site-menu:not([open])
     > .bottom-tab[aria-current] {
     color: var(--cl-header-muted);
+  }
+
+  .bottom-tabs:has(.pending:not([aria-current]))
+    > .bottom-tab[aria-current]:not(.pending)
+    svg,
+  .bottom-tabs:has(> .pending:not([aria-current]))
+    .site-menu:not([open])
+    > .bottom-tab[aria-current]
+    svg {
     background: transparent;
   }
 
@@ -345,7 +403,7 @@
   .bottom-tab.pending::after,
   .site-menu:has(.pending) > .bottom-tab::after {
     position: absolute;
-    bottom: 0.2rem;
+    bottom: 0.1rem;
     left: 35%;
     width: 30%;
     height: 3px;
@@ -385,27 +443,11 @@
 
 @media (max-width: 34rem) {
   .site-header {
-    padding-inline: 1rem;
-  }
-
-  .site-brand {
-    font-size: 1.2rem;
+    padding-inline: 0.75rem 0.5rem;
   }
 
   .nav-link {
-    padding: 0.45rem 0.5rem;
-    font-size: 0.7rem;
-  }
-
-  .site-nav {
-    gap: 0.4rem;
-    justify-content: flex-end;
-  }
-}
-
-@media (max-width: 20rem) {
-  .nav-link {
-    padding: 0.45rem 0.55rem;
-    font-size: 0.7rem;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.8rem;
   }
 }

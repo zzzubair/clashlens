@@ -1,6 +1,6 @@
 :root {
   /* Brand colours from the wordmark; see brand/README.md. */
-  --cl-brand-night: #1d1426;
+  --cl-brand-night: #1a1206;
   --cl-brand-yellow: #ffd447;
   --cl-brand-orange: #ff8a1f;
   --cl-brand-ember: #b3261e;
@@ -10,46 +10,55 @@
     var(--cl-brand-orange) 100%
   );
   --cl-brand-fill-hover: linear-gradient(180deg, #ffe27a 0%, #ffa040 100%);
-  --cl-ink: #1d1426;
-  --cl-paper: #fff8ec;
-  --cl-panel: #fff0d6;
-  --cl-accent: #b8460c;
-  --cl-accent-contrast: #b8460c;
+  /* Light theme: cool daylight greys under white cards. Dark is in appearance.css. */
+  --cl-ink: #0d1626;
+  --cl-paper: #eef2f7;
+  --cl-surface: #ffffff;
+  --cl-panel: #f3f6fa;
+  --cl-raised: #e8edf4;
+  --cl-muted: #55627a;
+  --cl-border: #e1e7ef;
+  --cl-outline: #c9d3e1;
+  --cl-accent: #a34a07;
+  --cl-accent-contrast: #a34a07;
   --cl-action: #ff8a1f;
   --cl-action-hover: #ffa040;
   --cl-action-shade: #b3261e;
-  --cl-on-action: #1d1426;
-  --cl-header-bg: var(--cl-brand-night);
-  --cl-header-ink: #fff4e2;
-  --cl-header-muted: #cdbfae;
-  --cl-header-soft: #2e2238;
+  --cl-on-action: #1a1206;
+  --cl-action-text: #a34a07;
+  --cl-action-soft: #fff1df;
+  --cl-action-border: #f2c48f;
+  --cl-header-bg: rgb(255 255 255 / 0.88);
+  --cl-header-solid: #ffffff;
+  --cl-header-ink: #0d1626;
+  --cl-header-muted: #55627a;
+  --cl-header-soft: #eef2f7;
   --cl-silver: #cfd5de;
   --cl-bronze: #e0a77c;
   --cl-medal-gold: #f2c641;
-  --cl-action-text: #b8460c;
-  --cl-action-soft: #ffe9c7;
-  --cl-action-border: #e3a35c;
   --cl-orange: #ff8a1f;
-  --cl-gold: #94590a;
-  --cl-muted: #6a5848;
-  --cl-border: #f0dfc4;
-  --cl-outline: #e3c9a3;
-  --cl-surface: #ffffff;
-  --cl-positive: #1f7a33;
-  --cl-negative: #c92a2a;
-  --cl-radius: 10px;
-  /* Every card and button: one outline, one hard drop below, one corner size. */
-  --cl-card-line: var(--cl-brand-night);
-  --cl-card-radius: 14px;
-  --cl-card-drop: 0 4px 0 var(--cl-card-line);
+  --cl-gold: #8a5a00;
+  --cl-sky: #0b6bb5;
+  --cl-sky-soft: #e3f1fc;
+  --cl-positive: #137a3a;
+  --cl-positive-soft: #e3f5ea;
+  --cl-negative: #c62828;
+  --cl-negative-soft: #fde8e8;
+  --cl-radius: 12px;
+  /* Cards: a hairline edge and a soft lift in light; just the edge in dark. */
+  --cl-card-line: var(--cl-border);
+  --cl-card-radius: 16px;
+  --cl-card-drop: 0 1px 2px rgb(13 22 38 / 0.06), 0 1px 1px rgb(13 22 38 / 0.03);
   --cl-font: Nunito, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   --cl-font-heading: "Lilita One", var(--cl-font);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --cl-shadow: var(--cl-card-drop);
+  --cl-overlay-shadow: 0 12px 32px -8px rgb(13 22 38 / 0.28), 0 2px 6px rgb(13 22 38 / 0.08);
   --cl-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   color: var(--cl-ink);
   background: var(--cl-paper);
   font-family: var(--cl-font);
+  font-weight: 500;
   line-height: 1.45;
 }
 

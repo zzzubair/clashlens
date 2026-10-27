@@ -1,44 +1,23 @@
 :root {
   color-scheme: light;
-  --cl-input-border: var(--cl-muted);
-  --cl-glow: radial-gradient(
-    120% 28rem at 50% -6rem,
-    #ffe2b0 0%,
-    #fff3dc 45%,
-    transparent 75%
-  );
-  --cl-button-shadow: 0 3px 0 var(--cl-card-line), inset 0 -3px 0 rgb(179 38 30 / 0.45);
-  --cl-raise: 0 3px 0 var(--cl-card-line);
-  --cl-header-shadow:
-    0 3px 0 var(--cl-brand-orange), 0 10px 24px -12px rgb(29 20 38 / 0.6);
+  --cl-input-border: var(--cl-outline);
+  /* Buttons press like the game's: a darker bottom edge, no outline. */
+  --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.16);
+  --cl-raise: none;
+  --cl-header-shadow: 0 1px 0 var(--cl-border);
   font-synthesis-weight: none;
   -webkit-text-size-adjust: 100%;
 }
 
-/* A sunny wash behind the top of every page; the header floats over it. */
 body {
-  background:
-    var(--cl-glow) no-repeat,
-    var(--cl-paper);
+  background: var(--cl-paper);
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
 }
 
-/* Secondary controls and medals sit slightly above the page. */
-:is(
-  .section-link,
-  .button-secondary,
-  .button.secondary,
-  .theme-toggle,
-  .header-search-toggle
-),
-.leaderboard-row[data-podium-rank] .rank-mark {
-  box-shadow: var(--cl-raise);
-}
-
 /* Headings use Lilita One, which ships one weight. */
-:is(h1, h2, h3, .site-brand) {
+:is(h1, h2, .site-brand) {
   font-weight: 400;
   letter-spacing: 0.01em;
 }
@@ -52,31 +31,37 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --cl-ink: #fff4e2;
-  --cl-paper: #120d17;
-  --cl-panel: #2a2034;
-  --cl-surface: #1d1626;
-  --cl-muted: #bcaa98;
-  --cl-border: #33283f;
-  --cl-outline: #4a3b58;
+  /* Night-sky navy, not black: easier on the eyes and the orange reads warm on it. */
+  --cl-ink: #edf2fa;
+  --cl-paper: #0b1220;
+  --cl-surface: #121b2d;
+  --cl-panel: #18233a;
+  --cl-raised: #22304d;
+  --cl-muted: #9aabc4;
+  --cl-border: #1f2b44;
+  --cl-outline: #2f3f5f;
   --cl-accent: #ffb547;
   --cl-accent-contrast: #ffb547;
-  --cl-header-bg: #0b0810;
-  --cl-header-soft: #241a2e;
+  --cl-header-bg: rgb(11 18 32 / 0.86);
+  --cl-header-solid: #0b1220;
+  --cl-header-ink: #edf2fa;
+  --cl-header-muted: #9aabc4;
+  --cl-header-soft: #18233a;
   --cl-action-text: #ffb547;
-  --cl-action-soft: #3a2a1c;
-  --cl-action-border: #7a4a1c;
-  --cl-glow: radial-gradient(
-    120% 26rem at 50% -6rem,
-    rgb(255 138 31 / 0.22) 0%,
-    transparent 70%
-  );
-  --cl-gold: #f2c641;
-  --cl-positive: #69db7c;
-  --cl-negative: #ff8787;
-  --cl-card-line: #000000;
-  --cl-header-shadow: 0 3px 0 var(--cl-brand-orange), 0 10px 24px -12px #000000;
-  --cl-button-shadow: 0 3px 0 var(--cl-card-line), inset 0 -3px 0 rgb(179 38 30 / 0.5);
+  --cl-action-soft: #2b2a2f;
+  --cl-action-border: #6b4a22;
+  --cl-gold: #f6c445;
+  --cl-sky: #6cc4ff;
+  --cl-sky-soft: #15304d;
+  --cl-positive: #4cd98b;
+  --cl-positive-soft: #123326;
+  --cl-negative: #ff7b7b;
+  --cl-negative-soft: #3a1c26;
+  --cl-card-line: var(--cl-border);
+  --cl-card-drop: none;
+  --cl-overlay-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--cl-outline);
+  --cl-header-shadow: 0 1px 0 var(--cl-border);
+  --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.22);
 }
 
 :is(.theme-toggle, .header-search-toggle) {
@@ -89,8 +74,8 @@ body {
   padding: 0;
   color: var(--cl-header-ink);
   background: transparent;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
+  border: 0;
+  border-radius: 999px;
   cursor: pointer;
 }
 :is(.theme-toggle, .header-search-toggle):active {
@@ -113,7 +98,12 @@ summary {
 .site-brand-logo {
   display: block;
   width: auto;
-  height: 3rem;
+  height: 2.6rem;
+}
+@media (max-width: 64rem), (hover: none) and (pointer: coarse) {
+  .site-brand-logo {
+    height: 2.35rem;
+  }
 }
 .search-result {
   position: relative;
@@ -149,7 +139,7 @@ summary {
     gap: 0.25rem;
   }
   .site-brand-logo {
-    height: 2.75rem;
+    height: 2.2rem;
   }
   .site-nav {
     gap: 0.25rem;
