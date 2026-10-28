@@ -363,7 +363,8 @@ function AccountTabs({
                       className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}
                     >
                       {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
-                    </b>
+                    </b>{" "}
+                    today
                   </>
                 ) : null}
               </span>

@@ -173,20 +173,22 @@ export function LegendDayCard({
           </div>
         ) : null}
       </div>
-      <BattleRow
-        battles={attacks}
-        count={attackCount}
-        total={complete ? sum(attacks) : null}
-        noun="attack"
-        kind="attack"
-      />
-      <BattleRow
-        battles={defenses}
-        count={defenseCount}
-        total={complete ? sum(defenses) : null}
-        noun="defense"
-        kind="defense"
-      />
+      <div className="legend-day-slots">
+        <BattleRow
+          battles={attacks}
+          count={attackCount}
+          total={complete ? sum(attacks) : null}
+          noun="attack"
+          kind="attack"
+        />
+        <BattleRow
+          battles={defenses}
+          count={defenseCount}
+          total={complete ? sum(defenses) : null}
+          noun="defense"
+          kind="defense"
+        />
+      </div>
       {openDefenses !== null && openDefenses > 0 ? (
         <p className="dash-chip">
           {openDefenses} defense{openDefenses === 1 ? "" : "s"} remain

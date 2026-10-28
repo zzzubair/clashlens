@@ -144,10 +144,19 @@
   cursor: pointer;
 }
 
+/* The chosen option lifts out of the track, as on every other switch. */
 .dash-switch button[aria-pressed="true"] {
   color: var(--cl-ink);
   background: var(--cl-surface);
-  box-shadow: inset 0 0 0 1px var(--cl-outline);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 0 0 1px var(--cl-card-line);
+}
+:root[data-theme="dark"] .dash-switch button[aria-pressed="true"] {
+  background: var(--cl-raised);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.5);
 }
 
 /* ---------- Account tabs and the Customise divider ---------- */

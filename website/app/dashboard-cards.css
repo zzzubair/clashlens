@@ -139,6 +139,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The time to Reset already shows on a Legend clock card right beside it. */
+.dash-card:has(> .legend-day-card):has(+ [data-card="legend-clock"])
+  .legend-day-countdown,
+[data-card="legend-clock"] + .dash-card .legend-day-countdown {
+  display: none;
+}
+
+.legend-day-slots {
+  display: grid;
+  gap: 0.75rem;
+}
+
 /* Each battle row: its icon, how many of 8 and the total, over its 8 slots. */
 .legend-day-battles {
   display: grid;
@@ -171,7 +183,7 @@
 @container (min-width: 36rem) {
   .legend-day-card {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas: "head head" "numbers attacks" "ranks defenses" "chip chip";
+    grid-template-areas: "head head" "numbers slots" "ranks slots" "chip slots";
     column-gap: 2rem;
   }
 
@@ -187,12 +199,8 @@
     grid-area: ranks;
   }
 
-  .legend-day-attacks {
-    grid-area: attacks;
-  }
-
-  .legend-day-defenses {
-    grid-area: defenses;
+  .legend-day-slots {
+    grid-area: slots;
   }
 
   .legend-day-card > .dash-chip {
@@ -200,18 +208,19 @@
     justify-self: start;
   }
 
-  /* Beside a taller card, the slots grow to fill the height instead of
-     leaving it empty, and the note sits at the bottom. */
+  /* The numbers stack on the left; beside a taller card the slots grow to
+     fill the height instead of leaving it empty. */
   .dash-card > .legend-day-card {
     flex-grow: 1;
-    grid-template-rows: auto 1fr 1fr auto;
+    grid-template-rows: auto auto auto 1fr;
   }
 
-  /* Each side lines up with its row of slots: trophies with attacks, ranks
-     with defenses. */
-  .legend-day-numbers,
-  .legend-day-ranks {
+  .legend-day-card > .dash-chip {
     align-self: start;
+  }
+
+  .legend-day-slots {
+    grid-template-rows: 1fr 1fr;
   }
 
   .legend-day-battles {
@@ -1233,30 +1242,23 @@
 }
 
 /* A narrow Rivals card gives each player two lines: rank, the whole name and
-   trophies, then hit rate, offense and defense, each after its label. */
+   trophies, then hit rate, offense and defense. The headings take the same
+   two lines once, at the top. */
 @container (max-width: 34rem) {
   .rival-table,
-  .rival-table tbody {
+  .rival-table :is(thead, tbody) {
     display: block;
-  }
-
-  .rival-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
   }
 
   .rival-table tr {
     display: grid;
-    grid-template-columns: 3.5rem repeat(3, minmax(0, 1fr));
+    grid-template-columns: 4rem repeat(3, minmax(0, 1fr));
     align-items: start;
     gap: 0.15rem 0.5rem;
     padding: 0.4rem 0.45rem;
   }
 
-  .rival-table td:nth-child(n) {
+  .rival-table :is(th, td):nth-child(n) {
     width: auto;
     padding: 0;
     overflow: visible;
@@ -1264,11 +1266,11 @@
     white-space: normal;
   }
 
-  .rival-table td:first-child {
+  .rival-table :is(th, td):first-child {
     grid-row: span 2;
   }
 
-  .rival-table td:nth-child(2) {
+  .rival-table :is(th, td):nth-child(2) {
     grid-column: span 2;
   }
 
@@ -1277,7 +1279,7 @@
     overflow-wrap: anywhere;
   }
 
-  .rival-table td:is(:nth-child(3), :nth-child(6)) {
+  .rival-table :is(th, td):is(:nth-child(3), :nth-child(6)) {
     text-align: right;
   }
 
@@ -1285,15 +1287,15 @@
     font-size: 0.8rem;
   }
 
-  .rival-table td:nth-child(n + 4)::before {
-    color: var(--cl-muted);
-    font-size: 0.68rem;
-    font-weight: 500;
-    content: attr(data-label) " " / "";
-  }
-
   .rival-table .rival-moved {
     display: block;
     margin-left: 0;
   }
+}
+
+/* Ranks on the site's rank plate, sized for a table row. */
+.rival-table .rank-mark {
+  height: 1.35rem;
+  padding: 0 0.45rem 0 0.5rem;
+  font-size: 0.9rem;
 }

@@ -459,7 +459,8 @@
 
 /* Tabs and filter chips: one row that scrolls sideways on a phone instead of
    wrapping. Links or buttons; the current one has aria-current or
-   aria-pressed/aria-selected, and turns solid. */
+   aria-pressed/aria-selected, and takes the ember tint of the current bottom
+   tab. */
 :root .tab-row {
   display: flex;
   gap: 0.375rem;
@@ -504,9 +505,9 @@
     [aria-pressed="true"],
     [aria-selected="true"]
   ) {
-  color: var(--cl-paper);
-  background: var(--cl-ink);
-  border-color: var(--cl-ink);
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
 }
 
 /* Stat tiles: a small label over a big scoreboard number, split by hairlines

@@ -284,13 +284,13 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
         {rows.map((row) => (
           <tr key={row.tag} className={row.you ? "rival-you" : undefined}>
             <td>
-              <b>#{count(row.rank)}</b>
+              <b className="rank-mark">#{count(row.rank)}</b>
               {row.moved ? (
                 <span
                   className={`rival-moved ${row.moved > 0 ? "positive" : "negative"}`}
                 >
                   {row.moved > 0 ? "▲" : "▼"}
-                  {Math.abs(row.moved)}
+                  {count(Math.abs(row.moved))}
                 </span>
               ) : null}
             </td>
@@ -298,18 +298,9 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
               <Name>{row.name}</Name>
             </td>
             <td>{count(row.trophies)}</td>
-            {/* A narrow card shows these on a second line, each after its label. */}
-            <td data-label="Hit rate">{percent(row.hitRate)}</td>
-            <td
-              data-label={live ? "Offense" : "Offense a day"}
-              className={tone(row.offense)}
-            >
-              {signedOr(row.offense)}
-            </td>
-            <td
-              data-label={live ? "Defense" : "Defense a day"}
-              className={tone(row.defense === null ? null : -Math.abs(row.defense))}
-            >
+            <td>{percent(row.hitRate)}</td>
+            <td className={tone(row.offense)}>{signedOr(row.offense)}</td>
+            <td className={tone(row.defense === null ? null : -Math.abs(row.defense))}>
               {signedOr(row.defense)}
             </td>
           </tr>
