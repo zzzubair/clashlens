@@ -298,9 +298,18 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
               <Name>{row.name}</Name>
             </td>
             <td>{count(row.trophies)}</td>
-            <td>{percent(row.hitRate)}</td>
-            <td className={tone(row.offense)}>{signedOr(row.offense)}</td>
-            <td className={tone(row.defense === null ? null : -Math.abs(row.defense))}>
+            {/* A narrow card shows these on a second line, each after its label. */}
+            <td data-label="Hit rate">{percent(row.hitRate)}</td>
+            <td
+              data-label={live ? "Offense" : "Offense a day"}
+              className={tone(row.offense)}
+            >
+              {signedOr(row.offense)}
+            </td>
+            <td
+              data-label={live ? "Defense" : "Defense a day"}
+              className={tone(row.defense === null ? null : -Math.abs(row.defense))}
+            >
               {signedOr(row.defense)}
             </td>
           </tr>

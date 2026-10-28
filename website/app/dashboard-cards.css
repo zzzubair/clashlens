@@ -1231,3 +1231,69 @@
     font-size: 0.68rem;
   }
 }
+
+/* A narrow Rivals card gives each player two lines: rank, the whole name and
+   trophies, then hit rate, offense and defense, each after its label. */
+@container (max-width: 34rem) {
+  .rival-table,
+  .rival-table tbody {
+    display: block;
+  }
+
+  .rival-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .rival-table tr {
+    display: grid;
+    grid-template-columns: 3.5rem repeat(3, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.15rem 0.5rem;
+    padding: 0.4rem 0.45rem;
+  }
+
+  .rival-table td:nth-child(n) {
+    width: auto;
+    padding: 0;
+    overflow: visible;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .rival-table td:first-child {
+    grid-row: span 2;
+  }
+
+  .rival-table td:nth-child(2) {
+    grid-column: span 2;
+  }
+
+  .rival-table td:nth-child(2) .dash-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .rival-table td:is(:nth-child(3), :nth-child(6)) {
+    text-align: right;
+  }
+
+  .rival-table td:nth-child(n + 4) {
+    font-size: 0.8rem;
+  }
+
+  .rival-table td:nth-child(n + 4)::before {
+    color: var(--cl-muted);
+    font-size: 0.68rem;
+    font-weight: 500;
+    content: attr(data-label) " " / "";
+  }
+
+  .rival-table .rival-moved {
+    display: block;
+    margin-left: 0;
+  }
+}
