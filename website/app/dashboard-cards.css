@@ -1208,8 +1208,12 @@
     order: 2;
   }
 
+  /* Beside up to 8 squares the hit can wrap; its time stays whole. */
   .opponents-hit {
     grid-area: hit;
+  }
+
+  .opponents-hit > .dash-muted {
     white-space: nowrap;
   }
 
