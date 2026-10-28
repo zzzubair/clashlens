@@ -30,6 +30,50 @@ export interface BaseRecord {
   trophiesLost: number;
 }
 
+/** The base page's windows: the 3 newest counted Legend days, the page's
+ * Season, and every day since the base was made. */
+export type BaseWindow = "last3" | "season" | "all";
+export const WINDOWS: Array<[BaseWindow, string]> = [
+  ["last3", "Last 3 days"],
+  ["season", "This Season"],
+  ["all", "All"],
+];
+
+/** One army type's defenses on a base: how many it 3-starred, trophies lost. */
+export interface ArmyRow {
+  name: string;
+  defenses: number;
+  threeStar: number;
+  trophiesLost: number;
+}
+
+/** A base's numbers in one window, from everyone who ran it. `armies` is
+ * null while armies are being sorted again; `bands` split the record by the
+ * defender's Reset trophies: under 5,400, 5,400–5,799, 5,800+. */
+export interface WindowNumbers {
+  record: BaseRecord;
+  ranBy: number;
+  armies: ArmyRow[] | null;
+  bands: BaseRecord[];
+}
+
+/** One account's Legend day on a base, in Who ran it. Counts are null for a
+ * day with no data; `live` is today, so far. `owner` is the Clash Lens
+ * account's name on a Crew's page. */
+export interface WhoRow {
+  tag: string;
+  name: string | null;
+  owner: string | null;
+  day: number;
+  date: string;
+  live: boolean;
+  windows: BaseWindow[];
+  start: number | null;
+  defenses: number | null;
+  held: number | null;
+  trophiesLost: number | null;
+}
+
 /** A stretch of Legend days one account ran one base. */
 export interface NotebookRun {
   from: number;
@@ -129,6 +173,13 @@ export interface Notebook {
      * Reset; null when nobody runs it today. */
     today: { defenses: number; held: number } | null;
     copy: CopyAccount[];
+    /** Its numbers in each window; null from an older API. */
+    windows: Record<BaseWindow, WindowNumbers> | null;
+    /** The newest rows of Who ran it, of `total`. */
+    who: { rows: WhoRow[]; total: number };
+    /** Clashers keeping it in their own notebook, for a Crew's Uploaders,
+     * admins and owner; null otherwise. */
+    copies: number | null;
   };
 }
 
@@ -362,7 +413,17 @@ export function parseNotebook(value: unknown): Notebook | null {
         ? { tag: item.tag, name: item.name, today: item.today, tomorrow: item.tomorrow }
         : null,
     );
-    if (records.includes(null) || copy.includes(null)) return null;
+    const windows = parseWindows(base.windows);
+    const who = parseWho(base.who);
+    const copies = base.copies ?? null;
+    if (
+      records.includes(null) ||
+      copy.includes(null) ||
+      windows === undefined ||
+      who === null ||
+      (copies !== null && !isCount(copies))
+    )
+      return null;
     notebook.base = {
       id: base.id,
       note: base.note,
@@ -371,9 +432,98 @@ export function parseNotebook(value: unknown): Notebook | null {
       shelves: base.shelves as string[],
       today: today as { defenses: number; held: number } | null,
       copy: copy as CopyAccount[],
+      windows,
+      who,
+      copies: copies as number | null,
     };
   }
   return notebook;
+}
+
+const isNumber = (value: unknown): value is number | null =>
+  value === null || Number.isInteger(value);
+const isWindow = (value: unknown): value is BaseWindow =>
+  WINDOWS.some(([window]) => window === value);
+
+/** Each window's numbers; null when the API sent none, undefined when they
+ * don't fit the contract. */
+function parseWindows(
+  value: unknown,
+): Record<BaseWindow, WindowNumbers> | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) return undefined;
+  const result: Partial<Record<BaseWindow, WindowNumbers>> = {};
+  for (const [window] of WINDOWS) {
+    const item = value[window];
+    if (!isRecord(item) || !isCount(item.ran_by) || !Array.isArray(item.bands))
+      return undefined;
+    const record = parseRecord(item.record);
+    const bands = item.bands.map(parseRecord);
+    const armies =
+      item.armies === null
+        ? null
+        : Array.isArray(item.armies)
+          ? item.armies.map((row: unknown) =>
+              isRecord(row) &&
+              typeof row.name === "string" &&
+              isCount(row.defenses) &&
+              isCount(row.three_star) &&
+              isCount(row.trophies_lost)
+                ? {
+                    name: row.name,
+                    defenses: row.defenses,
+                    threeStar: row.three_star,
+                    trophiesLost: row.trophies_lost,
+                  }
+                : null,
+            )
+          : undefined;
+    if (!record || bands.length !== 3 || bands.includes(null) || armies === undefined)
+      return undefined;
+    if (armies?.includes(null)) return undefined;
+    result[window] = {
+      record,
+      ranBy: item.ran_by,
+      armies: armies as ArmyRow[] | null,
+      bands: bands as BaseRecord[],
+    };
+  }
+  return result as Record<BaseWindow, WindowNumbers>;
+}
+
+/** Who ran it; empty when the API sent none, null when it doesn't fit. */
+function parseWho(value: unknown): { rows: WhoRow[]; total: number } | null {
+  if (value === undefined || value === null) return { rows: [], total: 0 };
+  if (!isRecord(value) || !Array.isArray(value.rows) || !isCount(value.total))
+    return null;
+  const rows = value.rows.map((row: unknown) =>
+    isRecord(row) &&
+    typeof row.tag === "string" &&
+    isText(row.name) &&
+    isText(row.owner) &&
+    isCount(row.day) &&
+    typeof row.date === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(row.date) &&
+    typeof row.live === "boolean" &&
+    Array.isArray(row.windows) &&
+    row.windows.every(isWindow) &&
+    [row.start, row.defenses, row.held, row.trophies_lost].every(isNumber)
+      ? {
+          tag: row.tag,
+          name: row.name,
+          owner: row.owner,
+          day: row.day,
+          date: row.date,
+          live: row.live,
+          windows: row.windows as BaseWindow[],
+          start: row.start as number | null,
+          defenses: row.defenses as number | null,
+          held: row.held as number | null,
+          trophiesLost: row.trophies_lost as number | null,
+        }
+      : null,
+  );
+  return rows.includes(null) ? null : { rows: rows as WhoRow[], total: value.total };
 }
 
 /** What a saved change did, or null when it does not fit the contract. */

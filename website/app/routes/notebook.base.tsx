@@ -11,6 +11,7 @@ import {
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { CopySheet } from "../components/NotebookChecks";
+import { BaseNumbers } from "../components/NotebookStats";
 import {
   BaseTile,
   recordLine,
@@ -32,7 +33,6 @@ import {
   heldText,
   noDataText,
   playerName,
-  type BaseRecord,
   type Notebook,
   type NotebookBase,
 } from "../lib/notebook";
@@ -229,17 +229,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           </button>
         ) : null}
       </div>
-      <p className="nb-hint">
-        {crew
-          ? "This Season, from everyone who ran it."
-          : "This Season, from everyone who ran it. The rows below are your accounts."}
-      </p>
-      {/* Every number on the page itself, one section each; the best and
-       * worst armies go in a section after Stars. */}
-      <section className="nb-base-part" aria-labelledby="nb-stars-title">
-        <h2 id="nb-stars-title">Stars</h2>
-        <Stars record={base.record} />
-      </section>
+      <BaseNumbers notebook={notebook} base={base} />
       <section className="nb-base-part" aria-labelledby="nb-each-title" hidden={!!crew}>
         <h2 id="nb-each-title">Your accounts</h2>
         {detail?.players.length ? (
@@ -386,19 +376,6 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         />
       ) : null}
     </>
-  );
-}
-
-function Stars({ record }: { record: BaseRecord }) {
-  return (
-    <dl className="nb-stars">
-      {[3, 2, 1, 0].map((stars) => (
-        <div key={stars}>
-          <dt>{stars}★</dt>
-          <dd>{record.stars[stars]}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 

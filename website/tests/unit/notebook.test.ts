@@ -37,6 +37,7 @@ import {
   type Saver,
 } from "../../app/components/NotebookParts";
 import { ChangedSheet, CopySheet, StillOn } from "../../app/components/NotebookChecks";
+import { BaseNumbers, WhoRanIt } from "../../app/components/NotebookStats";
 import {
   baseInitials,
   baseOnDay,
@@ -595,5 +596,134 @@ describe("copying a base and a forgotten one", () => {
       Number(match[1]),
     );
     expect(listed).toEqual(Array.from({ length: 14 }, (_, index) => 16 - index));
+  });
+});
+
+describe("a base page's numbers and Who ran it", () => {
+  const api = apiNotebook();
+  const numbers = (record: typeof RECORD, armies: unknown) => ({
+    record,
+    ran_by: 3,
+    armies,
+    bands: [
+      RECORD,
+      { ...RECORD, days: 0, defenses: 0, held: 0, stars: [0, 0, 0, 0], trophies_lost: 0 },
+      RECORD,
+    ],
+  });
+  const row = {
+    tag: "#P2P",
+    name: "Alt",
+    owner: "Sam",
+    day: 16,
+    date: "2026-10-20",
+    live: true,
+    windows: ["all", "season", "last3"],
+    start: 5488,
+    defenses: 3,
+    held: 2,
+    trophies_lost: 72,
+  };
+  const detail = {
+    id: "B-7K3QX9",
+    note: "",
+    link: null,
+    players: [],
+    shelves: [],
+    today: null,
+    copy: [],
+    windows: {
+      last3: numbers(RECORD, null),
+      season: numbers(RECORD, [
+        { name: "Hydra", defenses: 6, three_star: 3, trophies_lost: 120 },
+      ]),
+      all: numbers(RECORD, []),
+    },
+    who: {
+      rows: [
+        row,
+        {
+          ...row,
+          day: 2,
+          date: "2026-10-06",
+          live: false,
+          windows: ["all", "season"],
+          start: null,
+          defenses: null,
+          held: null,
+          trophies_lost: null,
+        },
+      ],
+      total: 2,
+    },
+    copies: 38,
+  };
+  const page = parseNotebook({ ...api, base: detail })!;
+  const shown = async (element: ReturnType<typeof createElement>) =>
+    (await render(element)).replaceAll("<!-- -->", "");
+
+  it("reads each window, Who ran it and copies, and refuses a bad row", () => {
+    expect(page.base?.windows?.season.armies).toEqual([
+      { name: "Hydra", defenses: 6, threeStar: 3, trophiesLost: 120 },
+    ]);
+    expect(page.base?.windows?.last3.armies).toBeNull();
+    expect(page.base?.who.rows.map((item) => item.day)).toEqual([16, 2]);
+    expect(page.base?.copies).toBe(38);
+    const bad = { ...detail, who: { rows: [{ ...row, windows: ["week"] }], total: 1 } };
+    expect(parseNotebook({ ...api, base: bad })).toBeNull();
+    // An older API without the numbers still opens the page.
+    const older = { ...detail, windows: undefined, who: undefined, copies: undefined };
+    expect(parseNotebook({ ...api, base: older })?.base?.who).toEqual({
+      rows: [],
+      total: 0,
+    });
+  });
+
+  it("shows This Season's stars, holds, armies and starting trophies", async () => {
+    const html = await shown(
+      createElement(BaseNumbers, { notebook: page, base: page.bases[0]! }),
+    );
+    expect(html).toContain("38 copied · 3 ran it");
+    expect(html).toContain("This Season, from everyone who ran it · 3 accounts.");
+    expect(html).toContain("Held 70% (7 of 10) · 18.0 trophies lost a defense");
+    expect(html).toContain("<b>Hydra</b><span>3 of 6 · −20 a defense</span>");
+    expect(html).toContain("<b>5,400–5,799</b><span>no counted days yet</span>");
+    expect(html).toContain("Who ran it (2) ›");
+  });
+
+  it("lists who ran it newest first, each row opening that day on the player's page", async () => {
+    const html = await shown(
+      createElement(WhoRanIt, {
+        name: "Ring",
+        label: "This Season",
+        rows: page.base!.who.rows,
+        capped: false,
+        crew: true,
+        onClose: () => {},
+      }),
+    );
+    expect(html).toContain('href="/players/%23P2P?day=2026-10-20"');
+    expect(html).toContain("Sam · Alt · Day 16 · live");
+    expect(html).toContain("Started 5,488 · 3 defenses · −72 so far · held 2");
+    expect(html).toContain("Sam · Alt · Day 2</b><small>no data</small>");
+    const empty = {
+      ...page.base!.who.rows[0]!,
+      start: null,
+      defenses: 0,
+      held: 0,
+      trophiesLost: 0,
+    };
+    const quiet = await shown(
+      createElement(WhoRanIt, {
+        name: "Ring",
+        label: "All",
+        rows: [empty],
+        capped: true,
+        crew: false,
+        onClose: () => {},
+      }),
+    );
+    expect(quiet).toContain("<small>no defenses yet</small>");
+    expect(quiet).toContain("Only the newest days are shown.");
   });
 });
