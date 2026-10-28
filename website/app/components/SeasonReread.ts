@@ -120,13 +120,17 @@ export function useSeasonReread(
     const visible = () => {
       if (!document.hidden) check();
     };
+    // The first load already read; only a page restored by Back or Forward needs a check.
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) visible();
+    };
     document.addEventListener("visibilitychange", visible);
-    window.addEventListener("pageshow", visible);
+    window.addEventListener("pageshow", restored);
     return () => {
       clearTimeout(boundary);
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visible);
-      window.removeEventListener("pageshow", visible);
+      window.removeEventListener("pageshow", restored);
     };
   }, [enabled, sourceTime, recoveryWaiting, revalidate]);
 

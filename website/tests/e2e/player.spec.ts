@@ -1193,6 +1193,9 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   page.on("request", (request) => {
     if (request.url().includes("/players/%23LQQC.data")) reloads.push(request);
   });
+  // Hold the load event, as a slow image on a phone does, until the page has started.
+  await page.route("**/held.png", (route) => void setTimeout(() => route.abort(), 2_000));
+  await page.addInitScript(() => void (new Image().src = "/held.png"));
   await page.clock.install();
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline);
