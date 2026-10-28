@@ -111,6 +111,14 @@ it("skips hidden reads, expires trophies, and rereads once on returning to the t
   expect(mocks.revalidate).toHaveBeenCalledTimes(1);
 });
 
+it("rereads a page restored by Back, not one the browser shows on its first load", () => {
+  start(AFTER, true);
+  window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+  expect(mocks.revalidate).not.toHaveBeenCalled();
+  window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+  expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+});
+
 it("does not overlap slow saved-data reads", async () => {
   let finish!: () => void;
   mocks.revalidate.mockReturnValue(

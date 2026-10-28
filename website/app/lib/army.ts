@@ -1,7 +1,8 @@
 /**
  * A battle's army, read from its Copy army code: "h" heroes, "u" troops and
- * "s" spells, then "i" Clan Castle troops and "d" Clan Castle spells, in the
- * order the player trained them. The format is python/src/clashlens/army_decoder.py's;
+ * "s" spells, then "i" Clan Castle troops and "d" Clan Castle spells. Each group
+ * lists its units by game unit id, not in the order the code has them, so the
+ * same army always looks the same. The format is python/src/clashlens/army_decoder.py's;
  * this reader shows no army rather than guess at a code that decoder rejects.
  */
 
@@ -32,6 +33,8 @@ const SECTION = /([husid])([^husid]*)/g;
 const ENTRY = /^(\d{1,7})x(\d{1,7})$/;
 const HERO = /^(\d{1,7})(?:m\d{1,7})?(?:p(\d{1,7}))?(?:e(\d{1,7})(?:_(\d{1,7}))?)?$/;
 
+const byId = (a: string, b: string) => Number(a.split(":")[1]) - Number(b.split(":")[1]);
+
 function units(content: string, kind: "troop" | "spell"): ArmyUnit[] | null {
   const result: ArmyUnit[] = [];
   for (const entry of content.split("-")) {
@@ -41,7 +44,7 @@ function units(content: string, kind: "troop" | "spell"): ArmyUnit[] | null {
     if (count < 1 || count > 1000) return null;
     result.push({ id: `${kind}:${Number(match[2])}`, count });
   }
-  return result;
+  return result.sort((a, b) => byId(a.id, b.id));
 }
 
 export function readArmy(code: string, names: ArmyUnitNames): Army | null {
@@ -64,9 +67,11 @@ export function readArmy(code: string, names: ArmyUnitNames): Army | null {
       pet: match[2] === undefined ? null : `pet:${Number(match[2])}`,
       equipment: [match[3], match[4]]
         .filter((part) => part !== undefined)
-        .map((part) => `equipment:${Number(part)}`),
+        .map((part) => `equipment:${Number(part)}`)
+        .sort(byId),
     });
   }
+  heroes.sort((a, b) => byId(a.id, b.id));
   const read = (letter: string, kind: "troop" | "spell") =>
     sections.has(letter) ? units(sections.get(letter) as string, kind) : [];
   const home = read("u", "troop");

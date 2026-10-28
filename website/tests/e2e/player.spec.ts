@@ -472,8 +472,13 @@ async function expectUsableLayout(page: Page) {
 }
 
 // Opens #2PP from search with worst-case saved data and one past Season.
-// `servesSeason` returning false leaves that read of the past Season unanswered.
-async function openWorstCasePlayer(page: Page, servesSeason = () => true) {
+// `servesSeason` returning false leaves that read of the past Season unanswered;
+// `edit` changes the player data first.
+async function openWorstCasePlayer(
+  page: Page,
+  servesSeason = () => true,
+  edit: (player: PlayerPage) => void = () => {},
+) {
   // Day 6 of a Season, so every worst-case day belongs to the current Season.
   const now = Date.parse("2026-10-10T12:00:00Z");
   await page.clock.install({ time: now });
@@ -482,7 +487,9 @@ async function openWorstCasePlayer(page: Page, servesSeason = () => true) {
   const dataType = saved.headers()["content-type"];
   const decoded = decodePageData(await saved.text());
   const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
-  Object.assign(data, { player: worstCasePlayer("#2PP", now), seasons: WORST_SEASONS });
+  const player = worstCasePlayer("#2PP", now);
+  edit(player);
+  Object.assign(data, { player, seasons: WORST_SEASONS });
   const current = encodePageData(decoded);
   Object.assign(data, {
     selectedSeason: WORST_SEASON_SUMMARY.seasonId,
@@ -613,6 +620,57 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await expect(page.locator(".battle-link").first()).toHaveAttribute("href", href);
   // Both moves stayed in the open page: no page was downloaded again.
   expect(documents).toEqual([]);
+});
+
+test("one army looks the same in every battle at iPhone width", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+  });
+  try {
+    const page = await context.newPage();
+    await refuseRefreshes(page);
+    // One Clasher's attacks 3 minutes apart on 26 Oct 2026: the same army, saved
+    // with its troops and spells in different orders.
+    const codes = [
+      "h1p9e17_48-2m1p16e4_34-6p17e49_43-7p4e53_52i1x63-1x76d1x70-1x98" +
+        "u3x1-1x76-8x8-1x188-5x65-3x57s1x9-1x2-3x10-3x120-2x5",
+      "h1p9e17_48-2m1p16e4_34-6p17e49_43-7p4e53_52i1x63-1x76d1x70-1x98" +
+        "u3x1-3x57-1x76-8x8-1x188-5x65s3x10-1x9-3x120-1x2-2x5",
+    ];
+    await openWorstCasePlayer(page, undefined, (player) => {
+      for (const day of [player.currentDay!, ...player.recentDays])
+        day.offenseEvents
+          .filter((event) => event.armyShareCode)
+          .forEach((event, index) => (event.armyShareCode = codes[index % 2]));
+    });
+    const log = page.getByRole("region", { name: "Daily Legend log" });
+    const day = log.locator("details.legend-day").first();
+    await expect(day.locator(".legend-day-live")).toBeVisible();
+    await day.locator("summary").tap();
+    const attacks = day.getByRole("region", { name: "Attacks" });
+    const show = attacks.getByRole("button", { name: "Show army" });
+    await expect(show).toHaveCount(3);
+    while (await show.count()) await show.first().tap();
+    const armies = attacks.locator(".army-portraits");
+    await expect(armies).toHaveCount(3);
+    const rows = await armies.evaluateAll((all) =>
+      all.map((army) =>
+        [...army.querySelectorAll(".army-unit")].map((unit) =>
+          unit.getAttribute("title"),
+        ),
+      ),
+    );
+    expect(rows[0]).toHaveLength(31);
+    expect(rows[1]).toEqual(rows[0]);
+    expect(rows[2]).toEqual(rows[0]);
+    // Copy army still copies each battle's army exactly as it was saved.
+    const links = attacks.getByRole("link", { name: /^Copy army/ });
+    for (const [index, code] of [codes[0], codes[1], codes[0]].entries())
+      await expect(links.nth(index)).toHaveAttribute("href", new RegExp(`army=${code}$`));
+  } finally {
+    await context.close();
+  }
 });
 
 // React leaves a folded day's battles as the server sent them while the page
@@ -1135,6 +1193,9 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   page.on("request", (request) => {
     if (request.url().includes("/players/%23LQQC.data")) reloads.push(request);
   });
+  // Hold the load event, as a slow image on a phone does, until the page has started.
+  await page.route("**/held.png", (route) => void setTimeout(() => route.abort(), 2_000));
+  await page.addInitScript(() => void (new Image().src = "/held.png"));
   await page.clock.install();
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline);
