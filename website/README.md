@@ -106,10 +106,12 @@ each side's total; wider screens show both side by side.
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
 trophies. The current Season's box leads with the Clash Lens rank at the
-latest Reset this Season, shown as Not ranked yet when that Reset's board has
-no rank for the player, and trophies at the latest Reset, the end of day of
-the day that Reset ended, with that day's dot. Before the Season's first
-finished day, trophies read No finished day yet. Below that: hit rate, the
+latest Reset this Season and trophies at that Reset, the end of day of the
+day it ended, with that day's dot. Until that Reset's board ranks the player,
+as between the Reset and the board deadline, both come from the Reset before
+it; when that Reset has no rank either, or was last Season's, the rank reads
+Not ranked yet. Before the Season's first finished day, trophies read No
+finished day yet. Below that: hit rate, the
 percentage of all attacks that got three stars; attacks and defenses by 3, 2,
 1 and 0 stars; and trophies per day on offense and defense, per attack and per
 defense. A note names stars of unknown battles only when there are some.

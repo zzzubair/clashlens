@@ -310,18 +310,41 @@ describe("recorded battle period statistics", () => {
     expect(first).toContain("No finished day yet");
   });
 
-  it("shows a missing latest Reset rank instead of an older one", () => {
+  it("shows the Reset before's rank and trophies until the latest board ranks the player", () => {
+    // 05:10, before the board for today's Reset publishes at 05:30.
     const html = render(
       player([
         day(0),
-        { ...day(1), resetRank: null },
+        { ...day(1), resetRank: null, startTrophies: 5100 },
         { ...day(2), resetRank: 1042, startTrophies: 5000 },
       ]),
+      TODAY + 10 * 60_000,
     );
-    expect(html).toContain(
+    expect(html).toContain("<dt>Reset rank</dt><dd>1,042</dd>");
+    // Day 2's end, the start of the day after it, not yesterday's 4,101.
+    expect(html).toMatch(/<dt>Reset trophies<\/dt><dd>5,100<span/);
+    expect(html).not.toContain("4,101");
+  });
+
+  it("says Not ranked yet when the day before has no rank or is last Season's", () => {
+    const unranked = render(
+      player([day(0), { ...day(1), resetRank: null }, { ...day(2), resetRank: null }]),
+    );
+    expect(unranked).toContain(
       '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
     );
-    expect(html).not.toContain("1,042");
+    // Season Day 2: the day before Day 1 is last Season's.
+    const dayTwo = render(
+      player([
+        { ...day(27), resetRank: null },
+        { ...day(28), resetRank: 1042 },
+      ]),
+      Date.parse("2026-09-08T05:10:00Z"),
+    );
+    expect(dayTwo).toContain(
+      '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
+    );
+    expect(dayTwo).not.toContain("1,042");
   });
 
   it("takes trophies at last Reset from today's start, Uncertain when battles disagree", () => {
