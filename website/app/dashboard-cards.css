@@ -331,8 +331,14 @@
   /* The viewBox leaves room for hour labels; the margin takes it back. */
   .legend-clock:not([data-full]) .legend-clock-face {
     grid-row: span 2;
-    width: 9rem;
-    margin: -1.25rem;
+    width: 8rem;
+    margin: -1.1rem;
+  }
+
+  /* The small clock's summary names the Reset in local time; the zone line
+     comes back with the full dial. */
+  .legend-clock:not([data-full]) + .dash-card-foot {
+    display: none;
   }
 
   .legend-clock:not([data-full])

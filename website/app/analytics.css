@@ -633,6 +633,11 @@
     width: 6.5rem;
     margin: 0.35rem 0 0 auto;
   }
+  /* One line a number: the counts behind each rate stay in the army sheet,
+     so the names get the room. */
+  .analytics-results-table td .analytics-note-value {
+    display: none;
+  }
   /* The table's headings name each column, so only Usage keeps a bar. */
   .analytics-results-table td:not([data-column="usage-rate"]) .meter {
     display: none;

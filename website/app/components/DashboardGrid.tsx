@@ -739,7 +739,7 @@ export function Dashboard({
             <DashboardIcon name="gear" />{" "}
             <span className="dash-customise-text">Customise dashboard</span>
             <span className="dash-customise-short" aria-hidden="true">
-              Edit
+              Customise
             </span>
           </button>
         ) : null}

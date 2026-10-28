@@ -688,6 +688,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           />
         )}
         <PlayerFreshness profile={trackedPlayer.profile} />
+        {/* The log sits below the Season summary; this reaches it in one tap. */}
+        {data.selectedSeason === null ? (
+          <a className="player-log-jump" href="#season-days-title">
+            Daily Legend log <span aria-hidden="true">↓</span>
+          </a>
+        ) : null}
         <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
             className="player-refresh-form"

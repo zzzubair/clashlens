@@ -900,8 +900,11 @@
     display: none;
   }
 
+  /* Customise matches Link: its icon over a small word. */
   .dash-customise {
-    padding-inline: 0.75rem;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 0.5rem;
   }
 
   /* Link player shrinks to its + and a small "Link" (its full name stays for
@@ -923,6 +926,9 @@
 
   .dash-customise-short {
     display: inline;
+    color: var(--cl-muted);
+    font-size: 0.68rem;
+    font-weight: 700;
   }
 
   .dash-account-add-text,

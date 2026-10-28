@@ -44,6 +44,7 @@
     "count actions"
     "line line"
     "fresh fresh"
+    "jump jump"
     "status status";
   align-items: center;
   column-gap: 1rem;
@@ -325,6 +326,22 @@
   align-self: end;
   margin-bottom: 0.2rem;
 }
+/* A jump to the log, whose heading lands clear of the sticky top bar. */
+.player-page .player-log-jump {
+  grid-area: jump;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+  color: var(--cl-action-text);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+#season-days-title {
+  scroll-margin-top: calc(var(--cl-header-h) + 1rem);
+}
 .player-page .player-actions :is(button, .button) {
   display: inline-flex;
   align-items: center;
@@ -387,6 +404,7 @@
       "who count actions"
       "line line line"
       "fresh fresh fresh"
+      "jump jump jump"
       "status status status";
     align-items: center;
     column-gap: 1.5rem;
