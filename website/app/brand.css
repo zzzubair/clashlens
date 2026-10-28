@@ -398,8 +398,11 @@
 
 /* ---------- Badges ---------- */
 
+/* A quiet label, so the orange stays on the main action. */
 :root :is(.profile-badge) {
-  border: 1px solid currentColor;
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-card-line);
   border-radius: 4px;
   font-weight: 650;
 }

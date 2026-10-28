@@ -46,6 +46,15 @@
   }
 }
 
+/* Between a phone and a laptop the example keeps about the shape it has on
+   them, centred, instead of stretching across the page. */
+@media (min-width: 40rem) and (max-width: 63.99rem) {
+  .front-grid-pitch .front-teaser {
+    justify-self: center;
+    width: min(100%, 34rem);
+  }
+}
+
 /* ---------- Search first ---------- */
 
 .front-hero {

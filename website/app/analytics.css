@@ -342,6 +342,11 @@
   background: var(--cl-panel);
   border-radius: 0.5rem;
 }
+/* An army shows one or two troops; its slot fits two, so every army's name
+   starts at the same place. */
+[data-view="armies"] .unit-art {
+  min-width: 3.65rem;
+}
 .unit-art img + img {
   width: 1.75rem;
   height: 1.75rem;
@@ -425,6 +430,34 @@
 /* ---------- Phones: each row is a small card ---------- */
 
 @media (max-width: 47.99rem) {
+  /* The day range sits at the end of the Sort row when both fit, instead of
+     taking a line of its own above it. */
+  .analytics-results {
+    flex-flow: row wrap;
+    align-items: center;
+    column-gap: 0.75rem;
+  }
+
+  .analytics-results > * {
+    flex: 1 0 100%;
+  }
+
+  .analytics-results > .analytics-sort-menu {
+    order: -2;
+    flex: 1 1 13.75rem;
+    margin: 0 0 0.75rem;
+  }
+
+  .analytics-results > .analytics-results-head {
+    order: -1;
+    flex: 0 0 auto;
+    margin: 0 0 0.75rem auto;
+  }
+
+  .analytics-controls {
+    margin-bottom: 1.25rem;
+  }
+
   /* The chosen tab above already names the list; screen readers keep the
      heading. */
   .analytics-results-head h2 {
