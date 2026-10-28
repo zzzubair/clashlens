@@ -241,11 +241,14 @@
   column-gap: 0.5rem;
 }
 
-/* With no battles at all, the two lines sit together in the card's spare
-   height instead of spreading apart. */
+/* With no battles at all, the two lines and the chip sit together under the
+   numbers, and any spare height falls below them. */
+.legend-day-card:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template-rows: repeat(4, auto) 1fr;
+}
+
 .legend-day-slots:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
   grid-template-rows: auto auto;
-  align-content: center;
 }
 
 .legend-day-battles:not(:has(.dash-star-box:not(.dash-star-box-empty))) .dash-star-box {
@@ -296,23 +299,13 @@
   place-items: center;
 }
 
+/* Each battle's tap circle stays about 28px at this size. */
 .legend-clock-face {
   width: 100%;
-  max-width: 16.5rem;
+  max-width: 13rem;
   overflow: visible;
 }
 
-/* A phone keeps the dial smaller so the cards after it come sooner; the hour
-   labels grow to stay readable, and each battle's tap circle stays about 28px. */
-@media (max-width: 47.99rem) {
-  .legend-clock-face {
-    max-width: 13rem;
-  }
-
-  .legend-clock-face .clock-hour {
-    font-size: 14px;
-  }
-}
 
 /* The countdown beside a small dial, and its switch, are for phones. The
    switch needs .button to outrank the shared button rule. */
@@ -402,7 +395,7 @@
 
 .clock-hour {
   fill: var(--cl-muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
