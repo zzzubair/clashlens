@@ -494,10 +494,15 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  font-size: 2rem;
+  font-size: clamp(1.65rem, 7.6vw, 2rem);
   line-height: 1;
 }
-/* The rank comes first and reads as a rank, as in the log: #1,288. */
+/* The rank comes first and reads as a rank, as in the log: #1,288. It never
+   breaks, and the size above keeps #13,183 in its column on a 360px phone. */
+.player-page .season-summary-headline > div:first-child dd:not(.summary-words) {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
 .player-page .season-summary-headline > div:first-child dd:not(.summary-words)::before {
   content: "#";
 }

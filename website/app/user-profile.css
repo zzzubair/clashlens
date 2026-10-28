@@ -81,9 +81,26 @@
   font-weight: 650;
 }
 
+/* Trophies, rank and today's net read as the scoreboard does elsewhere. */
 .linked-player-stat strong {
-  font-size: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-self: start;
+  font-family: var(--cl-font-score);
+  font-size: 1.45rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.linked-player-stat strong.linked-player-league {
+  font-family: var(--cl-font);
+  font-size: 1.05rem;
+}
+.linked-player-stat .trophy-mark {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
 }
 
 .linked-player-today {

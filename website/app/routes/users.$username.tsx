@@ -9,6 +9,7 @@ import {
 } from "react-router";
 
 import { useBackState } from "../components/BackLink";
+import { TrophyMark } from "../components/LeaderboardShared";
 import { SavedLine } from "../components/SavedLine";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
@@ -305,16 +306,21 @@ function LinkedPlayer({
                 : "Unknown"}
             </span>
           ) : (
-            <strong>{player.trophies.toLocaleString("en-GB")}</strong>
+            <strong>
+              <TrophyMark />
+              {player.trophies.toLocaleString("en-GB")}
+            </strong>
           )}
         </span>
         <span className="linked-player-stat">
           <small>Rank</small>
-          <strong>
-            {player.rank === null
-              ? (player.league ?? "Unranked")
-              : `#${player.rank.toLocaleString("en-GB")}`}
-          </strong>
+          {player.rank === null ? (
+            <strong className="linked-player-league">
+              {player.league ?? "Unranked"}
+            </strong>
+          ) : (
+            <strong className="rank-mark">#{player.rank.toLocaleString("en-GB")}</strong>
+          )}
         </span>
         <span className="linked-player-stat linked-player-today">
           <small>Today</small>

@@ -115,7 +115,7 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
           <DashboardIcon name="lock" />
         </span>
         <h2 id="front-teaser-title">Your Legend day, live</h2>
-        <p>Rank, rivals, Reset clock and goal on one page. Free.</p>
+        <p>Rank, rivals, Reset clock and goal. Free.</p>
         {loginAvailable ? (
           <AccountButtons returnPath="/" />
         ) : (

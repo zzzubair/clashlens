@@ -1403,7 +1403,7 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    expect(plain).toContain("Rank, rivals, Reset clock and goal on one page.");
+    expect(plain).toContain("Rank, rivals, Reset clock and goal. Free.");
     expect(plain).toContain("Create account Already have one? Sign in");
   });
 });
