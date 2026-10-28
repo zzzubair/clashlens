@@ -48,7 +48,14 @@
 }
 
 /* A watchlist's players, one line each: name and tag, trophies and an arrow.
-   The whole row opens the player. */
+   The whole row opens the player. Its columns may shrink below a row's one
+   line, so a long name ends in "…" instead of widening the page. */
+.group-card-list,
+.group-card,
+.group-card .group-members {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .group-card .group-members.player-action-list {
   gap: 0;
 }
