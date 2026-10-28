@@ -483,8 +483,8 @@ describe("army analytics route historical reads", () => {
     expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
     // The table's headings: Avg. trophies after 3-star, sorted highest first.
     expect(text).toContain("3-star Avg. trophies ↓ 2-star");
-    expect(text).toContain("50.0% 2 battles 36.0 misses 32.1");
-    expect(text).toContain("75.0% 3 battles 35.5 misses 22.0");
+    expect(text).toContain("50.0% 2 battles 36.0 32.1 below 3 stars");
+    expect(text).toContain("75.0% 3 battles 35.5 22.0 below 3 stars");
     expect(text).toContain("Avg. trophies counts every attack.");
 
     // A type with variants shows, closed, that it opens and how many named
@@ -524,7 +524,7 @@ describe("army analytics route historical reads", () => {
       rows: [{ ...row("Dragons", 4, 40, null) }],
     });
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "100.0% 4 battles 40.0 no misses",
+      "100.0% 4 battles 40.0 all 3 stars",
     );
 
     // Unit usage has no trophies column.

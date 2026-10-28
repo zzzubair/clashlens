@@ -21,9 +21,9 @@ const ALL_CARDS = [
   "Legend clock",
   "Bases you attacked",
   "Rivals watch",
+  "Season heat map",
   "Goal",
   "Armies on defense",
-  "Season heat map",
   "Cutoffs",
   "Season graph",
   "Recent form",
@@ -87,8 +87,8 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     "Legend day",
     "Legend clock",
     "Bases you attacked",
-    "Goal",
     "Rivals watch",
+    "Goal",
     "Armies on defense",
     ...ALL_CARDS.slice(7),
     "Season heat map",
@@ -213,8 +213,8 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect(settings).toBeHidden();
   await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
 
-  // Reset to default puts the default layout back, and it stays after a reload.
-  await bar.getByRole("button", { name: "Reset to default" }).click();
+  // Use default layout puts the default layout back, and it stays after a reload.
+  await bar.getByRole("button", { name: "Use default layout" }).click();
   await expect(bar.getByText("Default layout", { exact: true })).toBeVisible();
   await bar.getByRole("button", { name: "Done" }).click();
   await expect(bar).toBeHidden();

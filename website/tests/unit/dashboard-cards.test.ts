@@ -1174,8 +1174,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Next Reset #95–#760");
     expect(day).toContain("Projected #240 at Reset");
-    expect(day).toContain("Attacks 2 of 8");
-    expect(day).toContain("Defenses 1 of 8");
+    expect(day).toContain("2 of 8 attacks");
+    expect(day).toContain("1 of 8 defenses");
     expect(day).toContain("7 defenses remain · auto defense −21 each");
 
     // Bases you attacked: hardest first against 41% held at similar trophies.

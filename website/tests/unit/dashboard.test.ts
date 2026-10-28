@@ -213,9 +213,9 @@ describe("dashboard settings", () => {
       "legend-clock",
       "bases",
       "rivals-watch",
+      "heat-map",
       "goal",
       "armies-defense",
-      "heat-map",
     ]);
     expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
     expect(shownCards("default")).toEqual(DEFAULT_LAYOUT);
@@ -475,8 +475,8 @@ describe("Legend day card", () => {
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
     expect(html).toContain("Next Reset #95–#760 estimate");
-    expect(html).toContain("Attacks 2 of 8 +71");
-    expect(html).toContain("Defenses 1 of 8 −5");
+    expect(html).toContain("2 of 8 attacks +71");
+    expect(html).toContain("1 of 8 defenses −5");
     expect(html).toContain("7 defenses remain · auto defense −21 each");
   });
 
@@ -484,8 +484,8 @@ describe("Legend day card", () => {
     const html = render(
       emptyDay({ attacks: 3, defenses: 2, openDefenses: 6, battles: [] }),
     );
-    expect(html).toContain("Attacks 3 of 8 ");
-    expect(html).not.toContain("Attacks 3 of 8 –");
+    expect(html).toContain("3 of 8 attacks ");
+    expect(html).not.toContain("3 of 8 attacks –");
     expect(html).toContain("6 defenses remain");
     expect(html).not.toContain("auto defense");
     expect(render(null)).toContain("Trophies 5,696 Net today –");
@@ -495,8 +495,8 @@ describe("Legend day card", () => {
     // Today's battles not saved yet, or the player page not read at all.
     for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
       const html = render(day);
-      expect(html).toContain("Attacks – of 8");
-      expect(html).toContain("Defenses – of 8");
+      expect(html).toContain("– of 8 attacks");
+      expect(html).toContain("– of 8 defenses");
       expect(html).not.toContain("0 of 8");
       expect(html).toContain("Trophies 5,696");
       expect(html).toContain("Now #318");
@@ -1335,9 +1335,9 @@ describe("dashboard page", () => {
       "legend-clock:s",
       "bases:l",
       "rivals-watch:m",
+      "heat-map:s",
       "goal:s",
       "armies-defense:m",
-      "heat-map:s",
     ]);
   });
 

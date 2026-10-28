@@ -1485,7 +1485,7 @@ describe("player day honesty", () => {
     });
     expect(html).not.toContain("tracking started partway");
     expect(html).toContain(
-      "The collector has not confirmed this player profile within the current freshness limit.",
+      "This profile hasn&#x27;t been confirmed recently, so it may be behind.",
     );
     expect(html).toContain(
       "Ending evidence arrives after Reset. Some daily evidence is unavailable.",
