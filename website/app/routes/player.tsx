@@ -780,10 +780,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 ? liveDayNotice(dayEvidence(day), todayEnded, warning.label)
                 : undefined;
             if (notice === null) return null;
-            const plain = notice ? undefined : QUALITY_WORDS[warning.code];
+            const plain = notice
+              ? undefined
+              : QUALITY_WORDS[`${warning.code}/${warning.label}`];
             if (plain)
               return (
-                <p className="section-note" key={warning.code}>
+                <p className="section-note" key={`${warning.code}-${warning.label}`}>
                   {plain}
                 </p>
               );
@@ -862,10 +864,12 @@ function SeasonsError({
 
 const FRESHNESS_LIMIT_SECONDS = 15 * 60;
 
-// Plain words for the notices a Clasher can't act on.
+// Plain words for the notices a Clasher can't act on, by code and label: the
+// API also sends "unavailable" for a player the game no longer finds.
 const QUALITY_WORDS: Record<string, string> = {
-  unavailable: "Today's Legend day isn't saved yet.",
-  stale: "This profile hasn't been confirmed recently, so it may be behind.",
+  "unavailable/Missing current ranked-day data": "Today's Legend day isn't saved yet.",
+  "stale/Stale saved profile":
+    "This profile hasn't been confirmed recently, so it may be behind.",
 };
 
 // When the server read this profile, so the page's clock starts from it.

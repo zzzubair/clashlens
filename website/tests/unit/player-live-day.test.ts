@@ -38,6 +38,7 @@ function page(
   codes: string[],
   now = "2026-10-08T12:00:00Z",
   endedDays: RankedDaySummary[] = [],
+  warnings: PlayerPage["dataQuality"] = [],
 ) {
   const today = {
     ...TODAY,
@@ -64,6 +65,7 @@ function page(
     seasonDays: [],
     dataQuality: [
       { code: "partial", label: "Incomplete ranked-day data", detail: codes.join("; ") },
+      ...warnings,
     ],
     provenance: {
       source: "api_player_daily_logs",
@@ -172,6 +174,26 @@ describe("today's Legend day wording", () => {
       expect(todayEntry(html)).toContain(text);
       expect(todayEntry(html)).toContain("Ending evidence arrives after Reset.");
     }
+  });
+
+  it("says a player the game no longer finds is not found, not that today is unsaved", async () => {
+    const detail =
+      "Clash of Clans did not find this player at its latest check, so they are left off the Live Leaderboard.";
+    const html = await page(
+      WAITING,
+      "2026-10-08T12:00:00Z",
+      [],
+      [
+        { code: "unavailable", label: "Player not found", detail },
+        {
+          code: "unavailable",
+          label: "Missing current ranked-day data",
+          detail: "No ranked-day publication covers the current UTC time.",
+        },
+      ],
+    );
+    expect(note(html)).toContain(`<strong>Player not found:</strong> ${detail}`);
+    expect(html.split("Today&#x27;s Legend day isn&#x27;t saved yet.")).toHaveLength(2);
   });
 
   it("stops calling the day in progress once the page's clock passes Reset", async () => {
