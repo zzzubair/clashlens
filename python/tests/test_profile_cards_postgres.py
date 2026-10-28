@@ -181,6 +181,8 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                     "state": "not_in_legend", "reason": None, "trophies": 0,
                     "season_reset_pending": False, "rank": None,
                     "league": "Electro League 33", "today": None,
+                    # It has no Legend I day this Season to have left on.
+                    "left_legend_i": None,
                 },
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.

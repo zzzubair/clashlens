@@ -4,6 +4,8 @@
  * averages are worked out here so a missing sample never becomes a zero.
  */
 
+import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
+
 export const COMPARISON_DAYS = [3, 7, 14] as const;
 export type ComparisonDays = (typeof COMPARISON_DAYS)[number];
 
@@ -31,6 +33,8 @@ export interface ComparedPlayer {
   you: boolean;
   inGroup: boolean;
   status: MemberStatus;
+  /** This Season's Legend I part, for a player who left it. */
+  leftLegendI?: LeftLegendI | null;
   trophies: number | null;
   /** The latest profile is from before this player's Season reset; trophies stay null. */
   seasonResetPending: boolean;
@@ -217,6 +221,7 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
     you: value.you,
     inGroup: value.in_group,
     status: value.status as MemberStatus,
+    leftLegendI: parseLeftLegendI(value.left_legend_i),
     trophies: value.trophies,
     seasonResetPending: value.season_reset_pending === true,
     observedAt: value.observed_at,

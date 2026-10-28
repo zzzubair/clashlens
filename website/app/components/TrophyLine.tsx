@@ -16,12 +16,17 @@ export function TrophyLine({
   player,
   now,
   current,
+  until = now,
+  endLabel = "Now",
 }: {
   /** The Daily Legend log's days, newest first. */
   history: Array<{ day: RankedDaySummary }>;
   player: PlayerPage;
   now: number;
   current: number;
+  /** When the line ends: now, or the Reset a player left Legend I at. */
+  until?: number;
+  endLabel?: string;
 }) {
   const dayStart = (day: RankedDaySummary) => Date.parse(day.period.split(" – ")[0]);
   const oldest = history.at(-1)?.day;
@@ -38,8 +43,10 @@ export function TrophyLine({
   }
   const marks = [...resets].sort(([a], [b]) => a - b);
   if (marks.length === 0) return null;
-  // Now ends today's step, one day after the last finished day.
-  marks.push([Math.max(marks.at(-1)![0], Math.floor((now - origin) / DAY) + 1), current]);
+  // Now ends today's step, one day after the last finished day; a line that
+  // ends earlier ends at that Reset.
+  const end = until < now ? (until - origin) / DAY : Math.floor((now - origin) / DAY) + 1;
+  marks.push([Math.max(marks.at(-1)![0], end), current]);
   const values = marks.map(([, value]) => value);
   const low = Math.min(...values);
   const high = Math.max(...values);
@@ -113,7 +120,7 @@ export function TrophyLine({
         <span aria-hidden="true">
           This Season <b>{first.toLocaleString("en-GB")}</b>
         </span>
-        <span aria-hidden="true">Now</span>
+        <span aria-hidden="true">{endLabel}</span>
         <span className="sr-only">
           This Season: {first.toLocaleString("en-GB")} to{" "}
           {current.toLocaleString("en-GB")} trophies

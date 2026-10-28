@@ -18,8 +18,12 @@ import {
   FrontPage,
   type FrontPageData,
 } from "../components/FrontPage";
+import { BattleStatistics } from "../components/BattleStatistics";
+import { SeasonStory } from "../components/SeasonStory";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type { WebsiteErrorResponse } from "../lib/contracts";
+import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
+import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
+import { seasonShape } from "../lib/season-shape";
 import { publicPageMeta } from "../lib/blog";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
@@ -41,6 +45,7 @@ import "../dashboard-cards.css";
 import "../dashboard-clock.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
+import "../player.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 // Cards read within this go out with the page; slower ones stream in.
@@ -59,6 +64,8 @@ export type DashboardLoaderData =
       cards: CardReads;
       /** The Reset that ends the Legend day the cards were read for. */
       dayEndsMs: number;
+      /** The selected account's player page, when it left Legend I this Season. */
+      leftPlayer: PlayerPage | null;
       idempotencyKey: string;
     };
 
@@ -160,6 +167,12 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
   }
 
+  // An account that left Legend I keeps this Season's Legend I part, read-only.
+  const leftPlayer =
+    selected?.state === "not_in_legend" && selected.leftLegendI
+      ? await client.getPlayer(selected.tag).catch(() => null)
+      : null;
+
   return data<DashboardLoaderData>(
     {
       kind: "signed-in",
@@ -169,6 +182,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       settings,
       cards,
       dayEndsMs,
+      leftPlayer,
       idempotencyKey: freshIdempotencyKey(),
     },
     { headers: NO_STORE },
@@ -313,7 +327,10 @@ function switchingTo(
 }
 
 function accountLine(player: LinkedPlayerCard): string {
-  if (player.state === "not_in_legend") return "Not in Legend I";
+  if (player.state === "not_in_legend")
+    return player.leftLegendI
+      ? `Left Legend I ${leftDate(player.leftLegendI)}`
+      : "Not in Legend I";
   if (player.state !== "tracking") return "Not tracked yet";
   const parts = [
     player.trophies === null || player.seasonResetPending
@@ -477,6 +494,12 @@ function SignedInDashboard({
         loaderData.playersUnavailable ? null : (
           <LinkPlayerPrompt />
         )
+      ) : selected.state === "not_in_legend" && selected.leftLegendI ? (
+        <LeftLegendPanel
+          selected={selected}
+          left={selected.leftLegendI}
+          player={switching ? null : loaderData.leftPlayer}
+        />
       ) : selected.state === "not_in_legend" ? (
         <section className="dash-message" aria-live="polite">
           <h2>Unfortunately, the dashboard is Legend I only.</h2>
@@ -502,6 +525,40 @@ function SignedInDashboard({
         </>
       )}
     </main>
+  );
+}
+
+/**
+ * An account that left Legend I this Season: when it left, its last Legend I
+ * total, and the Season's Legend I part as the player page shows it.
+ */
+function LeftLegendPanel({
+  selected,
+  left,
+  player,
+}: {
+  selected: LinkedPlayerCard;
+  left: LeftLegendI;
+  player: PlayerPage | null;
+}) {
+  const now = Date.now();
+  return (
+    <section className="dash-left player-page" aria-live="polite">
+      <h2>{selected.name ?? selected.tag}</h2>
+      <p>{leftLine(left)}</p>
+      <p className="section-note">
+        The dashboard is Legend I only, so its cards return when this account does.
+      </p>
+      {player ? (
+        <>
+          <SeasonStory shape={seasonShape(player, now)} />
+          <BattleStatistics player={player} now={now} />
+        </>
+      ) : null}
+      <p>
+        <Link to={canonicalPlayerPath(selected.tag)}>Open the player page</Link>
+      </p>
+    </section>
   );
 }
 

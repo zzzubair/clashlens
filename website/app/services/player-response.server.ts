@@ -5,6 +5,7 @@ import type {
   PlayerPage,
   RankedBattleEvent,
   RankedDaySummary,
+  SeasonWeek,
   SummarizedSeasonRef,
 } from "../lib/contracts";
 import {
@@ -250,6 +251,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     publishedAt: payload.published_at as string | null,
     source: payload.source,
     officialHistory,
+    seasonWeeks: mapSeasonWeeks(payload.season_weeks),
   };
 }
 
@@ -454,6 +456,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       eligibility: payload.eligibility === "eligible" ? "legend-i" : "uncertain",
     },
     season: mapSeason(screen.season),
+    seasonWeeks: mapSeasonWeeks(screen.season_weeks),
     currentDay:
       screen.current_day_start === null ? null : dayAt(screen.current_day_start),
     currentDayPublishedAt: isUtcTimestamp(screen.current_day_published_at)
@@ -617,6 +620,7 @@ function mapSeason(value: unknown): PlayerPage["season"] {
     !isOneOf(value.anchor_source, [
       "official_league_history",
       "daily_publication",
+      "weekly_league_record",
     ] as const) ||
     !isUtcTimestamp(value.anchor_observed_at) ||
     (value.anchor_source === "official_league_history" &&
@@ -631,6 +635,27 @@ function mapSeason(value: unknown): PlayerPage["season"] {
     anchorSource: value.anchor_source,
     anchorObservedAt: value.anchor_observed_at,
   };
+}
+
+// A week with a malformed entry is left out: the page then treats it as a
+// week the record has not decided.
+function mapSeasonWeeks(value: unknown): SeasonWeek[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((week) =>
+    isRecord(week) &&
+    isUtcTimestamp(week.week_start) &&
+    isOneOf(week.league, ["legend_i", "below_legend_i", "unknown"] as const) &&
+    (week.entry === null ||
+      isOneOf(week.entry, [
+        "season_start",
+        "stayed",
+        "promoted",
+        "first_seen",
+        "unknown",
+      ] as const))
+      ? [{ start: week.week_start, league: week.league, entry: week.entry }]
+      : [],
+  );
 }
 
 function isSeasonDuration(start: string, end: string): boolean {

@@ -23,6 +23,7 @@ import { RefreshProgress, refreshInProgress } from "../components/RefreshProgres
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
+import { SeasonStory } from "../components/SeasonStory";
 import { SelectedSeason } from "../components/SelectedSeason";
 import { TrophyLine } from "../components/TrophyLine";
 import { TagSearchAgain } from "../components/TagSearchAgain";
@@ -34,6 +35,7 @@ import {
 } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
+  dayEnd,
   dayEvidence,
   dayReasons,
   explainsNoResults,
@@ -50,6 +52,13 @@ import {
   showsCurrentSeason,
 } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import {
+  gapLabel,
+  inGap,
+  logGaps,
+  seasonDayDate,
+  seasonShape,
+} from "../lib/season-shape";
 import type {
   HistoricalSeasonSummary,
   PastSeasonFinish,
@@ -401,7 +410,30 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         currentAvailable={currentAvailable}
       />
     );
-  const history = selectPlayerHistory(player, statisticsTime);
+  const allHistory = selectPlayerHistory(player, statisticsTime);
+  // A partial Season's log: one row for each stretch with no Legend I
+  // battles, in place of its days.
+  const shape = player ? seasonShape(player, statisticsTime) : null;
+  const shapeGaps = shape?.partial ? logGaps(shape) : [];
+  const history =
+    shape && shapeGaps.length > 0
+      ? allHistory.filter(({ day }) => !inGap(shapeGaps, shape, day))
+      : allHistory;
+  const gaps = shape
+    ? shapeGaps.map((gap) => ({
+        start: gap.lastStart,
+        label: gapLabel(shape, gap),
+        kind: gap.kind,
+      }))
+    : [];
+  // A player now outside Legend I shows the total they left on.
+  const leftOn =
+    player && shape?.outsideNow && shape.lastLegendDay
+      ? dayEnd(shape.lastLegendDay, player, statisticsTime).trophies
+      : null;
+  const droppedRun = shape
+    ? [...shape.runs].reverse().find((run) => run.dropped)
+    : undefined;
   const todayEnded =
     player?.currentDay != null &&
     Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
@@ -563,7 +595,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </main>
       );
     }
-    const current = player && showsCurrentSeason(lookup, history) ? player : null;
+    const current = player && showsCurrentSeason(lookup, allHistory) ? player : null;
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         {lookup?.profile ? (
@@ -576,13 +608,36 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             >
               <PlayerCrews crews={data.crews} name={lookup.profile.name} />
             </PlayerHeading>
-            <div className="player-trophies">
-              <span className="metric-label">Trophies</span>
-              <strong className="player-trophy-count">
-                <TrophyMark />
-                {lookup.profile.trophies.toLocaleString("en-GB")}
-              </strong>
-            </div>
+            {current && leftOn !== null && shape && droppedRun ? (
+              <>
+                <div className="player-trophies">
+                  <span className="metric-label">Last Legend I trophies</span>
+                  <strong className="player-trophy-count">
+                    <TrophyMark />
+                    {leftOn.toLocaleString("en-GB")}
+                  </strong>
+                  <span className="player-reset-note">
+                    Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)} Reset
+                  </span>
+                </div>
+                <TrophyLine
+                  history={allHistory}
+                  player={current}
+                  now={statisticsTime}
+                  current={leftOn}
+                  until={shape.seasonStart + droppedRun.last * 86_400_000}
+                  endLabel="Left"
+                />
+              </>
+            ) : (
+              <div className="player-trophies">
+                <span className="metric-label">Trophies</span>
+                <strong className="player-trophy-count">
+                  <TrophyMark />
+                  {lookup.profile.trophies.toLocaleString("en-GB")}
+                </strong>
+              </div>
+            )}
             <PlayerActions tag={data.requestedTag} />
           </header>
         ) : (
@@ -611,6 +666,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.seasonsError ? (
           <SeasonsError tag={data.requestedTag} selectedSeason={data.selectedSeason} />
         ) : null}
+        {data.selectedSeason === null && current && shape ? (
+          <SeasonStory shape={shape} />
+        ) : null}
         {data.selectedSeason !== null ? (
           <SelectedSeason
             seasonId={data.selectedSeason}
@@ -628,7 +686,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           seasonMenu(false)
         )}
         {dayBattles}
-        {data.selectedSeason === null && player && history.length > 0 ? (
+        {data.selectedSeason === null && player && allHistory.length > 0 ? (
           <section className="data-section legend-log" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
             <LegendLog
@@ -637,6 +695,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               now={statisticsTime}
               today={today}
               openDay={openDay}
+              gaps={gaps}
             />
           </section>
         ) : null}
@@ -746,6 +805,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {data.seasonsError ? (
         <SeasonsError tag={trackedPlayer.tag} selectedSeason={data.selectedSeason} />
       ) : null}
+      {data.selectedSeason === null && shape ? <SeasonStory shape={shape} /> : null}
       {data.selectedSeason !== null ? (
         <SelectedSeason
           seasonId={data.selectedSeason}
@@ -805,7 +865,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               </p>
             );
           })}
-          {history.length === 0 ? (
+          {allHistory.length === 0 ? (
             <p className="section-note">No Legend days are saved for this player yet.</p>
           ) : null}
           <LegendLog
@@ -814,6 +874,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             now={statisticsTime}
             today={today}
             openDay={openDay}
+            gaps={gaps}
           />
         </section>
       )}

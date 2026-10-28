@@ -924,3 +924,20 @@
   font-family: var(--cl-font-heading);
   font-size: 1.1rem;
 }
+
+/* A stretch with no Legend I battles: days outside Legend I, or days in it
+   before the player signed up. One plain row stands for all of them. */
+.player-page .log-days > .log-gap {
+  padding: 0.7rem 0.9rem;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  background: var(--cl-panel);
+}
+.player-page .log-days > * + .log-gap,
+.player-page .log-days > .log-gap + * {
+  border-top: 1px dashed var(--cl-outline);
+}
+.player-page .log-gap-waiting {
+  color: var(--cl-action-text);
+}

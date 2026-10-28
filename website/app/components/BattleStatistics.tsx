@@ -1,6 +1,7 @@
 import { battleStatistics } from "../lib/battle-statistics";
 import type { PlayerPage } from "../lib/contracts";
 import { dayEnd } from "../lib/player-lookup-text";
+import { seasonShape } from "../lib/season-shape";
 import { DayMark } from "./DayStatus";
 import { SeasonSummary } from "./SeasonSummary";
 
@@ -21,7 +22,10 @@ export function BattleStatistics({
   menu?: React.ReactNode;
 }) {
   const stats = battleStatistics(player, "season", now);
-  const lastDay = stats.today - DAY;
+  const shape = seasonShape(player, now);
+  // A player now outside Legend I keeps the rank and trophies they left on.
+  const left = shape.outsideNow ? shape.lastLegendDay : null;
+  const lastDay = left ? Date.parse(left.period.split(" – ")[0]) : stats.today - DAY;
   const dayFrom = (start: number) =>
     start >= stats.seasonStart
       ? [...player.seasonDays, ...player.recentDays].find(
@@ -29,7 +33,7 @@ export function BattleStatistics({
         )
       : undefined;
   const latest = dayFrom(lastDay);
-  const before = latest?.resetRank == null ? dayFrom(lastDay - DAY) : undefined;
+  const before = latest?.resetRank == null && !left ? dayFrom(lastDay - DAY) : undefined;
   const last = before?.resetRank != null ? before : latest;
   // The same end of day as the Daily Legend log shows for that day.
   const end = last ? dayEnd(last, player, now) : null;
@@ -40,31 +44,51 @@ export function BattleStatistics({
     perDay,
     perBattle,
   });
+  // A partial Season counts its Legend I days only: days outside Legend I,
+  // or before the player signed up, are not missing (owner decision, 28
+  // October 2026).
+  const { expected, saved } = shape.partial
+    ? shape.legendDays
+    : { expected: stats.daysExpected, saved: stats.daysSaved };
+  // Nor can a day before sign-up have lost a battle.
+  const incomplete = shape.partial
+    ? [...player.seasonDays, ...player.recentDays].some((day) => {
+        const number =
+          Math.round((Date.parse(day.period.split(" – ")[0]) - shape.seasonStart) / DAY) +
+          1;
+        return (
+          !day.battlesComplete &&
+          number < shape.today &&
+          shape.kinds[number - 1] === "legend"
+        );
+      })
+    : stats.incomplete;
   const flags = [
-    stats.incomplete || stats.daysSaved < stats.daysExpected
-      ? "Some battles may be missing"
-      : "",
+    incomplete || saved < expected ? "Some battles may be missing" : "",
     stats.attack.disputed || stats.defense.disputed ? "Conflicting reports" : "",
   ].filter(Boolean);
+  const count = !shape.partial
+    ? `${saved} of ${expected} days saved`
+    : saved < expected
+      ? `${saved} of ${expected} Legend I days saved`
+      : `${expected} Legend I ${expected === 1 ? "day" : "days"}${flags.length ? "" : " · all saved"}`;
   return (
     <SeasonSummary
       title="Season summary"
       meta={
-        stats.daysExpected === 0
+        expected === 0
           ? "No finished Legend days yet this Season"
-          : [`${stats.daysSaved} of ${stats.daysExpected} days saved`, ...flags].join(
-              " · ",
-            )
+          : [count, ...flags].join(" · ")
       }
       controls={menu}
       rank={[
-        "Reset rank",
+        left ? "Rank when they left" : "Reset rank",
         last?.resetRank == null
           ? "Not ranked yet"
           : last.resetRank.toLocaleString("en-GB"),
       ]}
       trophies={[
-        "Reset trophies",
+        left ? "Trophies when they left" : "Reset trophies",
         lastDay < stats.seasonStart
           ? "No finished day yet"
           : end?.trophies == null

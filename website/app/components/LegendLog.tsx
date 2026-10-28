@@ -148,12 +148,15 @@ export function LegendLog({
   now,
   today,
   openDay,
+  gaps = [],
 }: {
   history: Array<{ day: RankedDaySummary; seasonDay: string }>;
   player: PlayerPage;
   now: number;
   today: RankedDaySummary | null;
   openDay: string | null;
+  /** Rows standing for days with no Legend I battles, each placed by its last day. */
+  gaps?: Array<{ start: number; label: string; kind: "outside" | "waiting" }>;
 }) {
   const todayKey = today ? legendDayKey(today.period) : null;
   const moves = rankMoves(history.map(({ day }) => day));
@@ -171,6 +174,14 @@ export function LegendLog({
   );
   const current = history.filter(({ day }) => legendDayKey(day.period) === todayKey);
   const ended = history.filter(({ day }) => legendDayKey(day.period) !== todayKey);
+  // Newest first, as the days are.
+  const rows = [
+    ...ended.map((entry) => ({
+      start: Date.parse(entry.day.period.split(" – ")[0]),
+      entry,
+    })),
+    ...gaps.map((gap) => ({ start: gap.start, gap })),
+  ].sort((a, b) => b.start - a.start);
   return (
     <>
       {/* On a wide screen the columns are named over today's row too. */}
@@ -184,7 +195,15 @@ export function LegendLog({
         {ended.length > 0 ? (
           <LogHead show={current.length > 0 ? "phone" : undefined} />
         ) : null}
-        {ended.map(day)}
+        {rows.map((row) =>
+          "gap" in row && row.gap ? (
+            <p key={`gap-${row.start}`} className={`log-gap log-gap-${row.gap.kind}`}>
+              {row.gap.label}
+            </p>
+          ) : "entry" in row && row.entry ? (
+            day(row.entry)
+          ) : null,
+        )}
       </div>
     </>
   );

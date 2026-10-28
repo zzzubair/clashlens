@@ -311,6 +311,54 @@ describe("past-Season view", () => {
     expect(html).toMatch(/change<\/small><strong[^>]*>−30<.*battle net<\/dt><dd>\+10</s);
   });
 
+  it("ends a Season left after Day 14 on its last Legend I total", async () => {
+    // In Legend I for the first two weeks, then dropped at the Monday Reset.
+    const start = Date.parse("2026-09-07T05:00:00Z");
+    const entries = Array.from({ length: 14 }, (_, index) => ({
+      ...DAY,
+      dayNumber: index + 1,
+      period: new Date(start + index * 86_400_000).toISOString(),
+      startTrophies: 5000 - index * 6,
+      endTrophies: 4994 - index * 6,
+      netChange: -6,
+    }));
+    const week = (offset: number, league: "legend_i" | "below_legend_i") => ({
+      start: new Date(start + offset * 7 * 86_400_000).toISOString(),
+      league,
+      entry: league === "legend_i" ? ("stayed" as const) : null,
+    });
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          daysObserved: 14,
+          daysMissing: Array.from({ length: 14 }, (_, index) => index + 15),
+          endTrophies: null,
+          dailyEntries: entries,
+          seasonWeeks: [
+            week(0, "legend_i"),
+            week(1, "legend_i"),
+            week(2, "below_legend_i"),
+            week(3, "below_legend_i"),
+          ],
+        }),
+      },
+      SEASON,
+    );
+    // Days outside Legend I are not missing, and a player who left has no
+    // final placement: the page says when they left and what they left on.
+    expect(html).toContain(
+      '<p class="season-summary-meta" aria-live="polite">14 Legend I days · all recorded</p>',
+    );
+    expect(html).not.toContain("of 28 days recorded");
+    expect(html).toMatch(/<dt>Final rank<\/dt><dd[^>]*>Left Legend I after Day 14<\/dd>/);
+    expect(html).toContain("<dt>Last Legend I trophies</dt><dd>4,916</dd>");
+    expect(html).toContain("Days 1–14 · dropped to Legend II at the Mon 21 Sep Reset");
+    expect(html).toContain("Mon 21 Sep – Sun 4 Oct · Not in Legend I, not tracked");
+  });
+
   it("averages over played days only, leaving out quiet days and days before sign-up", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(

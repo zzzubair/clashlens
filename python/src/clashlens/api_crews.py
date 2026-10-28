@@ -31,6 +31,7 @@ from .api_db import (
     _opening_day_battles_sql,
     _text,
 )
+from .api_players import left_legend_i
 from .domain import ranked_day_for, season_opening_reset
 
 MAX_CREWS_PER_ACCOUNT = 5
@@ -290,12 +291,14 @@ def _players(
                          SELECT 1 FROM api_player_daily_logs AS newer
                          WHERE newer.player_id = day.player_id
                            AND newer.ranked_day_start = day.ranked_day_start
-                           AND newer.version > day.version))
+                           AND newer.version > day.version)),
+               player.id
         FROM {source}
         ORDER BY player.normalized_tag
         """,
         (opening, opening, ranked_day_for(now).season_start, *params),
     ).fetchall()
+    left = left_legend_i(connection, [int(row[9]) for row in rows], now)
     players = []
     for row in rows:
         player = _group_player(connection, row[1:8], now)
@@ -312,6 +315,10 @@ def _players(
                     "trophies": player["trophies"],
                     "lookup": player["state"],
                     "status": status,
+                    # This Season's Legend I part, for an account that left it.
+                    "left_legend_i": left.get(int(row[9]))
+                    if status == "not_in_legend"
+                    else None,
                 },
             )
         )

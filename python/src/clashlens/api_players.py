@@ -131,6 +131,29 @@ def _current_history_season(
     }
 
 
+def _season_weeks(
+    connection: Any, player_id: int, season_start: datetime
+) -> list[dict[str, Any]]:
+    """The weekly league record's rows for the Season starting at
+    ``season_start``, oldest first."""
+    return [
+        {
+            "week_start": week_start.astimezone(UTC),
+            "league": _text(league),
+            "entry": None if entry is None else _text(entry),
+            "decided_at": decided_at.astimezone(UTC),
+        }
+        for week_start, league, entry, decided_at in connection.execute(
+            """
+            SELECT week_start, league, entry, decided_at FROM player_league_weeks
+            WHERE player_id = %s AND week_start >= %s AND week_start < %s
+            ORDER BY week_start
+            """,
+            (player_id, season_start, season_start + SEASON_DURATION),
+        ).fetchall()
+    ]
+
+
 def get_player_page(
     database: ApiDatabase,
     normalized_tag: str,
@@ -262,6 +285,25 @@ def get_player_page(
                 or _text(current_day_raw[2]) != season_context["id"]
                 or int(current_day_raw[3]) != season_context["current_day_number"]
             )
+        calendar = ranked_day_for(now_utc)
+        season_weeks = _season_weeks(connection, int(row[15]), calendar.season_start)
+        newest_legend_week = max(
+            (week for week in season_weeks if week["league"] == "legend_i"),
+            key=lambda week: week["week_start"],
+            default=None,
+        )
+        if season_context is None and current_day_raw is None and newest_legend_week:
+            # A player who left Legend I before finishing any Season there has
+            # no league history row and no Legend day now. The weekly league
+            # record still says this Season held their Legend I days.
+            season_context = {
+                "id": calendar.official_season_id,
+                "current_day_number": calendar.day_number,
+                "start": calendar.season_start,
+                "end": calendar.season_end,
+                "anchor_source": "weekly_league_record",
+                "anchor_observed_at": newest_legend_week["decided_at"],
+            }
         if season_context is None and (
             current_day_raw is not None
             and current_day_raw[2] is not None
@@ -455,6 +497,16 @@ def get_player_page(
                 else current_day_raw[20].astimezone(UTC).isoformat(),
                 "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
                 "season_day_starts": season_day_starts,
+                # The calendar Season's weeks the weekly league record has
+                # decided: a partial Season reads its Legend I weeks here.
+                "season_weeks": [
+                    {
+                        "week_start": week["week_start"].isoformat(),
+                        "league": week["league"],
+                        "entry": week["entry"],
+                    }
+                    for week in season_weeks
+                ],
                 "season": None
                 if season_context is None or season_anchor_conflict
                 else {
@@ -514,6 +566,43 @@ def army_units(codes: Iterable[str | None]) -> dict[str, dict[str, Any]]:
     }
 
 
+def left_legend_i(
+    connection: Any, player_ids: list[int], now: datetime
+) -> dict[int, dict[str, Any]]:
+    """For each player who left Legend I this Season, at the Monday Reset
+    after their newest Legend I day the weekly league record put them below
+    it: that Reset, their last Legend I day's number and the total it ended
+    on, which no weekly raise follows."""
+    if not player_ids:
+        return {}
+    season = ranked_day_for(now.astimezone(UTC))
+    return {
+        int(player_id): {
+            "left_at": left_at.astimezone(UTC).isoformat(),
+            "last_day_number": None if day_number is None else int(day_number),
+            "trophies": None if trophies is None else int(trophies),
+        }
+        for player_id, left_at, day_number, trophies in connection.execute(
+            """
+            SELECT DISTINCT ON (day.player_id)
+                   day.player_id, day.ranked_day_end, day.season_day_number,
+                   version.final_trophies_before_reset
+            FROM api_player_daily_logs AS day
+            JOIN player_league_weeks AS week
+                ON week.player_id = day.player_id
+               AND week.week_start = day.ranked_day_end
+               AND week.league = 'below_legend_i'
+            LEFT JOIN ranked_day_versions AS version
+                ON version.id = day.ranked_day_version_id
+            WHERE day.player_id = ANY(%s)
+              AND day.ranked_day_start >= %s AND day.ranked_day_end <= %s
+            ORDER BY day.player_id, day.ranked_day_start DESC, day.version DESC
+            """,
+            (player_ids, season.season_start, now),
+        ).fetchall()
+    }
+
+
 def player_cards(
     connection: Any,
     players: list[tuple[int, str, str | None, str | None, str | None]],
@@ -566,6 +655,7 @@ def player_cards(
             (ids, ranked_day_for(now).start),
         ).fetchall()
     }
+    left = left_legend_i(connection, ids, now)
     cards = []
     for player_id, tag, name, clan, league in players:
         lookup = api_player_lookup._lookup(connection, tag, now)
@@ -588,6 +678,8 @@ def player_cards(
         if lookup["state"] in ("not_in_legend", "uncertain"):
             # Off the board, the newest saved profile's trophies, as on its page.
             card["trophies"] = lookup["profile"]["trophies"]
+            # And this Season's Legend I part, when the player left it.
+            card["left_legend_i"] = left.get(player_id)
         elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(
@@ -750,6 +842,20 @@ def get_player_season_summary(
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)
             )
+            # Which weeks were Legend I, so a Season the player left or
+            # joined partway counts only its Legend I days as missing.
+            result["season_weeks"] = [
+                {
+                    "week_start": week["week_start"].isoformat(),
+                    "league": week["league"],
+                    "entry": week["entry"],
+                }
+                for week in _season_weeks(
+                    connection,
+                    int(record["player_id"]),
+                    datetime.fromtimestamp(int(official_season_id), UTC),
+                )
+            ]
             return result
         if history is None:
             return None
