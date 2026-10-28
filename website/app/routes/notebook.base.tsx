@@ -275,17 +275,21 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <p className="nb-hint">{recordLine(notebook)}</p>
       </section>
       {base.mine ? (
-        <NoteBox key={base.id} base={base} note={detail?.note ?? ""} />
+        <NoteBox
+          key={base.id}
+          base={base}
+          note={detail?.note ?? ""}
+          crew={crew?.id ?? null}
+        />
       ) : detail?.note ? (
         <p className="nb-note-text">{detail.note}</p>
       ) : null}
       {manage ? (
         <div className="nb-delete">
-          {running ? (
+          {running && !crew ? (
             <p className="nb-hint">
-              {crew
-                ? `Someone in ${crew.name} runs it, so it stays until they pick another base.`
-                : "One of your accounts runs it, so it stays in your notebook until you pick another base."}
+              One of your accounts runs it, so it stays in your notebook until you pick
+              another base.
             </p>
           ) : removing ? (
             <>
@@ -390,9 +394,9 @@ function Stars({ record }: { record: BaseRecord }) {
 // an older text can never land after a newer one.
 let noteSaves: Promise<unknown> = Promise.resolve();
 
-function sendNote(base: string, note: string): Promise<boolean> {
+function sendNote(base: string, note: string, crew: string | null): Promise<boolean> {
   const body = new URLSearchParams({
-    change: JSON.stringify({ action: "edit", base, note }),
+    change: JSON.stringify({ action: "edit", base, note, ...(crew ? { crew } : {}) }),
   });
   const sent = noteSaves.then(() =>
     fetch(SAVE, { method: "POST", body }).then(
@@ -406,7 +410,16 @@ function sendNote(base: string, note: string): Promise<boolean> {
 
 /** The base's note, saved as the Clasher types, when the box loses focus,
  * and when the page closes. */
-function NoteBox({ base, note }: { base: NotebookBase; note: string }) {
+function NoteBox({
+  base,
+  note,
+  crew,
+}: {
+  base: NotebookBase;
+  note: string;
+  /** The Crew whose page this is, so the note saves through its notebook. */
+  crew: string | null;
+}) {
   const [text, setText] = useState(note);
   const [saved, setSaved] = useState<"" | "Saved" | "Not saved">("");
   const timer = useRef<number | undefined>(undefined);
@@ -419,7 +432,7 @@ function NoteBox({ base, note }: { base: NotebookBase; note: string }) {
     const value = waiting.current;
     if (value === null) return;
     waiting.current = null;
-    void sendNote(base.id, value).then((ok) => {
+    void sendNote(base.id, value, crew).then((ok) => {
       if (open.current && waiting.current === null) setSaved(ok ? "Saved" : "Not saved");
     });
   };

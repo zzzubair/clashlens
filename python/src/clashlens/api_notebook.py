@@ -510,23 +510,26 @@ _MANAGES = {"owner", "admin"}
 def _crew(connection: Any, crew: str, account_id: int, *, lock: bool) -> dict[str, Any]:
     """The Crew ``crew`` (its public id) and the account's role in it; a
     Crew the account isn't in is not found, as on its other private pages.
-    A write locks the Crew, so one change to its notebook goes at a time."""
+    A write locks the Crew first and reads the role afterwards, so one change
+    to its notebook goes at a time and a role changed meanwhile is the one
+    it sees."""
     try:
         public_id = uuid.UUID(crew)
     except ValueError:
         raise ApiError(404, "crew_not_found") from None
     row = connection.execute(
-        """
-        SELECT crew.id, crew.public_id, crew.name, member.role FROM crews AS crew
-        JOIN crew_accounts AS member ON member.crew_id = crew.id AND member.account_id = %s
-        WHERE crew.public_id = %s
-        """ + (" FOR NO KEY UPDATE OF crew" if lock else ""),
-        (account_id, public_id),
+        "SELECT id, public_id, name FROM crews WHERE public_id = %s"
+        + (" FOR NO KEY UPDATE" if lock else ""),
+        (public_id,),
     ).fetchone()
-    if row is None:
+    member = None if row is None else connection.execute(
+        "SELECT role FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
+        (row[0], account_id),
+    ).fetchone()
+    if member is None:
         raise ApiError(404, "crew_not_found")
     return {"row": int(row[0]), "id": str(row[1]), "name": _text(row[2]),
-            "role": _text(row[3])}
+            "role": _text(member[0])}
 
 
 def _crews(connection: Any, account_id: int) -> list[dict[str, Any]]:
@@ -1040,8 +1043,11 @@ def save(
                 _edit(connection, base_id, body.name, body.link, body.note)
             else:
                 _may(notebook, _MANAGES, entry)
-                if base_id in (notebook.mine_up(history, notebook.today)
-                               | notebook.mine_up(history, notebook.tomorrow)):
+                # A Crew's notebook has no picks, so taking a base out of it
+                # changes nobody's runs.
+                if notebook.crew is None and base_id in (
+                        notebook.mine_up(history, notebook.today)
+                        | notebook.mine_up(history, notebook.tomorrow)):
                     raise ApiError(422, "base_running")
                 entry_before = entry_state(base_id)
                 connection.execute(

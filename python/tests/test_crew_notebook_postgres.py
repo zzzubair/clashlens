@@ -155,6 +155,11 @@ def test_a_crew_notebook_shows_one_record_from_everyone_who_ran_a_base(
                 kais = ok("kai", "GET", NOTEBOOK)
                 kai_out = refused("kai", "GET", f"{NOTEBOOK}?crew={titans}")
                 members = ok("rin", "GET", f"{CREWS}/{titans}")["members"]
+                # Zed runs Ring, but taking it out of Owls changes nobody's
+                # runs: it stays in his own notebook.
+                ok("rin", "POST", NOTEBOOK, {"action": "remove", "base": ring, "crew": owls})
+                owls_after = ok("zed", "GET", f"{NOTEBOOK}?crew={owls}")
+                zeds_after = ok("zed", "GET", NOTEBOOK)
         finally:
             owner.close()
             api.close()
@@ -191,3 +196,5 @@ def test_a_crew_notebook_shows_one_record_from_everyone_who_ran_a_base(
     assert kai_out == (404, "crew_not_found")
     assert [(member["username"], member["role"]) for member in members] == [
         ("rin", "owner"), ("sam", "uploader")]
+    assert owls_after["bases"] == []
+    assert {base["id"]: base["status"] for base in zeds_after["bases"]} == {ring: "running"}
