@@ -426,8 +426,8 @@ describe("player route historical independence", () => {
       historical: null,
       historicalError: null,
     });
-    expect(html.match(/class="legend-day"/g)).toHaveLength(28);
-    expect(html.match(/class="battle-profile-link"/g)).toHaveLength(448);
+    expect(html.match(/<details class="log-day/g)).toHaveLength(28);
+    expect(html.match(/class="battle-row /g)).toHaveLength(448);
     expect(html.match(/>Show army</g)).toHaveLength(448);
     expect(html).not.toContain("army-portraits");
     expect(html).toContain("Synthetic Clasher 448");
@@ -466,7 +466,7 @@ describe("player route historical independence", () => {
       },
       "",
     );
-    expect(html.match(/class="battle-profile-link"/g)).toHaveLength(9);
+    expect(html.match(/class="battle-row /g)).toHaveLength(9);
     expect(html).toContain("Opponent 9");
     expect(html).not.toContain("Empty attack slot 9");
     expect(html).toContain(
@@ -773,21 +773,19 @@ describe("automatic tag lookup", () => {
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
     expect(await render(stale)).toContain(
-      "Updated 7 Sep 2026, 12:00 UTC · 2 hours oldBattle history updated 7 Sep 2026, 11:40 UTC · 2 hours old",
+      "Updated 7 Sep 2026, 12:00 UTC · 2 hours old · Battles 7 Sep 2026, 11:40 UTC · 2 hours old",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
-    expect(fresh).toContain(
-      "Updated 7 Sep 2026, 12:00 UTCBattle history updated not yet",
-    );
+    expect(fresh).toContain("Updated 12:00 UTC · Battles not updated yet");
     const oldHistory = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 7 Sep 2026, 12:00 UTCBattle history updated 7 Sep 2026, 11:40 UTC · 20 minutes old",
+      "Updated 12:00 UTC · Battles 7 Sep 2026, 11:40 UTC · 20 minutes old",
     );
   });
 
@@ -1177,7 +1175,7 @@ describe("player day honesty", () => {
   }
 
   function dayHtml(html: string, key: string) {
-    return html.split(`id="legend-day-${key}"`)[1].split("</details>")[0];
+    return html.split(`id="legend-day-${key}"`)[1].split("</div></details>")[0];
   }
 
   const net = (value: string) =>
@@ -1204,9 +1202,9 @@ describe("player day honesty", () => {
     expect(today).toContain("<span>0 from battles</span>");
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
-    expect(today.match(/label="(Attack|Defense) \d not recorded yet"/g)).toHaveLength(16);
-    expect(today).toContain('aria-hidden="true">—</span>');
-    expect(today.match(/>(—|Not recorded)</g)).toEqual(Array(16).fill(">—<"));
+    expect(today).toContain(">8 attacks not recorded yet</li>");
+    expect(today).toContain(">8 defenses not recorded yet</li>");
+    expect(today).not.toContain("not recorded<");
     expect(html).not.toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
@@ -1424,14 +1422,17 @@ describe("player day honesty", () => {
       },
       `?season=${SEASON}`,
     ).then((value) => value.replaceAll("<!-- -->", ""));
-    const rows = html.split("<tbody>").at(-1)!.split("</tbody>")[0].split("</tr>");
-    expect(rows[0]).toContain('<summary>1<span class="day-mark" title="Calculated');
-    // EOD change sits beside End, apart from battle net, and is provisional
-    // unless its proof is accepted; an unknown proof state is not accepted.
-    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6,026</td><td>+40</td>");
-    expect(rows[1]).toContain('<td>6,026<span class="day-mark" title="Provisional">');
-    expect(rows[2]).toContain("(provisional)</span></span></td><td>+40</td>");
-    expect(rows[3]).toContain('<td>6,026</td><td>+40<span class="day-mark"');
+    const rows = html.split('label="Daily trophy totals"')[1].split("</details>");
+    const text = rows.map((row) => row.replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
+    expect(rows[0]).toContain('Day 1</small><span class="day-mark" title="Calculated');
+    // EOD change sits apart from battle net, and is provisional unless its
+    // proof is accepted; an unknown proof state is not accepted.
+    expect(text[0]).toContain("End of day 6,026 Trophy change +26");
+    expect(text[0]).toContain("net +26 EOD change from previous day +40 Attacks");
+    expect(rows[1]).toContain('6,026<span class="day-mark" title="Provisional">');
+    expect(text[2]).toContain("6,026 (provisional) Trophy change Unknown");
+    expect(text[2]).toContain("net +26 EOD change from previous day +40 Attacks");
+    expect(rows[3]).toContain('<dd>+40<span class="day-mark" title="Provisional">');
     expect(rows[1]).toContain("Uncertain");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(
@@ -1439,27 +1440,26 @@ describe("player day honesty", () => {
     );
     expect(rows[1]).not.toContain("missing_end_baseline");
     expect(rows[2]).toContain("Uncertain");
-    expect(rows[2]).toContain("<td>Unknown</td><td>+26</td>");
     expect(rows[3]).toContain("Uncertain");
     expect(rows[3]).not.toContain("Calculated");
     expect(rows[3]).toContain("The evidence for this day conflicts.");
     expect(rows[4]).toContain(
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is uncertain.",
     );
-    expect(rows[4]).toContain("<td>+310</td><td>0</td><td>0</td><td>+310</td>");
+    expect(text[4]).toContain(
+      "Trophy change 0 Reset rank Unknown Attacks +310 Defenses 0",
+    );
+    expect(text[4]).toContain("Recorded battle net +310");
     expect(rows[5]).toContain("<strong>Calculated.</strong>");
     expect(rows[5]).not.toContain("Uncertain");
-    expect(rows[5]).toContain("<td>-11</td><td>-11</td>");
+    expect(text[5]).toMatch(/Trophy change -11 .*battle net -11 /);
     expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
     expect(rows[6]).toContain("Uncertain");
     expect(rows[6]).toContain(
       "The two players&#x27; battle logs disagree about a result.",
     );
     expect(rows[7]).toContain('<span class="day-mark day-mark-gap" title="Uncertain">');
-    expect(html).toContain("Attacks recorded");
-    expect(html).toContain("Defenses recorded");
-    expect(html).toContain("Recorded battle net");
-    expect(html).toContain("EOD change from previous day");
+    expect(text[0]).toContain("Attacks recorded 8 Defenses recorded 8 Adjustment No");
   });
 
   it("shows the received warnings instead of a late-tracking explanation", async () => {
@@ -1485,7 +1485,7 @@ describe("player day honesty", () => {
     });
     expect(html).not.toContain("tracking started partway");
     expect(html).toContain(
-      "The collector has not confirmed this player profile within the current freshness limit.",
+      "This profile hasn&#x27;t been confirmed recently, so it may be behind.",
     );
     expect(html).toContain(
       "Ending evidence arrives after Reset. Some daily evidence is unavailable.",

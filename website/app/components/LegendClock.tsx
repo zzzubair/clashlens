@@ -24,6 +24,15 @@ export function signed(value: number): string {
 }
 
 /** "★★☆" for two stars. */
+/** Whole minutes left in the Legend day, and the "9h 05m" the clocks show for them. */
+export function resetCountdown(nowMs: number): { left: number; text: string } {
+  const left = Math.ceil((nextResetMs(nowMs) - nowMs) / 60_000);
+  return {
+    left,
+    text: `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`,
+  };
+}
+
 export function starText(stars: number): string {
   const shown = Math.max(0, Math.min(3, stars));
   return "★".repeat(shown) + "☆".repeat(3 - shown);
@@ -165,6 +174,8 @@ export function LegendClock({
     null,
   );
   const [phone, setPhone] = useState(false);
+  // A phone starts with the small clock; the full one has battles to tap.
+  const [full, setFull] = useState(false);
   const detail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -196,11 +207,8 @@ export function LegendClock({
   const format = timeFormatter(timeZone);
   const elapsed =
     nowMs === null || dayStart === null ? null : (nowMs - dayStart) / 60_000;
-  const left = elapsed === null ? null : Math.ceil(DAY_MINUTES - elapsed);
-  const countdown =
-    left === null
-      ? "–"
-      : `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`;
+  const left = nowMs === null ? null : resetCountdown(nowMs).left;
+  const countdown = nowMs === null ? "–" : resetCountdown(nowMs).text;
   const resetLabel = resetMs === null ? "--:--" : format.format(resetMs);
   const marks = dayStart === null ? [] : clockMarks(battles, dayStart);
   const [arcX, arcY] = point(elapsed ?? 0, RING - 8);
@@ -210,9 +218,10 @@ export function LegendClock({
       current?.index === index ? null : { index, anchor: target.getBoundingClientRect() },
     );
   const openMark = open ? marks[open.index] : undefined;
+  const small = phone && !full;
 
   return (
-    <div className="legend-clock" ref={detail}>
+    <div className="legend-clock" ref={detail} data-full={full || undefined}>
       <svg
         className="legend-clock-face"
         viewBox="-138 -138 276 276"
@@ -230,12 +239,16 @@ export function LegendClock({
           const minutes = index * 180;
           const [x1, y1] = point(minutes, RING);
           const [x2, y2] = point(minutes, RING - 12);
-          const [lx, ly] = point(minutes, RING + 18);
+          // Side labels start just past the ring and grow outward, so a larger
+          // label never runs into the ring; the bottom one sits centred below.
+          const bottom = index === 4;
+          const [lx, ly] = point(minutes, bottom ? RING + 18 : RING + 6);
+          const anchor = bottom ? "middle" : lx < 0 ? "end" : "start";
           return (
             <g key={minutes}>
               <line className="clock-tick" x1={x1} y1={y1} x2={x2} y2={y2} />
               {index > 0 && dayStart !== null ? (
-                <text className="clock-hour" x={lx} y={ly + 4}>
+                <text className="clock-hour" x={lx} y={ly + 4} textAnchor={anchor}>
                   {format.format(dayStart + minutes * 60_000)}
                 </text>
               ) : null}
@@ -251,7 +264,7 @@ export function LegendClock({
           rx="5"
         />
         <text className="clock-reset-label" x="0" y="-117">
-          RESET {resetLabel}
+          Reset {resetLabel}
         </text>
         {marks.map((mark, index) => {
           const [x, y] = point(mark.minutes, mark.kind === "attack" ? 78 : 56);
@@ -261,7 +274,7 @@ export function LegendClock({
               className="clock-mark"
               transform={`translate(${x.toFixed(1)} ${y.toFixed(1)})`}
               role="button"
-              tabIndex={0}
+              tabIndex={small ? -1 : 0}
               aria-label={markLabel(mark)}
               aria-expanded={open?.index === index}
               onClick={(event) => toggle(index, event.currentTarget)}
@@ -272,7 +285,7 @@ export function LegendClock({
                 }
               }}
             >
-              <circle r="15" className="clock-hit" />
+              <circle r="18" className="clock-hit" />
               <g transform="scale(1.3)">{mark.kind === "attack" ? SWORD : SHIELD}</g>
               {mark.battles.length > 1 ? (
                 <>
@@ -296,6 +309,21 @@ export function LegendClock({
           to Reset
         </text>
       </svg>
+      {/* Phones only: the countdown beside the small dial, and the switch to the
+          full clock and back. */}
+      <p className="legend-clock-summary" aria-hidden="true">
+        <b>{countdown}</b> to Reset at {resetLabel}
+      </p>
+      <button
+        type="button"
+        className="button secondary legend-clock-toggle"
+        onClick={() => {
+          setOpen(null);
+          setFull(!full);
+        }}
+      >
+        {full ? "Show small clock" : "Show full clock"}
+      </button>
       {openMark ? (
         <MarkDetail
           mark={openMark}

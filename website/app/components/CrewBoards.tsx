@@ -1,6 +1,7 @@
-import { Link } from "react-router";
+import { Link, type To } from "react-router";
 
 import {
+  BOARDS,
   formatAverage,
   PERIOD_LABELS,
   PERIODS,
@@ -23,8 +24,39 @@ export function RoleChip({ role }: { role: CrewRole }) {
   );
 }
 
-/** Today / Last 7 days / Season, as links so it works without JavaScript. */
-export function PeriodSwitch({ period }: { period: CrewPeriod }) {
+/** How full a crew is, as a bar; the words beside it say the numbers. */
+export function PlacesMeter({ used, size }: { used: number; size: number }) {
+  const value = `${Math.min(100, (used / size) * 100)}%`;
+  return (
+    <span className="meter" aria-hidden="true">
+      <span style={{ "--value": value } as React.CSSProperties} />
+    </span>
+  );
+}
+
+/**
+ * The crew page's address for a board and period. Live and Season are the
+ * defaults, so they stay out of it; a board's own page passes no board.
+ */
+export function crewSearch(period: CrewPeriod, board?: BoardKey): string {
+  const params = new URLSearchParams();
+  if (board !== undefined && board !== "live") params.set("board", BOARDS[board].slug);
+  if (period !== "season") params.set("period", period);
+  const search = params.toString();
+  return search === "" ? "" : `?${search}`;
+}
+
+/**
+ * Today / Last 7 days / Season, as links so it works without JavaScript. On
+ * the crew page `board` keeps the board picked on a phone.
+ */
+export function PeriodSwitch({
+  period,
+  board,
+}: {
+  period: CrewPeriod;
+  board?: BoardKey;
+}) {
   return (
     <nav aria-label="Period" className="leaderboard-view-switch crew-period">
       {PERIODS.map((value) => (
@@ -32,10 +64,42 @@ export function PeriodSwitch({ period }: { period: CrewPeriod }) {
           key={value}
           className="button secondary"
           aria-current={value === period ? "page" : undefined}
-          to={{ search: value === "season" ? "" : `?period=${value}` }}
+          to={{ search: crewSearch(value, board) }}
           preventScrollReset
         >
           {PERIOD_LABELS[value]}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+export const DEFENSE_BOARDS = ["best_defenders", "worst_defenders"] as const;
+
+/**
+ * Best and Worst defenders are the same accounts in opposite orders, so they
+ * share one card with this switch between them.
+ */
+export function DefenseOrder({
+  board,
+  to,
+}: {
+  board: BoardKey;
+  to: (board: BoardKey) => To;
+}) {
+  return (
+    <nav aria-label="Defense order" className="leaderboard-view-switch crew-order">
+      {DEFENSE_BOARDS.map((key) => (
+        <Link
+          key={key}
+          className="button secondary"
+          aria-current={key === board ? "page" : undefined}
+          to={to(key)}
+          replace
+          preventScrollReset
+        >
+          {key === "best_defenders" ? "Best" : "Worst"}
+          <span className="sr-only"> defenders</span>
         </Link>
       ))}
     </nav>
@@ -122,7 +186,9 @@ function RowValue({
   }
   const battles = `${row.battles} ${board === "attackers" ? "attack" : "defense"}${row.battles === 1 ? "" : "s"}`;
   return (
-    <span className={`crew-value ${board === "attackers" ? "crew-gain" : "crew-loss"}`}>
+    <span
+      className={`crew-value ${board === "attackers" ? "score-positive" : "score-negative"}`}
+    >
       {formatAverage(row, board, period)}
       <small>
         {period === "today"

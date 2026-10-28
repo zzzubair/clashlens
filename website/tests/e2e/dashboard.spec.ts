@@ -20,10 +20,10 @@ const ALL_CARDS = [
   "Legend day",
   "Legend clock",
   "Bases you attacked",
-  "Goal",
-  "Armies on defense",
   "Rivals watch",
   "Season heat map",
+  "Goal",
+  "Armies on defense",
   "Cutoffs",
   "Season graph",
   "Recent form",
@@ -71,7 +71,7 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect(customise).toBeEnabled();
   await customise.click();
   const bar = page.getByRole("region", { name: "Customise dashboard" });
-  await expect(bar.getByText("Default layout")).toBeVisible();
+  await expect(bar.getByText("Default layout", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Move Goal earlier" }).click();
   await page.getByRole("button", { name: "Remove Season heat map" }).click();
   await expect(bar.getByText("Your own layout")).toBeVisible();
@@ -86,10 +86,10 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   const own = [
     "Legend day",
     "Legend clock",
-    "Goal",
     "Bases you attacked",
-    "Armies on defense",
     "Rivals watch",
+    "Goal",
+    "Armies on defense",
     ...ALL_CARDS.slice(7),
     "Season heat map",
   ];
@@ -213,8 +213,8 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect(settings).toBeHidden();
   await expect(page.getByRole("region", { name: "Goal" })).toContainText("Top 50");
 
-  // Reset to default puts the default layout back, and it stays after a reload.
-  await bar.getByRole("button", { name: "Reset to default" }).click();
+  // Use default layout puts the default layout back, and it stays after a reload.
+  await bar.getByRole("button", { name: "Use default layout" }).click();
   await expect(bar.getByText("Default layout", { exact: true })).toBeVisible();
   await bar.getByRole("button", { name: "Done" }).click();
   await expect(bar).toBeHidden();
@@ -235,6 +235,16 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     expect(box.width).toBe(boxes[0]!.width);
     if (index > 0) expect(box.top).toBeGreaterThan(boxes[index - 1]!.bottom);
   }
+  // The phone clock starts small; Show full clock opens the dial and back again.
+  const clock = page.getByRole("region", { name: "Legend clock" });
+  const dial = clock.locator(".legend-clock-face");
+  const smallHeight = (await dial.boundingBox())!.height;
+  await clock.getByRole("button", { name: "Show full clock" }).click();
+  await expect
+    .poll(async () => (await dial.boundingBox())!.height)
+    .toBeGreaterThan(smallHeight);
+  await clock.getByRole("button", { name: "Show small clock" }).click();
+  await expect.poll(async () => (await dial.boundingBox())!.height).toBe(smallHeight);
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await expect(bar).toBeInViewport();
   await bar.getByRole("button", { name: "Done" }).click();
@@ -280,6 +290,12 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   }).toPass({ intervals: [2_000], timeout: 60_000 });
   await welcome.getByRole("button", { name: /Use our layout/ }).click();
   await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
+  // On a 360px phone two players' tabs scroll in their row, not the page.
+  await page.setViewportSize({ width: 360, height: 740 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBe(360);
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   const tab = (tag: string) =>
     page.locator(`.dash-account[href$="player=${encodeURIComponent(tag)}"]`);

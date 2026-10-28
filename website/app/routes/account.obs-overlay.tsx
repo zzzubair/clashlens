@@ -254,10 +254,7 @@ export default function ObsOverlayRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell obs-settings">
       <section className="hero" aria-labelledby="obs-overlay-title">
         <h1 id="obs-overlay-title">Stream overlay</h1>
-        <p className="lede">
-          Show your live Legend day on stream. Pick a player, make it fit your layout,
-          then paste one address into OBS.
-        </p>
+        <p className="lede">Your live Legend day, on stream.</p>
       </section>
       {data.overlay === null ? (
         <aside className="notice notice-unavailable" role="alert">
@@ -550,12 +547,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     <div className="obs-layout">
       <form onSubmit={(event) => event.preventDefault()}>
         <section className="form-panel" aria-labelledby="obs-player">
-          <h2 id="obs-player">
-            <span className="obs-step">1</span> Player
-          </h2>
-          <p className="obs-help">
-            Your verified players. The overlay follows the one you pick.
-          </p>
+          <h2 id="obs-player">Player</h2>
           <div className="obs-players">
             {overlay.players.map((player) => (
               <label className="obs-player" key={player.tag}>
@@ -584,13 +576,8 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-layout">
-          <h2 id="obs-layout">
-            <span className="obs-step">2</span> Layout
-          </h2>
-          <p className="obs-help">
-            Start from a shape, then drag the overlay&apos;s edges or corners in the
-            preview to any size. What&apos;s inside rearranges to fit.
-          </p>
+          <h2 id="obs-layout">Layout</h2>
+          <p className="obs-help">Pick a shape, then drag its edges in the preview.</p>
           <div className="obs-shapes" role="radiogroup" aria-label="Shape">
             {SHAPES.map(([value, label, hint, [pw, ph]]) => (
               <label className="obs-shape" key={value}>
@@ -676,9 +663,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-shows">
-          <h2 id="obs-shows">
-            <span className="obs-step">3</span> What it shows
-          </h2>
+          <h2 id="obs-shows">What it shows</h2>
           <div className="obs-checks">
             {OVERLAY_PARTS.map((part) => (
               <label key={part}>
@@ -714,15 +699,76 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
       </form>
 
-      <div>
+      <div className="obs-side">
+        {/* The picture leads, outside its panel, so narrow screens can keep it
+            in view while the choices change it. */}
+        <div
+          className="obs-stagewrap"
+          ref={wrap}
+          style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
+        >
+          {/* A touch screen's hint, on the picture it is about. */}
+          <p className="obs-stage-hint" aria-hidden="true">
+            Drag to move it, drag a dot to resize
+          </p>
+          <div
+            className="obs-canvas"
+            style={
+              {
+                width: place.cw,
+                height: place.ch,
+                transform: `scale(${scale})`,
+                // Lets the touch resize dots keep one size on screen.
+                "--obs-k": scale || 1,
+              } as CSSProperties
+            }
+          >
+            <div className="obs-cam">camera</div>
+            <iframe
+              ref={frame}
+              title="Overlay preview"
+              src={`/account/obs-overlay/preview?${initialQuery}`}
+              style={box}
+            />
+            {guides.v !== null ? (
+              <div className="obs-guide v" style={{ left: guides.v }} />
+            ) : null}
+            {guides.h !== null ? (
+              <div className="obs-guide h" style={{ top: guides.h }} />
+            ) : null}
+            <div
+              className={`obs-handle${dragging ? " dragging" : ""}`}
+              style={box}
+              role="group"
+              tabIndex={0}
+              aria-label="Drag to place the overlay; drag an edge or corner to resize"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onKeyDown={onKeyDown}
+            >
+              <span className="obs-tip">
+                x {Math.round(place.x)}, y {Math.round(place.y)} · {Math.round(place.w)} ×{" "}
+                {Math.round(place.h)}
+              </span>
+              {["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((dir) => (
+                <i className="obs-rz" data-dir={dir} key={dir} />
+              ))}
+            </div>
+          </div>
+        </div>
         <section className="form-panel" aria-labelledby="obs-preview">
           <div className="obs-preview-head">
             <h2 id="obs-preview">
               Preview{" "}
               <span className="obs-help">
-                your stream, to scale. Drag the overlay to move it (hold Shift to snap to
-                edges), drag an edge or corner to resize, or click it and use the arrow
-                keys.
+                your stream, to scale.
+                <span className="obs-help-keys">
+                  {" "}
+                  Drag the overlay to move it (hold Shift to snap to edges), drag an edge
+                  or corner to resize, or click it and use the arrow keys.
+                </span>
               </span>
             </h2>
             <div className="obs-pos" role="group" aria-label="Snap to">
@@ -781,50 +827,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             </div>
             <p className="obs-help">{HELP[form.fit]}</p>
           </div>
-          <div
-            className="obs-stagewrap"
-            ref={wrap}
-            style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
-          >
-            <div
-              className="obs-canvas"
-              style={{ width: place.cw, height: place.ch, transform: `scale(${scale})` }}
-            >
-              <div className="obs-cam">camera</div>
-              <iframe
-                ref={frame}
-                title="Overlay preview"
-                src={`/account/obs-overlay/preview?${initialQuery}`}
-                style={box}
-              />
-              {guides.v !== null ? (
-                <div className="obs-guide v" style={{ left: guides.v }} />
-              ) : null}
-              {guides.h !== null ? (
-                <div className="obs-guide h" style={{ top: guides.h }} />
-              ) : null}
-              <div
-                className={`obs-handle${dragging ? " dragging" : ""}`}
-                style={box}
-                role="group"
-                tabIndex={0}
-                aria-label="Drag to place the overlay; drag an edge or corner to resize"
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={endDrag}
-                onPointerCancel={endDrag}
-                onKeyDown={onKeyDown}
-              >
-                <span className="obs-tip">
-                  x {Math.round(place.x)}, y {Math.round(place.y)} · {Math.round(place.w)}{" "}
-                  × {Math.round(place.h)}
-                </span>
-                {["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((dir) => (
-                  <i className="obs-rz" data-dir={dir} key={dir} />
-                ))}
-              </div>
-            </div>
-          </div>
           <div className="obs-under">
             <button
               type="button"
@@ -867,9 +869,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-add">
-          <h2 id="obs-add">
-            <span className="obs-step">4</span> Add it to OBS
-          </h2>
+          <h2 id="obs-add">Add it to OBS</h2>
           <p className="obs-help">
             Your own private link. Paste it into OBS once: every change you make on this
             page shows on stream within 3 seconds, with no new link.

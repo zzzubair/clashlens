@@ -4,82 +4,274 @@
  */
 /* ---------- Card 1: Legend day ---------- */
 
-.legend-day-card {
-  display: grid;
-  gap: 0.5rem;
+/* The card it sits in is measured, so a wide card can rearrange this grid. */
+.dash-card:has(> .legend-day-card) {
+  container-type: inline-size;
 }
 
+.legend-day-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Trophies with today's change on a chip, and the time left in the Legend day. */
 .legend-day-numbers {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.75rem;
-}
-
-.legend-day-ranks {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.7rem;
-  background: var(--cl-panel);
-  border-radius: var(--cl-radius);
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
 }
 
-.legend-day-ranks b {
-  display: block;
-  font-family: var(--cl-font-heading);
-  font-size: 1.4rem;
-  font-weight: 400;
+.legend-day-score {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.legend-day-score .trophy-mark {
+  width: 1.7rem;
+  height: 1.7rem;
+  margin: 0;
+  fill: color-mix(in srgb, var(--cl-gold) 22%, transparent);
+  stroke-width: 1.5;
+}
+
+.legend-day-net {
+  padding: 0.2rem 0.5rem;
+  background: var(--cl-panel);
+  border-radius: 6px;
+  font: 700 1.15rem/1 var(--cl-font-score);
   font-variant-numeric: tabular-nums;
 }
 
+.legend-day-net.positive {
+  background: color-mix(in srgb, var(--cl-positive) 13%, var(--cl-surface));
+}
+
+.legend-day-net.negative {
+  background: color-mix(in srgb, var(--cl-negative) 13%, var(--cl-surface));
+}
+
+.legend-day-net-label {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.legend-day-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+}
+
+.legend-day-countdown svg {
+  width: 1.6rem;
+  height: 1.6rem;
+  transform: rotate(-90deg);
+}
+
+.legend-day-countdown circle {
+  fill: none;
+  stroke: var(--cl-border);
+  stroke-width: 4;
+}
+
+.legend-day-countdown .legend-day-countdown-left {
+  stroke: var(--cl-action);
+  stroke-linecap: round;
+}
+
+.legend-day-countdown b {
+  color: var(--cl-ink);
+  font: 700 1.1rem var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Last Reset, Now on its rank plate, Next Reset: one line, joined like a track. */
+.legend-day-ranks {
+  display: grid;
+  grid-template-columns: auto minmax(0.75rem, 1fr) auto minmax(0.75rem, 1fr) auto;
+  align-items: start;
+  gap: 0 0.5rem;
+}
+
+.legend-day-ranks > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.legend-day-ranks > i {
+  height: 1px;
+  margin-top: 1.7rem;
+  background: var(--cl-border);
+}
+
+.legend-day-ranks b {
+  font: 700 1.2rem/1.3 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-now {
+  justify-items: center;
+}
+
+.legend-day-range {
+  justify-items: end;
+  text-align: right;
+}
+
 .legend-day-range b {
-  color: var(--cl-accent);
+  color: var(--cl-ink);
+  font-size: 1.05rem;
 }
 
 .legend-day-projected {
   display: flex;
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.2rem 0.5rem;
+  margin-top: 0.6rem;
   padding-top: 0.5rem;
   border-top: 1.5px dashed var(--cl-card-line);
 }
 
 .legend-day-projected strong {
   color: var(--cl-accent);
-  font-family: var(--cl-font-heading);
-  font-size: 1.1rem;
-  font-weight: 400;
+  font: 700 1.1rem var(--cl-font-score);
   font-variant-numeric: tabular-nums;
 }
 
-.legend-day-projected .dash-muted {
-  flex-basis: 100%;
-  font-size: 0.75rem;
+/* The time to Reset already shows on a Legend clock card right beside it. */
+.dash-card:has(> .legend-day-card):has(+ [data-card="legend-clock"])
+  .legend-day-countdown,
+[data-card="legend-clock"] + .dash-card .legend-day-countdown {
+  display: none;
 }
 
-.legend-day-arrow {
-  color: var(--cl-action);
-  font-size: 1.4rem;
-  font-weight: 900;
+/* Beside the Legend day card, the clock shows the same read, so its age shows
+   once, on the Legend day card. */
+.dash-card:has(> .legend-day-card) + [data-card="legend-clock"] .dash-card-meta,
+[data-card="legend-clock"]:has(+ .dash-card > .legend-day-card) .dash-card-meta {
+  display: none;
 }
 
+.legend-day-slots {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Each battle row: its icon, how many of 8 and the total, over its 8 slots. */
 .legend-day-battles {
   display: grid;
-  grid-template-columns: 7rem minmax(0, 1fr);
-  gap: 0.5rem;
+  gap: 0.35rem;
+}
+
+.legend-day-battles-head {
+  display: flex;
   align-items: center;
+  gap: 0.4rem;
 }
 
-.legend-day-battles > div > * {
-  display: block;
+.legend-day-battles-head .dash-label {
+  display: inline-flex;
+  color: var(--cl-faint);
 }
 
+.legend-day-battles-head .dash-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.legend-day-battles-head b {
+  margin-left: auto;
+  font: 700 1.05rem var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A wide card puts the ranks beside the numbers, and the slots under both
+   grow to fill the height beside a taller card. */
+@container (min-width: 40rem) {
+  .dash-card > .legend-day-card {
+    flex-grow: 1;
+    grid-template: "head head" "numbers ranks" "slots slots" 1fr "chip chip" / auto minmax(
+        0,
+        1fr
+      );
+    column-gap: 3rem;
+  }
+
+  .legend-day-card > .dash-card-head {
+    grid-area: head;
+  }
+
+  .legend-day-numbers {
+    grid-area: numbers;
+  }
+
+  .legend-day-ranks {
+    grid-area: ranks;
+    align-self: center;
+  }
+
+  /* A wide card has room for labels and ranks a step up. */
+  .legend-day-card :is(.dash-label, .dash-estimate) {
+    font-size: 0.85rem;
+  }
+
+  .legend-day-ranks b {
+    font-size: 1.45rem;
+  }
+
+  .legend-day-card :is(.legend-day-range b, .legend-day-projected strong) {
+    font-size: 1.3rem;
+  }
+
+  .legend-day-slots {
+    grid-area: slots;
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .legend-day-card > .dash-chip {
+    grid-area: chip;
+    justify-self: start;
+  }
+
+  .legend-day-battles {
+    grid-template-rows: auto minmax(2.3rem, 4.5rem);
+    align-content: start;
+  }
+}
+
+/* A row with no battles yet is one line: its count beside a thin track of the
+   8 slots to come. */
+.legend-day-battles:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template: auto / 8.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+/* With no battles at all, the two lines and the chip sit together under the
+   numbers, and any spare height falls below them. */
+.legend-day-card:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template-rows: repeat(4, auto) 1fr;
+}
+
+.legend-day-slots:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template-rows: auto auto;
+}
+
+.legend-day-battles:not(:has(.dash-star-box:not(.dash-star-box-empty))) .dash-star-box {
+  min-height: 0.55rem;
+  border-radius: 3px;
+}
+
+/* Eight boxes share one line, as wide as the card allows. */
 .dash-star-boxes {
   display: flex;
-  flex-wrap: wrap;
   gap: 0.3rem;
   margin: 0;
   padding: 0;
@@ -88,222 +280,29 @@
 
 .dash-star-box {
   display: flex;
+  flex: 1 1 0;
+  max-width: 4.5rem;
   flex-direction: column;
   align-items: center;
-  width: 2.8rem;
+  min-width: 0;
   padding: 0.1rem 0;
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 6px;
   font-size: 0.75rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dash-star-box-defense {
   background: var(--cl-panel);
 }
 
+/* A slot still to play is a short dashed box; beside played ones it grows
+   to their height. */
 .dash-star-box-empty {
-  min-height: 2.3rem;
-  border-style: dashed;
-  opacity: 0.45;
-}
-
-/* ---------- Card 2: Legend clock ---------- */
-
-.legend-clock {
-  display: grid;
-  place-items: center;
-}
-
-.legend-clock-face {
-  width: 100%;
-  max-width: 16.5rem;
-  overflow: visible;
-}
-
-.clock-dial {
-  fill: var(--cl-panel);
-  stroke: var(--cl-ink);
-  stroke-width: 3;
-}
-
-.clock-left {
-  fill: none;
-  stroke: var(--cl-brand-orange);
-  stroke-linecap: round;
-  stroke-width: 10;
-  opacity: 0.9;
-}
-
-.clock-tick {
-  stroke: var(--cl-ink);
-  stroke-width: 2;
-}
-
-.clock-hour {
-  fill: var(--cl-muted);
-  font-size: 12px;
-  font-weight: 700;
-  text-anchor: middle;
-}
-
-.clock-reset-tab {
-  fill: var(--cl-brand-orange);
-  stroke: var(--cl-ink);
-  stroke-width: 2;
-}
-
-.clock-reset-label {
-  fill: var(--cl-brand-night);
-  font-size: 11px;
-  font-weight: 900;
-  text-anchor: middle;
-}
-
-.clock-mark {
-  cursor: pointer;
-  outline: none;
-}
-
-.clock-mark:focus-visible .clock-hit {
-  stroke: var(--cl-brand-orange);
-  stroke-width: 3;
-}
-
-.clock-hit {
-  fill: transparent;
-}
-
-.clock-sword-blade {
-  fill: var(--cl-brand-orange);
-  stroke: var(--cl-ink);
-  stroke-linejoin: round;
-  stroke-width: 1.4;
-}
-
-.clock-ink {
-  fill: var(--cl-ink);
-}
-
-.clock-shield {
-  fill: #7a8fa6;
-  stroke: var(--cl-ink);
-  stroke-linejoin: round;
-  stroke-width: 1.6;
-}
-
-.clock-count {
-  fill: var(--cl-ink);
-}
-
-.clock-count-text {
-  fill: var(--cl-panel);
-  font-size: 10px;
-  font-weight: 900;
-  text-anchor: middle;
-}
-
-.clock-hand {
-  stroke: var(--cl-ink);
-  stroke-linecap: round;
-  stroke-width: 3;
-  pointer-events: none;
-}
-
-.clock-center {
-  fill: var(--cl-surface);
-  stroke: var(--cl-ink);
-  stroke-width: 2;
-  pointer-events: none;
-}
-
-.clock-countdown {
-  fill: var(--cl-ink);
-  font-family: var(--cl-font-heading);
-  font-size: 20px;
-  text-anchor: middle;
-  pointer-events: none;
-}
-
-.clock-caption {
-  fill: var(--cl-muted);
-  font-size: 9px;
-  font-weight: 700;
-  text-anchor: middle;
-  pointer-events: none;
-}
-
-.clock-detail {
-  z-index: 21;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
-  box-shadow: var(--cl-raise);
-  font-size: 0.88rem;
-}
-
-.clock-popover {
-  position: fixed;
-  width: 18rem;
-  padding: 0.6rem;
-  border-radius: var(--cl-radius);
-}
-
-.clock-sheet {
-  position: fixed;
-  right: 0;
-  bottom: var(--cl-bottom-tabs, 0px);
-  left: 0;
-  padding: 0.9rem 1rem 1.5rem;
-  border-radius: 16px 16px 0 0;
-}
-
-.clock-sheet-back {
-  position: fixed;
-  z-index: 20;
-  inset: 0;
-  background: rgb(29 20 38 / 0.45);
-}
-
-.clock-detail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.3rem;
-  font-family: var(--cl-font-heading);
-  font-size: 1.05rem;
-}
-
-.clock-detail-head b {
-  font-weight: 400;
-}
-
-.clock-detail-head button {
-  min-width: 2.4rem;
-  min-height: 2.4rem;
-  color: var(--cl-ink);
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font-size: 1.1rem;
-}
-
-.clock-detail-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 2.6rem;
-  gap: 0.5rem;
-  align-items: center;
-  padding: 0.35rem 0;
-  border-top: 1px solid var(--cl-border);
-}
-
-.clock-detail-row .dash-name {
-  justify-self: start;
-}
-
-.clock-detail-row b {
-  text-align: right;
+  min-height: 1.5rem;
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
 }
 
 /* ---------- Card 3: Bases you attacked ---------- */
@@ -339,7 +338,7 @@
   color: var(--cl-ink);
   border-inline: 2px solid var(--cl-card-line);
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   line-height: 1.8rem;
   text-align: center;
   white-space: nowrap;
@@ -357,8 +356,7 @@
   padding-bottom: 0.25rem;
   color: var(--cl-muted);
   font-size: 0.75rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 800;
 }
 
 .opponents-row {
@@ -427,10 +425,10 @@
 
 .dash-strength {
   padding: 0 0.45rem;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 6px;
   font-size: 0.75rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dash-strength-hard {
@@ -464,13 +462,13 @@
 
 .goal-title {
   font-size: 1.05rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .form-big {
   font-family: var(--cl-font-heading);
   font-size: 1.9rem;
-  font-weight: 400;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -491,7 +489,7 @@
   border: 2px solid currentColor;
   border-radius: 6px;
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .goal-pace-ahead,
@@ -522,7 +520,7 @@
 .goal-rows dd,
 .consistency-rows dd {
   margin: 0;
-  font-weight: 900;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -562,7 +560,7 @@
 .goal-label {
   fill: var(--cl-ink);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .goal-label-you {
@@ -592,22 +590,22 @@
 .cutoff-rows b {
   font-family: var(--cl-font-heading);
   font-size: 1.05rem;
-  font-weight: 400;
+  font-weight: 700;
   text-align: right;
 }
 
 .cutoff-rows li > span:last-child {
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   text-align: right;
 }
 
 .cutoff-rows .cutoff-you,
+/* Your own row: the ember tint and edge bar the example dashboard uses. */
 .rival-you {
-  background: var(--cl-panel);
-  outline: 2px solid var(--cl-action);
-  outline-offset: -2px;
-  font-weight: 900;
+  background: var(--cl-action-soft);
+  box-shadow: inset 3px 0 0 var(--cl-action);
+  font-weight: 800;
 }
 
 /* ---------- Rivals watch and Group watch ---------- */
@@ -625,10 +623,8 @@
   padding: 0.2rem 0.35rem;
   color: var(--cl-muted);
   font-size: 0.68rem;
-  font-weight: 900;
-  letter-spacing: 0.05em;
+  font-weight: 800;
   text-align: right;
-  text-transform: uppercase;
 }
 
 .rival-table td,
@@ -647,6 +643,19 @@
   width: 8.6rem;
 }
 
+/* The numbers in the scoreboard font, trophies largest. */
+.rival-table td:nth-child(n + 3) {
+  font-family: var(--cl-font-score);
+  font-size: 0.98rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-table td:nth-child(3) {
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
 .rival-table :is(th, td):nth-child(2),
 .group-table :is(th, td):first-child {
   width: 34%;
@@ -656,7 +665,72 @@
 .rival-moved {
   margin-left: 0.2rem;
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 800;
+}
+
+/* A rival's name opens their page, and its link covers the row, as on
+   Rankings. The transform keeps the link inside its row in older Safari. */
+.rival-table tbody tr {
+  position: relative;
+  transform: translate(0);
+}
+
+.rival-link {
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: none;
+  outline: none;
+}
+
+.rival-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
+.rival-link:focus-visible::after {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+}
+
+/* A small arrow at the row's end says it opens that player, as on Rankings. */
+.rival-table tbody td:last-child::after {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin: 0 0.1rem 0.12rem 0.6rem;
+  border-top: 2px solid var(--cl-muted);
+  border-right: 2px solid var(--cl-muted);
+  transform: rotate(45deg);
+  content: "";
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rival-table tbody tr:not(.rival-you):hover {
+    background: var(--cl-panel);
+  }
+
+  .rival-table tbody tr:hover .dash-name {
+    color: var(--cl-accent);
+    text-decoration: underline;
+  }
+}
+
+/* On a narrow card (phones, iPads) the rank change sits under the rank, so the
+   rank column stays narrow and the number columns keep room for their headings. */
+.dash-card:has(> .rival-table) {
+  container-type: inline-size;
+}
+
+@container (max-width: 40rem) {
+  .rival-table :is(th, td):first-child {
+    width: 4.4rem;
+  }
+
+  .rival-moved {
+    display: block;
+    margin-left: 0;
+  }
 }
 
 .group-picker {
@@ -664,10 +738,10 @@
   padding: 0.15rem 0.4rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 8px;
   font: inherit;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* ---------- Season heat map ---------- */
@@ -687,7 +761,7 @@
   place-items: center;
   height: 2.3rem;
   color: var(--cl-ink);
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 7px;
   font-family: var(--cl-font-heading);
   font-size: 0.78rem;
@@ -733,6 +807,12 @@
   border: 2px dashed var(--cl-action);
 }
 
+.heat-today button {
+  padding-top: 0.5rem;
+  color: var(--cl-action-text);
+  font: 700 0.55rem var(--cl-font);
+}
+
 .heat-future {
   color: var(--cl-muted);
   border-color: var(--cl-border);
@@ -761,7 +841,7 @@
 
 .heat-summary dd {
   margin: 0;
-  font-weight: 900;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -831,7 +911,7 @@
 .graph-foot b {
   font-family: var(--cl-font-heading);
   font-size: 1.15rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 /* ---------- Recent form ---------- */
@@ -859,7 +939,7 @@
   flex: 0 1 auto;
   justify-items: end;
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   text-align: right;
 }
 
@@ -879,7 +959,7 @@
   display: flex;
   height: 0.8rem;
   overflow: hidden;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 6px;
 }
 
@@ -902,7 +982,7 @@
   margin-right: 0.25rem;
   font-family: var(--cl-font-heading);
   font-size: 1rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .stars-3 {
@@ -965,7 +1045,7 @@
   align-items: flex-end;
   height: 1.3rem;
   overflow: hidden;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 5px;
 }
 
@@ -984,7 +1064,7 @@
   color: var(--cl-ink);
   font-family: var(--cl-font-heading);
   font-size: 0.85rem;
-  font-weight: 400;
+  font-weight: 700;
 }
 
 /* ---------- Narrow screens ---------- */
@@ -1014,15 +1094,18 @@
 
   .rival-table th,
   .group-table th {
+    padding-inline: 0.25rem;
     font-size: 0.64rem;
+    font-weight: 650;
+    line-height: 1.15;
     letter-spacing: 0;
     text-transform: none;
     white-space: normal;
     vertical-align: bottom;
   }
 
-  .rival-table :is(th, td),
-  .group-table :is(th, td) {
+  .rival-table td,
+  .group-table td {
     padding-inline: 0.15rem;
   }
 
@@ -1032,23 +1115,25 @@
     text-overflow: ellipsis;
   }
 
+  /* Each number column fits its heading; the name takes what is left. */
   .rival-table :is(th, td):first-child {
-    width: 4.4rem;
+    width: 3.5rem;
   }
 
-  /* The rank change sits under the rank so it never runs into the name. */
-  .rival-moved {
-    display: block;
-    margin-left: 0;
+  .rival-table :is(th, td):nth-child(2) {
+    width: auto;
   }
 
-  .rival-table :is(th, td):nth-child(2),
+  .rival-table :is(th, td):nth-child(n + 3) {
+    width: 3rem;
+  }
+
+  .rival-table :is(th, td):nth-child(4) {
+    width: 2.75rem;
+  }
+
   .group-table :is(th, td):first-child {
-    width: 25%;
-  }
-
-  .legend-day-battles {
-    grid-template-columns: minmax(0, 1fr);
+    width: 23%;
   }
 
   /* Your hit sets the right column's width and the strength line wraps under
@@ -1058,13 +1143,125 @@
   }
 
   .dash-star-boxes {
-    flex-wrap: nowrap;
     gap: 3px;
   }
 
   .dash-star-box {
     flex: 1;
-    width: auto;
     font-size: 0.68rem;
   }
+}
+
+/* A narrow Rivals card (a phone) gives each player two lines: rank, the
+   whole name and trophies, then hit rate, offense and defense, marked as in
+   the Daily Legend log. One heading line names the first. */
+@container (max-width: 30rem) {
+  .rival-table,
+  .rival-table :is(thead, tbody) {
+    display: block;
+  }
+
+  .rival-table tr {
+    display: grid;
+    grid-template-columns: 4rem repeat(3, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.15rem 0.5rem;
+    padding: 0.4rem 0.45rem;
+  }
+
+  .rival-table :is(th, td):nth-child(n) {
+    width: auto;
+    padding: 0;
+    overflow: visible;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .rival-table td:first-child {
+    grid-row: span 2;
+  }
+
+  .rival-table :is(th, td):nth-child(2) {
+    grid-column: span 2;
+  }
+
+  .rival-table td:nth-child(2) .dash-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .rival-table :is(th, td):is(:nth-child(3), :nth-child(6)) {
+    text-align: right;
+  }
+
+  .rival-table td:nth-child(n + 4) {
+    font-size: 0.92rem;
+  }
+
+  /* Screen readers keep these headings; the icons stand in for them. */
+  .rival-table th:nth-child(n + 4) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .rival-table td:nth-child(4)::before {
+    margin-right: 0.3em;
+    color: var(--cl-muted);
+    content: "Hit";
+    font-family: var(--cl-font);
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .rival-table td:is(:nth-child(5), :nth-child(6))::before {
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    margin-right: 0.25em;
+    vertical-align: -0.05em;
+    background: var(--cl-muted);
+    -webkit-mask: var(--icon) center / contain no-repeat;
+    mask: var(--icon) center / contain no-repeat;
+    content: "";
+  }
+
+  .rival-table td:nth-child(5) {
+    --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2'/%3E%3C/svg%3E");
+  }
+
+  .rival-table td:nth-child(6) {
+    --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
+  }
+
+  .rival-table .rival-moved {
+    display: block;
+    margin-left: 0;
+  }
+
+  /* On two lines the arrow follows the trophies, as on Rankings' phone rows. */
+  .rival-table tbody td:nth-child(3)::after {
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin: 0 0.1rem 0.12rem 0.45rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+  }
+
+  .rival-table tbody td:last-child::after {
+    content: none;
+  }
+}
+
+/* Ranks on the site's rank plate, sized for a table row. */
+.rival-table .rank-mark {
+  height: 1.35rem;
+  padding: 0 0.45rem 0 0.5rem;
+  font-size: 0.9rem;
 }

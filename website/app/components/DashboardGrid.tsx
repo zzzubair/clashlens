@@ -655,6 +655,21 @@ export function Dashboard({
     setDraft(next);
     setStatus(message);
   };
+  // Cancel, or Escape with no sheet open, leaves the saved layout as it was.
+  const cancel = () => {
+    setDraft(null);
+    setAdding(false);
+    setStatus("Changes discarded");
+  };
+  const sheetOpen = adding || editingSettings !== null;
+  useEffect(() => {
+    if (!editing || sheetOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) cancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
 
   // Dragging: the card under the pointer makes room; the page scrolls near its edges.
   useEffect(() => {
@@ -721,7 +736,11 @@ export function Dashboard({
               setStatus("");
             }}
           >
-            <DashboardIcon name="gear" /> Customise dashboard
+            <DashboardIcon name="gear" />{" "}
+            <span className="dash-customise-text">Customise dashboard</span>
+            <span className="dash-customise-short" aria-hidden="true">
+              Customise
+            </span>
           </button>
         ) : null}
       </div>
@@ -740,7 +759,8 @@ export function Dashboard({
             disabled={saving}
             onClick={() => setAdding(true)}
           >
-            <DashboardIcon name="plus" /> Add a card
+            <DashboardIcon name="plus" /> Add
+            <span className="dash-editbar-long"> a card</span>
           </button>
           <button
             type="button"
@@ -751,7 +771,15 @@ export function Dashboard({
               setStatus("Back to the default layout");
             }}
           >
-            Reset to default
+            Use default<span className="dash-editbar-long"> layout</span>
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={saving}
+            onClick={cancel}
+          >
+            Cancel
           </button>
           <button
             type="button"
@@ -843,12 +871,13 @@ export function Dashboard({
             {editing && CARDS[card].settings ? (
               <button
                 type="button"
-                className="button button-primary dash-card-settings"
+                className="button button-secondary dash-card-settings"
                 aria-label={`${CARDS[card].title} settings`}
                 disabled={saving}
                 onClick={() => setEditingSettings(card)}
               >
-                <DashboardIcon name="gear" /> Settings
+                <DashboardIcon name="gear" />
+                <span className="dash-card-settings-label">Settings</span>
               </button>
             ) : null}
             {cardBody(card, reads, editing, context)}

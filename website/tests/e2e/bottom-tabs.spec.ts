@@ -91,8 +91,16 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
   const bar = tabs(page);
   const analytics = bar.getByRole("link", { name: "Analytics" });
   const more = page.locator("details.site-menu > summary");
-  const filled = (tab: Locator) =>
-    tab.evaluate((el) => getComputedStyle(el).backgroundImage !== "none");
+  // A chosen tab takes the accent colour.
+  const chosen = (tab: Locator) =>
+    tab.evaluate((el) => {
+      const accent = document.createElement("span");
+      accent.style.color = "var(--cl-action-text)";
+      el.append(accent);
+      const color = getComputedStyle(accent).color;
+      accent.remove();
+      return getComputedStyle(el).color === color;
+    });
   const loading = (tab: Locator) =>
     tab.evaluate((el) => getComputedStyle(el, "::after").content !== "none");
   await expect(more).toHaveAttribute("aria-current", "page");
@@ -110,9 +118,9 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
     },
   );
   await analytics.click();
-  await expect.poll(() => filled(analytics)).toBe(true);
+  await expect.poll(() => chosen(analytics)).toBe(true);
   expect(await loading(analytics)).toBe(true);
-  expect(await filled(more)).toBe(false);
+  expect(await chosen(more)).toBe(false);
   await analytics.click();
   await expect(page).toHaveURL(/\/blog$/);
   // Ctrl/Cmd and middle clicks are left to the browser, which opens the tab's

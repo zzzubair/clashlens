@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "clashlens-theme";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
-// The browser bar matches the dark top bar in each theme.
-const BAR_COLOR = { light: "#1d1426", dark: "#0b0810" };
+// The browser bar matches the top bar in each theme.
+const BAR_COLOR = { light: "#faf5ef", dark: "#120d0a" };
 let themeFrame = 0;
 
 // A saved choice wins; otherwise the device's light or dark setting. Runs before

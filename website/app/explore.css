@@ -1,30 +1,11 @@
-/* Quiet cards frame plain, readable standings. */
+/* Standings and search: the front page, Rankings and /search, phones first.
+   Standings tables keep rank, player and trophies on a phone and add clan and
+   last update when there is room. */
 .home-page,
 .rankings-page {
   max-width: 72rem;
-  padding-top: clamp(1.75rem, 4vw, 3rem);
+  padding-top: clamp(1.25rem, 3vw, 2.5rem);
   font-variant-numeric: tabular-nums;
-}
-
-.home-page :is(h1, h2, h3),
-.rankings-page :is(h1, h2, h3) {
-  font-family: var(--cl-font-heading);
-}
-
-.section-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 2.75rem;
-  padding: 0.55rem 0.8rem;
-  color: var(--cl-action-text);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  box-shadow: none;
-  font-size: 0.84rem;
-  font-weight: 650;
-  white-space: nowrap;
 }
 
 .button.secondary,
@@ -47,53 +28,47 @@
   background: var(--cl-action-soft);
 }
 
-.home-page .analytics-link {
-  gap: 0.55rem;
+/* A small "go there" button, such as Full rankings. */
+.section-link {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: center;
   min-height: 2.75rem;
-  margin-top: 1.4rem;
-  padding: 0;
-  color: var(--cl-action-text);
-  border: 0;
-  background: transparent;
-  font-size: 0.86rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  text-decoration: none;
 }
 
-.home-page .analytics-link svg {
-  flex: 0 0 auto;
-  color: var(--cl-action);
+.section-link::after {
+  content: "›";
+  font-size: 1.2em;
+  line-height: 1;
 }
+
+/* ---------- The big search box: front page, /search and Find your rank ---------- */
 
 .player-search-panel {
   min-width: 0;
 }
 
-.player-search-panel .search-form {
-  max-width: none;
-}
-
-.player-search-panel .search-form > label {
-  display: block;
-  margin: 0 0 0.55rem;
-  color: var(--cl-ink);
-  font-size: 0.84rem;
-  font-weight: 650;
-}
-
-.home-page .search-controls {
-  gap: 0.55rem;
-  min-height: 3.75rem;
-  padding: 0.42rem 0.42rem 0.42rem 1rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
+/* One box holds the icon, the field and the button. Its edge keeps 3:1
+   contrast with its fill so it reads as a field in both themes. */
+:root .home-page .search-form div.search-controls,
+.leaderboard-search .search-controls {
+  gap: 0.5rem;
+  min-height: 3.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.85rem;
   background: var(--cl-surface);
-  box-shadow: var(--cl-shadow);
+  border: 1px solid color-mix(in srgb, var(--cl-muted) 72%, var(--cl-surface));
+  border-radius: 14px;
+  box-shadow: none;
 }
 
-.home-page .search-controls:focus-within {
-  border-color: var(--cl-outline);
-  outline: 3px solid color-mix(in srgb, var(--cl-action) 22%, transparent);
+:is(.home-page, .leaderboard-search) .search-controls:focus-within {
+  outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
-  box-shadow: var(--cl-shadow);
 }
 
 .search-field-icon {
@@ -101,262 +76,165 @@
   color: var(--cl-muted);
 }
 
-.home-page .search-controls input {
+:is(.home-page, .leaderboard-search) .search-controls input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   min-height: 2.75rem;
   padding: 0;
+  background: transparent;
+  border: 0;
   outline: none;
   font-size: 1rem;
 }
 
-.home-page .search-controls input + button {
+:is(.home-page, .leaderboard-search) .search-controls input + button {
   flex: 0 0 auto;
   width: auto;
-  min-width: 6.4rem;
-  min-height: 2.85rem;
-  padding-inline: 1rem;
-  border-radius: var(--cl-radius);
-  font-size: 0.84rem;
+  min-width: 4.75rem;
+  height: auto;
+  min-height: 2.75rem;
+  padding-inline: 0.85rem;
+  font-size: 0.9rem;
 }
 
 .home-page .search-dropdown {
-  top: calc(100% + 0.65rem);
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-shadow);
+  top: calc(100% + 0.5rem);
 }
 
-.home-page .search-suggestion {
-  padding: 0.75rem 0.9rem;
+/* ---------- Search results on /search ---------- */
+
+/* Results read as one column, not a stretched table. */
+.search-page {
+  max-width: 50rem;
 }
 
-.home-page .search-suggestion:is(:hover, :focus-visible) {
-  color: var(--cl-ink);
-  background: var(--cl-action-soft);
+.search-page .page-head {
+  margin-bottom: 1rem;
 }
 
+/* One card; profiles and players are sections of it. */
 .home-page .search-results {
   margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
+  padding: 0;
+  overflow: hidden;
+}
+
+.home-page .search-results section + section {
+  border-top: 1px solid var(--cl-border);
 }
 
 .home-page .search-results h3 {
-  margin: 0 0 0.7rem;
-  font-size: 1rem;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  color: var(--cl-muted);
+  border-bottom: 1px solid var(--cl-border);
+  font-size: 0.85rem;
 }
 
-.home-page .search-results > p {
-  color: var(--cl-muted);
+.home-page .search-results section > :is(p, .button) {
+  margin: 1rem;
+}
+
+.home-page .search-results section > p + .button {
+  margin-top: 0;
 }
 
 .home-page .search-result-list {
-  gap: 0.45rem;
+  display: block;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.home-page .search-result {
-  gap: 1rem;
-  padding: 0.75rem;
-  border-color: var(--cl-border);
-  background: var(--cl-paper);
+.home-page .search-result-list > li + li {
+  border-top: 1px solid var(--cl-border);
 }
 
-/* Clash Lens profiles get a tint and a label so they never pass for game players. */
-.home-page :is(.search-suggestion-profile, .search-result-profile) {
-  background: var(--cl-panel);
+/* Each result is one row: the name and tag, then clan and trophies. The name's
+   link covers the whole row. */
+:root .home-page .search-result {
+  display: flex;
+  flex-direction: row;
+  gap: 0.25rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3.75rem;
+  padding: 0.7rem 1rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
-.search-suggestion-profile .search-suggestion-player {
-  flex-wrap: wrap;
-  row-gap: 0.2rem;
+.home-page .search-result:has(.player-name:focus-visible) {
+  background: var(--cl-action-soft);
 }
 
+.home-page .search-result > div:first-child {
+  min-width: 0;
+}
+
+.home-page .search-result .player-name {
+  display: inline;
+  color: var(--cl-ink);
+  font-size: 1rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.home-page .search-result .player-tag {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+}
+
+.home-page .search-context {
+  display: grid;
+  flex: 0 1 auto;
+  gap: 0.1rem;
+  justify-items: end;
+  max-width: 45%;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.home-page .search-context span {
+  order: -1;
+  color: var(--cl-ink);
+  font-weight: 800;
+}
+
+.home-page .search-result-profile > span {
+  flex: 0 1 auto;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+/* Clash Lens profiles carry a label so they never pass for game players. */
 .profile-badge {
   display: inline-block;
   flex-shrink: 0;
-  padding: 0 0.4rem;
-  color: var(--cl-action-text);
-  border: 1px solid var(--cl-action-border);
+  padding: 0.05rem 0.5rem;
+  color: var(--cl-sky);
+  background: var(--cl-sky-soft);
   font-family: var(--cl-font);
   font-size: 0.7rem;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.5;
   vertical-align: 0.1em;
   white-space: nowrap;
 }
 
-.home-page .search-context {
-  color: var(--cl-muted);
+@media (hover: hover) {
+  .home-page .search-result:hover {
+    background: var(--cl-panel);
+  }
 }
 
-/* Home standings composition */
-.home-leaderboard {
-  overflow: hidden;
-  margin-top: clamp(2rem, 5vw, 3.25rem);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  box-shadow: var(--cl-shadow);
-}
-
-.home-leaderboard > .section-heading,
-.standings-toolbar {
-  background: var(--cl-surface);
-  border-bottom: 1px solid var(--cl-border);
-}
-
-.home-leaderboard > .section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.5rem;
-  margin: 0;
-  padding: 1.25rem 1.4rem;
-}
-
-.home-leaderboard h2 {
-  margin: 0;
-  font-size: clamp(1.25rem, 2.2vw, 1.55rem);
-  font-weight: 700;
-  letter-spacing: -0.025em;
-}
-
-.standings-context {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 1rem;
-  margin: 0.35rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.78rem;
-}
-
-.standings-context span + span {
-  position: relative;
-  padding-left: 1rem;
-}
-
-.standings-context span + span::before {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 0.25rem;
-  height: 0.25rem;
-  border-radius: 50%;
-  background: var(--cl-border);
-  content: "";
-  transform: translateY(-50%);
-}
-
-.leading-players {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid var(--cl-border);
-  border-bottom: 1px solid var(--cl-border);
-  background: var(--cl-panel);
-  list-style: none;
-}
-
-.leading-player {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.75rem 0.85rem;
-  align-content: start;
-  min-width: 0;
-  padding: 1.2rem;
-  border-left: 1px solid var(--cl-border);
-}
-
-.leading-player:first-child {
-  border-left: 0;
-}
-
-.leading-player-first {
-  background: color-mix(in srgb, var(--cl-action) 8%, var(--cl-surface));
-  box-shadow: inset 0 3px 0 var(--cl-action);
-}
-
-.leading-rank {
-  display: grid;
-  place-items: center;
-  width: 2.15rem;
-  height: 2.15rem;
-  color: var(--cl-action-text);
-  border: 1px solid var(--cl-action-border);
-  border-radius: 50%;
-  background: var(--cl-surface);
-  font-family: var(--cl-font-heading);
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.leading-player-first .leading-rank {
-  color: var(--cl-gold);
-  border-color: color-mix(in srgb, var(--cl-gold) 45%, var(--cl-border));
-}
-
-.leading-identity {
-  min-width: 0;
-}
-
-.leading-identity .player-name {
-  overflow: hidden;
-  font-family: var(--cl-font);
-  font-size: 1rem;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.leading-identity > span {
-  display: block;
-  margin-top: 0.12rem;
-  overflow: hidden;
-  color: var(--cl-muted);
-  font-size: 0.72rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.leading-trophies {
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--cl-gold);
-}
-
-.leading-trophies strong {
-  color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
-  font-size: 1.45rem;
-  line-height: 1;
-}
-
-.leading-trophies span {
-  align-self: end;
-  color: var(--cl-muted);
-  font-size: 0.7rem;
-}
-
-.leading-player > time {
-  grid-column: 1 / -1;
-  color: var(--cl-muted);
-  font-size: 0.68rem;
-  white-space: nowrap;
-}
-
-/* Shared standings table */
-.table-wrap {
-  scrollbar-width: thin;
-  scrollbar-color: var(--cl-border) transparent;
-}
-
-.home-leaderboard .table-wrap {
-  border: 0;
-  border-radius: var(--cl-radius);
-}
+/* ---------- Standings tables: the front page Top 10 and Rankings ---------- */
 
 .leaderboard-table {
   width: 100%;
@@ -365,49 +243,32 @@
   font-variant-numeric: tabular-nums;
 }
 
-.leaderboard-table th,
-.leaderboard-table td {
-  padding: 0.55rem 1rem;
-  border-color: var(--cl-border);
+.leaderboard-table :is(th, td) {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--cl-border);
   vertical-align: middle;
   font-size: 0.9rem;
 }
 
 .leaderboard-table thead th {
-  padding-block: 0.75rem;
-  color: var(--cl-muted);
-  border-top: 0;
-  background: var(--cl-panel);
-  border-bottom-color: var(--cl-border);
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
+  padding-block: 0.55rem;
+  white-space: nowrap;
 }
 
-.leaderboard-table tbody tr:hover {
-  background: var(--cl-action-soft);
+.leaderboard-table tbody tr:last-child > * {
+  border-bottom: 0;
 }
 
 .leaderboard-row {
   position: relative;
-  /* Rows reached with the arrow keys stay clear of the sticky header. */
+  /* Rows reached with the arrow keys stay clear of the sticky bars. */
   scroll-margin-block: 5rem;
   /* Safari before 2026 ignores position on table rows; the transform keeps each
      row's full-row link inside its row instead of covering the top of the page. */
   transform: translate(0);
 }
 
-.player-update-mobile {
-  display: none;
-}
-
-.player-update-age {
-  display: block;
-  color: var(--cl-muted);
-  font-size: 0.75rem;
-}
-
+/* The player's name link covers the whole row. */
 .leaderboard-row .player-name::after {
   position: absolute;
   inset: 0;
@@ -419,83 +280,96 @@
   outline-offset: -3px;
 }
 
-.leaderboard-table th:first-child,
-.leaderboard-table td:first-child {
-  width: 4.35rem;
-  padding-left: 1.15rem;
+/* Wider screens keep the phone's arrow, at the right end of the row. The
+   front page's Top 10 hides its last column, so there it follows the trophies. */
+@media (min-width: 40.01rem) {
+  .leaderboard-table :is(.leaderboard-row > :last-child, thead th:last-child),
+  .home-leaderboard :is(.leaderboard-row > .trophy-cell, thead th:nth-last-child(2)) {
+    padding-right: 2.25rem;
+  }
+
+  .leaderboard-row > :last-child::after,
+  .home-leaderboard .leaderboard-row > .trophy-cell::after {
+    position: absolute;
+    top: 50%;
+    right: 1rem;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-top: -0.25rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+    pointer-events: none;
+  }
 }
 
-.rank-mark {
-  display: inline-grid;
-  place-items: center;
-  min-width: 1.75rem;
-  height: 1.75rem;
-  padding-inline: 0.25rem;
-  color: var(--cl-ink);
-  border: 1px solid transparent;
-  border-radius: 50%;
-  font-size: 0.85rem;
-  font-weight: 700;
+.leaderboard-table :is(.rank-cell, thead th:first-child) {
+  width: 3.75rem;
+  padding-right: 0.25rem;
+  padding-left: 1rem;
+  text-align: center;
 }
 
-/* Gold, silver and bronze medals for the podium. */
-.leaderboard-row[data-podium-rank] .rank-mark {
-  color: #111318;
-  border: 0;
-  box-shadow: none;
+/* Gold, silver and bronze plates are in brand.css; the row itself stays plain. */
+
+/* The player Find your rank opened: the "you" colour. */
+.leaderboard-table .leaderboard-row[data-selected="true"] {
+  background: var(--cl-sky-soft);
 }
 
-.leaderboard-row[data-podium-rank="1"] .rank-mark {
-  background: var(--cl-medal-gold);
+.leaderboard-row[data-selected="true"] > :first-child {
+  box-shadow: inset 4px 0 0 var(--cl-sky);
 }
 
-.leaderboard-row[data-podium-rank="2"] .rank-mark {
-  background: var(--cl-silver);
-}
-
-.leaderboard-row[data-podium-rank="3"] .rank-mark {
-  background: var(--cl-bronze);
+.leaderboard-row[data-selected="true"]:focus {
+  outline: 2px solid var(--cl-sky);
+  outline-offset: -2px;
 }
 
 .leaderboard-table .player-name {
   display: block;
-  max-width: 22rem;
+  max-width: 24rem;
   color: var(--cl-ink);
   font-family: var(--cl-font);
   font-size: 0.95rem;
-  font-weight: 700;
+  line-height: 1.3;
   overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
 .leaderboard-table .player-tag {
   display: block;
-  margin-top: 0.12rem;
+  margin-top: 0.1rem;
   color: var(--cl-muted);
-  font-size: 0.74rem;
-  font-weight: 400;
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
-.leaderboard-table th:nth-child(4),
-.leaderboard-table td:nth-child(4),
-.leaderboard-table th:nth-child(5),
-.leaderboard-table td:nth-child(5) {
+/* Clan */
+.leaderboard-table td:nth-child(3) {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.leaderboard-table :is(th, td):is(:nth-child(4), :nth-child(5)) {
   text-align: right;
 }
 
-.leaderboard-table th:nth-child(5),
-.leaderboard-table td:nth-child(5) {
-  padding-right: 1.15rem;
+.leaderboard-table :is(th, td):last-child {
+  padding-right: 1rem;
 }
 
-.leaderboard-table td:nth-child(3),
+/* The heading lines up with the numbers, not with the Tie slot after them. */
+.tracked-leaderboard-viewport thead th:nth-child(4) {
+  padding-right: calc(0.75rem + 2.9rem);
+}
+
 .leaderboard-table time {
   color: var(--cl-muted);
   font-size: 0.8rem;
-}
-
-/* Long clan names wrap like player names, leaving room for the Tie slot. */
-.leaderboard-table td:nth-child(3) {
-  overflow-wrap: anywhere;
 }
 
 .local-time {
@@ -508,15 +382,38 @@
   z-index: 1;
 }
 
+.player-update-age {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+}
+
+/* A Live row not updated for over 10 minutes gets an ember dot, keyed once
+   above the board. */
+.leaderboard-table time.player-update-age {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.leaderboard-table time.player-update-age[data-old]::before {
+  margin-right: 0.3rem;
+  color: var(--cl-action-text);
+  font-size: 0.7em;
+  vertical-align: 0.1em;
+  content: "●" / "";
+}
+
+/* Trophies, the number a Clasher came for, in the game's own face. */
 .trophy-cell {
-  font-size: 1.1rem;
   white-space: nowrap;
 }
 
 .trophy-cell strong {
   color: var(--cl-ink);
-  font-size: 1rem;
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
   font-weight: 700;
+  letter-spacing: 0;
 }
 
 /* Every row keeps room for the Tie pill after its trophies, so trophies line
@@ -528,17 +425,16 @@
   text-align: left;
 }
 
-/* Trophies equal to another player's; the Rank still orders them. */
+/* Trophies equal to another player's; the Rank still orders them. Most rows
+   lower down tie, so the word stays quiet. */
 .tie-pill {
   display: inline-block;
-  padding: 0.05rem 0.45rem;
-  border: 1px solid var(--cl-outline);
-  border-radius: 999px;
   color: var(--cl-muted);
-  font-size: 0.7rem;
+  font-family: var(--cl-font);
+  font-size: 0.72rem;
   font-weight: 700;
   line-height: 1.3;
-  vertical-align: 0.1rem;
+  vertical-align: 0.15rem;
 }
 
 .trophy-mark {
@@ -556,185 +452,183 @@
   vertical-align: -0.17rem;
 }
 
-/* Full rankings */
-.rankings-header {
-  padding: 0.8rem 0 1.6rem;
-  border-bottom: 1px solid var(--cl-border);
+/* The update age under a name shows only on phones; wider screens have a column. */
+.player-meta {
+  display: block;
 }
 
-.rankings-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 2rem;
+.player-update-mobile {
+  display: none;
 }
 
-.rankings-kicker {
-  margin: 0 0 0.45rem;
-  color: var(--cl-action-text);
-  font-size: 0.8rem;
-  font-weight: 650;
+/* Phones: rank, player and trophies; the tag and update age share one line. */
+@media (max-width: 40rem) {
+  .leaderboard-table :is(th, td):is(:nth-child(3), :nth-child(5)) {
+    display: none;
+  }
+
+  .leaderboard-table :is(th, td) {
+    padding: 0.55rem 0.5rem;
+  }
+
+  .leaderboard-table :is(.rank-cell, thead th:first-child) {
+    width: 1%;
+    padding-right: 0.25rem;
+    padding-left: 0.75rem;
+  }
+
+  .leaderboard-table :is(.trophy-cell, thead th:nth-child(4)) {
+    width: 1%;
+    padding-right: 0.9rem;
+  }
+
+  .leaderboard-table tbody :is(th, td) {
+    padding-block: 0.45rem;
+  }
+
+  .rank-mark {
+    min-width: 1.9rem;
+    height: 1.9rem;
+    font-size: 0.85rem;
+  }
+
+  .trophy-cell strong {
+    font-size: 1.1rem;
+    line-height: 1.15;
+  }
+
+  /* The whole row opens the player; a small arrow says so, as on Analytics.
+     Taps pass through it to the row's link. */
+  .leaderboard-row .trophy-cell strong::after {
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin: 0 0.1rem 0.12rem 0.45rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+    pointer-events: none;
+  }
+
+  /* A Tie pill sits under the trophies instead of beside them. */
+  .tie-slot {
+    display: block;
+    width: auto;
+    margin: 0;
+    line-height: 1;
+    text-align: right;
+  }
+
+  .tie-pill {
+    font-size: 0.68rem;
+    line-height: 1.25;
+    vertical-align: 0;
+  }
+
+  /* The age's dot sits in the tag's right margin; when the age wraps to its
+     own line, the dot falls past the left edge and is cut off. */
+  .player-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    margin-top: 0.1rem;
+    overflow-x: clip;
+  }
+
+  .player-meta .player-tag {
+    margin: 0 0.9rem 0 0;
+  }
+
+  .player-update-mobile {
+    position: relative;
+    z-index: 1;
+    display: block;
+    min-width: 0;
+    margin-left: -0.9rem;
+    color: var(--cl-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .player-update-mobile summary {
+    display: block;
+    /* A taller tap area than the line it sits on. */
+    margin-block: -0.6rem;
+    padding-block: 0.6rem;
+    list-style: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .player-update-mobile summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .player-update-mobile summary::before {
+    display: inline-block;
+    width: 0.9rem;
+    text-align: center;
+    content: "·" / "";
+  }
+
+  .player-update-mobile .player-update-age {
+    display: inline;
+    color: var(--cl-action-text);
+    font-size: inherit;
+  }
+
+  .player-update-mobile .player-update-age::before {
+    content: " · ";
+  }
+
+  .player-update-mobile[data-old] summary::before {
+    color: var(--cl-action-text);
+    font-size: 0.55rem;
+    vertical-align: 0.1em;
+    content: "●" / "";
+  }
+
+  /* Indented past the dot, so it shows whole when the age wraps under the tag. */
+  .player-update-mobile > time {
+    display: block;
+    margin-top: 0.15rem;
+    padding-left: 0.9rem;
+    color: var(--cl-ink);
+    font-size: 0.75rem;
+    white-space: normal;
+  }
 }
 
-.rankings-header h1 {
-  margin: 0;
-  font-size: clamp(2rem, 4vw, 3rem);
-  font-weight: 700;
-  letter-spacing: -0.045em;
+/* At 360px a tag and its time still share one line, so rows stay even. */
+@media (max-width: 23.5rem) {
+  .leaderboard-table .player-meta :is(.player-tag, .player-update-mobile summary *) {
+    font-size: 0.68rem;
+  }
 }
 
-.rankings-header .daily-incomplete {
-  margin: 0.85rem 0 0;
-  font-size: 0.85rem;
-  font-weight: 400;
-}
-
-.daily-incomplete p {
-  margin: 0;
-}
-
-.rankings-context {
-  max-width: 74ch;
-  margin: 0.85rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.84rem;
-  line-height: 1.55;
-}
-
+/* Live and At Reset, and the same switch on Crew and watchlist boards. */
 .leaderboard-view-switch {
   display: inline-flex;
   flex: 0 0 auto;
   gap: 0.2rem;
-  padding: 0.25rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-panel);
 }
 
 .leaderboard-view-switch .button {
-  min-width: 5.2rem;
+  min-width: 6rem;
   min-height: 2.75rem;
-  padding: 0.55rem 0.9rem;
-  border: 1px solid transparent;
-  border-radius: var(--cl-radius);
-  background: transparent;
-  font-size: 0.82rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
 }
 
-.leaderboard-view-switch .button[aria-current="page"] {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-  box-shadow: none;
-}
+@media (max-width: 34rem) {
+  .leaderboard-view-switch {
+    width: 100%;
+  }
 
-.standings-board {
-  overflow: hidden;
-  margin-top: 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  box-shadow: var(--cl-shadow);
-}
-
-.standings-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.15rem;
-}
-
-.standings-toolbar h2 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.standings-toolbar p {
-  margin: 0.25rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.75rem;
-}
-
-.rankings-page .tracked-leaderboard-viewport {
-  overflow: auto;
-  border: 0;
-  border-bottom: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-}
-
-.rankings-page .tracked-leaderboard-viewport:focus-visible {
-  outline-color: var(--cl-action-text);
-  outline-offset: -3px;
-}
-
-.rankings-page .tracked-leaderboard-viewport thead th {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-}
-
-.standings-pagination {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 1rem;
-  align-items: center;
-  min-height: 4.4rem;
-  padding: 0.75rem 1rem;
-}
-
-.standings-pagination .button:first-child {
-  justify-self: start;
-}
-
-.standings-pagination .button:last-child {
-  justify-self: end;
-}
-
-.pagination-status {
-  grid-column: 2;
-  color: var(--cl-muted);
-  font-size: 0.78rem;
-}
-
-.snapshot-pagination {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 0.8rem 1.15rem;
-  border-bottom: 1px solid var(--cl-border);
-  background: var(--cl-panel);
-  font-size: 0.78rem;
-}
-
-.snapshot-pagination a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
-  color: var(--cl-action-text);
-  border: 1px solid var(--cl-action-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  font-size: 0.8rem;
-}
-
-/* Player controls share the same colour and outline rules. */
-.player-header {
-  max-width: none;
-  align-items: center;
-  padding: 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-}
-
-.player-header > div:first-child {
-  min-width: 0;
-}
-
-.player-header h1 {
-  margin-bottom: 0.75rem;
+  .leaderboard-view-switch .button {
+    flex: 1;
+  }
 }
 
 .player-identity {
@@ -747,175 +641,15 @@
   font-size: 0.85rem;
 }
 
-.player-trophy-card {
-  border-color: color-mix(in srgb, var(--cl-gold) 38%, var(--cl-border));
-  background: color-mix(in srgb, var(--cl-gold) 8%, var(--cl-surface));
-}
-
-.player-trophy-card strong {
-  font-size: 2rem;
-}
-
-.player-summary {
-  flex-shrink: 0;
-}
-
-.player-refresh-form button {
-  color: var(--cl-ink);
-  border-color: var(--cl-outline);
-  background: var(--cl-surface);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .player-refresh-form button:hover {
-    color: var(--cl-action-text);
-    border-color: var(--cl-action-border);
-    background: var(--cl-action-soft);
-  }
-}
-
 .metric-label {
   text-transform: none;
 }
 
-.legend-day > summary::-webkit-details-marker {
-  display: none;
-}
-
-.legend-day > summary strong::before {
-  display: inline-block;
-  width: 0.4rem;
-  height: 0.4rem;
-  margin: 0 0.8rem 0.15rem 0.1rem;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  content: "";
-  transform: rotate(-45deg);
-}
-
-.legend-day[open] > summary strong::before {
-  transform: rotate(45deg);
-}
-
 @media (hover: hover) and (pointer: fine) {
-  .legend-day > summary:hover,
-  .legend-day[open] > summary:hover {
-    background: var(--cl-panel);
-  }
-}
-
-.legend-day > summary:focus-visible {
-  outline: 3px solid var(--cl-action-text);
-  outline-offset: -3px;
-}
-
-.battle-column h3 {
-  margin: 0.2rem 0 0.85rem;
-  font-size: 0.9rem;
-}
-
-.battle-slot {
-  border-radius: var(--cl-radius);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .battle-slot:has(.battle-profile-link:hover) {
-    border-color: var(--cl-action-border);
-    background: var(--cl-action-soft);
-  }
   .battle-army:hover {
     border-color: var(--cl-action-border);
     background: var(--cl-action-soft);
   }
-}
-
-.battle-disagreement {
-  grid-column: 1 / -1;
-  color: var(--cl-muted);
-}
-
-/* Army filters use bold controls around a plain results table. */
-.sample-data-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
-  margin-bottom: 1rem;
-}
-
-.analytics-page .hero {
-  max-width: 46rem;
-}
-
-.analytics-page h1 {
-  font-size: clamp(1.75rem, 3vw, 2.25rem);
-}
-
-.analytics-filters {
-  padding: 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  box-shadow: none;
-}
-
-.filter-heading,
-.filter-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.filter-heading {
-  margin-bottom: 1.5rem;
-}
-
-.filter-heading .section-note {
-  font-size: 0.85rem;
-}
-
-.segmented-control {
-  display: flex;
-  gap: 0.2rem;
-  min-width: 0;
-  margin: 0;
-  padding: 0.25rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-panel);
-}
-
-.segmented-control label {
-  position: relative;
-  cursor: pointer;
-}
-
-.segmented-control span {
-  display: block;
-  min-height: 2.75rem;
-  padding: 0.7rem 1.3rem;
-  color: var(--cl-muted);
-  border-radius: var(--cl-radius);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.segmented-control input:checked + span {
-  color: var(--cl-action-text);
-  background: var(--cl-surface);
-  box-shadow: inset 0 0 0 1px var(--cl-action-border);
-}
-
-.segmented-control input:focus-visible + span {
-  outline: 3px solid var(--cl-action-text);
-}
-
-.filter-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1rem;
 }
 
 .filter-field {
@@ -950,344 +684,16 @@
   outline-offset: 3px;
 }
 
-.filter-footer {
-  align-items: flex-start;
-  margin-top: 1.5rem;
-}
-
-.filter-footer .button {
-  flex-shrink: 0;
-}
-
-.analytics-empty {
-  display: grid;
-  justify-items: center;
-  padding: 2rem 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  text-align: center;
-}
-
-.analytics-empty h2 {
-  margin: 1.5rem 0 0.6rem;
-}
-
-.analytics-empty p {
-  max-width: 48ch;
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 0.95rem;
-}
-
-.analytics-empty .button {
-  margin-top: 1.5rem;
-}
-
-.empty-chart {
-  display: flex;
-  align-items: end;
-  gap: 0.4rem;
-  height: 3rem;
-}
-
-.empty-chart span {
-  width: 0.85rem;
-  height: 40%;
-  border-radius: var(--cl-radius);
-  background: var(--cl-border);
-}
-
-.empty-chart span:nth-child(2) {
-  height: 75%;
-}
-
-.empty-chart span:nth-child(3) {
-  height: 100%;
-  background: var(--cl-action);
-}
-
-.empty-chart span:nth-child(4) {
-  height: 60%;
-}
-
-.analytics-results .metric-grid {
-  margin-bottom: 2rem;
-}
-
-.analytics-results .metric-card h2 {
-  color: var(--cl-muted);
-  font-size: 0.8rem;
-  letter-spacing: 0;
-}
-
-.analytics-results .metric-card > strong {
-  font-size: 2rem;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .home-page .analytics-link:hover {
-    color: var(--cl-action-text);
-    background: transparent;
-    text-decoration: underline;
-  }
-
-  .section-link:hover,
-  .snapshot-pagination a:hover {
-    color: var(--cl-on-action);
-    border-color: var(--cl-action);
-    background: var(--cl-action);
-  }
-}
-
-@media (max-width: 52rem) {
-  .leading-players {
-    grid-template-columns: 1fr;
-  }
-
-  .leading-player {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    border-top: 1px solid var(--cl-border);
-    border-left: 0;
-  }
-
-  .leading-player:first-child {
-    border-top: 0;
-  }
-
-  .leading-trophies {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .leading-player > time {
-    grid-column: 2 / -1;
-  }
-}
-
-@media (max-width: 48rem) {
-  .rankings-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .standings-toolbar {
-    align-items: flex-start;
-  }
-
-  .player-header {
-    padding: 1.25rem;
-  }
-
-  .filter-footer {
-    flex-wrap: wrap;
-  }
-
-  .filter-footer .button {
-    margin-left: auto;
-  }
-}
-
-@media (max-width: 34rem) {
-  .home-page,
-  .rankings-page {
-    padding-top: 1.4rem;
-  }
-
-  .rankings-header h1 {
-    font-size: 2rem;
-  }
-
-  .home-page .search-controls {
-    gap: 0.35rem;
-    min-height: 3.4rem;
-    padding-left: 0.75rem;
-  }
-
-  .home-page .search-controls input + button {
-    min-width: 0;
-    padding-inline: 0.75rem;
-  }
-
-  .home-leaderboard > .section-heading {
-    align-items: flex-start;
-    padding: 1rem;
-  }
-
-  .home-leaderboard .leaderboard-more {
-    padding-inline: 0.6rem;
-    font-size: 0.76rem;
-  }
-
-  .standings-context {
-    display: grid;
-  }
-
-  .standings-context span + span {
-    padding-left: 0;
-  }
-
-  .standings-context span + span::before {
-    display: none;
-  }
-
-  .leading-player {
-    grid-template-columns: auto minmax(0, 1fr);
-    padding: 1rem;
-  }
-
-  .leading-trophies {
-    grid-column: 2;
-    grid-row: auto;
-  }
-
-  .leading-player > time {
-    grid-column: 2;
-  }
-
-  /* Phones: keep rank, player and trophies in view without sideways scrolling.
-     Rank and trophies take only what they need. */
-  .leaderboard-table :is(th, td):is(:nth-child(3), :nth-child(5)) {
-    display: none;
-  }
-
-  .player-update-mobile {
-    position: relative;
-    z-index: 1;
-    display: block;
-    margin-top: 0.25rem;
-    color: var(--cl-muted);
-    font-size: 0.75rem;
-    font-weight: 400;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .leaderboard-table .player-update-mobile time {
-    white-space: normal;
-  }
-
-  .player-update-mobile summary {
-    min-height: 2.75rem;
-    align-content: center;
-    cursor: pointer;
-  }
-
-  .leaderboard-table th:nth-child(4),
-  .leaderboard-table td:nth-child(4) {
-    width: 1%;
-    padding-right: 0.75rem;
-  }
-
-  /* Long player tags wrap so the Tie slot still fits beside the trophies. */
-  .leaderboard-table .player-tag {
-    overflow-wrap: anywhere;
-  }
-
-  .leaderboard-table th,
-  .leaderboard-table td {
-    padding-inline: 0.65rem;
-  }
-
-  .leaderboard-table th:first-child,
-  .leaderboard-table td:first-child {
-    width: 1%;
-    padding-left: 0.75rem;
-  }
-
-  .leaderboard-table th:nth-child(5),
-  .leaderboard-table td:nth-child(5) {
-    padding-right: 0.75rem;
-  }
-
-  .leaderboard-view-switch {
-    width: 100%;
-  }
-
-  .leaderboard-view-switch .button {
-    flex: 1;
-  }
-
-  .standings-pagination {
-    grid-template-columns: 1fr 1fr;
-    gap: 0.6rem;
-  }
-
-  .pagination-status {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    justify-self: center;
-  }
-
-  .player-header {
-    display: grid;
-    gap: 1.25rem;
-  }
-
-  .player-header h1 {
-    font-size: 2rem;
-  }
-
-  .player-summary {
-    width: 100%;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-  }
-
-  .player-trophy-card {
-    padding: 0.85rem;
-  }
-
-  .player-refresh-form button {
-    padding: 0.6rem 0.85rem;
-    font-size: 0.8rem;
-  }
-
-  .legend-day > summary {
-    padding: 1rem;
-    font-size: 0.85rem;
-  }
-
-  .battle-columns {
-    padding: 0.75rem;
-  }
-
-  .battle-slot {
-    padding: 0.85rem;
-  }
-
-  .battle-opponent .player-tag {
-    font-size: 0.7rem;
-  }
-
-  .analytics-filters {
-    padding: 1rem;
-  }
-
-  .filter-heading {
-    flex-wrap: wrap;
-    gap: 0.75rem;
-  }
-
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .filter-footer .button {
-    width: 100%;
-  }
-
-  .analytics-empty {
-    padding: 2.5rem 1.25rem;
-  }
-}
-
 @media (forced-colors: active) {
-  .leaderboard-row[data-podium-rank] .rank-mark,
-  .leading-rank,
+  .rank-mark,
   .leaderboard-view-switch .button[aria-current="page"] {
     border: 1px solid CanvasText;
+  }
+}
+
+/* A 360px phone gives the search hint the icon's room. */
+@media (max-width: 23.5rem) {
+  :is(.home-page, .leaderboard-search) .search-controls .search-field-icon {
+    display: none;
   }
 }

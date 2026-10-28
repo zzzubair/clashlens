@@ -75,9 +75,7 @@ test("Discord completes a local sign-in without cloud credentials", async ({
     await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
     expect(await loginCookie(context)).toBeUndefined();
     await page.goto("/account/watchlists");
-    await expect(
-      page.getByText("You need a Clash Lens account to keep them."),
-    ).toBeVisible();
+    await expect(page.getByText("Sign in to keep them.")).toBeVisible();
     await page.goBack();
     await page.getByRole("link", { name: "Create account with Discord" }).click();
     await expect(page).toHaveURL(/\/account\/setup$/);

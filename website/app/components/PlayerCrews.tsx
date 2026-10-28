@@ -14,16 +14,21 @@ export function PlayerCrews({
   const backState = useBackState(name);
   if (!crews || crews.length === 0) return null;
   return (
-    <p className="player-crews">
-      {crews.length === 1 ? "Crew" : "Crews"}:{" "}
+    <span className="player-crews">
+      {/* Named, so a Crew called like the clan can't pass for it. */}
+      <span className="player-crews-label">{crews.length === 1 ? "Crew" : "Crews"}</span>
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
           {index > 0 ? " · " : null}
+          {/* The Crew's crest, as on its page, sets it apart from the clan. */}
           <Link to={`/crews/${crew.crewId}`} state={backState}>
+            <span className="player-crew-crest" aria-hidden="true">
+              {Array.from(crew.name)[0]}
+            </span>
             <bdi>{crew.name}</bdi>
           </Link>
         </span>
       ))}
-    </p>
+    </span>
   );
 }

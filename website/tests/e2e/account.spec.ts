@@ -219,9 +219,9 @@ test("a page that needs an account says why, with Create account and Sign in", a
   page,
 }) => {
   for (const [path, title, reason] of [
-    ["/account", "Your account", "Sign in to see it."],
-    ["/account/watchlists", "Watchlists", "You need a Clash Lens account to keep them."],
-    ["/crews", "Crews", "You need a Clash Lens account to make or join one."],
+    ["/account", "Your account", "Sign in to see them."],
+    ["/account/watchlists", "Watchlists", "Sign in to keep them."],
+    ["/crews", "Crews", "Sign in to make or join one."],
   ] as const) {
     const response = await page.goto(path);
     expect(response?.status()).toBe(401);

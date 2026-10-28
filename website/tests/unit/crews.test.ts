@@ -45,7 +45,10 @@ import CrewBoardRoute, {
   handle as boardHandle,
   loader as boardLoader,
 } from "../../app/routes/crews.$crewId.boards.$board";
-import CrewRoute, { loader as crewLoader } from "../../app/routes/crews.$crewId";
+import CrewRoute, {
+  loader as crewLoader,
+  shouldRevalidate,
+} from "../../app/routes/crews.$crewId";
 import { loader as listLoader } from "../../app/routes/crews";
 import { action as createAction, loader as newLoader } from "../../app/routes/crews.new";
 import { isCrewsEnabled, loadWebsiteConfig } from "../../app/server/config.server";
@@ -304,7 +307,7 @@ describe("crew page", () => {
       undefined,
     );
     expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
-    expect(html).toContain("Joining is by invite only.");
+    expect(html).toContain("By invite only");
     expect(html).toContain("Players (1)");
     expect(html).toMatch(/Player 2<\/a><span>#2QQ · [^]*?5,390/);
     for (const hidden of ["Invite", "Members", "Edit", "clasher", "Owner"]) {
@@ -338,6 +341,38 @@ describe("crew page", () => {
     const html = await render(`/crews/${CREW_ID}?period=today`, crewRoute);
     expect(html.match(/No attacks yet today/g)).toHaveLength(2);
     expect(html).not.toContain("No battles");
+  });
+
+  it("shows a phone the board picked in the address, with its tab, keeping it across periods", async () => {
+    answerCrew("week");
+    const html = await render(
+      `/crews/${CREW_ID}?board=worst-defenders&period=week`,
+      crewRoute,
+    );
+    // Every board is on the page for wider screens; only the picked one is current.
+    expect(html.match(/data-current=""/g)).toHaveLength(2);
+    expect(html).toMatch(/aria-labelledby="board-worst_defenders" data-current=""/);
+    expect(html).toMatch(/class="crew-period-bar" data-current=""/);
+    expect(html).not.toContain('id="board-best_defenders"');
+    expect(html).toMatch(/aria-current="page"[^>]*>Defense<\/a>/);
+    expect(html).toContain(
+      `href="/crews/${CREW_ID}?board=worst-defenders&amp;period=today"`,
+    );
+    expect(html).toContain(
+      `href="/crews/${CREW_ID}?board=best-defenders&amp;period=week"`,
+    );
+  });
+
+  it("reads the boards again for a new period but not for another board", () => {
+    const check = (from: string, to: string) =>
+      shouldRevalidate({
+        currentUrl: new URL(`${ORIGIN}/crews/${CREW_ID}${from}`),
+        nextUrl: new URL(`${ORIGIN}/crews/${CREW_ID}${to}`),
+        defaultShouldRevalidate: true,
+      } as never);
+    expect(check("", "?board=streaks")).toBe(false);
+    expect(check("?board=streaks&period=week", "?period=week")).toBe(false);
+    expect(check("?board=streaks", "?board=streaks&period=week")).toBe(true);
   });
 
   it("reads a missing crew as a missing page", async () => {

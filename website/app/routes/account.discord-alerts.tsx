@@ -183,8 +183,7 @@ export default function DiscordAlertsRoute() {
       <section className="hero" aria-labelledby="discord-alerts-title">
         <h1 id="discord-alerts-title">Discord alerts</h1>
         <p className="lede">
-          The Clash Lens bot messages you on Discord when someone attacks your players,
-          and sums up their Legend day after each Reset.
+          A Discord message for each attack on you, and a summary at Reset.
         </p>
       </section>
       {data.error ? (
@@ -198,9 +197,7 @@ export default function DiscordAlertsRoute() {
         <section className="form-panel stack-form" aria-labelledby="connect-title">
           <h2 id="connect-title">Connect Discord first</h2>
           <p className="form-help">
-            Alerts go to the Discord account connected to Clash Lens. Connecting asks you
-            to sign in with Discord and adds the Clash Lens bot to your Discord so it can
-            message you, then brings you back here.
+            Sign in with Discord and add the Clash Lens bot, then come back here.
           </p>
           <ConnectDiscord
             idempotencyKey={data.idempotencyKey}

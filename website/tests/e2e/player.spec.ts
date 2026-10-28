@@ -340,7 +340,7 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     if (day.period === player.currentDay!.period) day.offenseEvents.unshift(attack);
   }
   const processedData = encodePageData(processed);
-  const attacks = page.locator(".battle-slot-attack", { hasText: "Catch-up Clasher" });
+  const attacks = page.locator(".battle-row-attack", { hasText: "Catch-up Clasher" });
 
   // Before processing, page reads return the earlier check. Completion carries
   // the processed profile without its battles; only later reads include them.
@@ -527,8 +527,8 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
   await expect(page.getByText(/1,284 days old/)).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
-  const nameless = page.locator(".battle-slot-attack").nth(8);
-  await expect(nameless.locator(".battle-opponent strong")).toHaveText("#P0Y");
+  const nameless = page.locator(".battle-row-attack").nth(8);
+  await expect(nameless.locator(".battle-name")).toHaveText("#P0Y");
   await expect(nameless.locator(".player-tag")).toHaveCount(0);
   for (const size of [
     { width: 320, height: 568 },
@@ -555,22 +555,22 @@ for (const viewport of [
       await openWorstCasePlayer(page);
       const summary = page.getByRole("region", { name: "Season summary" });
       const log = page.getByRole("region", { name: "Daily Legend log" });
-      const today = log.locator("details.legend-day").first();
-      await expect(today.locator(".legend-day-live")).toBeVisible();
+      const today = log.locator("details.log-day").first();
+      await expect(today.locator(".log-live")).toBeVisible();
       const below = async (upper: typeof today, lower: typeof today) => {
         const [a, b] = [await upper.boundingBox(), await lower.boundingBox()];
         expect(b!.y).toBeGreaterThanOrEqual(a!.y + a!.height);
       };
       await below(summary, log.getByRole("heading", { name: "Daily Legend log" }));
       await below(log.getByRole("heading", { name: "Daily Legend log" }), today);
-      await below(today, log.locator("details.legend-day").nth(1));
+      await below(today, log.locator("details.log-day").nth(1));
 
       await expect(today).not.toHaveAttribute("open");
-      const header = today.locator("summary");
+      const header = today.locator("summary.log-row");
       expect((await header.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await (phone ? header.tap() : header.click());
       await expect(today).toHaveAttribute("open");
-      await expect(today.locator(".battle-slot-attack").first()).toBeVisible();
+      await expect(today.locator(".battle-side-attack")).toBeVisible();
       await (phone ? header.tap() : header.click());
       await expect(today).not.toHaveAttribute("open");
     } finally {
@@ -585,8 +585,11 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await refuseRefreshes(page);
   await openWorstCasePlayer(page);
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
-  await page.locator("details.legend-day").first().locator("summary").click();
-  const link = page.locator(".battle-profile-link").first();
+  // Today's day starts folded; the whole battle line opens it, their log inside.
+  await page.locator("details.log-day").first().locator("summary.log-row").click();
+  const row = page.locator(".battle-row").first();
+  await row.locator(".battle-toggle").click();
+  const link = row.locator(".battle-link");
   const href = (await link.getAttribute("href"))!;
   const target = new URL(href, page.url());
   const opponent = decodeURIComponent(target.pathname.split("/").pop()!);
@@ -614,10 +617,7 @@ test("an opponent's Legend day opens in the page at the battle, and Back returns
   await expect(battle).toBeInViewport();
   await page.goBack();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
-  await expect(page.locator(".battle-profile-link").first()).toHaveAttribute(
-    "href",
-    href,
-  );
+  await expect(page.locator(".battle-link").first()).toHaveAttribute("href", href);
   // Both moves stayed in the open page: no page was downloaded again.
   expect(documents).toEqual([]);
 });
@@ -645,9 +645,9 @@ test("one army looks the same in every battle at iPhone width", async ({ browser
           .forEach((event, index) => (event.armyShareCode = codes[index % 2]));
     });
     const log = page.getByRole("region", { name: "Daily Legend log" });
-    const day = log.locator("details.legend-day").first();
-    await expect(day.locator(".legend-day-live")).toBeVisible();
-    await day.locator("summary").tap();
+    const day = log.locator("details.log-day").first();
+    await expect(day.locator(".log-live")).toBeVisible();
+    await day.locator("summary.log-row").tap();
     const attacks = day.getByRole("region", { name: "Attacks" });
     const show = attacks.getByRole("button", { name: "Show army" });
     await expect(show).toHaveCount(3);
@@ -679,7 +679,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
   browser,
 }) => {
   test.setTimeout(120_000);
-  const battles = "details.legend-day:not([open]) .battle-slot[id]";
+  const battles = "details.log-day:not([open]) .battle-row[id]";
   const noScript = await browser.newContext({ javaScriptEnabled: false });
   let sent: string[] = [];
   try {
@@ -761,13 +761,13 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
     );
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(
-      page.locator("details.legend-day:not([open]) .battle-slot-attack", {
+      page.locator("details.log-day:not([open]) .battle-row-attack", {
         hasText: "After Refresh",
       }),
     ).toHaveCount(1);
 
     const folded = page
-      .locator("details.legend-day:not([open])")
+      .locator("details.log-day:not([open])")
       .filter({
         has: page.getByRole("button", { name: "Show army", includeHidden: true }),
       })
@@ -776,7 +776,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
     await day.locator("summary").click();
     await day.getByRole("button", { name: "Show army" }).first().click();
     await expect(day.getByRole("button", { name: "Hide army" })).toBeVisible();
-    await expect(day.locator(".battle-slot[id]")).not.toHaveCount(0);
+    await expect(day.locator(".battle-row[id]")).not.toHaveCount(0);
   } finally {
     await context.close();
   }

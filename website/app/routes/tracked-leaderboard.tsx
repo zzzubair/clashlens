@@ -14,10 +14,12 @@ import {
 import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { SearchIcon } from "../components/PlayerSearch";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
   formatAge,
+  formatTimestamp,
   LocalTimestamp,
   OLD_UPDATE_SECONDS,
   useCurrentTime,
@@ -61,6 +63,11 @@ function leaderboardUrl(
   }
   query.set("page", String(page));
   return `/leaderboards/tracked?${query.toString()}`;
+}
+
+// Phones fit "4 min ago" beside a tag, not "4 minutes ago".
+function shortAge(seconds: number) {
+  return seconds < 60 ? "<1 min" : formatAge(seconds).replace(/ minutes?$/, " min");
 }
 
 function playerRankUrl(tag: string, rank: number) {
@@ -246,10 +253,11 @@ export default function TrackedLeaderboardRoute() {
   const daily = leaderboard?.daily;
   const entries = leaderboard?.entries ?? [];
   const lastRank = entries.at(-1)?.rank ?? 0;
-  const range =
-    leaderboard && entries.length
-      ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()}`
-      : null;
+  const shown = entries.length
+    ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()}`
+    : null;
+  const total = ` of ${leaderboard?.totalEntries.toLocaleString()}`;
+  const range = leaderboard && shown ? shown + total : null;
   const nextCount = leaderboard
     ? Math.min(
         leaderboard.pageSize,
@@ -260,6 +268,11 @@ export default function TrackedLeaderboardRoute() {
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
     Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
+  // Live rows not updated for over 10 minutes carry a dot, explained once above the board.
+  const isOld = (observedAt: string) =>
+    view === "live" && ageSeconds(observedAt) > OLD_UPDATE_SECONDS;
+  const anyOld = entries.some((entry) => isOld(entry.freshness.observedAt));
+  const oldNote = <span className="sr-only"> · Over 10 min old</span>;
   const secondsBeforeReset = (observedAt: string) =>
     daily ? Math.max(0, (Date.parse(daily.resetAt) - Date.parse(observedAt)) / 1000) : 0;
   const newestInput = daily ? leaderboard?.provenance.observedAt : null;
@@ -276,19 +289,28 @@ export default function TrackedLeaderboardRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
       <section className="rankings-header" aria-labelledby="leaderboard-title">
         <div className="rankings-heading">
-          <div>
-            {daily ? <p className="rankings-kicker">Day {daily.dayNumber}</p> : null}
+          {/* Both views give the title one line under it, so the switch
+              after them stays put when a Clasher flips between views. */}
+          <div className="rankings-title">
             <h1 id="leaderboard-title">
-              {daily ? (
-                <>
-                  Leaderboard at <LocalTimestamp value={daily.resetAt} />
-                </>
-              ) : view === "live" ? (
-                "Live Leaderboard"
-              ) : (
-                "Daily leaderboard"
-              )}
+              {daily
+                ? "At Reset"
+                : view === "live"
+                  ? "Live Leaderboard"
+                  : "Daily leaderboard"}
             </h1>
+            {daily ? (
+              <p className="rankings-date">
+                {/* The private alert check reads the board's Reset from this time
+                    (website_daily_board in python/src/clashlens/alerts.py). */}
+                Day {daily.dayNumber} ·{" "}
+                <LocalTimestamp className="board-reset" value={daily.resetAt} />
+              </p>
+            ) : newestObservedAt ? (
+              <p className="rankings-date">
+                Updated <LocalTimestamp value={newestObservedAt} />
+              </p>
+            ) : null}
           </div>
           <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
             <Link
@@ -303,20 +325,35 @@ export default function TrackedLeaderboardRoute() {
               aria-current={view === "daily" ? "page" : undefined}
               to="/leaderboards/tracked?view=daily&page=1"
             >
-              Reset
+              At Reset
             </Link>
           </nav>
+          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
+            <nav aria-label="Other days" className="snapshot-pagination">
+              {daily.previousSnapshot ? (
+                <Link
+                  aria-label={`Go to Day ${daily.previousSnapshot.dayNumber}`}
+                  to={leaderboardUrl("daily", 1, daily.previousSnapshot)}
+                >
+                  ‹ Day {daily.previousSnapshot.dayNumber}
+                </Link>
+              ) : null}
+              {daily.nextSnapshot ? (
+                <Link
+                  aria-label={`Go to Day ${daily.nextSnapshot.dayNumber}`}
+                  to={leaderboardUrl("daily", 1, daily.nextSnapshot)}
+                >
+                  Day {daily.nextSnapshot.dayNumber} ›
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
         </div>
         {/* The Season's last board shows Complete days' EODs, as the game's
             Season-end result does. */}
         {daily && Date.parse(daily.resetAt) === Date.parse(daily.seasonEndAt) ? (
           <p className="rankings-context">
             Complete days show trophies after the automatic defense loss.
-          </p>
-        ) : null}
-        {!daily && newestObservedAt ? (
-          <p className="rankings-context">
-            Updated <LocalTimestamp value={newestObservedAt} />
           </p>
         ) : null}
         {!daily && leaderboard?.seasonResetPending ? (
@@ -340,7 +377,8 @@ export default function TrackedLeaderboardRoute() {
         ) : null}
       </section>
 
-      {error ? <ErrorNotice error={error} /> : null}
+      {/* Without a board, its own message below says what went wrong. */}
+      {error && leaderboard ? <ErrorNotice error={error} /> : null}
 
       {view === "live" ? (
         <section
@@ -353,8 +391,11 @@ export default function TrackedLeaderboardRoute() {
           <Form method="get" role="search" aria-label="Find your leaderboard rank">
             <input type="hidden" name="view" value="live" />
             <input type="hidden" name="page" value="1" />
-            <label htmlFor="rank-query">Find your rank</label>
-            <div className="rank-search-controls">
+            <label htmlFor="rank-query" className="sr-only">
+              Find your rank
+            </label>
+            <div className="search-controls rank-search-controls">
+              <SearchIcon className="search-field-icon" />
               <input
                 ref={rankInput}
                 id="rank-query"
@@ -362,7 +403,7 @@ export default function TrackedLeaderboardRoute() {
                 name="q"
                 defaultValue={query}
                 key={query}
-                placeholder="Player name or #tag"
+                placeholder="Your name or #tag"
                 maxLength={MAX_SEARCH_QUERY_LENGTH}
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -404,7 +445,7 @@ export default function TrackedLeaderboardRoute() {
                         <small>{entry.tag}</small>
                       </span>
                       <span>
-                        Rank {entry.rank.toLocaleString()}
+                        <strong>Rank {entry.rank.toLocaleString()}</strong>
                         <small>{entry.trophies.toLocaleString()} trophies</small>
                       </span>
                     </Link>
@@ -434,23 +475,40 @@ export default function TrackedLeaderboardRoute() {
           <div className="standings-toolbar">
             <div>
               <h2 id="standings-table-title">Standings</h2>
-              <p>{range ?? "No listed players"}</p>
+              {/* The page arrows here save scrolling to the end of the list. */}
+              <p className="standings-range">
+                {range && leaderboard.hasPrevious ? (
+                  <Link
+                    aria-label={`Previous ${PAGE_SIZE}`}
+                    to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}
+                  >
+                    ‹
+                  </Link>
+                ) : null}
+                {range ? (
+                  <span>
+                    {shown}
+                    <span className="standings-total">{total}</span>
+                  </span>
+                ) : (
+                  <span>No listed players</span>
+                )}
+                {range && leaderboard.hasNext ? (
+                  <Link
+                    aria-label={`Next ${nextCount}`}
+                    to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
+                  >
+                    ›
+                  </Link>
+                ) : null}
+              </p>
             </div>
+            {anyOld ? (
+              <p className="standings-key">
+                <span aria-hidden="true">●</span> Not updated for over 10 min
+              </p>
+            ) : null}
           </div>
-          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
-            <nav aria-label="Other days" className="snapshot-pagination">
-              {daily.previousSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
-                  Go to Day {daily.previousSnapshot.dayNumber}
-                </Link>
-              ) : null}
-              {daily.nextSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>
-                  Go to Day {daily.nextSnapshot.dayNumber}
-                </Link>
-              ) : null}
-            </nav>
-          ) : null}
           {entries.length === 0 ? (
             <div className="empty-state">
               <h3>No standings available yet</h3>
@@ -527,24 +585,29 @@ export default function TrackedLeaderboardRoute() {
                           >
                             <bdi>{entry.name}</bdi>
                           </Link>
-                          <span className="player-tag">{entry.tag}</span>
-                          <details className="player-update-mobile">
-                            <summary>
-                              Last updated{" "}
-                              {view === "live" ? (
-                                `${formatAge(ageSeconds(entry.freshness.observedAt))} ago`
-                              ) : (
-                                <LocalTimestamp value={entry.freshness.observedAt} />
-                              )}
-                              {view === "live" &&
-                              ageSeconds(entry.freshness.observedAt) >
-                                OLD_UPDATE_SECONDS ? (
-                                <span className="player-update-age">Over 10 min old</span>
-                              ) : null}
-                              {savedBeforeReset(entry.freshness.observedAt)}
-                            </summary>
-                            <LocalTimestamp value={entry.freshness.observedAt} />
-                          </details>
+                          {/* Phones show the tag and update age on one line. */}
+                          <div className="player-meta">
+                            <span className="player-tag">{entry.tag}</span>
+                            <details
+                              className="player-update-mobile"
+                              data-old={isOld(entry.freshness.observedAt) || undefined}
+                            >
+                              <summary>
+                                <span className="sr-only">Last updated </span>
+                                {view === "live" ? (
+                                  `${shortAge(ageSeconds(entry.freshness.observedAt))} ago`
+                                ) : (
+                                  <LocalTimestamp
+                                    value={entry.freshness.observedAt}
+                                    timeOnly
+                                  />
+                                )}
+                                {isOld(entry.freshness.observedAt) ? oldNote : null}
+                                {savedBeforeReset(entry.freshness.observedAt)}
+                              </summary>
+                              <LocalTimestamp value={entry.freshness.observedAt} />
+                            </details>
+                          </div>
                         </th>
                         <td data-label="Clan">{entry.clan}</td>
                         <td className="trophy-cell" data-label="Trophies">
@@ -562,16 +625,22 @@ export default function TrackedLeaderboardRoute() {
                           </span>
                         </td>
                         <td data-label="Last updated">
-                          <LocalTimestamp value={entry.freshness.observedAt} />
+                          {/* Live shows the age; the exact time is in its tooltip. */}
                           {view === "live" ? (
-                            <span className="player-update-age">
+                            <time
+                              className="local-time player-update-age"
+                              dateTime={entry.freshness.observedAt}
+                              title={formatTimestamp(entry.freshness.observedAt)}
+                              data-old={isOld(entry.freshness.observedAt) || undefined}
+                            >
                               {formatAge(ageSeconds(entry.freshness.observedAt))} ago
-                              {ageSeconds(entry.freshness.observedAt) > OLD_UPDATE_SECONDS
-                                ? " · Over 10 min old"
-                                : null}
-                            </span>
+                              {isOld(entry.freshness.observedAt) ? oldNote : null}
+                            </time>
                           ) : (
-                            savedBeforeReset(entry.freshness.observedAt)
+                            <>
+                              <LocalTimestamp value={entry.freshness.observedAt} />
+                              {savedBeforeReset(entry.freshness.observedAt)}
+                            </>
                           )}
                         </td>
                       </tr>
@@ -602,9 +671,28 @@ export default function TrackedLeaderboardRoute() {
           )}
         </section>
       ) : (
-        <div className="empty-state">
+        <div className="empty-state" role="alert">
           <h2>Leaderboard unavailable</h2>
-          <p>We couldn’t load the standings. Please try again in a moment.</p>
+          <p>
+            We couldn’t load the standings.
+            {error?.error.retryAfterSeconds
+              ? ` Try again in about ${error.error.retryAfterSeconds} seconds.`
+              : " Try again in a moment."}
+          </p>
+          <p className="empty-state-actions">
+            <Link
+              className="button secondary"
+              to={location.pathname + location.search}
+              reloadDocument
+            >
+              Try again
+            </Link>
+            {Number(new URLSearchParams(location.search).get("page") ?? 1) > 1 ? (
+              <Link className="button secondary" to={leaderboardUrl(view, 1)}>
+                Go to page 1
+              </Link>
+            ) : null}
+          </p>
         </div>
       )}
     </main>

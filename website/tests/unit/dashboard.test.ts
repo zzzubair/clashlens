@@ -212,10 +212,10 @@ describe("dashboard settings", () => {
       "legend-day",
       "legend-clock",
       "bases",
-      "goal",
-      "armies-defense",
       "rivals-watch",
       "heat-map",
+      "goal",
+      "armies-defense",
     ]);
     expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
     expect(shownCards("default")).toEqual(DEFAULT_LAYOUT);
@@ -398,7 +398,7 @@ describe("Legend clock", () => {
       }),
     );
     expect(html).toContain("to Reset at 05:00");
-    expect(text(html)).toContain("RESET 05:00");
+    expect(text(html)).toContain("Reset 05:00");
     expect(text(html)).toContain("3h 00m");
     expect(text(html)).not.toContain("now ");
   });
@@ -423,6 +423,11 @@ describe("Legend day card", () => {
     // The older of the day's reads and the range's shows.
     expect(updated(emptyDay({ observedAtMs: at(2) }))).toContain("updated 9 min ago");
     expect(updated(emptyDay({ observedAtMs: at(12) }))).toContain("updated 12 min ago");
+    // 09:00 UTC is 20 hours before the 05:00 Reset; the title's name is for screen readers.
+    expect(updated(emptyDay({ dayNumber: 9 }))).toContain(
+      "Legend day 9 , Lens Main updated",
+    );
+    expect(updated(emptyDay({}))).toContain("20h 00m to Reset");
   });
 
   const render = (
@@ -438,9 +443,7 @@ describe("Legend day card", () => {
 
   it("shows the projected place beside the outer range, labelled an estimate", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain(
-      "Next Reset #1 – #12,270 estimate · narrows as the day goes on Projected #3,000 at Reset",
-    );
+    expect(html).toContain("Next Reset #1–#12,270 estimate Projected #3,000 at Reset");
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
     );
@@ -467,12 +470,13 @@ describe("Legend day card", () => {
       }),
     );
     expect(html).toContain("Trophies 5,702");
-    expect(html).toContain("Net today +66");
+    // The change is marked "today" on screen, not left as a bare number.
+    expect(html).toContain("Net today +66 today");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
-    expect(html).toContain("Next Reset #95 – #760 estimate · narrows as the day goes on");
-    expect(html).toContain("+71 2 attacks");
-    expect(html).toContain("−5 1 defense");
+    expect(html).toContain("Next Reset #95–#760 estimate");
+    expect(html).toContain("2 of 8 attacks +71");
+    expect(html).toContain("1 of 8 defenses −5");
     expect(html).toContain("7 defenses remain · auto defense −21 each");
   });
 
@@ -480,7 +484,8 @@ describe("Legend day card", () => {
     const html = render(
       emptyDay({ attacks: 3, defenses: 2, openDefenses: 6, battles: [] }),
     );
-    expect(html).toContain("– 3 attacks");
+    expect(html).toContain("3 of 8 attacks ");
+    expect(html).not.toContain("3 of 8 attacks –");
     expect(html).toContain("6 defenses remain");
     expect(html).not.toContain("auto defense");
     expect(render(null)).toContain("Trophies 5,696 Net today –");
@@ -490,12 +495,12 @@ describe("Legend day card", () => {
     // Today's battles not saved yet, or the player page not read at all.
     for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
       const html = render(day);
-      expect(html).toContain("– – attacks");
-      expect(html).toContain("– – defenses");
-      expect(html).not.toContain("0 attacks");
+      expect(html).toContain("– of 8 attacks");
+      expect(html).toContain("– of 8 defenses");
+      expect(html).not.toContain("0 of 8");
       expect(html).toContain("Trophies 5,696");
       expect(html).toContain("Now #318");
-      expect(html).toContain("Next Reset #95 – #760");
+      expect(html).toContain("Next Reset #95–#760");
     }
   });
 });
@@ -1329,10 +1334,10 @@ describe("dashboard page", () => {
       "legend-day:m",
       "legend-clock:s",
       "bases:l",
-      "goal:s",
-      "armies-defense:m",
       "rivals-watch:m",
       "heat-map:s",
+      "goal:s",
+      "armies-defense:m",
     ]);
   });
 
@@ -1386,7 +1391,7 @@ describe("dashboard page", () => {
     expect(html).not.toContain("data-card=");
   });
 
-  it("previews the default cards behind sign-in", async () => {
+  it("puts search first and says what an account adds after it", async () => {
     const html = await renderPage({
       kind: "signed-out",
       loginAvailable: true,
@@ -1395,10 +1400,11 @@ describe("dashboard page", () => {
       error: null,
     });
     const plain = text(html);
-    expect(plain).toContain("Your Legend day, on one page");
-    expect(plain).toContain("Create account Already have one? Sign in");
-    expect(plain).toContain(
-      "Legend day Legend clock Bases you attacked Goal Armies on defense Rivals watch Season heat map",
+    expect(plain.indexOf("Find any Legend League player")).toBeLessThan(
+      plain.indexOf("Your Legend day, live"),
     );
+    expect(plain).toContain("Your Legend day, live");
+    expect(plain).toContain("Rank, rivals, Reset clock and goal. Free.");
+    expect(plain).toContain("Create account Already have one? Sign in");
   });
 });

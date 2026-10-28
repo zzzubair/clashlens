@@ -175,7 +175,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#1d1426" suppressHydrationWarning />
+        <meta name="theme-color" content="#faf5ef" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="/favicon.ico" sizes="32x32" />
@@ -273,13 +273,14 @@ function usePreloadTabCode(crews: boolean) {
   }, [manifest, crews]);
 }
 
-// The tabs, most useful first. Dashboard and Crews follow their switches.
+// The tabs, most useful first. Dashboard and Crews follow their switches; the
+// front page is Home until signed in, as on the phone tabs.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   return (
     <>
       {data?.dashboardEnabled && (
         <NavLink to="/" end>
-          Dashboard
+          {data.loggedIn ? "Dashboard" : "Home"}
         </NavLink>
       )}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
@@ -413,7 +414,8 @@ function PageLoading() {
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
 
 // The same top bar on every page, error pages included. Without the root
-// data (the server failed before it), it shows the signed-out menu. Below
+// data (the server failed before it), it shows the signed-out menu. The
+// sign-in page drops its Sign in, which would only open itself. Below
 // 64rem the tabs move to a bar at the bottom of the screen, in thumb reach.
 function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
@@ -459,7 +461,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
             }
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
           />
-        ) : (
+        ) : location.pathname === "/login" ? null : (
           <Link className="nav-link nav-link-primary" to={signIn}>
             Sign in
           </Link>

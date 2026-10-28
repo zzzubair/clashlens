@@ -38,6 +38,7 @@ import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
 import "../dashboard-cards.css";
+import "../dashboard-clock.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
 
@@ -363,7 +364,8 @@ function AccountTabs({
                       className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}
                     >
                       {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
-                    </b>
+                    </b>{" "}
+                    today
                   </>
                 ) : null}
               </span>
@@ -380,7 +382,8 @@ function AccountTabs({
         );
       })}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
-        <DashboardIcon name="plus" /> Link player
+        <DashboardIcon name="plus" />{" "}
+        <span className="dash-account-add-text">Link player</span>
       </Link>
     </nav>
   );

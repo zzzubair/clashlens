@@ -81,6 +81,12 @@ const PATHS = {
   up: <path d="M12 19V5M6 11l6-6 6 6" />,
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
   check: <path d="m5 12 5 5 9-10" />,
+  lock: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </>
+  ),
   globe: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -93,10 +99,13 @@ const PATHS = {
       <path d="M12 11v6M12 7.5v.01" />
     </>
   ),
+  // Three sliders, so it never reads as the theme button's sun.
   gear: (
     <>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" />
+      <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" />
+      <circle cx="15" cy="6" r="2" />
+      <circle cx="9" cy="12" r="2" />
+      <circle cx="17" cy="18" r="2" />
     </>
   ),
 } satisfies Record<string, ReactNode>;

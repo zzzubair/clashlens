@@ -24,6 +24,7 @@ function noticeText(payload: Record<string, unknown>): string | null {
   if (status === null) return null;
   return renderToString(createElement(UpdatesNotice, { status }))
     .replaceAll("<!-- -->", "")
+    .replace("</summary>", " ")
     .replace(/<[^>]+>/g, "");
 }
 
@@ -33,13 +34,21 @@ describe("delayed-updates notice", () => {
     expect(noticeText({ collection_delayed: true, last_collected_at: null })).toBeNull();
   });
 
+  it("shows one line and keeps the cause a tap away", () => {
+    const status = mapUpdateStatus({ ...ON_TIME, collection_delayed: true })!;
+    const html = renderToString(createElement(UpdatesNotice, { status }));
+    expect(html).toMatch(
+      /<details><summary><strong>Updates are delayed\.<\/strong> Showing saved data\.<\/summary><p>/,
+    );
+  });
+
   it("names a stalled API only when no answer has arrived", () => {
     const text = noticeText({
       collection_delayed: true,
       last_collected_at: "2026-10-03T00:00:00+00:00",
     });
     expect(text).toBe(
-      "Updates are delayed. No new data has arrived from the Clash of Clans API since 3 Oct 2026, 00:00 UTC (5 hours ago). Saved values stay on the page with the time they were last updated.",
+      "Updates are delayed. Showing saved data. No new data has arrived from the Clash of Clans API since 3 Oct 2026, 00:00 UTC (5 hours ago). Saved values stay on the page with the time they were last updated.",
     );
   });
 

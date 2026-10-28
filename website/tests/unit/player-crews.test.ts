@@ -45,6 +45,9 @@ import { PythonApiError } from "../../app/services/python.server";
 const TAG = "#2PP";
 const CREW_ID = "6f1c2b9e-4a7d-4c1e-9b2a-0d5e8f7a6b3c";
 const OTHER_ID = "0b6c1f2e-3d4a-4b5c-8d6e-7f8091a2b3c4";
+/** The small crest before a Crew's name: its first letter. */
+const crest = (letter: string) =>
+  `<span class="player-crew-crest" aria-hidden="true">${letter}</span>`;
 
 const PLAYER = {
   kind: "player-page",
@@ -139,8 +142,8 @@ describe("crews on the player page", () => {
     expect(mocks.requestJson.mock.calls[0]?.[0]).toBe("/v1/players/%232PP/crews");
     expect(html).toMatch(
       new RegExp(
-        `Crews: <span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>` +
-          `<span> · <a href="/crews/${OTHER_ID}"[^>]*><bdi>Owls</bdi></a></span>`,
+        `<span class="player-crews-label">Crews</span><span><a href="/crews/${CREW_ID}"[^>]*>${crest("R")}<bdi>Red Dawn</bdi></a></span>` +
+          `<span> · <a href="/crews/${OTHER_ID}"[^>]*>${crest("O")}<bdi>Owls</bdi></a></span>`,
       ),
     );
   });
@@ -160,7 +163,7 @@ describe("crews on the player page", () => {
     expect(html).toContain(`<h1>${TAG}</h1>`);
     expect(html).toMatch(
       new RegExp(
-        `Crew: <span><a href="/crews/${CREW_ID}"[^>]*><bdi>Red Dawn</bdi></a></span>`,
+        `<span class="player-crews-label">Crew</span><span><a href="/crews/${CREW_ID}"[^>]*>${crest("R")}<bdi>Red Dawn</bdi></a></span>`,
       ),
     );
   });

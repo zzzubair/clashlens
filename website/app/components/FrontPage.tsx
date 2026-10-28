@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 
-import { DashboardIcon } from "./DashboardIcon";
+import { DashboardTeaser } from "./DashboardTeaser";
 import { ErrorNotice } from "./ErrorNotice";
 import { TrophyMark, latestObservation } from "./LeaderboardShared";
 import { PageSearch } from "./PageSearch";
@@ -9,13 +9,11 @@ import { LocalTimestamp, OLD_UPDATE_SECONDS, useServerTime } from "./Provenance"
 import { useBackState } from "./BackLink";
 import { useSeasonReread } from "./SeasonReread";
 import { moveFocusWithArrows } from "./ArrowKeys";
-import { AccountButtons } from "./NeedsAccount";
 import type {
   TrackedLeaderboard,
   TrackedPlayerEntry,
   WebsiteErrorResponse,
 } from "../lib/contracts";
-import { CARDS, DEFAULT_LAYOUT } from "../lib/dashboard";
 import { canonicalPlayerPath } from "../lib/player-tag";
 
 export const FRONT_PAGE_PLAYERS = 10;
@@ -23,25 +21,15 @@ const RANKINGS_PATH = "/leaderboards/tracked?view=live&page=1";
 
 export interface FrontPageData {
   loginAvailable: boolean;
-  /** Off, the page leaves out the Dashboard preview. */
+  /** Off, the page leaves out what an account adds. */
   dashboardEnabled: boolean;
   leaderboard: TrackedLeaderboard | null;
   error: WebsiteErrorResponse | null;
 }
 
-const TEASER_TILES = [
-  { icon: "clock", label: "Legend clock in your time" },
-  { icon: "flag", label: "Your goal, on pace or not" },
-  { icon: "list", label: "Rivals just above and below you" },
-  { icon: "grid", label: "Every Season day at a glance" },
-  { icon: "bars", label: "Top lines and your gap" },
-  { icon: "users", label: "How you compare with your watchlists" },
-] as const;
-
 /**
- * What `/` shows anyone not signed in, and search engines: the Dashboard
- * preview first, then search, Rankings and Analytics, which need no account,
- * then the top players right now.
+ * What `/` shows anyone not signed in, and search engines: search first,
+ * then a peek at the dashboard an account unlocks, then the top players.
  */
 export function FrontPage({ data }: { data: FrontPageData }) {
   // Set by /logout: logged out, or logged out here but not recorded.
@@ -57,74 +45,20 @@ export function FrontPage({ data }: { data: FrontPageData }) {
       ) : loggedOut ? (
         <SavedLine>You&apos;re logged out.</SavedLine>
       ) : null}
-      {data.dashboardEnabled ? (
-        <DashboardPreview loginAvailable={data.loginAvailable} />
-      ) : (
-        <h1 className="sr-only">Clash Lens</h1>
-      )}
-      <section className="front-section" aria-labelledby="front-open-title">
-        <h2 id="front-open-title">No account needed</h2>
-        <p className="front-lede">
-          Legend League results, rankings and armies for all Legend I Players.
-        </p>
-        <PageSearch />
-        <nav className="front-links" aria-label="Rankings and Analytics">
-          <Link className="front-link" to={RANKINGS_PATH}>
-            <DashboardIcon name="trophy" />
-            <span>
-              <b>Rankings</b>
-              <small>Live and at each Reset</small>
-            </span>
-          </Link>
-          <Link className="front-link" to="/analytics/armies">
-            <DashboardIcon name="swords" />
-            <span>
-              <b>Analytics</b>
-              <small>Which armies win</small>
-            </span>
-          </Link>
-        </nav>
-      </section>
-      {data.error ? <ErrorNotice error={data.error} /> : null}
-      <TopPlayers leaderboard={data.leaderboard} />
-    </main>
-  );
-}
-
-function DashboardPreview({ loginAvailable }: { loginAvailable: boolean }) {
-  return (
-    <div className="dash-teaser">
-      <div className="dash-teaser-behind" aria-hidden="true" inert>
-        <div className="dash-grid">
-          {DEFAULT_LAYOUT.filter((card) => CARDS[card].built).map((card) => (
-            <section key={card} className={`dash-card dash-card-${CARDS[card].size}`}>
-              <h2>{CARDS[card].title}</h2>
-            </section>
-          ))}
-        </div>
+      <div
+        className={data.dashboardEnabled ? "front-grid front-grid-pitch" : "front-grid"}
+      >
+        <section className="front-hero" aria-labelledby="front-title">
+          <h1 id="front-title">Find any Legend League player</h1>
+          <PageSearch />
+        </section>
+        {data.dashboardEnabled ? (
+          <DashboardTeaser loginAvailable={data.loginAvailable} />
+        ) : null}
+        {data.error ? <ErrorNotice error={data.error} /> : null}
+        <TopPlayers leaderboard={data.leaderboard} />
       </div>
-      <section className="dash-teaser-panel" aria-labelledby="dash-teaser-title">
-        <h1 id="dash-teaser-title">Your Legend day, on one page</h1>
-        <ul className="dash-teaser-tiles">
-          {TEASER_TILES.map((tile) => (
-            <li key={tile.label}>
-              <DashboardIcon name={tile.icon} />
-              {tile.label}
-            </li>
-          ))}
-        </ul>
-        {loginAvailable ? (
-          <AccountButtons returnPath="/" />
-        ) : (
-          <p className="dash-note" role="status">
-            Sign-in is not available right now.
-          </p>
-        )}
-        <p className="dash-note">
-          <DashboardIcon name="info" /> Free. Player pages stay public.
-        </p>
-      </section>
-    </div>
+    </main>
   );
 }
 
@@ -149,18 +83,12 @@ function TopPlayers({ leaderboard: loaded }: { leaderboard: TrackedLeaderboard |
     >
       <div className="section-heading">
         <div>
-          <h2 id="live-leaderboard-title">Top {FRONT_PAGE_PLAYERS} right now</h2>
+          <h2 id="live-leaderboard-title">Top {FRONT_PAGE_PLAYERS} now</h2>
           {leaderboard ? (
             <p className="standings-context">
-              {leaderboard.entries.length > 0 ? (
-                <span>
-                  Top {leaderboard.entries.length} of{" "}
-                  {trackedPlayers(leaderboard.totalTracked)}
-                </span>
-              ) : null}
               {latestObservedAt ? (
                 <span>
-                  Newest player update <LocalTimestamp value={latestObservedAt} />
+                  Updated <LocalTimestamp value={latestObservedAt} />
                 </span>
               ) : null}
               {staleEntries > 0 ? (
@@ -172,7 +100,7 @@ function TopPlayers({ leaderboard: loaded }: { leaderboard: TrackedLeaderboard |
           ) : null}
         </div>
         <Link className="section-link leaderboard-more" to={RANKINGS_PATH}>
-          Full rankings
+          All rankings
         </Link>
       </div>
       {seasonExpired ? (
@@ -261,8 +189,4 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
       </table>
     </div>
   );
-}
-
-function trackedPlayers(count: number) {
-  return `${count.toLocaleString()} tracked ${count === 1 ? "player" : "players"}`;
 }

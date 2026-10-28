@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { Form, useNavigation } from "react-router";
 
 import { moveFocusWithArrows } from "./ArrowKeys";
-import { SearchSuggestions, usePlayerSuggestions } from "./PlayerSearch";
+import { SearchIcon, SearchSuggestions, usePlayerSuggestions } from "./PlayerSearch";
 
 /**
  * The big player search on the front page and the search page. Suggestions
@@ -57,26 +57,14 @@ export function PageSearch({
           Search players and Clash Lens profiles
         </label>
         <div className="search-controls">
-          <svg
-            className="search-field-icon"
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.7"
-            strokeLinecap="round"
-          >
-            <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
-          </svg>
+          <SearchIcon className="search-field-icon" />
           <input
             ref={inputRef}
             id="player-search"
             name="q"
             type="search"
             value={suggestions.query}
-            placeholder="Search player, @username or #tag"
+            placeholder="Name, @username or #tag"
             autoComplete="off"
             autoCapitalize="none"
             enterKeyHint="search"

@@ -229,8 +229,20 @@ def reset_at(now: float) -> int:
 
 
 def board_page(reset: int) -> str:
-    """The Daily board's heading as the website renders it since 13 Oct 2026,
-    the board shown at the address visitors use rather than a redirect to it."""
+    """The Daily board's heading as the website renders it since the Oct 2026
+    redesign, the board shown at the address visitors use rather than a
+    redirect to it."""
+    shown = datetime.fromtimestamp(reset, UTC)
+    return (
+        '<h1 id="leaderboard-title">At Reset</h1><p class="rankings-date">Day <!-- -->7'
+        '<!-- --> · <time class="local-time board-reset"'
+        f' dateTime="{shown:%Y-%m-%dT%H:%M:%SZ}"'
+        f' title="{shown:%-d %b %Y, %H:%M} UTC">{shown:%-d %b %Y, %H:%M} UTC</time></p>'
+    )
+
+
+def old_board_page(reset: int) -> str:
+    """The same heading before the redesign, still read while either side ships."""
     shown = datetime.fromtimestamp(reset, UTC)
     return (
         '<p class="rankings-kicker">Day <!-- -->7</p><h1 id="leaderboard-title">'
@@ -493,6 +505,15 @@ def test_daily_page_without_the_board_fails_the_check(runtime, page, capsys):
     rt.board_page = page
     assert rt.run() == 1
     assert "Reset publication status unavailable" in capsys.readouterr().err
+
+
+def test_the_daily_page_from_before_the_redesign_still_shows_the_board(
+    runtime, capsys
+):
+    rt = runtime
+    rt.board_page = old_board_page(reset_at(rt.now))
+    assert rt.run() == 0
+    assert "Reset publication status unavailable" not in capsys.readouterr().err
 
 
 def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):

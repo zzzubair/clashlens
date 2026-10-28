@@ -74,7 +74,7 @@ it("explains in place why a signed-out page needs an account", async () => {
     returnPath: "/crews",
   });
   expect(html).toContain("<h1>Crews</h1>");
-  expect(html).toContain("You need a Clash Lens account to make or join one.");
+  expect(html).toContain("Sign in to make or join one.");
   expect(html).toContain('href="/signup?returnPath=%2Fcrews"');
   expect(html).toContain('href="/login?returnPath=%2Fcrews"');
   expect(html).not.toContain("The page could not be loaded");

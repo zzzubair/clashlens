@@ -128,16 +128,18 @@ export const CARD_IDS = Object.keys(CARDS) as CardId[];
 
 /**
  * The default layout, in order. Users on the default follow this list at
- * each release; cards not built yet are skipped until they are.
+ * each release; cards not built yet are skipped until they are. On a wide
+ * screen the tall heat map shares Rivals watch's row and the short Goal
+ * shares Armies on defense's, so neither row leaves a hole.
  */
 export const DEFAULT_LAYOUT: readonly CardId[] = [
   "legend-day",
   "legend-clock",
   "bases",
-  "goal",
-  "armies-defense",
   "rivals-watch",
   "heat-map",
+  "goal",
+  "armies-defense",
 ];
 
 /** The 12 Top lines Cutoffs can show; a user picks 7. */

@@ -1,123 +1,545 @@
-/* The signed-out front page: the Dashboard preview, then search with big
-   Rankings and Analytics buttons, then the top players. */
+/* The signed-out front page: search first, then a peek at the dashboard an
+   account unlocks, then the Top 10. Wide screens put the peek beside them. */
 
-/* The preview's cards and its panel share one grid cell, so the taller of
-   the two sets the height and nothing below slides under the panel. */
-.front-page .dash-teaser {
+.front-grid {
   display: grid;
-  min-height: 0;
-  margin-bottom: 0.5rem;
+  gap: 1.25rem;
+  align-items: start;
 }
 
-.front-page .dash-teaser > * {
-  grid-area: 1 / 1;
+.front-grid > * {
+  min-width: 0;
+  margin: 0;
 }
 
-.front-page .dash-teaser-behind {
-  max-height: 26rem;
-  overflow: hidden;
+@media (min-width: 64rem) {
+  .front-grid-pitch {
+    grid-template-areas:
+      "hero teaser"
+      "top teaser";
+    grid-template-columns: minmax(0, 1fr) 30rem;
+    grid-template-rows: auto 1fr;
+    gap: 1.75rem 2.5rem;
+  }
+
+  .front-grid-pitch .front-hero {
+    grid-area: hero;
+  }
+
+  .front-grid-pitch .front-teaser {
+    position: sticky;
+    top: 5.5rem;
+    grid-area: teaser;
+  }
+
+  .front-grid-pitch .home-leaderboard {
+    grid-area: top;
+  }
+
+  /* The wider column lets the example's small labels read at a normal size. */
+  .front-grid-pitch :is(.teaser-label, .teaser-rivals > span) {
+    font-size: 0.8rem;
+  }
+
+  .front-grid-pitch :is(.teaser-ranks small, .teaser-clock small) {
+    font-size: 0.76rem;
+  }
 }
 
-.front-page .dash-teaser-panel {
-  position: relative;
-  top: auto;
-  left: auto;
-  align-self: start;
-  justify-self: center;
-  margin: 3rem 0 1.5rem;
-  transform: none;
+/* Between a phone and a laptop the example keeps about the shape it has on
+   them, centred, instead of stretching across the page. */
+@media (min-width: 40rem) and (max-width: 63.99rem) {
+  .front-grid-pitch .front-teaser {
+    justify-self: center;
+    width: min(100%, 34rem);
+  }
 }
 
-.front-section {
+/* ---------- Search first ---------- */
+
+.front-hero {
   display: grid;
   gap: 1rem;
-  padding-top: clamp(1.5rem, 4vw, 2.25rem);
+  padding-top: 0.5rem;
 }
 
-.front-section h2 {
+.front-hero h1 {
+  max-width: 16ch;
   margin: 0;
-  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  font-size: clamp(2.6rem, 1.75rem + 3.75vw, 4rem);
 }
 
-.front-lede {
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 1.05rem;
-  line-height: 1.5;
-}
+/* ---------- The dashboard, locked ---------- */
 
-.front-links {
+.front-teaser {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.front-link {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
-  min-height: 4.5rem;
-  padding: 1rem 1.25rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
+  overflow: hidden;
+  padding: 0.75rem;
+  background:
+    radial-gradient(
+      120% 70% at 50% 0%,
+      color-mix(in srgb, var(--cl-brand-orange) 18%, transparent),
+      transparent 65%
+    ),
+    var(--cl-card-fill);
+  border: 1px solid var(--cl-action-border);
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
-  text-decoration: none;
+  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
 }
 
-.front-link:is(:hover, :focus-visible) {
-  color: var(--cl-ink);
-  background: var(--cl-action-soft);
-}
-
-.front-link .dash-icon {
-  width: 1.75rem;
-  height: 1.75rem;
-  color: var(--cl-accent);
-}
-
-.front-link span {
+/* An example dashboard: sharp at the top, fading and blurring under the lock. */
+.teaser-board {
+  position: relative;
   display: grid;
-  gap: 0.15rem;
-  min-width: 0;
+  padding-top: 0.7rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-mask-image: linear-gradient(180deg, #000 30%, transparent 96%);
+  mask-image: linear-gradient(180deg, #000 30%, transparent 96%);
 }
 
-.front-link b {
-  font-family: var(--cl-font-heading);
-  font-size: 1.3rem;
-  font-weight: 400;
-}
-
-.front-link small {
+/* Sits on the first card's top edge, like a tab. */
+.teaser-example {
+  position: absolute;
+  z-index: 1;
+  top: 0.05rem;
+  left: 0.75rem;
+  padding: 0.1rem 0.45rem;
   color: var(--cl-muted);
-  font-size: 0.9rem;
+  background: var(--cl-glass-strong);
+  border: 1px solid var(--cl-glass-edge);
+  border-radius: 999px;
+  font-size: 0.68rem;
   font-weight: 650;
 }
 
-@media (max-width: 40rem) {
-  .front-page .dash-teaser-panel {
-    margin: 1rem 0;
+.teaser-card {
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
+  min-width: 0;
+  padding: 0.65rem 0.7rem;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 10px;
+}
+
+/* The day across the top: score on the left, the 8 attacks and 8 defenses
+   on the right, the rank strip under both. */
+.teaser-day {
+  grid-column: 1 / -1;
+  grid-template-areas:
+    "label slots"
+    "score slots"
+    "ranks ranks";
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 1.25rem;
+  padding: 0.8rem 0.9rem;
+}
+
+.teaser-day .teaser-label {
+  grid-area: label;
+}
+
+.teaser-day .teaser-score {
+  grid-area: score;
+}
+
+.teaser-day .teaser-ranks {
+  grid-area: ranks;
+  margin-top: 0.25rem;
+}
+
+.teaser-day .teaser-attack {
+  grid-area: slots;
+  align-self: start;
+  margin-top: 0.2rem;
+}
+
+.teaser-day .teaser-defense {
+  grid-area: slots;
+  align-self: end;
+}
+
+.teaser-label {
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.teaser-score {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.teaser-score strong {
+  font-size: 2.4rem;
+  line-height: 0.95;
+}
+
+.teaser-net {
+  padding: 0.1rem 0.3rem;
+  color: var(--cl-positive);
+  background: var(--cl-positive-soft);
+  border-radius: 4px;
+  font-size: 1rem;
+}
+
+.teaser-slots {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.teaser-slots .dash-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-right: 0.2rem;
+  color: var(--cl-muted);
+}
+
+.teaser-slots {
+  justify-content: flex-end;
+}
+
+.teaser-slots i {
+  flex: 1;
+  max-width: 1rem;
+  aspect-ratio: 1;
+  background: var(--cl-raised);
+  border-radius: 3px;
+}
+
+.teaser-attack i[data-stars="3"] {
+  background: var(--cl-star);
+}
+
+.teaser-attack i[data-stars="2"] {
+  background: color-mix(in srgb, var(--cl-star) 65%, var(--cl-raised));
+}
+
+.teaser-attack i[data-stars="1"] {
+  background: color-mix(in srgb, var(--cl-star) 35%, var(--cl-raised));
+}
+
+.teaser-defense i[data-stars="0"] {
+  background: var(--cl-positive);
+}
+
+.teaser-defense i:is([data-stars="1"], [data-stars="2"]) {
+  background: color-mix(in srgb, var(--cl-negative) 45%, var(--cl-raised));
+}
+
+.teaser-defense i[data-stars="3"] {
+  background: var(--cl-negative);
+}
+
+/* Last Reset, Now and Next Reset, read as the real Legend day card does. */
+.teaser-ranks {
+  display: grid;
+  grid-template-columns: auto minmax(0.5rem, 1fr) auto minmax(0.5rem, 1fr) auto;
+  gap: 0 0.4rem;
+  align-items: start;
+  color: var(--cl-muted);
+  font-family: var(--cl-font-score);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.teaser-ranks > span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.teaser-ranks small {
+  font-family: var(--cl-font);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.teaser-ranks i {
+  height: 1px;
+  margin-top: 1.45rem;
+  background: var(--cl-outline);
+}
+
+.teaser-now {
+  justify-items: center;
+}
+
+.teaser-ranks .rank-mark {
+  height: 1.45rem;
+  padding: 0 0.45rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.teaser-next {
+  justify-items: end;
+  text-align: right;
+}
+
+.teaser-clock {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.teaser-clock svg {
+  width: 2.6rem;
+  height: 2.6rem;
+  fill: none;
+  stroke: var(--cl-raised);
+  stroke-width: 7;
+  transform: rotate(-90deg);
+}
+
+.teaser-clock .teaser-clock-left {
+  stroke: var(--cl-brand-orange);
+  stroke-dasharray: 62 100;
+  stroke-linecap: round;
+}
+
+.teaser-clock span {
+  display: grid;
+}
+
+.teaser-clock strong {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.teaser-clock small {
+  color: var(--cl-muted);
+  font-size: 0.68rem;
+}
+
+.teaser-rivals {
+  gap: 0;
+  padding-block: 0.3rem;
+  filter: blur(0.6px);
+}
+
+.teaser-rivals > span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.15rem 0.25rem;
+  font-size: 0.72rem;
+}
+
+.teaser-rivals > span > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teaser-rivals b {
+  color: var(--cl-muted);
+}
+
+.teaser-rivals .teaser-you {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-radius: 4px;
+  font-weight: 650;
+}
+
+.teaser-heat {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 3px;
+  filter: blur(1.5px);
+}
+
+.teaser-heat i {
+  aspect-ratio: 1;
+  background: var(--cl-raised);
+  border-radius: 3px;
+}
+
+.teaser-heat i[data-net="up"] {
+  background: var(--cl-positive);
+}
+
+.teaser-heat i[data-net="down"] {
+  background: var(--cl-negative);
+}
+
+/* The way in, over the faded half. */
+.teaser-lock {
+  position: relative;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: center;
+  margin-top: -4.75rem;
+  padding: 0 0.5rem 0.5rem;
+  text-align: center;
+}
+
+.teaser-lock-icon {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--cl-action-text);
+  background: var(--cl-glass-strong);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 50%;
+  box-shadow:
+    var(--cl-glass-shine),
+    0 8px 24px -8px rgb(255 120 20 / 0.5);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.teaser-lock-icon .dash-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.teaser-lock h2 {
+  margin: 0;
+}
+
+.teaser-lock p {
+  max-width: 24rem;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.teaser-lock .account-buttons {
+  justify-content: center;
+  margin-top: 0.2rem;
+}
+
+.teaser-lock .account-buttons .button {
+  min-height: 2.75rem;
+}
+
+/* A small phone keeps Create account above the tab bar and the example
+   readable: no fade and no heat map, two rivals, and the lock beside its
+   one-line title under the example. */
+@media (max-width: 23.5rem) {
+  .front-grid {
+    gap: 1rem;
+  }
+
+  .front-hero {
+    gap: 0.75rem;
+    padding-top: 0;
+  }
+
+  .teaser-board {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .teaser-rivals > span:nth-child(3) {
+    display: none;
+  }
+
+  .front-hero h1 {
+    font-size: 2.35rem;
+  }
+
+  .teaser-heat {
+    display: none;
+  }
+
+  .teaser-lock {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .teaser-lock > :not(.teaser-lock-icon, h2) {
+    flex-basis: 100%;
+  }
+
+  .teaser-lock-icon {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .teaser-lock h2 {
+    font-size: 1.2rem;
+    white-space: nowrap;
   }
 }
 
-@media (max-width: 34rem) {
-  .front-link {
-    gap: 0.55rem;
-    min-height: 4rem;
-    padding: 0.75rem;
-  }
+/* ---------- Top 10 now ---------- */
 
-  .front-link .dash-icon {
-    width: 1.4rem;
-    height: 1.4rem;
-  }
+/* The title and All rankings share the top line; the update time runs under. */
+.home-leaderboard > .section-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 0.75rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.75rem 0.85rem 0.75rem 1rem;
+  border-bottom: 1px solid var(--cl-border);
+}
 
-  .front-link b {
-    font-size: 1.1rem;
-  }
+.home-leaderboard > .section-heading > div {
+  display: contents;
+}
 
-  .front-link small {
-    font-size: 0.8rem;
-  }
+.home-leaderboard h2 {
+  margin: 0;
+}
+
+.home-leaderboard .leaderboard-more {
+  grid-area: 1 / 2;
+}
+
+.standings-context {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.standings-context span + span::before {
+  content: " · ";
+}
+
+.home-leaderboard .table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.home-leaderboard .empty-state {
+  padding: 1.25rem 1rem;
+}
+
+/* The update time sits under the title; stale rows are counted there too. */
+.home-leaderboard .leaderboard-table :is(thead th:last-child, td:last-child) {
+  display: none;
+}
+
+/* Beside the teaser, Create account is the one filled button; Search is quiet
+   (Enter searches too). */
+:root .front-grid-pitch .search-controls button {
+  color: var(--cl-ink);
+  background: var(--cl-card-fill, var(--cl-surface));
+  border: 1px solid var(--cl-card-line);
+  box-shadow: var(--cl-glass-shine);
+  font-weight: 600;
+}
+:root .front-grid-pitch .search-controls button:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  border-color: var(--cl-outline);
 }

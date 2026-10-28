@@ -44,10 +44,36 @@
   margin: 0;
 }
 
+/* Two equal ways in, each with its mark; side by side where they fit. */
 .sign-in-panel .button-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.6rem;
+}
+
+@media (min-width: 30rem) {
+  .sign-in-panel .button-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.sign-in-panel .button-row .button {
+  gap: 0.6rem;
+  justify-content: center;
+  min-height: 3rem;
+}
+
+.provider-mark {
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+/* The Google mark keeps its colours on a white disc on the filled button. */
+.button-primary .provider-mark {
+  box-sizing: content-box;
+  padding: 0.2rem;
+  background: #fff;
+  border-radius: 50%;
 }
 
 .link-then {

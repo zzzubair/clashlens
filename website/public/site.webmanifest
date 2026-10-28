@@ -1,8 +1,8 @@
 {
   "name": "Clash Lens",
   "short_name": "Clash Lens",
-  "theme_color": "#1d1426",
-  "background_color": "#fff8ec",
+  "theme_color": "#120d0a",
+  "background_color": "#120d0a",
   "display": "standalone",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },

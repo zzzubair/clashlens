@@ -38,6 +38,7 @@ function page(
   codes: string[],
   now = "2026-10-08T12:00:00Z",
   endedDays: RankedDaySummary[] = [],
+  warnings: PlayerPage["dataQuality"] = [],
 ) {
   const today = {
     ...TODAY,
@@ -64,6 +65,7 @@ function page(
     seasonDays: [],
     dataQuality: [
       { code: "partial", label: "Incomplete ranked-day data", detail: codes.join("; ") },
+      ...warnings,
     ],
     provenance: {
       source: "api_player_daily_logs",
@@ -103,7 +105,7 @@ function page(
 }
 
 const note = (html: string) =>
-  html.split('id="season-days-title"')[1].split('class="legend-days"')[0];
+  html.split('id="season-days-title"')[1].split('class="log-card')[0];
 const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary => ({
@@ -117,6 +119,9 @@ const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary 
 });
 const cell = (html: string, key: string, label: string) =>
   html.split(`id="legend-day-${key}"`)[1].split(`<small>${label}</small>`)[1];
+// A day's status dot sits beside its date, before its numbers.
+const mark = (html: string, key: string) =>
+  html.split(`id="legend-day-${key}"`)[1].split("<small>Starting trophies</small>")[0];
 
 describe("today's Legend day wording", () => {
   it("shows no live trend and keeps the previous Season's days out", async () => {
@@ -132,7 +137,7 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
-    expect(summary).toContain("of 3 finished days saved");
+    expect(summary).toContain("of 3 days saved");
     expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
@@ -169,6 +174,26 @@ describe("today's Legend day wording", () => {
       expect(todayEntry(html)).toContain(text);
       expect(todayEntry(html)).toContain("Ending evidence arrives after Reset.");
     }
+  });
+
+  it("says a player the game no longer finds is not found, not that today is unsaved", async () => {
+    const detail =
+      "Clash of Clans did not find this player at its latest check, so they are left off the Live Leaderboard.";
+    const html = await page(
+      WAITING,
+      "2026-10-08T12:00:00Z",
+      [],
+      [
+        { code: "unavailable", label: "Player not found", detail },
+        {
+          code: "unavailable",
+          label: "Missing current ranked-day data",
+          detail: "No ranked-day publication covers the current UTC time.",
+        },
+      ],
+    );
+    expect(note(html)).toContain(`<strong>Player not found:</strong> ${detail}`);
+    expect(html.split("Today&#x27;s Legend day isn&#x27;t saved yet.")).toHaveLength(2);
   });
 
   it("stops calling the day in progress once the page's clock passes Reset", async () => {
@@ -216,6 +241,30 @@ describe("today's Legend day wording", () => {
     expect(rank("2026-10-08")).toMatch(/>After Reset$/);
   });
 
+  it("shows how far each day's Reset rank moved since the day before", async () => {
+    const ended = (day: number, resetRank: number): RankedDaySummary => ({
+      ...TODAY,
+      dayNumber: day,
+      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      state: "Complete",
+      resetRank,
+    });
+    const html = await page(WAITING, undefined, [
+      ended(7, 1234),
+      ended(6, 1500),
+      ended(5, 1000),
+    ]);
+    const move = (key: string) =>
+      html
+        .split(`id="legend-day-${key}"`)[1]
+        .split("</details>")[0]
+        .match(/class="sr-only">, ([^<]+)</)?.[1];
+    expect(move("2026-10-07")).toBe("up 266 since the day before");
+    expect(move("2026-10-06")).toBe("down 500 since the day before");
+    // Day 4 isn't saved, so day 5 has nothing to compare with.
+    expect(move("2026-10-05")).toBeUndefined();
+  });
+
   it("ends each finished day on the next day's start and shows the automatic loss", async () => {
     const html = await page(WAITING, undefined, [
       // 40 from attacks, 0 on defense, 32 taken at Reset: +8.
@@ -234,16 +283,20 @@ describe("today's Legend day wording", () => {
         resetAdjustment: { kind: "weekly", amount: 80 },
       }),
     ]);
-    expect(cell(html, "2026-10-07", "End of day")).toMatch(
-      /^<strong>6,000<span class="day-mark day-mark-verified" title="Verified">/,
+    expect(cell(html, "2026-10-07", "End of day")).toMatch(/^<strong>6,000<\/strong>/);
+    expect(mark(html, "2026-10-07")).toContain(
+      '<span class="day-mark day-mark-verified"',
     );
     expect(cell(html, "2026-10-07", "Defenses")).toContain(
       '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
     );
-    const gap = "Battles add up to 5,050; next day started at 5,992.";
-    expect(cell(html, "2026-10-06", "End of day")).toMatch(
-      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span class="legend-day-end-conflict">Battles add up to 5,050; next day started at 5,992.<\/span>/,
+    // An open day says where it started, at every width.
+    expect(cell(html, "2026-10-07", "Defenses")).toContain(
+      '<span class="log-fact-start">Started on 5,992</span>',
     );
+    const gap = "Battles add up to 5,050; next day started at 5,992.";
+    expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,992<\/strong>/);
+    expect(mark(html, "2026-10-06")).toContain('<span class="day-mark day-mark-gap"');
     // The whole day is Uncertain: its heading and its explanation too.
     const conflicted = html.split('id="legend-day-2026-10-06"')[1].split("</details>")[0];
     expect(conflicted.split("<small>Starting trophies</small>")[0]).toContain(
@@ -255,8 +308,9 @@ describe("today's Legend day wording", () => {
     expect(cell(html, "2026-10-05", "Trophy change")).toContain(
       "<span>+80 weekly reset</span>",
     );
-    expect(cell(html, "2026-10-05", "End of day")).toMatch(
-      /^<strong>5,000<span class="day-mark day-mark-verified" title="Verified">/,
+    expect(cell(html, "2026-10-05", "End of day")).toMatch(/^<strong>5,000<\/strong>/);
+    expect(mark(html, "2026-10-05")).toContain(
+      '<span class="day-mark day-mark-verified"',
     );
     expect(cell(html, "2026-10-06", "Defenses")).not.toContain("automatic loss");
     expect(cell(html, "2026-10-08", "End of day")).toMatch(
@@ -302,8 +356,9 @@ describe("today's Legend day wording", () => {
       ended(6, { startTrophies: 5150, trophyChange: 50 }),
     ]);
     expect(html).not.toContain('id="legend-day-2026-10-07"');
-    expect(cell(html, "2026-10-06", "End of day")).toMatch(
-      /^<strong>5,200<span class="day-mark day-mark-verified" title="Verified">/,
+    expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,200<\/strong>/);
+    expect(mark(html, "2026-10-06")).toContain(
+      '<span class="day-mark day-mark-verified"',
     );
   });
 });

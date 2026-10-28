@@ -907,7 +907,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // older than the board's, so the label goes by it.
     expect(data.cards.cutoffs?.live.observedAtMs).toBe(NOW - 10 * 60_000);
 
-    // Rivals watch: 3 above and 3 below on the live board, with moves since the Reset.
+    // Rivals watch: 3 above and 3 below live, moves since the Reset, each a player link.
     const rivals = text(cards["rivals-watch"]!);
     expect(rivals).toContain("Today so far");
     expect(rivals.match(/#3\d\d/g)).toEqual([
@@ -922,6 +922,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
     expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
     expect(rivals).toContain("#317 Player 317 5,365 – – –");
+    expect(cards["rivals-watch"]).toContain('href="/players/%238PYQ2LJ0"');
+    expect(cards["rivals-watch"]!.match(/class="rival-link" href/g)).toHaveLength(7);
     // Tundra's battles were saved 20 minutes ago, before the board's 3.
     expect(data.cards["rivals-watch"]?.live?.observedAtMs).toBe(NOW - 20 * 60_000);
 
@@ -1166,12 +1168,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);
-    expect(day).toContain("Legend day · Lens Main Day 9 of 28");
-    expect(day).toContain("Trophies 5,370 Net today –");
-    expect(day).toContain("Last Reset #318 → Now #316 → Next Reset #95 – #760");
+    // The tab shows whose day it is; the card names the player for screen readers only.
+    expect(day).toContain("Legend day 9 , Lens Main Trophies 5,370 Net today –");
+    expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
+    expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
+    expect(day).toContain("Last Reset #318 Now #316 Next Reset #95–#760");
     expect(day).toContain("Projected #240 at Reset");
-    expect(day).toContain("2 attacks");
-    expect(day).toContain("1 defense");
+    expect(day).toContain("2 of 8 attacks");
+    expect(day).toContain("1 of 8 defenses");
     expect(day).toContain("7 defenses remain · auto defense −21 each");
 
     // Bases you attacked: hardest first against 41% held at similar trophies.
@@ -1388,7 +1392,7 @@ describe("dashboard card numbers", () => {
     expect(recentForm(season([], 1), 7)).toBeNull();
   });
 
-  it("gives equal days one colour and leaves shield days out", () => {
+  it("gives equal days one colour, a lone day its sign, and leaves shields out", () => {
     const cells = heatCells(
       season([
         day(1, 10),
@@ -1406,13 +1410,13 @@ describe("dashboard card numbers", () => {
       ["shield", null],
       ["played", 0],
     ]);
+    expect(heatCells(season([day(1, 40)]), "net")[0]!.shade).toBe(1);
   });
 
   it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
     const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
     const lost = day(3, -304, quiet);
-    expect(isShieldDay(lost)).toBe(false);
-    expect(isShieldDay(day(2, 0, quiet))).toBe(true);
+    expect([lost, day(2, 0, quiet)].map((d) => isShieldDay(d))).toEqual([false, true]);
     expect(isShieldDay({ ...day(4, 0, quiet), net: null })).toBe(false);
     const cells = heatCells(season([day(1, 40), day(2, 0, quiet), lost]), "net");
     expect(cells.slice(0, 3).map((cell) => [cell.kind, cell.shade])).toEqual([

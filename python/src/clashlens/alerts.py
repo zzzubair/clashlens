@@ -473,8 +473,8 @@ def website_daily_board(origin: str) -> int:
     public page shows at its public address ``origin``, or 0 when it shows
     none yet.
 
-    The page shows the newest frozen board, headed "Leaderboard at" its Reset,
-    only once the website has read that board from the API and accepted it,
+    The page shows the newest frozen board, with its Reset under the At Reset
+    heading, only once the website has read that board from the API and accepted it,
     so a board the website cannot reach, rejects or fails to show does not
     count. Until 13 Oct 2026 it redirected to the board's own address instead.
     """
@@ -487,8 +487,11 @@ def website_daily_board(origin: str) -> int:
             return 0
         raise
     # website/app/routes/tracked-leaderboard.tsx; its unit test pins this markup.
+    # The "Leaderboard at" heading before the Oct 2026 redesign still matches, so
+    # the website and this check can ship in either order.
     heading = re.search(
-        r'<h1 id="leaderboard-title">Leaderboard at <time [^>]*\bdatetime="([^"]+)"',
+        r'(?:<time class="local-time board-reset"'
+        r'|<h1 id="leaderboard-title">Leaderboard at <time) [^>]*\bdatetime="([^"]+)"',
         page.decode(errors="replace"),
         re.IGNORECASE,
     )

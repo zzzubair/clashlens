@@ -10,6 +10,7 @@ import type {
   RivalsData,
 } from "../lib/dashboard-cards";
 import { around, goalPlan } from "../lib/dashboard-cards";
+import { canonicalPlayerPath } from "../lib/player-tag";
 import {
   CardHead,
   CardNote,
@@ -37,7 +38,10 @@ export function ClockCard({
     <>
       <CardHead title="Legend clock" meta={updatedAgo(data.observedAtMs, nowMs)} />
       <LegendClock battles={data.battles} nowMs={nowMs} timeZone={timeZone} />
-      <p className="dash-card-foot">Times in your zone: {timeZone}</p>
+      <p className="dash-card-foot">
+        <span className="sr-only">Times in your zone: </span>
+        {timeZone}
+      </p>
     </>
   );
 }
@@ -281,23 +285,28 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
         {rows.map((row) => (
           <tr key={row.tag} className={row.you ? "rival-you" : undefined}>
             <td>
-              <b>#{count(row.rank)}</b>
+              <b className="rank-mark">#{count(row.rank)}</b>
               {row.moved ? (
                 <span
                   className={`rival-moved ${row.moved > 0 ? "positive" : "negative"}`}
                 >
                   {row.moved > 0 ? "▲" : "▼"}
-                  {Math.abs(row.moved)}
+                  {count(Math.abs(row.moved))}
                 </span>
               ) : null}
             </td>
             <td>
-              <Name>{row.name}</Name>
+              {/* The name opens the player, and its link covers the row. */}
+              <Link className="rival-link" to={canonicalPlayerPath(row.tag)}>
+                <Name>{row.name}</Name>
+              </Link>
             </td>
             <td>{count(row.trophies)}</td>
             <td>{percent(row.hitRate)}</td>
-            <td className="positive">{signedOr(row.offense)}</td>
-            <td className="negative">{signedOr(row.defense)}</td>
+            <td className={tone(row.offense)}>{signedOr(row.offense)}</td>
+            <td className={tone(row.defense === null ? null : -Math.abs(row.defense))}>
+              {signedOr(row.defense)}
+            </td>
           </tr>
         ))}
       </tbody>

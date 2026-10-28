@@ -248,14 +248,12 @@ describe("recorded battle period statistics", () => {
 
   it("renders one summary with dates and unavailable rates and averages", () => {
     const html = render(player());
+    expect(html).toContain("0 of 27 days saved · Some battles may be missing");
     expect(html).toContain(
-      "7 Sep – 3 Oct · 0 of 27 finished days saved · Some battles may be missing",
+      '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
     );
     expect(html).toContain(
-      '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
-    );
-    expect(html).toContain(
-      '<dt>Trophies at last Reset</dt><dd class="summary-words">Unavailable</dd>',
+      '<dt>Reset trophies</dt><dd class="summary-words">Unavailable</dd>',
     );
     expect(html).toContain('<dt>Hit rate</dt><dd class="summary-words">Unavailable</dd>');
     expect(html).toContain("<dt>Per attack</dt><dd>Unavailable</dd>");
@@ -287,16 +285,16 @@ describe("recorded battle period statistics", () => {
         { ...day(40), resetRank: 1 },
       ]),
     );
-    expect(html).toContain("<dt>Rank at last Reset</dt><dd>1,042</dd>");
+    expect(html).toContain("<dt>Reset rank</dt><dd>1,042</dd>");
     expect(html).toMatch(
-      /<dt>Trophies at last Reset<\/dt><dd>5,000<span class="day-mark" title="Calculated">/,
+      /<dt>Reset trophies<\/dt><dd>5,000<span class="day-mark" title="Calculated">/,
     );
-    expect(html).toContain("50.0%<small>1 of 2 attacks</small>");
+    expect(html).toContain("50.0%<small>1 of 2</small>");
     expect(html).toMatch(
-      /Attacks<\/th><td>2<\/td><td>1<\/td><td>1<\/td><td>0<\/td><td>0</,
+      /Attacks<\/th><td[^>]*>2<\/td><td[^>]*>1<\/td><td[^>]*>1<\/td><td[^>]*>0<\/td><td[^>]*>0</,
     );
     expect(html).toMatch(
-      /Defenses<\/th><td>1<\/td><td>1<\/td><td>0<\/td><td>0<\/td><td>0</,
+      /Defenses<\/th><td[^>]*>1<\/td><td[^>]*>1<\/td><td[^>]*>0<\/td><td[^>]*>0<\/td><td[^>]*>0</,
     );
     // Per day divides by played days only: day 2, with none, is left out.
     expect(html).toMatch(/Offense per day<\/dt><dd>\+60</);
@@ -312,18 +310,41 @@ describe("recorded battle period statistics", () => {
     expect(first).toContain("No finished day yet");
   });
 
-  it("shows a missing latest Reset rank instead of an older one", () => {
+  it("shows the Reset before's rank and trophies until the latest board ranks the player", () => {
+    // 05:10, before the board for today's Reset publishes at 05:30.
     const html = render(
       player([
         day(0),
-        { ...day(1), resetRank: null },
+        { ...day(1), resetRank: null, startTrophies: 5100 },
         { ...day(2), resetRank: 1042, startTrophies: 5000 },
       ]),
+      TODAY + 10 * 60_000,
     );
-    expect(html).toContain(
-      '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
+    expect(html).toContain("<dt>Reset rank</dt><dd>1,042</dd>");
+    // Day 2's end, the start of the day after it, not yesterday's 4,101.
+    expect(html).toMatch(/<dt>Reset trophies<\/dt><dd>5,100<span/);
+    expect(html).not.toContain("4,101");
+  });
+
+  it("says Not ranked yet when the day before has no rank or is last Season's", () => {
+    const unranked = render(
+      player([day(0), { ...day(1), resetRank: null }, { ...day(2), resetRank: null }]),
     );
-    expect(html).not.toContain("1,042");
+    expect(unranked).toContain(
+      '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
+    );
+    // Season Day 2: the day before Day 1 is last Season's.
+    const dayTwo = render(
+      player([
+        { ...day(27), resetRank: null },
+        { ...day(28), resetRank: 1042 },
+      ]),
+      Date.parse("2026-09-08T05:10:00Z"),
+    );
+    expect(dayTwo).toContain(
+      '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
+    );
+    expect(dayTwo).not.toContain("1,042");
   });
 
   it("takes trophies at last Reset from today's start, Uncertain when battles disagree", () => {
@@ -339,7 +360,7 @@ describe("recorded battle period statistics", () => {
       ]),
     );
     expect(html).toMatch(
-      /<dt>Trophies at last Reset<\/dt><dd>5,100<span class="day-mark day-mark-gap" title="Uncertain">/,
+      /<dt>Reset trophies<\/dt><dd>5,100<span class="day-mark day-mark-gap" title="Uncertain">/,
     );
   });
 
@@ -364,6 +385,6 @@ describe("recorded battle period statistics", () => {
     expect(render(null)).not.toContain("unknown");
     expect(render(1)).toContain("Stars unknown for 1 attack.");
     // Hit rate counts every attack, including ones with unknown stars.
-    expect(render(1)).toContain("25.0%<small>1 of 4 attacks</small>");
+    expect(render(1)).toContain("25.0%<small>1 of 4</small>");
   });
 });

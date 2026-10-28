@@ -105,11 +105,14 @@ it("keeps rank and update explanations off the page but in hover and screen-read
   expect(html).toMatch(/Updated <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
   expect(html).not.toContain("2026-10-02T11:30:00Z");
   expect(html).not.toContain("Tracked player rankings");
-  expect(html).toContain("<p>101–101 of 101</p>");
+  expect(html).toMatch(
+    /<p class="standings-range"><a aria-label="Previous 100" href="[^"]*page=1"[^>]*>‹<\/a><span>101–101<span class="standings-total"> of 101<\/span><\/span><\/p>/,
+  );
   expect(html).toContain('<span class="pagination-status">101–101 of 101</span>');
   expect(html).toContain(">Previous 100</a>");
   expect(html).toContain('<span class="rank-mark">101</span>');
-  expect(html).toMatch(/<summary>Last updated 20 minutes ago/);
+  // Phones show the age beside the tag; "Last updated" is read out, not shown.
+  expect(html).toMatch(/<summary><span class="sr-only">Last updated <\/span>20 min ago/);
   expect(html).toContain("Over 10 min old");
   expect(html).toMatch(/<details[^>]*>.*dateTime="2026-10-02T11:40:00Z".*<\/details>/);
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
@@ -122,9 +125,9 @@ it("keeps rank and update explanations off the page but in hover and screen-read
 });
 
 it.each([
-  ["2026-10-02T11:50:00Z", "10 minutes ago", false],
-  ["2026-10-02T11:49:59Z", "10 minutes ago", true],
-  ["2026-10-02T11:58:00Z", "2 minutes ago", false],
+  ["2026-10-02T11:50:00Z", "10 minutes", false],
+  ["2026-10-02T11:49:59Z", "10 minutes", true],
+  ["2026-10-02T11:58:00Z", "2 minutes", false],
 ] as const)(
   "measures a row updated at %s from its timestamp at page load",
   async (observedAt, age, stale) => {
@@ -132,9 +135,16 @@ it.each([
     fixture.entries[0].freshness = { ...fixture.entries[0].freshness, observedAt };
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render();
-    expect(html).toContain(`<summary>Last updated ${age}`);
-    expect(html).toContain(`${age}${stale ? " · Over 10 min old" : ""}</span>`);
+    expect(html).toContain(
+      `<summary><span class="sr-only">Last updated </span>${age.replace("minutes", "min")} ago`,
+    );
+    expect(html).toContain(
+      `${age} ago${stale ? '<span class="sr-only"> · Over 10 min old</span>' : ""}</time>`,
+    );
     expect(html.includes("Over 10 min old")).toBe(stale);
+    // Old rows carry a dot, which one line above the board explains.
+    expect(html.includes("data-old")).toBe(stale);
+    expect(html.includes("Not updated for over 10 min")).toBe(stale);
   },
 );
 
@@ -264,7 +274,14 @@ it("does not mislabel service failures as missing standings", async () => {
   const { html } = await render();
   expect(html).toContain("Leaderboard unavailable");
   expect(html).not.toContain("No standings available yet");
-  expect(html).not.toContain("Go to page 1");
+  expect(html).not.toContain("This standings page is unavailable");
+  // A way back: this page again, or page 1 from this later page.
+  expect(html).toMatch(
+    /href="\/leaderboards\/tracked\?view=live&amp;page=2"[^>]*>Try again</,
+  );
+  expect(html).toMatch(
+    /href="\/leaderboards\/tracked\?view=live&amp;page=1"[^>]*>Go to page 1</,
+  );
 });
 
 it.each([
@@ -340,10 +357,9 @@ it("heads a Daily board with its Reset time and, at the Season end, its automati
   fixture.provenance.version = "tracked-player-order-v3";
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
-  expect(html).toContain('<p class="rankings-kicker">Day 28</p>');
   // The server writes UTC; the browser then switches it to the viewer's time.
   expect(html).toMatch(
-    /id="leaderboard-title">Leaderboard at(<!-- -->)? <time class="local-time" datetime="2026-10-05T05:00:00Z"[^>]*>5 Oct 2026, 05:00 UTC<\/time><\/h1>/i,
+    /id="leaderboard-title">At Reset<\/h1><p class="rankings-date">Day 28 · <time class="local-time board-reset" datetime="2026-10-05T05:00:00Z"[^>]*>5 Oct 2026, 05:00 UTC<\/time><\/p>/i,
   );
   expect(html).toContain(
     '<p class="rankings-context">Complete days show trophies after the automatic defense loss.</p>',
@@ -440,9 +456,11 @@ it.each([
     fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render("view=daily&season=1788757200&day=2&page=1");
-    const links = [...html.matchAll(/<a href="([^"]+)"[^>]*>Go to Day (\d+)/g)];
-    expect(links.map(([, , day]) => `Go to Day ${day}`)).toEqual(labels);
-    for (const [, href, day] of links) expect(href).toContain(`day=${day}`);
+    const links = [
+      ...html.matchAll(/<a aria-label="Go to Day (\d+)" href="([^"]+)"/g),
+    ].map(([, day, href]) => ({ day, href }));
+    expect(links.map(({ day }) => `Go to Day ${day}`)).toEqual(labels);
+    for (const { day, href } of links) expect(href).toContain(`day=${day}`);
     expect(html).not.toMatch(/>(Older|Newer)</);
     if (labels.length) {
       expect(html.indexOf('aria-label="Other days"')).toBeLessThan(
@@ -471,11 +489,10 @@ it("shows the newest Daily board from one read, then names its Season and day wi
   // The board renders at once, as it does without JavaScript, not after a redirect.
   const { html, status } = await render("view=daily&page=2");
   expect(status).toBe(200);
-  expect(html).toContain('<p class="rankings-kicker">Day 7</p>');
-  // The private alert check reads the board's Reset from this heading
+  // The private alert check reads the board's Reset from this time
   // (website_daily_board in python/src/clashlens/alerts.py).
   expect(html).toContain(
-    '<h1 id="leaderboard-title">Leaderboard at <time class="local-time" dateTime="2026-10-12T05:00:00Z"',
+    '<p class="rankings-date">Day 7 · <time class="local-time board-reset" dateTime="2026-10-12T05:00:00Z"',
   );
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledTimes(1);
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(

@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+
 // One side of a Season's recorded battles. Averages are trophies moved, never
 // signed; null anywhere means that part is unknown.
 export interface SummarySide {
@@ -23,6 +25,15 @@ const signed = (value: number | null, sign: 1 | -1, digits = 0) =>
 const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undefined);
 export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
+// Grid track sizes for a row's 3-, 2-, 1- and 0-star segments. A segment
+// with any battles stays a visible sliver.
+const shares = (stars: Array<number | null>) =>
+  Object.fromEntries(
+    [3, 2, 1, 0].map((star) => [
+      `--s${star}`,
+      stars[star] ? `minmax(0.3rem, ${stars[star]}fr)` : "0fr",
+    ]),
+  ) as React.CSSProperties;
 
 // The one Season box: rank and trophies first, then hit rate, battles by
 // stars and averages. Meta is one short line of dates and coverage. Without battles it shows only the headline. An ended
@@ -96,8 +107,17 @@ export function SeasonSummary({
                 : `${((100 * triples) / total).toFixed(1)}%`}
               {triples === null || !total ? null : (
                 <small>
-                  {count(triples)} of {count(total)} attacks
+                  {count(triples)} of {count(total)}
                 </small>
+              )}
+              {triples === null || !total ? null : (
+                <span className="meter" aria-hidden="true">
+                  <span
+                    style={
+                      { "--value": `${(100 * triples) / total}%` } as React.CSSProperties
+                    }
+                  />
+                </span>
               )}
             </dd>
           </div>
@@ -118,7 +138,10 @@ export function SeasonSummary({
                   <th scope="col">Total</th>
                   {[3, 2, 1, 0].map((stars) => (
                     <th scope="col" key={stars}>
-                      <span aria-hidden="true">{stars}★</span>
+                      <span aria-hidden="true">
+                        {stars}
+                        <span className="summary-star">★</span>
+                      </span>
                       <span className="sr-only">{stars}-star</span>
                     </th>
                   ))}
@@ -131,13 +154,38 @@ export function SeasonSummary({
                     ["Defenses", defense],
                   ] as const
                 ).map(([label, side]) => (
-                  <tr key={label}>
-                    <th scope="row">{label}</th>
-                    <td>{count(side.count)}</td>
-                    {[3, 2, 1, 0].map((stars) => (
-                      <td key={stars}>{count(side.stars[stars] ?? null)}</td>
-                    ))}
-                  </tr>
+                  // Each star count is a bar segment as wide as its share; the
+                  // line under the bar names every count, so none hides in a sliver.
+                  <Fragment key={label}>
+                    <tr data-side={label} style={shares(side.stars)}>
+                      <th scope="row">{label}</th>
+                      <td>{count(side.count)}</td>
+                      {[3, 2, 1, 0].map((stars) => (
+                        <td
+                          key={stars}
+                          data-stars={stars}
+                          data-empty={side.stars[stars] ? undefined : ""}
+                        >
+                          {count(side.stars[stars] ?? null)}
+                        </td>
+                      ))}
+                    </tr>
+                    <tr
+                      className="season-summary-key"
+                      data-side={label}
+                      aria-hidden="true"
+                    >
+                      <td colSpan={6}>
+                        {[3, 2, 1, 0].map((stars) => (
+                          <span key={stars} data-stars={stars}>
+                            {stars}
+                            <span className="summary-star">★</span>
+                            <b>{count(side.stars[stars] ?? null)}</b>
+                          </span>
+                        ))}
+                      </td>
+                    </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

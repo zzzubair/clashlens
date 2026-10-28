@@ -31,27 +31,27 @@ const PAGES: ReadonlyArray<readonly [string, string, string]> = [
   [
     "/crews",
     "Crews",
-    "Crews are invite-only groups that share Legend boards. You need a Clash Lens account to make or join one.",
+    "Invite-only groups with shared Legend boards. Sign in to make or join one.",
   ],
   [
     "/account/watchlists",
     "Watchlists",
-    "Watchlists are private lists of players you compare side by side. You need a Clash Lens account to keep them.",
+    "Private lists of players, side by side. Sign in to keep them.",
   ],
   [
     "/account/discord-alerts",
     "Discord alerts",
-    "Discord alerts message you when someone attacks your player. You need a Clash Lens account to set them up.",
+    "A Discord message when someone attacks your player. Sign in to set it up.",
   ],
   [
     "/account/verify-player",
     "Link your Clash player",
-    "Link your Clash player to see your own Legend days. You need a Clash Lens account first.",
+    "See your own Legend days. Sign in first.",
   ],
   [
     "/account/obs-overlay",
     "Stream overlay",
-    "The stream overlay shows your Legend day in OBS. You need a Clash Lens account to make one.",
+    "Your Legend day, live in OBS. Sign in to make one.",
   ],
   [
     "/account/setup",
@@ -63,7 +63,7 @@ const PAGES: ReadonlyArray<readonly [string, string, string]> = [
 const ACCOUNT_PAGE = [
   "",
   "Your account",
-  "Your account holds your profile, your linked Clash players and your settings. Sign in to see it.",
+  "Your profile, linked players and settings. Sign in to see them.",
 ] as const;
 
 /** The title and reason for the page at `pathname`. */

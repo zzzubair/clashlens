@@ -6,6 +6,19 @@
  */
 
 /* The streamer's font choices beside Clash Lens's own; SIL OFL, see /fonts. */
+/* The Clash Lens overlay style keeps the old in-game faces. */
+@font-face {
+  font-family: "Lilita One";
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/lilita-one-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: Nunito;
+  font-weight: 400 900;
+  font-display: block;
+  src: url("/fonts/nunito-latin.woff2") format("woff2");
+}
 @font-face {
   font-family: Inter;
   font-weight: 400 900;
@@ -675,12 +688,43 @@ html.obs-page body {
   .obs-settings .obs-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* Stacked, the picture leads and stays under the top bar while the choices
+     below change it; its own controls and the OBS link follow them. */
+  .obs-settings .obs-side {
+    display: contents;
+  }
+
+  .obs-settings .obs-side > .obs-stagewrap {
+    position: sticky;
+    z-index: 5;
+    top: calc(var(--cl-header-h) + 0.5rem);
+    order: -1;
+    justify-self: center;
+    width: min(100%, 30rem);
+    margin: 0;
+    box-shadow: var(--cl-overlay-shadow);
+  }
+
+  .obs-settings .obs-side > .form-panel + .form-panel {
+    margin-top: 0;
+  }
 }
 .obs-settings .form-panel {
   padding: 16px;
 }
+/* The settings are sections of one page, each under a hairline, not cards in
+   cards; only the choices inside keep their edges. */
+:root .obs-settings .obs-layout .form-panel {
+  padding: 20px 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--cl-card-line);
+  border-radius: 0;
+  box-shadow: none;
+}
 .obs-settings .form-panel + .form-panel {
-  margin-top: 18px;
+  margin-top: 24px;
 }
 .obs-settings .form-panel h2 {
   font-size: 22px;
@@ -688,18 +732,6 @@ html.obs-page body {
   align-items: center;
   gap: 10px;
   margin: 0;
-}
-.obs-settings .obs-step {
-  width: 28px;
-  height: 28px;
-  flex: none;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  background: var(--cl-brand-fill);
-  color: var(--cl-brand-night);
-  border: 2px solid var(--cl-brand-night);
 }
 .obs-settings .obs-help {
   color: var(--cl-muted);
@@ -724,16 +756,15 @@ html.obs-page body {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 12px;
   padding: 9px 12px;
   cursor: pointer;
   background: var(--cl-surface);
 }
 .obs-settings .obs-player:has(input:checked) {
-  border-color: var(--cl-card-line);
-  background: var(--cl-panel);
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  border-color: var(--cl-action-border);
+  background: var(--cl-action-soft);
 }
 .obs-settings .obs-player input,
 .obs-settings .obs-checks input,
@@ -755,12 +786,13 @@ html.obs-page body {
   font-weight: 900;
   border-radius: 999px;
   padding: 1px 9px;
-  border: 2px solid currentColor;
+  border: 1px solid currentColor;
   white-space: nowrap;
   color: var(--cl-muted);
 }
 .obs-settings .obs-badge.ok {
-  color: var(--cl-positive);
+  color: var(--cl-ink);
+  border-color: var(--cl-card-line);
 }
 .obs-settings .obs-wh {
   display: flex;
@@ -777,7 +809,7 @@ html.obs-page body {
   width: 86px;
   font: 800 15px var(--cl-font);
   padding: 5px 8px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-surface);
   color: var(--cl-ink);
@@ -803,9 +835,15 @@ html.obs-page body {
 .obs-settings .obs-fonts {
   grid-template-columns: repeat(3, 1fr);
 }
+/* Phones: the four layouts two by two, so their names fit. */
+@media (max-width: 37.5rem) {
+  .obs-settings .obs-shapes {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 .obs-settings :is(.obs-shape, .obs-font) {
   position: relative;
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 12px;
   text-align: center;
   cursor: pointer;
@@ -820,9 +858,8 @@ html.obs-page body {
   padding: 8px 6px 6px;
 }
 .obs-settings :is(.obs-shape, .obs-font):has(input:checked) {
-  border-color: var(--cl-card-line);
-  background: var(--cl-panel);
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  border-color: var(--cl-action-border);
+  background: var(--cl-action-soft);
 }
 .obs-settings :is(.obs-shape, .obs-font):has(input:focus-visible) {
   outline: 3px solid var(--cl-brand-orange);
@@ -863,10 +900,11 @@ html.obs-page body {
 }
 .obs-settings .obs-seg {
   display: inline-flex;
-  border: 2px solid var(--cl-card-line);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 3px 0 var(--cl-card-line);
+  gap: 2px;
+  padding: 3px;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: 12px;
 }
 .obs-settings .obs-seg label {
   position: relative;
@@ -874,15 +912,18 @@ html.obs-page body {
   font-weight: 800;
   font-size: 14px;
   cursor: pointer;
-  background: var(--cl-surface);
-  border-right: 2px solid var(--cl-card-line);
-}
-.obs-settings .obs-seg label:last-child {
-  border-right: 0;
+  color: var(--cl-muted);
+  border-radius: 9px;
 }
 .obs-settings .obs-seg label:has(input:checked) {
-  background: var(--cl-brand-fill);
-  color: var(--cl-brand-night);
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  box-shadow:
+    0 1px 3px rgb(30 18 10 / 0.12),
+    inset 0 0 0 1px var(--cl-outline);
+}
+:root[data-theme="dark"] .obs-settings .obs-seg label:has(input:checked) {
+  background: var(--cl-raised);
 }
 .obs-settings .obs-seg label:has(input:focus-visible) {
   outline: 3px solid var(--cl-brand-orange);
@@ -931,12 +972,37 @@ html.obs-page body {
   font: 700 13px var(--cl-font);
   margin: 0;
 }
+/* A mouse and keyboard get the full help beside Preview; a touch screen gets
+   a short hint on the picture itself. */
+.obs-settings .obs-stage-hint {
+  display: none;
+}
+@media (pointer: coarse) {
+  .obs-settings .obs-help-keys {
+    display: none;
+  }
+  .obs-settings .obs-stage-hint {
+    position: absolute;
+    z-index: 2;
+    bottom: 6px;
+    left: 6px;
+    display: block;
+    margin: 0;
+    padding: 3px 8px;
+    color: #fff;
+    background: rgb(0 0 0 / 0.55);
+    border-radius: 6px;
+    font: 700 11px var(--cl-font);
+    pointer-events: none;
+  }
+}
+/* The picture tops the side column, above its panel of controls. */
 .obs-settings .obs-stagewrap {
-  margin-top: 12px;
+  margin-bottom: 18px;
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-card-line);
   border-radius: 12px;
   overflow: hidden;
   background: #333;
@@ -1079,6 +1145,30 @@ html.obs-page body {
   top: calc(50% - 13px);
   cursor: ew-resize;
 }
+/* A finger gets two corner dots, always shown, each about 44px on screen
+   whatever the picture's scale; the mouse keeps all eight edges. */
+@media (pointer: coarse) {
+  .obs-settings .obs-rz {
+    --hit: calc(44px / var(--obs-k));
+    width: var(--hit);
+    height: var(--hit);
+    margin: calc(13px - var(--hit) / 2);
+    background: none;
+    border: 0;
+    opacity: 1;
+  }
+  .obs-settings .obs-rz:not([data-dir="nw"], [data-dir="se"]) {
+    display: none;
+  }
+  .obs-settings .obs-rz::before {
+    position: absolute;
+    inset: 30%;
+    background: #ffd447;
+    border: calc(2px / var(--obs-k)) solid #1d1426;
+    border-radius: 50%;
+    content: "";
+  }
+}
 .obs-settings .obs-guide {
   position: absolute;
   background: rgb(255 212 71 / 0.9);
@@ -1108,7 +1198,7 @@ html.obs-page body {
 .obs-settings .obs-place select {
   font: 800 14px var(--cl-font);
   padding: 6px 8px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-surface);
   color: var(--cl-ink);
@@ -1149,7 +1239,7 @@ html.obs-page body {
   min-width: 0;
   font: 600 13px var(--cl-font-mono);
   padding: 8px 10px;
-  border: 2px solid var(--cl-card-line);
+  border: 1px solid var(--cl-input-border);
   border-radius: 10px;
   background: var(--cl-panel);
   color: var(--cl-ink);
@@ -1162,7 +1252,7 @@ html.obs-page body {
 .obs-settings .obs-dim {
   flex: 1;
   background: var(--cl-panel);
-  border: 2px solid var(--cl-border);
+  border: 1px solid var(--cl-border);
   border-radius: 10px;
   padding: 6px 10px;
 }
@@ -1174,8 +1264,6 @@ html.obs-page body {
   font-size: 12px;
   font-weight: 800;
   color: var(--cl-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 .obs-settings ol.obs-steps {
   margin: 12px 0 0;
@@ -1187,8 +1275,8 @@ html.obs-page body {
 .obs-settings kbd {
   font: 700 13px var(--cl-font);
   background: var(--cl-panel);
-  border: 2px solid var(--cl-border);
-  border-bottom-width: 3px;
+  border: 1px solid var(--cl-outline);
+  border-bottom-width: 2px;
   border-radius: 6px;
   padding: 0 6px;
 }
@@ -1196,8 +1284,8 @@ html.obs-page body {
   margin-top: 12px;
   font-size: 13px;
   color: var(--cl-muted);
-  border-left: 4px solid var(--cl-brand-orange);
-  padding: 4px 10px;
+  border-left: 3px solid var(--cl-accent);
+  padding: 6px 12px;
   background: var(--cl-panel);
   border-radius: 0 8px 8px 0;
 }
@@ -1208,10 +1296,9 @@ html.obs-page body {
 }
 /* Start demo is the bright button; Stop demo turns dark. */
 :root .obs-settings .obs-demo[aria-pressed="true"] {
-  background: #1d1426;
-  color: #fff4e2;
-  border-color: #000;
-  box-shadow: 0 3px 0 #000;
+  background: var(--cl-ink);
+  color: var(--cl-paper);
+  border-color: transparent;
   text-shadow: none;
 }
 .obs-settings .obs-demonote {

@@ -96,17 +96,22 @@ automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
 weekly reset.
-Today's end of day and Reset rank read After Reset, and its empty battle slots
-read —, where a finished day's read Not recorded. Today's day sits first in
-the log on every screen and starts folded.
+Today's end of day and Reset rank read After Reset, and the battles it has
+not saved yet are counted in one line, such as 7 attacks not recorded yet,
+where a finished day's say 7 attacks not recorded. Today's day sits first in
+the log on every screen and starts folded. On a phone an opened day shows its
+attacks or its defenses, picked with an Attacks | Defenses switch that carries
+each side's total; wider screens show both side by side.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
 trophies. The current Season's box leads with the Clash Lens rank at the
-latest Reset this Season, shown as Not ranked yet when that Reset's board has
-no rank for the player, and trophies at the latest Reset, the end of day of
-the day that Reset ended, with that day's dot. Before the Season's first
-finished day, trophies read No finished day yet. Below that: hit rate, the
+latest Reset this Season and trophies at that Reset, the end of day of the
+day it ended, with that day's dot. Until that Reset's board ranks the player,
+as between the Reset and the board deadline, both come from the Reset before
+it; when that Reset has no rank either, or was last Season's, the rank reads
+Not ranked yet. Before the Season's first finished day, trophies read No
+finished day yet. Below that: hit rate, the
 percentage of all attacks that got three stars; attacks and defenses by 3, 2,
 1 and 0 stars; and trophies per day on offense and defense, per attack and per
 defense. A note names stars of unknown battles only when there are some.
@@ -187,9 +192,10 @@ that the page stops checking, says so, and ignores any later answer.
 The Dashboard is `/` for signed-in users while
 `CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
 there. Everyone else, and everyone while the switch is off, gets the front
-page at `/`: the Dashboard preview with Create account and Sign in (only while
-the switch is on), the big search, Rankings and Analytics buttons, and the top
-10 right now ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+page at `/`: the big search, then, only while the switch is on, a locked
+example dashboard with Create account and Sign in
+([`DashboardTeaser.tsx`](app/components/DashboardTeaser.tsx)), then the top 10
+now with a link to all rankings ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
 Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
 screens, they move to a bar at the bottom of the screen: Home (Dashboard when
@@ -294,7 +300,9 @@ see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at
 `/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,
 Best defenders, Worst defenders and Highest streaks, the last four switched
-between Today, Last 7 days and Season (the default). Each card shows its top 5
+between Today, Last 7 days and Season (the default). Best and Worst defenders
+share one card with a Best | Worst switch. On a phone a row of tabs (Live,
+Reset, Attack, Defense, Streaks) shows one board at a time. Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
 who is not on it and why. Anyone, signed in or not, can open a crew's page and
 its boards; below the boards it lists every account in the crew by name and
@@ -621,17 +629,16 @@ The root repository `Containerfile` builds the Python asyncio collector; this
 
 ## Font assets
 
-Headings and big numbers use Lilita One; everything else uses Nunito, as decided
-in [`../brand/README.md`](../brand/README.md). Both are WOFF2 files as published
-by Google Fonts, split into Latin and Latin Extended so a browser only downloads
-the part a page needs: 12 KB for Lilita One and 75 KB for Nunito, which is one
-variable file covering weights 400 to 900. Other scripts fall back to the system
-font. Their SIL Open Font Licences are in `public/fonts/OFL-LilitaOne.txt` and
-`public/fonts/OFL-Nunito.txt`. The OBS overlay's other font choices, used only by
-its setup page and the overlay itself, are Inter (Clean), Barlow Condensed
-(Esports), Rajdhani (Tech) and Bungee with Rubik for smaller text (Arcade):
-Latin-only WOFF2 files, 206 KB in all, with their licences in the matching
-`public/fonts/OFL-*.txt` files. The fonts are served by the site itself and add no
+Words use Inter and scoreboard numbers use Barlow Condensed (semi-bold and bold),
+as decided in [`../brand/README.md`](../brand/README.md). Both are Latin-only WOFF2
+files as published by Google Fonts and already shipped for the OBS overlay, so the
+redesign added no font files: Inter is one variable file covering weights 400 to
+900, and the two Barlow Condensed weights are one file each. Other scripts fall
+back to the system font. The OBS overlay keeps Lilita One and Nunito (split into
+Latin and Latin Extended) for its own look, and its other font choices are Inter
+(Clean), Barlow Condensed (Esports), Rajdhani (Tech) and Bungee with Rubik for
+smaller text (Arcade). Every font's SIL Open Font Licence is in the matching
+`public/fonts/OFL-*.txt` file. The fonts are served by the site itself and add no
 application or build dependency.
 
 ## Game art and brand icons
@@ -663,9 +670,9 @@ which the site footer links to.
 (fankit.supercell.com, checked on October 13, 2026), also used under the Fan
 Content Policy: 159 images, 64 × 64 pixels, 348 KB in all, each named after the
 unit's saved id (`troop:23` is `troop-23.webp`). The build gives them
-fingerprinted names under `/assets/`, cached for a year. Every attack and defense
-on a player page has a Show army button beside Copy army. It draws that battle's
-army from its Copy army code, using the unit names the player response sends once
+fingerprinted names under `/assets/`, cached for a year. Tapping an attack or defense
+on a player page opens it: the opponent's tag, a link to their Legend log, Copy
+army, and that battle's army drawn from its Copy army code, using the unit names the player response sends once
 per page. Units the Fan Kit has no art for, such as Noble Iron, show their name
 instead.
 

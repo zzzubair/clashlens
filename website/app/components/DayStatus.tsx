@@ -1,6 +1,6 @@
-// A small dot for an ended day's status: filled when Verified, hollow when
-// Calculated, gold when Uncertain. Hover shows the status; opening the day
-// explains it.
+// A small dot for an ended day's status: hollow when Calculated, gold when
+// Uncertain, and none to see when Verified. Hover shows the status; opening
+// the day explains it.
 const MARK_CLASS: Record<string, string> = {
   Verified: "day-mark day-mark-verified",
   Calculated: "day-mark",
@@ -15,10 +15,9 @@ export function DayMark({ status }: { status: string }) {
 }
 
 const STATUS_TEXT: Record<string, string> = {
-  Verified:
-    "A reading from the game matched this day's start, battles and automatic defense loss. ",
+  Verified: "A reading from the game confirmed every part of this day. ",
   Calculated:
-    "Added up from the recorded battles. A reading from the game has not confirmed every part of this number yet. ",
+    "Added up from recorded battles, not yet confirmed by a reading from the game. ",
 };
 
 export function DayStatusNote({

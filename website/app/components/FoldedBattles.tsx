@@ -51,12 +51,12 @@ export function FoldedBattles({
     // React leaves an element's own HTML alone while it hydrates, so the rows stay.
     <div
       ref={columns}
-      className="battle-columns"
+      className="battle-sides"
       dangerouslySetInnerHTML={serverRows}
       suppressHydrationWarning
     />
   ) : (
-    <div ref={columns} className="battle-columns">
+    <div ref={columns} className="battle-sides">
       {children}
     </div>
   );

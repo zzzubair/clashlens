@@ -1,7 +1,14 @@
 import { data, Link, useLoaderData, type UIMatch } from "react-router";
 
 import { type BackHandle, useBackState } from "../components/BackLink";
-import { BoardRows, emptyBoardText, PeriodSwitch } from "../components/CrewBoards";
+import {
+  BoardRows,
+  crewSearch,
+  DEFENSE_BOARDS,
+  DefenseOrder,
+  emptyBoardText,
+  PeriodSwitch,
+} from "../components/CrewBoards";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   BOARDS,
@@ -74,7 +81,19 @@ export default function CrewBoardRoute() {
       <p className="eyebrow">{crew.name}</p>
       <h1>{title}</h1>
       <p className="crew-lede">{boardDescription(board, period)}</p>
-      {NOW_BOARDS.includes(board) ? null : <PeriodSwitch period={period} />}
+      {NOW_BOARDS.includes(board) ? null : (
+        <div className="crew-controls">
+          <PeriodSwitch period={period} />
+          {DEFENSE_BOARDS.some((key) => key === board) ? (
+            <DefenseOrder
+              board={board}
+              to={(key) =>
+                `/crews/${crew.crewId}/boards/${BOARDS[key].slug}${crewSearch(period)}`
+              }
+            />
+          ) : null}
+        </div>
+      )}
       <section className="crew-panel crew-board crew-board-full" aria-label={title}>
         {rows.length > 0 ? (
           <BoardRows rows={rows} board={board} period={period} backLabel={title} />
