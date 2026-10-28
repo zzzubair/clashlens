@@ -317,6 +317,16 @@ name, link and note. Every change saves at once through `/notebook/save` and
 offers Undo, except the note. Records come from the worker's defense counts, so
 a finished day counts after 07:00 UTC.
 
+Each Crew has a Notebook too, at `/crews/<crew id>/bases`, linked as Bases from
+the Crew's page and seen only by its members. It lists bases, with no account
+rows: owners, admins and Uploaders add bases and retire or remove them (an
+Uploader only the ones they made or added), and any member adds one to their
+own notebook with Add to my notebook, where it stays if they leave. From a base
+in your own notebook, Add to Crew puts it in a Crew where you can add bases.
+One base keeps one record wherever it is. While the Notebook is on, only a
+Crew's owner and admins make invite links, and they make or remove Uploaders
+from Members.
+
 Crews at `/crews` stay hidden unless `CLASHLENS_CREWS_ENABLED=true`. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at

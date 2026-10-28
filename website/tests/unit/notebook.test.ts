@@ -41,6 +41,10 @@ import {
   basesNear,
   libraryView,
   matchName,
+  basePath,
+  bookPath,
+  canAdd,
+  canManage,
   parseChange,
   parseNotebook,
   sameUntil,
@@ -74,6 +78,8 @@ function apiNotebook() {
       current: true,
     },
     seasons: ["1791176400"],
+    crew: null,
+    crews: [],
     as_of_day: 15,
     players: [
       {
@@ -92,6 +98,7 @@ function apiNotebook() {
         id: "B-7K3QX9",
         name: "Ring",
         mine: true,
+        own: true,
         status: "running",
         here: true,
         added_day: 9,
@@ -115,6 +122,7 @@ function base(
     id,
     name,
     mine: true,
+    own: true,
     status,
     here: true,
     addedDay: 1,
@@ -125,6 +133,36 @@ function base(
 }
 
 describe("notebook contract", () => {
+  it("reads a Crew's notebook and says who may add, retire and remove", () => {
+    const crew = { id: "6f1c2a8e-4b7d-4c3a-9e2f-1a2b3c4d5e6f", name: "Titans" };
+    const page = parseNotebook({
+      ...apiNotebook(),
+      players: [],
+      crew: { ...crew, role: "uploader" },
+      crews: [{ ...crew, role: "uploader" }],
+    });
+    expect(page?.crew).toEqual({ ...crew, role: "uploader" });
+    expect(bookPath(page!)).toBe(`/crews/${crew.id}/bases`);
+    expect(basePath(page!, "B-7K3QX9")).toBe(`/crews/${crew.id}/bases/B-7K3QX9`);
+    expect(basePath({ crew: null }, "B-7K3QX9")).toBe("/notebook/bases/B-7K3QX9");
+    const ring = page!.bases[0]!;
+    // An Uploader adds, and retires only bases they made or added.
+    expect([canAdd(page!), canManage(page!, ring)]).toEqual([true, true]);
+    expect(canManage(page!, { ...ring, own: false })).toBe(false);
+    const member = { crew: { ...crew, role: "member" as const } };
+    expect([canAdd(member), canManage(member, ring)]).toEqual([false, false]);
+    const admin = { crew: { ...crew, role: "admin" as const } };
+    expect(canManage(admin, { ...ring, own: false })).toBe(true);
+    // Your own notebook is yours.
+    expect([canAdd({ crew: null }), canManage({ crew: null }, ring)]).toEqual([
+      true,
+      true,
+    ]);
+    expect(
+      parseNotebook({ ...apiNotebook(), crew: { ...crew, role: "captain" } }),
+    ).toBeNull();
+  });
+
   it("reads the private API's notebook", () => {
     const notebook = parseNotebook(apiNotebook());
     expect(notebook?.season.today).toBe(16);
@@ -314,6 +352,8 @@ describe("Legend days only", () => {
     legendDays: DAYS.slice(0, 7),
   };
   const notebook: Notebook = {
+    crew: null,
+    crews: [],
     season: {
       id: "1791262800",
       start: "2026-10-06T05:00:00Z",
@@ -329,6 +369,7 @@ describe("Legend days only", () => {
       id: `B-0000${String(day).padStart(2, "0")}`,
       name: `Base number ${day}`,
       mine: true,
+      own: true,
       status: "season",
       here: true,
       addedDay: day,

@@ -59,6 +59,9 @@ export interface NotebookBase {
   name: string;
   /** Made by this Clash Lens account, so it may edit it. */
   mine: boolean;
+  /** Made or put in this notebook by this account: on a Crew's page, an
+   * Uploader may retire or remove it. */
+  own: boolean;
   status: BaseStatus;
   /** On this Season's page; a past page offers to bring it back. */
   here: boolean;
@@ -70,7 +73,20 @@ export interface NotebookBase {
   record: BaseRecord;
 }
 
+export type CrewRole = "owner" | "admin" | "uploader" | "member";
+
+/** A Crew and the Clasher's role in it. */
+export interface NotebookCrew {
+  id: string;
+  name: string;
+  role: CrewRole;
+}
+
 export interface Notebook {
+  /** The Crew whose notebook this is, or null for the Clasher's own. */
+  crew: NotebookCrew | null;
+  /** The Clasher's Crews, for "Add to Crew". */
+  crews: NotebookCrew[];
   season: {
     id: string;
     start: string;
@@ -94,6 +110,9 @@ export interface Notebook {
     note: string;
     link: string | null;
     players: Array<{ tag: string; record: BaseRecord }>;
+    /** "mine" when it is in the Clasher's own notebook, and the ids of
+     * their Crews it is in. */
+    shelves: string[];
   };
 }
 
@@ -108,6 +127,8 @@ export interface NotebookChange {
   day?: number;
   /** The Season the page was on, so a change sent across a Reset is refused. */
   season?: string;
+  /** A Crew's notebook, by the Crew's id; null for the Clasher's own. */
+  crew?: string | null;
   undo?: unknown;
 }
 
@@ -119,6 +140,8 @@ export interface NotebookSaved {
 
 export const BASE_ID = /^B-[0-9A-HJKMNP-TV-Z]{6}$/;
 export const SEASON_ID = /^[0-9]{1,12}$/;
+export const CREW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ROLES = new Set(["owner", "admin", "uploader", "member"]);
 const STATUSES = new Set(["running", "season", "retired"]);
 const ACTIONS = ["add", "pick", "retire", "keep", "edit", "remove", "undo"];
 
@@ -197,6 +220,7 @@ function parseBase(value: unknown): NotebookBase | null {
     return null;
   const {
     mine,
+    own,
     status,
     here,
     added_day: added,
@@ -207,6 +231,7 @@ function parseBase(value: unknown): NotebookBase | null {
   if (
     !record ||
     typeof mine !== "boolean" ||
+    typeof own !== "boolean" ||
     typeof here !== "boolean" ||
     !STATUSES.has(status as string) ||
     !(added === null || isDay(added)) ||
@@ -218,6 +243,7 @@ function parseBase(value: unknown): NotebookBase | null {
     id: value.id,
     name: value.name,
     mine,
+    own,
     status: status as BaseStatus,
     here,
     addedDay: added,
@@ -225,6 +251,16 @@ function parseBase(value: unknown): NotebookBase | null {
     ranBy,
     record,
   };
+}
+
+function parseCrew(value: unknown): NotebookCrew | null {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    CREW_ID.test(value.id) &&
+    typeof value.name === "string" &&
+    ROLES.has(value.role as string)
+    ? { id: value.id, name: value.name, role: value.role as CrewRole }
+    : null;
 }
 
 /** The private API's notebook, or null when it does not fit the contract. */
@@ -244,13 +280,24 @@ export function parseNotebook(value: unknown): Notebook | null {
     !value.seasons.every((item) => typeof item === "string" && SEASON_ID.test(item)) ||
     !(value.as_of_day === null || isDay(value.as_of_day)) ||
     !Array.isArray(value.players) ||
-    !Array.isArray(value.bases)
+    !Array.isArray(value.bases) ||
+    !Array.isArray(value.crews)
   )
     return null;
   const players = value.players.map(parsePlayer);
   const bases = value.bases.map(parseBase);
-  if (players.includes(null) || bases.includes(null)) return null;
+  const crews = value.crews.map(parseCrew);
+  const crew = value.crew === null ? null : parseCrew(value.crew);
+  if (
+    players.includes(null) ||
+    bases.includes(null) ||
+    crews.includes(null) ||
+    (value.crew !== null && !crew)
+  )
+    return null;
   const notebook: Notebook = {
+    crew,
+    crews: crews as NotebookCrew[],
     season: { id, start, end, today, tomorrow, current },
     seasons: value.seasons as string[],
     asOfDay: value.as_of_day,
@@ -264,7 +311,11 @@ export function parseNotebook(value: unknown): Notebook | null {
       !isCode(base.id) ||
       typeof base.note !== "string" ||
       !isText(base.link) ||
-      !Array.isArray(base.players)
+      !Array.isArray(base.players) ||
+      !Array.isArray(base.shelves) ||
+      !base.shelves.every(
+        (item) => item === "mine" || (typeof item === "string" && CREW_ID.test(item)),
+      )
     )
       return null;
     const records = base.players.map((item) =>
@@ -278,6 +329,7 @@ export function parseNotebook(value: unknown): Notebook | null {
       note: base.note,
       link: base.link,
       players: records as Array<{ tag: string; record: BaseRecord }>,
+      shelves: base.shelves as string[],
     };
   }
   return notebook;
@@ -306,7 +358,7 @@ export function parseSaved(value: unknown): NotebookSaved | null {
 /** A change the page posted, checked before it goes to the private API. */
 export function parseChange(value: unknown): NotebookChange | null {
   if (!isRecord(value)) return null;
-  const { action, base, name, link, note, tag, day, season, undo } = value;
+  const { action, base, name, link, note, tag, day, season, crew, undo } = value;
   if (
     !ACTIONS.includes(action as string) ||
     !(base === undefined || base === null || isCode(base)) ||
@@ -316,6 +368,11 @@ export function parseChange(value: unknown): NotebookChange | null {
     !(tag === undefined || (typeof tag === "string" && /^#[0-9A-Z]{2,14}$/.test(tag))) ||
     !(day === undefined || isDay(day)) ||
     !(season === undefined || (typeof season === "string" && SEASON_ID.test(season))) ||
+    !(
+      crew === undefined ||
+      crew === null ||
+      (typeof crew === "string" && CREW_ID.test(crew))
+    ) ||
     !(undo === undefined || isRecord(undo))
   )
     return null;
@@ -551,4 +608,29 @@ export function baseRuns(player: NotebookPlayer, code: string): string {
     .filter((run) => run.base === code)
     .map((run) => daysText(run.from, run.to))
     .join(", ");
+}
+
+/** Where a notebook's page is: /notebook, or the Crew's Bases page. */
+export function bookPath(notebook: Pick<Notebook, "crew">): string {
+  return notebook.crew ? `/crews/${notebook.crew.id}/bases` : "/notebook";
+}
+
+/** A base's page in this notebook. */
+export function basePath(notebook: Pick<Notebook, "crew">, code: string): string {
+  return notebook.crew ? `${bookPath(notebook)}/${code}` : `/notebook/bases/${code}`;
+}
+
+/** Your own notebook is yours; in a Crew's, owners, admins and Uploaders
+ * add bases. */
+export function canAdd(notebook: Pick<Notebook, "crew">): boolean {
+  return !notebook.crew || notebook.crew.role !== "member";
+}
+
+/** Retire, bring back or remove a base: in a Crew's notebook, owners and
+ * admins any, an Uploader only bases they made or added. */
+export function canManage(notebook: Pick<Notebook, "crew">, base: NotebookBase): boolean {
+  const role = notebook.crew?.role;
+  return (
+    !role || role === "owner" || role === "admin" || (role === "uploader" && base.own)
+  );
 }

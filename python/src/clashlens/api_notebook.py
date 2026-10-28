@@ -44,6 +44,7 @@ from __future__ import annotations
 import re
 import secrets
 import unicodedata
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -284,11 +285,13 @@ class _History:
 
 
 class _Notebook:
-    """One account's notebook as this Season's page, or the past Season
-    ``season``'s read as on its last day, in one transaction."""
+    """One account's notebook, or with ``crew`` one of its Crews', as this
+    Season's page, or the past Season ``season``'s read as on its last day,
+    in one transaction."""
 
     def __init__(
-        self, connection: Any, account_id: int, now: datetime, season: str | None = None
+        self, connection: Any, account_id: int, now: datetime, season: str | None = None,
+        crew: str | None = None, *, lock: bool = False,
     ) -> None:
         self.connection = connection
         self.account_id = account_id
@@ -307,14 +310,30 @@ class _Notebook:
         self.editable_from = today.season_start
         # The page's last day: tomorrow for this Season, its Day 28 otherwise.
         self.last = self.tomorrow if self.current else shown.season_end - DAY
-        # Legend players first, each kind by tag.
-        self.players = sorted(
-            _linked_players(connection, account_id, None),
-            key=lambda player: "Legend" not in (player[4] or ""),
-        )
+        # The Crew's id, name and the account's role in it; None for the
+        # account's own notebook.
+        self.crew: dict[str, Any] | None = None
+        if crew is None:
+            # Legend players first, each kind by tag.
+            self.players = sorted(
+                _linked_players(connection, account_id, None),
+                key=lambda player: "Legend" not in (player[4] or ""),
+            )
+            self.owner = ("account_id", account_id)
+        else:
+            self.crew = _crew(connection, crew, account_id, lock=lock)
+            # A Crew's page has no account rows; picks are made in your own.
+            self.players = []
+            self.owner = ("crew_id", self.crew["row"])
         self.player_ids = {tag: player_id for player_id, tag, *_ in self.players}
+        # The game accounts whose base makes it Running on this page.
+        self.runner_ids = set(self.player_ids.values()) if crew is None else {
+            int(player_id) for (player_id,) in connection.execute(
+                "SELECT player_id FROM crew_players WHERE crew_id = %s", (self.owner[1],)
+            ).fetchall()
+        }
         row = connection.execute(
-            "SELECT id FROM notebooks WHERE account_id = %s", (account_id,)
+            f"SELECT id FROM notebooks WHERE {self.owner[0]} = %s", (self.owner[1],)
         ).fetchone()
         self.notebook_id: int | None = None if row is None else int(row[0])
 
@@ -329,13 +348,14 @@ class _Notebook:
     def ensure(self) -> int:
         """The notebook's id, making it on its first change."""
         if self.notebook_id is None:
+            column, owner = self.owner
             self.connection.execute(
-                "INSERT INTO notebooks (account_id) VALUES (%s)"
-                " ON CONFLICT (account_id) DO NOTHING",
-                (self.account_id,),
+                f"INSERT INTO notebooks ({column}) VALUES (%s)"
+                f" ON CONFLICT ({column}) DO NOTHING",
+                (owner,),
             )
             row = self.connection.execute(
-                "SELECT id FROM notebooks WHERE account_id = %s", (self.account_id,)
+                f"SELECT id FROM notebooks WHERE {column} = %s", (owner,)
             ).fetchone()
             self.notebook_id = int(row[0])
         return self.notebook_id
@@ -351,12 +371,15 @@ class _Notebook:
                 "mine": row[5] == self.account_id,
                 "created_at": row[6], "updated_at": row[7], "season": _text(row[8]),
                 "added_at": row[9], "kept_at": row[10], "retired_at": row[11],
+                # Made or put here by this account: an Uploader's to retire.
+                "own": self.account_id in (row[5], row[12]),
             }
             for row in self.connection.execute(
                 """
                 SELECT base.id, base.code, base.name, base.note, base.base_link,
                        base.made_by, base.created_at, base.updated_at,
-                       entry.season_id, entry.added_at, entry.kept_at, entry.retired_at
+                       entry.season_id, entry.added_at, entry.kept_at, entry.retired_at,
+                       entry.added_by
                 FROM notebook_entries AS entry
                 JOIN notebook_bases AS base ON base.id = entry.base_id
                 WHERE entry.notebook_id = %s
@@ -382,14 +405,15 @@ class _Notebook:
                 (base_ids, first, self.tomorrow),
             ).fetchall()
         ]
-        players = sorted(set(self.player_ids.values()) | set(others))
+        players = sorted(self.runner_ids | set(others))
         return _History(self.connection, players, first, self.tomorrow, counted_from,
                         week_start(self.today))
 
     def mine_up(self, history: _History, day: datetime) -> set[int]:
-        """The bases the notebook's game accounts run on ``day``."""
+        """The bases the page's game accounts run on ``day``: the account's,
+        or on a Crew's page its members'."""
         return {
-            base for player_id in self.player_ids.values()
+            base for player_id in self.runner_ids
             if (base := base_on(history.runs[player_id], day)) is not None
         }
 
@@ -424,9 +448,9 @@ class _Notebook:
         start: datetime, end: datetime,
     ) -> set[int]:
         """The bases on one Season's page, from ``start`` to ``end``: put on
-        it, or run on it by the notebook's game accounts."""
+        it, or run on it by the page's game accounts."""
         ran = {
-            base for player_id in self.player_ids.values()
+            base for player_id in self.runner_ids
             for first, last, base in history.runs[player_id]
             if first <= end and last >= start
         }
@@ -477,6 +501,82 @@ def _base(notebook: _Notebook, code: str | None) -> int:
     return int(row[0])
 
 
+# Who may add bases to a Crew's notebook, and who may retire or remove any
+# base in it; an Uploader retires or removes only bases they made or added.
+_ADDS = {"owner", "admin", "uploader"}
+_MANAGES = {"owner", "admin"}
+
+
+def _crew(connection: Any, crew: str, account_id: int, *, lock: bool) -> dict[str, Any]:
+    """The Crew ``crew`` (its public id) and the account's role in it; a
+    Crew the account isn't in is not found, as on its other private pages.
+    A write locks the Crew first and reads the role afterwards, so one change
+    to its notebook goes at a time and a role changed meanwhile is the one
+    it sees."""
+    try:
+        public_id = uuid.UUID(crew)
+    except ValueError:
+        raise ApiError(404, "crew_not_found") from None
+    row = connection.execute(
+        "SELECT id, public_id, name FROM crews WHERE public_id = %s"
+        + (" FOR NO KEY UPDATE" if lock else ""),
+        (public_id,),
+    ).fetchone()
+    member = None if row is None else connection.execute(
+        "SELECT role FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
+        (row[0], account_id),
+    ).fetchone()
+    if member is None:
+        raise ApiError(404, "crew_not_found")
+    return {"row": int(row[0]), "id": str(row[1]), "name": _text(row[2]),
+            "role": _text(member[0])}
+
+
+def _crews(connection: Any, account_id: int) -> list[dict[str, Any]]:
+    """The account's Crews, by name, with its role in each."""
+    return [
+        {"id": str(public_id), "name": _text(name), "role": _text(role)}
+        for public_id, name, role in connection.execute(
+            """
+            SELECT crew.public_id, crew.name, member.role FROM crews AS crew
+            JOIN crew_accounts AS member ON member.crew_id = crew.id
+            WHERE member.account_id = %s ORDER BY crew.name, crew.public_id
+            """,
+            (account_id,),
+        ).fetchall()
+    ]
+
+
+def _visible(notebook: _Notebook, code: str) -> int:
+    """The base ``code`` names if the account can see it: it made it, or it
+    is in the account's own notebook or a notebook of one of its Crews."""
+    row = notebook.connection.execute(
+        """
+        SELECT base.id FROM notebook_bases AS base
+        WHERE base.code = %s AND (base.made_by = %s OR EXISTS (
+            SELECT FROM notebook_entries AS entry
+            JOIN notebooks AS book ON book.id = entry.notebook_id
+            WHERE entry.base_id = base.id AND (book.account_id = %s OR book.crew_id IN (
+                SELECT crew_id FROM crew_accounts WHERE account_id = %s))))
+        """,
+        (parse_code(code), notebook.account_id, notebook.account_id, notebook.account_id),
+    ).fetchone()
+    if row is None:
+        raise ApiError(404, "base_not_found")
+    return int(row[0])
+
+
+def _may(notebook: _Notebook, allowed: set[str], entry: dict[str, Any] | None = None) -> None:
+    """On a Crew's page, refuse a role not in ``allowed``; an Uploader may
+    still act on an ``entry`` it made or added. Your own notebook is yours."""
+    if notebook.crew is None:
+        return
+    role = notebook.crew["role"]
+    if role in allowed or (role == "uploader" and entry is not None and entry["own"]):
+        return
+    raise ApiError(403, "crew_forbidden")
+
+
 def _moment(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -497,15 +597,15 @@ def _when(value: str) -> datetime:
 
 def get_notebook(
     database: ApiDatabase, account_id: int, *, now: datetime,
-    season: str | None = None, base: str | None = None,
+    season: str | None = None, base: str | None = None, crew: str | None = None,
 ) -> dict[str, Any]:
-    """The account's notebook as one Season's page: its game accounts, each
-    one's runs and base, and every base on the page with its record from
-    everyone who ran it. With ``base``, also that base's note, link and
-    record on each of the notebook's game accounts."""
+    """The account's notebook, or with ``crew`` that Crew's, as one Season's
+    page: its game accounts, each one's runs and base, and every base on the
+    page with its record from everyone who ran it. With ``base``, also that
+    base's note, link and record on each of the notebook's game accounts."""
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        notebook = _Notebook(connection, account_id, now, season)
+        notebook = _Notebook(connection, account_id, now, season, crew)
         entries = notebook.entries()
         detail = _base(notebook, base) if base is not None else None
         history = notebook.history(list(entries))
@@ -522,6 +622,24 @@ def get_notebook(
             seasons.add(ranked_day_for(start).official_season_id)
         # A pick for tomorrow can sit in the next Season; it has no page yet.
         seasons = {item for item in seasons if int(item) <= int(notebook.this_season)}
+        crews = _crews(connection, account_id)
+        # Where the base on show also sits: your Crews' notebooks, or, on a
+        # Crew's page, your own.
+        shelves: set[str] = set()
+        if detail is not None:
+            shelves = {
+                "mine" if crew_id is None else str(crew_id)
+                for (crew_id,) in connection.execute(
+                    """
+                    SELECT crew.public_id FROM notebook_entries AS entry
+                    JOIN notebooks AS book ON book.id = entry.notebook_id
+                    LEFT JOIN crews AS crew ON crew.id = book.crew_id
+                    WHERE entry.base_id = %s AND (book.account_id = %s OR book.crew_id IN (
+                        SELECT crew_id FROM crew_accounts WHERE account_id = %s))
+                    """,
+                    (detail, account_id, account_id),
+                ).fetchall()
+            }
     if detail is not None:
         page.add(detail)
     first, last_counted = notebook.season_start, min(notebook.today, notebook.season_end) - DAY
@@ -596,6 +714,11 @@ def get_notebook(
             "current": notebook.current,
         },
         "seasons": sorted(seasons, key=int, reverse=True),
+        # The Crew this page is, or None for your own notebook.
+        "crew": None if notebook.crew is None else {
+            key: notebook.crew[key] for key in ("id", "name", "role")},
+        # Your Crews and your role in each, for "Add to Crew".
+        "crews": crews,
         # The newest Legend day whose defenses are counted: records are as of it.
         "as_of_day": notebook.day_number(max(counted_days)) if counted_days else None,
         "players": players,
@@ -604,6 +727,7 @@ def get_notebook(
                 "id": entry["code"],
                 "name": entry["name"],
                 "mine": entry["mine"],
+                "own": entry["own"],
                 # Running, retired or season on this Season's page.
                 "status": statuses[base_id],
                 # On this Season's page; a past page offers to bring it back.
@@ -627,6 +751,8 @@ def get_notebook(
             "id": entry["code"],
             "note": entry["note"],
             "link": entry["link"],
+            # "mine" for your own notebook, or the ids of your Crews it is in.
+            "shelves": sorted(shelves),
             "players": [
                 {"tag": tag, "record": by_player[player_id]}
                 for player_id, tag, *_ in notebook.players if player_id in by_player
@@ -697,6 +823,8 @@ class NotebookWrite(StrictBody):
     day: int | None = Field(default=None, ge=1, le=29)
     # The Season the page was on: its day numbers mean nothing in another.
     season: str | None = Field(default=None, max_length=12)
+    # A Crew's notebook, by the Crew's public id, instead of your own.
+    crew: str | None = Field(default=None, max_length=36)
     undo: Undo | None = None
 
 
@@ -743,7 +871,12 @@ def save(
             "SELECT 1 FROM clash_lens_accounts WHERE id = %s FOR NO KEY UPDATE",
             (account_id,),
         )
-        notebook = _Notebook(connection, account_id, now)
+        notebook = _Notebook(connection, account_id, now, crew=body.crew, lock=True)
+        # A Crew's notebook lists bases; each Clasher picks in their own.
+        if notebook.crew is not None and (
+            body.action == "pick" or body.tag is not None or body.day is not None
+        ):
+            raise ApiError(422, "invalid_request")
         if any(season is not None and season != notebook.this_season
                for season in (body.season, body.undo and body.undo.season)):
             raise ApiError(409, "season_changed")
@@ -817,14 +950,23 @@ def save(
         entry_before: dict[str, Any] | None = None
         base_id: int | None = None
         if body.action == "add":
-            name = clean_name(body.name or "")
-            link = clean_link(body.link or "")
-            note = clean_note(body.note or "")
+            _may(notebook, _ADDS)
             runner: int | None = None
             if body.tag is not None or body.day is not None:
                 runner = _player(notebook, body.tag)
                 day = pick_day(body.day, past=False)
                 require_legend(runner, day)
+        if body.action == "add" and body.base is not None:
+            # A base from another notebook the account can see: from a Crew
+            # to its own, or from its own to a Crew.
+            base_id = _visible(notebook, body.base)
+            if base_id in entries:
+                raise ApiError(409, "already_added")
+            entry_before = {"base": parse_code(body.base), "absent": True}
+        elif body.action == "add":
+            name = clean_name(body.name or "")
+            link = clean_link(body.link or "")
+            note = clean_note(body.note or "")
             for _attempt in range(5):
                 row = connection.execute(
                     """
@@ -839,12 +981,14 @@ def save(
             else:  # pragma: no cover - five draws all taken: about 1 in 10^15.
                 raise ApiError(503, "busy")
             base_id, made = int(row[0]), _text(row[1])
+        if body.action == "add":
+            assert base_id is not None
             # The API's clock, not the database's, dates entries: their
             # Retired date and Day added follow the Legend day it reads.
             connection.execute(
                 "INSERT INTO notebook_entries (notebook_id, base_id, season_id, added_at,"
-                " kept_at) VALUES (%s, %s, %s, %s, %s)",
-                (notebook_id, base_id, notebook.this_season, now, now),
+                " kept_at, added_by) VALUES (%s, %s, %s, %s, %s, %s)",
+                (notebook_id, base_id, notebook.this_season, now, now, account_id),
             )
             if runner is not None:
                 pick(runner, day, base_id)
@@ -858,6 +1002,7 @@ def save(
             pick(player_id, day, base_id)
         elif body.action in {"retire", "keep"}:
             base_id = _base(notebook, body.base)
+            _may(notebook, _MANAGES, entries[base_id])
             entry_before = entry_state(base_id)
             if body.action == "keep":
                 connection.execute(
@@ -871,7 +1016,8 @@ def save(
                     " WHERE notebook_id = %s AND base_id = %s",
                     (now, notebook_id, base_id),
                 )
-                # Stop it on every game account running it, from tomorrow: a
+                # Stop it on every game account of yours running it, from
+                # tomorrow (a Crew's page only moves it to Retired): a
                 # pick of it for tomorrow goes when another base is up today,
                 # so that one carries on; otherwise tomorrow has no base.
                 for player_id in notebook.player_ids.values():
@@ -896,8 +1042,12 @@ def save(
                     if getattr(body, key) is not None}
                 _edit(connection, base_id, body.name, body.link, body.note)
             else:
-                if base_id in (notebook.mine_up(history, notebook.today)
-                               | notebook.mine_up(history, notebook.tomorrow)):
+                _may(notebook, _MANAGES, entry)
+                # A Crew's notebook has no picks, so taking a base out of it
+                # changes nobody's runs.
+                if notebook.crew is None and base_id in (
+                        notebook.mine_up(history, notebook.today)
+                        | notebook.mine_up(history, notebook.tomorrow)):
                     raise ApiError(422, "base_running")
                 entry_before = entry_state(base_id)
                 connection.execute(
@@ -909,6 +1059,7 @@ def save(
         else:
             if body.undo is None:
                 raise ApiError(422, "undo_required")
+            _may(notebook, _ADDS)
             _undo(notebook, body.undo, pick, pick_day)
         _, _, after = state()
         # Every base named in the answer, including one a pick ran before it
@@ -972,10 +1123,13 @@ def _undo(
     if undo.entry is not None:
         item = undo.entry
         row = connection.execute(
-            "SELECT id, made_by FROM notebook_bases WHERE code = %s", (parse_code(item.base),)
+            "SELECT id FROM notebook_bases WHERE code = %s", (parse_code(item.base),)
         ).fetchone()
         if row is None:
             raise ApiError(404, "base_not_found")
+        listed = notebook.entries().get(int(row[0]))
+        if listed is not None:
+            _may(notebook, _MANAGES, listed)
         if item.absent:
             connection.execute(
                 "DELETE FROM notebook_entries WHERE notebook_id = %s AND base_id = %s",
@@ -984,25 +1138,20 @@ def _undo(
         else:
             if not _SEASON.fullmatch(item.season):
                 raise ApiError(422, "invalid_request")
-            # Only a base this notebook pointed to, or this account made,
-            # comes back.
-            listed = connection.execute(
-                "SELECT 1 FROM notebook_entries WHERE notebook_id = %s AND base_id = %s",
-                (notebook_id, row[0]),
-            ).fetchone()
-            if listed is None and row[1] != notebook.account_id:
-                raise ApiError(404, "base_not_found")
+            # Only a base the account can see comes back.
+            if listed is None:
+                _visible(notebook, item.base)
             connection.execute(
                 """
                 INSERT INTO notebook_entries (notebook_id, base_id, season_id, added_at,
-                                              kept_at, retired_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                                              kept_at, retired_at, added_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (notebook_id, base_id) DO UPDATE SET
                     season_id = EXCLUDED.season_id, added_at = EXCLUDED.added_at,
                     kept_at = EXCLUDED.kept_at, retired_at = EXCLUDED.retired_at
                 """,
                 (notebook_id, row[0], item.season, _when(item.added_at),
-                 _when(item.kept_at), _moment(item.retired_at)),
+                 _when(item.kept_at), _moment(item.retired_at), notebook.account_id),
             )
     for item in undo.picks:
         player_id = _player(notebook, item.tag)
@@ -1013,6 +1162,7 @@ def _undo(
             pick(player_id, day, None if item.base is None else _base(notebook, item.base))
     if undo.delete is not None:
         base_id = _base(notebook, undo.delete)
+        _may(notebook, _MANAGES, notebook.entries()[base_id])
         connection.execute(
             "DELETE FROM notebook_entries WHERE notebook_id = %s AND base_id = %s",
             (notebook_id, base_id),
@@ -1033,7 +1183,7 @@ def register_notebook_routes(
     enabled: bool,
 ) -> None:
     """The notebook's two routes, both answering 404 ``notebook_disabled``
-    while the dashboard is switched off, before reading anything."""
+    while the Notebook is switched off, before reading anything."""
 
     def switch() -> None:
         if not enabled:
@@ -1048,15 +1198,18 @@ def register_notebook_routes(
 
     @router.get("/v1/account/notebook")
     def notebook(
-        request: Request, season: str | None = None, base: str | None = None
+        request: Request, season: str | None = None, base: str | None = None,
+        crew: str | None = None,
     ) -> JSONResponse:
         account_id = account(request, "account.read")
         if base is not None and len(base) > 12:
             raise ApiError(404, "base_not_found")
         if season is not None and len(season) > 12:
             raise ApiError(404, "season_not_found")
+        if crew is not None and len(crew) > 36:
+            raise ApiError(404, "crew_not_found")
         return JSONResponse(content=get_notebook(
-            database, account_id, now=current_time(), season=season, base=base
+            database, account_id, now=current_time(), season=season, base=base, crew=crew
         ))
 
     @router.post("/v1/account/notebook")

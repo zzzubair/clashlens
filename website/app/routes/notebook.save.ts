@@ -19,6 +19,9 @@ const REFUSALS = new Set([
   "not_your_base",
   "not_legend_day",
   "season_changed",
+  "crew_forbidden",
+  "crew_not_found",
+  "already_added",
 ]);
 
 /**

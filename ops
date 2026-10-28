@@ -817,7 +817,7 @@ write_environment() {
   hmac_key_id=$(setting CLASHLENS_HMAC_KEY_ID current)
   local api_environment=(CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url "CLASHLENS_HMAC_CALLER=$hmac_caller" "CLASHLENS_HMAC_KEY_ID=$hmac_key_id"
     CLASHLENS_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current CLASHLENS_OFFICIAL_KEY_FILE=/run/secrets/clashlens-interactive-1
-    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "$dashboard_enabled")
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "$dashboard_enabled" "$notebook_enabled")
   [[ -z "$official_proxy" ]] || api_environment+=("CLASHLENS_OFFICIAL_PROXY_URL=$official_proxy")
   if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
     api_environment+=("CLASHLENS_HMAC_PREVIOUS_KEY_ID=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" CLASHLENS_HMAC_PREVIOUS_SECRET_FILE=/run/secrets/clashlens-hmac-previous)

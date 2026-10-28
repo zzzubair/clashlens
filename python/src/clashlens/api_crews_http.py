@@ -47,7 +47,8 @@ class CrewTagsBody(StrictBody):
 
 
 class CrewRoleBody(StrictBody):
-    role: Literal["admin", "member"]
+    # Uploader only while the Notebook is switched on.
+    role: Literal["admin", "uploader", "member"]
 
 
 class CrewOwnerBody(StrictBody):
@@ -64,7 +65,11 @@ def register_crew_routes(
     database: ApiDatabase,
     current_time: Callable[[], datetime],
     enabled: bool,
+    notebook: bool = False,
 ) -> None:
+    """The Crew routes. With ``notebook`` (the Notebook switch), owners and
+    admins make Uploaders, and only they make invite links."""
+
     def switch() -> None:
         if not enabled:
             raise ApiError(404, "crews_disabled")
@@ -212,6 +217,8 @@ def register_crew_routes(
     def set_member_role(
         crew_id: str, username: str, body: CrewRoleBody, request: Request
     ) -> JSONResponse:
+        if body.role == "uploader" and not notebook:
+            raise ApiError(422, "invalid_request")
         context = writer(request)
         crew_id = _safe_uuid(crew_id)
         username = _username(username)
@@ -263,6 +270,7 @@ def register_crew_routes(
             crew_id=crew_id,
             new=body.new,
             now=current_time(),
+            admins_only=notebook,
         )
 
     @router.delete("/v1/account/crews/{crew_id}/invites/{invite_id}")

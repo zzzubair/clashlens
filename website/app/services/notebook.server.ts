@@ -7,16 +7,17 @@ import {
 } from "../lib/notebook";
 import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
 
-/** The account's notebook as this Season's page, or `season`'s; with
- * `base`, also that base's note, link and record on each of the account's
- * players. */
+/** The account's notebook, or with `crew` that Crew's, as this Season's
+ * page, or `season`'s; with `base`, also that base's note, link and record
+ * on each of the account's players. */
 export async function getNotebook(
   identity: GoogleAccountIdentity,
-  { season, base }: { season?: string; base?: string } = {},
+  { season, base, crew }: { season?: string; base?: string; crew?: string } = {},
 ): Promise<Notebook> {
   const params = new URLSearchParams();
   if (season !== undefined) params.set("season", season);
   if (base !== undefined) params.set("base", base);
+  if (crew !== undefined) params.set("crew", crew);
   const query = params.size ? `?${params.toString()}` : "";
   const payload = await requestJson<unknown>(
     `/v1/account/notebook${query}`,

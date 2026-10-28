@@ -9,9 +9,11 @@ import {
 import { Link, useFetcher } from "react-router";
 
 import {
+  basePath,
   basesNear,
   baseInitials,
   baseLine,
+  canAdd,
   baseOnDay,
   dayDate,
   dayText,
@@ -55,6 +57,9 @@ const ERRORS: Record<string, string> = {
   base_running:
     "One of your accounts runs it today or tomorrow. Pick another base first.",
   not_your_base: "Only the Clasher who made a base can edit it.",
+  crew_forbidden: "Your role in this Crew can't do that. Ask an admin.",
+  crew_not_found: "You're not in that Crew any more. Refresh the page.",
+  already_added: "That base is there already.",
   not_legend_day: LEGEND_ONLY,
   season_changed: "A new Season has started. Refresh the page and try again.",
   invalid: "That didn't save. Refresh the page and try again.",
@@ -81,6 +86,8 @@ export function useNotebookSave(notebook: Notebook | null) {
   const latest = useRef(notebook);
   if (notebook) latest.current = notebook;
   const describe = useRef<Describe | null>(null);
+  // The notebook the last change went to, where its Undo goes too.
+  const sent = useRef<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
   const handled = useRef<unknown>(null);
@@ -103,7 +110,10 @@ export function useNotebookSave(notebook: Notebook | null) {
             ...shown,
             actions: [
               ...shown.actions,
-              { label: "Undo", change: { action: "undo", undo: saved.undo } },
+              {
+                label: "Undo",
+                change: { action: "undo", undo: saved.undo, crew: sent.current },
+              },
             ],
           }
         : shown,
@@ -121,8 +131,11 @@ export function useNotebookSave(notebook: Notebook | null) {
     setToast(null);
     // The newest Season comes first: the one the page's day numbers are in.
     const season = latest.current?.seasons[0];
+    // The page's notebook, unless the change names another (null: your own).
+    const crew = "crew" in change ? change.crew : (latest.current?.crew?.id ?? null);
+    sent.current = crew ?? null;
     void fetcher.submit(
-      { change: JSON.stringify(season ? { ...change, season } : change) },
+      { change: JSON.stringify({ ...change, crew, ...(season ? { season } : {}) }) },
       { method: "post", action: SAVE },
     );
   }
@@ -403,7 +416,7 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
             · {total} {total === 1 ? "base" : "bases"}
           </span>
         </h2>
-        {current ? (
+        {current && canAdd(notebook) ? (
           <button type="button" className="button nb-add" onClick={onNew}>
             + Add base
           </button>
@@ -411,9 +424,11 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
       </div>
       {total === 0 ? (
         <p className="nb-empty">
-          {current
-            ? "No bases this Season yet. Add the base you run now from your account above, or save one to try with + Add base."
-            : "No bases this Season."}
+          {!current
+            ? "No bases this Season."
+            : notebook.crew
+              ? `No bases in ${notebook.crew.name} this Season yet.`
+              : "No bases this Season yet. Add the base you run now from your account above, or save one to try with + Add base."}
         </p>
       ) : (
         <>
@@ -448,7 +463,7 @@ export function Library({ notebook, onNew }: { notebook: Notebook; onNew: () => 
           <ul className="nb-list">
             {rows.slice(0, limit).map((base) => (
               <li key={base.id}>
-                <Link to={`/notebook/bases/${base.id}`} className="nb-row">
+                <Link to={basePath(notebook, base.id)} className="nb-row">
                   <BaseTile name={base.name} />
                   <span className="nb-row-text">
                     <b>
@@ -834,6 +849,8 @@ export function NewBaseSheet({
               <p className="nb-hint">Saved to this Season, not run yet.</p>
             )}
           </fieldset>
+        ) : notebook.crew ? (
+          <p className="nb-hint">Everyone in {notebook.crew.name} can copy it.</p>
         ) : (
           <p className="nb-hint">{LEGEND_ONLY} Saved to this Season.</p>
         )}
@@ -905,7 +922,7 @@ export function StatusSheet({
           Bring back to this Season
         </button>
       ) : null}
-      {notebook.players.length > 0 ? (
+      {notebook.crew ? null : notebook.players.length > 0 ? (
         <>
           <div className="nb-from">
             <span>Run it from</span>

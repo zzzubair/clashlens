@@ -14,14 +14,17 @@ import { canonicalPlayerPath } from "../lib/player-tag";
 import { useBackState } from "./BackLink";
 import { TrophyMark } from "./LeaderboardShared";
 
-/** Owner and Admin chips; members have none. */
+const ROLE_CHIP: Record<CrewRole, string | null> = {
+  owner: "Owner",
+  admin: "Admin",
+  uploader: "Uploader",
+  member: null,
+};
+
+/** Owner, Admin and Uploader chips; members have none. */
 export function RoleChip({ role }: { role: CrewRole }) {
-  if (role === "member") return null;
-  return (
-    <span className={`crew-chip crew-chip-${role}`}>
-      {role === "owner" ? "Owner" : "Admin"}
-    </span>
-  );
+  const label = ROLE_CHIP[role];
+  return label ? <span className={`crew-chip crew-chip-${role}`}>{label}</span> : null;
 }
 
 /** How full a crew is, as a bar; the words beside it say the numbers. */

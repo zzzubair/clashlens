@@ -43,7 +43,7 @@ INVITE_LIFETIME = timedelta(hours=48)
 # left, so a link shared yesterday keeps working.
 INVITE_REUSE_MIN_LEFT = timedelta(hours=24)
 
-_ROLE_ORDER = {"owner": 0, "admin": 1, "member": 2}
+_ROLE_ORDER = {"owner": 0, "admin": 1, "uploader": 2, "member": 3}
 
 
 class _Refused(Exception):
@@ -620,7 +620,7 @@ def remove_player(
             if role == "owner" and len(_own_tags(connection, crew_row, holder)) == 1:
                 raise _Refused(409, {"error": "owner_must_hand_over"})
         elif not (
-            role == "owner" or (role == "admin" and holder_role == "member")
+            role == "owner" or (role == "admin" and holder_role in {"uploader", "member"})
         ):
             raise _Refused(403, {"error": "crew_forbidden"})
         connection.execute(
@@ -675,18 +675,21 @@ def set_member_role(
     username: str,
     role: str,
 ) -> OperationResult:
-    """The owner makes a member an admin, or an admin a member again."""
-    assert binding.account_id is not None and role in {"admin", "member"}
+    """The owner makes a member an admin, or an admin a member again; the
+    owner or an admin makes a member an Uploader, or an Uploader a member."""
+    assert binding.account_id is not None and role in {"admin", "uploader", "member"}
     account_id = binding.account_id
 
     def change(connection: Any) -> OperationResult:
         crew_row, _size, my_role = _membership(
             connection, crew_id, account_id, lock=True
         )
-        _require(my_role, "owner")
+        _require(my_role, "owner", "admin")
         target, display_name, target_role = _member(connection, crew_row, username)
         if target_role == "owner":
             raise _Refused(409, {"error": "owner_role_fixed"})
+        if "admin" in (role, target_role):
+            _require(my_role, "owner")
         _set_role(connection, crew_row, target, role)
         return OperationResult(
             200, {"username": username, "display_name": display_name, "role": role}
@@ -761,13 +764,17 @@ def make_invite(
     crew_id: str,
     new: bool,
     now: datetime,
+    admins_only: bool = False,
 ) -> OperationResult:
-    """The caller's newest live link while it has a day left, or a new one."""
+    """The caller's newest live link while it has a day left, or a new one.
+    With ``admins_only``, only the owner and admins make links."""
     assert binding.account_id is not None
     account_id = binding.account_id
 
     def invite(connection: Any) -> OperationResult:
-        crew_row, size, _role = _membership(connection, crew_id, account_id, lock=True)
+        crew_row, size, role = _membership(connection, crew_id, account_id, lock=True)
+        if admins_only:
+            _require(role, "owner", "admin")
         open_places = size - _used(connection, crew_row)
         if open_places <= 0:
             raise _Refused(409, {"error": "crew_full", "open_places": 0})

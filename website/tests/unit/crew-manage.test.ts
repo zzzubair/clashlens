@@ -428,6 +428,21 @@ describe("members", () => {
     ).toEqual([{ role: "admin" }, { role: "member" }]);
   });
 
+  it("makes and removes an Uploader", async () => {
+    mocks.requestJson.mockResolvedValue({ username: "kenji", display_name: "Kenji" });
+    const made = unwrap<Answer>(await members({ intent: "upload", username: "kenji" }));
+    expect(made.data.notice).toBe("Kenji is now an Uploader and can add bases.");
+    const removed = unwrap<Answer>(
+      await members({ intent: "demote", username: "kenji", from: "uploader" }),
+    );
+    expect(removed.data.notice).toBe("Kenji is no longer an Uploader.");
+    expect(
+      mocks.requestJson.mock.calls.map((call) =>
+        JSON.parse((call[2] as Buffer).toString()),
+      ),
+    ).toEqual([{ role: "uploader" }, { role: "member" }]);
+  });
+
   it("adds your accounts, checking one Clash Lens hasn't checked yet", async () => {
     mocks.requestJson
       .mockRejectedValueOnce(

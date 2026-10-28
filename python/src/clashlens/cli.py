@@ -398,6 +398,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("CLASHLENS_DASHBOARD_ENABLED") == "true",
     )
     serve.add_argument(
+        "--enable-notebook",
+        action="store_true",
+        default=os.environ.get("CLASHLENS_NOTEBOOK_ENABLED") == "true",
+    )
+    serve.add_argument(
         "--max-body-bytes",
         type=int,
         default=int(os.environ.get("CLASHLENS_API_MAX_BODY_BYTES", "1048576")),
@@ -1355,6 +1360,7 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
             official_credential_fingerprint=fingerprint,
             clashking_client=ClashKingClient(enabled=not arguments.allow_insecure_official_origin),
             dashboard_enabled=arguments.enable_dashboard,
+            notebook_enabled=arguments.enable_notebook,
         )
     except BaseException:
         # Startup failed after the pool opened; the app never reached its

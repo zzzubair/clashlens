@@ -412,6 +412,15 @@ def test_roles_decide_who_can_kick_rename_and_hand_over(site: Site) -> None:
     assert call("member", api_crews.set_member_role, username="admin", role="member") == forbidden
     assert call("admin", api_crews.set_member_role, username="member", role="admin") == forbidden
     assert call("owner", api_crews.set_member_role, username="admin", role="admin") == (200, None)
+    # An admin makes a member an Uploader and back, but only the owner makes
+    # or unmakes admins.
+    assert call("admin", api_crews.set_member_role, username="other", role="uploader") == (
+        200, None)
+    assert call("other", api_crews.set_member_role, username="member", role="uploader") == (
+        forbidden)
+    assert call("admin", api_crews.set_member_role, username="admin", role="member") == forbidden
+    assert call("admin", api_crews.set_member_role, username="other", role="member") == (
+        200, None)
     assert call("owner", api_crews.set_member_role, username="owner", role="member") == (
         409, "owner_role_fixed",
     )

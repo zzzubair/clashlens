@@ -122,7 +122,7 @@ export default function CrewSettingsRoute() {
       </main>
     );
   }
-  if (crew.myRole === "member") {
+  if (crew.myRole !== "owner" && crew.myRole !== "admin") {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Edit crew</h1>
