@@ -27,13 +27,16 @@ export function TrophyLine({
   const oldest = history.at(-1)?.day;
   if (!oldest) return null;
   const origin = dayStart(oldest);
-  // [days since the oldest day began, trophies]: its start, each known EOD, now.
-  const marks: Array<[number, number]> = [];
-  if (oldest.startTrophies != null) marks.push([0, oldest.startTrophies]);
+  // Trophies at each Reset, by days since the oldest day began: a day's start,
+  // which is also the day before's EOD, and each known EOD. Then now.
+  const resets = new Map<number, number>();
   for (const { day } of [...history].reverse()) {
-    const trophies = dayEnd(day, player, now).trophies;
-    if (trophies !== null) marks.push([(dayStart(day) - origin) / DAY + 1, trophies]);
+    const at = (dayStart(day) - origin) / DAY;
+    if (day.startTrophies != null && !resets.has(at)) resets.set(at, day.startTrophies);
+    const end = dayEnd(day, player, now).trophies;
+    if (end !== null) resets.set(at + 1, end);
   }
+  const marks = [...resets].sort(([a], [b]) => a - b);
   if (marks.length === 0) return null;
   // Now ends today's step, one day after the last finished day.
   marks.push([Math.max(marks.at(-1)![0], Math.floor((now - origin) / DAY) + 1), current]);
@@ -50,8 +53,8 @@ export function TrophyLine({
   const steps = (dashed: boolean) =>
     marks
       .slice(1)
-      .map((mark, i) =>
-        gap(i + 1) === dashed ? `M${point(marks[i])} L${point(mark)}` : "",
+      .flatMap((mark, i) =>
+        gap(i + 1) === dashed ? [`M${point(marks[i])} L${point(mark)}`] : [],
       )
       .join(" ");
   const line = marks.map((mark, i) => `${i ? "L" : "M"}${point(mark)}`).join(" ");
