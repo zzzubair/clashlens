@@ -493,6 +493,11 @@
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+@media (pointer: coarse) {
+  :root .tab-row :is(a, button) {
+    min-height: 2.75rem;
+  }
+}
 :root .tab-row :is(a, button):is(:hover, :focus-visible) {
   color: var(--cl-ink);
   border-color: var(--cl-outline);

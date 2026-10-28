@@ -922,6 +922,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
     expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
     expect(rivals).toContain("#317 Player 317 5,365 – – –");
+    // Each rival's name opens their player page.
+    expect(cards["rivals-watch"]).toMatch(
+      /<a class="rival-link" href="\/players\/%238PYQ2LJ0"[^>]*><bdi class="dash-name" title="Tundra">Tundra<\/bdi><\/a>/,
+    );
+    expect(cards["rivals-watch"]!.match(/class="rival-link"/g)).toHaveLength(7);
     // Tundra's battles were saved 20 minutes ago, before the board's 3.
     expect(data.cards["rivals-watch"]?.live?.observedAtMs).toBe(NOW - 20 * 60_000);
 

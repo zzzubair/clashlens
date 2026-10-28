@@ -200,6 +200,13 @@
   touch-action: manipulation;
 }
 
+@media (pointer: coarse) {
+  .standings-range a {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
 .standings-range a:hover {
   border-color: var(--cl-outline);
 }

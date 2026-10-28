@@ -125,7 +125,6 @@
   align-self: flex-start;
   gap: 0.15rem;
   padding: 0.15rem;
-  overflow: hidden;
   background: var(--cl-panel);
   border: 1px solid var(--cl-border);
   border-radius: 10px;
@@ -145,6 +144,19 @@
 }
 
 /* The chosen option lifts out of the track, as on every other switch. */
+/* A thumb gets 44px of height to hit, beyond the switch's small look. */
+@media (pointer: coarse) {
+  .dash-switch button {
+    position: relative;
+  }
+
+  .dash-switch button::after {
+    position: absolute;
+    inset: -0.5rem -0.08rem;
+    content: "";
+  }
+}
+
 .dash-switch button[aria-pressed="true"] {
   color: var(--cl-ink);
   background: var(--cl-surface);

@@ -10,6 +10,7 @@ import type {
   RivalsData,
 } from "../lib/dashboard-cards";
 import { around, goalPlan } from "../lib/dashboard-cards";
+import { canonicalPlayerPath } from "../lib/player-tag";
 import {
   CardHead,
   CardNote,
@@ -295,7 +296,10 @@ function RivalTable({ rows, live }: { rows: RivalRow[]; live: boolean }) {
               ) : null}
             </td>
             <td>
-              <Name>{row.name}</Name>
+              {/* The name opens the player, and its link covers the row. */}
+              <Link className="rival-link" to={canonicalPlayerPath(row.tag)}>
+                <Name>{row.name}</Name>
+              </Link>
             </td>
             <td>{count(row.trophies)}</td>
             <td>{percent(row.hitRate)}</td>

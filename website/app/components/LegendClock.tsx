@@ -278,7 +278,7 @@ export function LegendClock({
                 }
               }}
             >
-              <circle r="15" className="clock-hit" />
+              <circle r="18" className="clock-hit" />
               <g transform="scale(1.3)">{mark.kind === "attack" ? SWORD : SHIELD}</g>
               {mark.battles.length > 1 ? (
                 <>
