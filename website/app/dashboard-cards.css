@@ -306,7 +306,6 @@
   overflow: visible;
 }
 
-
 /* The countdown beside a small dial, and its switch, are for phones. The
    switch needs .button to outrank the shared button rule. */
 .legend-clock :is(.legend-clock-summary, .legend-clock-toggle.button) {
