@@ -10,6 +10,7 @@ import {
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { ChangedSheet, StillOn } from "../components/NotebookChecks";
 import {
   AccountRow,
   ChangeSheet,
@@ -92,6 +93,7 @@ export function headers() {
 type Open =
   | { kind: "change"; tag: string }
   | { kind: "days"; tag: string }
+  | { kind: "changed"; tag: string }
   | { kind: "day"; tag: string; day: number }
   | { kind: "new"; preset: NewBasePreset };
 
@@ -178,6 +180,14 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
                 })
               }
               onDays={() => setOpen({ kind: "days", tag: item.tag })}
+              prompt={
+                <StillOn
+                  notebook={notebook}
+                  player={item}
+                  saver={saver}
+                  onChanged={() => setOpen({ kind: "changed", tag: item.tag })}
+                />
+              }
             />
           ))}
         </section>
@@ -204,6 +214,9 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
           onDay={(day) => setOpen({ kind: "day", tag: player.tag, day })}
           onClose={close}
         />
+      ) : null}
+      {open?.kind === "changed" && player ? (
+        <ChangedSheet notebook={notebook} player={player} saver={saver} onClose={close} />
       ) : null}
       {open?.kind === "day" && player ? (
         <FixDaySheet

@@ -51,6 +51,18 @@ export interface NotebookPlayer {
   /** The days up to tomorrow the account plays in Legend League: the only
    * days a base can be set on. */
   legendDays: number[];
+  /** A base whose days wait for "Still on it?", with the day its run was
+   * last confirmed (0 or less in an earlier Season); null when none waits. */
+  waiting: { base: string; seen: number } | null;
+}
+
+/** One of the Clasher's game accounts, for "Which account will run it?". */
+export interface CopyAccount {
+  tag: string;
+  name: string | null;
+  /** Whether today and tomorrow are Legend days for it. */
+  today: boolean;
+  tomorrow: boolean;
 }
 
 export interface NotebookBase {
@@ -113,12 +125,17 @@ export interface Notebook {
     /** "mine" when it is in the Clasher's own notebook, and the ids of
      * their Crews it is in. */
     shelves: string[];
+    /** Today's defenses so far on everyone running it, not final until the
+     * Reset; null when nobody runs it today. */
+    today: { defenses: number; held: number } | null;
+    copy: CopyAccount[];
   };
 }
 
 /** One change, as the private API takes it. `undo` is passed back as given. */
 export interface NotebookChange {
-  action: "add" | "pick" | "retire" | "keep" | "edit" | "remove" | "undo";
+  /** confirm: "Still on it?" Yes, for `tag`. */
+  action: "add" | "pick" | "retire" | "keep" | "edit" | "remove" | "undo" | "confirm";
   base?: string | null;
   name?: string;
   link?: string;
@@ -143,7 +160,7 @@ export const SEASON_ID = /^[0-9]{1,12}$/;
 export const CREW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ROLES = new Set(["owner", "admin", "uploader", "member"]);
 const STATUSES = new Set(["running", "season", "retired"]);
-const ACTIONS = ["add", "pick", "retire", "keep", "edit", "remove", "undo"];
+const ACTIONS = ["add", "pick", "retire", "keep", "edit", "remove", "undo", "confirm"];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -203,6 +220,12 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
       : null,
   );
   if (parsedRuns.includes(null) || parsedPicks.includes(null)) return null;
+  const waiting = value.waiting ?? null;
+  if (
+    waiting !== null &&
+    !(isRecord(waiting) && isCode(waiting.base) && Number.isInteger(waiting.seen))
+  )
+    return null;
   return {
     tag: value.tag,
     name,
@@ -212,6 +235,7 @@ function parsePlayer(value: unknown): NotebookPlayer | null {
     next: next as NotebookPlayer["next"],
     picks: parsedPicks as NotebookPlayer["picks"],
     legendDays: legend,
+    waiting: waiting as NotebookPlayer["waiting"],
   };
 }
 
@@ -323,13 +347,30 @@ export function parseNotebook(value: unknown): Notebook | null {
         ? { tag: item.tag, record: parseRecord(item.record) as BaseRecord }
         : null,
     );
-    if (records.includes(null)) return null;
+    const today = base.today ?? null;
+    if (
+      today !== null &&
+      !(isRecord(today) && isCount(today.defenses) && isCount(today.held))
+    )
+      return null;
+    const copy = (Array.isArray(base.copy) ? base.copy : []).map((item: unknown) =>
+      isRecord(item) &&
+      typeof item.tag === "string" &&
+      isText(item.name) &&
+      typeof item.today === "boolean" &&
+      typeof item.tomorrow === "boolean"
+        ? { tag: item.tag, name: item.name, today: item.today, tomorrow: item.tomorrow }
+        : null,
+    );
+    if (records.includes(null) || copy.includes(null)) return null;
     notebook.base = {
       id: base.id,
       note: base.note,
       link: base.link,
       players: records as Array<{ tag: string; record: BaseRecord }>,
       shelves: base.shelves as string[],
+      today: today as { defenses: number; held: number } | null,
+      copy: copy as CopyAccount[],
     };
   }
   return notebook;

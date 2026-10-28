@@ -34,7 +34,9 @@ import {
   LEGEND_ONLY,
   RunStrip,
   saveError,
+  type Saver,
 } from "../../app/components/NotebookParts";
+import { ChangedSheet, CopySheet, StillOn } from "../../app/components/NotebookChecks";
 import {
   baseInitials,
   baseOnDay,
@@ -266,6 +268,7 @@ describe("run strip", () => {
       { day: 9, base: "B-000002" },
     ],
     legendDays: Array.from({ length: 17 }, (_, index) => index + 1),
+    waiting: null,
   };
 
   it("covers all 28 days: no base, past run, today's run, days to come", () => {
@@ -340,6 +343,7 @@ describe("Legend days only", () => {
     next: null,
     picks: DAYS.map((day) => ({ day, base: `B-0000${String(day).padStart(2, "0")}` })),
     legendDays: DAYS,
+    waiting: null,
   };
   // Dropped out of Legend League at the Day 8 Reset.
   const dropped: NotebookPlayer = {
@@ -527,5 +531,69 @@ describe("a refused save", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("copying a base and a forgotten one", () => {
+  const LINK =
+    "https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAAKgAAAAJ";
+  const saver = { save: () => {} } as unknown as Saver;
+  const api = apiNotebook();
+  const page = parseNotebook({
+    ...api,
+    players: [{ ...api.players[0]!, waiting: { base: "B-7K3QX9", seen: 2 } }],
+    base: {
+      id: "B-7K3QX9",
+      note: "",
+      link: LINK,
+      players: [],
+      shelves: [],
+      today: { defenses: 4, held: 3 },
+      copy: [
+        { tag: "#L9L0GJ9LR", name: "curtypie", today: true, tomorrow: true },
+        { tag: "#P2P", name: "Alt", today: true, tomorrow: false },
+      ],
+    },
+  })!;
+  const ring = page.bases[0]!;
+  const player = page.players[0]!;
+  // The page as read, without React's markers between pieces of text.
+  const shown = async (element: ReturnType<typeof createElement>) =>
+    (await render(element)).replaceAll("<!-- -->", "");
+
+  it("reads today's defenses so far, the accounts to copy to and a waiting run", () => {
+    expect(page.base?.today).toEqual({ defenses: 4, held: 3 });
+    expect(page.base?.copy.map((item) => item.tag)).toEqual(["#L9L0GJ9LR", "#P2P"]);
+    expect(player.waiting).toEqual({ base: "B-7K3QX9", seen: 2 });
+    const bad = { ...api.players[0]!, waiting: { base: "ring", seen: 2 } };
+    expect(parseNotebook({ ...api, players: [bad] })).toBeNull();
+  });
+
+  it("asks which account runs it from tomorrow, each choice opening the game", async () => {
+    const html = await shown(
+      createElement(CopySheet, { notebook: page, base: ring, saver, onClose: () => {} }),
+    );
+    // Alt plays no Legend day tomorrow; Just looking opens the game too.
+    expect(html).toContain("curtypie");
+    expect(html).not.toContain("<b>Alt</b>");
+    expect(html).toContain("from tomorrow (Day 17)");
+    expect(html.match(/target="_blank"/g)).toHaveLength(2);
+    expect(html).toContain("It&#x27;s already my base today (Day 16) ›");
+  });
+
+  it("asks if a forgotten run is still on, and which day it changed", async () => {
+    const asked = await shown(
+      createElement(StillOn, { notebook: page, player, saver, onChanged: () => {} }),
+    );
+    expect(asked).toContain("Still on Ring on curtypie?");
+    expect(asked).toContain("Its days from Day 10 don&#x27;t count until you say.");
+    const days = await shown(
+      createElement(ChangedSheet, { notebook: page, player, saver, onClose: () => {} }),
+    );
+    // Day 3, the day after the last confirmation, to today, newest first.
+    const listed = [...days.matchAll(/<b>Day (\d+)<\/b>/g)].map((match) =>
+      Number(match[1]),
+    );
+    expect(listed).toEqual(Array.from({ length: 14 }, (_, index) => 16 - index));
   });
 });

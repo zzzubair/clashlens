@@ -47,6 +47,7 @@ Use these exactly.
 - **Day pick**: a Clasher saying which base one game account ran from one Legend day on, until the next pick or the first day the account is out of Legend League; one base per game account per Legend day.
 - **Run**: a stretch of Legend days on which one game account ran one base.
 - **Held**: a defense on which the attacker did not get 3 stars.
+- **Waiting day**: a Legend day of a Run more than 7 Legend days after the Run was last confirmed (by the Clasher opening Clash Lens before any day waits, picking a base for that game account, or answering "Still on it?"); it counts for nothing until they answer.
 
 ## Technical words
 

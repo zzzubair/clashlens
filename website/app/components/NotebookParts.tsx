@@ -1040,12 +1040,15 @@ export function AccountRow({
   onChange,
   onAdd,
   onDays,
+  prompt,
 }: {
   notebook: Notebook;
   player: NotebookPlayer;
   onChange: () => void;
   onAdd: () => void;
   onDays: () => void;
+  /** "Still on it?", when a run waits for an answer. */
+  prompt?: ReactNode;
 }) {
   const { today, current } = notebook.season;
   const run = runOn(player, today);
@@ -1085,6 +1088,7 @@ export function AccountRow({
           </p>
         </div>
       </div>
+      {prompt}
       <RunStrip notebook={notebook} player={player} />
       {settable || fixable ? (
         <div className="nb-account-actions">

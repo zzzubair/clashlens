@@ -497,9 +497,11 @@ the navigation bar has no Notebook link, and a Crew page has no Bases link. The
 private API's `/v1/account/notebook` answers 404 `notebook_disabled` before
 reading anything, and Crews keep their rules from before: any member makes
 invite links and there is no Uploader role. While it is on, only a Crew's owner
-and admins make invite links, and they make Uploaders. Migrations 0132 and 0133
-create the notebook tables and the Uploader role either way; the tables stay
-empty while the setting is off.
+and admins make invite links, and they make Uploaders, and every signed-in page
+load notes the visit for the forgotten-base check (at most one small write per
+game account per Legend day). Migrations 0132, 0133 and 0134 create the notebook
+tables, the Uploader role and the forgotten-base check either way; the tables
+stay empty while the setting is off.
 
 Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only

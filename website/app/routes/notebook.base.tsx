@@ -10,6 +10,7 @@ import {
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { CopySheet } from "../components/NotebookChecks";
 import {
   BaseTile,
   recordLine,
@@ -125,7 +126,7 @@ export default function NotebookBaseRoute() {
 
 function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }) {
   const saver = useOutletContext<Saver>();
-  const [open, setOpen] = useState<"status" | "edit" | "crews" | null>(null);
+  const [open, setOpen] = useState<"status" | "edit" | "crews" | "copy" | null>(null);
   const [removing, setRemoving] = useState(false);
   const navigate = useNavigate();
   const detail = notebook.base;
@@ -176,16 +177,19 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
             .join(" · ")}
         </small>
       </p>
+      {detail?.today ? (
+        <p className="nb-hint">
+          {detail.today.defenses
+            ? `Today so far: ${detail.today.held} of ${detail.today.defenses} held`
+            : "Today so far: no defenses yet"}
+          , not final until the Reset.
+        </p>
+      ) : null}
       <div className="nb-actions">
-        {detail?.link ? (
-          <a
-            className="button"
-            href={detail.link}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open in game
-          </a>
+        {notebook.season.current ? (
+          <button type="button" className="button" onClick={() => setOpen("copy")}>
+            Copy base
+          </button>
         ) : null}
         {base.mine ? (
           <button
@@ -317,6 +321,14 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
             </button>
           )}
         </div>
+      ) : null}
+      {open === "copy" ? (
+        <CopySheet
+          notebook={notebook}
+          base={base}
+          saver={saver}
+          onClose={() => setOpen(null)}
+        />
       ) : null}
       {open === "status" ? (
         <StatusSheet
