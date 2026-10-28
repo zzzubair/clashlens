@@ -273,3 +273,18 @@ test("retired IDs render honest labels, quantities and stars before and after na
     await expectNoSeriousAccessibilityViolations(page);
   }
 });
+
+test("a desktop keeps every army column to read and sort by", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(
+    "/analytics/armies?recent=1&population=top-100&category=troops&sort=usage-rate",
+  );
+  for (const name of ["2-star", "1-star", "Avg. destruction"]) {
+    await expect(page.getByRole("columnheader", { name })).toBeVisible();
+  }
+  await page.getByRole("columnheader", { name: "2-star" }).getByRole("button").click();
+  await expect(page.getByRole("columnheader", { name: "2-star" })).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+});

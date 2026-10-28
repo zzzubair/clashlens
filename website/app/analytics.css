@@ -647,9 +647,10 @@
     padding-right: 1rem;
   }
 }
-/* The table leaves the rarer numbers to the army sheet, unless sorted by one,
-   so each army's name has room. */
-@media (min-width: 48rem) {
+/* On iPads the table leaves the rarer numbers to the Sort menu, unless sorted
+   by one, so each army's name has room. Desktops have no Sort menu, so every
+   column stays to sort by. */
+@media (min-width: 48rem) and (max-width: 63.99rem) {
   .analytics-results-table
     :is(th, td):is(
       [data-column="two-star-rate"],
