@@ -212,9 +212,9 @@ describe("dashboard settings", () => {
       "legend-day",
       "legend-clock",
       "bases",
+      "rivals-watch",
       "goal",
       "armies-defense",
-      "rivals-watch",
       "heat-map",
     ]);
     expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
@@ -1333,9 +1333,9 @@ describe("dashboard page", () => {
       "legend-day:m",
       "legend-clock:s",
       "bases:l",
+      "rivals-watch:m",
       "goal:s",
       "armies-defense:m",
-      "rivals-watch:m",
       "heat-map:s",
     ]);
   });

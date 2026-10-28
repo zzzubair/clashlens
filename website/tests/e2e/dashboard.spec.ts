@@ -20,9 +20,9 @@ const ALL_CARDS = [
   "Legend day",
   "Legend clock",
   "Bases you attacked",
+  "Rivals watch",
   "Goal",
   "Armies on defense",
-  "Rivals watch",
   "Season heat map",
   "Cutoffs",
   "Season graph",
@@ -86,10 +86,10 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   const own = [
     "Legend day",
     "Legend clock",
-    "Goal",
     "Bases you attacked",
-    "Armies on defense",
+    "Goal",
     "Rivals watch",
+    "Armies on defense",
     ...ALL_CARDS.slice(7),
     "Season heat map",
   ];

@@ -19,12 +19,12 @@ The dashboard can be built behind the off switch, but nothing goes live until tr
 
 ## Default layout
 
-| Row | Cards                                           |
-| --- | ----------------------------------------------- |
-| 1   | Legend day (Medium) + Legend clock (Small)      |
-| 2   | Bases you attacked (Large)                      |
-| 3   | Goal (Small) + Armies on defense (Medium)       |
-| 4   | Rivals watch (Medium) + Season heat map (Small) |
+| Row | Cards                                                |
+| --- | ---------------------------------------------------- |
+| 1   | Legend day (Medium) + Legend clock (Small)           |
+| 2   | Bases you attacked (Large)                           |
+| 3   | Rivals watch (Medium) + Goal (Small)                 |
+| 4   | Armies on defense (Medium) + Season heat map (Small) |
 
 Goal starts at Top 200 until the user picks a rank. The other 6 cards are available from "+ Add a card".
 

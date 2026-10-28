@@ -134,9 +134,9 @@ export const DEFAULT_LAYOUT: readonly CardId[] = [
   "legend-day",
   "legend-clock",
   "bases",
+  "rivals-watch",
   "goal",
   "armies-defense",
-  "rivals-watch",
   "heat-map",
 ];
 
