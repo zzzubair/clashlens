@@ -423,11 +423,26 @@
   min-height: 2.75rem;
 }
 
-/* A small phone keeps Create account above the tab bar: the faded heat map
-   steps out, and the lock sits beside its one-line title. */
+/* A small phone keeps Create account above the tab bar and the example
+   readable: no fade and no heat map, two rivals, and the lock beside its
+   one-line title under the example. */
 @media (max-width: 23.5rem) {
+  .front-grid {
+    gap: 1rem;
+  }
+
   .front-hero {
+    gap: 0.75rem;
     padding-top: 0;
+  }
+
+  .teaser-board {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .teaser-rivals > span:nth-child(3) {
+    display: none;
   }
 
   .front-hero h1 {
@@ -444,7 +459,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.4rem 0.5rem;
-    margin-top: -0.75rem;
+    margin-top: 0.5rem;
   }
 
   .teaser-lock > :not(.teaser-lock-icon, h2) {

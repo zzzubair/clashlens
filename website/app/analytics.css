@@ -495,22 +495,22 @@
   .analytics-row-open {
     min-height: 0;
   }
-  /* The other numbers share one quiet line: label, then value. */
+  /* The other numbers share the row under it in equal columns: label over
+     value, like a scoreboard. */
   .analytics-results-table td {
-    display: flex;
-    flex: 0 1 auto;
-    align-items: baseline;
-    gap: 0.3rem;
+    display: grid;
+    flex: 1 1 0;
+    gap: 0.05rem;
     min-width: 0;
     padding: 0;
-    font-size: 0.8rem;
+    font-size: 0.9rem;
     order: 2;
   }
   .analytics-results-table td::before {
     content: attr(data-label);
     color: var(--cl-muted);
-    font-size: 0.72rem;
-    font-weight: 700;
+    font-size: 0.8rem;
+    font-weight: 600;
   }
   /* The sorted number leads, big beside its bar; sorted by name or Usage,
      Usage leads. The rest share the line under it. */
@@ -518,6 +518,7 @@
     td[data-sorted],
   .analytics-results-table:is([data-sort="usage-rate"], [data-sort="name"])
     td[data-column="usage-rate"] {
+    display: flex;
     flex: 1 1 100%;
     align-items: center;
     gap: 0.6rem;

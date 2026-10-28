@@ -374,7 +374,8 @@ export default function TrackedLeaderboardRoute() {
         ) : null}
       </section>
 
-      {error ? <ErrorNotice error={error} /> : null}
+      {/* Without a board, its own message below says what went wrong. */}
+      {error && leaderboard ? <ErrorNotice error={error} /> : null}
 
       {view === "live" ? (
         <section
@@ -667,9 +668,28 @@ export default function TrackedLeaderboardRoute() {
           )}
         </section>
       ) : (
-        <div className="empty-state">
+        <div className="empty-state" role="alert">
           <h2>Leaderboard unavailable</h2>
-          <p>We couldn’t load the standings. Please try again in a moment.</p>
+          <p>
+            We couldn’t load the standings.
+            {error?.error.retryAfterSeconds
+              ? ` Try again in about ${error.error.retryAfterSeconds} seconds.`
+              : " Try again in a moment."}
+          </p>
+          <p className="empty-state-actions">
+            <Link
+              className="button secondary"
+              to={location.pathname + location.search}
+              reloadDocument
+            >
+              Try again
+            </Link>
+            {Number(new URLSearchParams(location.search).get("page") ?? 1) > 1 ? (
+              <Link className="button secondary" to={leaderboardUrl(view, 1)}>
+                Go to page 1
+              </Link>
+            ) : null}
+          </p>
         </div>
       )}
     </main>

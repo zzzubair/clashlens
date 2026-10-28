@@ -359,3 +359,11 @@
     font-size: 0.75rem;
   }
 }
+
+/* Try again, and page 1 from a later page, when the board can't load. */
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
