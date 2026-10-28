@@ -713,8 +713,18 @@ html.obs-page body {
 .obs-settings .form-panel {
   padding: 16px;
 }
+/* The settings are sections of one page, each under a hairline, not cards in
+   cards; only the choices inside keep their edges. */
+:root .obs-settings .obs-layout .form-panel {
+  padding: 20px 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--cl-card-line);
+  border-radius: 0;
+  box-shadow: none;
+}
 .obs-settings .form-panel + .form-panel {
-  margin-top: 18px;
+  margin-top: 24px;
 }
 .obs-settings .form-panel h2 {
   font-size: 22px;
@@ -722,17 +732,6 @@ html.obs-page body {
   align-items: center;
   gap: 10px;
   margin: 0;
-}
-.obs-settings .obs-step {
-  width: 28px;
-  height: 28px;
-  flex: none;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  background: var(--cl-brand-fill);
-  color: var(--cl-brand-night);
 }
 .obs-settings .obs-help {
   color: var(--cl-muted);
@@ -972,16 +971,28 @@ html.obs-page body {
   font: 700 13px var(--cl-font);
   margin: 0;
 }
-/* Touch screens get the drag hint; a mouse and keyboard get the full one. */
-.obs-settings .obs-help-touch {
+/* A mouse and keyboard get the full help beside Preview; a touch screen gets
+   a short hint on the picture itself. */
+.obs-settings .obs-stage-hint {
   display: none;
 }
 @media (pointer: coarse) {
   .obs-settings .obs-help-keys {
     display: none;
   }
-  .obs-settings .obs-help-touch {
-    display: inline;
+  .obs-settings .obs-stage-hint {
+    position: absolute;
+    z-index: 2;
+    bottom: 6px;
+    left: 6px;
+    display: block;
+    margin: 0;
+    padding: 3px 8px;
+    color: #fff;
+    background: rgb(0 0 0 / 0.55);
+    border-radius: 6px;
+    font: 700 11px var(--cl-font);
+    pointer-events: none;
   }
 }
 /* The picture tops the side column, above its panel of controls. */

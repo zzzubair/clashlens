@@ -152,6 +152,13 @@
   display: none;
 }
 
+/* Beside the Legend day card, the clock shows the same read, so its age shows
+   once, on the Legend day card. */
+.dash-card:has(> .legend-day-card) + [data-card="legend-clock"] .dash-card-meta,
+[data-card="legend-clock"]:has(+ .dash-card > .legend-day-card) .dash-card-meta {
+  display: none;
+}
+
 .legend-day-slots {
   display: grid;
   gap: 0.75rem;
@@ -263,8 +270,10 @@
   background: var(--cl-panel);
 }
 
+/* A slot still to play is a short dashed box; beside played ones it grows
+   to their height. */
 .dash-star-box-empty {
-  min-height: 2.3rem;
+  min-height: 1.5rem;
   background: transparent;
   border: 1px dashed var(--cl-outline);
 }
@@ -874,8 +883,9 @@
   .rival-table .rival-link .dash-name {
     margin-bottom: -0.3em;
     padding-bottom: 0.3em;
-    text-decoration: underline 1.5px color-mix(in srgb, var(--cl-action) 55%, transparent);
-    text-underline-offset: 0.18em;
+    text-decoration: underline 1px color-mix(in srgb, currentColor 45%, transparent);
+    text-decoration-skip-ink: none;
+    text-underline-offset: 0.2em;
   }
 }
 

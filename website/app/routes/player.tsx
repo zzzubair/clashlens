@@ -717,7 +717,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
               </svg>
-              <span className="sr-only">
+              <span>
                 {refreshFetcher.state === "submitting" || refreshing
                   ? "Refreshing…"
                   : "Refresh"}

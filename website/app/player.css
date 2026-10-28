@@ -337,11 +337,6 @@
   border-radius: var(--cl-radius);
   font-size: 0.875rem;
 }
-/* Refresh is an icon; its name is for screen readers. */
-.player-page .player-refresh-form button {
-  padding: 0;
-  border-radius: 50%;
-}
 .player-page .player-refresh-form button:disabled svg {
   animation: refresh-spin 900ms linear infinite;
 }

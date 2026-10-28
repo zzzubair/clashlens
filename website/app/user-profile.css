@@ -43,7 +43,8 @@
    says the card opens the player. */
 @media (hover: none), (pointer: coarse) {
   .linked-player-name {
-    text-decoration: underline 1.5px color-mix(in srgb, var(--cl-action) 55%, transparent);
+    text-decoration: underline 1px color-mix(in srgb, currentColor 45%, transparent);
+    text-decoration-skip-ink: none;
     text-underline-offset: 0.2em;
   }
 }

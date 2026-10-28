@@ -481,6 +481,15 @@ h3 {
   text-decoration: underline;
 }
 
+/* On a touch screen each footer link is a thumb tall. */
+@media (pointer: coarse) {
+  .page-footer nav > :is(a, button) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+}
+
 @media (max-width: 48rem) {
   .section-heading {
     align-items: flex-start;

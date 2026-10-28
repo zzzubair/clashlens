@@ -548,7 +548,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       <form onSubmit={(event) => event.preventDefault()}>
         <section className="form-panel" aria-labelledby="obs-player">
           <h2 id="obs-player">
-            <span className="obs-step">1</span> Player
+            Player
           </h2>
           <div className="obs-players">
             {overlay.players.map((player) => (
@@ -579,7 +579,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
 
         <section className="form-panel" aria-labelledby="obs-layout">
           <h2 id="obs-layout">
-            <span className="obs-step">2</span> Layout
+            Layout
           </h2>
           <p className="obs-help">Pick a shape, then drag its edges in the preview.</p>
           <div className="obs-shapes" role="radiogroup" aria-label="Shape">
@@ -668,7 +668,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
 
         <section className="form-panel" aria-labelledby="obs-shows">
           <h2 id="obs-shows">
-            <span className="obs-step">3</span> What it shows
+            What it shows
           </h2>
           <div className="obs-checks">
             {OVERLAY_PARTS.map((part) => (
@@ -713,6 +713,10 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           ref={wrap}
           style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
         >
+          {/* A touch screen's hint, on the picture it is about. */}
+          <p className="obs-stage-hint" aria-hidden="true">
+            Drag to move it, drag an edge to resize
+          </p>
           <div
             className="obs-canvas"
             style={{ width: place.cw, height: place.ch, transform: `scale(${scale})` }}
@@ -756,14 +760,13 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           <div className="obs-preview-head">
             <h2 id="obs-preview">
               Preview{" "}
-              <span className="obs-help obs-help-keys">
-                your stream, to scale. Drag the overlay to move it (hold Shift to snap to
-                edges), drag an edge or corner to resize, or click it and use the arrow
-                keys.
-              </span>
-              <span className="obs-help obs-help-touch">
-                your stream, to scale. Drag the overlay to move it, or drag an edge or
-                corner to resize.
+              <span className="obs-help">
+                your stream, to scale.
+                <span className="obs-help-keys">
+                  {" "}
+                  Drag the overlay to move it (hold Shift to snap to edges), drag an edge
+                  or corner to resize, or click it and use the arrow keys.
+                </span>
               </span>
             </h2>
             <div className="obs-pos" role="group" aria-label="Snap to">
@@ -865,7 +868,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
 
         <section className="form-panel" aria-labelledby="obs-add">
           <h2 id="obs-add">
-            <span className="obs-step">4</span> Add it to OBS
+            Add it to OBS
           </h2>
           <p className="obs-help">
             Your own private link. Paste it into OBS once: every change you make on this

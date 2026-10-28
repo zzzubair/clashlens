@@ -280,6 +280,30 @@
   outline-offset: -3px;
 }
 
+/* Wider screens keep the phone's arrow, at the right end of the row. The
+   front page's Top 10 hides its last column, so there it follows the trophies. */
+@media (min-width: 40.01rem) {
+  .leaderboard-table :is(.leaderboard-row > :last-child, thead th:last-child),
+  .home-leaderboard :is(.leaderboard-row > .trophy-cell, thead th:nth-last-child(2)) {
+    padding-right: 2.25rem;
+  }
+
+  .leaderboard-row > :last-child::after,
+  .home-leaderboard .leaderboard-row > .trophy-cell::after {
+    position: absolute;
+    top: 50%;
+    right: 1rem;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-top: -0.25rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+    pointer-events: none;
+  }
+}
+
 .leaderboard-table :is(.rank-cell, thead th:first-child) {
   width: 3.75rem;
   padding-right: 0.25rem;
@@ -487,16 +511,18 @@
     vertical-align: 0;
   }
 
+  /* The age's dot sits in the tag's right margin; when the age wraps to its
+     own line, the dot falls past the left edge and is cut off. */
   .player-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0 0.35rem;
     align-items: baseline;
     margin-top: 0.1rem;
+    overflow-x: clip;
   }
 
   .player-meta .player-tag {
-    margin: 0;
+    margin: 0 0.9rem 0 0;
   }
 
   .player-update-mobile {
@@ -504,6 +530,7 @@
     z-index: 1;
     display: block;
     min-width: 0;
+    margin-left: -0.9rem;
     color: var(--cl-muted);
     font-size: 0.75rem;
     font-weight: 600;
@@ -523,10 +550,11 @@
     display: none;
   }
 
-  /* The dot stays with the tag when the age wraps to its own line. */
-  .player-meta .player-tag::after {
-    margin-left: 0.35rem;
-    content: "·";
+  .player-update-mobile summary::before {
+    display: inline-block;
+    width: 0.9rem;
+    text-align: center;
+    content: "·" / "";
   }
 
   .player-update-mobile .player-update-age {

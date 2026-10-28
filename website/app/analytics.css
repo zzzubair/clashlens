@@ -57,18 +57,21 @@
   gap: 0.75rem;
   margin: 0 0 1.75rem;
 }
-.analytics-unit-types {
-  margin: 0;
-  /* The chips run to the screen edge on a phone. */
-  margin-inline: -1rem;
-  padding-inline: 1rem;
+/* The chips run to the screen edge on a phone and fade out at the right, so
+   a cut-off chip reads as "more this way". The shared tab row style can load
+   after this file, so this selector is the more specific one. */
+:root .analytics-controls .analytics-unit-types {
+  margin: 0 -1rem;
+  padding: 0 2.5rem 0 1rem;
   scroll-padding-inline: 1rem;
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
 }
 @media (min-width: 40rem) {
-  .analytics-unit-types {
+  :root .analytics-controls .analytics-unit-types {
     flex-wrap: wrap;
     margin-inline: 0;
     padding-inline: 0;
+    mask-image: none;
   }
 }
 .analytics-filter-row {

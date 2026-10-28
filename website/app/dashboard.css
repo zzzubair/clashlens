@@ -306,6 +306,19 @@
   gap: 1rem;
 }
 
+/* The Legend day and the clock beside it end level; the clock centres in the
+   extra room. */
+.dash-card:has(> .legend-day-card):has(+ [data-card="legend-clock"]),
+.dash-card:has(> .legend-day-card) + [data-card="legend-clock"],
+[data-card="legend-clock"]:has(+ .dash-card > .legend-day-card),
+[data-card="legend-clock"] + .dash-card:has(> .legend-day-card) {
+  align-self: stretch;
+}
+
+[data-card="legend-clock"] > .legend-clock {
+  flex-grow: 1;
+}
+
 .dash-card {
   position: relative;
   display: flex;
@@ -768,16 +781,24 @@
     display: none;
   }
 
-  /* The Customise bar sits at the bottom, in thumb reach, above the tabs: one
-     row of its three buttons, Done last and filled. Its title and layout
-     line stay for screen readers. */
+  /* The Customise bar takes the tab bar's place at the bottom, in thumb
+     reach, until Done: one row of its three buttons, Done last and filled.
+     Its title and layout line stay for screen readers. */
+  :root:has(.dash-editbar) {
+    --cl-bottom-tabs: 0px;
+  }
+
+  :root:has(.dash-editbar) .bottom-tabs {
+    display: none;
+  }
+
   .dash-editbar {
     position: fixed;
-    inset: auto 0 var(--cl-bottom-tabs, 0px);
+    inset: auto 0 0;
     flex-wrap: nowrap;
     gap: 0.5rem;
     margin: 0;
-    padding: 0.6rem 1rem;
+    padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
     border-radius: 16px 16px 0 0;
   }
 
