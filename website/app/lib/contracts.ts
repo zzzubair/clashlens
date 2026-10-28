@@ -443,6 +443,8 @@ export interface HistoricalSeasonSummary {
   publishedAt: string | null;
   source: "tracked_summary" | "official_league_history";
   officialHistory: OfficialSeasonHistory | null;
+  /** The Season's weeks the weekly league record decided, oldest first. */
+  seasonWeeks?: SeasonWeek[];
 }
 
 export interface OfficialSeasonHistory {

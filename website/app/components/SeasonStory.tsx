@@ -13,18 +13,24 @@ const KIND_WORDS = {
  * stretch in Legend I saying how it began and ended. Shown only when the
  * Season so far was not all Legend I from Day 1.
  */
-export function SeasonStory({ shape }: { shape: SeasonShape }) {
+export function SeasonStory({
+  shape,
+  title = "This Season in Legend I",
+}: {
+  shape: SeasonShape<unknown>;
+  title?: string;
+}) {
   if (!shape.partial) return null;
   const shown = new Set(shape.kinds);
   return (
     <section className="season-story" aria-labelledby="season-story-title">
-      <h2 id="season-story-title">This Season in Legend I</h2>
+      <h2 id="season-story-title">{title}</h2>
       <ul className="season-story-runs">
         {runLines(shape).map((line) => (
           <li key={line}>{line}</li>
         ))}
       </ul>
-      <ol className="season-strip" aria-label="Each day of this Season">
+      <ol className="season-strip" aria-label="Each day of the Season">
         {shape.kinds.map((kind, index) => (
           <li
             key={index}

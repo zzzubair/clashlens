@@ -802,6 +802,20 @@ def get_player_season_summary(
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)
             )
+            # Which weeks were Legend I, so a Season the player left or
+            # joined partway counts only its Legend I days as missing.
+            result["season_weeks"] = [
+                {
+                    "week_start": week["week_start"].isoformat(),
+                    "league": week["league"],
+                    "entry": week["entry"],
+                }
+                for week in _season_weeks(
+                    connection,
+                    int(record["player_id"]),
+                    datetime.fromtimestamp(int(official_season_id), UTC),
+                )
+            ]
             return result
         if history is None:
             return None

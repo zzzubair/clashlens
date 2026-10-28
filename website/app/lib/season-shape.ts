@@ -1,5 +1,11 @@
 import { seasonStartAt } from "../components/SeasonReread";
-import type { PlayerPage, RankedDaySummary, SeasonWeek } from "./contracts";
+import type {
+  HistoricalSeasonDayEntry,
+  HistoricalSeasonSummary,
+  PlayerPage,
+  RankedDaySummary,
+  SeasonWeek,
+} from "./contracts";
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -26,7 +32,7 @@ export interface SeasonRun {
   dropped: boolean;
 }
 
-export interface SeasonShape {
+export interface SeasonShape<Day = RankedDaySummary> {
   seasonStart: number;
   /** Today's Season day number. */
   today: number;
@@ -40,7 +46,7 @@ export interface SeasonShape {
   /** Finished Legend I days from each run's sign-up on, and how many are saved. */
   legendDays: { expected: number; saved: number };
   /** The newest finished Legend I day, the one a dropped player left on. */
-  lastLegendDay: RankedDaySummary | null;
+  lastLegendDay: Day | null;
 }
 
 const startOf = (day: RankedDaySummary) => Date.parse(day.period.split(" – ")[0]);
@@ -77,11 +83,26 @@ export function seasonShape(player: PlayerPage, now: number): SeasonShape {
     const number = Math.floor((startOf(day) - seasonStart) / DAY_MS) + 1;
     if (number >= 1 && number <= 28 && !saved.has(number)) saved.set(number, day);
   }
+  return shapeOf(seasonStart, today, player.seasonWeeks ?? [], saved, unplayed);
+}
+
+/**
+ * A Season's shape from its weeks and saved days. Days before `today` are
+ * finished; an ended Season passes 29, so all 28 are.
+ */
+export function shapeOf<Day>(
+  seasonStart: number,
+  today: number,
+  seasonWeeks: SeasonWeek[],
+  saved: Map<number, Day>,
+  unplayed: (day: Day) => boolean,
+): SeasonShape<Day> {
   const weeks = new Map<number, SeasonWeek>(
-    (player.seasonWeeks ?? []).map((week) => [Date.parse(week.start), week]),
+    seasonWeeks.map((week) => [Date.parse(week.start), week]),
   );
   const weekOf = (number: number) =>
     weeks.get(seasonStart + Math.floor((number - 1) / 7) * WEEK_MS);
+  const last = Math.min(today, 28);
   const kinds: SeasonDayKind[] = [];
   for (let number = 1; number <= 28; number++) {
     const league = weekOf(number)?.league;
@@ -96,10 +117,10 @@ export function seasonShape(player: PlayerPage, now: number): SeasonShape {
     );
   }
   const runs: SeasonRun[] = [];
-  for (let number = 1; number <= today; number++) {
+  for (let number = 1; number <= last; number++) {
     if (kinds[number - 1] !== "legend") continue;
     const first = number;
-    while (number < today && kinds[number] === "legend") number++;
+    while (number < last && kinds[number] === "legend") number++;
     // Until the player's first battle, each saved day is 5,000 to 5,000.
     let signedUp: number | null = null;
     for (let day = first; day <= number; day++) {
@@ -122,8 +143,8 @@ export function seasonShape(player: PlayerPage, now: number): SeasonShape {
   }
   let expected = 0;
   let savedCount = 0;
-  let lastLegendDay: RankedDaySummary | null = null;
-  for (let number = 1; number < today; number++) {
+  let lastLegendDay: Day | null = null;
+  for (let number = 1; number < today && number <= 28; number++) {
     if (kinds[number - 1] !== "legend") continue;
     expected++;
     const kept = saved.get(number);
@@ -141,24 +162,26 @@ export function seasonShape(player: PlayerPage, now: number): SeasonShape {
     kinds,
     runs,
     partial: kinds.some((kind) => kind === "outside" || kind === "waiting"),
-    outsideNow: kinds[today - 1] === "outside",
+    outsideNow: today <= 28 && kinds[today - 1] === "outside",
     legendDays: { expected, saved: savedCount },
     lastLegendDay,
   };
 }
 
 /** A Season day's date, such as "Mon 12 Oct". */
-export function seasonDayDate(shape: SeasonShape, number: number) {
-  return new Date(shape.seasonStart + (number - 1) * DAY_MS).toLocaleDateString("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  });
+export function seasonDayDate(shape: SeasonShape<unknown>, number: number) {
+  return new Date(shape.seasonStart + (number - 1) * DAY_MS)
+    .toLocaleDateString("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    })
+    .replace("Sept", "Sep");
 }
 
 /** One plain line for each stretch of Legend I this Season. */
-export function runLines(shape: SeasonShape): string[] {
+export function runLines(shape: SeasonShape<unknown>): string[] {
   return shape.runs.map((run) => {
     const ongoing = !run.dropped && run.last === shape.today;
     const days =
@@ -194,7 +217,7 @@ export interface LogGap {
 }
 
 /** The log's gaps up to yesterday, and today when it is one. */
-export function logGaps(shape: SeasonShape): LogGap[] {
+export function logGaps(shape: SeasonShape<unknown>): LogGap[] {
   const gaps: LogGap[] = [];
   for (let number = 1; number <= shape.today; number++) {
     const kind = shape.kinds[number - 1];
@@ -214,7 +237,7 @@ export function logGaps(shape: SeasonShape): LogGap[] {
   return gaps;
 }
 
-export function gapLabel(shape: SeasonShape, gap: LogGap) {
+export function gapLabel(shape: SeasonShape<unknown>, gap: LogGap) {
   const from = seasonDayDate(shape, gap.first);
   const to =
     gap.kind === "outside" && gap.last === shape.today
@@ -227,8 +250,13 @@ export function gapLabel(shape: SeasonShape, gap: LogGap) {
 }
 
 /** Whether a day of the log is one a gap row already stands for. */
-export function inGap(gaps: LogGap[], shape: SeasonShape, day: RankedDaySummary) {
-  const number = Math.floor((startOf(day) - shape.seasonStart) / DAY_MS) + 1;
+export function inGap(
+  gaps: LogGap[],
+  shape: SeasonShape<unknown>,
+  day: { period: string },
+) {
+  const number =
+    Math.floor((Date.parse(day.period.split(" – ")[0]) - shape.seasonStart) / DAY_MS) + 1;
   return gaps.some((gap) => gap.first <= number && number <= gap.last);
 }
 
@@ -237,5 +265,24 @@ export function leftAfter(player: PlayerPage, day: RankedDaySummary) {
   const end = Date.parse(day.period.split(" – ")[1]);
   return (player.seasonWeeks ?? []).some(
     (week) => Date.parse(week.start) === end && week.league === "below_legend_i",
+  );
+}
+
+/** An ended Season's shape from its saved summary. */
+export function pastSeasonShape(summary: HistoricalSeasonSummary) {
+  const saved = new Map<number, HistoricalSeasonDayEntry>();
+  for (const entry of summary.dailyEntries)
+    if (entry.dayNumber !== null && !saved.has(entry.dayNumber))
+      saved.set(entry.dayNumber, entry);
+  return shapeOf(
+    Number(summary.seasonId) * 1000,
+    29,
+    summary.seasonWeeks ?? [],
+    saved,
+    (entry) =>
+      entry.attacks === 0 &&
+      entry.defenses === 0 &&
+      entry.netChange === 0 &&
+      entry.startTrophies === SEASON_START_TROPHIES,
   );
 }

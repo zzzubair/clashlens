@@ -251,6 +251,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     publishedAt: payload.published_at as string | null,
     source: payload.source,
     officialHistory,
+    seasonWeeks: mapSeasonWeeks(payload.season_weeks),
   };
 }
 

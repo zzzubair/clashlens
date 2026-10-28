@@ -38,13 +38,14 @@ from test_reset_scenarios_postgres import (
 
 from clashlens import board_deadline, league_days, reset_baselines
 from clashlens.api_db import ApiDatabase
-from clashlens.api_players import get_player_page
+from clashlens.api_players import get_player_page, get_player_season_summary
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.league_week import Below, Claim, League, ProofKind
+from clashlens.season_summaries import materialize_player_season
 
 
 @dataclass
@@ -264,12 +265,19 @@ def test_a_mid_season_monday_moves_players_between_leagues(
         story.run_worker()
         rechecked = {tag: _public_days(connection_info, tag) for tag in (STALE_LATE, STEADY_1)}
         # Each player's page on Tuesday evening, with the weeks the record
-        # decided for the Season.
+        # decided for the Season, and DROPPED's Season summary as the
+        # operator's summary command would save it once the Season ends.
+        season_id = str(int(SEASON.timestamp()))
+        with psycopg.connect(connection_info) as connection:
+            dropped_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (DROPPED,)).fetchone()[0]
+            materialize_player_season(connection, dropped_id, season_id)
         api = ApiDatabase(connection_info)
         try:
             pages = {tag: get_player_page(api, tag, now=tuesday + timedelta(hours=14),
                                           freshness_seconds=900)
                      for tag in (DROPPED, PROMOTED, STEADY_1)}
+            summary = get_player_season_summary(api, DROPPED, season_id)
         finally:
             api.close()
 
@@ -365,6 +373,14 @@ def test_a_mid_season_monday_moves_players_between_leagues(
             season["anchor_source"]) == (
         str(int(SEASON.timestamp())), SEASON.isoformat(), 9, "weekly_league_record")
     assert sunday.isoformat() in pages[DROPPED]["screen_ready"]["season_day_starts"]
+    # Its past-Season view reads the same weeks, so the Legend II week's
+    # days are not counted missing, and its Sunday keeps its own end.
+    assert summary is not None
+    assert [(week["week_start"], week["league"]) for week in summary["season_weeks"]] == [
+        (first, "legend_i"), (second, "below_legend_i")]
+    assert [(entry["season_day_number"], entry["end_trophies"])
+            for entry in summary["daily_entries"]
+            if entry["ranked_day_start"] == sunday.isoformat()] == [(7, 4940)]
 
 
 KEPT = "#VPP"

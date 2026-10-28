@@ -8,6 +8,7 @@ import type {
 } from "../lib/contracts";
 import { legendDayKey, presentDay } from "../lib/player-lookup-text";
 import { seasonDates } from "../lib/season-end";
+import { gapLabel, inGap, logGaps, pastSeasonShape } from "../lib/season-shape";
 import { DayMark, DayStatusNote, provisional } from "./DayStatus";
 import { ErrorNotice } from "./ErrorNotice";
 import {
@@ -21,7 +22,10 @@ import {
   validDay,
   valueTone,
 } from "./LegendLog";
+import { SeasonStory } from "./SeasonStory";
 import { SeasonSummary, per, type SummarySide } from "./SeasonSummary";
+
+type PastShape = ReturnType<typeof pastSeasonShape>;
 
 /** A chosen past Season: its finish, then its saved days in the log's short rows. */
 export function SelectedSeason({
@@ -36,10 +40,12 @@ export function SelectedSeason({
   menu: React.ReactNode;
 }) {
   if (summary !== null) {
+    const shape = summary.source === "tracked_summary" ? pastSeasonShape(summary) : null;
     return (
       <>
-        <SeasonFinish summary={summary} menu={menu} />
-        {summary.source === "tracked_summary" ? <SeasonDays summary={summary} /> : null}
+        <SeasonFinish summary={summary} shape={shape} menu={menu} />
+        {shape ? <SeasonStory shape={shape} title="The Season in Legend I" /> : null}
+        {shape ? <SeasonDays summary={summary} shape={shape} /> : null}
       </>
     );
   }
@@ -57,12 +63,21 @@ export function SelectedSeason({
 
 function SeasonFinish({
   summary,
+  shape,
   menu,
 }: {
   summary: HistoricalSeasonSummary;
+  shape: PastShape | null;
   menu: React.ReactNode;
 }) {
   const tracked = summary.source === "tracked_summary";
+  // A Season the player left or joined partway counts its Legend I days
+  // only; one they left ends on the last Legend I total, with no final
+  // placement (owner decisions, 28 October 2026).
+  const partial = shape?.partial ? shape : null;
+  const lastRun = partial?.runs.at(-1);
+  const left = lastRun?.dropped ? lastRun : null;
+  const { expected, saved } = partial?.legendDays ?? { expected: 0, saved: 0 };
   const side = (
     count: number | null,
     stars: Record<string, number | null>,
@@ -85,16 +100,34 @@ function SeasonFinish({
     <SeasonSummary
       title={seasonDates(summary.seasonId)}
       controls={menu}
-      {...(tracked &&
-        summary.coverageState !== "complete" && {
-          meta: `${summary.daysObserved} of 28 days recorded`,
-        })}
-      rank={["Final rank", finalRank(summary)]}
-      finalRank
-      trophies={[
-        "Final trophies",
-        formatCount(summary.officialHistory?.eodTrophies ?? summary.endTrophies),
-      ]}
+      {...(partial
+        ? {
+            meta:
+              saved < expected
+                ? `${saved} of ${expected} Legend I days recorded`
+                : `${expected} Legend I ${expected === 1 ? "day" : "days"} · all recorded`,
+          }
+        : tracked &&
+          summary.coverageState !== "complete" && {
+            meta: `${summary.daysObserved} of 28 days recorded`,
+          })}
+      rank={
+        left
+          ? ["Final rank", `Left Legend I after Day ${left.last}`]
+          : ["Final rank", finalRank(summary)]
+      }
+      finalRank={!left}
+      trophies={
+        left
+          ? [
+              "Last Legend I trophies",
+              formatCount(partial?.lastLegendDay?.endTrophies ?? null),
+            ]
+          : [
+              "Final trophies",
+              formatCount(summary.officialHistory?.eodTrophies ?? summary.endTrophies),
+            ]
+      }
       {...(tracked && {
         attack: side(
           summary.attackCount,
@@ -123,8 +156,22 @@ function finalRank(summary: HistoricalSeasonSummary): string {
 
 // Each saved day as one short row, like the Daily Legend log; opening it shows
 // its evidence and the rest of its numbers. A day link opens its day.
-function SeasonDays({ summary }: { summary: HistoricalSeasonSummary }) {
+function SeasonDays({
+  summary,
+  shape,
+}: {
+  summary: HistoricalSeasonSummary;
+  shape: PastShape;
+}) {
   const selectedDay = validDay(useSearchParams()[0].get("day"));
+  // Days outside Legend I, or before sign-up, as one row each stretch.
+  const gaps = shape.partial ? logGaps(shape) : [];
+  const rows = [
+    ...summary.dailyEntries
+      .filter((day) => !inGap(gaps, shape, day))
+      .map((day) => ({ start: Date.parse(day.period.split(" – ")[0]), day })),
+    ...gaps.map((gap) => ({ start: gap.lastStart, gap })),
+  ].sort((a, b) => a.start - b.start);
   const moves = rankMoves(summary.dailyEntries);
   const { hash } = useLocation();
   // A day link opens at its row unless the link names a place on the page.
@@ -141,14 +188,22 @@ function SeasonDays({ summary }: { summary: HistoricalSeasonSummary }) {
       ) : null}
       <div className="log-card log-days">
         <LogHead />
-        {summary.dailyEntries.map((day) => (
-          <SeasonDay
-            key={`${day.period}-${day.dayNumber ?? "unknown"}`}
-            day={day}
-            selected={legendDayKey(day.period) === selectedDay}
-            rankMove={day.dayNumber === null ? undefined : moves.get(day.dayNumber)}
-          />
-        ))}
+        {rows.map((row) =>
+          "gap" in row && row.gap ? (
+            <p key={`gap-${row.start}`} className={`log-gap log-gap-${row.gap.kind}`}>
+              {gapLabel(shape, row.gap)}
+            </p>
+          ) : "day" in row && row.day ? (
+            <SeasonDay
+              key={`${row.day.period}-${row.day.dayNumber ?? "unknown"}`}
+              day={row.day}
+              selected={legendDayKey(row.day.period) === selectedDay}
+              rankMove={
+                row.day.dayNumber === null ? undefined : moves.get(row.day.dayNumber)
+              }
+            />
+          ) : null,
+        )}
       </div>
     </section>
   );

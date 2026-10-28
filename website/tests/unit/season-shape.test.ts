@@ -15,7 +15,10 @@ const NOW = SEASON + 23 * DAY + 7 * 3_600_000;
 type Played = { attacks: number; defenses: number; start: number; change: number };
 const UNPLAYED: Played = { attacks: 0, defenses: 0, start: 5000, change: 0 };
 
-function day(number: number, { attacks, defenses, start, change }: Played): RankedDaySummary {
+function day(
+  number: number,
+  { attacks, defenses, start, change }: Played,
+): RankedDaySummary {
   const begins = SEASON + (number - 1) * DAY;
   return {
     dayNumber: number,
