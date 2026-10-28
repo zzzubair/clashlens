@@ -33,7 +33,7 @@ from datetime import UTC, datetime, time
 from time import monotonic
 from typing import Any
 
-from . import army_analytics
+from . import army_analytics, notebook_meta
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION, unit_label
 from .domain import DomainRuleError, allocate_trophies
@@ -432,8 +432,10 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
     the last ``OFFENSE_CARD_DAYS``, whose counts are missing or older than the
     day, newest first. Once no attack count is due, it counts one day's
     defenses the same way, for the current Season or the last
-    ``DEFENSE_CARD_DAYS``, at most once every ``DEFENSE_PACE_SECONDS``. A
-    failure is reported and tried again after ``RETRY_SECONDS``.
+    ``DEFENSE_CARD_DAYS``, at most once every ``DEFENSE_PACE_SECONDS``. With
+    neither due, it saves one day of the Notebook's meta table
+    (notebook_meta.py). A failure is reported and tried again after
+    ``RETRY_SECONDS``.
     """
     global _retry_at, _defense_at
     current = (now or datetime.now(UTC)).astimezone(UTC).time()
@@ -452,6 +454,9 @@ def refresh_army_types(database: Any, now: datetime | None = None) -> None:
                 event = _count_day(connection, "defense")
                 if event is not None:
                     _defense_at = monotonic() + DEFENSE_PACE_SECONDS
+            if event is None:
+                # Then the Notebook's meta table, from the counted defenses.
+                event = notebook_meta.refresh_day(connection, RULES_VERSION)
     except Exception as error:  # noqa: BLE001 - retried after RETRY_SECONDS
         _retry_at = monotonic() + RETRY_SECONDS
         print(json.dumps({"event": "army_types", "status": "failed",

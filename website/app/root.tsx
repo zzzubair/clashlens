@@ -297,15 +297,36 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
           {data.loggedIn ? "Dashboard" : "Home"}
         </NavLink>
       )}
-      {data?.notebookEnabled && data.loggedIn && (
-        <NavLink to="/notebook">Notebook</NavLink>
-      )}
+      {data?.notebookEnabled && data.loggedIn && <NotebookTab />}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
       <NavLink to="/analytics/armies">Analytics</NavLink>
       {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
       <NavLink to="/account/watchlists">Watchlists</NavLink>
       <NavLink to="/blog">Blog</NavLink>
     </>
+  );
+}
+
+// The Notebook opens on Tomorrow, and its tab stays chosen on every
+// Notebook page, as a NavLink's does on its own.
+function NotebookTab({
+  onClick,
+}: {
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const inNotebook = (path: string | undefined) =>
+    path === "/notebook" || Boolean(path?.startsWith("/notebook/"));
+  const here = useLocation().pathname;
+  const next = useNavigation().location?.pathname;
+  return (
+    <Link
+      to="/notebook/tomorrow"
+      onClick={onClick}
+      aria-current={inNotebook(here) ? "page" : undefined}
+      className={inNotebook(next) && !inNotebook(here) ? "pending" : undefined}
+    >
+      Notebook
+    </Link>
   );
 }
 
@@ -391,9 +412,7 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
           {data?.notebookEnabled && data.loggedIn && (
-            <NavLink to="/notebook" onClick={ignoreRepeatTap}>
-              Notebook
-            </NavLink>
+            <NotebookTab onClick={ignoreRepeatTap} />
           )}
           <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
             Watchlists
