@@ -267,6 +267,11 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* Across days with no saved EOD. */
+.player-page .trophy-line-gap {
+  stroke-dasharray: 2 5;
+  opacity: 0.6;
+}
 .player-page .trophy-line-now {
   position: absolute;
   right: -0.3rem;

@@ -217,6 +217,19 @@
     align-self: center;
   }
 
+  /* A wide card has room for labels and ranks a step up. */
+  .legend-day-card :is(.dash-label, .dash-estimate) {
+    font-size: 0.85rem;
+  }
+
+  .legend-day-ranks b {
+    font-size: 1.45rem;
+  }
+
+  .legend-day-card :is(.legend-day-range b, .legend-day-projected strong) {
+    font-size: 1.3rem;
+  }
+
   .legend-day-slots {
     grid-area: slots;
     grid-template-rows: 1fr 1fr;
@@ -483,14 +496,14 @@
 .clock-countdown {
   fill: var(--cl-ink);
   font-family: var(--cl-font-heading);
-  font-size: 20px;
+  font-size: 22px;
   text-anchor: middle;
   pointer-events: none;
 }
 
 .clock-caption {
   fill: var(--cl-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   text-anchor: middle;
   pointer-events: none;
@@ -957,18 +970,16 @@
   outline-offset: -3px;
 }
 
-/* Touch screens have no hover, so each name keeps a quiet ember underline
-   that says the row opens that player. */
-@media (hover: none), (pointer: coarse) {
-  /* The name clips what overflows it, so it gets room below for the line
-     without growing the row. */
-  .rival-table .rival-link .dash-name {
-    margin-bottom: -0.3em;
-    padding-bottom: 0.3em;
-    text-decoration: underline 1px color-mix(in srgb, currentColor 45%, transparent);
-    text-decoration-skip-ink: none;
-    text-underline-offset: 0.2em;
-  }
+/* A small arrow at the row's end says it opens that player, as on Rankings. */
+.rival-table tbody td:last-child::after {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin: 0 0.1rem 0.12rem 0.6rem;
+  border-top: 2px solid var(--cl-muted);
+  border-right: 2px solid var(--cl-muted);
+  transform: rotate(45deg);
+  content: "";
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1506,6 +1517,22 @@
   .rival-table .rival-moved {
     display: block;
     margin-left: 0;
+  }
+
+  /* On two lines the arrow follows the trophies, as on Rankings' phone rows. */
+  .rival-table tbody td:nth-child(3)::after {
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin: 0 0.1rem 0.12rem 0.45rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+  }
+
+  .rival-table tbody td:last-child::after {
+    content: none;
   }
 }
 

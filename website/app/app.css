@@ -647,7 +647,32 @@ body {
 }
 
 .updates-notice p {
-  margin: 0;
+  margin: 0.35rem 0 0;
+}
+
+.updates-notice summary {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  list-style: none;
+  cursor: pointer;
+}
+
+.updates-notice summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A small arrow says the line opens, and turns when it is open. */
+.updates-notice summary::after {
+  margin-left: auto;
+  font-size: 1.1em;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  content: "›" / "";
+}
+
+.updates-notice details[open] summary::after {
+  transform: rotate(90deg);
 }
 
 /* The one line a save shows at the top of the page (components/SavedLine). */
