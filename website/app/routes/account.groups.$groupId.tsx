@@ -11,6 +11,7 @@ import {
   type GroupComparison,
   type MemberStatus,
 } from "../lib/group-comparison";
+import { leftLine } from "../lib/left-legend";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
@@ -299,7 +300,11 @@ function PlayerRow({
           ) : null}
         </span>
         {player.status !== "tracking" ? (
-          <span className="compare-status">{STATUS_LABELS[player.status]}</span>
+          <span className="compare-status">
+            {player.leftLegendI
+              ? leftLine(player.leftLegendI)
+              : STATUS_LABELS[player.status]}
+          </span>
         ) : null}
       </th>
       <td data-label="Trophies now">

@@ -7,6 +7,7 @@
  */
 
 import type { PlayerLookup } from "./contracts";
+import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
 import { normalizePlayerTag } from "./player-tag";
 
 export interface ClashLensAccount {
@@ -89,6 +90,8 @@ export interface LinkedPlayerCard extends VerifiedPlayer {
   league: string | null;
   /** Today's battles so far; `net` only once every one is recorded. */
   today: { net: number | null; attacks: number | null; defenses: number | null } | null;
+  /** This Season's Legend I part, for a player who left it. */
+  leftLegendI?: LeftLegendI | null;
 }
 
 export interface PublicUser {
@@ -440,6 +443,7 @@ function asLinkedPlayerCard(
             attacks: today.attacks as number | null,
             defenses: today.defenses as number | null,
           },
+    leftLegendI: parseLeftLegendI(value.left_legend_i),
   };
 }
 

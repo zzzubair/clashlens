@@ -7,6 +7,7 @@
  */
 
 import type { LinkedPlayerCard } from "./account-contracts";
+import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
 import { validPlayerTag } from "./player-tag";
 import { isCanonicalUuid } from "./validation";
 
@@ -45,6 +46,8 @@ export interface CrewPlayer {
   name: string | null;
   trophies: number | null;
   status: CrewPlayerStatus;
+  /** This Season's Legend I part, for an account that left it. */
+  leftLegendI?: LeftLegendI | null;
 }
 
 export interface CrewMember {
@@ -653,6 +656,7 @@ function mapPlayers(value: unknown): CrewPlayer[] | null {
       name: player.name,
       trophies: player.trophies,
       status: player.status as CrewPlayerStatus,
+      leftLegendI: parseLeftLegendI(player.left_legend_i),
     });
   }
   return players;

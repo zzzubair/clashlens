@@ -566,6 +566,43 @@ def army_units(codes: Iterable[str | None]) -> dict[str, dict[str, Any]]:
     }
 
 
+def left_legend_i(
+    connection: Any, player_ids: list[int], now: datetime
+) -> dict[int, dict[str, Any]]:
+    """For each player who left Legend I this Season, at the Monday Reset
+    after their newest Legend I day the weekly league record put them below
+    it: that Reset, their last Legend I day's number and the total it ended
+    on, which no weekly raise follows."""
+    if not player_ids:
+        return {}
+    season = ranked_day_for(now.astimezone(UTC))
+    return {
+        int(player_id): {
+            "left_at": left_at.astimezone(UTC).isoformat(),
+            "last_day_number": None if day_number is None else int(day_number),
+            "trophies": None if trophies is None else int(trophies),
+        }
+        for player_id, left_at, day_number, trophies in connection.execute(
+            """
+            SELECT DISTINCT ON (day.player_id)
+                   day.player_id, day.ranked_day_end, day.season_day_number,
+                   version.final_trophies_before_reset
+            FROM api_player_daily_logs AS day
+            JOIN player_league_weeks AS week
+                ON week.player_id = day.player_id
+               AND week.week_start = day.ranked_day_end
+               AND week.league = 'below_legend_i'
+            LEFT JOIN ranked_day_versions AS version
+                ON version.id = day.ranked_day_version_id
+            WHERE day.player_id = ANY(%s)
+              AND day.ranked_day_start >= %s AND day.ranked_day_end <= %s
+            ORDER BY day.player_id, day.ranked_day_start DESC, day.version DESC
+            """,
+            (player_ids, season.season_start, now),
+        ).fetchall()
+    }
+
+
 def player_cards(
     connection: Any,
     players: list[tuple[int, str, str | None, str | None, str | None]],
@@ -618,6 +655,7 @@ def player_cards(
             (ids, ranked_day_for(now).start),
         ).fetchall()
     }
+    left = left_legend_i(connection, ids, now)
     cards = []
     for player_id, tag, name, clan, league in players:
         lookup = api_player_lookup._lookup(connection, tag, now)
@@ -640,6 +678,8 @@ def player_cards(
         if lookup["state"] in ("not_in_legend", "uncertain"):
             # Off the board, the newest saved profile's trophies, as on its page.
             card["trophies"] = lookup["profile"]["trophies"]
+            # And this Season's Legend I part, when the player left it.
+            card["left_legend_i"] = left.get(player_id)
         elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(

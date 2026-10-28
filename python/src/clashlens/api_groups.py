@@ -23,6 +23,7 @@ from .api_db import (
     _shown_total,
     _text,
 )
+from .api_players import left_legend_i
 from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
 from .season_retirement import retired_day_ranges
 
@@ -134,6 +135,7 @@ def get_group_comparison(
             for start in day_starts
             if any(low <= start < high for low, high in ranges)
         }
+        left = left_legend_i(connection, ids, now)
         results = []
         for player_id, player in players.items():
             profile = profiles.get(player_id)
@@ -149,6 +151,8 @@ def get_group_comparison(
                     "you": player_id in own_ids,
                     "in_group": player["in_group"],
                     "status": status,
+                    # This Season's Legend I part, for a player who left it.
+                    "left_legend_i": left.get(player_id) if status == "not_in_legend" else None,
                     **_current(profile, now, freshness_seconds),
                     **_window(player_id, logs, day_starts, today_start, retired),
                 }

@@ -38,7 +38,11 @@ from test_reset_scenarios_postgres import (
 
 from clashlens import board_deadline, league_days, reset_baselines
 from clashlens.api_db import ApiDatabase
-from clashlens.api_players import get_player_page, get_player_season_summary
+from clashlens.api_players import (
+    get_player_page,
+    get_player_season_summary,
+    left_legend_i,
+)
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -272,6 +276,12 @@ def test_a_mid_season_monday_moves_players_between_leagues(
             dropped_id = connection.execute(
                 "SELECT id FROM players WHERE normalized_tag = %s", (DROPPED,)).fetchone()[0]
             materialize_player_season(connection, dropped_id, season_id)
+            # What Crews, Watchlists and the dashboard say about each one.
+            ids = dict(connection.execute(
+                "SELECT normalized_tag, id FROM players WHERE normalized_tag = ANY(%s)",
+                ([DROPPED, PROMOTED, STEADY_1],)).fetchall())
+            left = left_legend_i(connection, list(ids.values()),
+                                 tuesday + timedelta(hours=14))
         api = ApiDatabase(connection_info)
         try:
             pages = {tag: get_player_page(api, tag, now=tuesday + timedelta(hours=14),
@@ -381,6 +391,9 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     assert [(entry["season_day_number"], entry["end_trophies"])
             for entry in summary["daily_entries"]
             if entry["ranked_day_start"] == sunday.isoformat()] == [(7, 4940)]
+    # Only DROPPED left Legend I: at the Monday Reset, on its Sunday's total.
+    assert left == {ids[DROPPED]: {"left_at": monday.isoformat(), "last_day_number": 7,
+                                   "trophies": 4940}}
 
 
 KEPT = "#VPP"

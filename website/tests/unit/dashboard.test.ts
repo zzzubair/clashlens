@@ -1226,6 +1226,7 @@ describe("dashboard page", () => {
       settings: { ...defaultSettings(), layout: "default" },
       cards: {},
       dayEndsMs: Date.UTC(2099, 0, 1, 5),
+      leftPlayer: null,
       idempotencyKey: IDEMPOTENCY_KEY,
       ...loaderData,
     });
@@ -1360,6 +1361,25 @@ describe("dashboard page", () => {
       "Unfortunately, the dashboard is Legend I only. Support for lower leagues is coming in the future!",
     );
     expect(html).not.toContain("Customise dashboard");
+    expect(html).not.toContain("data-card=");
+  });
+
+  it("says when an account left Legend I and the total it left on", async () => {
+    const leftLegendI = {
+      leftAt: "2026-10-12T05:00:00Z",
+      lastDayNumber: 7,
+      trophies: 4684,
+    };
+    const html = await renderDashboard({
+      players: [linked(MAIN), linked(ALT, { state: "not_in_legend", leftLegendI })],
+      selectedTag: ALT,
+    });
+    expect(text(html)).toContain("Left Legend I Mon 12 Oct");
+    expect(text(html)).toContain(
+      "Left Legend I at the Mon 12 Oct Reset · last 4,684 trophies",
+    );
+    expect(text(html)).toContain("Open the player page");
+    expect(html).not.toContain("Support for lower leagues");
     expect(html).not.toContain("data-card=");
   });
 
