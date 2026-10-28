@@ -645,9 +645,9 @@ test("one army looks the same in every battle at iPhone width", async ({ browser
           .forEach((event, index) => (event.armyShareCode = codes[index % 2]));
     });
     const log = page.getByRole("region", { name: "Daily Legend log" });
-    const day = log.locator("details.legend-day").first();
-    await expect(day.locator(".legend-day-live")).toBeVisible();
-    await day.locator("summary").tap();
+    const day = log.locator("details.log-day").first();
+    await expect(day.locator(".log-live")).toBeVisible();
+    await day.locator("summary.log-row").tap();
     const attacks = day.getByRole("region", { name: "Attacks" });
     const show = attacks.getByRole("button", { name: "Show army" });
     await expect(show).toHaveCount(3);
