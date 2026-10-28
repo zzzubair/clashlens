@@ -840,6 +840,10 @@ def create_app(
         result = api_accounts.get_account(production_database, context.account.internal_id)
         if result is None:
             raise ApiError(404, "account_not_found")
+        if notebook_enabled:  # Every signed-in page reads the account: a visit.
+            from .api_notebook import note_visit
+
+            note_visit(production_database, context.account.internal_id, now=current_time())
         return JSONResponse(status_code=200, content=result)
 
     # The website asks before trusting a login cookie and records logouts, so

@@ -36,7 +36,15 @@ today or from tomorrow, Retired once the Clasher retires it or 30 days after
 the later of its last counted day and when it was added or brought back,
 and otherwise just on this Season.
 
-Every write but Undo returns what undoes it.
+A forgotten base (migration 0134): a run counts for at most CHECK_DAYS
+Legend days after it was last confirmed, by its Clasher opening Clash Lens,
+picking a base for that game account or answering "Still on it?". Later
+days wait, counting for nothing and keeping no base Running, so a forgotten
+base retires like any other. Opening Clash Lens after such a gap confirms
+nothing until the Clasher answers: Yes counts the waiting days, No is a
+pick of no base from the day they changed.
+
+Every write but Undo and that Yes returns what undoes it.
 """
 
 from __future__ import annotations
@@ -55,7 +63,8 @@ from pydantic import Field
 
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
-from .api_db import ApiDatabase, _text
+from .api_dashboard import _DAY_LOGS_SQL
+from .api_db import ApiDatabase, _screen_events, _text
 from .domain import RANKED_DAY_DURATION, SEASON_DURATION, RankedDay, ranked_day_for
 from .league_week import WEEK, week_start
 
@@ -64,6 +73,8 @@ DAY = RANKED_DAY_DURATION
 LOOKBACK = 4 * SEASON_DURATION
 # A base not run, added or brought back for this long retires on its own.
 RETIRE_AFTER = timedelta(days=30)
+# A run counts for this many Legend days after its last confirmation.
+CHECK_DAYS = 7
 # Crockford's base-32 alphabet: no I, L, O or U, so no 1/I/L or 0/O mix-ups.
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _CODE = re.compile(r"B-[0-9A-HJKMNP-TV-Z]{6}")
@@ -210,6 +221,14 @@ class _History:
         self.picks: dict[int, dict[datetime, int | None]] = {
             player_id: {} for player_id in player_ids
         }
+        # The day each run was last confirmed; none for a game account whose
+        # picks were all made before the forgotten-base check.
+        self.seen: dict[int, datetime] = {
+            int(player_id): seen_day for player_id, seen_day in connection.execute(
+                "SELECT player_id, seen_day FROM notebook_checks WHERE player_id = ANY(%s)",
+                (player_ids,),
+            ).fetchall()
+        }
         for player_id, start, base_id in connection.execute(
             """
             SELECT player_id, ranked_day_start, base_id FROM notebook_day_picks
@@ -275,6 +294,12 @@ class _History:
                 (player_ids, counted_from, last),
             ).fetchall()
         }
+
+    def confirmed(self, player_id: int, day: datetime) -> bool:
+        """Whether ``day`` of a run on the game account still counts: not one
+        waiting for its Clasher to say they're still on that base."""
+        seen = self.seen.get(player_id)
+        return seen is None or day <= seen + CHECK_DAYS * DAY
 
     def day_counts(self, player_id: int, day: datetime) -> list[int] | None:
         """A counted day's counts on one game account, None for no data."""
@@ -415,6 +440,7 @@ class _Notebook:
         return {
             base for player_id in self.runner_ids
             if (base := base_on(history.runs[player_id], day)) is not None
+            and history.confirmed(player_id, day)
         }
 
     def statuses(
@@ -428,7 +454,8 @@ class _Notebook:
             for start, end, base in found:
                 day = start
                 while day <= min(end, self.today - DAY):
-                    if day in history.counted and history.day_counts(player_id, day):
+                    if (day in history.counted and history.confirmed(player_id, day)
+                            and history.day_counts(player_id, day)):
                         last_counted[base] = max(last_counted.get(base, day), day)
                     day += DAY
         result = {}
@@ -595,6 +622,57 @@ def _when(value: str) -> datetime:
     return moment
 
 
+def note_visit(database: ApiDatabase, account_id: int, *, now: datetime) -> None:
+    """The account opened Clash Lens: confirm the runs of its game accounts
+    whose last confirmation is recent enough that no day waits yet. After a
+    gap they stay as they are until the Clasher answers "Still on it?"."""
+    today = ranked_day_for(now).start
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE notebook_checks SET seen_day = %s
+            WHERE seen_day < %s AND seen_day >= %s AND player_id IN (
+                SELECT player_id FROM verified_player_links WHERE account_id = %s)
+            """,
+            (today, today, today - (CHECK_DAYS + 1) * DAY, account_id),
+        )
+
+
+def _confirm(connection: Any, player_id: int, today: datetime) -> None:
+    """The Clasher says which base the game account runs: its days count."""
+    connection.execute(
+        """
+        INSERT INTO notebook_checks (player_id, seen_day) VALUES (%s, %s)
+        ON CONFLICT (player_id) DO UPDATE SET seen_day = EXCLUDED.seen_day
+        """,
+        (player_id, today),
+    )
+
+
+def _today_so_far(
+    connection: Any, history: _History, base_id: int, today: datetime
+) -> dict[str, int] | None:
+    """Today's defenses and holds so far on everyone running the base today,
+    from their published logs; None when nobody runs it today."""
+    runners = [
+        player_id for player_id, found in history.runs.items()
+        if base_on(found, today) == base_id and history.confirmed(player_id, today)
+    ]
+    if not runners:
+        return None
+    tags = [_text(tag) for (tag,) in connection.execute(
+        "SELECT normalized_tag FROM players WHERE id = ANY(%s)", (runners,)
+    ).fetchall()]
+    defenses = [
+        event for row in connection.execute(
+            _DAY_LOGS_SQL, {"tags": tags, "day_start": today}
+        ).fetchall()
+        for event in _screen_events(row[5])[1]
+    ]
+    return {"defenses": len(defenses),
+            "held": sum(1 for event in defenses if event["stars"] < 3)}
+
+
 def get_notebook(
     database: ApiDatabase, account_id: int, *, now: datetime,
     season: str | None = None, base: str | None = None, crew: str | None = None,
@@ -603,6 +681,8 @@ def get_notebook(
     page: its game accounts, each one's runs and base, and every base on the
     page with its record from everyone who ran it. With ``base``, also that
     base's note, link and record on each of the notebook's game accounts."""
+    # Opening the page counts as opening Clash Lens, before it is read.
+    note_visit(database, account_id, now=now)
     with database.pool.connection() as connection, connection.transaction():
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         notebook = _Notebook(connection, account_id, now, season, crew)
@@ -640,6 +720,24 @@ def get_notebook(
                     (detail, account_id, account_id),
                 ).fetchall()
             }
+        today_so_far = None
+        copy: list[dict[str, Any]] = []
+        if detail is not None and notebook.current:
+            today_so_far = _today_so_far(connection, history, detail, notebook.today)
+            # Your game accounts, for "Which account will run it?".
+            linked = notebook.players or sorted(
+                _linked_players(connection, account_id, None),
+                key=lambda player: "Legend" not in (player[4] or ""),
+            )
+            near = history if notebook.crew is None else _History(
+                connection, [player[0] for player in linked], notebook.today,
+                notebook.tomorrow, notebook.today, week_start(notebook.today))
+            copy = [
+                {"tag": tag, "name": name,
+                 "today": notebook.today in near.legend[player_id],
+                 "tomorrow": notebook.tomorrow in near.legend[player_id]}
+                for player_id, tag, name, *_ in linked
+            ]
     if detail is not None:
         page.add(detail)
     first, last_counted = notebook.season_start, min(notebook.today, notebook.season_end) - DAY
@@ -660,7 +758,7 @@ def get_notebook(
             record = _record()
             day = start
             while day <= min(end, last_counted):
-                if day in history.counted:
+                if day in history.counted and history.confirmed(player_id, day):
                     counts = history.day_counts(player_id, day)
                     _add(records[base_id], counts)
                     _add(record, counts)
@@ -682,6 +780,17 @@ def get_notebook(
             if notebook.season_start <= day <= notebook.last
         }
         following = base_on(found, notebook.tomorrow)
+        # The first base waiting for "Still on it?", with the day the run was
+        # last confirmed (0 or less in an earlier Season).
+        waiting = None
+        seen = history.seen.get(player_id)
+        if notebook.current and seen is not None:
+            day = seen + (CHECK_DAYS + 1) * DAY
+            while waiting is None and day <= notebook.today:
+                shown = base_on(found, day)
+                if shown in entries:
+                    waiting = {"base": codes[shown], "seen": notebook.day_number(seen)}
+                day += DAY
         players.append({
             "tag": tag,
             "name": name,
@@ -701,6 +810,7 @@ def get_notebook(
                  "base": None if picked is None else codes.get(picked)}
                 for day, picked in sorted(picks.items())
             ],
+            "waiting": waiting,
         })
     counted_days = [day for day in history.counted if first <= day <= last_counted]
     result: dict[str, Any] = {
@@ -757,6 +867,10 @@ def get_notebook(
                 {"tag": tag, "record": by_player[player_id]}
                 for player_id, tag, *_ in notebook.players if player_id in by_player
             ],
+            # Today's defenses so far on everyone running it, not final until
+            # the Reset; None when nobody runs it today.
+            "today": today_so_far,
+            "copy": copy,
         }
     return result
 
@@ -814,7 +928,7 @@ class Undo(StrictBody):
 
 
 class NotebookWrite(StrictBody):
-    action: Literal["add", "pick", "retire", "keep", "edit", "remove", "undo"]
+    action: Literal["add", "pick", "retire", "keep", "edit", "remove", "undo", "confirm"]
     base: str | None = Field(default=None, max_length=12)
     name: str | None = Field(default=None, max_length=200)
     link: str | None = Field(default=None, max_length=400)
@@ -894,7 +1008,8 @@ def save(
 
         def pick(player_id: int, day: int, base_id: int | None, *, drop: bool = False) -> None:
             """Set (or with ``drop`` remove) the player's pick on ``day``,
-            remembering what it was the first time it changes."""
+            remembering what it was the first time it changes. Saying which
+            base it runs confirms its run."""
             start = notebook.day_start(day)
             row = connection.execute(
                 "SELECT base_id FROM notebook_day_picks"
@@ -904,6 +1019,7 @@ def save(
             touched.setdefault((player_id, day), (
                 row is not None, None if row is None or row[0] is None else int(row[0])
             ))
+            _confirm(connection, player_id, notebook.today)
             if drop:
                 connection.execute(
                     "DELETE FROM notebook_day_picks"
@@ -1000,6 +1116,9 @@ def save(
             if base_id is not None:
                 require_legend(player_id, day)
             pick(player_id, day, base_id)
+        elif body.action == "confirm":
+            # "Still on it?" Yes: the waiting days count.
+            _confirm(connection, _player(notebook, body.tag), notebook.today)
         elif body.action in {"retire", "keep"}:
             base_id = _base(notebook, body.base)
             _may(notebook, _MANAGES, entries[base_id])
@@ -1076,7 +1195,8 @@ def save(
         for key in sorted(after)
         if key in before and before[key] != after[key]
     ]
-    undo = None if body.action == "undo" else {
+    # A Yes to "Still on it?" is undone by picking the day you changed.
+    undo = None if body.action in {"undo", "confirm"} else {
         "season": notebook.this_season,
         "picks": [
             {"tag": tags[player_id], "day": day,

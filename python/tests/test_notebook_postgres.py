@@ -229,6 +229,11 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
                 # counted on Day 4 and Hex was added 31 days ago, so both
                 # have retired on their own and stayed on the old page.
                 old = str(int(SEASON.timestamp()))
+                # Sloothy opens the Notebook every week, so Ring's run
+                # stays confirmed.
+                for days in (7, 14, 21, 28):
+                    clock[0] = noon + timedelta(days=days)
+                    notebook()
                 clock[0] = noon + timedelta(days=31)
                 carried = notebook()
                 past = notebook(query=f"?season={old}")

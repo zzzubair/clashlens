@@ -441,6 +441,19 @@
   color: var(--cl-muted);
   font-weight: 700;
 }
+/* "Still on it?" on an account whose run waits for an answer. */
+.nb-still {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.65rem 0.75rem;
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: var(--cl-radius);
+}
+.nb-still p {
+  margin: 0;
+}
 .nb-form {
   display: grid;
   gap: 0.9rem;
