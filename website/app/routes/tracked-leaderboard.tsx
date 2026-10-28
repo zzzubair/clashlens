@@ -19,6 +19,7 @@ import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
   formatAge,
+  formatTimestamp,
   LocalTimestamp,
   OLD_UPDATE_SECONDS,
   useCurrentTime,
@@ -267,6 +268,11 @@ export default function TrackedLeaderboardRoute() {
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
     Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
+  // Live rows not updated for over 10 minutes carry a dot, explained once above the board.
+  const isOld = (observedAt: string) =>
+    view === "live" && ageSeconds(observedAt) > OLD_UPDATE_SECONDS;
+  const anyOld = entries.some((entry) => isOld(entry.freshness.observedAt));
+  const oldNote = <span className="sr-only"> · Over 10 min old</span>;
   const secondsBeforeReset = (observedAt: string) =>
     daily ? Math.max(0, (Date.parse(daily.resetAt) - Date.parse(observedAt)) / 1000) : 0;
   const newestInput = daily ? leaderboard?.provenance.observedAt : null;
@@ -493,6 +499,11 @@ export default function TrackedLeaderboardRoute() {
                 ) : null}
               </p>
             </div>
+            {anyOld ? (
+              <p className="standings-key">
+                <span aria-hidden="true">●</span> Not updated for over 10 min
+              </p>
+            ) : null}
           </div>
           {entries.length === 0 ? (
             <div className="empty-state">
@@ -573,7 +584,10 @@ export default function TrackedLeaderboardRoute() {
                           {/* Phones show the tag and update age on one line. */}
                           <div className="player-meta">
                             <span className="player-tag">{entry.tag}</span>
-                            <details className="player-update-mobile">
+                            <details
+                              className="player-update-mobile"
+                              data-old={isOld(entry.freshness.observedAt) || undefined}
+                            >
                               <summary>
                                 <span className="sr-only">Last updated </span>
                                 {view === "live" ? (
@@ -584,13 +598,7 @@ export default function TrackedLeaderboardRoute() {
                                     timeOnly
                                   />
                                 )}
-                                {view === "live" &&
-                                ageSeconds(entry.freshness.observedAt) >
-                                  OLD_UPDATE_SECONDS ? (
-                                  <span className="player-update-age">
-                                    Over 10 min old
-                                  </span>
-                                ) : null}
+                                {isOld(entry.freshness.observedAt) ? oldNote : null}
                                 {savedBeforeReset(entry.freshness.observedAt)}
                               </summary>
                               <LocalTimestamp value={entry.freshness.observedAt} />
@@ -613,16 +621,22 @@ export default function TrackedLeaderboardRoute() {
                           </span>
                         </td>
                         <td data-label="Last updated">
-                          <LocalTimestamp value={entry.freshness.observedAt} />
+                          {/* Live shows the age; the exact time is in its tooltip. */}
                           {view === "live" ? (
-                            <span className="player-update-age">
+                            <time
+                              className="local-time player-update-age"
+                              dateTime={entry.freshness.observedAt}
+                              title={formatTimestamp(entry.freshness.observedAt)}
+                              data-old={isOld(entry.freshness.observedAt) || undefined}
+                            >
                               {formatAge(ageSeconds(entry.freshness.observedAt))} ago
-                              {ageSeconds(entry.freshness.observedAt) > OLD_UPDATE_SECONDS
-                                ? " · Over 10 min old"
-                                : null}
-                            </span>
+                              {isOld(entry.freshness.observedAt) ? oldNote : null}
+                            </time>
                           ) : (
-                            savedBeforeReset(entry.freshness.observedAt)
+                            <>
+                              <LocalTimestamp value={entry.freshness.observedAt} />
+                              {savedBeforeReset(entry.freshness.observedAt)}
+                            </>
                           )}
                         </td>
                       </tr>

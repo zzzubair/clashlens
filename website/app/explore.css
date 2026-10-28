@@ -388,6 +388,21 @@
   font-size: 0.75rem;
 }
 
+/* A Live row not updated for over 10 minutes gets an ember dot, keyed once
+   above the board. */
+.leaderboard-table time.player-update-age {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.leaderboard-table time.player-update-age[data-old]::before {
+  margin-right: 0.3rem;
+  color: var(--cl-action-text);
+  font-size: 0.7em;
+  vertical-align: 0.1em;
+  content: "●" / "";
+}
+
 /* Trophies, the number a Clasher came for, in the game's own face. */
 .trophy-cell {
   white-space: nowrap;
@@ -567,9 +582,18 @@
     content: " · ";
   }
 
+  .player-update-mobile[data-old] summary::before {
+    color: var(--cl-action-text);
+    font-size: 0.55rem;
+    vertical-align: 0.1em;
+    content: "●" / "";
+  }
+
+  /* Indented past the dot, so it shows whole when the age wraps under the tag. */
   .player-update-mobile > time {
     display: block;
     margin-top: 0.15rem;
+    padding-left: 0.9rem;
     color: var(--cl-ink);
     font-size: 0.75rem;
     white-space: normal;

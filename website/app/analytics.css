@@ -1083,3 +1083,10 @@
   background: color-mix(in srgb, var(--cl-panel) 70%, transparent);
   border-radius: 0.6rem;
 }
+/* On a wide screen the name keeps its own width and the numbers share the
+   rest, so each row's arrow sits beside its army. */
+@media (min-width: 64rem) {
+  .analytics-results-table tbody th {
+    width: 22rem;
+  }
+}

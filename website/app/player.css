@@ -582,6 +582,23 @@
   color: var(--cl-action-text);
   font-size: 2.75rem;
 }
+/* On a 360px phone three columns squeeze "Unavailable", so Hit rate takes the
+   next row. */
+@media (max-width: 23.5rem) {
+  .player-page .season-summary-headline:not(:has(> .season-summary-rank)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.9rem;
+  }
+  .player-page
+    .season-summary-headline:not(:has(> .season-summary-rank))
+    > div
+    + div
+    + div {
+    grid-column: 1 / -1;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
 /* Battles by stars: each row is one bar, its 3-, 2-, 1- and 0-star parts as
    wide as their share (the --s* tracks SeasonSummary sets), with a line under
    it naming every count. Huge counts scroll inside instead of widening the

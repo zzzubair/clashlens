@@ -780,6 +780,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 ? liveDayNotice(dayEvidence(day), todayEnded, warning.label)
                 : undefined;
             if (notice === null) return null;
+            const plain = notice ? undefined : QUALITY_WORDS[warning.code];
+            if (plain)
+              return (
+                <p className="section-note" key={warning.code}>
+                  {plain}
+                </p>
+              );
             return (
               <p className="section-note" key={`${warning.code}-${warning.label}`}>
                 <strong>{notice?.heading ?? warning.label}:</strong>{" "}
@@ -854,6 +861,12 @@ function SeasonsError({
 }
 
 const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+
+// Plain words for the notices a Clasher can't act on.
+const QUALITY_WORDS: Record<string, string> = {
+  unavailable: "Today's Legend day isn't saved yet.",
+  stale: "This profile hasn't been confirmed recently, so it may be behind.",
+};
 
 // When the server read this profile, so the page's clock starts from it.
 function profileLoadedAt(profile: PlayerProfile): string | undefined {

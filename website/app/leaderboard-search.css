@@ -180,6 +180,18 @@
   font-weight: 700;
 }
 
+.standings-toolbar .standings-key {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.standings-key span {
+  color: var(--cl-action-text);
+  font-size: 0.7em;
+  vertical-align: 0.1em;
+}
+
 .standings-range {
   display: inline-flex;
   gap: 0.4rem;
