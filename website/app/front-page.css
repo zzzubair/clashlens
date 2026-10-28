@@ -423,6 +423,45 @@
   min-height: 2.75rem;
 }
 
+/* A small phone keeps Create account above the tab bar: the faded heat map
+   steps out, and the lock sits beside its one-line title. */
+@media (max-width: 23.5rem) {
+  .front-hero {
+    padding-top: 0;
+  }
+
+  .front-hero h1 {
+    font-size: 2.35rem;
+  }
+
+  .teaser-heat {
+    display: none;
+  }
+
+  .teaser-lock {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem 0.5rem;
+    margin-top: -0.75rem;
+  }
+
+  .teaser-lock > :not(.teaser-lock-icon, h2) {
+    flex-basis: 100%;
+  }
+
+  .teaser-lock-icon {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .teaser-lock h2 {
+    font-size: 1.2rem;
+    white-space: nowrap;
+  }
+}
+
 /* ---------- Top 10 now ---------- */
 
 /* The title and All rankings share the top line; the update time runs under. */

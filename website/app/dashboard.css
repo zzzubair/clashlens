@@ -821,22 +821,40 @@
     white-space: nowrap;
   }
 
-  /* Each card's name keeps its line; its moves sit under it, finger-sized. */
+  /* While editing, each card is one row: grip, name, its settings gear, then
+     the finger-sized moves and remove, so every card fits on one screen. */
+  :root .dash-grid-editing .dash-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.5rem;
+  }
+
   .dash-edit-strip {
-    flex-wrap: wrap;
+    display: contents;
   }
 
   .dash-edit-name {
-    flex-basis: calc(100% - 3rem);
+    flex: 1 1 0;
+    line-height: 1.2;
+    white-space: normal;
   }
 
-  .dash-edit-strip .dash-icon-button {
+  .dash-edit-strip .dash-icon-button,
+  :root .dash-grid-editing .dash-card-settings {
+    order: 1;
     width: 2.75rem;
     height: 2.75rem;
   }
 
-  .dash-size-chip + .dash-icon-button {
-    margin-left: auto;
+  :root .dash-grid-editing .dash-card-settings {
+    order: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .dash-card-settings-label {
+    display: none;
   }
 
   .dash-editbar-title,

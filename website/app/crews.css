@@ -421,6 +421,12 @@
     display: none;
   }
 
+  /* Live already lists every player, their trophies and who has none; the
+     roster shows under the other boards. */
+  .crew-boards:has(> .crew-board-live[data-current]) > .crew-players {
+    display: none;
+  }
+
   /* The tab already says which board it is. */
   .crew-period-bar h2 {
     position: absolute;

@@ -876,7 +876,8 @@ export function Dashboard({
                 disabled={saving}
                 onClick={() => setEditingSettings(card)}
               >
-                <DashboardIcon name="gear" /> Settings
+                <DashboardIcon name="gear" />
+                <span className="dash-card-settings-label">Settings</span>
               </button>
             ) : null}
             {cardBody(card, reads, editing, context)}
