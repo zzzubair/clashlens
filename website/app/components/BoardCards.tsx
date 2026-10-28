@@ -52,7 +52,7 @@ function topLabel(rank: number): string {
 
 /** Card: the trophies a day needed to finish the Season at the goal rank. */
 export function GoalCard({ data }: { data: GoalData }) {
-  const [shield, setShield] = useState(1);
+  const [shield, setShield] = useState(0);
   const plan = goalPlan(data);
   const title = topLabel(data.rank);
   const head = <CardHead title="Goal" meta="from last Reset" />;
@@ -88,28 +88,59 @@ export function GoalCard({ data }: { data: GoalData }) {
     );
   }
   const days = `${data.window} day${data.window === 1 ? "" : "s"}`;
-  const picked = plan.shields.find((item) => item.days === shield) ?? plan.shields.at(-1);
+  // Shield days picked (none at first) set the trophies a day needed and the verdict.
+  const picked = plan.shields.find((item) => item.days === shield);
+  const need = picked?.need ?? plan.need;
+  const status = !picked
+    ? plan.status
+    : need <= 0 && plan.gap >= 0
+      ? "ahead"
+      : picked.onPace
+        ? "on"
+        : "behind";
   return (
     <>
       {head}
       <b className="goal-title">{title}</b>
       <p className="goal-need">
         <span>
-          <b className="form-big">{signedOr(Math.max(0, plan.need))}</b>{" "}
+          <b className="form-big">{signedOr(Math.max(0, need))}</b>{" "}
           <span className="dash-muted">a day needed</span>
         </span>
-        <span className={`goal-pace goal-pace-${plan.status}`}>
-          {plan.status === "ahead"
+        <span className={`goal-pace goal-pace-${status}`}>
+          {status === "ahead"
             ? "✓ Already ahead"
-            : plan.status === "on"
+            : status === "on"
               ? "✓ On pace"
-              : `Behind pace by ${Math.round(plan.need - plan.pace)} a day`}
+              : `Behind pace by ${Math.round(need - plan.pace)} a day`}
         </span>
       </p>
+      {plan.shields.length > 0 ? (
+        <div className="goal-shield">
+          <span title="Days you won't play before the Season ends; the rest make up the need">
+            Shield days
+          </span>
+          <Switch
+            label="Shield days"
+            value={String(picked?.days ?? 0)}
+            onChange={(value) => setShield(Number(value))}
+            options={[
+              ["0", "None"],
+              ...plan.shields.map(
+                (item) => [String(item.days), String(item.days)] as const,
+              ),
+            ]}
+          />
+        </div>
+      ) : null}
       <dl className="goal-rows">
         <div>
           <dt>Gap at last Reset</dt>
-          <dd>{signedOr(plan.gap)}</dd>
+          <dd>
+            {plan.gap === 0
+              ? "Level"
+              : `${Math.abs(plan.gap).toLocaleString("en-US")} ${plan.gap > 0 ? "ahead" : "short"}`}
+          </dd>
         </div>
         <div>
           <dt>Days left</dt>
@@ -125,29 +156,6 @@ export function GoalCard({ data }: { data: GoalData }) {
           <dt>Your pace ({days})</dt>
           <dd>{signedOr(plan.pace)} a day</dd>
         </div>
-        {picked ? (
-          <div>
-            <dt className="goal-shield">
-              Shield days{" "}
-              <Switch
-                label="Shield days"
-                value={String(picked.days)}
-                onChange={(value) => setShield(Number(value))}
-                options={plan.shields.map(
-                  (item) => [String(item.days), String(item.days)] as const,
-                )}
-              />
-            </dt>
-            <dd>
-              {signedOr(Math.max(0, picked.need))} ·{" "}
-              <span className={picked.onPace ? "positive" : "negative"}>
-                {picked.onPace
-                  ? "still on pace"
-                  : `behind by ${Math.round(picked.need - plan.pace)}`}
-              </span>
-            </dd>
-          </div>
-        ) : null}
       </dl>
       <GoalChart data={data} title={title} />
     </>
@@ -160,6 +168,7 @@ function GoalChart({ data, title }: { data: GoalData; title: string }) {
   const width = 320;
   const height = 60;
   const right = 236;
+  const axis = height + 12;
   const steps = data.history.length - 1;
   const line = data.history.map(
     (_, index) =>
@@ -192,7 +201,7 @@ function GoalChart({ data, title }: { data: GoalData; title: string }) {
   return (
     <svg
       className="goal-chart"
-      viewBox={`0 0 ${width} ${height}`}
+      viewBox={`0 0 ${width} ${axis}`}
       role="img"
       aria-label={`${data.name} against the ${title} line`}
     >
@@ -203,6 +212,14 @@ function GoalChart({ data, title }: { data: GoalData; title: string }) {
       </text>
       <text className="goal-label goal-label-you" x={right + 8} y={youLabel}>
         {data.name.length > 12 ? `${data.name.slice(0, 11)}…` : data.name}
+      </text>
+      {steps > 0 ? (
+        <text className="goal-axis" x={4} y={axis - 2}>
+          {steps === 1 ? "1 day earlier" : `${steps} days earlier`}
+        </text>
+      ) : null}
+      <text className="goal-axis" x={right} y={axis - 2} textAnchor="end">
+        Last Reset
       </text>
     </svg>
   );
@@ -414,7 +431,9 @@ export function GroupWatchCard({
             <tr>
               <th scope="col">Player</th>
               <th scope="col">Trophies</th>
-              <th scope="col">Avg gain</th>
+              <th scope="col" aria-sort="descending">
+                Avg gain <span aria-hidden="true">↓</span>
+              </th>
               <th scope="col">Hit rate</th>
               <th scope="col">Avg offense</th>
               <th scope="col">Avg defense</th>
@@ -424,7 +443,9 @@ export function GroupWatchCard({
             {shown.map((row, at) => (
               <tr key={row.tag} className={row.you ? "rival-you" : undefined}>
                 <td>
-                  <Name>{`${first + at + 1}. ${row.name}`}</Name>
+                  <Link className="rival-link" to={canonicalPlayerPath(row.tag)}>
+                    <Name>{`${first + at + 1}. ${row.name}`}</Name>
+                  </Link>
                 </td>
                 <td>{count(row.trophies)}</td>
                 <td className={tone(row.gain)}>{signedOr(row.gain)}</td>

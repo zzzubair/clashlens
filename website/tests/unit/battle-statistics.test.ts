@@ -298,9 +298,9 @@ describe("recorded battle period statistics", () => {
     );
     // Per day divides by played days only: day 2, with none, is left out.
     expect(html).toMatch(/Offense per day<\/dt><dd>\+60</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-40</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>−40</);
     expect(html).toContain("<dt>Per attack</dt><dd>+30.0</dd>");
-    expect(html).toContain("<dt>Per defense</dt><dd>-40.0</dd>");
+    expect(html).toContain("<dt>Per defense</dt><dd>−40.0</dd>");
   });
 
   it("offers no recent-days choice and says when no day has finished", () => {

@@ -184,7 +184,7 @@ async function renderProfile(
 it("confirms a just-linked player by name in one line at the top", async () => {
   const html = await renderProfile("?linked=%232PP");
   expect(html).toContain(
-    '<main id="main-content" tabindex="-1" class="page-shell narrow-shell"><p class="status-banner status-banner-success saved-line" role="status">Nova linked.</p>',
+    '<main id="main-content" tabindex="-1" class="page-shell"><p class="status-banner status-banner-success saved-line" role="status">Nova linked.</p>',
   );
   expect(html).not.toContain(">Edit<");
   expect(await renderProfile("?linked=%232PY")).not.toContain("saved-line");
@@ -255,7 +255,7 @@ it("shows worst-case linked players with separators and every missing value name
   for (const text of [
     "#13,204",
     "6,499",
-    "#1<",
+    'data-podium-rank="1">1<',
     "0/8 attacks · 0/8 defenses",
     "1/8 attacks · 8/8 defenses",
     "Waiting for this player's Season reset",

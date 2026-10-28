@@ -76,6 +76,7 @@ function GameLink({ href, name }: { href: string; name: string }) {
       target="_blank"
       rel="noopener noreferrer"
       aria-label={`Open ${name} in Clash of Clans`}
+      title="Open in Clash of Clans"
     >
       <bdi>{name}</bdi>
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">

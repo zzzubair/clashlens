@@ -198,8 +198,8 @@
   width: 0.62em;
   height: 0.62em;
   margin: 0;
-  color: var(--cl-gold);
-  fill: color-mix(in srgb, var(--cl-gold) 22%, transparent);
+  color: var(--cl-star);
+  fill: color-mix(in srgb, var(--cl-star) 22%, transparent);
   stroke: currentColor;
   stroke-width: 1.5;
   stroke-linecap: round;
@@ -457,6 +457,20 @@
   border-color: var(--cl-gold);
 }
 
+/* The hollow dot's key, under the log's title while the log shows one. */
+.log-key {
+  display: none;
+  margin: -0.35rem 0 0.75rem;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+}
+.legend-log:has(.day-mark:not(.day-mark-verified, .day-mark-gap, .log-key-dot)) .log-key {
+  display: block;
+}
+.log-key .log-key-dot {
+  margin: 0 0.3rem 0 0;
+}
+
 /* ---------- Season summary ---------- */
 
 .player-page .season-summary {
@@ -711,16 +725,16 @@
   font-size: 0.98rem;
   font-weight: 700;
 }
-/* Attacks: gold for three stars fading to grey; defenses: red for three
+/* Attacks: gold for three stars, then greys; defenses: red for three
    stars given up, green for a clean hold. */
 .player-page .season-summary-table [data-side="Attacks"] [data-stars="3"] {
   --seg: var(--cl-star);
 }
 .player-page .season-summary-table [data-side="Attacks"] [data-stars="2"] {
-  --seg: color-mix(in srgb, var(--cl-star) 55%, var(--cl-raised));
+  --seg: var(--cl-star-2);
 }
 .player-page .season-summary-table [data-side="Attacks"] [data-stars="1"] {
-  --seg: color-mix(in srgb, var(--cl-star) 28%, var(--cl-raised));
+  --seg: var(--cl-star-1);
 }
 .player-page .season-summary-table [data-side="Attacks"] [data-stars="0"] {
   --seg: var(--cl-raised);

@@ -17,7 +17,7 @@ const signed = (value: number | null, sign: 1 | -1, digits = 0) =>
     ? "Unavailable"
     : value === 0
       ? "0"
-      : `${sign > 0 ? "+" : "-"}${value.toLocaleString("en-GB", {
+      : `${sign > 0 ? "+" : "−"}${value.toLocaleString("en-GB", {
           minimumFractionDigits: digits,
           maximumFractionDigits: digits,
         })}`;

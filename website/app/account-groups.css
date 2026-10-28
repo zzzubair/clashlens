@@ -1,5 +1,140 @@
 /* Private groups list: members with names, and add and edit opened below the buttons. */
 
+/* The title with New watchlist beside it; its form opens under the button. */
+.groups-hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  justify-content: space-between;
+  max-width: none;
+}
+
+.group-create {
+  position: relative;
+}
+
+.group-create > summary {
+  list-style: none;
+}
+
+.group-create > summary::-webkit-details-marker {
+  display: none;
+}
+
+.group-create > .form-panel {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(26rem, calc(100vw - 2rem));
+  margin: 0;
+  box-shadow: var(--cl-overlay-shadow);
+}
+
+@media (max-width: 34rem) {
+  .group-create {
+    flex: 1 1 100%;
+  }
+
+  .group-create > summary {
+    width: 100%;
+  }
+
+  .group-create > .form-panel {
+    width: auto;
+    left: 0;
+  }
+}
+
+/* A watchlist's players, one line each: name and tag, trophies and an arrow.
+   The whole row opens the player. Its columns may shrink below a row's one
+   line, so a long name ends in "…" instead of widening the page. */
+.group-card-list,
+.group-card,
+.group-card .group-members {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.group-card .group-members.player-action-list {
+  gap: 0;
+}
+
+.group-card .group-members.player-action-list li {
+  position: relative;
+  padding: 0.65rem 0.25rem 0.65rem 0.5rem;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--cl-border);
+  border-radius: 0;
+}
+
+.group-card .group-members.player-action-list li:first-child {
+  border-top: 0;
+}
+
+.group-card .group-members .player-action-name {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.group-card .group-members .player-action-name a {
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-card .group-members .player-action-name a::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  content: "";
+}
+
+.group-card .group-members .player-action-name a:focus-visible {
+  outline: none;
+}
+
+.group-card .group-members .player-action-name a:focus-visible::after {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+}
+
+.group-card .group-members .group-member-detail {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.3rem;
+  align-items: center;
+  margin-left: auto;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.group-card .group-members .group-member-detail .score {
+  color: var(--cl-ink);
+  font-size: 1.1rem;
+}
+
+.group-card .group-members li::after {
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin: 0 0.35rem 0 0.1rem;
+  border-top: 2px solid var(--cl-muted);
+  border-right: 2px solid var(--cl-muted);
+  transform: rotate(45deg);
+  content: "";
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .group-card .group-members.player-action-list li:hover {
+    background: var(--cl-raised);
+    border-radius: 8px;
+  }
+}
+
 .group-card-head {
   display: flex;
   flex-wrap: wrap;
@@ -94,15 +229,36 @@
   gap: 0.5rem;
 }
 
-/* On a phone, Compare players takes a full row and Add player and Edit share one. */
+/* A wide screen sets watchlists side by side, so a row is not mostly gap. */
+@media (min-width: 64rem) {
+  .group-card-list {
+    grid-template-columns: repeat(auto-fill, minmax(30rem, 1fr));
+    align-items: start;
+  }
+
+  /* The name takes its own line and the three actions sit together under it. */
+  .group-card-head > h3 {
+    flex-basis: 100%;
+  }
+}
+
+/* On a phone, Add player and Edit sit small beside the name, and Compare
+   players takes the row under it. */
 @media (max-width: 34rem) {
   .group-card-head {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
-  .group-card-head > :is(h3, .button-primary) {
+  .group-card-head > .button-primary {
+    grid-row: 2;
     grid-column: 1 / -1;
+  }
+
+  .group-card-head > .button-secondary {
+    min-height: 2.5rem;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.88rem;
   }
 }
 
@@ -150,7 +306,7 @@
   justify-self: start;
 }
 
-/* No watchlists yet: one quiet line under the form, not a second card. The
+/* No watchlists yet: one quiet line over the form, not a second card. The
    list heading stays for screen readers and for focus after a delete. */
 :root .data-section:has(> .empty-state) {
   margin-top: 0.85rem;
@@ -173,4 +329,8 @@
   color: var(--cl-muted);
   font-size: 0.9rem;
   font-weight: 500;
+}
+
+.group-card .group-members .group-member-detail .trophy-mark {
+  margin: 0;
 }

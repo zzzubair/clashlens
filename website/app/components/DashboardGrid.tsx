@@ -1,4 +1,11 @@
-import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Await, useFetcher, type FetcherWithComponents } from "react-router";
 
 import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
@@ -10,6 +17,7 @@ import {
   DEFAULT_CUTOFFS,
   MAX_GOAL,
   addableCards,
+  cardPlaces,
   serializeSettings,
   shownCards,
 } from "../lib/dashboard";
@@ -651,6 +659,8 @@ export function Dashboard({
 
   const editing = draft !== null;
   const cards = shownCards(editing ? draft : settings.layout);
+  const wide = cardPlaces(cards, 3, !editing);
+  const medium = cardPlaces(cards, 2, !editing);
   const change = (next: CardId[], message: string) => {
     setDraft(next);
     setStatus(message);
@@ -738,9 +748,6 @@ export function Dashboard({
           >
             <DashboardIcon name="gear" />{" "}
             <span className="dash-customise-text">Customise dashboard</span>
-            <span className="dash-customise-short" aria-hidden="true">
-              Customise
-            </span>
           </button>
         ) : null}
       </div>
@@ -810,6 +817,14 @@ export function Dashboard({
             className={`dash-card dash-card-${CARDS[card].size}${dragging === card ? " dash-card-dragging" : ""}`}
             aria-label={CARDS[card].title}
             data-card={card}
+            style={
+              {
+                "--span-3": wide[index].span,
+                "--order-3": wide[index].order,
+                "--span-2": medium[index].span,
+                "--order-2": medium[index].order,
+              } as CSSProperties
+            }
           >
             {editing ? (
               <div className="dash-edit-strip">

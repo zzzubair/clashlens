@@ -25,20 +25,40 @@
    over defenses, the change over the EOD, then the Reset rank on its plate
    over its move. Wide screens put it all on one line. Labels are for screen
    readers; icons, plates and colours say which number is which. */
+/* A phone's rows stack two numbers a column, so one line says which is which. */
 .player-page .log-head {
+  padding: 0.6rem 1rem 0.5rem;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--cl-border);
+}
+.player-page .log-head > :not(.log-head-phone) {
   display: none;
 }
+@media (max-width: 47.99rem) {
+  .player-page .log-head[data-show="columns"] {
+    display: none;
+  }
+}
 @media (min-width: 48rem) {
+  .player-page .log-head[data-show="phone"] {
+    display: none;
+  }
+  .player-page .log-head > :not(.log-head-phone) {
+    display: block;
+  }
+  .player-page .log-head > .log-head-phone {
+    display: none;
+  }
   .player-page .log-head {
     display: grid;
     grid-template-columns: var(--log-columns);
     column-gap: 0.75rem;
     padding: 0 1rem 0.4rem 1.25rem;
-    color: var(--cl-muted);
-    font-size: 0.72rem;
-    font-weight: 600;
+    border-bottom: 0;
   }
-  .player-page .log-head > :nth-child(n + 5) {
+  .player-page .log-head > :is(:nth-child(3), :nth-child(n + 5)) {
     text-align: right;
   }
 }
@@ -108,7 +128,7 @@
   align-items: center;
   gap: 0.35rem;
   color: var(--cl-muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -127,7 +147,7 @@
   justify-self: end;
   color: var(--cl-muted);
   font-family: var(--cl-font-score);
-  font-size: 0.9rem;
+  font-size: 0.98rem;
   font-weight: 600;
 }
 .player-page .log-trophies {
@@ -145,7 +165,7 @@
   content: "";
 }
 .player-page .log-end .stat-unavailable {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
 }
 .player-page .log-net {
   grid-area: net;
@@ -165,7 +185,7 @@
 .player-page .log-net > span,
 .player-page .log-battles > span:not(.log-stat) {
   color: var(--cl-muted);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 .player-page .log-battles > span:not(.log-stat) {
@@ -179,7 +199,7 @@
   min-width: 3.6rem;
   color: var(--cl-muted);
   font-family: var(--cl-font-score);
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   font-weight: 600;
 }
 /* The Reset rank on the rank plate Rankings and Crew boards use, smaller. */
@@ -193,7 +213,7 @@
   content: "#";
 }
 .player-page .log-rank-move {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   font-weight: 700;
   line-height: 1;
 }
@@ -204,7 +224,7 @@
   align-items: center;
   justify-content: flex-end;
   font-family: var(--cl-font-score);
-  font-size: 0.95rem;
+  font-size: 1.02rem;
   font-weight: 700;
 }
 .player-page .log-battles > .log-stat:first-child {
@@ -277,10 +297,11 @@
 .player-page .log-day-live .log-net strong {
   font-size: 1.85rem;
 }
+/* Today keeps the log's columns, so its numbers sit over the days' below. */
 @media (min-width: 48rem) {
   .player-page .log-day-live > .log-row {
-    grid-template-columns: 4.25rem 8.5rem minmax(0, 1fr) 4rem 4rem 4.5rem 4.5rem 0.75rem;
-    grid-template-areas: "date meta swing att def net net chev";
+    grid-template-columns: var(--log-columns);
+    grid-template-areas: "date meta meta swing att def net . chev";
   }
 }
 .player-page .log-today .log-day[open] > .log-row {

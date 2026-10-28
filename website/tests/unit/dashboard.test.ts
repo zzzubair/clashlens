@@ -47,6 +47,7 @@ import { OpponentsCard } from "../../app/components/OpponentsCard";
 import App, { loader as rootLoader } from "../../app/root";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import type {
+  CardId,
   ClockBattle,
   DashboardSettings,
   OpponentRow,
@@ -56,6 +57,7 @@ import {
   BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
   addableCards,
+  cardPlaces,
   baseStrength,
   defaultSettings,
   nextResetMs,
@@ -367,6 +369,48 @@ describe("dashboard settings", () => {
   });
 });
 
+describe("dashboard grid", () => {
+  const places = (cards: readonly CardId[], columns: number, fill?: boolean) =>
+    cardPlaces(cards, columns, fill).map(({ span, order }) => `${span}@${order}`);
+
+  it("packs the default layout with no card moved, on 3 columns and on 2", () => {
+    expect(places(DEFAULT_LAYOUT, 3)).toEqual([
+      "2@0",
+      "1@1",
+      "3@2",
+      "2@3",
+      "1@4",
+      "1@5",
+      "2@6",
+    ]);
+    // On 2 columns the clock widens (Bases is Large) and Goal pairs with the heat map.
+    expect(places(DEFAULT_LAYOUT, 2)).toEqual([
+      "2@0",
+      "2@1",
+      "2@2",
+      "2@3",
+      "1@4",
+      "1@5",
+      "2@6",
+    ]);
+  });
+
+  it("fills a row's hole with a later Small card, never from past a Large card", () => {
+    expect(places(["goal", "armies-defense", "heat-map"], 2)).toEqual([
+      "1@0",
+      "2@2",
+      "1@1",
+    ]);
+    // Customising shows the saved order, so Goal widens instead.
+    expect(places(["goal", "armies-defense", "heat-map"], 2, false)).toEqual([
+      "2@0",
+      "2@1",
+      "2@2",
+    ]);
+    expect(places(["goal", "bases", "heat-map"], 2)).toEqual(["2@0", "2@1", "2@2"]);
+  });
+});
+
 describe("Legend clock", () => {
   const dayStart = Date.UTC(2026, 9, 7, 5);
 
@@ -443,7 +487,8 @@ describe("Legend day card", () => {
 
   it("shows the projected place beside the outer range, labelled an estimate", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain("Next Reset #1–#12,270 estimate Projected #3,000 at Reset");
+    expect(html).toContain("Projected #3,000 at Reset. ");
+    expect(html).toContain("Next Reset #1 – #12,270 estimate");
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
     );
@@ -474,20 +519,31 @@ describe("Legend day card", () => {
     expect(html).toContain("Net today +66 today");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
-    expect(html).toContain("Next Reset #95–#760 estimate");
-    expect(html).toContain("2 of 8 attacks +71");
-    expect(html).toContain("1 of 8 defenses −5");
-    expect(html).toContain("7 defenses remain · auto defense −21 each");
+    expect(html).toContain("Next Reset #95 – #760 estimate");
+    expect(html).toContain("Attacks 2/8 +71");
+    expect(html).toContain("Defenses 1/8 −5");
+    // The defenses still to come and their automatic loss stay off the card.
+    expect(html).not.toContain("defenses remain");
+    expect(html).not.toContain("auto defense");
   });
 
   it("leaves totals and the automatic loss out until they are known", () => {
     const html = render(
       emptyDay({ attacks: 3, defenses: 2, openDefenses: 6, battles: [] }),
     );
-    expect(html).toContain("3 of 8 attacks ");
-    expect(html).not.toContain("3 of 8 attacks –");
-    expect(html).toContain("6 defenses remain");
-    expect(html).not.toContain("auto defense");
+    expect(html).toContain("Attacks 3/8 Defenses 2/8 ");
+    expect(html).not.toContain("3/8 –");
+    // A screen reader hears each row's count with its noun.
+    const markup = renderToStaticMarkup(
+      createElement(LegendDayCard, {
+        player: linked(MAIN),
+        day: emptyDay({ attacks: 3, defenses: 2, battles: [] }),
+        range: null,
+        projected: null,
+      }),
+    );
+    expect(markup).toContain('aria-label="3 of 8 attacks"');
+    expect(markup).toContain('aria-label="2 of 8 defenses"');
     expect(render(null)).toContain("Trophies 5,696 Net today –");
   });
 
@@ -495,12 +551,12 @@ describe("Legend day card", () => {
     // Today's battles not saved yet, or the player page not read at all.
     for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
       const html = render(day);
-      expect(html).toContain("– of 8 attacks");
-      expect(html).toContain("– of 8 defenses");
-      expect(html).not.toContain("0 of 8");
+      expect(html).toContain("Attacks –/8");
+      expect(html).toContain("Defenses –/8");
+      expect(html).not.toContain("0/8");
       expect(html).toContain("Trophies 5,696");
       expect(html).toContain("Now #318");
-      expect(html).toContain("Next Reset #95–#760");
+      expect(html).toContain("Next Reset #95 – #760");
     }
   });
 });
@@ -544,16 +600,18 @@ describe("Bases you attacked", () => {
       }),
     );
     const plain = text(html);
-    expect(plain).toContain("Base strength · vs Legends at similar trophies today");
+    expect(plain).toContain("Base strength today");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
-    expect(plain).toContain("Hard held 5 of 6 · 83% vs 41%");
-    expect(plain).toContain("Easy held 1 of 4 · 25% vs 41%");
-    expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
+    expect(plain).toContain("Hard held 5 of 6 · 83% vs Legend avg 41%");
+    expect(plain).toContain("Easy held 1 of 4 · 25% vs Legend avg 41%");
+    expect(plain).toContain("Too early held 0 of 2");
+    expect(html).toContain('title="Needs 3+ defenses for a rating">Too early<');
     expect(plain).not.toContain("not yet");
     // Each opponent can be saved into one of the account's groups.
     expect(html).toContain('href="/account/watchlists/add/8PP"');
-    expect(html.match(/is-yours/g)).toHaveLength(3);
+    // One square per attack, and one in the key under the rows.
+    expect(html.match(/is-yours/g)).toHaveLength(4);
   });
 
   it("shows a base with 3+ defenses but no comparison as unavailable, not too early", async () => {
@@ -573,7 +631,7 @@ describe("Bases you attacked", () => {
     );
     expect(plain).toContain("– held 3 of 4 · no comparison yet");
     expect(plain).not.toContain("Too early held 3 of 4");
-    expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
+    expect(plain).toContain("Too early held 0 of 2");
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("No comparison"));
     expect(plain.indexOf("No comparison")).toBeLessThan(plain.indexOf("Early"));
   });
@@ -645,25 +703,21 @@ describe("Bases you attacked", () => {
         }),
       ),
     );
-    expect(plain).toContain("Base strength · vs Legends at similar trophies today");
+    expect(plain).toContain("Base strength today");
     // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense,
     // against 32 a defense, 192 over 6, at similar trophies.
-    expect(plain).toContain("Hard lost −165 · avg −192 · in 6 defenses");
+    expect(plain).toContain("Hard lost −165 in 6 defenses · Legend avg −192");
     // One held and three tripled: 145 over 4 is −36 a defense.
-    expect(plain).toContain("Easy lost −145 · avg −128 · in 4 defenses");
+    expect(plain).toContain("Easy lost −145 in 4 defenses · Legend avg −128");
     // The same base near players losing 36 a defense is Average.
     expect(plain).toContain(
-      "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 · avg −144 · in 4 defenses",
+      "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 in 4 defenses · Legend avg −144",
     );
-    expect(plain).toContain("– lost −145 · in 4 defenses · no comparison yet");
+    expect(plain).toContain("– lost −145 in 4 defenses · no comparison yet");
     // Under 3 defenses the rating waits, but the day's total so far shows
     // beside the average.
-    expect(plain).toContain(
-      "Too early lost −65 · avg −64 · in 2 defenses · needs 3+ defenses",
-    );
-    expect(plain).toContain(
-      "Too early lost −40 · avg −32 · in 1 defense · needs 3+ defenses",
-    );
+    expect(plain).toContain("Too early lost −65 in 2 defenses · Legend avg −64");
+    expect(plain).toContain("Too early lost −40 in 1 defense · Legend avg −32");
     expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });

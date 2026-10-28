@@ -159,8 +159,8 @@ describe("the player page header", () => {
     const html = header(await renderPlayer());
     expect(html).toContain(
       `<h1><a class="game-link" href="${PLAYER_LINK}" target="_blank" ` +
-        `rel="noopener noreferrer" aria-label="Open VANGUARD in Clash of Clans">` +
-        `<bdi>VANGUARD</bdi><svg`,
+        `rel="noopener noreferrer" aria-label="Open VANGUARD in Clash of Clans" ` +
+        `title="Open in Clash of Clans"><bdi>VANGUARD</bdi><svg`,
     );
     expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
     expect(html).not.toContain("OpenClanProfile");
@@ -182,7 +182,8 @@ describe("the player page header", () => {
     expect(html).toContain(
       `<span class="player-clan"><a class="game-link" href="${CLAN_LINK}" ` +
         `target="_blank" rel="noopener noreferrer" ` +
-        `aria-label="Open Titans3.0 in Clash of Clans"><bdi>Titans3.0</bdi><svg`,
+        `aria-label="Open Titans3.0 in Clash of Clans" title="Open in Clash of Clans">` +
+        `<bdi>Titans3.0</bdi><svg`,
     );
     expect(html).not.toContain("Titans2.0");
   });

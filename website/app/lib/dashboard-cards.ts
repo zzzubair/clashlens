@@ -362,24 +362,13 @@ export function heatCells(season: SeasonData, mode: HeatMode): HeatCell[] {
   });
 }
 
-// Rose and sage between the ends, so no day looks like the orange buttons.
-const HEAT_STOPS = [
-  [224, 49, 49],
-  [226, 146, 134],
-  [140, 192, 140],
-  [47, 179, 68],
-] as const;
-
-/** Red for your worst day, then rose, sage and green for your best. */
-export function heatColour(shade: number): [number, number, number] {
-  const position = Math.max(0, Math.min(1, shade)) * 3;
-  const step = Math.min(2, Math.floor(position));
-  const part = position - step;
-  const from = HEAT_STOPS[step]!;
-  const to = HEAT_STOPS[step + 1]!;
-  return [0, 1, 2].map((channel) =>
-    Math.round(from[channel]! + (to[channel]! - from[channel]!) * part),
-  ) as [number, number, number];
+/**
+ * A played day's step on the heat map, 0 for your worst days to 4 for your
+ * best: five clean steps, never a blend. The stylesheet colours them red,
+ * rose, grey, sage and green for each theme.
+ */
+export function heatStep(shade: number): number {
+  return Math.round(Math.max(0, Math.min(1, shade)) * 4);
 }
 
 export interface GoalPlan {

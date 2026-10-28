@@ -116,10 +116,17 @@ describe("Armies on defense", () => {
     expect(plain).toContain("Last 3 days · 2 with army data · 3 defenses");
     expect(plain).toContain("Army type Share Held / Legends avg Avg lost / Legends avg");
     // Thrower: 2 of 3 defenses, 1 of 2 held, 69 lost; every tracked player
-    // held 2 of 4 against it and lost 119.
-    expect(plain).toContain("Thrower 67% 50% / 50% −35 / −30");
-    expect(plain).toContain("Hydra 33% 100% / 100% −26 / −26");
-    expect(plain).toContain("All defenses 100% 67% / 60% −32 / −29");
+    // held 2 of 4 against it and lost 119. Each number carries its own label
+    // for a phone, where the headings go.
+    expect(plain).toContain(
+      "Thrower 67% of defenses Held 50% / Legends 50% Avg lost −35 / Legends −30",
+    );
+    expect(plain).toContain(
+      "Hydra 33% of defenses Held 100% / Legends 100% Avg lost −26 / Legends −26",
+    );
+    expect(plain).toContain(
+      "All defenses 100% of defenses Held 67% / Legends 60% Avg lost −32 / Legends −29",
+    );
     expect(plain.indexOf("Thrower")).toBeLessThan(plain.indexOf("Hydra"));
   });
 
@@ -136,8 +143,12 @@ describe("Armies on defense", () => {
     const plain = await render(
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies } }),
     );
-    expect(plain).toContain("Thrower 67% 50% / – −35 / –");
-    expect(plain).toContain("All defenses 100% 67% / – −32 / –");
+    expect(plain).toContain(
+      "Thrower 67% of defenses Held 50% / Legends – Avg lost −35 / Legends –",
+    );
+    expect(plain).toContain(
+      "All defenses 100% of defenses Held 67% / Legends – Avg lost −32 / Legends –",
+    );
   });
 
   it("lists at most 5 armies, and says when there is nothing to show", async () => {
@@ -208,7 +219,7 @@ describe("Armies on offense", () => {
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies: armies } }),
     );
     expect(plain).toContain("Last 7 days · 2 with army data · 1 attack");
-    expect(plain).toContain("1 attack Thrower You 100% Legends 50%");
+    expect(plain).toContain("1 attack Thrower Your hit rate 100% Legends 50%");
     expect(plain).not.toContain("Tripled");
   });
 
@@ -239,7 +250,7 @@ describe("Armies on offense", () => {
     // Each army's hit rate beside everyone's with it. Dragon Rider and the 2
     // unreadable attacks: 3 of 6 tripled, a mix with no Legends rate.
     expect(plain).toContain(
-      "Army type You Legends Thrower 77% 50% Super Bowler 71% 47% Hydra 63% 48% Other armies 50% –",
+      "Army type Your hit rate Legends Thrower 77% 50% Super Bowler 71% 47% Hydra 63% 48% Other armies 50% mixed",
     );
     expect(plain).not.toContain("Dragon Rider");
     expect(plain).not.toContain("of attacks");

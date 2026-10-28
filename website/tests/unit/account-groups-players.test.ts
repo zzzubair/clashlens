@@ -197,7 +197,7 @@ describe("adding and removing one group player", () => {
       }),
     ).replaceAll("&#x27;", "'");
     expect(html).toContain("Waiting for this player's Season reset");
-    expect(html).not.toContain("6,000 trophies");
+    expect(html).not.toContain("6,000");
   });
 
   it("adds a real player outside Legend League with a no-data label", async () => {

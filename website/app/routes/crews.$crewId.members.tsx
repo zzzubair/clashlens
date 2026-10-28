@@ -21,7 +21,8 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /** Each account picked to add is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
 const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
-const REMOVE_ICON = <span aria-hidden="true">✕</span>;
+/** The row's remove button says what it does; its name adds whose account. */
+const REMOVE_ICON = <span aria-hidden="true">Remove</span>;
 
 /** Back leads to the crew. */
 export const handle: BackHandle = {
@@ -145,7 +146,7 @@ export default function CrewMembersRoute() {
   const result = useActionData<typeof action>();
   if (crew === null) {
     return (
-      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+      <main id="main-content" tabIndex={-1} className="page-shell crew-page">
         <h1>Crew unavailable</h1>
         {error ? <ErrorNotice error={error} /> : null}
       </main>
@@ -156,7 +157,7 @@ export default function CrewMembersRoute() {
   // You first, then the owner, admins and members.
   const members = [...crew.members].sort((a, b) => Number(b.you) - Number(a.you));
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+    <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <h1>Members</h1>
       <p className="crew-meta">
         {clashers} {clashers === 1 ? "clasher" : "clashers"} · {crew.used} of {crew.size}{" "}
@@ -204,7 +205,13 @@ function MemberCard({
         </span>
         <span className="crew-who">
           <b>
-            {member.displayName}
+            <Link
+              className="crew-member-link"
+              to={`/users/${encodeURIComponent(member.username)}`}
+              state={backState}
+            >
+              {member.displayName}
+            </Link>
             {member.you ? <span className="crew-chip crew-chip-you">You</span> : null}
           </b>
           <span>
@@ -294,23 +301,19 @@ function MemberCard({
           </div>
         </details>
       ) : canKick && role === "owner" ? (
-        <details className="crew-edit">
-          <summary className="button secondary">Edit</summary>
-          <div className="crew-tray">
-            <Form method="post">
-              <input
-                type="hidden"
-                name="intent"
-                value={member.role === "admin" ? "demote" : "promote"}
-              />
-              <input type="hidden" name="username" value={member.username} />
-              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-              <button type="submit" className="button secondary">
-                {member.role === "admin" ? "Remove admin" : "Make admin"}
-              </button>
-            </Form>
-          </div>
-        </details>
+        // The owner's one choice for another member, named on the button.
+        <Form method="post" className="crew-edit">
+          <input
+            type="hidden"
+            name="intent"
+            value={member.role === "admin" ? "demote" : "promote"}
+          />
+          <input type="hidden" name="username" value={member.username} />
+          <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+          <button type="submit" className="button secondary">
+            {member.role === "admin" ? "Remove admin" : "Make admin"}
+          </button>
+        </Form>
       ) : null}
     </li>
   );

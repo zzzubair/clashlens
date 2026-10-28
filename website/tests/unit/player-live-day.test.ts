@@ -288,7 +288,7 @@ describe("today's Legend day wording", () => {
       '<span class="day-mark day-mark-verified"',
     );
     expect(cell(html, "2026-10-07", "Defenses")).toContain(
-      '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
+      '<span title="Taken by the game at Reset for defenses not played">−32 automatic loss</span>',
     );
     // An open day says where it started, at every width.
     expect(cell(html, "2026-10-07", "Defenses")).toContain(

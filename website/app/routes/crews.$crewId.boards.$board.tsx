@@ -69,7 +69,7 @@ export default function CrewBoardRoute() {
   const backState = useBackState(title);
   if (crew === null || boards === null) {
     return (
-      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+      <main id="main-content" tabIndex={-1} className="page-shell crew-page">
         <h1>{title}</h1>
         {error ? <ErrorNotice error={error} /> : null}
       </main>
@@ -77,10 +77,11 @@ export default function CrewBoardRoute() {
   }
   const { rows, missing } = boards.boards[board];
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
-      <p className="eyebrow">{crew.name}</p>
+    <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <h1>{title}</h1>
-      <p className="crew-lede">{boardDescription(board, period)}</p>
+      <p className="crew-lede">
+        {crew.name} · {boardDescription(board, period)}
+      </p>
       {NOW_BOARDS.includes(board) ? null : (
         <div className="crew-controls">
           <PeriodSwitch period={period} />

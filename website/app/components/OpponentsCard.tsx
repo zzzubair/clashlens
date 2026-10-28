@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -10,6 +10,7 @@ import {
 import type { PastBases } from "../lib/dashboard-cards";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, updatedAgo } from "./DashboardParts";
+import { DashboardIcon } from "./DashboardIcon";
 import { signed, starText, timeFormatter } from "./LegendClock";
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
@@ -139,14 +140,9 @@ function trophiesLine(row: OpponentRow): string {
       : null;
   const early = count < BASE_STRENGTH_MIN_DEFENSES;
   return [
-    `lost ${signed(-trophiesGivenUp(row.defenses))}`,
-    ...(average !== null ? [`avg ${signed(-Math.round(average))}`] : []),
-    `in ${count} defense${count === 1 ? "" : "s"}`,
-    ...(early
-      ? [`needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`]
-      : average === null
-        ? ["no comparison yet"]
-        : []),
+    `lost ${signed(-trophiesGivenUp(row.defenses))} in ${count} defense${count === 1 ? "" : "s"}`,
+    ...(average !== null ? [`Legend avg ${signed(-Math.round(average))}`] : []),
+    ...(!early && average === null ? ["no comparison yet"] : []),
   ].join(" · ");
 }
 
@@ -265,7 +261,9 @@ export function OpponentsCard({
           <span>Player · trophies at Reset</span>
           <span>Your hit</span>
           <span>Their defenses {when}</span>
-          <span>Base strength · vs Legends at similar trophies {when}</span>
+          <span title={`Against Legends at similar trophies ${when}`}>
+            Base strength {when}
+          </span>
           <span />
         </div>
         {sorted.map(({ row, strength }, index) => {
@@ -293,7 +291,7 @@ export function OpponentsCard({
                     : row.resetTrophies.toLocaleString("en-US")}
                 </span>
               </div>
-              <div>
+              <div className="opponents-hit">
                 <span className="dash-stars">{starText(row.hit.stars)}</span>{" "}
                 {row.hit.destruction}%{" "}
                 <b className={row.hit.trophyChange > 0 ? "positive" : ""}>
@@ -314,36 +312,59 @@ export function OpponentsCard({
                 ))}
               </ol>
               <div className="opponents-strength">
-                <span className={`dash-strength dash-strength-${strength}`}>
+                <span
+                  className={`dash-strength dash-strength-${strength}`}
+                  title={
+                    strength === "early"
+                      ? `Needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses for a rating`
+                      : undefined
+                  }
+                >
                   {earlier && strength === "early"
                     ? "Too few"
                     : STRENGTH_LABELS[strength]}
                 </span>
                 <span className="dash-muted">
-                  {mode === "held"
-                    ? `held ${held} of ${row.defenses.length} · ${
+                  {(mode === "held"
+                    ? `held ${held} of ${row.defenses.length}${
                         row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
-                          ? `needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses`
+                          ? ""
                           : row.legends?.defenses
-                            ? `${Math.round(heldShare(row.defenses) * 100)}% vs ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
-                            : "no comparison yet"
+                            ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
+                            : " · no comparison yet"
                       }`
-                    : trophiesLine(row)}
+                    : trophiesLine(row)
+                  )
+                    .split(" · ")
+                    // Each part stays whole, so a label never wraps away from its number.
+                    .map((part, index) => (
+                      <Fragment key={index}>
+                        {index ? " · " : null}
+                        <span className="opponents-part">{part}</span>
+                      </Fragment>
+                    ))}
                 </span>
               </div>
               <div className="opponents-action">
                 <Link
-                  className="button button-secondary dash-small-button"
+                  className="opponents-watch"
                   to={addToGroupPath(row.tag)}
+                  aria-label={`Add ${row.name ?? row.tag} to a watchlist`}
                   onClick={(event) => event.stopPropagation()}
                 >
-                  Add to watchlist
+                  <DashboardIcon name="plus" />
+                  Watchlist
                 </Link>
               </div>
             </div>
           );
         })}
       </div>
+      <p className="dash-card-foot opponents-key" aria-hidden="true">
+        Their defenses: <span className="opponents-block is-tripled" /> tripled
+        <span className="opponents-block is-held" /> held
+        <span className="opponents-block is-held is-yours" /> your attack
+      </p>
     </>
   );
 }
