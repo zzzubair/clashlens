@@ -312,9 +312,9 @@
   display: none;
 }
 
-/* A phone starts with a small dial (the arc, hand and battle marks only) and
-   the countdown beside it, so the cards after it come sooner. Show full clock
-   opens the dial whose battles can be tapped. */
+/* A phone starts with the clock as one strip, with no title: a small ring
+   (the arc and hand), the countdown and Show full clock, which opens the dial
+   whose battles can be tapped. */
 @media (max-width: 40rem) {
   .legend-clock .legend-clock-toggle.button {
     display: inline-flex;
@@ -322,60 +322,65 @@
     margin-top: 0.75rem;
   }
 
-  .legend-clock:not([data-full]) {
-    grid-template-columns: auto minmax(0, 1fr);
-    place-items: center start;
-    column-gap: 1.25rem;
+  .dash-card:has(> .legend-clock:not([data-full])) {
+    padding-block: 0.75rem;
   }
 
-  /* The viewBox leaves room for hour labels; the margin takes it back. */
-  .legend-clock:not([data-full]) .legend-clock-face {
-    grid-row: span 2;
-    width: 8rem;
-    margin: -1.1rem;
-  }
-
-  /* The small clock's summary names the Reset in local time; the zone line
-     comes back with the full dial. */
-  .legend-clock:not([data-full]) + .dash-card-foot {
-    display: none;
-  }
-
+  .dash-card:has(> .legend-clock:not([data-full])) > .dash-card-head,
+  .legend-clock:not([data-full]) + .dash-card-foot,
   .legend-clock:not([data-full])
     :is(
       .clock-hour,
+      .clock-tick,
       .clock-reset-tab,
       .clock-reset-label,
+      .clock-mark,
       .clock-center,
       .clock-countdown,
-      .clock-caption,
-      .clock-count,
-      .clock-count-text
+      .clock-caption
     ) {
     display: none;
   }
 
-  .legend-clock:not([data-full]) .clock-mark {
-    pointer-events: none;
+  .legend-clock:not([data-full]) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 0.9rem;
+  }
+
+  /* The viewBox leaves room for hour labels; the margin takes it back, and
+     the ring's lines thicken to read at this size. */
+  .legend-clock:not([data-full]) .legend-clock-face {
+    width: 4.75rem;
+    margin: -0.65rem;
+  }
+
+  .legend-clock:not([data-full]) :is(.clock-dial, .clock-hand) {
+    stroke-width: 9;
+  }
+
+  .legend-clock:not([data-full]) .clock-left {
+    stroke-width: 24;
   }
 
   .legend-clock:not([data-full]) .legend-clock-summary {
     display: block;
-    align-self: end;
     margin: 0;
     color: var(--cl-muted);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: 600;
   }
 
   .legend-clock-summary b {
     display: block;
     color: var(--cl-ink);
-    font: 700 2.1rem/1.05 var(--cl-font-score);
+    font: 700 1.75rem/1.05 var(--cl-font-score);
   }
 
-  .legend-clock:not([data-full]) .legend-clock-toggle {
-    align-self: start;
+  .legend-clock:not([data-full]) .legend-clock-toggle.button {
+    margin-top: 0;
+    padding-inline: 0.8rem;
+    font-size: 0.85rem;
   }
 }
 
@@ -1066,6 +1071,12 @@
 
 .heat-today {
   border: 2px dashed var(--cl-action);
+}
+
+.heat-today button {
+  padding-top: 0.5rem;
+  color: var(--cl-action-text);
+  font: 700 0.55rem var(--cl-font);
 }
 
 .heat-future {

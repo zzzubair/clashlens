@@ -46,7 +46,11 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
   const [picked, setPicked] = useState<number | null>(null);
   const cells = heatCells(data, mode);
   const byDay = new Map(data.days.map((day) => [day.day, day]));
-  const pickedDay = picked === null ? null : (byDay.get(picked) ?? null);
+  const pickedCell = cells.find((cell) => cell.day === picked) ?? null;
+  const pickedDay =
+    pickedCell === null || pickedCell.kind in NO_RESULT
+      ? null
+      : (byDay.get(pickedCell.day) ?? null);
   return (
     <>
       <CardHead
@@ -77,9 +81,11 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
       <p className="dash-muted heat-tip" aria-live="polite">
         {pickedDay
           ? `Day ${pickedDay.day} · ended on ${count(pickedDay.endTrophies)}${isShieldDay(pickedDay) ? " · no battles" : ""}`
-          : data.today !== null && data.today > 1
-            ? null
-            : FIRST_DAY_NOTE}
+          : pickedCell && pickedCell.kind in NO_RESULT
+            ? `Day ${pickedCell.day}: ${NO_RESULT[pickedCell.kind as keyof typeof NO_RESULT]}`
+            : data.today !== null && data.today > 1
+              ? null
+              : FIRST_DAY_NOTE}
       </p>
       <dl className="heat-summary">
         {pickedDay ? (
@@ -91,6 +97,13 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
     </>
   );
 }
+
+/** What a day without a result says when tapped. */
+const NO_RESULT = {
+  today: "in progress",
+  future: "not started",
+  missing: "no saved result",
+} as const;
 
 function HeatSquare({
   cell,
@@ -111,19 +124,8 @@ function HeatSquare({
           : cell.kind === "shield"
             ? "no battles"
             : signedOr(cell.value);
-  if (cell.kind === "future" || cell.kind === "today" || cell.kind === "missing") {
-    return (
-      <li
-        className={`heat-day heat-${cell.kind}`}
-        aria-label={`Day ${cell.day}: ${label}`}
-      >
-        <small>{cell.day}</small>
-        {cell.kind === "today" ? "…" : cell.kind === "missing" ? "–" : ""}
-      </li>
-    );
-  }
   const style =
-    cell.shade === null
+    cell.kind in NO_RESULT || cell.shade === null
       ? undefined
       : (() => {
           const [red, green, blue] = heatColour(cell.shade);
@@ -141,7 +143,11 @@ function HeatSquare({
         onClick={onPick}
       >
         <small>{cell.day}</small>
-        {signedOr(cell.value)}
+        {cell.kind === "today"
+          ? "today"
+          : cell.kind in NO_RESULT
+            ? ""
+            : signedOr(cell.value)}
       </button>
     </li>
   );

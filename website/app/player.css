@@ -53,8 +53,8 @@
 .player-hero > h1 {
   grid-area: name;
   margin: 0;
-  font-size: clamp(2.1rem, 9vw, 3.25rem);
-  line-height: 1.02;
+  font-size: clamp(2.6rem, 11vw, 4rem);
+  line-height: 0.98;
   overflow-wrap: anywhere;
 }
 .player-hero .game-link {
