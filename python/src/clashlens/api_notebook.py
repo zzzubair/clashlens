@@ -722,6 +722,11 @@ def get_notebook(
             }
         today_so_far = None
         copy: list[dict[str, Any]] = []
+        numbers: dict[str, Any] = {}
+        if detail is not None:
+            from .notebook_base import base_page
+
+            numbers = base_page(connection, notebook, detail)
         if detail is not None and notebook.current:
             today_so_far = _today_so_far(connection, history, detail, notebook.today)
             # Your game accounts, for "Which account will run it?".
@@ -871,6 +876,8 @@ def get_notebook(
             # the Reset; None when nobody runs it today.
             "today": today_so_far,
             "copy": copy,
+            # Its numbers in each window, Who ran it, and copies (notebook_base).
+            **numbers,
         }
     return result
 

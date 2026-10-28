@@ -617,6 +617,10 @@
   font-family: var(--cl-font-heading);
   font-size: 1.4rem;
 }
+.nb-stars small {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
 .nb-per-account {
   display: grid;
   gap: 0.4rem;

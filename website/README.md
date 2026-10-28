@@ -310,9 +310,15 @@ running when a Season ends carries over by itself; the rest stay on their
 Season's page, opened from the Season picker (`/notebook?season=<id>`), where a
 base's page brings it back. A base retires by hand or 30 days after its last
 counted day or when it was added or brought back. A base's page at
-`/notebook/bases/<base ID>` shows how it held this Season (defenses not
-3-starred) from everyone who ran it, its stars, each of your accounts with the
-days it ran, days with no data, its note and link. Only its maker edits its
+`/notebook/bases/<base ID>` shows how it held (defenses not 3-starred) from
+everyone who ran it over Last 3 days (the 3 newest counted Legend days), This
+Season (the default) or All: its stars and their shares, how often each army
+type 3-starred it, the same split by the defender's Reset trophies (under
+5,400, 5,400–5,799, 5,800+), and Who ran it, one row per account per Legend day,
+newest first with today so far, each opening that day on the player's page.
+Who ran it lists only accounts of people in that notebook: yours, or on a
+Crew's page its members'. Then each of your accounts with the days it ran,
+days with no data, its note and link. Only its maker edits its
 name, link and note. Every change saves at once through `/notebook/save` and
 offers Undo, except the note. Records come from the worker's defense counts, so
 a finished day counts after 07:00 UTC.
@@ -323,7 +329,9 @@ rows: owners, admins and Uploaders add bases and retire or remove them (an
 Uploader only the ones they made or added), and any member adds one to their
 own notebook with Add to my notebook, where it stays if they leave. From a base
 in your own notebook, Add to Crew puts it in a Crew where you can add bases.
-One base keeps one record wherever it is. While the Notebook is on, only a
+One base keeps one record wherever it is; on a Crew's base page its owner,
+admins and Uploaders also see how many Clashers copied it into their own
+notebook. While the Notebook is on, only a
 Crew's owner and admins make invite links, and they make or remove Uploaders
 from Members.
 

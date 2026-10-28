@@ -132,7 +132,7 @@ def test_today_so_far_counts_todays_defenses_on_everyone_running_the_base(
 ) -> None:
     """Live logs publish only during their own Legend day, so this story is
     today's: Main and Alt run Ring from today and Sam runs another base.
-    Main has held 1 of 2 so far and Alt 1 of 1: 2 of 3."""
+    Main has held 1 of 2 so far, losing 50, and Alt 1 of 1, losing 16: 2 of 3."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
             today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
@@ -182,3 +182,7 @@ def test_today_so_far_counts_todays_defenses_on_everyone_running_the_base(
 
     assert unfinished == []
     assert seen["base"]["today"] == {"defenses": 3, "held": 2}
+    # Who ran it shows each account's day so far, from its published log.
+    assert sorted((row["tag"], row["live"], row["start"], row["defenses"], row["held"],
+                   row["trophies_lost"]) for row in seen["base"]["who"]["rows"]) == [
+        (JO, True, 5000, 2, 1, 50), (ALT, True, 5000, 1, 1, 16)]
