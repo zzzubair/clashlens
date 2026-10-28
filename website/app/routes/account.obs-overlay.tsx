@@ -709,11 +709,19 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         >
           {/* A touch screen's hint, on the picture it is about. */}
           <p className="obs-stage-hint" aria-hidden="true">
-            Drag to move it, drag an edge to resize
+            Drag to move it, drag a dot to resize
           </p>
           <div
             className="obs-canvas"
-            style={{ width: place.cw, height: place.ch, transform: `scale(${scale})` }}
+            style={
+              {
+                width: place.cw,
+                height: place.ch,
+                transform: `scale(${scale})`,
+                // Lets the touch resize dots keep one size on screen.
+                "--obs-k": scale || 1,
+              } as CSSProperties
+            }
           >
             <div className="obs-cam">camera</div>
             <iframe

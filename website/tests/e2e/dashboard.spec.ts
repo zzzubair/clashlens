@@ -235,6 +235,16 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     expect(box.width).toBe(boxes[0]!.width);
     if (index > 0) expect(box.top).toBeGreaterThan(boxes[index - 1]!.bottom);
   }
+  // The phone clock starts small; Show full clock opens the dial and back again.
+  const clock = page.getByRole("region", { name: "Legend clock" });
+  const dial = clock.locator(".legend-clock-face");
+  const smallHeight = (await dial.boundingBox())!.height;
+  await clock.getByRole("button", { name: "Show full clock" }).click();
+  await expect
+    .poll(async () => (await dial.boundingBox())!.height)
+    .toBeGreaterThan(smallHeight);
+  await clock.getByRole("button", { name: "Show small clock" }).click();
+  await expect.poll(async () => (await dial.boundingBox())!.height).toBe(smallHeight);
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await expect(bar).toBeInViewport();
   await bar.getByRole("button", { name: "Done" }).click();

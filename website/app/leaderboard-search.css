@@ -25,6 +25,15 @@
   margin: 0;
 }
 
+/* An At Reset title keeps its full time, as a smaller line under the words. */
+.rankings-header h1 time {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--cl-muted);
+  font: 700 max(0.95rem, 0.45em) / 1.3 var(--cl-font);
+  letter-spacing: normal;
+}
+
 .rankings-context {
   max-width: 74ch;
   margin: 0;

@@ -174,6 +174,8 @@ export function LegendClock({
     null,
   );
   const [phone, setPhone] = useState(false);
+  // A phone starts with the small clock; the full one has battles to tap.
+  const [full, setFull] = useState(false);
   const detail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -216,9 +218,10 @@ export function LegendClock({
       current?.index === index ? null : { index, anchor: target.getBoundingClientRect() },
     );
   const openMark = open ? marks[open.index] : undefined;
+  const small = phone && !full;
 
   return (
-    <div className="legend-clock" ref={detail}>
+    <div className="legend-clock" ref={detail} data-full={full || undefined}>
       <svg
         className="legend-clock-face"
         viewBox="-138 -138 276 276"
@@ -271,7 +274,7 @@ export function LegendClock({
               className="clock-mark"
               transform={`translate(${x.toFixed(1)} ${y.toFixed(1)})`}
               role="button"
-              tabIndex={0}
+              tabIndex={small ? -1 : 0}
               aria-label={markLabel(mark)}
               aria-expanded={open?.index === index}
               onClick={(event) => toggle(index, event.currentTarget)}
@@ -306,6 +309,21 @@ export function LegendClock({
           to Reset
         </text>
       </svg>
+      {/* Phones only: the countdown beside the small dial, and the switch to the
+          full clock and back. */}
+      <p className="legend-clock-summary" aria-hidden="true">
+        <b>{countdown}</b> to Reset at {resetLabel}
+      </p>
+      <button
+        type="button"
+        className="button secondary legend-clock-toggle"
+        onClick={() => {
+          setOpen(null);
+          setFull(!full);
+        }}
+      >
+        {full ? "Show small clock" : "Show full clock"}
+      </button>
       {openMark ? (
         <MarkDetail
           mark={openMark}

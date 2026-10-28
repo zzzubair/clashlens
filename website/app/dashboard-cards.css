@@ -303,6 +303,73 @@
   }
 }
 
+/* The countdown beside a small dial, and its switch, are for phones. The
+   switch needs .button to outrank the shared button rule. */
+.legend-clock :is(.legend-clock-summary, .legend-clock-toggle.button) {
+  display: none;
+}
+
+/* A phone starts with a small dial (the arc, hand and battle marks only) and
+   the countdown beside it, so the cards after it come sooner. Show full clock
+   opens the dial whose battles can be tapped. */
+@media (max-width: 40rem) {
+  .legend-clock .legend-clock-toggle.button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    margin-top: 0.75rem;
+  }
+
+  .legend-clock:not([data-full]) {
+    grid-template-columns: auto minmax(0, 1fr);
+    place-items: center start;
+    column-gap: 1.25rem;
+  }
+
+  /* The viewBox leaves room for hour labels; the margin takes it back. */
+  .legend-clock:not([data-full]) .legend-clock-face {
+    grid-row: span 2;
+    width: 9rem;
+    margin: -1.25rem;
+  }
+
+  .legend-clock:not([data-full])
+    :is(
+      .clock-hour,
+      .clock-reset-tab,
+      .clock-reset-label,
+      .clock-center,
+      .clock-countdown,
+      .clock-caption,
+      .clock-count,
+      .clock-count-text
+    ) {
+    display: none;
+  }
+
+  .legend-clock:not([data-full]) .clock-mark {
+    pointer-events: none;
+  }
+
+  .legend-clock:not([data-full]) .legend-clock-summary {
+    display: block;
+    align-self: end;
+    margin: 0;
+    color: var(--cl-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .legend-clock-summary b {
+    display: block;
+    color: var(--cl-ink);
+    font: 700 2.1rem/1.05 var(--cl-font-score);
+  }
+
+  .legend-clock:not([data-full]) .legend-clock-toggle {
+    align-self: start;
+  }
+}
+
 .clock-dial {
   fill: var(--cl-panel);
   stroke: var(--cl-ink);
@@ -328,14 +395,15 @@
   font-weight: 700;
 }
 
+/* An outlined tab: the orange fill is kept for the main action. */
 .clock-reset-tab {
-  fill: var(--cl-brand-orange);
-  stroke: var(--cl-ink);
+  fill: var(--cl-panel);
+  stroke: var(--cl-brand-orange);
   stroke-width: 2;
 }
 
 .clock-reset-label {
-  fill: var(--cl-brand-night);
+  fill: var(--cl-action-text);
   font-size: 11px;
   font-weight: 900;
   text-anchor: middle;

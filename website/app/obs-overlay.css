@@ -1144,6 +1144,30 @@ html.obs-page body {
   top: calc(50% - 13px);
   cursor: ew-resize;
 }
+/* A finger gets two corner dots, always shown, each about 44px on screen
+   whatever the picture's scale; the mouse keeps all eight edges. */
+@media (pointer: coarse) {
+  .obs-settings .obs-rz {
+    --hit: calc(44px / var(--obs-k));
+    width: var(--hit);
+    height: var(--hit);
+    margin: calc(13px - var(--hit) / 2);
+    background: none;
+    border: 0;
+    opacity: 1;
+  }
+  .obs-settings .obs-rz:not([data-dir="nw"], [data-dir="se"]) {
+    display: none;
+  }
+  .obs-settings .obs-rz::before {
+    position: absolute;
+    inset: 30%;
+    background: #ffd447;
+    border: calc(2px / var(--obs-k)) solid #1d1426;
+    border-radius: 50%;
+    content: "";
+  }
+}
 .obs-settings .obs-guide {
   position: absolute;
   background: rgb(255 212 71 / 0.9);
