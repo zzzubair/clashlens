@@ -7,6 +7,7 @@ import type {
   RefreshWork,
   SummarizedSeasonRef,
 } from "./contracts";
+import { leftAfter } from "./season-shape";
 
 /** What a player page says about a tag without current results. */
 export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
@@ -371,7 +372,8 @@ export function isLegendDay(codes: string[], battles: number) {
 // record of that day, shown in the log or not. Only the latest finished day,
 // ended at the latest Reset, can fall back to its start plus its trophy change
 // and any weekly or Season reset at its closing Reset; an older day without
-// the next day's start has none. When both exist and disagree the whole day is
+// the next day's start has none, unless the player left Legend I at that
+// Reset: no Legend day follows it, and no weekly raise applies. When both exist and disagree the whole day is
 // Uncertain and its reasons lead with the gap.
 export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
   const ended = Date.parse(day.period.split(" – ")[1]);
@@ -395,7 +397,9 @@ export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
       : null;
   const evidence = presentDay(dayEvidence(day), false);
   return {
-    trophies: following ?? (ended <= now && now - ended < DAY_MS ? own : null),
+    trophies:
+      following ??
+      (ended <= now && (now - ended < DAY_MS || leftAfter(player, day)) ? own : null),
     status: conflict ? "Uncertain" : evidence.status,
     reasons: conflict ? [conflict, ...evidence.reasons] : evidence.reasons,
     conflict,

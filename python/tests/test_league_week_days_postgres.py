@@ -37,6 +37,8 @@ from test_reset_scenarios_postgres import (
 )
 
 from clashlens import board_deadline, league_days, reset_baselines
+from clashlens.api_db import ApiDatabase
+from clashlens.api_players import get_player_page
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -261,6 +263,15 @@ def test_a_mid_season_monday_moves_players_between_leagues(
         queued = _queued(connection_info)
         story.run_worker()
         rechecked = {tag: _public_days(connection_info, tag) for tag in (STALE_LATE, STEADY_1)}
+        # Each player's page on Tuesday evening, with the weeks the record
+        # decided for the Season.
+        api = ApiDatabase(connection_info)
+        try:
+            pages = {tag: get_player_page(api, tag, now=tuesday + timedelta(hours=14),
+                                          freshness_seconds=900)
+                     for tag in (DROPPED, PROMOTED, STEADY_1)}
+        finally:
+            api.close()
 
     def days(tag: str, since: datetime, until: datetime) -> dict[datetime, dict[str, object]]:
         return {start: row for start, row in public[tag].items() if since <= start < until}
@@ -334,6 +345,26 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     assert queued == [(STEADY_1, "reconcile_pass", 25, "pending")]
     assert monday not in rechecked[STALE_LATE]
     assert rechecked[STEADY_1][monday] == public[STEADY_1][monday]
+    # The player page names each week's league, so a partial Season shows
+    # which days were Legend I days. DROPPED has finished no Season in
+    # Legend I and has no Legend day now: the record alone places its
+    # Season, whose Sunday stays on its page.
+    def weeks(tag: str) -> list[tuple[str, str, str | None]]:
+        return [(week["week_start"], week["league"], week["entry"])
+                for week in pages[tag]["screen_ready"]["season_weeks"]]
+
+    first, second = week_before.isoformat(), monday.isoformat()
+    assert weeks(DROPPED) == [(first, "legend_i", "season_start"),
+                              (second, "below_legend_i", None)]
+    assert weeks(PROMOTED) == [(first, "below_legend_i", None),
+                               (second, "legend_i", "promoted")]
+    assert weeks(STEADY_1) == [(first, "legend_i", "season_start"),
+                               (second, "legend_i", "stayed")]
+    season = pages[DROPPED]["screen_ready"]["season"]
+    assert (season["id"], season["start"], season["current_day_number"],
+            season["anchor_source"]) == (
+        str(int(SEASON.timestamp())), SEASON.isoformat(), 9, "weekly_league_record")
+    assert sunday.isoformat() in pages[DROPPED]["screen_ready"]["season_day_starts"]
 
 
 KEPT = "#VPP"

@@ -327,6 +327,14 @@ export interface PlayerLookup {
   };
 }
 
+/** One week, Monday Reset to Monday Reset, of the weekly league record. */
+export interface SeasonWeek {
+  start: string;
+  league: "legend_i" | "below_legend_i" | "unknown";
+  /** How a Legend I week began; null for any other week. */
+  entry: "season_start" | "stayed" | "promoted" | "first_seen" | "unknown" | null;
+}
+
 export interface PlayerPage {
   kind: "player-page";
   tag: string;
@@ -337,9 +345,12 @@ export interface PlayerPage {
     anchor: string;
     currentDayNumber: number;
     dayCount: number;
-    anchorSource: "official_league_history" | "daily_publication";
+    anchorSource:
+      "official_league_history" | "daily_publication" | "weekly_league_record";
     anchorObservedAt: string;
   } | null;
+  /** The calendar Season's weeks the weekly league record has decided, oldest first. */
+  seasonWeeks?: SeasonWeek[];
   currentDay: RankedDaySummary | null;
   /** When `currentDay` was published. */
   currentDayPublishedAt?: string | null;
