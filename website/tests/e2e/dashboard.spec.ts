@@ -290,6 +290,12 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   }).toPass({ intervals: [2_000], timeout: 60_000 });
   await welcome.getByRole("button", { name: /Use our layout/ }).click();
   await expect.poll(() => cardOrder(page)).toEqual(DEFAULT_CARDS);
+  // On a 360px phone two players' tabs scroll in their row, not the page.
+  await page.setViewportSize({ width: 360, height: 740 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBe(360);
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   const tab = (tag: string) =>
     page.locator(`.dash-account[href$="player=${encodeURIComponent(tag)}"]`);

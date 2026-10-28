@@ -175,6 +175,8 @@
 /* ---------- Account tabs and the Customise divider ---------- */
 
 .dash-accounts {
+  /* Holds the hidden Link player text, which would otherwise widen the page. */
+  position: relative;
   display: flex;
   gap: 0.6rem;
   margin-bottom: 0.8rem;
