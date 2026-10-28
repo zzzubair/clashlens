@@ -301,7 +301,10 @@ export default function TrackedLeaderboardRoute() {
             </h1>
             {daily ? (
               <p className="rankings-date">
-                Day {daily.dayNumber} · <LocalTimestamp value={daily.resetAt} />
+                {/* The private alert check reads the board's Reset from this time
+                    (website_daily_board in python/src/clashlens/alerts.py). */}
+                Day {daily.dayNumber} ·{" "}
+                <LocalTimestamp className="board-reset" value={daily.resetAt} />
               </p>
             ) : newestObservedAt ? (
               <p className="rankings-date">
