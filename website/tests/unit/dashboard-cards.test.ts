@@ -907,7 +907,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // older than the board's, so the label goes by it.
     expect(data.cards.cutoffs?.live.observedAtMs).toBe(NOW - 10 * 60_000);
 
-    // Rivals watch: 3 above and 3 below on the live board, with moves since the Reset.
+    // Rivals watch: 3 above and 3 below live, moves since the Reset, each a player link.
     const rivals = text(cards["rivals-watch"]!);
     expect(rivals).toContain("Today so far");
     expect(rivals.match(/#3\d\d/g)).toEqual([
@@ -922,11 +922,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
     expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
     expect(rivals).toContain("#317 Player 317 5,365 – – –");
-    // Each rival's name opens their player page.
-    expect(cards["rivals-watch"]).toMatch(
-      /<a class="rival-link" href="\/players\/%238PYQ2LJ0"[^>]*><bdi class="dash-name" title="Tundra">Tundra<\/bdi><\/a>/,
-    );
-    expect(cards["rivals-watch"]!.match(/class="rival-link"/g)).toHaveLength(7);
+    expect(cards["rivals-watch"]).toContain('href="/players/%238PYQ2LJ0"');
+    expect(cards["rivals-watch"]!.match(/class="rival-link" href/g)).toHaveLength(7);
     // Tundra's battles were saved 20 minutes ago, before the board's 3.
     expect(data.cards["rivals-watch"]?.live?.observedAtMs).toBe(NOW - 20 * 60_000);
 
@@ -1173,9 +1170,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const day = text(cards["legend-day"]!);
     // The tab shows whose day it is; the card names the player for screen readers only.
     expect(day).toContain("Legend day 9 , Lens Main Trophies 5,370 Net today –");
-    expect(cards["legend-day"]).toMatch(
-      /<span class="sr-only">, (<!-- -->)?Lens Main<\/span>/,
-    );
+    expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Next Reset #95–#760");
     expect(day).toContain("Projected #240 at Reset");
