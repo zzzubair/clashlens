@@ -148,6 +148,12 @@
   color: var(--cl-muted);
 }
 
+.legend-day-est {
+  display: block;
+  color: var(--cl-muted);
+  font: 600 0.7rem/1.2 var(--cl-font);
+}
+
 @container (max-width: 30rem) {
   .legend-day-ranks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -460,6 +466,10 @@
   display: grid;
   gap: 0.2rem;
   justify-items: start;
+}
+
+.opponents-part {
+  white-space: nowrap;
 }
 
 .dash-strength {
@@ -1313,8 +1323,8 @@
   }
 }
 
-/* A narrow phone has no room for 8 readable boxes in a line: two rows of 4. */
-@media (max-width: 24rem) {
+/* A phone has no room for 8 readable boxes in a line: two rows of 4. */
+@media (max-width: 30rem) {
   .dash-star-boxes {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 4px;

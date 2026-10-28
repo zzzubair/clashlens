@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -325,7 +325,7 @@ export function OpponentsCard({
                     : STRENGTH_LABELS[strength]}
                 </span>
                 <span className="dash-muted">
-                  {mode === "held"
+                  {(mode === "held"
                     ? `held ${held} of ${row.defenses.length}${
                         row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
                           ? ""
@@ -333,7 +333,16 @@ export function OpponentsCard({
                             ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
                             : " · no comparison yet"
                       }`
-                    : trophiesLine(row)}
+                    : trophiesLine(row)
+                  )
+                    .split(" · ")
+                    // Each part stays whole, so a label never wraps away from its number.
+                    .map((part, index) => (
+                      <Fragment key={index}>
+                        {index ? " · " : null}
+                        <span className="opponents-part">{part}</span>
+                      </Fragment>
+                    ))}
                 </span>
               </div>
               <div className="opponents-action">

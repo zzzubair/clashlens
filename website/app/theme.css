@@ -62,7 +62,7 @@
   /* Panels: white cards with a hairline edge, a lit top and a soft drop. */
   --cl-card-line: rgb(0 0 0 / 0.075);
   --cl-card-radius: 14px;
-  --cl-card-drop: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -20px rgb(0 0 0 / 0.22);
+  --cl-card-drop: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 20px -16px rgb(0 0 0 / 0.14);
   --cl-glass: rgb(255 255 255 / 0.74);
   --cl-glass-strong: rgb(255 255 255 / 0.9);
   --cl-glass-edge: rgb(0 0 0 / 0.08);

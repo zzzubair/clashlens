@@ -182,7 +182,7 @@ export function LegendDayCard({
             ) : (
               "–"
             )}
-            <span className="sr-only"> estimate</span>
+            <small className="legend-day-est"> estimate</small>
           </dd>
         </div>
       </dl>

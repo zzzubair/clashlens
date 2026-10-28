@@ -182,8 +182,14 @@
       display: inline;
     }
 
+    /* The caption shows the zone; the foot stays for screen readers. */
     .legend-clock + .dash-card-foot {
-      display: none;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
 
     .legend-clock .legend-clock-face {
