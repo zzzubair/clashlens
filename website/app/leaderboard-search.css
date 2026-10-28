@@ -310,7 +310,10 @@
     gap: 0.6rem;
   }
 
+  /* The Live / At Reset switch sits above the title, so a longer At Reset
+     title never moves it out from under the thumb. */
   .rankings-heading .leaderboard-view-switch {
+    order: -1;
     width: auto;
   }
 

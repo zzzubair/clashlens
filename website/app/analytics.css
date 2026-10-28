@@ -359,9 +359,12 @@
   font-size: 0.78rem;
   font-weight: 700;
 }
+/* The arrow sits at the name cell's right edge, so it lines up row to row. */
 .analytics-row-open {
   display: flex;
+  flex: 1;
   align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
   min-width: 0;
   min-height: 2.75rem;
@@ -454,8 +457,6 @@
   }
   /* The whole card opens the sheet, so the name needs no tall tap target. */
   .analytics-row-open {
-    flex: 1;
-    justify-content: space-between;
     min-height: 0;
   }
   /* The other numbers share one quiet line: label, then value. */

@@ -688,6 +688,27 @@ html.obs-page body {
   .obs-settings .obs-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* Stacked, the picture leads and stays under the top bar while the choices
+     below change it; its own controls and the OBS link follow them. */
+  .obs-settings .obs-side {
+    display: contents;
+  }
+
+  .obs-settings .obs-side > .obs-stagewrap {
+    position: sticky;
+    z-index: 5;
+    top: calc(var(--cl-header-h) + 0.5rem);
+    order: -1;
+    justify-self: center;
+    width: min(100%, 30rem);
+    margin: 0;
+    box-shadow: var(--cl-overlay-shadow);
+  }
+
+  .obs-settings .obs-side > .form-panel + .form-panel {
+    margin-top: 0;
+  }
 }
 .obs-settings .form-panel {
   padding: 16px;
@@ -951,8 +972,21 @@ html.obs-page body {
   font: 700 13px var(--cl-font);
   margin: 0;
 }
+/* Touch screens get the drag hint; a mouse and keyboard get the full one. */
+.obs-settings .obs-help-touch {
+  display: none;
+}
+@media (pointer: coarse) {
+  .obs-settings .obs-help-keys {
+    display: none;
+  }
+  .obs-settings .obs-help-touch {
+    display: inline;
+  }
+}
+/* The picture tops the side column, above its panel of controls. */
 .obs-settings .obs-stagewrap {
-  margin-top: 12px;
+  margin-bottom: 18px;
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;

@@ -17,7 +17,7 @@
     grid-template-areas:
       "hero teaser"
       "top teaser";
-    grid-template-columns: minmax(0, 1fr) 26rem;
+    grid-template-columns: minmax(0, 1fr) 30rem;
     grid-template-rows: auto 1fr;
     gap: 1.75rem 2.5rem;
   }
@@ -34,6 +34,15 @@
 
   .front-grid-pitch .home-leaderboard {
     grid-area: top;
+  }
+
+  /* The wider column lets the example's small labels read at a normal size. */
+  .front-grid-pitch :is(.teaser-label, .teaser-rivals > span) {
+    font-size: 0.8rem;
+  }
+
+  .front-grid-pitch :is(.teaser-ranks small, .teaser-clock small) {
+    font-size: 0.76rem;
   }
 }
 

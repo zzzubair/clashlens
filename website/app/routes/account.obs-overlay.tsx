@@ -705,15 +705,65 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
       </form>
 
-      <div>
+      <div className="obs-side">
+        {/* The picture leads, outside its panel, so narrow screens can keep it
+            in view while the choices change it. */}
+        <div
+          className="obs-stagewrap"
+          ref={wrap}
+          style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
+        >
+          <div
+            className="obs-canvas"
+            style={{ width: place.cw, height: place.ch, transform: `scale(${scale})` }}
+          >
+            <div className="obs-cam">camera</div>
+            <iframe
+              ref={frame}
+              title="Overlay preview"
+              src={`/account/obs-overlay/preview?${initialQuery}`}
+              style={box}
+            />
+            {guides.v !== null ? (
+              <div className="obs-guide v" style={{ left: guides.v }} />
+            ) : null}
+            {guides.h !== null ? (
+              <div className="obs-guide h" style={{ top: guides.h }} />
+            ) : null}
+            <div
+              className={`obs-handle${dragging ? " dragging" : ""}`}
+              style={box}
+              role="group"
+              tabIndex={0}
+              aria-label="Drag to place the overlay; drag an edge or corner to resize"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onKeyDown={onKeyDown}
+            >
+              <span className="obs-tip">
+                x {Math.round(place.x)}, y {Math.round(place.y)} · {Math.round(place.w)} ×{" "}
+                {Math.round(place.h)}
+              </span>
+              {["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((dir) => (
+                <i className="obs-rz" data-dir={dir} key={dir} />
+              ))}
+            </div>
+          </div>
+        </div>
         <section className="form-panel" aria-labelledby="obs-preview">
           <div className="obs-preview-head">
             <h2 id="obs-preview">
               Preview{" "}
-              <span className="obs-help">
+              <span className="obs-help obs-help-keys">
                 your stream, to scale. Drag the overlay to move it (hold Shift to snap to
                 edges), drag an edge or corner to resize, or click it and use the arrow
                 keys.
+              </span>
+              <span className="obs-help obs-help-touch">
+                your stream, to scale. Drag the overlay to move it, or drag an edge or
+                corner to resize.
               </span>
             </h2>
             <div className="obs-pos" role="group" aria-label="Snap to">
@@ -771,50 +821,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
               </label>
             </div>
             <p className="obs-help">{HELP[form.fit]}</p>
-          </div>
-          <div
-            className="obs-stagewrap"
-            ref={wrap}
-            style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
-          >
-            <div
-              className="obs-canvas"
-              style={{ width: place.cw, height: place.ch, transform: `scale(${scale})` }}
-            >
-              <div className="obs-cam">camera</div>
-              <iframe
-                ref={frame}
-                title="Overlay preview"
-                src={`/account/obs-overlay/preview?${initialQuery}`}
-                style={box}
-              />
-              {guides.v !== null ? (
-                <div className="obs-guide v" style={{ left: guides.v }} />
-              ) : null}
-              {guides.h !== null ? (
-                <div className="obs-guide h" style={{ top: guides.h }} />
-              ) : null}
-              <div
-                className={`obs-handle${dragging ? " dragging" : ""}`}
-                style={box}
-                role="group"
-                tabIndex={0}
-                aria-label="Drag to place the overlay; drag an edge or corner to resize"
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={endDrag}
-                onPointerCancel={endDrag}
-                onKeyDown={onKeyDown}
-              >
-                <span className="obs-tip">
-                  x {Math.round(place.x)}, y {Math.round(place.y)} · {Math.round(place.w)}{" "}
-                  × {Math.round(place.h)}
-                </span>
-                {["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((dir) => (
-                  <i className="obs-rz" data-dir={dir} key={dir} />
-                ))}
-              </div>
-            </div>
           </div>
           <div className="obs-under">
             <button

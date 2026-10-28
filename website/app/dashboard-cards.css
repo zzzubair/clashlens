@@ -866,6 +866,19 @@
   outline-offset: -3px;
 }
 
+/* Touch screens have no hover, so each name keeps a quiet ember underline
+   that says the row opens that player. */
+@media (hover: none), (pointer: coarse) {
+  /* The name clips what overflows it, so it gets room below for the line
+     without growing the row. */
+  .rival-table .rival-link .dash-name {
+    margin-bottom: -0.3em;
+    padding-bottom: 0.3em;
+    text-decoration: underline 1.5px color-mix(in srgb, var(--cl-action) 55%, transparent);
+    text-underline-offset: 0.18em;
+  }
+}
+
 @media (hover: hover) and (pointer: fine) {
   .rival-table tbody tr:not(.rival-you):hover {
     background: var(--cl-panel);

@@ -39,6 +39,15 @@
   color: var(--cl-accent-contrast);
 }
 
+/* Touch screens have no hover, so the name keeps a quiet ember underline that
+   says the card opens the player. */
+@media (hover: none), (pointer: coarse) {
+  .linked-player-name {
+    text-decoration: underline 1.5px color-mix(in srgb, var(--cl-action) 55%, transparent);
+    text-underline-offset: 0.2em;
+  }
+}
+
 .linked-player-identity {
   display: flex;
   flex-wrap: wrap;

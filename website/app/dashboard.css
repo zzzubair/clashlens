@@ -871,11 +871,21 @@
     padding-inline: 0.75rem;
   }
 
-  /* Link player shrinks to its + so the player tab beside it fits. */
+  /* Link player shrinks to its + and a small "Link" (its full name stays for
+     screen readers), so the player tab beside it fits. */
   .dash-account-add {
+    flex-direction: column;
     justify-content: center;
+    gap: 0;
     min-width: 2.75rem;
-    padding: 0;
+    padding: 0 0.3rem;
+  }
+
+  .dash-account-add::after {
+    color: var(--cl-muted);
+    content: "Link" / "";
+    font-size: 0.68rem;
+    font-weight: 700;
   }
 
   .dash-customise-short {
