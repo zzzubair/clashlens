@@ -1166,8 +1166,10 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);
-    expect(day).toContain("Legend day 9 Trophies 5,370 Net today –");
-    expect(day).not.toContain("Lens Main");
+    // The tab shows whose day it is; the card names the player for screen readers only.
+    expect(day).toContain("Legend day 9 , Lens Main Trophies 5,370 Net today –");
+    expect(cards["legend-day"]).toMatch(/<span class="sr-only">, (<!-- -->)?Lens Main<\/span>/);
+    expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Next Reset #95–#760");
     expect(day).toContain("Projected #240 at Reset");
     expect(day).toContain("Attacks 2 of 8");

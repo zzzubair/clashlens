@@ -100,8 +100,14 @@ export function LegendDayCard({
   const countdown = nowMs === null ? null : resetCountdown(nowMs);
   return (
     <div className="legend-day-card">
+      {/* The tab above shows whose day this is; screen readers hear it here. */}
       <CardHead
-        title={day?.dayNumber ? `Legend day ${day.dayNumber}` : "Legend day"}
+        title={
+          <>
+            {day?.dayNumber ? `Legend day ${day.dayNumber}` : "Legend day"}
+            <span className="sr-only">, {player.name ?? player.tag}</span>
+          </>
+        }
         meta={updatedAgo(observed.length ? Math.min(...observed) : null, nowMs)}
       />
       <div className="legend-day-numbers">
