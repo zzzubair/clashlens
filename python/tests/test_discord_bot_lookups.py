@@ -4,7 +4,7 @@ definitions, with a fake Discord interaction and a fake store."""
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -250,6 +250,24 @@ def test_today_with_a_battle_that_may_be_missing_counts_none_left(store) -> None
         "`Defenses` –",
         "-# Some of today's battles may be missing. The day on Clash Lens says why.",
     ]
+
+
+def test_season_counts_only_the_weeks_in_legend_i(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    season = season_page()
+    ready = season["screen_ready"]
+    # Promoted into Legend I at the Season's second Monday: its three days
+    # are Days 8 to 10, and the first week has no Legend day to miss.
+    start = datetime.fromisoformat(ready["days"][0]["ranked_day_start"]) - timedelta(days=7)
+    ready["season"].update(start=start.isoformat(), current_day_number=10)
+    ready["season_weeks"] = [
+        {"week_start": start.isoformat(), "league": "below_legend_i", "entry": None},
+        {"week_start": (start + timedelta(days=7)).isoformat(), "league": "legend_i",
+         "entry": "promoted"},
+    ]
+    store.pages["#2PP"] = season
+    text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
+    assert "Attack hit rate: 50%\nDefenses held: 50%" in text
 
 
 @pytest.mark.parametrize("state", ["not_in_legend", "uncertain"])

@@ -12,6 +12,7 @@ import {
   type CrewPlayer,
   type LinkedAccount,
 } from "../lib/crew-contracts";
+import { leftDate } from "../lib/left-legend";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.$crewId.members";
 import "../crews.css";
@@ -232,6 +233,11 @@ function MemberCard({
                 <TrophyMark />
                 {player.trophies.toLocaleString("en-US")}
               </span>
+            ) : player.leftLegendI?.trophies != null ? (
+              <span className="crew-value" title="Last Legend I trophies">
+                <TrophyMark />
+                {player.leftLegendI.trophies.toLocaleString("en-US")}
+              </span>
             ) : null}
             {canRemove ? (
               <ConfirmForm
@@ -315,9 +321,11 @@ function PlayerStatus({ player }: { player: CrewPlayer }) {
   if (player.status === "tracking") return null;
   return (
     <span className="crew-chip crew-chip-quiet">
-      {player.status === "not_in_legend"
-        ? "Not in Legend now"
-        : "No Legend battles this Season"}
+      {player.leftLegendI
+        ? `Left Legend I ${leftDate(player.leftLegendI)}`
+        : player.status === "not_in_legend"
+          ? "Not in Legend now"
+          : "No Legend battles this Season"}
     </span>
   );
 }

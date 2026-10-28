@@ -493,8 +493,9 @@ def _total(days: Sequence[Mapping[str, Any] | None], key: str) -> int | None:
 
 
 def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | None:
-    """Every Legend day of the Season so far from the player page read, None
-    where none is published; None when the Season's days are not available."""
+    """Every Legend I day of the Season so far from the player page read, None
+    where none is published; None when the Season's days are not available.
+    Weeks the weekly league record puts below Legend I have no Legend days."""
     ready = page["screen_ready"]
     season = ready.get("season")
     if season is None:
@@ -506,9 +507,15 @@ def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | Non
         if (moment := datetime.fromisoformat(day["ranked_day_start"])) in published
     }
     season_start = datetime.fromisoformat(season["start"])
+    below = {
+        datetime.fromisoformat(week["week_start"])
+        for week in ready.get("season_weeks") or ()
+        if week["league"] == "below_legend_i"
+    }
     return [
         by_start.get(season_start + timedelta(days=offset))
         for offset in range(season["current_day_number"])
+        if season_start + timedelta(weeks=offset // 7) not in below
     ]
 
 

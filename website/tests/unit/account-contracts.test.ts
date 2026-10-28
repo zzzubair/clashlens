@@ -117,6 +117,11 @@ describe("Python account response mappers", () => {
       state: "not_in_legend",
       reason: null,
       league: "Electro League 33",
+      left_legend_i: {
+        left_at: "2026-10-12T05:00:00Z",
+        last_day_number: 7,
+        trophies: 4684,
+      },
     };
     const user = { username: "nova", display_name: "Nova" };
     expect(
@@ -136,6 +141,7 @@ describe("Python account response mappers", () => {
           rank: 12,
           league: null,
           today: { net: -8, attacks: 5, defenses: 3 },
+          leftLegendI: null,
         },
         {
           tag: "#2PQ",
@@ -148,6 +154,7 @@ describe("Python account response mappers", () => {
           rank: null,
           league: null,
           today: null,
+          leftLegendI: null,
         },
         {
           tag: "#8PY",
@@ -160,6 +167,11 @@ describe("Python account response mappers", () => {
           rank: null,
           league: "Electro League 33",
           today: null,
+          leftLegendI: {
+            leftAt: "2026-10-12T05:00:00Z",
+            lastDayNumber: 7,
+            trophies: 4684,
+          },
         },
       ],
     });

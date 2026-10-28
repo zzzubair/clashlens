@@ -808,3 +808,110 @@
     border-left: 0;
   }
 }
+
+/* ---------- A partial Season: its Legend I stretches and a day strip ---------- */
+.player-page .season-story {
+  margin-top: 1.25rem;
+}
+.player-page .season-story h2 {
+  margin: 0 0 0.4rem;
+}
+.player-page .season-story-runs {
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.92rem;
+}
+.player-page .season-story-runs li + li {
+  margin-top: 0.25rem;
+}
+.player-page .season-strip {
+  display: grid;
+  grid-template-columns: repeat(28, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.player-page .season-strip li {
+  height: 1rem;
+  border-radius: 3px;
+}
+/* Each week starts a little apart, as the Monday Reset is where leagues change. */
+.player-page .season-strip li:nth-child(7n + 1):not(:first-child) {
+  margin-left: 3px;
+}
+.player-page .season-strip-legend {
+  background: var(--cl-action);
+}
+.player-page .season-strip-waiting {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--cl-action) 0 2px,
+    transparent 2px 5px
+  );
+  box-shadow: inset 0 0 0 1px var(--cl-action);
+}
+.player-page .season-strip-outside {
+  background: var(--cl-outline);
+}
+.player-page .season-strip-unrecorded {
+  background: var(--cl-raised);
+}
+.player-page .season-strip-ahead {
+  box-shadow: inset 0 0 0 1px var(--cl-outline);
+}
+.player-page .season-strip-today {
+  outline: 2px solid var(--cl-ink);
+  outline-offset: 1px;
+}
+.player-page .season-strip-ends {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.2rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+}
+.player-page .season-strip-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+  background: none;
+}
+.player-page .season-strip-key li {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  box-shadow: none;
+}
+.player-page .season-strip-key li::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  background: var(--cl-action);
+}
+.player-page .season-strip-key .season-strip-waiting::before {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--cl-action) 0 2px,
+    transparent 2px 4px
+  );
+  box-shadow: inset 0 0 0 1px var(--cl-action);
+}
+.player-page .season-strip-key .season-strip-outside::before {
+  background: var(--cl-outline);
+}
+.player-page .season-strip-key .season-strip-unrecorded::before {
+  background: var(--cl-raised);
+}
+.player-page .season-strip-key .season-strip-ahead::before {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--cl-outline);
+}
