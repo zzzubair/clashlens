@@ -405,7 +405,7 @@ start_application() {
     --secret-file /run/clashlens-dev/hmac-key \
     --official-key-file /run/clashlens-dev/official-key \
     --official-origin http://127.0.0.1:8080 \
-    --allow-insecure-official-origin --enable-dashboard >/dev/null
+    --allow-insecure-official-origin --enable-dashboard --enable-notebook >/dev/null
 
   start_worker
   start_collector

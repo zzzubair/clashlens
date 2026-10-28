@@ -22,7 +22,11 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   averageLost,
   BASE_ID,
+  basePath,
   baseRuns,
+  bookPath,
+  canManage,
+  CREW_ID,
   dayDate,
   heldText,
   noDataText,
@@ -39,7 +43,15 @@ const NO_STORE = { "Cache-Control": "no-store" };
 const NOTE_WAIT_MS = 800;
 const SAVE = "/notebook/save";
 
-export const handle: BackHandle = { back: { to: "/notebook", label: "Notebook" } };
+export const handle: BackHandle = {
+  back: (match) => {
+    const crew = (match.loaderData as { notebook?: Notebook | null } | undefined)
+      ?.notebook?.crew;
+    return crew
+      ? { to: bookPath({ crew }), label: `${crew.name} bases` }
+      : { to: "/notebook", label: "Notebook" };
+  },
+};
 
 export function meta({ loaderData: loaded }: Route.MetaArgs) {
   const name = loaded?.notebook?.bases.find((base) => base.id === loaded.code)?.name;
@@ -48,19 +60,22 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 
 /** GET /notebook/bases/:code — one base in the Clasher's notebook: its
  * record this Season from everyone who ran it, each of the Clasher's
- * accounts on it, its note and link. The base ID is for support, so the page
- * never shows it. */
+ * accounts on it, its note and link. GET /crews/:crewId/bases/:code — the
+ * same base in a Crew's notebook, for its members only. The base ID is for
+ * support, so the page never shows it. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
   const code = params.code;
-  if (!BASE_ID.test(code)) throw data(null, { status: 404 });
+  const crew = (params as { crewId?: string }).crewId;
+  if (!BASE_ID.test(code) || (crew !== undefined && !CREW_ID.test(crew)))
+    throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { PythonApiError } = await import("../services/python.server");
   try {
     const { getNotebook } = await import("../services/notebook.server");
-    const notebook: Notebook = await getNotebook(identity, { base: code });
+    const notebook: Notebook = await getNotebook(identity, { base: code, crew });
     return data({ notebook, code, error: null }, { headers: NO_STORE });
   } catch (cause) {
     // Not in this account's notebook, or deleted a moment ago.
@@ -99,7 +114,7 @@ export default function NotebookBaseRoute() {
             <ErrorNotice error={error} />
           ) : (
             <p>
-              That base isn't in your notebook. <Link to="/notebook">Notebook</Link>
+              That base isn't in this notebook. <Link to="/notebook">Notebook</Link>
             </p>
           )}
         </>
@@ -110,25 +125,36 @@ export default function NotebookBaseRoute() {
 
 function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }) {
   const saver = useOutletContext<Saver>();
-  const [open, setOpen] = useState<"status" | "edit" | null>(null);
+  const [open, setOpen] = useState<"status" | "edit" | "crews" | null>(null);
   const [removing, setRemoving] = useState(false);
   const navigate = useNavigate();
   const detail = notebook.base;
   const lost = averageLost(base.record);
   const running = base.status === "running";
+  const { crew } = notebook;
+  const manage = canManage(notebook, base);
+  const shelves = detail?.shelves ?? [];
+  // Crews you can add bases to: you're their owner, an admin or an Uploader.
+  const uploads = notebook.crews.filter((item) => item.role !== "member");
   return (
     <>
       <BaseTile name={base.name} size="lg" />
       <div className="nb-base-title">
         <h1>{base.name}</h1>
-        <button
-          type="button"
-          className={`nb-status nb-status-${base.status} nb-status-button`}
-          onClick={() => setOpen("status")}
-          aria-label={`Status: ${statusText(base, notebook)}. Change status`}
-        >
-          {statusText(base, notebook)} ▾
-        </button>
+        {manage ? (
+          <button
+            type="button"
+            className={`nb-status nb-status-${base.status} nb-status-button`}
+            onClick={() => setOpen("status")}
+            aria-label={`Status: ${statusText(base, notebook)}. Change status`}
+          >
+            {statusText(base, notebook)} ▾
+          </button>
+        ) : (
+          <span className={`nb-status nb-status-${base.status}`}>
+            {statusText(base, notebook)}
+          </span>
+        )}
       </div>
       <p className="nb-headline">
         {base.record.defenses
@@ -170,9 +196,39 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
             Edit
           </button>
         ) : null}
+        {crew && !shelves.includes("mine") ? (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() =>
+              saver.save({ action: "add", base: base.id, crew: null }, () => ({
+                text: `${base.name} added to your notebook.`,
+                actions: [],
+              }))
+            }
+          >
+            Add to my notebook
+          </button>
+        ) : null}
+        {crew && shelves.includes("mine") ? (
+          <Link className="button secondary" to={basePath({ crew: null }, base.id)}>
+            In your notebook ›
+          </Link>
+        ) : null}
+        {!crew && uploads.length ? (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => setOpen("crews")}
+          >
+            Add to Crew
+          </button>
+        ) : null}
       </div>
       <p className="nb-hint">
-        This Season, from everyone who ran it. The rows below are your accounts.
+        {crew
+          ? "This Season, from everyone who ran it."
+          : "This Season, from everyone who ran it. The rows below are your accounts."}
       </p>
       {/* Every number on the page itself, one section each; the best and
        * worst armies go in a section after Stars. */}
@@ -180,7 +236,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <h2 id="nb-stars-title">Stars</h2>
         <Stars record={base.record} />
       </section>
-      <section className="nb-base-part" aria-labelledby="nb-each-title">
+      <section className="nb-base-part" aria-labelledby="nb-each-title" hidden={!!crew}>
         <h2 id="nb-each-title">Your accounts</h2>
         {detail?.players.length ? (
           <ul className="nb-per-account">
@@ -223,35 +279,41 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
       ) : detail?.note ? (
         <p className="nb-note-text">{detail.note}</p>
       ) : null}
-      <div className="nb-delete">
-        {running ? (
-          <p className="nb-hint">
-            One of your accounts runs it, so it stays in your notebook until you pick
-            another base.
-          </p>
-        ) : removing ? (
-          <>
-            <p>Remove {base.name} from your notebook? Its results stay.</p>
-            <button
-              type="button"
-              className="button danger-button"
-              onClick={() => {
-                saver.save({ action: "remove", base: base.id }, () => ({
-                  text: `${base.name} removed from your notebook.`,
-                  actions: [],
-                }));
-                void navigate("/notebook");
-              }}
-            >
-              Remove
+      {manage ? (
+        <div className="nb-delete">
+          {running ? (
+            <p className="nb-hint">
+              {crew
+                ? `Someone in ${crew.name} runs it, so it stays until they pick another base.`
+                : "One of your accounts runs it, so it stays in your notebook until you pick another base."}
+            </p>
+          ) : removing ? (
+            <>
+              <p>
+                Remove {base.name} from {crew ? crew.name : "your notebook"}? Its results
+                stay.
+              </p>
+              <button
+                type="button"
+                className="button danger-button"
+                onClick={() => {
+                  saver.save({ action: "remove", base: base.id }, () => ({
+                    text: `${base.name} removed from ${crew ? crew.name : "your notebook"}.`,
+                    actions: [],
+                  }));
+                  void navigate(bookPath(notebook));
+                }}
+              >
+                Remove
+              </button>
+            </>
+          ) : (
+            <button type="button" className="nb-chip" onClick={() => setRemoving(true)}>
+              {crew ? `Remove from ${crew.name}…` : "Remove from my notebook…"}
             </button>
-          </>
-        ) : (
-          <button type="button" className="nb-chip" onClick={() => setRemoving(true)}>
-            Remove from my notebook…
-          </button>
-        )}
-      </div>
+          )}
+        </div>
+      ) : null}
       {open === "status" ? (
         <StatusSheet
           notebook={notebook}
@@ -259,6 +321,45 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
           saver={saver}
           onClose={() => setOpen(null)}
         />
+      ) : null}
+      {open === "crews" ? (
+        <Sheet title={`Add ${base.name} to a Crew`} onClose={() => setOpen(null)}>
+          <ul className="nb-list nb-pick-list">
+            {uploads.map((item) =>
+              shelves.includes(item.id) ? (
+                <li key={item.id}>
+                  <Link className="nb-row" to={basePath({ crew: item }, base.id)}>
+                    <span className="nb-row-text">
+                      <b>{item.name}</b>
+                      <small>In it already</small>
+                    </span>
+                    <span className="nb-pick">Open</span>
+                  </Link>
+                </li>
+              ) : (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className="nb-row"
+                    onClick={() => {
+                      saver.save({ action: "add", base: base.id, crew: item.id }, () => ({
+                        text: `${base.name} added to ${item.name}.`,
+                        actions: [],
+                      }));
+                      setOpen(null);
+                    }}
+                  >
+                    <span className="nb-row-text">
+                      <b>{item.name}</b>
+                      <small>Everyone in it can copy the base</small>
+                    </span>
+                    <span className="nb-pick">Add</span>
+                  </button>
+                </li>
+              ),
+            )}
+          </ul>
+        </Sheet>
       ) : null}
       {open === "edit" ? (
         <EditSheet

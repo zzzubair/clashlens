@@ -41,7 +41,8 @@ Use these exactly.
 - **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 - **Projected place**: the one estimated rank the Legend day card shows for the next Reset. It is the middle result of 200 imagined finishes of the day, copied from the last 7 days, and always falls inside the Next Reset range.
 - **Variant**: a split of an army type by the hero equipment its attacks used, from a hand-kept list (for example Revenge Hydra), with an army matching none in its type's Other.
-- **Notebook**: a private page of bases, one per Clash Lens account, that points to bases and shows how each held for everyone who ran it, one page per Season.
+- **Notebook**: a private page of bases, one per Clash Lens account and one per Crew (seen only by its members), that points to bases and shows how each held for everyone who ran it, one page per Season.
+- **Uploader**: a Crew role, made by the owner or an admin, that adds bases to the Crew's Notebook and retires or removes the ones it made or added; members only copy bases out.
 - **Base ID**: the `B-` code with six letters or digits that names one base wherever it is; Clashers never see it on a page, and it never opens the base.
 - **Day pick**: a Clasher saying which base one game account ran from one Legend day on, until the next pick or the first day the account is out of Legend League; one base per game account per Legend day.
 - **Run**: a stretch of Legend days on which one game account ran one base.

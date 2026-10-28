@@ -48,6 +48,11 @@ export default [
   layout("routes/notebook.layout.tsx", [
     route("notebook", "routes/notebook.tsx"),
     route("notebook/bases/:code", "routes/notebook.base.tsx"),
+    // A Crew's notebook: the same pages, for its members.
+    route("crews/:crewId/bases", "routes/notebook.tsx", { id: "crew-notebook" }),
+    route("crews/:crewId/bases/:code", "routes/notebook.base.tsx", {
+      id: "crew-notebook-base",
+    }),
   ]),
   route("notebook/save", "routes/notebook.save.ts"),
   route("crews", "routes/crews.tsx"),

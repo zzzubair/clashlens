@@ -16,8 +16,9 @@ export const MIN_CREW_SIZE = 2;
 export const MAX_CREW_SIZE = 100;
 export const DEFAULT_CREW_SIZE = 50;
 
-export type CrewRole = "owner" | "admin" | "member";
-const ROLES: readonly CrewRole[] = ["owner", "admin", "member"];
+/** Uploaders add bases to the Crew's notebook; only while the Notebook is on. */
+export type CrewRole = "owner" | "admin" | "uploader" | "member";
+const ROLES: readonly CrewRole[] = ["owner", "admin", "uploader", "member"];
 
 export interface ListedCrew {
   crewId: string;

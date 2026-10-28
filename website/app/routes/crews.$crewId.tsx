@@ -72,8 +72,14 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const { loadCrewPage } = await import("../services/crews.server");
   const page = await loadCrewPage(request, params.crewId, period);
   const { freshIdempotencyKey } = await import("../server/actions.server");
+  const { isNotebookEnabled } = await import("../server/config.server");
   return data(
-    { ...page, period, idempotencyKey: freshIdempotencyKey() },
+    {
+      ...page,
+      period,
+      idempotencyKey: freshIdempotencyKey(),
+      notebook: isNotebookEnabled(),
+    },
     { status: page.error ? 503 : 200, headers: NO_STORE },
   );
 }
@@ -123,7 +129,8 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 }
 
 export default function CrewRoute() {
-  const { crew, boards, period, error, idempotencyKey } = useLoaderData<typeof loader>();
+  const { crew, boards, period, error, idempotencyKey, notebook } =
+    useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
   // Set by joining from an invite link.
@@ -178,18 +185,24 @@ export default function CrewRoute() {
         </div>
         {myRole === null ? null : (
           <div className="crew-actions">
-            {open > 0 ? (
+            {/* With the Notebook on, only the owner and admins invite. */}
+            {open > 0 && (!notebook || myRole === "owner" || myRole === "admin") ? (
               <CrewInvite
                 crewName={crew.name}
-                canEdit={myRole !== "member"}
+                canEdit={myRole === "owner" || myRole === "admin"}
                 idempotencyKey={idempotencyKey}
                 answer={answer ?? null}
               />
             ) : null}
+            {notebook ? (
+              <Link className="button secondary" to={`/crews/${crew.crewId}/bases`}>
+                Bases
+              </Link>
+            ) : null}
             <Link className="button secondary" to={`/crews/${crew.crewId}/members`}>
               Members
             </Link>
-            {myRole === "member" ? null : (
+            {myRole !== "owner" && myRole !== "admin" ? null : (
               <Link className="button secondary" to={`/crews/${crew.crewId}/settings`}>
                 Edit
               </Link>

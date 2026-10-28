@@ -8,6 +8,7 @@ import {
   useOutletContext,
 } from "react-router";
 
+import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   AccountRow,
@@ -21,31 +22,53 @@ import {
   type Saver,
 } from "../components/NotebookParts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { SEASON_ID, seasonLabel, seasonName, type Notebook } from "../lib/notebook";
+import {
+  bookPath,
+  CREW_ID,
+  SEASON_ID,
+  seasonLabel,
+  seasonName,
+  type Notebook,
+} from "../lib/notebook";
 import type { Route } from "./+types/notebook";
 import "../notebook.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-export function meta() {
-  return [{ title: "Notebook · Clash Lens" }];
+export const handle: BackHandle = {
+  back: (match) => {
+    const crew = (match.loaderData as { notebook?: Notebook | null } | undefined)
+      ?.notebook?.crew;
+    return crew ? { to: `/crews/${crew.id}`, label: crew.name } : null;
+  },
+};
+
+export function meta({ loaderData: loaded }: Route.MetaArgs) {
+  const crew = loaded?.notebook?.crew;
+  return [{ title: crew ? `${crew.name} bases · Clash Lens` : "Notebook · Clash Lens" }];
 }
 
 /** GET /notebook — the signed-in Clasher's notebook as this Season's page:
- * each linked account's base and run strip, and the bases. With
- * `?season=<id>`, an earlier Season's page, read only. While
- * CLASHLENS_NOTEBOOK_ENABLED is off the page does not exist. */
-export async function loader({ request }: Route.LoaderArgs) {
+ * each linked account's base and run strip, and the bases. GET
+ * /crews/:crewId/bases — a Crew's notebook, its bases only, for its members.
+ * With `?season=<id>`, an earlier Season's page, read only. While
+ * CLASHLENS_NOTEBOOK_ENABLED is off neither page exists. */
+export async function loader({ request, params }: Route.LoaderArgs) {
   const { isNotebookEnabled } = await import("../server/config.server");
   if (!isNotebookEnabled()) throw data(null, { status: 404 });
   const season = new URL(request.url).searchParams.get("season") ?? undefined;
-  if (season !== undefined && !SEASON_ID.test(season)) throw data(null, { status: 404 });
+  const crew = (params as { crewId?: string }).crewId;
+  if (
+    (season !== undefined && !SEASON_ID.test(season)) ||
+    (crew !== undefined && !CREW_ID.test(crew))
+  )
+    throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { PythonApiError } = await import("../services/python.server");
   try {
     const { getNotebook } = await import("../services/notebook.server");
-    const notebook: Notebook = await getNotebook(identity, { season });
+    const notebook: Notebook = await getNotebook(identity, { season, crew });
     return data({ notebook, error: null }, { headers: NO_STORE });
   } catch (cause) {
     if (cause instanceof PythonApiError && cause.status === 404)
@@ -101,7 +124,7 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
   return (
     <>
       <header className="nb-title">
-        <h1>Notebook</h1>
+        <h1>{notebook.crew ? `${notebook.crew.name} bases` : "Notebook"}</h1>
         {notebook.seasons.length > 1 ? (
           <label className="nb-season-pick">
             <span className="sr-only">Season</span>
@@ -110,9 +133,8 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
               aria-label="Season"
               onChange={(event) => {
                 const id = event.target.value;
-                void navigate(
-                  id === notebook.seasons[0] ? "/notebook" : `/notebook?season=${id}`,
-                );
+                const home = bookPath(notebook);
+                void navigate(id === notebook.seasons[0] ? home : `${home}?season=${id}`);
               }}
             >
               {notebook.seasons.map((id, index) => (
@@ -129,12 +151,14 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
         </p>
       </header>
       <p className="lede">
-        {season.current
-          ? "Your bases this Season and how each one held. Say which base each account runs; Clash Lens fills in every defense, from everyone who ran each base."
-          : "This Season is finished, so its days are locked. Open a base to bring it back to this Season."}{" "}
+        {notebook.crew
+          ? `Bases everyone in ${notebook.crew.name} can copy, and how each held this Season for everyone who ran it. Add one to your notebook to say which account runs it.`
+          : season.current
+            ? "Your bases this Season and how each one held. Say which base each account runs; Clash Lens fills in every defense, from everyone who ran each base."
+            : "This Season is finished, so its days are locked. Open a base to bring it back to this Season."}{" "}
         {recordLine(notebook)}
       </p>
-      {notebook.players.length === 0 ? (
+      {notebook.crew ? null : notebook.players.length === 0 ? (
         <p className="nb-empty">
           Link your Clash of Clans account to say which base it runs.{" "}
           <Link to="/account/verify-player">Link a player</Link>

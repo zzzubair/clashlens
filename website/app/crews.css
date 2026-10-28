@@ -57,6 +57,12 @@
   border-color: var(--cl-action-border);
 }
 
+.crew-chip-uploader {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  border-color: var(--cl-outline);
+}
+
 .crew-chip-you {
   color: var(--cl-surface);
   background: var(--cl-sky);

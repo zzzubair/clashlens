@@ -202,6 +202,7 @@ def create_app(
     api_metrics: ApiMetrics | None = None,
     clashking_client: ClashKingClient | None = None,
     dashboard_enabled: bool = False,
+    notebook_enabled: bool = False,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -1271,6 +1272,7 @@ def create_app(
         database=production_database,
         current_time=current_time,
         enabled=dashboard_enabled,
+        notebook=notebook_enabled,
     )
     from .api_overlays import register_overlay_routes
 
@@ -1281,7 +1283,7 @@ def create_app(
         app,
         database=production_database,
         current_time=current_time,
-        enabled=dashboard_enabled,
+        enabled=notebook_enabled,
     )
     return app
 

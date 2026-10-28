@@ -20,7 +20,7 @@ import "../crews.css";
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each account picked to add is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
-const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
+const INTENTS = ["remove", "add", "promote", "demote", "upload", "leave"] as const;
 const REMOVE_ICON = <span aria-hidden="true">✕</span>;
 
 /** Back leads to the crew. */
@@ -36,8 +36,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const { loadCrew } = await import("../services/crews.server");
   const loaded = await loadCrew(request, params.crewId, true);
   const { freshIdempotencyKey } = await import("../server/actions.server");
+  const { isNotebookEnabled } = await import("../server/config.server");
   return data(
-    { ...loaded, idempotencyKey: freshIdempotencyKey() },
+    { ...loaded, idempotencyKey: freshIdempotencyKey(), notebook: isNotebookEnabled() },
     { status: loaded.error ? 503 : 200, headers: NO_STORE },
   );
 }
@@ -80,22 +81,29 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         );
         throw redirect("/crews");
       }
-      if (intent === "promote" || intent === "demote") {
+      if (intent === "promote" || intent === "demote" || intent === "upload") {
         const username = fields["username"] ?? "";
+        // Demote takes an admin or an Uploader back to member.
+        const role =
+          intent === "promote" ? "admin" : intent === "upload" ? "uploader" : "member";
         const changed = (await crews.writeCrew(
           identity,
           "PATCH",
           `${path}/members/${encodeURIComponent(username)}`,
-          { role: intent === "promote" ? "admin" : "member" },
-          key(username),
+          { role },
+          key(`${username}:${role}`),
         )) as { display_name?: unknown };
         const who =
           typeof changed.display_name === "string" ? changed.display_name : username;
         return {
           notice:
-            intent === "promote"
+            role === "admin"
               ? `${who} is now an admin.`
-              : `${who} is no longer an admin.`,
+              : role === "uploader"
+                ? `${who} is now an Uploader and can add bases.`
+                : fields["from"] === "uploader"
+                  ? `${who} is no longer an Uploader.`
+                  : `${who} is no longer an admin.`,
         };
       }
       if (intent === "remove") {
@@ -141,6 +149,7 @@ export default function CrewMembersRoute() {
     accounts,
     error,
     idempotencyKey: loadedKey,
+    notebook,
   } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   if (crew === null) {
@@ -171,6 +180,7 @@ export default function CrewMembersRoute() {
             member={member}
             accounts={accounts}
             idempotencyKey={key}
+            notebook={notebook}
           />
         ))}
       </ul>
@@ -183,16 +193,32 @@ function MemberCard({
   member,
   accounts,
   idempotencyKey,
+  notebook,
 }: {
   crew: Crew;
   member: CrewMember;
   accounts: LinkedAccount[];
   idempotencyKey: string;
+  /** The Notebook switch: owners and admins make Uploaders. */
+  notebook: boolean;
 }) {
   const backState = useBackState("Members");
   const role = crew.myRole;
   const canKick =
-    !member.you && (role === "owner" || (role === "admin" && member.role === "member"));
+    !member.you &&
+    (role === "owner" ||
+      (role === "admin" && (member.role === "member" || member.role === "uploader")));
+  const roles: Array<[intent: string, label: string]> = [];
+  if (canKick && role === "owner")
+    roles.push(
+      member.role === "admin" ? ["demote", "Remove admin"] : ["promote", "Make admin"],
+    );
+  if (canKick && notebook && member.role !== "admin")
+    roles.push(
+      member.role === "uploader"
+        ? ["demote", "Remove Uploader"]
+        : ["upload", "Make Uploader"],
+    );
   const count = member.players.length;
   // The owner keeps a place until they hand over or delete the crew.
   const canRemove = member.you && !(member.role === "owner" && count === 1);
@@ -293,22 +319,21 @@ function MemberCard({
             )}
           </div>
         </details>
-      ) : canKick && role === "owner" ? (
+      ) : roles.length ? (
         <details className="crew-edit">
           <summary className="button secondary">Edit</summary>
           <div className="crew-tray">
-            <Form method="post">
-              <input
-                type="hidden"
-                name="intent"
-                value={member.role === "admin" ? "demote" : "promote"}
-              />
-              <input type="hidden" name="username" value={member.username} />
-              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-              <button type="submit" className="button secondary">
-                {member.role === "admin" ? "Remove admin" : "Make admin"}
-              </button>
-            </Form>
+            {roles.map(([intent, label]) => (
+              <Form method="post" key={label}>
+                <input type="hidden" name="intent" value={intent} />
+                <input type="hidden" name="username" value={member.username} />
+                <input type="hidden" name="from" value={member.role} />
+                <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+                <button type="submit" className="button secondary">
+                  {label}
+                </button>
+              </Form>
+            ))}
           </div>
         </details>
       ) : null}

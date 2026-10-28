@@ -489,14 +489,17 @@ While the dashboard setting is off, every private API crew route
 `crews_disabled` before reading anything. Migration 0095
 creates the crew tables either way; they stay empty while the setting is off.
 
-The Notebook has its own website setting, `CLASHLENS_NOTEBOOK_ENABLED=true` in
-`app.env` (default `false`), which `./ops` passes to the website only. While it
-is off, `/notebook`, `/notebook/save` and every `/notebook/bases/…` page show the
-normal page-not-found page and the navigation bar has no Notebook link. The
-private API's `/v1/account/notebook` follows the dashboard setting and answers
-404 `notebook_disabled` before reading anything while that is off. Migration
-0132 creates the notebook tables either way; they stay empty while the
-website setting is off.
+The Notebook has its own setting, `CLASHLENS_NOTEBOOK_ENABLED=true` in
+`app.env` (default `false`), which `./ops` passes to the website and the private
+API. While it is off, `/notebook`, `/notebook/save`, every `/notebook/bases/…`
+page and every Crew's `/crews/…/bases` pages show the normal page-not-found page,
+the navigation bar has no Notebook link, and a Crew page has no Bases link. The
+private API's `/v1/account/notebook` answers 404 `notebook_disabled` before
+reading anything, and Crews keep their rules from before: any member makes
+invite links and there is no Uploader role. While it is on, only a Crew's owner
+and admins make invite links, and they make Uploaders. Migrations 0132 and 0133
+create the notebook tables and the Uploader role either way; the tables stay
+empty while the setting is off.
 
 Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only

@@ -44,7 +44,7 @@ SPLASH = "\U0001fadf Splash"
 TIRED = "CC \U0001fae9 lure first"
 
 
-def test_both_notebook_routes_are_missing_while_the_dashboard_is_off() -> None:
+def test_both_notebook_routes_are_missing_while_the_notebook_is_off() -> None:
     app = create_app(FakeDatabase(), keys={("typescript-website", "current"): TS_CURRENT},
                      clock=lambda: NOW_SECONDS)
     with TestClient(app) as client:
@@ -106,7 +106,7 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
             clock = [noon]
             app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
                              clock=lambda: NOW_SECONDS, now=lambda: clock[0],
-                             dashboard_enabled=True)
+                             dashboard_enabled=True, notebook_enabled=True)
             with TestClient(app) as client:
 
                 def stored(code: str) -> tuple:
@@ -378,7 +378,7 @@ def test_bases_are_set_and_counted_on_legend_days_only(
             clock = [noon]
             app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
                              clock=lambda: NOW_SECONDS, now=lambda: clock[0],
-                             dashboard_enabled=True)
+                             dashboard_enabled=True, notebook_enabled=True)
             with TestClient(app) as client:
 
                 def write(**change) -> tuple[int, dict]:
