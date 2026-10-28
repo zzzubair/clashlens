@@ -212,6 +212,12 @@ function LegendDay({
     if (linked && defenseIds.split(" ").includes(linked)) setSide("defense");
   }, [hash, defenseIds]);
   const facts = [
+    // Phones show an ended day's start in its open row; wider rows have no room.
+    day.startTrophies != null ? (
+      <span key="start" className="log-fact-start">
+        Started on {day.startTrophies.toLocaleString("en-GB")}
+      </span>
+    ) : null,
     day.startTrophiesSource ? (
       <span
         key="source"

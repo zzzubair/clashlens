@@ -118,7 +118,7 @@
 .player-page .log-day-meta .day-mark {
   margin-left: 0;
 }
-/* The day's start is the day before's EOD, so only the EOD shows. */
+/* The row shows only the EOD; an open day says where it started. */
 .player-page .log-trophies > .log-stat:first-child {
   display: none;
 }
@@ -771,6 +771,9 @@
   }
   .player-page .log-open .battle-side h3 strong {
     font-size: 0;
+  }
+  .player-page .log-day:not(.log-day-live) .log-fact-start {
+    display: none;
   }
   /* An open day keeps its row and adds where the day started, where its
      battles were: 🏆 5,198 → 5,232. */

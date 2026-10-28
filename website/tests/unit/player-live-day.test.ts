@@ -290,6 +290,10 @@ describe("today's Legend day wording", () => {
     expect(cell(html, "2026-10-07", "Defenses")).toContain(
       '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
     );
+    // An open day says where it started, at every width.
+    expect(cell(html, "2026-10-07", "Defenses")).toContain(
+      '<span class="log-fact-start">Started on 5,992</span>',
+    );
     const gap = "Battles add up to 5,050; next day started at 5,992.";
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,992<\/strong>/);
     expect(mark(html, "2026-10-06")).toContain('<span class="day-mark day-mark-gap"');
