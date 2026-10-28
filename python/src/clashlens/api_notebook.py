@@ -634,7 +634,7 @@ def note_visit(database: ApiDatabase, account_id: int, *, now: datetime) -> None
             WHERE seen_day < %s AND seen_day >= %s AND player_id IN (
                 SELECT player_id FROM verified_player_links WHERE account_id = %s)
             """,
-            (today, today, today - (CHECK_DAYS + 1) * DAY, account_id),
+            (today, today, today - CHECK_DAYS * DAY, account_id),
         )
 
 

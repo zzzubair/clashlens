@@ -1,11 +1,12 @@
 """The forgotten-base check and Today so far end to end: saved game data in,
 the real worker counting Legend days, the Notebook out. See docs/testing.md.
 
-Jo runs Ring on Main and Fort on Alt from Day 2, then stops opening Clash
-Lens until Day 13. A run counts for 7 Legend days after it was last
-confirmed, so Days 10 to 12 wait until Jo answers "Still on it?": Yes for
-Ring brings them back, No from Day 11 for Fort keeps only the days before.
-Sam opens Clash Lens on Days 6 and 12, so his Spire never waits.
+Jo runs Ring on Main and Fort on Alt from Day 2, then opens Clash Lens
+only on Day 10. A run counts for 7 Legend days after it was last confirmed,
+so Day 10 already waits and that visit confirms nothing: Days 10 to 12 wait
+until Jo answers "Still on it?". Yes for Ring brings them back, No from
+Day 11 for Fort keeps only the days before. Sam opens Clash Lens on Days 9
+and 12, each within 7 days of the last, so Sam's Spire never waits.
 """
 
 from __future__ import annotations
@@ -76,10 +77,10 @@ def test_a_forgotten_base_waits_until_its_clasher_says_they_are_still_on_it(
                                                    "tag": ALT, "day": 2})["base"]
                 spire = ok("sam", "POST", NOTEBOOK, {"action": "add", "name": "Spire",
                                                      "tag": SAM, "day": 2})["base"]
-                # Sam opens Clash Lens on Days 6 and 12; Jo not at all.
-                for number in (6, 12):
+                # Sam opens Clash Lens on Days 9 and 12; Jo only on Day 10.
+                for name, number in (("sam", 9), ("joe", 10), ("sam", 12)):
                     clock[0] = day(number) + timedelta(hours=7)
-                    ok("sam", "GET", "/v1/account")
+                    ok(name, "GET", "/v1/account")
 
                 clock[0] = noon
                 waiting = ok("joe", "GET", f"{NOTEBOOK}?base={ring}")
