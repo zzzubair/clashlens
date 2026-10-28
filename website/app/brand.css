@@ -128,8 +128,7 @@
 :root
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
-    .button-primary,
-    .search-controls button
+    .button-primary
   ) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill);
@@ -146,11 +145,25 @@
 :root
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
-    .button-primary,
-    .search-controls button
+    .button-primary
   ):is(:hover, :focus-visible) {
   color: var(--cl-brand-night);
   background: var(--cl-brand-fill-hover);
+}
+/* Search is quiet on every page, so a page's own main action stays the one
+   filled button (Enter searches too). */
+:root .search-controls button {
+  color: var(--cl-ink);
+  background: var(--cl-card-fill, var(--cl-surface));
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-glass-shine);
+  font-weight: 600;
+}
+:root .search-controls button:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  border-color: var(--cl-outline);
 }
 /* The top bar's Sign in: an outline, so the page's own main action stays the
    only filled one on screen. */
@@ -248,8 +261,8 @@
   --cl-card-fill: var(--cl-surface);
 }
 :root[data-theme="dark"] {
-  /* Dark panels are smoked glass: lighter at the top, lit along the edge. */
-  --cl-card-fill: linear-gradient(180deg, #211913 0%, #1b1410 100%);
+  /* Dark panels lift off the black: a shade lighter at the top, lit along the edge. */
+  --cl-card-fill: linear-gradient(180deg, #121215 0%, #0c0c0e 100%);
 }
 :root
   :is(
@@ -359,10 +372,16 @@
   font-variant-numeric: tabular-nums;
   box-shadow: none;
 }
+/* On white, a plate below the podium needs a darker grey to show. */
+:root:not([data-theme="dark"])
+  :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
+  background: #e1e1e6;
+}
 :root
   :is(
     .leaderboard-row[data-podium-rank] .rank-mark,
     .log-rank[data-podium-rank] .rank-mark,
+    .rank-mark[data-podium-rank],
     .crew-rank[data-podium-rank],
     [data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank
   ) {
@@ -374,6 +393,7 @@
   :is(
     .leaderboard-row[data-podium-rank="1"] .rank-mark,
     .log-rank[data-podium-rank="1"] .rank-mark,
+    .rank-mark[data-podium-rank="1"],
     .crew-rank[data-podium-rank="1"],
     [data-ranked] .analytics-row:nth-child(1) .analytics-rank
   ) {
@@ -383,6 +403,7 @@
   :is(
     .leaderboard-row[data-podium-rank="2"] .rank-mark,
     .log-rank[data-podium-rank="2"] .rank-mark,
+    .rank-mark[data-podium-rank="2"],
     .crew-rank[data-podium-rank="2"],
     [data-ranked] .analytics-row:nth-child(2) .analytics-rank
   ) {
@@ -392,6 +413,7 @@
   :is(
     .leaderboard-row[data-podium-rank="3"] .rank-mark,
     .log-rank[data-podium-rank="3"] .rank-mark,
+    .rank-mark[data-podium-rank="3"],
     .crew-rank[data-podium-rank="3"],
     [data-ranked] .analytics-row:nth-child(3) .analytics-rank
   ) {
@@ -457,7 +479,6 @@
 }
 :root .page-head p {
   flex-basis: 100%;
-  max-width: 40rem;
   margin: 0;
   color: var(--cl-muted);
 }

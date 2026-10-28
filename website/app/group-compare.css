@@ -58,7 +58,7 @@
 }
 
 .compare-table tbody tr.compare-you {
-  background: color-mix(in srgb, var(--cl-action) 7%, var(--cl-surface));
+  background: var(--cl-raised);
 }
 
 .compare-table tbody tr.compare-you th {

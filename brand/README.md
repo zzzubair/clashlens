@@ -1,6 +1,6 @@
 # Clash Lens brand
 
-Decided by the owner on 2026-10-08. The brand comes from the logo: its thick dark outline, its yellow-to-orange letters, the ember-red base under them and the gold lens. Since the 2026-10-27 UI/UX redesign the whole site takes its colours from the logo too: warm ember browns, with the yellow-to-orange kept for the one main action on each page.
+Decided by the owner on 2026-10-08. The brand comes from the logo: its thick dark outline, its yellow-to-orange letters, the ember-red base under them and the gold lens. Since UI/UX Redesign v2 (2026-10-28) the site is black and neutral grey, and the logo's yellow and orange are its only colour: accents, and the one main action on each page.
 
 ## Logo
 
@@ -25,7 +25,7 @@ At 16 pixels the CL mark reads as two orange blocks rather than letters.
 
 ## Colours
 
-Chosen by the owner on 2026-10-27 ("Warm ember", because it goes with the logo). It replaced a navy look that read as generic. The logo itself is unchanged.
+Chosen by the owner on 2026-10-28: black, minimalist and clean, with the logo's orange and yellow as accents. It replaced "Warm ember" (2026-10-27), whose browns filled the whole screen, which had replaced a navy look that read as generic. The logo itself is unchanged.
 
 Brand colours, the same in both themes:
 
@@ -37,22 +37,22 @@ Brand colours, the same in both themes:
 | Ember red   | `#b3261e`             | Never body text                                    |
 | Button fill | `#ffd447` → `#ff8a1f` | The one main action on a page, and the current tab |
 
-The site has a light theme (warm paper) and a dark theme (ember night: brown-blacks like the logo's outline). A first-time visitor gets whichever theme their device is set to; the moon/sun button overrides it and the choice is remembered in that browser.
+The site has a light theme (white and light grey) and a dark theme (night: near-blacks that step up in lightness, never in hue). A first-time visitor gets whichever theme their device is set to; the moon/sun button overrides it and the choice is remembered in that browser.
 
-| Role                 | Light          | Dark                 |
-| -------------------- | -------------- | -------------------- |
-| Page                 | `#f5efe8`      | `#120d0a`            |
-| Card                 | `#fffcf8`      | `#1c1511`            |
-| Panel, table head    | `#f8f2ea`      | `#221a15`            |
-| Raised (rank plate)  | `#ede3d8`      | `#30251e`            |
-| Text                 | `#1c130d`      | `#fbf3ea`            |
-| Muted text           | `#6e5e52`      | `#b8a596`            |
-| Link, accent, you    | `#b53a0a`      | `#ff9a3c`            |
-| Divider, card edge   | `#ebe1d6`      | `#2a201a`            |
-| Trophies             | `#865800`      | `#ffc53d`            |
-| Win, trophies gained | `#127436`      | `#4ade80`            |
-| Loss, trophies lost  | `#c81e1e`      | `#ff6b5b`            |
-| Top bar, tab bar     | paper, frosted | ember night, frosted |
+| Role                     | Light          | Dark           |
+| ------------------------ | -------------- | -------------- |
+| Page                     | `#f4f4f5`      | `#050506`      |
+| Card                     | `#ffffff`      | `#0e0e10`      |
+| Panel, table head        | `#f7f7f8`      | `#141417`      |
+| Raised (rank plate, you) | `#ececef`      | `#1f1f23`      |
+| Text                     | `#0b0b0d`      | `#f4f4f5`      |
+| Muted text               | `#5b5b65`      | `#a1a1aa`      |
+| Link, accent, you        | `#b93c0a`      | `#ffa149`      |
+| Divider, card edge       | `#e6e6e9`      | `#1d1d21`      |
+| Trophies                 | `#855700`      | `#ffc53d`      |
+| Win, trophies gained     | `#13773a`      | `#4ade80`      |
+| Loss, trophies lost      | `#c81e1e`      | `#ff6b5b`      |
+| Top bar, tab bar         | white, frosted | black, frosted |
 
 Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the yellow-to-orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
 

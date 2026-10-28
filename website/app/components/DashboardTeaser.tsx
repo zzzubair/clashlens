@@ -44,7 +44,7 @@ const HEAT = [
 
 /**
  * What the dashboard holds, shown to a visitor who is not signed in: a small
- * example dashboard that fades under a lock, with the way in.
+ * example dashboard, with the way in under it.
  */
 export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean }) {
   return (
@@ -110,10 +110,7 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
           ))}
         </div>
       </Board>
-      <div className="teaser-lock">
-        <span className="teaser-lock-icon">
-          <DashboardIcon name="lock" />
-        </span>
+      <div className="teaser-cta">
         <h2 id="front-teaser-title">Your Legend day, live</h2>
         <p>Rank, rivals, Reset clock and goal. Free.</p>
         {loginAvailable ? (

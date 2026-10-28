@@ -39,7 +39,11 @@ export function formatCount(value: number | null): string {
 
 export function formatSigned(value: number | null): string {
   if (value === null) return "Unknown";
-  return value > 0 ? `+${formatCount(value)}` : formatCount(value);
+  return value > 0
+    ? `+${formatCount(value)}`
+    : value < 0
+      ? `−${formatCount(-value)}`
+      : formatCount(value);
 }
 
 export function valueTone(value: number | null): string {
@@ -112,10 +116,13 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
   );
 }
 
-/** The labels over a log's rows, for sighted readers; each row names its own values. */
-export function LogHead() {
+/**
+ * The labels over a log's rows, for sighted readers; each row names its own
+ * values. `show` keeps only the wide screen's columns or the phone's line.
+ */
+export function LogHead({ show }: { show?: "columns" | "phone" }) {
   return (
-    <div className="log-head" aria-hidden="true">
+    <div className="log-head" data-show={show} aria-hidden="true">
       <span>Date</span>
       <span>Day</span>
       <span>End of day</span>
@@ -124,6 +131,9 @@ export function LogHead() {
       <span>Defenses</span>
       <span>Change</span>
       <span>Reset rank</span>
+      <span className="log-head-phone">
+        Attacks over defenses · change over end of day · Reset rank
+      </span>
     </div>
   );
 }
@@ -163,11 +173,17 @@ export function LegendLog({
   const ended = history.filter(({ day }) => legendDayKey(day.period) !== todayKey);
   return (
     <>
+      {/* On a wide screen the columns are named over today's row too. */}
       {current.length > 0 ? (
-        <div className="log-card log-today">{current.map(day)}</div>
+        <>
+          <LogHead show="columns" />
+          <div className="log-card log-today">{current.map(day)}</div>
+        </>
       ) : null}
       <div className="log-card log-days">
-        {ended.length > 0 ? <LogHead /> : null}
+        {ended.length > 0 ? (
+          <LogHead show={current.length > 0 ? "phone" : undefined} />
+        ) : null}
         {ended.map(day)}
       </div>
     </>

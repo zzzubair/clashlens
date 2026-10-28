@@ -45,10 +45,13 @@ export default function CrewsRoute() {
   const crews = list?.crews ?? [];
   const max = list?.maxCrews ?? MAX_CREWS;
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
+    <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <header className="page-head">
         <h1>Crews</h1>
-        <p>Invite-only groups of up to 100 accounts, with shared Legend boards.</p>
+        <p>
+          Invite-only groups of Legend accounts with shared boards. A crew has up to 100
+          places.
+        </p>
       </header>
       {error ? (
         <ErrorNotice error={error} />

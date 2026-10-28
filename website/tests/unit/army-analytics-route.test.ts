@@ -440,7 +440,7 @@ describe("army analytics route historical reads", () => {
     );
   });
 
-  it("shows Avg. trophies after 3-star on Armies only, sortable", async () => {
+  it("shows Avg. trophies after the star rates on Armies only, sortable", async () => {
     const row = (
       label: string,
       threeStars: number,
@@ -482,9 +482,9 @@ describe("army analytics route historical reads", () => {
     expect(rowNames(html)).toEqual(["Thrower", "Hydra"]);
     expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
     // The table's headings: Avg. trophies after 3-star, sorted highest first.
-    expect(text).toContain("3-star Avg. trophies ↓ 2-star");
-    expect(text).toContain("50.0% 2 battles 36.0 32.1 below 3 stars");
-    expect(text).toContain("75.0% 3 battles 35.5 22.0 below 3 stars");
+    expect(text).toContain("1-star Avg. trophies ↓ Avg. stars");
+    expect(text).toContain("50.0% 2 battles 0.0% 0 battles 36.0 32.1 below 3 stars");
+    expect(text).toContain("25.0% 1 battle 0.0% 0 battles 35.5 22.0 below 3 stars");
     expect(text).toContain("Avg. trophies counts every attack.");
 
     // A type with variants shows, closed, that it opens and how many named
@@ -504,8 +504,8 @@ describe("army analytics route historical reads", () => {
     });
     getArmyAnalytics.mockResolvedValue(hydra([1, 0]));
     const closed = await renderArmyRoute("season=current");
-    expect(closed).toContain('aria-expanded="false"');
-    expect(renderedText(closed)).toContain("Hydra 1 variant + Other 50.0%");
+    expect(closed).toContain('aria-haspopup="dialog" aria-expanded="false"');
+    expect(renderedText(closed)).toContain("Hydra Hydra + Other 50.0%");
     expect(closed).not.toContain("<dialog");
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
@@ -514,7 +514,7 @@ describe("army analytics route historical reads", () => {
     // Only its Other: a plain row with nothing to open.
     getArmyAnalytics.mockResolvedValue(hydra([0]));
     const otherOnly = await renderArmyRoute("season=current");
-    expect(otherOnly).not.toContain("aria-expanded");
+    expect(otherOnly).not.toContain('aria-haspopup="dialog"');
     expect(otherOnly).not.toContain("data-opens");
     expect(renderedText(otherOnly)).toContain("Hydra 50.0%");
     expect(renderedText(otherOnly)).not.toContain("Tap an army");
@@ -524,7 +524,7 @@ describe("army analytics route historical reads", () => {
       rows: [{ ...row("Dragons", 4, 40, null) }],
     });
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "100.0% 4 battles 40.0 all 3 stars",
+      "100.0% 4 battles 0.0% 0 battles 0.0% 0 battles 40.0 all 3 stars",
     );
 
     // Unit usage has no trophies column.
@@ -1109,7 +1109,7 @@ describe("army analytics variant rows", () => {
     const closed = html();
     expect(sorted(closed)).toEqual(["name", "ascending"]);
     expect(closed).toContain('title="Show Thrower variants"');
-    expect(closed).toContain('aria-expanded="false"');
+    expect(closed).toContain('aria-haspopup="dialog" aria-expanded="false"');
     expect(closed).not.toContain("<dialog");
 
     // The sheet opens with every variant closed; Other is last.
@@ -1117,7 +1117,7 @@ describe("army analytics variant rows", () => {
     await router.navigate("/analytics/armies", { state: { army: "army-type:3" } });
     const open = html();
     expect(sorted(open)).toEqual(["name", "ascending"]);
-    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain('aria-haspopup="dialog" aria-expanded="true"');
     expect(open).toContain("<dialog");
     expect(renderedText(open)).toContain(
       "Variants Each variant’s share of Thrower attacks. Revenge Thrower 75.0% 3-star 0.0% · 26.0 trophies · 6 battles",

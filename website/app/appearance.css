@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   /* Field edges keep 3:1 against every surface, as form controls need. */
-  --cl-input-border: #8f7b6a;
+  --cl-input-border: #8e8e98;
   /* Buttons press like the game's: a darker bottom edge, no outline. */
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.16);
   --cl-raise: none;
@@ -10,10 +10,10 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* The logo's warm light falls from the top of every page. */
+/* A faint warm light from the top of every page, under the logo. */
 body {
   background:
-    radial-gradient(56rem 28rem at 50% -14rem, var(--cl-glow), transparent 72%) no-repeat,
+    radial-gradient(60rem 26rem at 50% -16rem, var(--cl-glow), transparent 70%) no-repeat,
     var(--cl-paper);
 }
 .site-header {
@@ -29,44 +29,54 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Ember night: warm brown-blacks that match the logo's outline, so its
-     yellow and orange glow on them. */
-  --cl-ink: #fbf3ea;
-  --cl-paper: #120d0a;
-  --cl-surface: #1c1511;
-  --cl-panel: #221a15;
-  --cl-raised: #30251e;
-  --cl-muted: #b8a596;
-  --cl-faint: #a08d7c;
-  --cl-border: #2a201a;
-  --cl-outline: #3d3027;
-  --cl-input-border: #7d6a5a;
-  --cl-accent: #ff9a3c;
-  --cl-accent-contrast: #ff9a3c;
-  --cl-header-bg: rgb(18 13 10 / 0.72);
-  --cl-header-solid: #120d0a;
-  --cl-header-ink: #fbf3ea;
-  --cl-header-muted: #b8a596;
-  --cl-header-soft: rgb(255 220 190 / 0.08);
-  --cl-action-text: #ff9a3c;
-  --cl-action-soft: #33200f;
-  --cl-action-border: #7a4a1a;
+  /* Night: near-black neutrals, so the logo's yellow and orange are the only
+     colour on screen. Panels step up in lightness, never in hue. */
+  --cl-ink: #f4f4f5;
+  --cl-paper: #050506;
+  --cl-surface: #0e0e10;
+  --cl-panel: #141417;
+  --cl-raised: #1f1f23;
+  --cl-muted: #a1a1aa;
+  --cl-faint: #8d8d96;
+  --cl-border: #1d1d21;
+  --cl-outline: #2e2e33;
+  --cl-input-border: #6b6b75;
+  --cl-accent: #ffa149;
+  --cl-accent-contrast: #ffa149;
+  --cl-header-bg: rgb(6 6 7 / 0.72);
+  --cl-header-solid: #060607;
+  --cl-header-ink: #f4f4f5;
+  --cl-header-muted: #a1a1aa;
+  --cl-header-soft: rgb(255 255 255 / 0.07);
+  --cl-action-text: #ffa149;
+  --cl-action-soft: #23170c;
+  --cl-action-border: #6e4218;
   --cl-gold: #ffc53d;
   --cl-star: #ffc53d;
-  --cl-sky: #ff9a3c;
-  --cl-sky-soft: #33200f;
+  /* Two and one star on a star split: greys, never a darkened gold. */
+  --cl-star-2: #a1a1aa;
+  --cl-star-1: #626269;
+  /* Deeper heat map steps, so no square glares against the black page. */
+  --cl-heat-0: #c92a2a;
+  --cl-heat-1: #7f2c38;
+  --cl-heat-2: #3a3a40;
+  --cl-heat-3: #2e5a37;
+  --cl-heat-4: #237a35;
+  --cl-heat-text: #fff;
+  --cl-sky: #ffa149;
+  --cl-sky-soft: #23170c;
   --cl-positive: #4ade80;
-  --cl-positive-soft: #13291a;
+  --cl-positive-soft: #0d2416;
   --cl-negative: #ff6b5b;
-  --cl-negative-soft: #3a1812;
-  --cl-card-line: rgb(255 220 190 / 0.09);
-  --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.4), 0 16px 40px -24px rgb(0 0 0 / 0.8);
-  --cl-glass: rgb(34 26 21 / 0.6);
-  --cl-glass-strong: rgb(30 22 18 / 0.9);
-  --cl-glass-edge: rgb(255 220 190 / 0.09);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 230 200 / 0.06);
-  --cl-glow: rgb(255 110 20 / 0.2);
-  --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.75), 0 0 0 1px var(--cl-outline);
+  --cl-negative-soft: #2b1210;
+  --cl-card-line: rgb(255 255 255 / 0.075);
+  --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.6), 0 20px 44px -26px rgb(0 0 0 / 0.95);
+  --cl-glass: rgb(18 18 20 / 0.62);
+  --cl-glass-strong: rgb(14 14 16 / 0.86);
+  --cl-glass-edge: rgb(255 255 255 / 0.09);
+  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.055);
+  --cl-glow: rgb(255 140 40 / 0.075);
+  --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.8), 0 0 0 1px var(--cl-outline);
   --cl-header-shadow: 0 1px 0 var(--cl-border);
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.22);
 }

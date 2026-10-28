@@ -366,6 +366,13 @@
     isolation: isolate;
   }
 
+  /* On white pages a lighter shadow; the edge already parts it from the page. */
+  :root:not([data-theme="dark"]) .bottom-tabs {
+    box-shadow:
+      var(--cl-glass-shine),
+      0 8px 20px -10px rgb(0 0 0 / 0.18);
+  }
+
   /* Blurred on its own layer, so the More sheet is not pinned inside the bar. */
   .bottom-tabs::before {
     position: absolute;
@@ -378,7 +385,7 @@
     content: "";
   }
 
-  /* Each tab: an icon over its name; the chosen one sits in a soft lit pill. */
+  /* Each tab: an icon over its name; the chosen one is orange on a soft grey pill. */
   .bottom-tab {
     position: relative;
     display: flex;
@@ -436,8 +443,7 @@
   .site-menu[open] > .bottom-tab,
   .site-menu:has(.pending) > .bottom-tab {
     color: var(--cl-action-text);
-    background: var(--cl-action-soft);
-    box-shadow: inset 0 0 0 1px var(--cl-action-border);
+    background: var(--cl-header-soft);
   }
 
   /* The tab being left, and the current tab while the More sheet is open,

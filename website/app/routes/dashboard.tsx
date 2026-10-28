@@ -376,7 +376,6 @@ function AccountTabs({
               aria-label={`${name} player page`}
             >
               <DashboardIcon name="open" />
-              <span aria-hidden="true">Page</span>
             </Link>
           </span>
         );

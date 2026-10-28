@@ -351,12 +351,12 @@ const sortColumns = {
   quantity: { label: "Quantity", value: (row: ArmyRow) => row.quantity ?? 0 },
   "usage-rate": { label: "Usage", value: (row: ArmyRow) => row.usageRate },
   "three-star-rate": { label: "3-star", value: (row: ArmyRow) => starRate(row, 3) },
+  "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
+  "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
   "average-trophies": {
     label: "Avg. trophies",
     value: (row: ArmyRow) => row.averageTrophies ?? 0,
   },
-  "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
-  "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
   "average-stars": {
     label: "Avg. stars",
     value: (row: ArmyRow) => row.averageStars ?? 0,
@@ -369,7 +369,7 @@ const sortColumns = {
 } as const;
 type SortColumn = keyof typeof sortColumns;
 type TableSort = { column: SortColumn; direction: "ascending" | "descending" };
-// The phone's Sort menu, most asked-for first.
+// The phone's sort chips, most asked-for first.
 const menuOrder: SortColumn[] = [
   "usage-rate",
   "three-star-rate",
@@ -386,6 +386,11 @@ const nameOrder = new Intl.Collator("en", { sensitivity: "base", numeric: true }
 // A long list shows its first rows, then Show all.
 const FIRST_ROWS = 20;
 
+/** Other and Unreadable are no army type of their own: last, with no rank. */
+function isLeftover(row: ArmyRow) {
+  return row.key === "army-type:1" || row.key === "army-type:2";
+}
+
 function sortedRows(rows: ArmyRow[], sort: TableSort) {
   const value = sortColumns[sort.column].value;
   return [...rows].sort((a, b) => {
@@ -396,6 +401,7 @@ function sortedRows(rows: ArmyRow[], sort: TableSort) {
         ? nameOrder.compare(left, right)
         : Number(left) - Number(right);
     return (
+      Number(isLeftover(a)) - Number(isLeftover(b)) ||
       comparison * (sort.direction === "ascending" ? 1 : -1) ||
       nameOrder.compare(a.label, b.label) ||
       a.key.localeCompare(b.key)
@@ -458,6 +464,11 @@ function SortButton({
 
 function namedVariantCount(row: ArmyRow) {
   return row.variants?.filter((variant) => variant.variantId !== 0).length ?? 0;
+}
+
+/** A variant under its army's name, without repeating it: "Revenge" for Revenge Hydra. */
+function variantShort(army: string, variant: string) {
+  return variant.endsWith(` ${army}`) ? variant.slice(0, -army.length - 1) : variant;
 }
 
 function ResultCell({
@@ -560,6 +571,7 @@ function ArmyResultRow({
     <tr
       role="row"
       className={more ? "analytics-row analytics-row-more" : "analytics-row"}
+      data-leftover={isLeftover(row) || undefined}
       data-opens={named > 0 || undefined}
       onClick={named ? () => onOpen(row.key) : undefined}
     >
@@ -579,7 +591,12 @@ function ArmyResultRow({
                 {row.label}
                 <small>
                   {" "}
-                  {named} {named === 1 ? "variant" : "variants"}
+                  {named === 1
+                    ? variantShort(
+                        row.label,
+                        row.variants!.find((variant) => variant.variantId !== 0)!.label,
+                      )
+                    : `${named} variants`}
                   {row.variants!.length > named ? " + Other" : null}
                 </small>
               </span>
@@ -681,6 +698,7 @@ export default function ArmyAnalyticsRoute() {
   const navigationType = useNavigationType();
   const navigate = useNavigate();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
+  const [moreSorts, setMoreSorts] = useState(false);
   const [shownAll, setShownAll] = useState<string | null>(null);
   const [defaultVisit, setDefaultVisit] = useState(location.key);
   // An open army's sheet is its own step in history, so Back closes it and
@@ -717,9 +735,9 @@ export default function ArmyAnalyticsRoute() {
     ...(isHistorical ? ["quantity" as const] : []),
     "usage-rate",
     "three-star-rate",
-    ...(armyTypes ? ["average-trophies" as const] : []),
     "two-star-rate",
     "one-star-rate",
+    ...(armyTypes ? ["average-trophies" as const] : []),
     ...(!isHistorical ? ["average-stars" as const, "average-destruction" as const] : []),
     "usage-count",
   ];
@@ -1004,38 +1022,54 @@ export default function ArmyAnalyticsRoute() {
               Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
             </span>
           </div>
-          {/* Phones and iPads: one Sort menu and its direction. */}
-          <div className="analytics-sort-menu">
-            <label className="analytics-field">
-              <span>Sort</span>
-              <select
-                value={tableSort.column}
-                onChange={(event) =>
-                  setChosenSort(
-                    nextSort(event.currentTarget.value as SortColumn, tableSort),
-                  )
-                }
-              >
-                {menuOrder
-                  .filter((column) => columns.includes(column))
-                  .map((column) => (
-                    <option key={column} value={column}>
-                      {sortColumns[column].label}
-                    </option>
-                  ))}
-              </select>
-            </label>
+          {/* Phones and iPads: the four most used sorts as chips, the rest behind
+              More; a second tap on the lit chip flips the order. */}
+          <div className="analytics-sort-menu" role="group" aria-label="Sort by">
+            {menuOrder
+              .filter((column) => columns.includes(column))
+              .filter(
+                (column, index) => index < 4 || moreSorts || column === tableSort.column,
+              )
+              .map((column) => {
+                const active = tableSort.column === column;
+                const next = nextSort(column, tableSort);
+                return (
+                  <button
+                    key={column}
+                    type="button"
+                    className="analytics-sort-chip"
+                    data-column={column}
+                    aria-pressed={active}
+                    title={sortName(next)}
+                    onClick={() => setChosenSort(next)}
+                  >
+                    {sortColumns[column].label}
+                    {active ? (
+                      <span className="analytics-sort-arrow">
+                        <span aria-hidden="true">
+                          {tableSort.direction === "ascending" ? "↑" : "↓"}
+                        </span>
+                        <span className="sr-only">
+                          {tableSort.direction === "ascending"
+                            ? column === "name"
+                              ? ", A to Z"
+                              : ", lowest first"
+                            : column === "name"
+                              ? ", Z to A"
+                              : ", highest first"}
+                        </span>
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             <button
               type="button"
-              className="analytics-sort-button analytics-sort-direction"
-              data-column={tableSort.column}
-              aria-label={sortName(nextSort(tableSort.column, tableSort))}
-              title={sortName(nextSort(tableSort.column, tableSort))}
-              onClick={() => setChosenSort(nextSort(tableSort.column, tableSort))}
+              className="analytics-sort-chip analytics-sort-more"
+              aria-expanded={moreSorts}
+              onClick={() => setMoreSorts((open) => !open)}
             >
-              <span aria-hidden="true">
-                {tableSort.direction === "ascending" ? "↑" : "↓"}
-              </span>
+              {moreSorts ? "Fewer sorts" : "More sorts"}
             </button>
           </div>
           <div

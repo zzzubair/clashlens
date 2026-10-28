@@ -7,7 +7,7 @@ import {
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
 
-import { type BackHandle, useBackState } from "../components/BackLink";
+import { type BackHandle } from "../components/BackLink";
 import {
   BoardRows,
   crewSearch,
@@ -21,7 +21,6 @@ import {
 import { CrewInvite } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { SavedLine } from "../components/SavedLine";
-import { TrophyMark } from "../components/LeaderboardShared";
 import {
   BOARDS,
   boardDescription,
@@ -34,15 +33,12 @@ import {
   type CrewView,
   type InviteLink,
 } from "../lib/crew-contracts";
-import { canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/crews.$crewId";
 import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each card shows the top of its board; the board's own page shows the rest. */
 const CARD_ROWS = 5;
-/** The players list shows this many, then Show all. */
-const PLAYER_ROWS = 10;
 
 /** A phone shows one board at a time, picked from these tabs. */
 const TABS: readonly { label: string; boards: readonly BoardKey[] }[] = [
@@ -244,7 +240,6 @@ export default function CrewRoute() {
           }
         />
         {card("streaks")}
-        <CrewAccounts crew={crew} />
       </div>
     </main>
   );
@@ -260,49 +255,6 @@ function showBoardTop(event: React.MouseEvent<HTMLAnchorElement>) {
   if (tabs && boards && boards.top < tabs.bottom) {
     window.scrollBy({ top: boards.top - tabs.bottom });
   }
-}
-
-/** Every Clash of Clans account in the crew, most trophies first. */
-function CrewAccounts({ crew }: { crew: CrewView }) {
-  const backState = useBackState(crew.name);
-  if (crew.players.length === 0) return null;
-  const item = (player: CrewView["players"][number]) => (
-    <li key={player.tag}>
-      <Link to={canonicalPlayerPath(player.tag)} state={backState}>
-        {player.name ?? player.tag}
-      </Link>
-      <span>
-        {player.tag}
-        {player.trophies === null ? null : (
-          <>
-            {" · "}
-            <TrophyMark />
-            {player.trophies.toLocaleString("en-GB")}
-          </>
-        )}
-      </span>
-    </li>
-  );
-  const rest = crew.players.slice(PLAYER_ROWS);
-  return (
-    <section
-      className="crew-panel crew-board crew-players"
-      aria-labelledby="crew-accounts-title"
-    >
-      <div className="crew-board-head">
-        <h2 id="crew-accounts-title">Players ({crew.players.length})</h2>
-      </div>
-      <ul className="crew-player-list">{crew.players.slice(0, PLAYER_ROWS).map(item)}</ul>
-      <div className="crew-board-foot">
-        {rest.length > 0 ? (
-          <details className="crew-more">
-            <summary className="button secondary">Show all {crew.players.length}</summary>
-            <ul className="crew-player-list">{rest.map(item)}</ul>
-          </details>
-        ) : null}
-      </div>
-    </section>
-  );
 }
 
 /**
@@ -329,6 +281,15 @@ function BoardCard({
 }) {
   const { rows, missing } = boards.boards[board];
   const fixed = NOW_BOARDS.includes(board);
+  // Boards with rows share their row on a wider screen (crews.css); an empty
+  // one shrinks to a line under them. Both defender boards hold the same days.
+  const filled = (
+    fixed ? NOW_BOARDS : (["attackers", "best_defenders", "streaks"] as const)
+  ).filter((key) => boards.boards[key].rows.length > 0).length;
+  const span = {
+    "--span-wide": 6 / Math.max(1, filled),
+    "--span-mid": filled === 1 || (filled === 3 && board === "streaks") ? 2 : 1,
+  } as React.CSSProperties;
   const path = `/crews/${crew.crewId}/boards/${BOARDS[board].slug}${
     fixed || period === "season" ? "" : `?period=${period}`
   }`;
@@ -337,6 +298,8 @@ function BoardCard({
       className={`crew-panel crew-board crew-board-${BOARDS[board].slug}`}
       aria-labelledby={`board-${board}`}
       data-current={current ? "" : undefined}
+      data-empty={rows.length === 0 ? "" : undefined}
+      style={rows.length === 0 ? undefined : span}
     >
       <div className="crew-board-head">
         <div>
@@ -353,15 +316,22 @@ function BoardCard({
           backLabel={crew.name}
         />
       ) : (
-        <p className="crew-empty">{emptyBoardText(board, period, boards.dayNumber)}</p>
+        <div className="crew-empty">
+          <b>{emptyBoardText(board, period, boards.dayNumber)}</b>
+          {missing.length > 0 ? (
+            <Link to={`${path}#not-on-board`}>
+              See why<span className="sr-only"> no one is on {BOARDS[board].title}</span>
+            </Link>
+          ) : null}
+        </div>
       )}
       <div className="crew-board-foot">
-        {missing.length > 0 ? (
+        {missing.length > 0 && rows.length > 0 ? (
           <span>
             {missing.length} {missing.length === 1 ? "account has" : "accounts have"} no
             data here.{" "}
             <Link to={`${path}#not-on-board`}>
-              Who<span className="sr-only"> is not on {BOARDS[board].title}</span>?
+              See who<span className="sr-only"> is not on {BOARDS[board].title}</span>
             </Link>
           </span>
         ) : (

@@ -764,6 +764,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {data.selectedSeason !== null ? null : (
         <section className="data-section legend-log" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
+          {/* Shown only while a day in the log carries the hollow dot. */}
+          <p className="log-key" aria-hidden="true">
+            <span className="day-mark log-key-dot" /> Not yet confirmed by a reading from
+            the game. Open the day for why.
+          </p>
           {selectedDay &&
           !pastDay &&
           !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (

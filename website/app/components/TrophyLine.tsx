@@ -82,8 +82,8 @@ export function TrophyLine({
             y2="0"
           >
             {/* Text colours, so the line reads on light paper as on dark. */}
-            <stop offset="0" stopColor="var(--cl-gold)" />
-            <stop offset="1" stopColor="var(--cl-action-text)" />
+            <stop offset="0" stopColor="var(--cl-star)" />
+            <stop offset="1" stopColor="var(--cl-brand-orange)" />
           </linearGradient>
         </defs>
         <path

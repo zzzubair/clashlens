@@ -1261,7 +1261,7 @@ describe("player day honesty", () => {
 
   it("calls a finished day with all 8 attacks and defenses calculated", async () => {
     const row = dayHtml(await page([DAY_24]), "2026-09-30");
-    expect(row).toMatch(net("-11"));
+    expect(row).toMatch(net("−11"));
     expect(row).toContain("Calculated");
     expect(row).not.toContain("Uncertain");
     expect(row).not.toContain("so far");
@@ -1273,7 +1273,7 @@ describe("player day honesty", () => {
       await page([{ ...DAY_24, battlesComplete: false }]),
       "2026-09-30",
     );
-    expect(gaps).toMatch(net("-11"));
+    expect(gaps).toMatch(net("−11"));
     expect(gaps).toContain("Uncertain");
   });
 
@@ -1452,7 +1452,7 @@ describe("player day honesty", () => {
     expect(text[4]).toContain("Recorded battle net +310");
     expect(rows[5]).toContain("<strong>Calculated.</strong>");
     expect(rows[5]).not.toContain("Uncertain");
-    expect(text[5]).toMatch(/Trophy change -11 .*battle net -11 /);
+    expect(text[5]).toMatch(/Trophy change −11 .*battle net −11 /);
     expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
     expect(rows[6]).toContain("Uncertain");
     expect(rows[6]).toContain(

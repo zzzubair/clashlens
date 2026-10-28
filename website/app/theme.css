@@ -10,53 +10,64 @@
     var(--cl-brand-orange) 100%
   );
   --cl-brand-fill-hover: linear-gradient(180deg, #ffe27a 0%, #ffa040 100%);
-  /* Light theme: warm paper under near-white panels, lit from the top by the
-     logo's glow. Dark is in appearance.css. */
-  --cl-ink: #1c130d;
-  --cl-paper: #f5efe8;
-  --cl-surface: #fffcf8;
-  --cl-panel: #f8f2ea;
-  --cl-raised: #ede3d8;
-  --cl-muted: #6e5e52;
-  --cl-faint: #736255;
-  --cl-border: #ebe1d6;
-  --cl-outline: #d9cbbc;
-  --cl-accent: #b53a0a;
-  --cl-accent-contrast: #b53a0a;
+  /* Light theme: clean neutral white with the logo's orange and yellow as the
+     only colour. Dark is in appearance.css. */
+  --cl-ink: #0b0b0d;
+  --cl-paper: #f4f4f5;
+  --cl-surface: #ffffff;
+  --cl-panel: #f7f7f8;
+  --cl-raised: #ececef;
+  --cl-muted: #5b5b65;
+  --cl-faint: #66666f;
+  --cl-border: #e6e6e9;
+  --cl-outline: #d4d4d8;
+  --cl-accent: #b93c0a;
+  --cl-accent-contrast: #b93c0a;
   --cl-action: #ff8a1f;
   --cl-action-hover: #ffa040;
   --cl-action-shade: #b3261e;
   --cl-on-action: #1a1206;
-  --cl-action-text: #b53a0a;
-  --cl-action-soft: #ffeedd;
-  --cl-action-border: #f3bf8c;
-  --cl-header-bg: rgb(250 245 239 / 0.74);
-  --cl-header-solid: #faf5ef;
-  --cl-header-ink: #1c130d;
-  --cl-header-muted: #6e5e52;
-  --cl-header-soft: rgb(60 30 10 / 0.06);
+  --cl-action-text: #b93c0a;
+  --cl-action-soft: #fff4e8;
+  --cl-action-border: #fbc189;
+  --cl-header-bg: rgb(255 255 255 / 0.74);
+  --cl-header-solid: #ffffff;
+  --cl-header-ink: #0b0b0d;
+  --cl-header-muted: #5b5b65;
+  --cl-header-soft: rgb(0 0 0 / 0.05);
   --cl-silver: #c9ccd2;
   --cl-bronze: #dca27a;
   --cl-medal-gold: #f2c641;
   --cl-orange: #ff8a1f;
-  --cl-gold: #865800;
+  --cl-gold: #855700;
   --cl-star: #e8a200;
-  --cl-sky: #b53a0a;
-  --cl-sky-soft: #ffeedd;
-  --cl-positive: #127436;
-  --cl-positive-soft: #e6f4e6;
+  /* Two and one star on a star split: greys, never a darkened gold. */
+  --cl-star-2: #7a7a82;
+  --cl-star-1: #b0b0b8;
+  /* Season heat map steps, worst (0) to best (4), and the text on them. */
+  --cl-heat-0: #e03131;
+  --cl-heat-1: #e29286;
+  --cl-heat-2: #a8a8ae;
+  --cl-heat-3: #8cc08c;
+  --cl-heat-4: #2fb344;
+  --cl-heat-text: #000;
+  --cl-heat-0-text: #fff;
+  --cl-sky: #b93c0a;
+  --cl-sky-soft: #fff4e8;
+  --cl-positive: #13773a;
+  --cl-positive-soft: #e7f6ec;
   --cl-negative: #c81e1e;
-  --cl-negative-soft: #fbe6e2;
+  --cl-negative-soft: #fdebeb;
   --cl-radius: 8px;
-  /* Panels: white glass with a hairline edge and a soft long shadow. */
-  --cl-card-line: rgb(60 30 10 / 0.1);
-  --cl-card-radius: 12px;
-  --cl-card-drop: 0 1px 1px rgb(60 30 10 / 0.04), 0 12px 32px -20px rgb(60 30 10 / 0.28);
-  --cl-glass: rgb(255 252 248 / 0.78);
-  --cl-glass-strong: rgb(255 252 248 / 0.9);
-  --cl-glass-edge: rgb(60 30 10 / 0.1);
+  /* Panels: white cards with a hairline edge, a lit top and a soft drop. */
+  --cl-card-line: rgb(0 0 0 / 0.075);
+  --cl-card-radius: 14px;
+  --cl-card-drop: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -20px rgb(0 0 0 / 0.22);
+  --cl-glass: rgb(255 255 255 / 0.74);
+  --cl-glass-strong: rgb(255 255 255 / 0.9);
+  --cl-glass-edge: rgb(0 0 0 / 0.08);
   --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.9);
-  --cl-glow: rgb(255 130 40 / 0.22);
+  --cl-glow: rgb(255 138 31 / 0.1);
   --cl-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   /* Scoreboard numbers: trophies, ranks and results. --cl-font-heading is
      the older name for the same face. */
@@ -64,8 +75,7 @@
   --cl-font-heading: var(--cl-font-score);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --cl-shadow: var(--cl-card-drop);
-  --cl-overlay-shadow:
-    0 24px 48px -16px rgb(60 30 10 / 0.3), 0 2px 6px rgb(60 30 10 / 0.08);
+  --cl-overlay-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.28), 0 2px 6px rgb(0 0 0 / 0.06);
   --cl-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   color: var(--cl-ink);
   background: var(--cl-paper);

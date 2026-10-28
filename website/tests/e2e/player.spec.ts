@@ -524,7 +524,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await seasonMenu.selectOption("");
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
   await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
+  await expect(page.getByText("−1,288", { exact: true })).toBeVisible();
   await expect(page.getByText(/1,284 days old/)).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
   const nameless = page.locator(".battle-row-attack").nth(8);
@@ -1027,10 +1027,10 @@ test("Back after switching Seasons returns to Your watchlists in one step", asyn
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
   await page.goto("/account/watchlists");
-  const group = page.locator(".group-card").filter({
-    has: page.getByRole("heading", { name: "War plan" }),
-  });
+  const group = page.locator(".group-card", { hasText: "War plan" });
   if ((await group.count()) === 0) {
+    const newList = page.getByText("New watchlist", { exact: true });
+    if (await newList.isVisible()) await newList.click();
     await page.getByLabel("Watchlist name").first().fill("War plan");
     await page.getByRole("button", { name: "Create watchlist" }).click();
   }

@@ -298,9 +298,9 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Sum of daily trophy changes");
     expect(html).toContain("50.0%<small>20 of 40</small>");
     expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>−260</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
-    expect(html).toContain("<dt>Per defense</dt><dd>-32.5</dd>");
+    expect(html).toContain("<dt>Per defense</dt><dd>−32.5</dd>");
     expect(html).not.toContain("Trophies lost");
     expect(html).not.toContain("Stars unknown");
     expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
@@ -308,7 +308,7 @@ describe("past-Season view", () => {
     // Missing days alone do not make any known total unavailable.
     expect(html).not.toContain("Some daily totals are unavailable.");
     // The day's -30 trophy change stays apart from its +10 recorded battle net.
-    expect(html).toMatch(/change<\/small><strong[^>]*>-30<.*battle net<\/dt><dd>\+10</s);
+    expect(html).toMatch(/change<\/small><strong[^>]*>−30<.*battle net<\/dt><dd>\+10</s);
   });
 
   it("averages over played days only, leaving out quiet days and days before sign-up", async () => {
@@ -339,7 +339,7 @@ describe("past-Season view", () => {
     // 1,600 attack trophies and 1,300 defense trophies over the 3 played
     // days; the 3 quiet days, before sign-up or not, are left out.
     expect(html).toMatch(/Offense per day<\/dt><dd>\+533</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-433</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>−433</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
   });
 
@@ -438,7 +438,7 @@ describe("past-Season view", () => {
     expect(html).toContain(CURRENT_LINK);
     expect(html).toContain("Season history could not be loaded.");
     expect(html).toContain(`href="/players/%232PP?season=${SEASON}">Try again</a>`);
-    expect(html).toContain(">-30</strong>");
+    expect(html).toContain(">−30</strong>");
   });
 
   it.each([

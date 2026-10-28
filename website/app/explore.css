@@ -255,6 +255,14 @@
   white-space: nowrap;
 }
 
+/* Rank, trophies and update age take only their width, so the trophies sit
+   by the age on the right and the names get the room. */
+@media (min-width: 40.01rem) {
+  .leaderboard-table :is(thead th:first-child, thead th:nth-child(n + 4)) {
+    width: 1%;
+  }
+}
+
 .leaderboard-table tbody tr:last-child > * {
   border-bottom: 0;
 }
@@ -443,7 +451,7 @@
   height: 1rem;
   margin-right: 0.3rem;
   overflow: visible;
-  color: var(--cl-gold);
+  color: var(--cl-star);
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;

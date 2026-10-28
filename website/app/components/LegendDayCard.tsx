@@ -28,11 +28,12 @@ function BattleRow({
   return (
     <div className={`legend-day-battles legend-day-${kind}s`}>
       <div className="legend-day-battles-head">
-        <span className="dash-label">
-          <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
+        <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
+        <span className="legend-day-battles-name">
+          {kind === "attack" ? "Attacks" : "Defenses"}
         </span>
-        <span className="dash-muted">
-          {count ?? "–"} of {SLOTS} {noun}s
+        <span className="legend-day-battles-count" aria-hidden="true">
+          {count ?? "–"}/{SLOTS}
         </span>
         {total !== null && count ? (
           <b className={total > 0 ? "positive" : total < 0 ? "negative" : ""}>
@@ -91,7 +92,6 @@ export function LegendDayCard({
   const defenseCount = complete ? defenses.length : (day?.defenses ?? null);
   const net = day?.net ?? null;
   const trophies = day ? day.trophies : player.trophies;
-  const openDefenses = day?.openDefenses ?? null;
   // The oldest read shown, so the card never looks newer than it is.
   const observed = [day?.observedAtMs ?? null, rangeAtMs].filter(
     (at): at is number => at !== null,
@@ -120,16 +120,12 @@ export function LegendDayCard({
           {net === null ? (
             <span className="sr-only">–</span>
           ) : (
-            <>
-              <span
-                className={`legend-day-net ${net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
-              >
-                {signed(net)}
-              </span>
-              <span className="legend-day-net-label" aria-hidden="true">
-                today
-              </span>
-            </>
+            <span
+              className={`legend-day-net ${net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
+            >
+              {signed(net)}
+              <span className="legend-day-net-label"> today</span>
+            </span>
           )}
         </span>
         {countdown ? (
@@ -149,34 +145,47 @@ export function LegendDayCard({
           </span>
         ) : null}
       </div>
-      <div className="legend-day-ranks">
+      <dl className="legend-day-ranks">
         <div>
-          <span className="dash-label">Last Reset</span>
-          <b>{rankText(day?.lastResetRank ?? null)}</b>
+          <dt>Last Reset</dt>
+          <dd>{rankText(day?.lastResetRank ?? null)}</dd>
         </div>
-        <i aria-hidden="true" />
         <div className="legend-day-now">
-          <span className="dash-label">Now</span>
-          <b className="rank-mark">{rankText(player.rank)}</b>
-        </div>
-        <i aria-hidden="true" />
-        <div className="legend-day-range">
-          <span className="dash-label">Next Reset</span>
-          <b>{range ? `${rankText(range.best)}–${rankText(range.worst)}` : "–"}</b>
-          <span className="dash-estimate">estimate</span>
+          <dt>Now</dt>
+          <dd>
+            <b className="rank-mark">{rankText(player.rank)}</b>
+          </dd>
         </div>
         {projected ? (
           <div className="legend-day-projected">
-            <span className="dash-label">Projected</span>
-            <strong>{rankText(projected)} at Reset</strong>
-            <span className="sr-only">
-              An estimate from how players in your spot finished on recent days. It can be
-              hundreds of places out while battles are left, and gets closer through the
-              day.
-            </span>
+            <dt>Projected</dt>
+            <dd>
+              {rankText(projected)}
+              <span className="sr-only">
+                {" "}
+                at Reset. An estimate from how players in your spot finished on recent
+                days. It can be hundreds of places out while battles are left, and gets
+                closer through the day.
+              </span>
+            </dd>
           </div>
         ) : null}
-      </div>
+        <div className="legend-day-range">
+          <dt>Next Reset</dt>
+          <dd>
+            {range ? (
+              <>
+                {rankText(range.best)}
+                <span className="legend-day-range-dash">–</span>
+                {rankText(range.worst)}
+              </>
+            ) : (
+              "–"
+            )}
+            <span className="sr-only"> estimate</span>
+          </dd>
+        </div>
+      </dl>
       <div className="legend-day-slots">
         <BattleRow
           battles={attacks}
@@ -193,17 +202,6 @@ export function LegendDayCard({
           kind="defense"
         />
       </div>
-      {openDefenses !== null && openDefenses > 0 ? (
-        <p className="dash-chip">
-          {openDefenses} defense{openDefenses === 1 ? "" : "s"} remain
-          {day?.autoDefenseEach !== null && day?.autoDefenseEach !== undefined ? (
-            <>
-              {" "}
-              · auto defense <b>{signed(-day.autoDefenseEach)}</b> each
-            </>
-          ) : null}
-        </p>
-      ) : null}
     </div>
   );
 }

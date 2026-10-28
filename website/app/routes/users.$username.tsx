@@ -146,7 +146,7 @@ export default function UserRoute() {
   );
   if (data.notFound) {
     return (
-      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+      <main id="main-content" tabIndex={-1} className="page-shell">
         <section className="hero" aria-labelledby="user-not-found-title">
           <h1 id="user-not-found-title">User not found</h1>
           <p>No Clash Lens user exists at this address.</p>
@@ -156,7 +156,7 @@ export default function UserRoute() {
   }
   if (data.error) {
     return (
-      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+      <main id="main-content" tabIndex={-1} className="page-shell">
         <h1>User profile</h1>
         <aside className="notice notice-unavailable" role="alert">
           <strong>Profile could not be loaded.</strong>{" "}
@@ -167,7 +167,7 @@ export default function UserRoute() {
   }
   const players = data.user?.verifiedPlayers ?? [];
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell">
       {justLinked ? (
         <SavedLine>{justLinked.name ?? justLinked.tag} linked.</SavedLine>
       ) : null}
@@ -187,34 +187,36 @@ export default function UserRoute() {
         <p className="player-tag">@{data.user?.username ?? ""}</p>
       </section>
 
-      {isOwnProfile ? <YourTools tools={data.owner} /> : null}
+      <div className="profile-body">
+        <section className="data-section" aria-labelledby="user-players-title">
+          <h2 id="user-players-title">Clash players</h2>
+          {players.length > 0 ? (
+            <ul className="linked-player-cards">
+              {players.map((player) => (
+                <li key={player.tag}>
+                  <LinkedPlayer
+                    player={player}
+                    backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : isOwnProfile ? (
+            <div className="empty-state">
+              <p>Link your Clash player to see your Legend days here.</p>
+              <Link className="button button-primary" to="/account/verify-player">
+                Link your Clash player
+              </Link>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <p>This user hasn&apos;t linked a Clash player yet.</p>
+            </div>
+          )}
+        </section>
 
-      <section className="data-section" aria-labelledby="user-players-title">
-        <h2 id="user-players-title">Clash players</h2>
-        {players.length > 0 ? (
-          <ul className="linked-player-cards">
-            {players.map((player) => (
-              <li key={player.tag}>
-                <LinkedPlayer
-                  player={player}
-                  backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
-                />
-              </li>
-            ))}
-          </ul>
-        ) : isOwnProfile ? (
-          <div className="empty-state">
-            <p>Link your Clash player to see your Legend days here.</p>
-            <Link className="button button-primary" to="/account/verify-player">
-              Link your Clash player
-            </Link>
-          </div>
-        ) : (
-          <div className="empty-state">
-            <p>This user hasn&apos;t linked a Clash player yet.</p>
-          </div>
-        )}
-      </section>
+        {isOwnProfile ? <YourTools tools={data.owner} /> : null}
+      </div>
     </main>
   );
 }
@@ -236,7 +238,10 @@ function YourTools({ tools }: { tools: OwnerTools | null }) {
     },
   ];
   return (
-    <section className="data-section" aria-labelledby="your-tools-title">
+    <section
+      className="data-section profile-tools-section"
+      aria-labelledby="your-tools-title"
+    >
       <h2 id="your-tools-title">Your tools</h2>
       <ul className="profile-tools">
         {cards.map((card) => (
@@ -319,7 +324,13 @@ function LinkedPlayer({
               {player.league ?? "Unranked"}
             </strong>
           ) : (
-            <strong className="rank-mark">#{player.rank.toLocaleString("en-GB")}</strong>
+            <strong
+              className="rank-mark"
+              data-podium-rank={player.rank <= 3 ? player.rank : undefined}
+            >
+              {/* A podium plate shows the bare place, as on Rankings. */}
+              {player.rank <= 3 ? player.rank : `#${player.rank.toLocaleString("en-GB")}`}
+            </strong>
           )}
         </span>
         <span className="linked-player-stat linked-player-today">

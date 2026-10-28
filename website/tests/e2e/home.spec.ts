@@ -152,10 +152,10 @@ test("leaderboard ages and old-data labels advance while the page stays open", a
   );
   await page.clock.setSystemTime(observedAt + 2 * 60_000);
   await page.clock.runFor(30_000);
-  await expect(update).toContainText("2 minutes ago");
+  await expect(update).toContainText("2 min ago");
   await expect(update).not.toContainText("Over 10 min old");
   await page.clock.runFor(9 * 60_000);
-  await expect(update).toContainText("11 minutes ago · Over 10 min old");
+  await expect(update).toContainText("11 min ago · Over 10 min old");
 });
 
 test("an out-of-range leaderboard page offers a working link to page one", async ({

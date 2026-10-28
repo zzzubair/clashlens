@@ -174,15 +174,35 @@
 
 /* ---------- Account tabs and the Customise divider ---------- */
 
+/* One segmented control: a sunken track, the chosen player lifted out of it
+   with an arrow to their player page. Link player sits at the end. */
 .dash-accounts {
   /* Holds the hidden Link player text, which would otherwise widen the page. */
   position: relative;
   display: flex;
-  gap: 0.6rem;
-  margin-bottom: 0.8rem;
+  align-items: stretch;
+  gap: 0.25rem;
+  justify-self: start;
+  max-width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.25rem;
   overflow-x: auto;
-  padding: 0.2rem 0.2rem 0.5rem;
-  scrollbar-width: thin;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.1);
+  scrollbar-width: none;
+}
+
+.dash-accounts::-webkit-scrollbar {
+  display: none;
+}
+
+.dash-account-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border-radius: 10px;
 }
 
 .dash-account {
@@ -190,88 +210,89 @@
   flex: 0 0 auto;
   flex-direction: column;
   justify-content: center;
-  max-width: 15rem;
-  min-height: 3.6rem;
-  padding: 0.4rem 1rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-card-drop);
+  max-width: 14rem;
+  min-height: 3rem;
+  padding: 0.3rem 0.9rem;
+  color: var(--cl-muted);
+  border-radius: 10px;
   text-decoration: none;
 }
 
 .dash-account > .dash-name {
+  color: inherit;
   font-family: var(--cl-font);
-  font-size: 1.15rem;
-  font-weight: 700;
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
 .dash-account-line {
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
+  font-weight: 500;
   white-space: nowrap;
+}
+
+.dash-account:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+}
+
+/* The chosen player: lifted, bright, with its page arrow joined on. */
+.dash-account-tab:has(> [aria-current="page"]) {
+  background: var(--cl-surface);
+  box-shadow:
+    var(--cl-glass-shine),
+    0 1px 2px rgb(0 0 0 / 0.14),
+    0 0 0 1px var(--cl-card-line);
+}
+
+:root[data-theme="dark"] .dash-account-tab:has(> [aria-current="page"]) {
+  background: var(--cl-raised);
 }
 
 .dash-account[aria-current="page"] {
   color: var(--cl-ink);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-}
-
-/* Page sits on the tab's right edge and opens that player's page. */
-.dash-account-tab {
-  display: flex;
-  flex: 0 0 auto;
-  border-radius: var(--cl-radius);
-  box-shadow: var(--cl-card-drop);
-}
-
-.dash-account-tab > .dash-account {
-  border-right-width: 1px;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  box-shadow: none;
+  padding-right: 0.35rem;
 }
 
 .dash-account-page {
-  display: flex;
-  flex-direction: column;
+  display: none;
   align-items: center;
   justify-content: center;
-  gap: 0.1rem;
-  min-width: 3rem;
-  padding: 0.3rem 0.5rem;
-  color: var(--cl-accent);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-left-width: 1px;
-  border-radius: 0 var(--cl-radius) var(--cl-radius) 0;
-  font-size: 0.72rem;
-  font-weight: 800;
+  width: 2.5rem;
+  margin: 0.25rem 0.25rem 0.25rem 0;
+  color: var(--cl-action-text);
+  border-radius: 8px;
   text-decoration: none;
 }
 
+.dash-account[aria-current="page"] + .dash-account-page {
+  display: flex;
+}
+
 .dash-account-page .dash-icon {
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 1.1rem;
+  height: 1.1rem;
 }
 
 .dash-account-page:is(:hover, :focus-visible) {
   background: var(--cl-action-soft);
 }
 
-.dash-account[aria-current="page"] + .dash-account-page {
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-}
-
 .dash-account-add {
   flex-direction: row;
   align-items: center;
-  gap: 0.4rem;
-  box-shadow: none;
-  font-weight: 800;
+  gap: 0.35rem;
+  margin-left: 0.15rem;
+  padding: 0 0.85rem;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.dash-account-add .dash-icon {
+  width: 1rem;
+  height: 1rem;
 }
 
 .dash-divider {
@@ -292,28 +313,22 @@
   min-height: 3.6rem;
 }
 
-.dash-customise-short {
-  display: none;
+/* Beside the player tabs, Customise matches their height. */
+.dash-divider .dash-customise {
+  min-height: 3.6rem;
+  border-radius: 14px;
 }
 
 /* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
 
-/* Each card is as tall as its content, so a short card beside a long one
-   stays short instead of stretching with empty space. */
+/* Rows pack with no holes (cardPlaces in lib/dashboard.ts sets each card's
+   span and order), and every card in a row is as tall as the tallest, so a row reads as
+   one band. Cards never scroll inside; each design fits its content. */
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 1rem;
-}
-
-/* The Legend day and the clock beside it end level; the clock centres in the
-   extra room. */
-.dash-card:has(> .legend-day-card):has(+ [data-card="legend-clock"]),
-.dash-card:has(> .legend-day-card) + [data-card="legend-clock"],
-[data-card="legend-clock"]:has(+ .dash-card > .legend-day-card),
-[data-card="legend-clock"] + .dash-card:has(> .legend-day-card) {
-  align-self: stretch;
 }
 
 [data-card="legend-clock"] > .legend-clock {
@@ -324,40 +339,27 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
   min-width: 0;
-  padding: 0.9rem 1rem;
+  padding: 1.1rem 1.2rem 1.2rem;
+  grid-column: span var(--span-3, 1);
+  order: var(--order-3, 0);
 }
 
-/* A card's parts keep their size; a card taller than its slot scrolls instead. */
 .dash-card > * {
   flex-shrink: 0;
 }
 
-/* Small and Medium cards are at most 360 px tall and every design fits inside;
-   cards in a row match the tallest, so a nearly empty row stays short. */
-.dash-card-s,
-.dash-card-m {
-  max-height: 360px;
-  overflow: hidden auto;
-}
+/* iPads and small laptops: 2 columns; Medium and Large take the row. */
+@media (min-width: 40.01rem) and (max-width: 64rem) {
+  .dash-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
-/* Rivals watch always shows all 7 rows, never a scroll inside the card. */
-.dash-card-m:has(> .rival-table) {
-  max-height: none;
-  overflow: visible;
-}
-
-.dash-card-s {
-  grid-column: span 1;
-}
-
-.dash-card-m {
-  grid-column: span 2;
-}
-
-.dash-card-l {
-  grid-column: 1 / -1;
+  .dash-card {
+    grid-column: span var(--span-2, 1);
+    order: var(--order-2, 0);
+  }
 }
 
 .dash-card h2 {
@@ -377,6 +379,12 @@
 .dash-card-meta {
   color: var(--cl-muted);
   font-size: 0.82rem;
+}
+
+/* One place for every card's switch: its own line under the title, as on
+   Rivals watch and Cutoffs. */
+.dash-card-meta:has(.dash-switch) {
+  flex-basis: 100%;
 }
 
 .dash-card-sub {
@@ -780,12 +788,9 @@
     gap: 0.75rem;
   }
 
-  .dash-card-s,
-  .dash-card-m,
-  .dash-card-l {
+  .dash-card {
     grid-column: 1 / -1;
-    max-height: none;
-    overflow: visible;
+    order: 0;
   }
 
   /* Every card is full width here, so its size says nothing and the room
@@ -895,78 +900,29 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* The player tab tightens and Page keeps only its arrow, so the tab and
-     Edit fit one row. */
+  /* On a phone the row holds names only; the day card below shows the
+     chosen player's numbers. */
   .dash-account {
+    min-height: 2.75rem;
     padding-inline: 0.75rem;
   }
 
-  /* The day card below already shows the chosen player's numbers. */
-  .dash-account[aria-current="page"] .dash-account-line {
+  .dash-account-line {
     display: none;
   }
 
-  .dash-account-page {
-    flex: none;
-    min-width: 2.5rem;
-  }
-
-  /* The chosen player's name gives way first, onto two lines, so its arrow
-     and Link player stay in view; other players still scroll sideways. */
-  .dash-account-tab:has(> [aria-current="page"]) {
-    flex-shrink: 1;
-    min-width: 9rem;
-  }
-
-  .dash-account-tab > .dash-account[aria-current="page"] {
-    flex-shrink: 1;
-    min-width: 0;
-  }
-
-  .dash-account[aria-current="page"] > .dash-name {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    font-size: 1rem;
-    line-height: 1.2;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .dash-account-page > span {
-    display: none;
-  }
-
-  /* Customise matches Link: its icon over a small word. */
+  /* Customise and Link player keep only their icons; their names stay for
+     screen readers. */
   .dash-customise {
-    flex-direction: column;
-    gap: 0;
-    padding: 0 0.5rem;
+    width: 3.1rem;
+    min-height: 3.1rem;
+    padding: 0;
   }
 
-  /* Link player shrinks to its + and a small "Link" (its full name stays for
-     screen readers), so the player tab beside it fits. */
   .dash-account-add {
-    flex-direction: column;
-    justify-content: center;
-    gap: 0;
     min-width: 2.75rem;
-    padding: 0 0.3rem;
-  }
-
-  .dash-account-add::after {
-    color: var(--cl-muted);
-    content: "Link" / "";
-    font-size: 0.68rem;
-    font-weight: 700;
-  }
-
-  .dash-customise-short {
-    display: inline;
-    color: var(--cl-muted);
-    font-size: 0.68rem;
-    font-weight: 700;
+    justify-content: center;
+    padding: 0;
   }
 
   .dash-account-add-text,

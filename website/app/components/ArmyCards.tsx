@@ -94,11 +94,28 @@ function lost(outcome: ArmyOutcome | null): string {
   return average === null ? "–" : signed(-average);
 }
 
-/** The user's number, then every tracked player's in grey: "29% / 50%". */
-function WithLegends({ own, legends }: { own: string; legends: string }) {
+/**
+ * The user's number, then every tracked player's in grey: "29% / 50%". On a
+ * phone the column headers go, so each number carries its own label.
+ */
+function WithLegends({
+  label,
+  own,
+  legends,
+}: {
+  label: string;
+  own: string;
+  legends: string;
+}) {
   return (
-    <span>
-      {own} <span className="dash-muted army-legends">/ {legends}</span>
+    <span className="army-stat">
+      <small className="army-stat-label">{label} </small>
+      {own}{" "}
+      <span className="dash-muted army-legends">
+        <span className="army-slash">/ </span>
+        <span className="army-stat-label">Legends </span>
+        {legends}
+      </span>
     </span>
   );
 }
@@ -190,19 +207,21 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   ) => (
     <div className={`army-defense-row${all ? " is-all" : ""}`} key={name}>
       {all ? <span>{name}</span> : <Name>{name}</Name>}
-      <span>
+      <span className="army-share">
         {percent(
           armies?.total.battles
             ? Math.round((100 * outcome.battles) / armies.total.battles)
             : null,
         )}
+        <small className="army-stat-label"> of defenses</small>
       </span>
       <WithLegends
+        label="Held"
         own={percent(heldPercent(outcome))}
         legends={percent(legends ? heldPercent(legends) : null)}
       />
       <span className="negative">
-        <WithLegends own={lost(outcome)} legends={lost(legends)} />
+        <WithLegends label="Avg lost" own={lost(outcome)} legends={lost(legends)} />
       </span>
     </div>
   );
@@ -285,7 +304,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
             <>
               <div className="army-offense-row army-head" aria-hidden="true">
                 <span>Army type</span>
-                <span>You</span>
+                <span>Your hit rate</span>
                 <span>Legends</span>
               </div>
               {shown.map((army) => (
@@ -299,7 +318,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
                 <div className="army-offense-row">
                   <span>Other armies</span>
                   <b>{percent(hitPercent(rest))}</b>
-                  <span className="dash-muted">–</span>
+                  <span className="dash-muted">mixed</span>
                 </div>
               ) : null}
             </>
@@ -318,7 +337,7 @@ function OneArmy({ army }: { army: ArmyRow }) {
       </div>
       <div className="army-one-big">
         <div>
-          <span className="dash-label">You</span>
+          <span className="dash-label">Your hit rate</span>
           <b>{percent(hitPercent(army))}</b>
         </div>
         <div>

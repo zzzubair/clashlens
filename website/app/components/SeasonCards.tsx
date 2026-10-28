@@ -11,7 +11,7 @@ import {
   DAILY_BATTLES,
   SEASON_DAYS,
   heatCells,
-  heatColour,
+  heatStep,
   heatValue,
   isShieldDay,
   offenseConsistency,
@@ -28,7 +28,6 @@ import {
   signedOr,
   tone,
 } from "./DashboardParts";
-import { starText } from "./LegendClock";
 
 const DAYS_OPTIONS = [
   ["3", "3 days"],
@@ -84,7 +83,7 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
           : pickedCell && pickedCell.kind in NO_RESULT
             ? `Day ${pickedCell.day}: ${NO_RESULT[pickedCell.kind as keyof typeof NO_RESULT]}`
             : data.today !== null && data.today > 1
-              ? null
+              ? "Coloured against your own Season: best days green, worst red."
               : FIRST_DAY_NOTE}
       </p>
       <dl className="heat-summary">
@@ -124,43 +123,35 @@ function HeatSquare({
           : cell.kind === "shield"
             ? "no battles"
             : signedOr(cell.value);
+  const step =
+    cell.kind in NO_RESULT || cell.shade === null ? null : heatStep(cell.shade);
   const style =
-    cell.kind in NO_RESULT || cell.shade === null
+    step === null
       ? undefined
-      : (() => {
-          const [red, green, blue] = heatColour(cell.shade);
-          return {
-            background: `rgb(${red} ${green} ${blue})`,
-            color: readableOn(red, green, blue),
-          };
-        })();
+      : {
+          background: `var(--cl-heat-${step})`,
+          color: `var(--cl-heat-${step}-text, var(--cl-heat-text))`,
+        };
   return (
     <li className={`heat-day heat-${cell.kind}`} style={style}>
       <button
         type="button"
         aria-pressed={picked}
         aria-label={`Day ${cell.day}: ${label}`}
+        title={`Day ${cell.day}: ${label}`}
         onClick={onPick}
       >
         <small>{cell.day}</small>
         {cell.kind === "today"
           ? "today"
-          : cell.kind in NO_RESULT
-            ? ""
-            : signedOr(cell.value)}
+          : cell.kind === "missing"
+            ? "–"
+            : cell.kind in NO_RESULT
+              ? ""
+              : signedOr(cell.value)}
       </button>
     </li>
   );
-}
-
-/** White or black, whichever reads better on the colour (at least 4.5 to 1). */
-function readableOn(red: number, green: number, blue: number): string {
-  const linear = (channel: number) => {
-    const value = channel / 255;
-    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  };
-  const light = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
-  return 1.05 / (light + 0.05) >= (light + 0.05) / 0.05 ? "#fff" : "#000";
 }
 
 function Pair({
@@ -428,10 +419,19 @@ function Trend({
 }) {
   if (before === undefined) return null;
   if (now === null || before === null) return <span className="form-trend" />;
-  const better = now >= before;
+  const change = Math.abs(now - before).toFixed(digits);
+  // A change that rounds to nothing reads as the same, not as better.
+  if (Number(change) === 0)
+    return (
+      <span className="form-trend">
+        No change
+        <small>vs the {size} days before</small>
+      </span>
+    );
+  const better = now > before;
   return (
     <span className={`form-trend ${better ? "positive" : "negative"}`}>
-      {better ? "▲ better" : "▼ worse"} by {Math.abs(now - before).toFixed(digits)}
+      {better ? "▲ better" : "▼ worse"} by {change}
       <small>vs the {size} days before</small>
     </span>
   );
@@ -570,8 +570,7 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
           <ul className="consistency-split">
             {stats.stars.map((amount, index) => (
               <li key={index} className={STAR_CLASSES[index]}>
-                <b>{amount}</b>
-                {index === 3 ? "0★" : starText(3 - index).replaceAll("☆", "")}
+                {3 - index}★ <b>{amount}</b>
               </li>
             ))}
           </ul>

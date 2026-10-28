@@ -15,6 +15,7 @@ import {
 
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { TrophyMark } from "../components/LeaderboardShared";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import { addedNotice, GROUP_LIMIT, STATE_LABELS } from "../lib/group-text";
 import {
@@ -354,42 +355,58 @@ export default function GroupsRoute() {
     shownGroups.current = groups.length;
   }, [groups.length]);
 
+  const createForm = (
+    <section className="form-panel" aria-label="Create a watchlist">
+      <h2>Create a watchlist</h2>
+      <Form key={createKey} method="post" action="." className="stack-form" replace>
+        <input type="hidden" name="action" value="create" />
+        <input type="hidden" name="idempotencyKey" value={createKey} />
+        <NameField
+          id="group-create-name"
+          value={actionData?.action === "create" ? actionData.values.name : ""}
+          error={createErrors.name}
+          help={
+            atLimit
+              ? GROUP_LIMIT
+              : `Up to ${MAX_GROUPS} watchlists. Add players once it exists.`
+          }
+        />
+        <button
+          type="submit"
+          className="button button-primary"
+          disabled={creating || atLimit}
+        >
+          {creating ? "Creating watchlist…" : "Create watchlist"}
+        </button>
+      </Form>
+    </section>
+  );
+
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      <section className="hero" aria-labelledby="groups-title">
-        <h1 id="groups-title">Watchlists</h1>
-        <p className="lede">Private lists of up to 20 players, side by side.</p>
+    <main id="main-content" tabIndex={-1} className="page-shell">
+      <section className="hero groups-hero" aria-labelledby="groups-title">
+        <div>
+          <h1 id="groups-title">Watchlists</h1>
+          <p className="lede">Private lists of up to 20 players, side by side.</p>
+        </div>
+        {/* With lists to show, making one waits behind a button. */}
+        {groups.length > 0 || loaderData.error ? (
+          <details
+            key={createKey}
+            className="group-create"
+            open={createErrors.name !== undefined}
+          >
+            <summary className="button button-secondary">New watchlist</summary>
+            {createForm}
+          </details>
+        ) : null}
       </section>
 
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
-      <section className="form-panel" aria-label="Create a watchlist">
-        <h2>Create a watchlist</h2>
-        <Form key={createKey} method="post" action="." className="stack-form" replace>
-          <input type="hidden" name="action" value="create" />
-          <input type="hidden" name="idempotencyKey" value={createKey} />
-          <NameField
-            id="group-create-name"
-            value={actionData?.action === "create" ? actionData.values.name : ""}
-            error={createErrors.name}
-            help={
-              atLimit
-                ? GROUP_LIMIT
-                : `Up to ${MAX_GROUPS} watchlists. Add players once it exists.`
-            }
-          />
-          <button
-            type="submit"
-            className="button button-primary"
-            disabled={creating || atLimit}
-          >
-            {creating ? "Creating watchlist…" : "Create watchlist"}
-          </button>
-        </Form>
-      </section>
-
       <section className="data-section" aria-labelledby="group-list-title">
-        <h2 id="group-list-title" ref={listTitle} tabIndex={-1}>
+        {/* The page title already names them; the heading stays for screen readers. */}
+        <h2 id="group-list-title" className="sr-only" ref={listTitle} tabIndex={-1}>
           Your watchlists
         </h2>
         {loaderData.error ? (
@@ -411,9 +428,12 @@ export default function GroupsRoute() {
             ))}
           </ul>
         ) : (
-          <div className="empty-state">
-            <h3>No watchlists yet</h3>
-          </div>
+          <>
+            <div className="empty-state">
+              <h3>No watchlists yet</h3>
+            </div>
+            {createForm}
+          </>
         )}
       </section>
     </main>
@@ -705,13 +725,21 @@ function MemberName({ player }: { player: GroupPlayer }) {
       </Link>
       {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
       <span className="group-member-detail">
-        {player.state === "tracking"
-          ? player.seasonResetPending
-            ? "Waiting for this player's Season reset"
-            : player.trophies === null
-              ? "Legend League"
-              : `${player.trophies.toLocaleString("en")} trophies`
-          : STATE_LABELS[player.state]}
+        {player.state === "tracking" ? (
+          player.seasonResetPending ? (
+            "Waiting for this player's Season reset"
+          ) : player.trophies === null ? (
+            "Legend League"
+          ) : (
+            <>
+              <TrophyMark />
+              <span className="score">{player.trophies.toLocaleString("en")}</span>
+              <span className="sr-only"> trophies</span>
+            </>
+          )
+        ) : (
+          STATE_LABELS[player.state]
+        )}
       </span>
     </span>
   );

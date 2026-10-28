@@ -139,7 +139,7 @@ it.each([
       `<summary><span class="sr-only">Last updated </span>${age.replace("minutes", "min")} ago`,
     );
     expect(html).toContain(
-      `${age} ago${stale ? '<span class="sr-only"> · Over 10 min old</span>' : ""}</time>`,
+      `${age.replace("minutes", "min")} ago${stale ? '<span class="sr-only"> · Over 10 min old</span>' : ""}</time>`,
     );
     expect(html.includes("Over 10 min old")).toBe(stale);
     // Old rows carry a dot, which one line above the board explains.

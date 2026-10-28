@@ -409,11 +409,7 @@ export default function TrackedLeaderboardRoute() {
                 autoCorrect="off"
                 enterKeyHint="search"
               />
-              <button
-                className="button button-primary"
-                type="submit"
-                disabled={navigation.state !== "idle"}
-              >
+              <button type="submit" disabled={navigation.state !== "idle"}>
                 {navigation.state !== "idle" ? "Searching…" : "Search"}
               </button>
             </div>
@@ -633,7 +629,7 @@ export default function TrackedLeaderboardRoute() {
                               title={formatTimestamp(entry.freshness.observedAt)}
                               data-old={isOld(entry.freshness.observedAt) || undefined}
                             >
-                              {formatAge(ageSeconds(entry.freshness.observedAt))} ago
+                              {shortAge(ageSeconds(entry.freshness.observedAt))} ago
                               {isOld(entry.freshness.observedAt) ? oldNote : null}
                             </time>
                           ) : (

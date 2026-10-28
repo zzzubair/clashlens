@@ -309,10 +309,25 @@ export function LegendClock({
           to Reset
         </text>
       </svg>
-      {/* Phones only: the countdown beside the small dial, and the switch to the
-          full clock and back. */}
+      {/* The countdown beside a small dial on a phone, or beside the dial when
+          the card spans a row; today's count of each mark under or beside the
+          dial; and the phone's switch to the full clock and back. */}
       <p className="legend-clock-summary" aria-hidden="true">
-        <b>{countdown}</b> to Reset at {resetLabel}
+        <b>{countdown}</b> to Reset
+        <span className="legend-clock-at"> at {resetLabel}</span>
+        <span className="legend-clock-zone"> · {timeZone}</span>
+      </p>
+      <p className="legend-clock-key" aria-hidden="true">
+        {(["attack", "defense"] as const).map((kind) => {
+          const total = battles.filter((battle) => battle.kind === kind).length;
+          return (
+            <span key={kind}>
+              <svg viewBox="-13 -13 26 26">{kind === "attack" ? SWORD : SHIELD}</svg>
+              {total} {kind}
+              {total === 1 ? "" : "s"}
+            </span>
+          );
+        })}
       </p>
       <button
         type="button"
