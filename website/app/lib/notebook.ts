@@ -175,8 +175,8 @@ export interface Notebook {
     copy: CopyAccount[];
     /** Its numbers in each window; null from an older API. */
     windows: Record<BaseWindow, WindowNumbers> | null;
-    /** The newest rows of Who ran it, of `total`. */
-    who: { rows: WhoRow[]; total: number };
+    /** The newest rows of Who ran it, and how many rows each window has. */
+    who: { rows: WhoRow[]; total: Record<BaseWindow, number> };
     /** Clashers keeping it in their own notebook, for a Crew's Uploaders,
      * admins and owner; null otherwise. */
     copies: number | null;
@@ -492,9 +492,18 @@ function parseWindows(
 }
 
 /** Who ran it; empty when the API sent none, null when it doesn't fit. */
-function parseWho(value: unknown): { rows: WhoRow[]; total: number } | null {
-  if (value === undefined || value === null) return { rows: [], total: 0 };
-  if (!isRecord(value) || !Array.isArray(value.rows) || !isCount(value.total))
+function parseWho(
+  value: unknown,
+): { rows: WhoRow[]; total: Record<BaseWindow, number> } | null {
+  if (value === undefined || value === null)
+    return { rows: [], total: { last3: 0, season: 0, all: 0 } };
+  const total = isRecord(value) && isRecord(value.total) ? value.total : null;
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.rows) ||
+    !total ||
+    !WINDOWS.every(([window]) => isCount(total[window]))
+  )
     return null;
   const rows = value.rows.map((row: unknown) =>
     isRecord(row) &&
@@ -523,7 +532,9 @@ function parseWho(value: unknown): { rows: WhoRow[]; total: number } | null {
         }
       : null,
   );
-  return rows.includes(null) ? null : { rows: rows as WhoRow[], total: value.total };
+  return rows.includes(null)
+    ? null
+    : { rows: rows as WhoRow[], total: total as Record<BaseWindow, number> };
 }
 
 /** What a saved change did, or null when it does not fit the contract. */

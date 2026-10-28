@@ -151,10 +151,14 @@ def base_page(connection: Any, notebook: _Notebook, base_id: int) -> dict[str, A
                         every.append((player_id, day))
                         if day in history.counted and day <= last_counted:
                             ran.append((player_id, day))
-                        if player_id in notebook.runner_ids:
+                        # A past Season's page lists nothing after it.
+                        if player_id in notebook.runner_ids and day <= notebook.last:
                             shown.append((player_id, day))
                     day += DAY
-    recent = sorted({day for _, day in ran if day <= last_counted}, reverse=True)
+    # The newest counted Legend days, whether or not anyone ran the base then.
+    recent = sorted(
+        {day for day in history.counted if day <= last_counted} if history else (),
+        reverse=True)
     recent_days = set(recent[:RECENT_DAYS])
 
     def windows(day: datetime) -> list[str]:
@@ -240,5 +244,6 @@ def base_page(connection: Any, notebook: _Notebook, base_id: int) -> dict[str, A
             """,
             (base_id,),
         ).fetchone()[0])
-    return {"windows": result, "who": {"rows": rows[:WHO_ROWS], "total": len(rows)},
+    totals = {window: sum(window in row["windows"] for row in rows) for window in result}
+    return {"windows": result, "who": {"rows": rows[:WHO_ROWS], "total": totals},
             "copies": copies}

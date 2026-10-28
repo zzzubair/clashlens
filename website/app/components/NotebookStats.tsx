@@ -39,6 +39,7 @@ export function BaseNumbers({
   const record = numbers?.record ?? base.record;
   const label = WINDOWS.find(([key]) => key === span)?.[1] ?? "";
   const who = (detail?.who.rows ?? []).filter((row) => row.windows.includes(span));
+  const total = detail?.who.total[span] ?? 0;
   return (
     <>
       <section className="nb-base-part" aria-labelledby="nb-stars-title">
@@ -70,7 +71,7 @@ export function BaseNumbers({
         <p className="nb-hint">{heldLine(record)}</p>
         {detail?.windows ? (
           <button type="button" className="nb-chip" onClick={() => setWhoOpen(true)}>
-            Who ran it ({who.length}) ›
+            Who ran it ({total}) ›
           </button>
         ) : null}
       </section>
@@ -119,7 +120,7 @@ export function BaseNumbers({
           name={base.name}
           label={label}
           rows={who}
-          capped={(detail?.who.total ?? 0) > (detail?.who.rows.length ?? 0)}
+          capped={total > who.length}
           crew={notebook.crew !== null}
           onClose={() => setWhoOpen(false)}
         />
@@ -189,7 +190,9 @@ export function WhoRanIt({
           {crew ? "Nobody in this Crew" : "None of your accounts"} ran it in these days.
         </p>
       )}
-      {capped ? <p className="nb-hint">Only the newest days are shown.</p> : null}
+      {capped ? (
+        <p className="nb-hint">Only the newest {rows.length} days are shown.</p>
+      ) : null}
     </Sheet>
   );
 }
@@ -200,7 +203,13 @@ function whoLine(row: WhoRow): string {
   if (!row.defenses)
     return [
       start,
-      row.live ? "no defenses yet" : row.defenses === 0 ? "0 defenses" : "no data",
+      row.defenses === 0
+        ? row.live
+          ? "no defenses yet"
+          : "0 defenses"
+        : row.live
+          ? "no data yet"
+          : "no data",
     ]
       .filter(Boolean)
       .join(" · ");

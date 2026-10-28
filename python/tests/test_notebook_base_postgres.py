@@ -85,6 +85,10 @@ def test_a_base_page_shows_its_numbers_by_window_army_and_trophies_and_who_ran_i
                                                     "day": 6})["base"]
                 ok("joe", "POST", NOTEBOOK, {"action": "pick", "tag": MAIN, "day": 2,
                                              "base": ring})
+                # Alt ran Box on Days 2 and 3, before Ring.
+                box = ok("joe", "POST", NOTEBOOK, {"action": "add", "name": "Box"})["base"]
+                ok("joe", "POST", NOTEBOOK, {"action": "pick", "tag": ALT, "day": 2,
+                                             "base": box})
                 ok("joe", "POST", NOTEBOOK, {"action": "pick", "tag": ALT, "day": 4,
                                              "base": ring})
                 ok("joe", "POST", NOTEBOOK, {"action": "add", "base": ring, "crew": titans})
@@ -95,6 +99,7 @@ def test_a_base_page_shows_its_numbers_by_window_army_and_trophies_and_who_ran_i
                 mine = ok("joe", "GET", f"{NOTEBOOK}?base={ring}")
                 crew = ok("joe", "GET", f"{NOTEBOOK}?base={ring}&crew={titans}")
                 member = ok("sam", "GET", f"{NOTEBOOK}?base={ring}&crew={titans}")
+                boxed = ok("joe", "GET", f"{NOTEBOOK}?base={box}")["base"]["windows"]
         finally:
             owner.close()
             api.close()
@@ -111,7 +116,7 @@ def test_a_base_page_shows_its_numbers_by_window_army_and_trophies_and_who_ran_i
     everything = record(9, 12, 7, [2, 2, 3, 5], 263)
     assert windows["season"]["record"] == everything
     assert windows["all"]["record"] == everything
-    assert [base["record"] for base in mine["bases"]] == [everything]
+    assert {base["id"]: base["record"] for base in mine["bases"]}[ring] == everything
     # Last 3 days leaves out Main's Day 2: a triple and a two-star, 56 lost.
     assert windows["last3"]["record"] == record(8, 10, 6, [2, 2, 2, 4], 207)
     assert [windows[key]["ran_by"] for key in ("last3", "season", "all")] == [3, 3, 3]
@@ -149,7 +154,12 @@ def test_a_base_page_shows_its_numbers_by_window_army_and_trophies_and_who_ran_i
     assert sorted(who(crew), key=lambda row: (-row[1], row[0])) == sorted(
         [(*row[:6], "Joe") for row in joes] + sams, key=lambda row: (-row[1], row[0]))
     assert crew["base"]["windows"] == windows
-    assert crew["base"]["who"]["total"] == 12
+    # Main's Day 2 is not in Last 3 days.
+    assert crew["base"]["who"]["total"] == {"last3": 11, "season": 12, "all": 12}
+    # Last 3 days are the 3 newest counted Legend days, Days 3 to 5, not the
+    # last days Box ran: of Alt's two quiet days on it, only Day 3.
+    assert boxed["all"]["record"] == record(2, 0, 0, [0, 0, 0, 0], 0)
+    assert boxed["last3"]["record"] == record(1, 0, 0, [0, 0, 0, 0], 0)
     # Copies: Joe's and Sam's own notebooks, for Titans' owner only.
     assert (mine["base"]["copies"], crew["base"]["copies"], member["base"]["copies"]) == (
         None, 2, None)

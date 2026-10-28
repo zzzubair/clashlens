@@ -654,7 +654,7 @@ describe("a base page's numbers and Who ran it", () => {
           trophies_lost: null,
         },
       ],
-      total: 2,
+      total: { last3: 1, season: 2, all: 150 },
     },
     copies: 38,
   };
@@ -669,13 +669,18 @@ describe("a base page's numbers and Who ran it", () => {
     expect(page.base?.windows?.last3.armies).toBeNull();
     expect(page.base?.who.rows.map((item) => item.day)).toEqual([16, 2]);
     expect(page.base?.copies).toBe(38);
-    const bad = { ...detail, who: { rows: [{ ...row, windows: ["week"] }], total: 1 } };
+    const bad = {
+      ...detail,
+      who: { ...detail.who, rows: [{ ...row, windows: ["week"] }] },
+    };
     expect(parseNotebook({ ...api, base: bad })).toBeNull();
+    const noTotal = { ...detail, who: { ...detail.who, total: 2 } };
+    expect(parseNotebook({ ...api, base: noTotal })).toBeNull();
     // An older API without the numbers still opens the page.
     const older = { ...detail, windows: undefined, who: undefined, copies: undefined };
     expect(parseNotebook({ ...api, base: older })?.base?.who).toEqual({
       rows: [],
-      total: 0,
+      total: { last3: 0, season: 0, all: 0 },
     });
   });
 
@@ -724,6 +729,6 @@ describe("a base page's numbers and Who ran it", () => {
       }),
     );
     expect(quiet).toContain("<small>no defenses yet</small>");
-    expect(quiet).toContain("Only the newest days are shown.");
+    expect(quiet).toContain("Only the newest 1 days are shown.");
   });
 });
