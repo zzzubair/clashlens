@@ -54,8 +54,9 @@ export function TrophyLine({
             <stop offset="1" stopColor="var(--cl-brand-orange)" stopOpacity="0" />
           </linearGradient>
           <linearGradient id="trophy-line-stroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stopColor="var(--cl-brand-yellow)" />
-            <stop offset="1" stopColor="var(--cl-brand-orange)" />
+            {/* Text colours, so the line reads on light paper as on dark. */}
+            <stop offset="0" stopColor="var(--cl-gold)" />
+            <stop offset="1" stopColor="var(--cl-action-text)" />
           </linearGradient>
         </defs>
         <path

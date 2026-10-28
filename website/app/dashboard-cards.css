@@ -192,12 +192,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* A wide card puts the slots beside the numbers, as the front page shows them. */
-@container (min-width: 36rem) {
-  .legend-day-card {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas: "head head" "numbers slots" "ranks slots" "chip slots";
-    column-gap: 2rem;
+/* A wide card puts the ranks beside the numbers, and the slots under both
+   grow to fill the height beside a taller card. */
+@container (min-width: 40rem) {
+  .dash-card > .legend-day-card {
+    flex-grow: 1;
+    grid-template: "head head" "numbers ranks" "slots slots" 1fr "chip chip" / auto minmax(
+        0,
+        1fr
+      );
+    column-gap: 3rem;
   }
 
   .legend-day-card > .dash-card-head {
@@ -210,10 +214,12 @@
 
   .legend-day-ranks {
     grid-area: ranks;
+    align-self: center;
   }
 
   .legend-day-slots {
     grid-area: slots;
+    grid-template-rows: 1fr 1fr;
   }
 
   .legend-day-card > .dash-chip {
@@ -221,25 +227,30 @@
     justify-self: start;
   }
 
-  /* The numbers stack on the left; beside a taller card the slots grow to
-     fill the height instead of leaving it empty. */
-  .dash-card > .legend-day-card {
-    flex-grow: 1;
-    grid-template-rows: auto auto auto 1fr;
-  }
-
-  .legend-day-card > .dash-chip {
-    align-self: start;
-  }
-
-  .legend-day-slots {
-    grid-template-rows: 1fr 1fr;
-  }
-
   .legend-day-battles {
     grid-template-rows: auto minmax(2.3rem, 4.5rem);
     align-content: start;
   }
+}
+
+/* A row with no battles yet is one line: its count beside a thin track of the
+   8 slots to come. */
+.legend-day-battles:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template: auto / 8.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+/* With no battles at all, the two lines sit together in the card's spare
+   height instead of spreading apart. */
+.legend-day-slots:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+  grid-template-rows: auto auto;
+  align-content: center;
+}
+
+.legend-day-battles:not(:has(.dash-star-box:not(.dash-star-box-empty))) .dash-star-box {
+  min-height: 0.55rem;
+  border-radius: 3px;
 }
 
 /* Eight boxes share one line, as wide as the card allows. */
@@ -263,7 +274,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 6px;
   font-size: 0.75rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dash-star-box-defense {
@@ -405,7 +416,7 @@
 .clock-reset-label {
   fill: var(--cl-action-text);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
   text-anchor: middle;
 }
 
@@ -448,7 +459,7 @@
 .clock-count-text {
   fill: var(--cl-panel);
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 800;
   text-anchor: middle;
 }
 
@@ -588,7 +599,7 @@
   color: var(--cl-ink);
   border-inline: 2px solid var(--cl-card-line);
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   line-height: 1.8rem;
   text-align: center;
   white-space: nowrap;
@@ -606,7 +617,7 @@
   padding-bottom: 0.25rem;
   color: var(--cl-muted);
   font-size: 0.75rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .opponents-row {
@@ -678,7 +689,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 6px;
   font-size: 0.75rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dash-strength-hard {
@@ -712,7 +723,7 @@
 
 .goal-title {
   font-size: 1.05rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .form-big {
@@ -739,7 +750,7 @@
   border: 2px solid currentColor;
   border-radius: 6px;
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .goal-pace-ahead,
@@ -770,7 +781,7 @@
 .goal-rows dd,
 .consistency-rows dd {
   margin: 0;
-  font-weight: 900;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -810,7 +821,7 @@
 .goal-label {
   fill: var(--cl-ink);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .goal-label-you {
@@ -846,7 +857,7 @@
 
 .cutoff-rows li > span:last-child {
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   text-align: right;
 }
 
@@ -855,7 +866,7 @@
 .rival-you {
   background: var(--cl-action-soft);
   box-shadow: inset 3px 0 0 var(--cl-action);
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* ---------- Rivals watch and Group watch ---------- */
@@ -873,7 +884,7 @@
   padding: 0.2rem 0.35rem;
   color: var(--cl-muted);
   font-size: 0.68rem;
-  font-weight: 900;
+  font-weight: 800;
   text-align: right;
 }
 
@@ -915,7 +926,7 @@
 .rival-moved {
   margin-left: 0.2rem;
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* A rival's name opens their page, and its link covers the row, as on
@@ -993,7 +1004,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 8px;
   font: inherit;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* ---------- Season heat map ---------- */
@@ -1087,7 +1098,7 @@
 
 .heat-summary dd {
   margin: 0;
-  font-weight: 900;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -1185,7 +1196,7 @@
   flex: 0 1 auto;
   justify-items: end;
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   text-align: right;
 }
 

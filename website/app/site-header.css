@@ -308,9 +308,13 @@
   border-top: 1px solid var(--cl-border);
 }
 
-.site-menu-extras .nav-link {
+/* Join Discord lines up with the links above it. */
+:root .site-menu-extras .nav-link {
+  justify-content: flex-start;
   min-height: 3.25rem;
-  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
 }
 
 /* Phones, tablets and any touch screen get the bottom bar; a mouse keeps

@@ -100,8 +100,8 @@ export function ArmyDetail({
             : null}
           {" · "}
           {row.averageMissTrophies == null
-            ? "no misses"
-            : `misses ${row.averageMissTrophies.toFixed(1)} trophies`}
+            ? "all 3 stars"
+            : `${row.averageMissTrophies.toFixed(1)} trophies below 3 stars`}
         </p>
         <h3 className="analytics-sheet-section">Variants</h3>
         <p className="analytics-sheet-note">

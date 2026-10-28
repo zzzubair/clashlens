@@ -76,7 +76,7 @@
 
 .dash-stars {
   color: var(--cl-gold);
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -0.05em;
   white-space: nowrap;
 }
@@ -116,7 +116,7 @@
   border: 1px solid var(--cl-action-border);
   border-radius: 999px;
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* A choice flipped while looking at the card. */
@@ -140,7 +140,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 800;
   cursor: pointer;
 }
 
@@ -398,7 +398,7 @@
   align-self: flex-start;
   margin-top: auto;
   color: var(--cl-accent);
-  font-weight: 900;
+  font-weight: 800;
   text-decoration: none;
 }
 
@@ -525,7 +525,7 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-weight: 900;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -571,7 +571,7 @@
   min-height: 2.4rem;
   padding: 0.3rem 0.8rem;
   font: inherit;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 @media not (max-width: 40rem) {
@@ -653,7 +653,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 1.2rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dash-chips {
@@ -755,7 +755,7 @@
   background: var(--cl-positive);
   border-radius: 6px;
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* ---------- Phone ---------- */

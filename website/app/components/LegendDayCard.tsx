@@ -30,10 +30,9 @@ function BattleRow({
       <div className="legend-day-battles-head">
         <span className="dash-label">
           <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
-          <span className="sr-only">{noun === "attack" ? "Attacks" : "Defenses"}</span>
         </span>
         <span className="dash-muted">
-          {count ?? "–"} of {SLOTS}
+          {count ?? "–"} of {SLOTS} {noun}s
         </span>
         {total !== null && count ? (
           <b className={total > 0 ? "positive" : total < 0 ? "negative" : ""}>

@@ -530,14 +530,12 @@ h3 {
   gap: 0.45rem;
   max-width: 100%;
   min-height: 2.75rem;
-  padding: 0.4rem 0.9rem 0.4rem 0.7rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 2px solid var(--cl-card-line);
-  border-radius: 999px;
-  box-shadow: var(--cl-raise);
+  margin-left: -0.25rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.25rem;
+  color: var(--cl-muted);
+  border-radius: var(--cl-radius);
   font-size: 0.95rem;
-  font-weight: 900;
+  font-weight: 600;
   text-decoration: none;
 }
 
@@ -561,7 +559,6 @@ h3 {
 .back-link:hover,
 .back-link:focus-visible {
   color: var(--cl-action-text);
-  background: var(--cl-action-soft);
 }
 
 /* Raised actions; pressing shrinks them and drops the shadow. */

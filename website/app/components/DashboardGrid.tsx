@@ -655,6 +655,21 @@ export function Dashboard({
     setDraft(next);
     setStatus(message);
   };
+  // Cancel, or Escape with no sheet open, leaves the saved layout as it was.
+  const cancel = () => {
+    setDraft(null);
+    setAdding(false);
+    setStatus("Changes discarded");
+  };
+  const sheetOpen = adding || editingSettings !== null;
+  useEffect(() => {
+    if (!editing || sheetOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) cancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
 
   // Dragging: the card under the pointer makes room; the page scrolls near its edges.
   useEffect(() => {
@@ -744,7 +759,8 @@ export function Dashboard({
             disabled={saving}
             onClick={() => setAdding(true)}
           >
-            <DashboardIcon name="plus" /> Add a card
+            <DashboardIcon name="plus" /> Add
+            <span className="dash-editbar-long"> a card</span>
           </button>
           <button
             type="button"
@@ -756,6 +772,14 @@ export function Dashboard({
             }}
           >
             Reset<span className="dash-editbar-long"> to default</span>
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={saving}
+            onClick={cancel}
+          >
+            Cancel
           </button>
           <button
             type="button"

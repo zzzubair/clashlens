@@ -791,7 +791,8 @@ html.obs-page body {
   color: var(--cl-muted);
 }
 .obs-settings .obs-badge.ok {
-  color: var(--cl-positive);
+  color: var(--cl-ink);
+  border-color: var(--cl-card-line);
 }
 .obs-settings .obs-wh {
   display: flex;

@@ -826,19 +826,25 @@
   color: var(--cl-muted);
   font-size: 0.85rem;
 }
+/* A scoreboard row: each number over its label, split by hairlines. */
 .analytics-sheet-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.4rem;
-  margin: 0.75rem 0 0.5rem;
+  margin: 0.9rem 0 0.6rem;
+  padding-block: 0.7rem;
+  border-block: 1px solid var(--cl-card-line);
 }
 .analytics-sheet-stats > div {
-  display: grid;
-  align-content: space-between;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
   min-width: 0;
-  padding: 0.55rem 0.65rem;
-  background: var(--cl-panel);
-  border-radius: var(--cl-radius);
+  padding: 0 0.6rem;
+  border-left: 1px solid var(--cl-card-line);
+}
+.analytics-sheet-stats > div:first-child {
+  padding-left: 0;
+  border-left: 0;
 }
 .analytics-sheet-stats dt {
   color: var(--cl-muted);
@@ -847,9 +853,10 @@
   line-height: 1.25;
 }
 .analytics-sheet-stats dd {
-  margin: 0.15rem 0 0;
-  font-family: var(--cl-font-heading);
-  font-size: 1.25rem;
+  margin: 0 0 0.2rem;
+  font-family: var(--cl-font-score);
+  font-size: 1.6rem;
+  font-weight: 700;
   line-height: 1.1;
   letter-spacing: 0;
 }
@@ -863,18 +870,14 @@
 /* Variants: a row each; the open one shows its most-used armies. */
 .analytics-variants {
   display: grid;
-  gap: 0.5rem;
   margin: 0;
   padding: 0;
+  border-top: 1px solid var(--cl-card-line);
   list-style: none;
 }
 .analytics-variant {
   overflow: hidden;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-}
-.analytics-variant[data-open="true"] {
-  border-color: var(--cl-action-border);
+  border-bottom: 1px solid var(--cl-card-line);
 }
 .analytics-variant-toggle {
   display: grid;
@@ -887,7 +890,7 @@
   gap: 0.35rem 0.75rem;
   width: 100%;
   min-height: 2.75rem;
-  padding: 0.75rem 0.9rem;
+  padding: 0.75rem 0.5rem;
   color: inherit;
   background: none;
   border: 0;

@@ -14,19 +14,12 @@
   justify-content: space-between;
 }
 
-.rankings-kicker {
-  margin: 0 0 0.2rem;
-  color: var(--cl-action-text);
-  font-size: 0.85rem;
-  font-weight: 800;
-}
-
 .rankings-header h1 {
   margin: 0;
 }
 
-/* An At Reset title keeps its full time, as a smaller line under the words. */
-.rankings-header h1 time {
+/* An At Reset title keeps its day and full time, as a smaller line under it. */
+.rankings-date {
   display: block;
   margin-top: 0.3rem;
   color: var(--cl-muted);
@@ -229,19 +222,17 @@
 /* Other days of a Daily board, either side of this one. */
 .snapshot-pagination {
   display: flex;
-  flex-wrap: wrap;
   gap: 0.5rem;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--cl-border);
+  margin-top: 0.6rem;
 }
 
 .snapshot-pagination a {
   display: inline-flex;
-  gap: 0.3rem;
   align-items: center;
-  min-height: 2.75rem;
-  padding: 0.4rem 0.85rem;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.8rem;
   font-size: 0.85rem;
+  white-space: nowrap;
   text-decoration: none;
 }
 
@@ -319,10 +310,7 @@
     gap: 0.6rem;
   }
 
-  /* The Live / At Reset switch sits above the title, so a longer At Reset
-     title never moves it out from under the thumb. */
   .rankings-heading .leaderboard-view-switch {
-    order: -1;
     width: auto;
   }
 

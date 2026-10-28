@@ -262,7 +262,7 @@
 }
 .player-page .trophy-line-path {
   fill: none;
-  stroke-width: 2;
+  stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -271,10 +271,10 @@
   right: -0.3rem;
   width: 0.6rem;
   height: 0.6rem;
-  background: var(--cl-brand-orange);
+  background: var(--cl-action-text);
   border: 2px solid var(--cl-paper);
   border-radius: 50%;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cl-brand-orange) 25%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cl-action-text) 25%, transparent);
   transform: translateY(-50%);
 }
 .player-page .player-trophy-count.player-reset-pending {

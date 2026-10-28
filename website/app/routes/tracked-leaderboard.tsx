@@ -283,12 +283,14 @@ export default function TrackedLeaderboardRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
       <section className="rankings-header" aria-labelledby="leaderboard-title">
         <div className="rankings-heading">
-          <div>
-            {daily ? <p className="rankings-kicker">Day {daily.dayNumber}</p> : null}
+          <div className="rankings-title">
             <h1 id="leaderboard-title">
               {daily ? (
                 <>
-                  Leaderboard at <LocalTimestamp value={daily.resetAt} />
+                  At Reset{" "}
+                  <span className="rankings-date">
+                    Day {daily.dayNumber} · <LocalTimestamp value={daily.resetAt} />
+                  </span>
                 </>
               ) : view === "live" ? (
                 "Live Leaderboard"
@@ -296,6 +298,27 @@ export default function TrackedLeaderboardRoute() {
                 "Daily leaderboard"
               )}
             </h1>
+            {/* The day stepper sits with the day it steps from. */}
+            {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
+              <nav aria-label="Other days" className="snapshot-pagination">
+                {daily.previousSnapshot ? (
+                  <Link
+                    aria-label={`Go to Day ${daily.previousSnapshot.dayNumber}`}
+                    to={leaderboardUrl("daily", 1, daily.previousSnapshot)}
+                  >
+                    ‹ Day {daily.previousSnapshot.dayNumber}
+                  </Link>
+                ) : null}
+                {daily.nextSnapshot ? (
+                  <Link
+                    aria-label={`Go to Day ${daily.nextSnapshot.dayNumber}`}
+                    to={leaderboardUrl("daily", 1, daily.nextSnapshot)}
+                  >
+                    Day {daily.nextSnapshot.dayNumber} ›
+                  </Link>
+                ) : null}
+              </nav>
+            ) : null}
           </div>
           <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
             <Link
@@ -473,20 +496,6 @@ export default function TrackedLeaderboardRoute() {
               </p>
             ) : null}
           </div>
-          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
-            <nav aria-label="Other days" className="snapshot-pagination">
-              {daily.previousSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
-                  Go to Day {daily.previousSnapshot.dayNumber}
-                </Link>
-              ) : null}
-              {daily.nextSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>
-                  Go to Day {daily.nextSnapshot.dayNumber}
-                </Link>
-              ) : null}
-            </nav>
-          ) : null}
           {entries.length === 0 ? (
             <div className="empty-state">
               <h3>No standings available yet</h3>

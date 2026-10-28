@@ -488,8 +488,8 @@ function ResultCell({
         ? [
             row.averageTrophies?.toFixed(1) ?? "–",
             row.averageMissTrophies == null
-              ? "no misses"
-              : `misses ${row.averageMissTrophies.toFixed(1)}`,
+              ? "all 3 stars"
+              : `${row.averageMissTrophies.toFixed(1)} below 3 stars`,
           ]
         : column === "average-stars"
           ? [row.averageStars?.toFixed(2) ?? "–", null]
