@@ -124,7 +124,7 @@
 }
 
 .legend-day-range b {
-  color: var(--cl-accent);
+  color: var(--cl-ink);
   font-size: 1.05rem;
 }
 

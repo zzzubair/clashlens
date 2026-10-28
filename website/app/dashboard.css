@@ -268,7 +268,6 @@
   flex-direction: row;
   align-items: center;
   gap: 0.4rem;
-  border-style: dashed;
   box-shadow: none;
   font-weight: 800;
 }
@@ -794,10 +793,11 @@
   }
 
   /* The Customise bar takes the tab bar's place at the bottom, in thumb
-     reach, until Done: one row of its three buttons, Done last and filled.
-     Its title and layout line stay for screen readers. */
+     reach, until Done: one row of its four buttons (two on a small phone),
+     Done last and filled. Its title and layout line stay for screen readers;
+     the page keeps room below for it. */
   :root:has(.dash-editbar) {
-    --cl-bottom-tabs: 0px;
+    --cl-bottom-tabs: calc(4.25rem + env(safe-area-inset-bottom, 0px));
   }
 
   :root:has(.dash-editbar) .bottom-tabs {
@@ -819,6 +819,24 @@
     min-height: 2.75rem;
     padding-inline: 0.6rem;
     white-space: nowrap;
+  }
+
+  /* Each card's name keeps its line; its moves sit under it, finger-sized. */
+  .dash-edit-strip {
+    flex-wrap: wrap;
+  }
+
+  .dash-edit-name {
+    flex-basis: calc(100% - 3rem);
+  }
+
+  .dash-edit-strip .dash-icon-button {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .dash-size-chip + .dash-icon-button {
+    margin-left: auto;
   }
 
   .dash-editbar-title,
@@ -939,5 +957,20 @@
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+}
+
+/* A small phone's Customise bar takes two rows, so Done is never cut off. */
+@media (max-width: 24rem) {
+  :root:has(.dash-editbar) {
+    --cl-bottom-tabs: calc(7.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .dash-editbar {
+    flex-wrap: wrap;
+  }
+
+  .dash-editbar > .button {
+    flex-basis: calc(50% - 0.25rem);
   }
 }
