@@ -1295,6 +1295,11 @@
     text-overflow: ellipsis;
   }
 
+  /* The row arrow sits close, so the last number is not cut on a phone. */
+  .group-table tbody td:last-child::after {
+    margin: 0 0 0.12rem 0.15rem;
+  }
+
   /* Each number column fits its heading; the name takes what is left. */
   .rival-table :is(th, td):first-child {
     width: 3.5rem;
