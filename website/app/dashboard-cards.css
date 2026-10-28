@@ -845,6 +845,7 @@
 
 .rival-link {
   color: inherit;
+  font-weight: inherit;
   text-decoration: none;
   outline: none;
 }
