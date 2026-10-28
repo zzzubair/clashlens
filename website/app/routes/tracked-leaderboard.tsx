@@ -252,10 +252,11 @@ export default function TrackedLeaderboardRoute() {
   const daily = leaderboard?.daily;
   const entries = leaderboard?.entries ?? [];
   const lastRank = entries.at(-1)?.rank ?? 0;
-  const range =
-    leaderboard && entries.length
-      ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()}`
-      : null;
+  const shown = entries.length
+    ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()}`
+    : null;
+  const total = ` of ${leaderboard?.totalEntries.toLocaleString()}`;
+  const range = leaderboard && shown ? shown + total : null;
   const nextCount = leaderboard
     ? Math.min(
         leaderboard.pageSize,
@@ -448,7 +449,14 @@ export default function TrackedLeaderboardRoute() {
                     ‹
                   </Link>
                 ) : null}
-                <span>{range ?? "No listed players"}</span>
+                {range ? (
+                  <span>
+                    {shown}
+                    <span className="standings-total">{total}</span>
+                  </span>
+                ) : (
+                  <span>No listed players</span>
+                )}
                 {range && leaderboard.hasNext ? (
                   <Link
                     aria-label={`Next ${nextCount}`}

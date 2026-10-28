@@ -497,6 +497,10 @@
   font-size: 2rem;
   line-height: 1;
 }
+/* The rank comes first and reads as a rank, as in the log: #1,288. */
+.player-page .season-summary-headline > div:first-child dd:not(.summary-words)::before {
+  content: "#";
+}
 .player-page .season-summary-headline dd.summary-words {
   font-family: var(--cl-font);
   font-size: 0.95rem;

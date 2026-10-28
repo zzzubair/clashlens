@@ -199,9 +199,28 @@
     grid-area: chip;
     justify-self: start;
   }
+
+  /* Beside a taller card, the slots grow to fill the height instead of
+     leaving it empty, and the note sits at the bottom. */
+  .dash-card > .legend-day-card {
+    flex-grow: 1;
+    grid-template-rows: auto 1fr 1fr auto;
+  }
+
+  /* Each side lines up with its row of slots: trophies with attacks, ranks
+     with defenses. */
+  .legend-day-numbers,
+  .legend-day-ranks {
+    align-self: start;
+  }
+
+  .legend-day-battles {
+    grid-template-rows: auto minmax(2.3rem, 4.5rem);
+    align-content: start;
+  }
 }
 
-/* Eight boxes stay on one line, narrowing to fit the card. */
+/* Eight boxes share one line, as wide as the card allows. */
 .dash-star-boxes {
   display: flex;
   gap: 0.3rem;
@@ -212,7 +231,8 @@
 
 .dash-star-box {
   display: flex;
-  flex: 0 1 2.8rem;
+  flex: 1 1 0;
+  max-width: 4.5rem;
   flex-direction: column;
   align-items: center;
   min-width: 0;

@@ -318,6 +318,17 @@
     margin-block: 1rem;
   }
 
+  /* With both page arrows, the total waits for the pager at the end, so the
+     header stays on one line. */
+  .standings-range:has(> a ~ a) .standings-total {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .standings-pagination {
     padding-inline: 0.5rem;
   }

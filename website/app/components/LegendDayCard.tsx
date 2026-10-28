@@ -152,7 +152,7 @@ export function LegendDayCard({
         <i aria-hidden="true" />
         <div className="legend-day-range">
           <span className="dash-label">Next Reset</span>
-          <b>{range ? `${rankText(range.best)} – ${rankText(range.worst)}` : "–"}</b>
+          <b>{range ? `${rankText(range.best)}–${rankText(range.worst)}` : "–"}</b>
           <span className="dash-estimate">estimate</span>
         </div>
         {projected ? (
