@@ -1,0 +1,651 @@
+/* Season notebook: account rows with run strips, the Library, sheets and
+   the base page. Colours come from the theme, so dark mode follows. */
+
+.nb-page {
+  --nb-now: var(--cl-brand-orange);
+  --nb-past: #e8c49c;
+  --nb-past-ink: #5a3a1c;
+  --nb-gap: var(--cl-border);
+  padding-bottom: 7rem;
+}
+:root[data-theme="dark"] .nb-page {
+  --nb-past: #6b4a2c;
+  --nb-past-ink: #ffe9c7;
+}
+
+.nb-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+.nb-title h1 {
+  margin: 0;
+}
+.nb-season {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--cl-muted);
+  font-weight: 700;
+}
+/* The Season picker: this Season and every earlier page. */
+.nb-season-pick select {
+  min-height: 44px;
+  padding: 0 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-outline);
+  border-radius: var(--cl-radius);
+  font: inherit;
+  font-weight: 700;
+}
+
+/* One column as wide as the page, so a long row cuts its text instead of
+   widening the page. */
+.nb-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.9rem;
+  margin-top: 1.5rem;
+}
+.nb-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.nb-section-head h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+.nb-count {
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 1rem;
+  font-weight: 700;
+}
+.nb-empty,
+.nb-hint {
+  margin: 0;
+  color: var(--cl-muted);
+}
+
+/* A base's tile: its initials until bases have pictures. */
+.nb-tile {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--cl-brand-night);
+  background: linear-gradient(160deg, #ffe08a, #ffb25e);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 10px;
+  font-family: var(--cl-font-heading);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.nb-tile-empty {
+  background: var(--cl-panel);
+  border-style: dashed;
+  border-color: var(--cl-outline);
+}
+.nb-tile-add {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
+  font-size: 1.5rem;
+}
+.nb-tile-lg {
+  width: 100%;
+  height: 9rem;
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+  font-size: 3.5rem;
+}
+
+/* Account rows. */
+.nb-account {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+.nb-account-head {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.nb-account-text {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+.nb-account-text h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+.nb-account-text h3 small {
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.nb-account-text p {
+  margin: 0.1rem 0 0;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+/* Today's base links from the whole head, not just its name. */
+.nb-account-text a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.nb-next {
+  color: var(--cl-action-text);
+  font-weight: 700;
+}
+/* Change and Days: full-size buttons under the strip, side by side. */
+.nb-account-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.nb-account-actions .button {
+  flex: 1 1 0;
+  min-height: 2.75rem;
+}
+.nb-account > .nb-hint {
+  margin: 0;
+}
+
+/* The run strip: 28 equal days, a block per run. */
+.nb-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(28, minmax(0, 1fr));
+  height: 1.9rem;
+}
+.nb-run {
+  grid-row: 1;
+  overflow: hidden;
+  margin-right: 3px;
+  padding: 0 0.3rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.9rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Faint lines keep single days countable. */
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent calc(100% / var(--nb-days, 1) - 1px),
+    rgb(0 0 0 / 0.1) calc(100% / var(--nb-days, 1) - 1px),
+    rgb(0 0 0 / 0.1) calc(100% / var(--nb-days, 1))
+  );
+}
+.nb-run-now {
+  color: var(--cl-brand-night);
+  background-color: var(--nb-now);
+}
+.nb-run-past {
+  color: var(--nb-past-ink);
+  background-color: var(--nb-past);
+}
+.nb-run-none {
+  background-color: var(--cl-panel);
+}
+.nb-run-next {
+  margin-right: 0;
+  border: 1.5px dashed var(--cl-outline);
+}
+.nb-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.2rem;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+/* Lists of bases: the Library and the sheets' pick lists. */
+.nb-tools {
+  display: flex;
+  gap: 0.5rem;
+}
+.nb-search {
+  flex: 1 1 auto;
+}
+.nb-search input,
+.nb-sort select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.45rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
+  border: 1px solid var(--cl-input-border, var(--cl-border));
+  border-radius: var(--cl-radius);
+  font: inherit;
+}
+.nb-sort {
+  flex: 0 0 auto;
+}
+.nb-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nb-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 3.4rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .nb-row:hover {
+    color: var(--cl-ink);
+    border-color: var(--cl-action-border);
+  }
+}
+.nb-row[aria-current="true"] {
+  border-color: var(--cl-action-border);
+  background: var(--cl-action-soft);
+}
+.nb-row-text {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.nb-row-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-row-text small {
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-row mark {
+  color: inherit;
+  background: #ffd447;
+  border-radius: 3px;
+}
+:root[data-theme="dark"] .nb-row mark {
+  color: var(--cl-brand-night);
+}
+/* The Days list: one full-width row a day. */
+.nb-day-row {
+  min-height: 3rem;
+}
+.nb-day-row:disabled {
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  cursor: default;
+}
+.nb-day-base {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-row-new b {
+  color: var(--cl-action-text);
+}
+.nb-pick {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.7rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+.nb-more {
+  padding: 0.5rem;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.nb-status {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  padding: 0.2rem 0.55rem;
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-status-running {
+  color: var(--cl-brand-night);
+  background: var(--nb-now, var(--cl-brand-orange));
+  border-color: var(--cl-card-line);
+}
+.nb-status-season {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
+}
+
+/* Pressed-one-of-several buttons. */
+.nb-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.nb-seg button,
+.nb-chip {
+  min-height: 2.75rem;
+  padding: 0.35rem 0.8rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-outline);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nb-seg button[aria-pressed="true"] {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-orange);
+  border-color: var(--cl-card-line);
+}
+
+/* Sheets: bottom sheets on a phone, a centred card wider up. */
+.nb-sheet {
+  width: min(100% - 1rem, 30rem);
+  max-height: min(100dvh - 2rem, 46rem);
+  padding: 0;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+.nb-sheet::backdrop {
+  background: rgb(29 20 38 / 0.55);
+}
+.nb-sheet-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+.nb-sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nb-sheet-head h2 {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.nb-sheet-head .nb-seg {
+  order: 3;
+  flex: 1 1 100%;
+}
+.nb-close {
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--cl-ink);
+  background: transparent;
+  border: 1px solid var(--cl-border);
+  border-radius: 50%;
+  font: inherit;
+  cursor: pointer;
+}
+.nb-sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.nb-ask {
+  margin: 0;
+  color: var(--cl-muted);
+  font-weight: 700;
+}
+.nb-form {
+  display: grid;
+  gap: 0.9rem;
+}
+.nb-form .button {
+  justify-self: start;
+}
+.nb-fieldset {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.nb-fieldset legend {
+  margin-bottom: 0.4rem;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+.nb-active-on {
+  display: grid;
+  gap: 0.5rem;
+}
+.nb-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--cl-muted);
+  font-weight: 700;
+}
+@media (max-width: 40rem) {
+  .nb-sheet {
+    width: 100%;
+    max-width: none;
+    margin: auto 0 0;
+    border-radius: var(--cl-card-radius) var(--cl-card-radius) 0 0;
+    border-bottom: 0;
+  }
+}
+
+/* Toasts sit above everything at the bottom. */
+.nb-notice {
+  position: fixed;
+  z-index: 50;
+  right: 0;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  left: 0;
+  display: grid;
+  justify-items: center;
+  padding: 0 0.75rem;
+  pointer-events: none;
+}
+.nb-toast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  width: min(100%, 34rem);
+  padding: 0.6rem 0.75rem;
+  color: #fff4e2;
+  background: var(--cl-brand-night);
+  border: 2px solid #000;
+  border-radius: var(--cl-card-radius);
+  box-shadow: 0 4px 0 #000;
+  font-weight: 700;
+  pointer-events: auto;
+}
+.nb-toast-error {
+  background: #7a1d17;
+}
+.nb-toast-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.nb-toast .nb-chip {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+  border-color: #000;
+}
+
+/* The base page. */
+.nb-base-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.nb-base-title h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* The full label, wrapping on a phone rather than widening the page. */
+.nb-status-button {
+  max-width: 100%;
+  white-space: normal;
+  min-height: 2.75rem;
+  padding-inline: 0.85rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.nb-headline {
+  display: grid;
+  margin: 0.75rem 0;
+  font-family: var(--cl-font-heading);
+  font-size: 1.9rem;
+  line-height: 1.15;
+}
+.nb-headline small {
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.nb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.nb-note label {
+  display: flex;
+  justify-content: space-between;
+}
+.nb-saved {
+  color: var(--cl-positive);
+}
+/* Another Clasher's base: its note, read only. */
+.nb-note-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.nb-base-part {
+  margin-top: 1rem;
+}
+.nb-base-part h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.nb-stars {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.nb-stars div {
+  padding: 0.4rem;
+  background: var(--cl-panel);
+  border-radius: var(--cl-radius);
+  text-align: center;
+}
+.nb-stars dt {
+  color: var(--cl-muted);
+  font-weight: 800;
+}
+.nb-stars dd {
+  margin: 0;
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+}
+.nb-per-account {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+.nb-per-account li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--cl-border);
+}
+.nb-per-account small {
+  flex-basis: 100%;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+.nb-delete {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--cl-border);
+}
+.nb-delete p {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nb-toast {
+    animation: nb-rise 180ms var(--cl-ease-out);
+  }
+}
+@keyframes nb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+.nb-base-part + .nb-note {
+  margin-top: 1rem;
+}

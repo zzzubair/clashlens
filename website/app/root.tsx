@@ -62,6 +62,7 @@ export interface RootLoaderData {
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
   crewsEnabled?: boolean;
+  notebookEnabled?: boolean;
   analytics?: AnalyticsSettings | null;
   /** The site's public origin, for each page's canonical address; null when unreadable. */
   origin?: string | null;
@@ -79,12 +80,25 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
   const switches = import("./server/config.server")
-    .then(({ isDashboardEnabled, isCrewsEnabled, loadAnalyticsSettings }) => ({
-      dashboardEnabled: isDashboardEnabled(),
-      crewsEnabled: isCrewsEnabled(),
-      analytics: loadAnalyticsSettings(),
-    }))
-    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
+    .then(
+      ({
+        isDashboardEnabled,
+        isCrewsEnabled,
+        isNotebookEnabled,
+        loadAnalyticsSettings,
+      }) => ({
+        dashboardEnabled: isDashboardEnabled(),
+        crewsEnabled: isCrewsEnabled(),
+        notebookEnabled: isNotebookEnabled(),
+        analytics: loadAnalyticsSettings(),
+      }),
+    )
+    .catch(() => ({
+      dashboardEnabled: false,
+      crewsEnabled: false,
+      notebookEnabled: false,
+      analytics: null,
+    }));
   const origin = import("./server/config.server")
     .then(({ getWebsiteConfig }) => getWebsiteConfig().publicOrigin.origin)
     .catch(() => null);
@@ -273,8 +287,8 @@ function usePreloadTabCode(crews: boolean) {
   }, [manifest, crews]);
 }
 
-// The tabs, most useful first. Dashboard and Crews follow their switches; the
-// front page is Home until signed in, as on the phone tabs.
+// The tabs, most useful first. Dashboard, Notebook and Crews follow their
+// switches; the front page is Home until signed in, as on the phone tabs.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   return (
     <>
@@ -282,6 +296,9 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
         <NavLink to="/" end>
           {data.loggedIn ? "Dashboard" : "Home"}
         </NavLink>
+      )}
+      {data?.notebookEnabled && data.loggedIn && (
+        <NavLink to="/notebook">Notebook</NavLink>
       )}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
       <NavLink to="/analytics/armies">Analytics</NavLink>
@@ -320,14 +337,15 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
-// and Join Discord. `/` is Home while it shows the front page. A tapped tab
-// looks chosen, with a loading line, from the tap until its page shows (the
-// `pending` class NavLink adds); see site-header.css.
+// Below 64rem: the four most useful tabs, then More with Notebook (behind
+// its switch), Watchlists, Blog and Join Discord. `/` is Home while it shows
+// the front page. A tapped tab looks chosen, with a loading line, from the
+// tap until its page shows (the `pending` class NavLink adds); see
+// site-header.css.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const navigation = useNavigation();
-  const inMore = ["/account/watchlists", "/blog"].some(
+  const inMore = ["/notebook", "/account/watchlists", "/blog"].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
   // Tapping a tab again while its page loads would start the load over.
@@ -372,6 +390,11 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
+          {data?.notebookEnabled && data.loggedIn && (
+            <NavLink to="/notebook" onClick={ignoreRepeatTap}>
+              Notebook
+            </NavLink>
+          )}
           <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
             Watchlists
           </NavLink>
