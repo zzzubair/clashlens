@@ -771,7 +771,7 @@ export function Dashboard({
               setStatus("Back to the default layout");
             }}
           >
-            Reset<span className="dash-editbar-long"> to default</span>
+            Use default<span className="dash-editbar-long"> layout</span>
           </button>
           <button
             type="button"
@@ -871,7 +871,7 @@ export function Dashboard({
             {editing && CARDS[card].settings ? (
               <button
                 type="button"
-                className="button button-primary dash-card-settings"
+                className="button button-secondary dash-card-settings"
                 aria-label={`${CARDS[card].title} settings`}
                 disabled={saving}
                 onClick={() => setEditingSettings(card)}

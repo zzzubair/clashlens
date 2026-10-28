@@ -18,13 +18,12 @@
   margin: 0;
 }
 
-/* An At Reset title keeps its day and full time, as a smaller line under it. */
+/* The line under the title: At Reset's day and time, or Live's last update. */
 .rankings-date {
-  display: block;
-  margin-top: 0.3rem;
+  margin: 0.3rem 0 0;
   color: var(--cl-muted);
-  font: 700 max(0.95rem, 0.45em) / 1.3 var(--cl-font);
-  letter-spacing: normal;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .rankings-context {
@@ -213,17 +212,11 @@
   border-color: var(--cl-outline);
 }
 
-.standings-toolbar .standings-updated {
-  margin-top: 0.15rem;
-  font-size: 0.78rem;
-  font-weight: 500;
-}
-
 /* Other days of a Daily board, either side of this one. */
 .snapshot-pagination {
   display: flex;
+  flex-basis: 100%;
   gap: 0.5rem;
-  margin-top: 0.6rem;
 }
 
 .snapshot-pagination a {
@@ -312,6 +305,11 @@
 
   .rankings-heading .leaderboard-view-switch {
     width: auto;
+  }
+
+  /* A day step fits beside the switch, at the thumb's end of the row. */
+  .rankings-heading .snapshot-pagination {
+    flex-basis: auto;
   }
 
   .rankings-heading .leaderboard-view-switch .button {

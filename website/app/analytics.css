@@ -622,7 +622,7 @@
     vertical-align: middle;
   }
   .analytics-results-table tbody th {
-    min-width: 13rem;
+    min-width: 17rem;
     padding-left: 1rem;
     text-align: left;
   }
@@ -641,8 +641,9 @@
     padding-right: 1rem;
   }
 }
-/* iPads leave out the rarer numbers, unless sorted by one. */
-@media (min-width: 48rem) and (max-width: 63.99rem) {
+/* The table leaves the rarer numbers to the army sheet, unless sorted by one,
+   so each army's name has room. */
+@media (min-width: 48rem) {
   .analytics-results-table
     :is(th, td):is(
       [data-column="two-star-rate"],

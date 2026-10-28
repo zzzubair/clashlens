@@ -283,41 +283,24 @@ export default function TrackedLeaderboardRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
       <section className="rankings-header" aria-labelledby="leaderboard-title">
         <div className="rankings-heading">
+          {/* Both views give the title one line under it, so the switch
+              after them stays put when a Clasher flips between views. */}
           <div className="rankings-title">
             <h1 id="leaderboard-title">
-              {daily ? (
-                <>
-                  At Reset{" "}
-                  <span className="rankings-date">
-                    Day {daily.dayNumber} · <LocalTimestamp value={daily.resetAt} />
-                  </span>
-                </>
-              ) : view === "live" ? (
-                "Live Leaderboard"
-              ) : (
-                "Daily leaderboard"
-              )}
+              {daily
+                ? "At Reset"
+                : view === "live"
+                  ? "Live Leaderboard"
+                  : "Daily leaderboard"}
             </h1>
-            {/* The day stepper sits with the day it steps from. */}
-            {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
-              <nav aria-label="Other days" className="snapshot-pagination">
-                {daily.previousSnapshot ? (
-                  <Link
-                    aria-label={`Go to Day ${daily.previousSnapshot.dayNumber}`}
-                    to={leaderboardUrl("daily", 1, daily.previousSnapshot)}
-                  >
-                    ‹ Day {daily.previousSnapshot.dayNumber}
-                  </Link>
-                ) : null}
-                {daily.nextSnapshot ? (
-                  <Link
-                    aria-label={`Go to Day ${daily.nextSnapshot.dayNumber}`}
-                    to={leaderboardUrl("daily", 1, daily.nextSnapshot)}
-                  >
-                    Day {daily.nextSnapshot.dayNumber} ›
-                  </Link>
-                ) : null}
-              </nav>
+            {daily ? (
+              <p className="rankings-date">
+                Day {daily.dayNumber} · <LocalTimestamp value={daily.resetAt} />
+              </p>
+            ) : newestObservedAt ? (
+              <p className="rankings-date">
+                Updated <LocalTimestamp value={newestObservedAt} />
+              </p>
             ) : null}
           </div>
           <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
@@ -336,6 +319,26 @@ export default function TrackedLeaderboardRoute() {
               At Reset
             </Link>
           </nav>
+          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
+            <nav aria-label="Other days" className="snapshot-pagination">
+              {daily.previousSnapshot ? (
+                <Link
+                  aria-label={`Go to Day ${daily.previousSnapshot.dayNumber}`}
+                  to={leaderboardUrl("daily", 1, daily.previousSnapshot)}
+                >
+                  ‹ Day {daily.previousSnapshot.dayNumber}
+                </Link>
+              ) : null}
+              {daily.nextSnapshot ? (
+                <Link
+                  aria-label={`Go to Day ${daily.nextSnapshot.dayNumber}`}
+                  to={leaderboardUrl("daily", 1, daily.nextSnapshot)}
+                >
+                  Day {daily.nextSnapshot.dayNumber} ›
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
         </div>
         {/* The Season's last board shows Complete days' EODs, as the game's
             Season-end result does. */}
@@ -490,11 +493,6 @@ export default function TrackedLeaderboardRoute() {
                 ) : null}
               </p>
             </div>
-            {!daily && newestObservedAt ? (
-              <p className="standings-updated">
-                Updated <LocalTimestamp value={newestObservedAt} />
-              </p>
-            ) : null}
           </div>
           {entries.length === 0 ? (
             <div className="empty-state">

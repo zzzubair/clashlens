@@ -578,7 +578,7 @@
 
 /* At 360px a tag and its time still share one line, so rows stay even. */
 @media (max-width: 23.5rem) {
-  .leaderboard-table .player-meta :is(.player-tag, .player-update-mobile summary) {
+  .leaderboard-table .player-meta :is(.player-tag, .player-update-mobile summary *) {
     font-size: 0.68rem;
   }
 }

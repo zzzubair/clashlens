@@ -506,6 +506,18 @@
   box-shadow: none;
 }
 
+/* While editing, the strip names each card, so its own title steps aside; a
+   phone shows only the strips, so more cards fit to reorder. */
+.dash-grid-editing .dash-card-head {
+  display: none;
+}
+
+@media (max-width: 40rem) {
+  .dash-grid-editing .dash-card > :not(.dash-edit-strip, .dash-card-settings) {
+    display: none;
+  }
+}
+
 .dash-card-dragging {
   opacity: 0.45;
 }
