@@ -71,7 +71,7 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
   await expect(customise).toBeEnabled();
   await customise.click();
   const bar = page.getByRole("region", { name: "Customise dashboard" });
-  await expect(bar.getByText("Default layout")).toBeVisible();
+  await expect(bar.getByText("Default layout", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Move Goal earlier" }).click();
   await page.getByRole("button", { name: "Remove Season heat map" }).click();
   await expect(bar.getByText("Your own layout")).toBeVisible();
