@@ -47,6 +47,7 @@ import { OpponentsCard } from "../../app/components/OpponentsCard";
 import App, { loader as rootLoader } from "../../app/root";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import type {
+  CardId,
   ClockBattle,
   DashboardSettings,
   OpponentRow,
@@ -213,10 +214,10 @@ describe("dashboard settings", () => {
       "legend-day",
       "legend-clock",
       "bases",
-      "goal",
-      "armies-defense",
       "rivals-watch",
       "heat-map",
+      "goal",
+      "armies-defense",
     ]);
     expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
     expect(shownCards("default")).toEqual(DEFAULT_LAYOUT);
@@ -369,16 +370,44 @@ describe("dashboard settings", () => {
 });
 
 describe("dashboard grid", () => {
+  const places = (cards: readonly CardId[], columns: number, fill?: boolean) =>
+    cardPlaces(cards, columns, fill).map(({ span, order }) => `${span}@${order}`);
+
+  it("packs the default layout with no card moved, on 3 columns and on 2", () => {
+    expect(places(DEFAULT_LAYOUT, 3)).toEqual([
+      "2@0",
+      "1@1",
+      "3@2",
+      "2@3",
+      "1@4",
+      "1@5",
+      "2@6",
+    ]);
+    // On 2 columns the clock widens (Bases is Large) and Goal pairs with the heat map.
+    expect(places(DEFAULT_LAYOUT, 2)).toEqual([
+      "2@0",
+      "2@1",
+      "2@2",
+      "2@3",
+      "1@4",
+      "1@5",
+      "2@6",
+    ]);
+  });
+
   it("fills a row's hole with a later Small card, never from past a Large card", () => {
-    const places = (columns: number, fill?: boolean) =>
-      cardPlaces(DEFAULT_LAYOUT, columns, fill).map(
-        ({ span, order }) => `${span}@${order}`,
-      );
-    expect(places(3)).toEqual(["2@0", "1@1", "3@2", "1@3", "2@4", "2@5", "1@6"]);
-    // On 2 columns the clock widens (Bases is Large), and the heat map moves up beside Goal.
-    expect(places(2)).toEqual(["2@0", "2@1", "2@2", "1@3", "2@5", "2@6", "1@4"]);
+    expect(places(["goal", "armies-defense", "heat-map"], 2)).toEqual([
+      "1@0",
+      "2@2",
+      "1@1",
+    ]);
     // Customising shows the saved order, so Goal widens instead.
-    expect(places(2, false)).toEqual(["2@0", "2@1", "2@2", "2@3", "2@4", "2@5", "2@6"]);
+    expect(places(["goal", "armies-defense", "heat-map"], 2, false)).toEqual([
+      "2@0",
+      "2@1",
+      "2@2",
+    ]);
+    expect(places(["goal", "bases", "heat-map"], 2)).toEqual(["2@0", "2@1", "2@2"]);
   });
 });
 
@@ -1359,10 +1388,10 @@ describe("dashboard page", () => {
       "legend-day:m",
       "legend-clock:s",
       "bases:l",
-      "goal:s",
-      "armies-defense:m",
       "rivals-watch:m",
       "heat-map:s",
+      "goal:s",
+      "armies-defense:m",
     ]);
   });
 
