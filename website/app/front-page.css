@@ -456,3 +456,18 @@
 .home-leaderboard .leaderboard-table :is(thead th:last-child, td:last-child) {
   display: none;
 }
+
+/* Beside the teaser, Create account is the one filled button; Search is quiet
+   (Enter searches too). */
+:root .front-grid-pitch .search-controls button {
+  color: var(--cl-ink);
+  background: var(--cl-card-fill, var(--cl-surface));
+  border: 1px solid var(--cl-card-line);
+  box-shadow: var(--cl-glass-shine);
+  font-weight: 600;
+}
+:root .front-grid-pitch .search-controls button:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  border-color: var(--cl-outline);
+}

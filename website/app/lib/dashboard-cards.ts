@@ -341,9 +341,10 @@ export function heatCells(season: SeasonData, mode: HeatMode): HeatCell[] {
     .filter((day) => !isShieldDay(day) && heatValue(day, mode) !== null)
     .map((day) => heatValue(day, mode) as number)
     .sort((a, b) => a - b);
-  // Equal values share the middle of their places, so ties get one colour.
+  // Equal values share the middle of their places, so ties get one colour. A
+  // lone played day has nothing to rank against, so its sign colours it.
   const shade = (value: number) => {
-    if (ranked.length < 2) return 0.5;
+    if (ranked.length < 2) return value > 0 ? 1 : value < 0 ? 0 : 0.5;
     const first = ranked.indexOf(value);
     const last = ranked.lastIndexOf(value);
     return (first + last) / 2 / (ranked.length - 1);

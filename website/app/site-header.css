@@ -436,8 +436,11 @@
     box-shadow: inset 0 0 0 1px var(--cl-action-border);
   }
 
+  /* The tab being left, and the current tab while the More sheet is open,
+     look like the others. */
   .bottom-tabs:has(.pending:not([aria-current]))
     > .bottom-tab[aria-current]:not(.pending),
+  .bottom-tabs:has(.site-menu[open]) > .bottom-tab[aria-current]:not(.pending),
   .bottom-tabs:has(> .pending:not([aria-current]))
     .site-menu:not([open])
     > .bottom-tab[aria-current] {

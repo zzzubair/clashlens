@@ -210,7 +210,9 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
           value={String(nets.filter((net) => net < 0).length)}
           className="negative"
         />
-        <Pair label="Worst" value={at(worst)} className={tone(value(worst))} />
+        {played.length > 1 && (
+          <Pair label="Worst" value={at(worst)} className={tone(value(worst))} />
+        )}
         <Pair label="No change" value={String(nets.filter((net) => net === 0).length)} />
       </>
     );
@@ -223,7 +225,7 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
       <Pair label="Avg a day" value={signedOr(average)} className={side} />
       <Pair label="Best" value={at(best)} className={side} />
       <Pair label="Days played" value={String(played.length)} />
-      <Pair label="Worst" value={at(worst)} className={side} />
+      {played.length > 1 && <Pair label="Worst" value={at(worst)} className={side} />}
       <Pair label="Shield days" value={String(shields)} />
     </>
   );

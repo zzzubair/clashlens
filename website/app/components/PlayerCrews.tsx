@@ -15,7 +15,8 @@ export function PlayerCrews({
   if (!crews || crews.length === 0) return null;
   return (
     <span className="player-crews">
-      <span className="sr-only">{crews.length === 1 ? "Crew" : "Crews"}: </span>
+      {/* Named, so a Crew called like the clan can't pass for it. */}
+      <span className="player-crews-label">{crews.length === 1 ? "Crew" : "Crews"}</span>
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
           {index > 0 ? " · " : null}

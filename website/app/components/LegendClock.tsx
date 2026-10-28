@@ -236,12 +236,16 @@ export function LegendClock({
           const minutes = index * 180;
           const [x1, y1] = point(minutes, RING);
           const [x2, y2] = point(minutes, RING - 12);
-          const [lx, ly] = point(minutes, RING + 18);
+          // Side labels start just past the ring and grow outward, so a larger
+          // label never runs into the ring; the bottom one sits centred below.
+          const bottom = index === 4;
+          const [lx, ly] = point(minutes, bottom ? RING + 18 : RING + 6);
+          const anchor = bottom ? "middle" : lx < 0 ? "end" : "start";
           return (
             <g key={minutes}>
               <line className="clock-tick" x1={x1} y1={y1} x2={x2} y2={y2} />
               {index > 0 && dayStart !== null ? (
-                <text className="clock-hour" x={lx} y={ly + 4}>
+                <text className="clock-hour" x={lx} y={ly + 4} textAnchor={anchor}>
                   {format.format(dayStart + minutes * 60_000)}
                 </text>
               ) : null}

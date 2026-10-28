@@ -250,6 +250,8 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("Ice Golem");
     expect(text).toContain("5 of 10");
     expect(text).toContain("50.0%");
+    // Even the most-used row's bar is on a 0 to 100% track, as in the army's sheet.
+    expect(html).toContain('style="--value:50%"');
     expect(text).toContain("1 battle");
     expect(text).toContain("2 battles");
   });

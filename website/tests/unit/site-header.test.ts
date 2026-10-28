@@ -47,14 +47,14 @@ const bottomOf = (header: string) =>
 const moreOf = (header: string) =>
   /<details class="site-menu"[\s\S]*?<\/details>/.exec(header)![0];
 
-it("names the tabs most useful first, with no Home tab", async () => {
+it("names the tabs most useful first, the front page Home until signed in", async () => {
   const header = await renderHeader({
     ...SIGNED_OUT,
     dashboardEnabled: true,
     crewsEnabled: true,
   });
   const wide = /<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(header)![0];
-  const tabs = ["Dashboard", "Rankings", "Analytics", "Crews", "Watchlists", "Blog"];
+  const tabs = ["Home", "Rankings", "Analytics", "Crews", "Watchlists", "Blog"];
   expect(tabsOf(wide)).toEqual(tabs);
   expect(wide).toContain('href="/account/watchlists"');
   expect(header).toContain('aria-label="Clash Lens"');
@@ -116,6 +116,9 @@ it("on phones puts the four most useful tabs and More in the bottom bar", async 
     accountLabel: "Lens Scout",
   });
   expect(labelsOf(bottomOf(signedIn))[0]).toBe("Dashboard");
+  expect(tabsOf(/<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(signedIn)![0])[0]).toBe(
+    "Dashboard",
+  );
   // With the Dashboard switched off, / is the front page for everyone.
   expect(
     labelsOf(bottomOf(await renderHeader({ ...SIGNED_OUT, loggedIn: true }))),

@@ -755,7 +755,7 @@ export function Dashboard({
               setStatus("Back to the default layout");
             }}
           >
-            Reset to default
+            Reset<span className="dash-editbar-long"> to default</span>
           </button>
           <button
             type="button"

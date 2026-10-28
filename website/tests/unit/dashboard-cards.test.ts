@@ -1392,7 +1392,7 @@ describe("dashboard card numbers", () => {
     expect(recentForm(season([], 1), 7)).toBeNull();
   });
 
-  it("gives equal days one colour and leaves shield days out", () => {
+  it("gives equal days one colour, a lone day its sign, and leaves shields out", () => {
     const cells = heatCells(
       season([
         day(1, 10),
@@ -1410,13 +1410,13 @@ describe("dashboard card numbers", () => {
       ["shield", null],
       ["played", 0],
     ]);
+    expect(heatCells(season([day(1, 40)]), "net")[0]!.shade).toBe(1);
   });
 
   it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
     const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
     const lost = day(3, -304, quiet);
-    expect(isShieldDay(lost)).toBe(false);
-    expect(isShieldDay(day(2, 0, quiet))).toBe(true);
+    expect([lost, day(2, 0, quiet)].map((d) => isShieldDay(d))).toEqual([false, true]);
     expect(isShieldDay({ ...day(4, 0, quiet), net: null })).toBe(false);
     const cells = heatCells(season([day(1, 40), day(2, 0, quiet), lost]), "net");
     expect(cells.slice(0, 3).map((cell) => [cell.kind, cell.shade])).toEqual([

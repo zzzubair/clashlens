@@ -273,13 +273,14 @@ function usePreloadTabCode(crews: boolean) {
   }, [manifest, crews]);
 }
 
-// The tabs, most useful first. Dashboard and Crews follow their switches.
+// The tabs, most useful first. Dashboard and Crews follow their switches; the
+// front page is Home until signed in, as on the phone tabs.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   return (
     <>
       {data?.dashboardEnabled && (
         <NavLink to="/" end>
-          Dashboard
+          {data.loggedIn ? "Dashboard" : "Home"}
         </NavLink>
       )}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>

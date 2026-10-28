@@ -464,13 +464,11 @@ function ResultCell({
   row,
   column,
   sorted,
-  topRate,
   topSorted,
 }: {
   row: ArmyRow;
   column: Exclude<SortColumn, "name">;
   sorted: boolean;
-  topRate: number;
   /** The sorted column's highest value. */
   topSorted: number;
 }) {
@@ -508,15 +506,18 @@ function ResultCell({
                   row.usageCount.toLocaleString(),
                   `of ${row.usageDenominator.toLocaleString()}`,
                 ];
-  // Usage's bar, and the sorted number's on a phone, beside the row with the most.
+  // Usage's bar, and the sorted number's on a phone. A rate fills a 0 to 100%
+  // track, as in the army's sheet; any other number is beside the row with the most.
   const bar =
     column === "usage-rate"
-      ? topRate
-        ? row.usageRate / topRate
-        : 0
-      : sorted && topSorted
-        ? Number(sortColumns[column].value(row)) / topSorted
-        : null;
+      ? row.usageRate
+      : !sorted
+        ? null
+        : column.endsWith("-rate")
+          ? Number(sortColumns[column].value(row))
+          : topSorted
+            ? Number(sortColumns[column].value(row)) / topSorted
+            : null;
   return (
     <td
       role="cell"
@@ -541,7 +542,6 @@ function ArmyResultRow({
   row,
   columns,
   sort,
-  topRate,
   topSorted,
   more,
   open,
@@ -550,7 +550,6 @@ function ArmyResultRow({
   row: ArmyRow;
   columns: SortColumn[];
   sort: SortColumn;
-  topRate: number;
   topSorted: number;
   more: boolean;
   open: boolean;
@@ -598,7 +597,6 @@ function ArmyResultRow({
             row={row}
             column={column}
             sorted={sort === column}
-            topRate={topRate}
             topSorted={topSorted}
           />
         ),
@@ -730,7 +728,6 @@ export default function ArmyAnalyticsRoute() {
       ? chosenSort
       : { column: defaultColumn, direction: "descending" };
   const rows = analytics ? sortedRows(analytics.rows, tableSort) : [];
-  const topRate = Math.max(0, ...rows.map((row) => row.usageRate));
   const topSorted =
     tableSort.column === "name"
       ? 0
@@ -1095,7 +1092,6 @@ export default function ArmyAnalyticsRoute() {
                     row={row}
                     columns={columns}
                     sort={tableSort.column}
-                    topRate={topRate}
                     topSorted={topSorted}
                     more={index >= FIRST_ROWS}
                     open={opened?.key === row.key}

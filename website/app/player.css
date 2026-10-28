@@ -143,6 +143,12 @@
   width: 0.85em;
   height: 0.85em;
 }
+.player-page .player-crews-label {
+  margin-right: 0.4em;
+  color: var(--cl-muted);
+  font-size: 0.85em;
+  font-weight: 600;
+}
 .player-page .player-crews a {
   display: inline-flex;
   gap: 0.3em;
