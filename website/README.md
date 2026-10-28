@@ -335,6 +335,23 @@ notebook. While the Notebook is on, only a
 Crew's owner and admins make invite links, and they make or remove Uploaders
 from Members.
 
+The Notebook opens on Tomorrow, at `/notebook/tomorrow`, one tap from Your
+bases (`/notebook`). For one of your accounts (a tab each) it shows about what
+it will have at the Reset (live trophies plus the middle of the 200 imagined
+finishes behind Projected place, or 5,000 before a Season's Day 1), how far
+from that defenses count (at least ±40, wider where players are spread out,
+0.6× on Mondays and 1.25× at weekends), and the armies that attacked players
+there in the last 7 counted days. Every base you can reach, from your notebook
+and every Crew you're in, is ranked by holds of 8: each army's share of those
+attacks times the base's chance to hold it, added up, times 8, from defenses
+weighted by how close the defender started and how recent they are, with 10
+pretend defenses per army at the average base's rate. A base needs 24 defenses
+near you (looking twice as wide if needed) to be ranked; fewer is an early
+guess, and a base with no results is Not run yet. Run it from tomorrow picks it
+for that account from tomorrow, adding it to your notebook first if needed.
+The worker saves the armies by Reset trophies for the last 28 counted days in
+`notebook_meta_counts` (migration 0135).
+
 Crews at `/crews` stay hidden unless `CLASHLENS_CREWS_ENABLED=true`. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at

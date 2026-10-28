@@ -1308,8 +1308,9 @@ def register_notebook_routes(
     database: ApiDatabase,
     current_time: Callable[[], datetime],
     enabled: bool,
+    live_board: Any,
 ) -> None:
-    """The notebook's two routes, both answering 404 ``notebook_disabled``
+    """The notebook's three routes, all answering 404 ``notebook_disabled``
     while the Notebook is switched off, before reading anything."""
 
     def switch() -> None:
@@ -1338,6 +1339,17 @@ def register_notebook_routes(
         return JSONResponse(content=get_notebook(
             database, account_id, now=current_time(), season=season, base=base, crew=crew
         ))
+
+    @router.get("/v1/account/notebook/tomorrow")
+    def tomorrow(request: Request, tag: str | None = None) -> JSONResponse:
+        from .notebook_tomorrow import get_tomorrow
+
+        account_id = account(request, "account.read")
+        if tag is not None and len(tag) > 16:
+            raise ApiError(404, "player_not_verified")
+        return JSONResponse(content=get_tomorrow(
+            database, account_id, now=current_time(), live_board=live_board,
+            tag=None if tag is None else _safe_tag(tag)))
 
     @router.post("/v1/account/notebook")
     def write(body: NotebookWrite, request: Request) -> JSONResponse:

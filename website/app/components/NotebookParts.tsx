@@ -152,6 +152,23 @@ export function useNotebookSave(notebook: Notebook | null) {
 
 export type Saver = ReturnType<typeof useNotebookSave>;
 
+/** Tomorrow and the Notebook, one tap apart. */
+export function NotebookPages({ here }: { here: "tomorrow" | "notebook" }) {
+  return (
+    <nav className="nb-seg" aria-label="Notebook pages">
+      <Link
+        to="/notebook/tomorrow"
+        aria-current={here === "tomorrow" ? "page" : undefined}
+      >
+        Tomorrow
+      </Link>
+      <Link to="/notebook" aria-current={here === "notebook" ? "page" : undefined}>
+        Your bases
+      </Link>
+    </nav>
+  );
+}
+
 /** The toast and any save error, fixed to the bottom of the screen. */
 export function SaveNotice({ saver }: { saver: Saver }) {
   return (

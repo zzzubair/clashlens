@@ -48,6 +48,7 @@ Use these exactly.
 - **Run**: a stretch of Legend days on which one game account ran one base.
 - **Held**: a defense on which the attacker did not get 3 stars.
 - **Waiting day**: a Legend day of a Run more than 7 Legend days after the Run was last confirmed (by the Clasher opening Clash Lens before any day waits, picking a base for that game account, or answering "Still on it?"); it counts for nothing until they answer.
+- **Holds of 8**: how many of 8 defenses a base should hold tomorrow on the Tomorrow screen: each army's share of attacks near the game account's Reset trophies times the base's chance to hold it, added up, times 8; a base with under 24 defenses near those trophies is an early guess.
 
 ## Technical words
 

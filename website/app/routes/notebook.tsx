@@ -18,6 +18,7 @@ import {
   FixDaySheet,
   Library,
   NewBaseSheet,
+  NotebookPages,
   recordLine,
   type NewBasePreset,
   type Saver,
@@ -152,6 +153,7 @@ function NotebookPage({ notebook }: { notebook: Notebook }) {
           {season.current ? `Day ${season.today} of 28` : "finished, locked"}
         </p>
       </header>
+      {notebook.crew ? null : <NotebookPages here="notebook" />}
       <p className="lede">
         {notebook.crew
           ? `Bases everyone in ${notebook.crew.name} can copy, and how each held this Season for everyone who ran it. Add one to your notebook to say which account runs it.`

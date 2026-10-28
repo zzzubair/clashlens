@@ -47,6 +47,7 @@ export default [
   route("account/groups/*", "routes/account.groups.redirect.ts"),
   layout("routes/notebook.layout.tsx", [
     route("notebook", "routes/notebook.tsx"),
+    route("notebook/tomorrow", "routes/notebook.tomorrow.tsx"),
     route("notebook/bases/:code", "routes/notebook.base.tsx"),
     // A Crew's notebook: the same pages, for its members.
     route("crews/:crewId/bases", "routes/notebook.tsx", { id: "crew-notebook" }),

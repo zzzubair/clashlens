@@ -1288,6 +1288,7 @@ def create_app(
         database=production_database,
         current_time=current_time,
         enabled=notebook_enabled,
+        live_board=live_board,
     )
     return app
 

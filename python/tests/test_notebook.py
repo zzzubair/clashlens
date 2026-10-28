@@ -17,6 +17,7 @@ from clashlens.api_notebook import (
     parse_code,
     runs,
 )
+from clashlens.notebook_tomorrow import _place
 
 RING, BOX, FORT = 1, 2, 3
 SEASON = datetime(2026, 10, 5, 5, tzinfo=UTC)
@@ -123,3 +124,12 @@ def test_only_the_games_own_base_links_are_kept() -> None:
                 "https://link.clashofclans.com.evil.example/x", link + " <b>"):
         with pytest.raises(ApiError):
             clean_link(bad)
+
+
+def test_tomorrow_copies_days_from_players_at_the_accounts_place_on_the_live_board() -> None:
+    """The middle of the places shared with equal trophies; off the board,
+    below everyone on it."""
+    board = [("#A", "A", 5600), ("#B", "B", 5500), ("#C", "C", 5500), ("#D", "D", 5400)]
+    assert _place(board, "#B", 5500) == 2.5
+    assert _place(board, "#D", 5420) == 4
+    assert _place(board, "#ZZ", 5500) == 5

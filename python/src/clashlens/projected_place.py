@@ -132,18 +132,21 @@ def situations(
     open_attacks: Sequence[int],
     open_defenses: Sequence[int],
     activities: Sequence[int],
+    places: Sequence[float] | None = None,
 ) -> list[int]:
     """Each player's situation as one number: open attacks, open defenses,
     activity and level. ``situation // LEVELS`` drops the level and
-    ``situation // (LEVELS * ACTIVITIES)`` the activity too."""
+    ``situation // (LEVELS * ACTIVITIES)`` the activity too. ``places``
+    gives each player's place on the board when they aren't all of it."""
     ordered = sorted(trophies)
     n = len(ordered)
     out = []
-    for points, attacks, defenses, act in zip(
+    for index, (points, attacks, defenses, act) in enumerate(zip(
         trophies, open_attacks, open_defenses, activities, strict=True
-    ):
+    )):
         # The middle of the places this player shares with equal trophies.
-        middle = (1 + 2 * n - bisect_right(ordered, points) - bisect_left(ordered, points)) / 2
+        middle = places[index] if places is not None else (
+            (1 + 2 * n - bisect_right(ordered, points) - bisect_left(ordered, points)) / 2)
         if middle <= 200:
             level = 0
         elif middle <= 1000:
@@ -431,8 +434,9 @@ class ProjectedPlaces:
         tags: Sequence[str],
         examples: list[tuple[list[int], list[int], list[bool]]],
         seed: int,
+        places: Sequence[float] | None = None,
     ) -> None:
-        keys = situations(trophies, open_attacks, open_defenses, activities)
+        keys = situations(trophies, open_attacks, open_defenses, activities, places)
         size = len(keys)
         # The examples by situation, then without level, then by open slots
         # only: pooled over the days and for each day. An example's change is

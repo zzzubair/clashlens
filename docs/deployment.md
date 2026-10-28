@@ -491,8 +491,8 @@ creates the crew tables either way; they stay empty while the setting is off.
 
 The Notebook has its own setting, `CLASHLENS_NOTEBOOK_ENABLED=true` in
 `app.env` (default `false`), which `./ops` passes to the website and the private
-API. While it is off, `/notebook`, `/notebook/save`, every `/notebook/bases/…`
-page and every Crew's `/crews/…/bases` pages show the normal page-not-found page,
+API. While it is off, every `/notebook…` page (Tomorrow, the bases, saving)
+and every Crew's `/crews/…/bases` pages show the normal page-not-found page,
 the navigation bar has no Notebook link, and a Crew page has no Bases link. The
 private API's `/v1/account/notebook` answers 404 `notebook_disabled` before
 reading anything, and Crews keep their rules from before: any member makes
@@ -500,8 +500,8 @@ invite links and there is no Uploader role. While it is on, only a Crew's owner
 and admins make invite links, and they make Uploaders, and every signed-in page
 load notes the visit for the forgotten-base check (at most one small write per
 game account per Legend day). Migrations 0132, 0133 and 0134 create the notebook
-tables, the Uploader role and the forgotten-base check either way; the tables
-stay empty while the setting is off.
+tables, the Uploader role and the forgotten-base check, empty while it is off;
+0135's Tomorrow meta table the worker fills either way (45,000 rows, 2 MB).
 
 Visitor counting stays off, with no script and no requests, until
 `CLASHLENS_POSTHOG_TOKEN` (the project token, which starts `phc_` and can only

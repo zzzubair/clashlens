@@ -31,6 +31,9 @@ def test_level_is_rank_band_then_trophy_bracket() -> None:
     assert {key % LEVELS for key in keys[:200]} == {0}
     assert {key % LEVELS for key in keys[200:1000]} == {1}
     assert [key % LEVELS for key in keys[1000:1006]] == [8, 6, 5, 4, 3, 2]
+    # One player given with their place on the whole board.
+    assert [situations([5050], [8], [8], [0], [place])[0] % LEVELS
+            for place in (150, 600, 1500)] == [0, 1, 5]
     # Open slots and activity sit above the level.
     key = situations([5000], [2], [5], [3])[0]
     assert key // (LEVELS * ACTIVITIES) == 2 * 9 + 5

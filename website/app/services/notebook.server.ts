@@ -5,6 +5,7 @@ import {
   type NotebookChange,
   type NotebookSaved,
 } from "../lib/notebook";
+import { parseTomorrow, type Tomorrow } from "../lib/notebook-tomorrow";
 import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
 
 /** The account's notebook, or with `crew` that Crew's, as this Season's
@@ -48,4 +49,24 @@ export async function saveNotebook(
   const saved = parseSaved(payload);
   if (saved === null) throw new PythonApiError(502, { error: "malformed" });
   return saved;
+}
+
+/** The Tomorrow screen for one of the account's game accounts: `tag`, or
+ * its first Legend account. */
+export async function getTomorrow(
+  identity: GoogleAccountIdentity,
+  tag?: string,
+): Promise<Tomorrow> {
+  const query = tag === undefined ? "" : `?${new URLSearchParams({ tag }).toString()}`;
+  const payload = await requestJson<unknown>(
+    `/v1/account/notebook/tomorrow${query}`,
+    "GET",
+    undefined,
+    "notebook-tomorrow",
+    undefined,
+    identity,
+  );
+  const tomorrow = parseTomorrow(payload);
+  if (tomorrow === null) throw new PythonApiError(502, { error: "malformed" });
+  return tomorrow;
 }

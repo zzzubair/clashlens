@@ -366,6 +366,7 @@
   gap: 0.35rem;
 }
 .nb-seg button,
+.nb-seg a,
 .nb-chip {
   min-height: 2.75rem;
   padding: 0.35rem 0.8rem;
@@ -378,7 +379,13 @@
   font-weight: 700;
   cursor: pointer;
 }
-.nb-seg button[aria-pressed="true"] {
+.nb-seg a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.nb-seg button[aria-pressed="true"],
+.nb-seg a[aria-current="page"] {
   color: var(--cl-brand-night);
   background: var(--cl-brand-orange);
   border-color: var(--cl-card-line);
@@ -665,4 +672,90 @@
 }
 .nb-base-part + .nb-note {
   margin-top: 1rem;
+}
+
+/* The Tomorrow screen: who you will meet, then each base's card. */
+.nb-page > .nb-seg {
+  margin-top: 0.75rem;
+}
+.nb-tm-card {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+.nb-section > .nb-tm-card {
+  margin-top: 0;
+}
+.nb-tm-card h2,
+.nb-tm-card h3,
+.nb-tm-card p {
+  margin: 0;
+}
+.nb-tm-card h2 {
+  font-size: 1.1rem;
+}
+.nb-tm-card .nb-headline {
+  margin: 0.25rem 0;
+}
+.nb-tm-card .nb-actions,
+.nb-tm-card .nb-per-account {
+  margin: 0;
+}
+.nb-tm-best {
+  border-color: var(--cl-brand-orange);
+}
+.nb-tm-kicker {
+  color: var(--cl-brand-orange);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+.nb-tm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.nb-tm-head h3 {
+  min-width: 0;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+/* Armies near you: name, a bar against the most used one, its share. */
+.nb-tm-bars {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nb-tm-bars li {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) 3rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nb-tm-bars span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-tm-bars b {
+  text-align: right;
+}
+.nb-tm-track {
+  height: 0.6rem;
+  overflow: hidden;
+  background: var(--cl-panel);
+  border-radius: 999px;
+}
+.nb-tm-track i {
+  display: block;
+  height: 100%;
+  background: var(--cl-brand-orange);
 }
