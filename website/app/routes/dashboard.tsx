@@ -38,6 +38,7 @@ import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
 import "../dashboard-cards.css";
+import "../dashboard-clock.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
 
