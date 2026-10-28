@@ -18,6 +18,7 @@ const REFUSALS = new Set([
   "base_running",
   "not_your_base",
   "not_legend_day",
+  "season_changed",
 ]);
 
 /**

@@ -520,6 +520,8 @@ def get_notebook(
             (list(notebook.player_ids.values()),),
         ).fetchall():
             seasons.add(ranked_day_for(start).official_season_id)
+        # A pick for tomorrow can sit in the next Season; it has no page yet.
+        seasons = {item for item in seasons if int(item) <= int(notebook.this_season)}
     if detail is not None:
         page.add(detail)
     first, last_counted = notebook.season_start, min(notebook.today, notebook.season_end) - DAY
@@ -654,18 +656,25 @@ class UndoEntry(StrictBody):
 
 class UndoEdit(StrictBody):
     base: str = Field(max_length=12)
-    name: str = Field(max_length=200)
+    # Only what the edit changed; None leaves it as it is now.
+    name: str | None = Field(default=None, max_length=200)
     # "": no base link.
+    link: str | None = Field(default=None, max_length=400)
+    note: str | None = Field(default=None, max_length=2 * MAX_NOTE)
+
+
+class UndoBase(StrictBody):
+    base: str = Field(max_length=12)
+    name: str = Field(max_length=200)
     link: str = Field(max_length=400)
     note: str = Field(max_length=2 * MAX_NOTE)
-
-
-class UndoBase(UndoEdit):
     created_at: str = Field(max_length=40)
     updated_at: str = Field(max_length=40)
 
 
 class Undo(StrictBody):
+    # The Season of the change: its day numbers mean nothing in another.
+    season: str | None = Field(default=None, max_length=12)
     # A change touches at most one base on one player's two days.
     picks: list[UndoPick] = Field(default_factory=list, max_length=60)
     # The notebook's entry for the base before the change.
@@ -686,6 +695,8 @@ class NotebookWrite(StrictBody):
     note: str | None = Field(default=None, max_length=2 * MAX_NOTE)
     tag: str | None = Field(default=None, max_length=16)
     day: int | None = Field(default=None, ge=1, le=29)
+    # The Season the page was on: its day numbers mean nothing in another.
+    season: str | None = Field(default=None, max_length=12)
     undo: Undo | None = None
 
 
@@ -733,6 +744,9 @@ def save(
             (account_id,),
         )
         notebook = _Notebook(connection, account_id, now)
+        if any(season is not None and season != notebook.this_season
+               for season in (body.season, body.undo and body.undo.season)):
+            raise ApiError(409, "season_changed")
         notebook_id = notebook.ensure()
         today_number = notebook.day_number(notebook.today)
         tomorrow_number = today_number + 1
@@ -875,7 +889,11 @@ def save(
             if body.action == "edit":
                 if not entry["mine"]:
                     raise ApiError(403, "not_your_base")
-                edited = {key: kept[key] for key in ("base", "name", "link", "note")}
+                # Only what this edit changes, so its Undo can't put back a
+                # note saved since.
+                edited = {"base": kept["base"]} | {
+                    key: kept[key] for key in ("name", "link", "note")
+                    if getattr(body, key) is not None}
                 _edit(connection, base_id, body.name, body.link, body.note)
             else:
                 if base_id in (notebook.mine_up(history, notebook.today)
@@ -908,6 +926,7 @@ def save(
         if key in before and before[key] != after[key]
     ]
     undo = None if body.action == "undo" else {
+        "season": notebook.this_season,
         "picks": [
             {"tag": tags[player_id], "day": day,
              "base": None if old is None else codes[old], "absent": not existed}
@@ -1001,6 +1020,8 @@ def _undo(
         _drop_if_unused(connection, base_id)
     if undo.edit is not None:
         base_id = _base(notebook, undo.edit.base)
+        if not notebook.entries()[base_id]["mine"]:
+            raise ApiError(403, "not_your_base")
         _edit(connection, base_id, undo.edit.name, undo.edit.link, undo.edit.note)
 
 

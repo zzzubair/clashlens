@@ -106,6 +106,8 @@ export interface NotebookChange {
   note?: string;
   tag?: string;
   day?: number;
+  /** The Season the page was on, so a change sent across a Reset is refused. */
+  season?: string;
   undo?: unknown;
 }
 
@@ -304,7 +306,7 @@ export function parseSaved(value: unknown): NotebookSaved | null {
 /** A change the page posted, checked before it goes to the private API. */
 export function parseChange(value: unknown): NotebookChange | null {
   if (!isRecord(value)) return null;
-  const { action, base, name, link, note, tag, day, undo } = value;
+  const { action, base, name, link, note, tag, day, season, undo } = value;
   if (
     !ACTIONS.includes(action as string) ||
     !(base === undefined || base === null || isCode(base)) ||
@@ -313,6 +315,7 @@ export function parseChange(value: unknown): NotebookChange | null {
     !(note === undefined || (typeof note === "string" && note.length <= 2000)) ||
     !(tag === undefined || (typeof tag === "string" && /^#[0-9A-Z]{2,14}$/.test(tag))) ||
     !(day === undefined || isDay(day)) ||
+    !(season === undefined || (typeof season === "string" && SEASON_ID.test(season))) ||
     !(undo === undefined || isRecord(undo))
   )
     return null;

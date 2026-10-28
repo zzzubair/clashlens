@@ -37,6 +37,7 @@ import "../notebook.css";
 const NO_STORE = { "Cache-Control": "no-store" };
 // A note saves this long after the last key press.
 const NOTE_WAIT_MS = 800;
+const SAVE = "/notebook/save";
 
 export const handle: BackHandle = { back: { to: "/notebook", label: "Notebook" } };
 
@@ -218,7 +219,7 @@ function BasePage({ notebook, base }: { notebook: Notebook; base: NotebookBase }
         <p className="nb-hint">{recordLine(notebook)}</p>
       </section>
       {base.mine ? (
-        <NoteBox key={base.id} base={base} note={detail?.note ?? ""} saver={saver} />
+        <NoteBox key={base.id} base={base} note={detail?.note ?? ""} />
       ) : detail?.note ? (
         <p className="nb-note-text">{detail.note}</p>
       ) : null}
@@ -284,44 +285,54 @@ function Stars({ record }: { record: BaseRecord }) {
   );
 }
 
+// Note saves go one after another, and carry on after the page closes, so
+// an older text can never land after a newer one.
+let noteSaves: Promise<unknown> = Promise.resolve();
+
+function sendNote(base: string, note: string): Promise<boolean> {
+  const body = new URLSearchParams({
+    change: JSON.stringify({ action: "edit", base, note }),
+  });
+  const sent = noteSaves.then(() =>
+    fetch(SAVE, { method: "POST", body }).then(
+      (response) => response.ok,
+      () => false,
+    ),
+  );
+  noteSaves = sent;
+  return sent;
+}
+
 /** The base's note, saved as the Clasher types, when the box loses focus,
  * and when the page closes. */
-function NoteBox({
-  base,
-  note,
-  saver,
-}: {
-  base: NotebookBase;
-  note: string;
-  saver: Saver;
-}) {
+function NoteBox({ base, note }: { base: NotebookBase; note: string }) {
   const [text, setText] = useState(note);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<"" | "Saved" | "Not saved">("");
   const timer = useRef<number | undefined>(undefined);
   // Typed but not yet sent.
   const waiting = useRef<string | null>(null);
+  const open = useRef(true);
   const flush = useRef(() => {});
   flush.current = () => {
     window.clearTimeout(timer.current);
     const value = waiting.current;
-    // One save at a time: a newer note waits for the one on its way, so an
-    // older text can never land after it. The effect below sends it.
-    if (value === null || saver.busy) return;
+    if (value === null) return;
     waiting.current = null;
-    // Called only once the save succeeded.
-    saver.save({ action: "edit", base: base.id, note: value }, () => {
-      if (waiting.current === null) setSaved(true);
-      return null;
+    void sendNote(base.id, value).then((ok) => {
+      if (open.current && waiting.current === null) setSaved(ok ? "Saved" : "Not saved");
     });
   };
   useEffect(() => {
-    if (!saver.busy) flush.current();
-  }, [saver.busy]);
-  useEffect(() => () => flush.current(), []);
+    open.current = true;
+    return () => {
+      open.current = false;
+      flush.current();
+    };
+  }, []);
   return (
     <div className="form-field nb-note">
       <label htmlFor="nb-note">
-        Note <span className="nb-saved">{saved ? "Saved" : ""}</span>
+        Note <span className="nb-saved">{saved}</span>
       </label>
       <textarea
         id="nb-note"
@@ -332,7 +343,7 @@ function NoteBox({
         onChange={(event) => {
           waiting.current = event.target.value;
           setText(event.target.value);
-          setSaved(false);
+          setSaved("");
           window.clearTimeout(timer.current);
           timer.current = window.setTimeout(() => flush.current(), NOTE_WAIT_MS);
         }}

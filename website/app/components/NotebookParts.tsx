@@ -56,6 +56,7 @@ const ERRORS: Record<string, string> = {
     "One of your accounts runs it today or tomorrow. Pick another base first.",
   not_your_base: "Only the Clasher who made a base can edit it.",
   not_legend_day: LEGEND_ONLY,
+  season_changed: "A new Season has started. Refresh the page and try again.",
   invalid: "That didn't save. Refresh the page and try again.",
   unavailable: "Couldn't save just now. Try again in a moment.",
 };
@@ -118,8 +119,10 @@ export function useNotebookSave(notebook: Notebook | null) {
   function save(change: NotebookChange, words?: Describe) {
     describe.current = words ?? null;
     setToast(null);
+    // The newest Season comes first: the one the page's day numbers are in.
+    const season = latest.current?.seasons[0];
     void fetcher.submit(
-      { change: JSON.stringify(change) },
+      { change: JSON.stringify(season ? { ...change, season } : change) },
       { method: "post", action: SAVE },
     );
   }

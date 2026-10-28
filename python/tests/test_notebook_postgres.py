@@ -134,7 +134,8 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
                 box = save(action="add", name="Box")["base"]
                 save(action="pick", tag=MAIN, day=2, base=ring)
                 save(action="pick", tag=MAIN, day=4, base=box)
-                save(action="pick", tag=QUIET, day=2, base=ring)
+                save(action="pick", tag=QUIET, day=2, base=ring,
+                     season=str(int(SEASON.timestamp())))
                 # Other adds Ring to their notebook, as adding a shared base
                 # will, and fixes ALT's Day 3 to it.
                 with owner.pool.connection() as connection:
@@ -163,6 +164,14 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
                     # Only Ring's maker edits it; Box is in no notebook of Other's.
                     refused("other", action="edit", base=ring, name="Mine"),
                     refused("other", action="pick", tag=ALT, day=4, base=box),
+                    # Nor does an Undo it never had.
+                    refused("other", action="undo", undo={
+                        "picks": [], "entry": None, "delete": None, "restore": None,
+                        "edit": {"base": ring, "name": "Mine", "link": "", "note": ""}}),
+                    # Day numbers from a page on another Season.
+                    refused(action="pick", tag=MAIN, day=2, base=box, season="123"),
+                    refused(action="undo", undo={"season": "123", "picks": [
+                        {"tag": MAIN, "day": 2, "base": box}]}),
                     # A base someone runs today or tomorrow stays listed.
                     refused(action="remove", base=ring),
                 ]
@@ -204,6 +213,11 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
                 # Names and notes with emoji joined by U+200D, 🧑‍🚀 and ❤️‍🔥.
                 save(action="edit", base=box, name=ROCKET, note=LURE)
                 joined = notebook(query=f"?base={box}")
+                # Undoing a rename leaves a note saved after it.
+                renamed = save(action="edit", base=box, name="Box v3")
+                save(action="edit", base=box, note="Newer note")
+                save(action="undo", undo=renamed["undo"])
+                rename_undone = notebook(query=f"?base={box}")
                 # Adding Zig and undoing it deletes it.
                 zig = save(action="add", name="Zig", tag=MAIN, day=6)
                 save(action="undo", undo=zig["undo"])
@@ -264,7 +278,8 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
     assert bad == [
         (422, "invalid_day"), (422, "invalid_day"), (404, "player_not_verified"),
         (422, "invalid_base_link"), (422, "player_required"), (403, "not_your_base"),
-        (404, "base_not_found"), (422, "base_running"),
+        (404, "base_not_found"), (403, "not_your_base"), (409, "season_changed"),
+        (409, "season_changed"), (422, "base_running"),
     ]
     assert (box_for_other.status_code, box_for_other.json()) == (
         404, {"error": "base_not_found"})
@@ -295,6 +310,8 @@ def test_one_base_has_one_record_from_everyone_who_ran_it(
     assert (made[1], made[2], made[3]) == (me, SPLASH, TIRED)
     names = {base["id"]: base["name"] for base in joined["bases"]}
     assert (names[box], joined["base"]["note"]) == (ROCKET, LURE)
+    names = {base["id"]: base["name"] for base in rename_undone["bases"]}
+    assert (names[box], rename_undone["base"]["note"]) == (ROCKET, "Newer note")
     assert zig_gone is None
     assert {base["id"] for base in after_zig["bases"]} == {ring, box, hex_}
 
@@ -418,4 +435,6 @@ def test_bases_are_set_and_counted_on_legend_days_only(
 
     main = last_day["players"][0]
     assert (last_day["season"]["today"], last_day["season"]["tomorrow"]) == (28, 29)
+    # Day 29's pick is in the next Season, which has no page yet.
+    assert last_day["seasons"] == [str(int(SEASON.timestamp()))]
     assert (main["current"], main["next"]) == (ring, {"day": 29, "base": box})

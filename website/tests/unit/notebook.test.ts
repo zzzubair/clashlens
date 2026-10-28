@@ -149,6 +149,10 @@ describe("notebook contract", () => {
     expect(parseChange({ action: "remove", base: "B-7K3QX9" })).not.toBeNull();
     expect(parseChange({ action: "pick", tag: "L9L0GJ9LR" })).toBeNull();
     expect(
+      parseChange({ action: "keep", base: "B-7K3QX9", season: "1791176400" }),
+    ).toEqual({ action: "keep", base: "B-7K3QX9", season: "1791176400" });
+    expect(parseChange({ action: "keep", base: "B-7K3QX9", season: "next" })).toBeNull();
+    expect(
       parseChange({ action: "edit", base: "B-7K3QX9", note: "x".repeat(2001) }),
     ).toBeNull();
   });
