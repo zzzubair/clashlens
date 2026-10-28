@@ -547,9 +547,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     <div className="obs-layout">
       <form onSubmit={(event) => event.preventDefault()}>
         <section className="form-panel" aria-labelledby="obs-player">
-          <h2 id="obs-player">
-            Player
-          </h2>
+          <h2 id="obs-player">Player</h2>
           <div className="obs-players">
             {overlay.players.map((player) => (
               <label className="obs-player" key={player.tag}>
@@ -578,9 +576,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-layout">
-          <h2 id="obs-layout">
-            Layout
-          </h2>
+          <h2 id="obs-layout">Layout</h2>
           <p className="obs-help">Pick a shape, then drag its edges in the preview.</p>
           <div className="obs-shapes" role="radiogroup" aria-label="Shape">
             {SHAPES.map(([value, label, hint, [pw, ph]]) => (
@@ -667,9 +663,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-shows">
-          <h2 id="obs-shows">
-            What it shows
-          </h2>
+          <h2 id="obs-shows">What it shows</h2>
           <div className="obs-checks">
             {OVERLAY_PARTS.map((part) => (
               <label key={part}>
@@ -867,9 +861,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         </section>
 
         <section className="form-panel" aria-labelledby="obs-add">
-          <h2 id="obs-add">
-            Add it to OBS
-          </h2>
+          <h2 id="obs-add">Add it to OBS</h2>
           <p className="obs-help">
             Your own private link. Paste it into OBS once: every change you make on this
             page shows on stream within 3 seconds, with no new link.
