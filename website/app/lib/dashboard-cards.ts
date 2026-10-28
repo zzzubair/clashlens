@@ -361,14 +361,15 @@ export function heatCells(season: SeasonData, mode: HeatMode): HeatCell[] {
   });
 }
 
+// Rose and sage between the ends, so no day looks like the orange buttons.
 const HEAT_STOPS = [
   [224, 49, 49],
-  [255, 138, 31],
-  [255, 212, 71],
+  [226, 146, 134],
+  [140, 192, 140],
   [47, 179, 68],
 ] as const;
 
-/** Red for your worst day, then orange, yellow and green for your best. */
+/** Red for your worst day, then rose, sage and green for your best. */
 export function heatColour(shade: number): [number, number, number] {
   const position = Math.max(0, Math.min(1, shade)) * 3;
   const step = Math.min(2, Math.floor(position));

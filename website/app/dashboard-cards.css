@@ -769,10 +769,10 @@
 }
 
 .cutoff-rows .cutoff-you,
+/* Your own row: the ember tint and edge bar the example dashboard uses. */
 .rival-you {
-  background: var(--cl-panel);
-  outline: 2px solid var(--cl-action);
-  outline-offset: -2px;
+  background: var(--cl-action-soft);
+  box-shadow: inset 3px 0 0 var(--cl-action);
   font-weight: 900;
 }
 
@@ -809,6 +809,19 @@
 
 .rival-table :is(th, td):first-child {
   width: 8.6rem;
+}
+
+/* The numbers in the scoreboard font, trophies largest. */
+.rival-table td:nth-child(n + 3) {
+  font-family: var(--cl-font-score);
+  font-size: 0.98rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-table td:nth-child(3) {
+  font-size: 1.08rem;
+  font-weight: 700;
 }
 
 .rival-table :is(th, td):nth-child(2),
@@ -848,7 +861,7 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .rival-table tbody tr:hover {
+  .rival-table tbody tr:not(.rival-you):hover {
     background: var(--cl-panel);
   }
 
@@ -1331,7 +1344,7 @@
   }
 
   .rival-table td:nth-child(n + 4) {
-    font-size: 0.8rem;
+    font-size: 0.92rem;
   }
 
   .rival-table .rival-moved {

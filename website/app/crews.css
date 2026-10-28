@@ -373,6 +373,17 @@
   padding-inline: 0.6rem;
 }
 
+/* All five boards fit across a 360px phone, Streaks included. */
+@media (max-width: 24rem) {
+  .crew-page .crew-tabs {
+    gap: 0.25rem;
+  }
+
+  .crew-page .crew-tabs a {
+    padding-inline: 0.4rem;
+  }
+}
+
 .crew-boards {
   margin-top: 0.5rem;
 }

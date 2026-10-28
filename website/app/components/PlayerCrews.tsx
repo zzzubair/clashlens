@@ -19,7 +19,11 @@ export function PlayerCrews({
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
           {index > 0 ? " · " : null}
+          {/* The Crew's crest, as on its page, sets it apart from the clan. */}
           <Link to={`/crews/${crew.crewId}`} state={backState}>
+            <span className="player-crew-crest" aria-hidden="true">
+              {Array.from(crew.name)[0]}
+            </span>
             <bdi>{crew.name}</bdi>
           </Link>
         </span>

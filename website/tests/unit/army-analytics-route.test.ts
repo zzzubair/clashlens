@@ -419,6 +419,12 @@ describe("army analytics route historical reads", () => {
     expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
     expect(text).toContain("Thrower 50.0%");
     expect(text).toContain("6 of 12");
+    // A type shows the troop it is named after; Unreadable shows none.
+    expect(html.match(/<span class="unit-art"[^>]*>(?:<img[^>]*>)+<\/span>/g)).toEqual([
+      expect.stringMatching(
+        /^<span class="unit-art"[^>]*><img [^>]*src="[^"]*troop-132\.webp[^"]*"[^>]*><\/span>$/,
+      ),
+    ]);
     expect(text).not.toContain("not which army is best");
     // Unreadable attacks are a row of their own, not excluded.
     expect(text).toContain("Battle records 12 Included 12 Excluded 0");

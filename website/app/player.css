@@ -110,8 +110,8 @@
   display: inline-flex;
   align-items: baseline;
 }
-/* A small shield before the clan, a small crowd before the Crews. */
-.player-page .player-identity > :is(.player-clan, .player-crews)::after {
+/* A small shield before the clan; each Crew has its crest instead. */
+.player-page .player-identity > .player-clan::after {
   order: -1;
   width: 0.95em;
   height: 0.95em;
@@ -126,7 +126,6 @@
   --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
 }
 .player-page .player-identity > .player-crews {
-  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='9' cy='8' r='3.5'/%3E%3Cpath d='M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6M16 4.5a3.5 3.5 0 0 1 0 7M18 14c2.2.6 3.5 2.8 3.5 6'/%3E%3C/svg%3E");
   display: inline-flex;
   align-items: baseline;
 }
@@ -145,7 +144,30 @@
   height: 0.85em;
 }
 .player-page .player-crews a {
+  display: inline-flex;
+  gap: 0.3em;
+  align-items: center;
   color: var(--cl-action-text);
+  text-decoration: none;
+}
+.player-page .player-crews a:hover bdi {
+  text-decoration: underline;
+}
+/* The Crew's crest in small: the Crew page's gold hexagon and first letter. */
+.player-page .player-crew-crest {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.05em;
+  height: 1.15em;
+  padding-bottom: 0.05em;
+  color: var(--cl-brand-night);
+  background: linear-gradient(180deg, var(--cl-brand-yellow), var(--cl-brand-orange));
+  clip-path: polygon(50% 0, 100% 16%, 100% 68%, 50% 100%, 0 68%, 0 16%);
+  font-family: var(--cl-font-score);
+  font-size: 0.85em;
+  font-weight: 700;
+  line-height: 1;
 }
 .player-page .player-trophies {
   grid-area: count;
@@ -447,7 +469,7 @@
   padding: 0.4rem 2.25rem 0.4rem 0.9rem;
   color: var(--cl-ink);
   background: var(--cl-panel)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%2388a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23927f70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     no-repeat right 0.75rem center / 1rem;
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
