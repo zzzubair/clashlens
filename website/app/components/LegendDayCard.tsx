@@ -121,11 +121,16 @@ export function LegendDayCard({
           {net === null ? (
             <span className="sr-only">–</span>
           ) : (
-            <span
-              className={`legend-day-net ${net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
-            >
-              {signed(net)}
-            </span>
+            <>
+              <span
+                className={`legend-day-net ${net > 0 ? "positive" : net < 0 ? "negative" : ""}`}
+              >
+                {signed(net)}
+              </span>
+              <span className="legend-day-net-label" aria-hidden="true">
+                today
+              </span>
+            </>
           )}
         </span>
         {countdown ? (

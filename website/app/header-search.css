@@ -105,6 +105,16 @@
   background: var(--cl-header-soft);
 }
 
+/* Open, it dims the page under the bar so the results stand apart; a tap
+   there closes it. */
+.header-search:has(.header-search-panel)::before {
+  position: fixed;
+  z-index: 39;
+  inset: var(--cl-header-h) 0 0;
+  background: rgb(10 6 4 / 0.45);
+  content: "";
+}
+
 .header-search-panel {
   position: absolute;
   z-index: 40;

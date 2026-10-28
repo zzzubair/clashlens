@@ -419,6 +419,17 @@
 /* ---------- Phones: each row is a small card ---------- */
 
 @media (max-width: 47.99rem) {
+  /* The chosen tab above already names the list; screen readers keep the
+     heading. */
+  .analytics-results-head h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .analytics-results-table,
   .analytics-results-table tbody {
     display: block;

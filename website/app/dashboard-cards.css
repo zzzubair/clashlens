@@ -53,6 +53,12 @@
   background: color-mix(in srgb, var(--cl-negative) 13%, var(--cl-surface));
 }
 
+.legend-day-net-label {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .legend-day-countdown {
   display: inline-flex;
   align-items: center;

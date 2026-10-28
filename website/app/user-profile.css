@@ -296,7 +296,6 @@
 }
 
 .settings-value {
-  font-family: var(--cl-font-mono);
   overflow-wrap: anywhere;
 }
 

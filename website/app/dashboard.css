@@ -297,9 +297,12 @@
 
 /* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
 
+/* Each card is as tall as its content, so a short card beside a long one
+   stays short instead of stretching with empty space. */
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
   gap: 1rem;
 }
 
@@ -837,7 +840,7 @@
     min-width: 2.5rem;
   }
 
-  /* The chosen player's name gives way first, with an ellipsis, so its arrow
+  /* The chosen player's name gives way first, onto two lines, so its arrow
      and Link player stay in view; other players still scroll sideways. */
   .dash-account-tab:has(> [aria-current="page"]) {
     flex-shrink: 1;
@@ -850,9 +853,14 @@
   }
 
   .dash-account[aria-current="page"] > .dash-name {
+    display: -webkit-box;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 1rem;
+    line-height: 1.2;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .dash-account-page > span {

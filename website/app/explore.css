@@ -458,6 +458,20 @@
     line-height: 1.15;
   }
 
+  /* The whole row opens the player; a small arrow says so, as on Analytics.
+     Taps pass through it to the row's link. */
+  .leaderboard-row .trophy-cell strong::after {
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin: 0 0.1rem 0.12rem 0.45rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+    pointer-events: none;
+  }
+
   /* A Tie pill sits under the trophies instead of beside them. */
   .tie-slot {
     display: block;
@@ -615,5 +629,12 @@
   .rank-mark,
   .leaderboard-view-switch .button[aria-current="page"] {
     border: 1px solid CanvasText;
+  }
+}
+
+/* A 360px phone gives the search hint the icon's room. */
+@media (max-width: 23.5rem) {
+  :is(.home-page, .leaderboard-search) .search-controls .search-field-icon {
+    display: none;
   }
 }

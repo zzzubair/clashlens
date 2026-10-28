@@ -470,7 +470,8 @@ describe("Legend day card", () => {
       }),
     );
     expect(html).toContain("Trophies 5,702");
-    expect(html).toContain("Net today +66");
+    // The change is marked "today" on screen, not left as a bare number.
+    expect(html).toContain("Net today +66 today");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
     expect(html).toContain("Next Reset #95–#760 estimate");
