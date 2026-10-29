@@ -234,7 +234,7 @@ export default function App() {
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
   usePreloadInlineAnswerCode();
-  usePreloadTabCode(data.crewsEnabled === true);
+  usePreloadTabCode(fourthTab(data));
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });
@@ -252,6 +252,18 @@ export default function App() {
   );
 }
 
+// The phone bar's fourth tab: the Notebook, signed in with its switch on,
+// otherwise Crews behind its switch.
+function fourthTab(data: RootLoaderData | undefined): "notebook" | "crews" | null {
+  if (data?.notebookEnabled && data.loggedIn) return "notebook";
+  return data?.crewsEnabled ? "crews" : null;
+}
+
+const FOURTH_TAB_ROUTES = {
+  notebook: ["routes/notebook.layout", "routes/notebook.tomorrow"],
+  crews: ["routes/crews"],
+};
+
 // The pages a tap most often opens: the tabs and a player.
 const TAB_ROUTES = [
   "routes/dashboard",
@@ -262,12 +274,12 @@ const TAB_ROUTES = [
 
 // Once the page has loaded, download the code and styles of the pages a tap
 // most often opens, so a first tap on one waits only for its data.
-function usePreloadTabCode(crews: boolean) {
+function usePreloadTabCode(fourth: "notebook" | "crews" | null) {
   const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
   useEffect(() => {
     if (manifest === undefined) return;
     const timer = setTimeout(() => {
-      for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
+      for (const id of [...TAB_ROUTES, ...(fourth ? FOURTH_TAB_ROUTES[fourth] : [])]) {
         const route = manifest.routes[id];
         if (route === undefined) continue;
         for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
@@ -284,7 +296,7 @@ function usePreloadTabCode(crews: boolean) {
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [manifest, crews]);
+  }, [manifest, fourth]);
 }
 
 // The tabs, most useful first. Dashboard, Notebook and Crews follow their
@@ -310,9 +322,13 @@ function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
 // The Notebook opens on Tomorrow, and its tab stays chosen on every
 // Notebook page, as a NavLink's does on its own.
 function NotebookTab({
+  className,
   onClick,
+  children = "Notebook",
 }: {
+  className?: string;
   onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  children?: ReactNode;
 }) {
   const inNotebook = (path: string | undefined) =>
     path === "/notebook" || Boolean(path?.startsWith("/notebook/"));
@@ -323,9 +339,13 @@ function NotebookTab({
       to="/notebook/tomorrow"
       onClick={onClick}
       aria-current={inNotebook(here) ? "page" : undefined}
-      className={inNotebook(next) && !inNotebook(here) ? "pending" : undefined}
+      className={
+        [className, inNotebook(next) && !inNotebook(here) && "pending"]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
     >
-      Notebook
+      {children}
     </Link>
   );
 }
@@ -337,6 +357,7 @@ const TAB_ICONS = {
   analytics: "M5 20V11M12 20V5M19 20v-7",
   crews:
     "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 3-5 6-5s6 2 6 5M17 11a2.5 2.5 0 1 0 0-5M18 15c2 .5 3 2 3 4",
+  notebook: "M6 4h12v16H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM9 4v16M12 9h3M12 13h3",
 } as const;
 
 function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
@@ -358,15 +379,21 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-// Below 64rem: the four most useful tabs, then More with Notebook (behind
-// its switch), Watchlists, Blog and Join Discord. `/` is Home while it shows
-// the front page. A tapped tab looks chosen, with a loading line, from the
+// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
+// and Join Discord, and Crews while the Notebook has its tab. `/` is Home
+// while it shows the front page. A tapped tab looks chosen, with a loading line, from the
 // tap until its page shows (the `pending` class NavLink adds); see
 // site-header.css.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const navigation = useNavigation();
-  const inMore = ["/notebook", "/account/watchlists", "/blog"].some(
+  const fourth = fourthTab(data);
+  const crewsInMore = fourth === "notebook" && data?.crewsEnabled === true;
+  const inMore = [
+    "/account/watchlists",
+    "/blog",
+    ...(crewsInMore ? ["/crews"] : []),
+  ].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
   // Tapping a tab again while its page loads would start the load over.
@@ -403,7 +430,13 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
         <TabIcon name="analytics" />
         Analytics
       </NavLink>
-      {data?.crewsEnabled && (
+      {fourth === "notebook" && (
+        <NotebookTab className="bottom-tab" onClick={ignoreRepeatTap}>
+          <TabIcon name="notebook" />
+          Notebook
+        </NotebookTab>
+      )}
+      {fourth === "crews" && (
         <NavLink className="bottom-tab" to="/crews" onClick={ignoreRepeatTap}>
           <TabIcon name="crews" />
           Crews
@@ -411,8 +444,10 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          {data?.notebookEnabled && data.loggedIn && (
-            <NotebookTab onClick={ignoreRepeatTap} />
+          {crewsInMore && (
+            <NavLink to="/crews" onClick={ignoreRepeatTap}>
+              Crews
+            </NavLink>
           )}
           <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
             Watchlists

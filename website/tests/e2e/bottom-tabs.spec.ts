@@ -206,12 +206,15 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
     ["Rankings", /\/leaderboards\/tracked\?view=live/],
     ["Dashboard", /\/$/],
     ["Analytics", /\/analytics\/armies$/],
-    ["Crews", /\/crews$/],
+    // The browser test stack runs with the Notebook on, so it has the tab
+    // and Crews moves into More.
+    ["Notebook", /\/notebook\/tomorrow$/],
   ] as const) {
     await bar.getByRole("link", { name: tab }).click();
     await stillSignedIn(path);
   }
   for (const [item, path] of [
+    ["Crews", /\/crews$/],
     ["Watchlists", /\/account\/watchlists$/],
     ["Blog", /\/blog$/],
   ] as const) {

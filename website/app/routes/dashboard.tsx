@@ -103,7 +103,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (query.has("q")) {
     throw redirect(`/search?${new URLSearchParams({ q: query.get("q") ?? "" })}`);
   }
-  const { getWebsiteConfig, isDashboardEnabled } =
+  const { getWebsiteConfig, isDashboardEnabled, isNotebookEnabled } =
     await import("../server/config.server");
   const { readLoginIdentity, freshIdempotencyKey, isAccountNotFoundError } =
     await import("../server/actions.server");
@@ -160,7 +160,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         only
           ? CARD_IDS.filter((card) => only.includes(card))
           : shownCards(settings.layout),
-        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
+        {
+          client,
+          selected,
+          settings,
+          waitForBoard: query.get("board") === "wait",
+          notebook: isNotebookEnabled(),
+        },
         identity,
       ),
       CARD_WAIT_MS,

@@ -10,6 +10,30 @@
   opacity: 0.6;
 }
 
+/* The Notebook's "Base: Ring ›" line: a 44 px tap target, and a long base
+   name is cut, never widening the card. */
+.army-base-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.25rem;
+  max-width: 100%;
+  min-height: 44px;
+  margin-top: -0.5rem;
+  color: var(--cl-accent);
+  font-weight: 900;
+  text-decoration: none;
+}
+.army-base-link:hover {
+  text-decoration: underline;
+}
+.army-base-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .army-switch {
   position: relative;
   display: inline-block;

@@ -28,6 +28,7 @@ import {
   type GoalData,
   type GroupRow,
   type GroupWatchData,
+  notebookToday,
   type PastBases,
   type RivalRow,
   type RivalsData,
@@ -44,6 +45,7 @@ import type { ArmyDays } from "../lib/dashboard-armies";
 import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
 import { getGroupComparison } from "./group-comparison.server";
+import { getNotebook } from "./notebook.server";
 import {
   requestJson,
   type GoogleAccountIdentity,
@@ -227,6 +229,8 @@ export interface CardContext {
   settings: DashboardSettings;
   /** Wait a few seconds for the shared board's read under way. */
   waitForBoard?: boolean;
+  /** The Notebook is switched on, so Armies on defense shows today's base. */
+  notebook?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -845,7 +849,17 @@ export function readCards(
         ...waiting(read),
       };
     },
-    "armies-defense": () => armies("defense"),
+    "armies-defense": async () => {
+      if (!ctx.notebook) return armies("defense");
+      const [read, base] = await Promise.all([
+        armies("defense"),
+        getNotebook(identity).then(
+          (notebook) => notebookToday(notebook, ctx.selected.tag),
+          () => null,
+        ),
+      ]);
+      return { ...read, base };
+    },
     "armies-offense": () => armies("offense"),
     "legend-clock": async () => {
       const page = await pages(ctx.selected.tag);

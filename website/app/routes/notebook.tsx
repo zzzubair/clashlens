@@ -6,6 +6,7 @@ import {
   useLoaderData,
   useNavigate,
   useOutletContext,
+  useSearchParams,
 } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
@@ -13,6 +14,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { ChangedSheet, StillOn } from "../components/NotebookChecks";
 import {
   AccountRow,
+  canSet,
   ChangeSheet,
   DaysSheet,
   FixDaySheet,
@@ -51,7 +53,8 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 }
 
 /** GET /notebook — the signed-in Clasher's notebook as this Season's page:
- * each linked account's base and run strip, and the bases. GET
+ * each linked account's base and run strip, and the bases. `?change=<tag>`,
+ * from the dashboard, opens that account's Change sheet. GET
  * /crews/:crewId/bases — a Crew's notebook, its bases only, for its members.
  * With `?season=<id>`, an earlier Season's page, read only. While
  * CLASHLENS_NOTEBOOK_ENABLED is off neither page exists. */
@@ -116,9 +119,17 @@ export default function NotebookRoute() {
 
 function NotebookPage({ notebook }: { notebook: Notebook }) {
   const saver = useOutletContext<Saver>();
-  const [open, setOpen] = useState<Open | null>(null);
-  const close = () => setOpen(null);
   const { season } = notebook;
+  const [searchParams] = useSearchParams();
+  const [open, setOpen] = useState<Open | null>(() => {
+    const asked = notebook.players.find(
+      (item) => item.tag === searchParams.get("change"),
+    );
+    return asked && !notebook.crew && season.current && canSet(notebook, asked)
+      ? { kind: "change", tag: asked.tag }
+      : null;
+  });
+  const close = () => setOpen(null);
   const navigate = useNavigate();
   const player =
     open && open.kind !== "new"

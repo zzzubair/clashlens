@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router";
 
-import type { ArmiesData } from "../lib/dashboard-cards";
+import type { ArmiesData, NotebookToday } from "../lib/dashboard-cards";
 import type {
   ArmyDays,
   ArmyLens,
@@ -179,6 +180,31 @@ function DaySwitch({
  * over the chosen finished days, and every defense together, each beside
  * every tracked player's defenses against that army.
  */
+/**
+ * "Base: Ring ›" under Armies on defense, opening the base the account runs
+ * today; with none, "Which base? ›" opens the account's Change sheet.
+ */
+function BaseLine({ today }: { today: NotebookToday }) {
+  return (
+    <Link
+      className="army-base-link"
+      to={
+        today.base
+          ? `/notebook/bases/${today.base.id}`
+          : `/notebook?${new URLSearchParams({ change: today.tag })}`
+      }
+    >
+      {today.base ? (
+        <>
+          Base: <bdi className="army-base-name">{today.base.name}</bdi> ›
+        </>
+      ) : (
+        "Which base? ›"
+      )}
+    </Link>
+  );
+}
+
 export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("defense", data);
   const empty = emptyText(armies, "defense");
@@ -212,6 +238,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
         title="Armies on defense"
         meta={<DaySwitch days={days} choose={choose} custom />}
       />
+      {data.base ? <BaseLine today={data.base} /> : null}
       {empty || !armies ? (
         <CardNote>{empty}</CardNote>
       ) : (

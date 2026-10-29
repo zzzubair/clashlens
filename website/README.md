@@ -197,10 +197,12 @@ example dashboard with Create account and Sign in
 ([`DashboardTeaser.tsx`](app/components/DashboardTeaser.tsx)), then the top 10
 now with a link to all rankings ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
 [deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
-Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
-screens, they move to a bar at the bottom of the screen: Home (Dashboard when
-signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
-holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
+Notebook (signed in, with the Notebook on), Rankings, Analytics, Crews,
+Watchlists and Blog. Below 64rem, and on touch screens, they move to a bar at
+the bottom of the screen: Home (Dashboard when signed in with the Dashboard
+on), Rankings, Analytics, Crews and More, which holds Watchlists, Blog and Join
+Discord. Signed in with the Notebook on, Notebook takes Crews' place in the bar
+and Crews moves into More; the top bar keeps the logo, search,
 the theme switch and Sign in or the account menu. A signed-out visitor who
 opens a page that needs an account sees, in its place, what the page is for and
 separate Create account and Sign in buttons that both come back to it
@@ -229,6 +231,10 @@ tab at once and each card fills in as its data arrives; a save keeps the cards
 shown and reads again only those it changes or adds
 ([`dashboard.tsx`](app/routes/dashboard.tsx)). A page left open past the
 Reset hides the day's numbers behind a new-day notice until it reloads.
+While the Notebook is on, Armies on defense says "Base: Ring ›" for the base
+the selected account runs today, opening its page; with none it says "Which
+base? ›" and opens `/notebook?change=<tag>`, the Notebook with that account's
+Change sheet open.
 
 Bases you attacked rates each base Hard / Average / Easy in the mode its
 settings choose. Held % compares the base's held share today with today's held
