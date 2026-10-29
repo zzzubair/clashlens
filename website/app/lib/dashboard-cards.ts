@@ -7,6 +7,7 @@
 import type { LinkedPlayerCard } from "./account-contracts";
 import type { ClockBattle, OpponentRow, PlayerDay, RankRange } from "./dashboard";
 import type { PlayerArmies } from "./dashboard-armies";
+import type { Notebook } from "./notebook";
 
 /** Every Legend I player starts a Season here (domain.py SEASON_START_TROPHIES). */
 export const SEASON_START_TROPHIES = 5000;
@@ -478,6 +479,25 @@ export interface PastBases {
 export interface ArmiesData {
   tag: string;
   armies: PlayerArmies;
+  /**
+   * Armies on defense only: the account's base today, for its "Base: Ring ›"
+   * line. Left out while the Notebook is off; null when it could not be read.
+   */
+  base?: NotebookToday | null;
+}
+
+/** One account's base today in the Clasher's Notebook. */
+export interface NotebookToday {
+  tag: string;
+  /** Null when the account runs no base today. */
+  base: { id: string; name: string } | null;
+}
+
+/** What the Notebook says `tag` runs today, as the dashboard shows it. */
+export function notebookToday(notebook: Notebook, tag: string): NotebookToday {
+  const current = notebook.players.find((item) => item.tag === tag)?.current;
+  const base = notebook.bases.find((item) => item.id === current);
+  return { tag, base: base ? { id: base.id, name: base.name } : null };
 }
 
 export interface CardDataMap {
