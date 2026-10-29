@@ -295,6 +295,28 @@ API's memory the same way. A defense whose attacking army could not be read
 counts only in All defenses. Until the worker has counted every one of the
 days the grey numbers show –.
 
+The Notebook at `/notebook` stays hidden unless `CLASHLENS_NOTEBOOK_ENABLED=true`,
+and needs sign-in. A base stands on its own with one base ID; a notebook only
+points to it, so removing one from a notebook keeps the base and its results.
+The page is this Season's: each verified account's base today, its record on
+that run, and a strip of the Season's 28 Legend days with a block per run of
+one base. Change picks the base from today or tomorrow, and Days lists every
+day so far to fix which base was up then; a finished Season is locked. Each
+starts from one account and only changes that account, and an account runs one
+base a day. Bases can be set only on an account's Legend days (its weekly
+league record says Legend I). Below, Bases lists this Season's bases with
+search, a This Season or Retired filter with counts, and three sorts. A base
+running when a Season ends carries over by itself; the rest stay on their
+Season's page, opened from the Season picker (`/notebook?season=<id>`), where a
+base's page brings it back. A base retires by hand or 30 days after its last
+counted day or when it was added or brought back. A base's page at
+`/notebook/bases/<base ID>` shows how it held this Season (defenses not
+3-starred) from everyone who ran it, its stars, each of your accounts with the
+days it ran, days with no data, its note and link. Only its maker edits its
+name, link and note. Every change saves at once through `/notebook/save` and
+offers Undo, except the note. Records come from the worker's defense counts, so
+a finished day counts after 07:00 UTC.
+
 Crews at `/crews` stay hidden unless `CLASHLENS_CREWS_ENABLED=true`. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at
