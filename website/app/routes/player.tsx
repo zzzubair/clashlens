@@ -608,8 +608,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             >
               <PlayerCrews crews={data.crews} name={lookup.profile.name} />
             </PlayerHeading>
-            {current && leftOn !== null && shape && droppedRun ? (
-              <>
+            <div className="player-score">
+              {current && leftOn !== null && shape && droppedRun ? (
                 <div className="player-trophies">
                   <span className="metric-label">Last Legend I trophies</span>
                   <strong className="player-trophy-count">
@@ -620,25 +620,27 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                     Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)} Reset
                   </span>
                 </div>
-                <TrophyLine
-                  history={allHistory}
-                  player={current}
-                  now={statisticsTime}
-                  current={leftOn}
-                  until={shape.seasonStart + droppedRun.last * 86_400_000}
-                  endLabel="Left"
-                />
-              </>
-            ) : (
-              <div className="player-trophies">
-                <span className="metric-label">Trophies</span>
-                <strong className="player-trophy-count">
-                  <TrophyMark />
-                  {lookup.profile.trophies.toLocaleString("en-GB")}
-                </strong>
-              </div>
-            )}
-            <PlayerActions tag={data.requestedTag} />
+              ) : (
+                <div className="player-trophies">
+                  <span className="metric-label">Trophies</span>
+                  <strong className="player-trophy-count">
+                    <TrophyMark />
+                    {lookup.profile.trophies.toLocaleString("en-GB")}
+                  </strong>
+                </div>
+              )}
+              <PlayerActions tag={data.requestedTag} />
+            </div>
+            {current && leftOn !== null && shape && droppedRun ? (
+              <TrophyLine
+                history={allHistory}
+                player={current}
+                now={statisticsTime}
+                current={leftOn}
+                until={shape.seasonStart + droppedRun.last * 86_400_000}
+                endLabel="Left"
+              />
+            ) : null}
           </header>
         ) : (
           <header className="player-hero">
@@ -719,24 +721,63 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         >
           <PlayerCrews crews={data.crews} name={trackedPlayer.profile.name} />
         </PlayerHeading>
-        <div className="player-trophies">
-          <span className="metric-label sr-only">Current trophies</span>
-          {seasonExpired || trackedPlayer.profile.seasonResetPending ? (
-            <>
-              <strong className="player-trophy-count player-reset-pending">
-                Waiting for this player&apos;s Season reset
-              </strong>
-              <span className="player-reset-note">
-                Last saved before the reset:{" "}
+        <div className="player-score">
+          <div className="player-trophies">
+            <span className="metric-label sr-only">Current trophies</span>
+            {seasonExpired || trackedPlayer.profile.seasonResetPending ? (
+              <>
+                <strong className="player-trophy-count player-reset-pending">
+                  Waiting for this player&apos;s Season reset
+                </strong>
+                <span className="player-reset-note">
+                  Last saved before the reset:{" "}
+                  {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
+                </span>
+              </>
+            ) : (
+              <strong className="player-trophy-count">
+                <TrophyMark />
                 {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
-              </span>
-            </>
-          ) : (
-            <strong className="player-trophy-count">
-              <TrophyMark />
-              {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
-            </strong>
-          )}
+              </strong>
+            )}
+          </div>
+          <PlayerActions tag={trackedPlayer.tag}>
+            <refreshFetcher.Form
+              className="player-refresh-form"
+              action={refreshActionPath}
+              method="post"
+            >
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={data.noJsIdempotencyKey}
+                readOnly
+              />
+              <button
+                type="submit"
+                className="button secondary"
+                disabled={refreshFetcher.state !== "idle" || refreshing}
+                name="refresh"
+                value="public"
+                onClick={(event) => {
+                  event.preventDefault();
+                  startRefresh(
+                    { idempotencyKey: data.noJsIdempotencyKey },
+                    refreshActionPath,
+                  );
+                }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+                </svg>
+                <span>
+                  {refreshFetcher.state === "submitting" || refreshing
+                    ? "Refreshing…"
+                    : "Refresh"}
+                </span>
+              </button>
+            </refreshFetcher.Form>
+          </PlayerActions>
         </div>
         {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
           <TrophyLine
@@ -753,43 +794,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             Daily Legend log <span aria-hidden="true">↓</span>
           </a>
         ) : null}
-        <PlayerActions tag={trackedPlayer.tag}>
-          <refreshFetcher.Form
-            className="player-refresh-form"
-            action={refreshActionPath}
-            method="post"
-          >
-            <input
-              type="hidden"
-              name="idempotencyKey"
-              value={data.noJsIdempotencyKey}
-              readOnly
-            />
-            <button
-              type="submit"
-              className="button secondary"
-              disabled={refreshFetcher.state !== "idle" || refreshing}
-              name="refresh"
-              value="public"
-              onClick={(event) => {
-                event.preventDefault();
-                startRefresh(
-                  { idempotencyKey: data.noJsIdempotencyKey },
-                  refreshActionPath,
-                );
-              }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
-              </svg>
-              <span>
-                {refreshFetcher.state === "submitting" || refreshing
-                  ? "Refreshing…"
-                  : "Refresh"}
-              </span>
-            </button>
-          </refreshFetcher.Form>
-        </PlayerActions>
         {visibleStatus ? (
           <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
         ) : null}
