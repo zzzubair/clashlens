@@ -17,6 +17,8 @@ export interface AttackAlerts {
   players: AttackAlertPlayer[];
   /** The newest alert Discord did not deliver, while none has been delivered since. */
   undelivered: { tag: string; reason: UndeliveredReason; at: string } | null;
+  /** The account's switch for every attack detail in the phone notification. */
+  fullNotice: boolean;
 }
 
 const REASONS: readonly UndeliveredReason[] = [
@@ -33,7 +35,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The private API's attack alert settings, or null when malformed. */
 export function mapAttackAlerts(value: unknown): AttackAlerts | null {
-  if (!isRecord(value) || !Array.isArray(value.players)) return null;
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.players) ||
+    typeof value.full_notice !== "boolean"
+  ) {
+    return null;
+  }
+  const fullNotice = value.full_notice;
   const players: AttackAlertPlayer[] = [];
   for (const player of value.players) {
     if (
@@ -53,7 +62,7 @@ export function mapAttackAlerts(value: unknown): AttackAlerts | null {
     });
   }
   const missed = value.undelivered;
-  if (missed === null) return { players, undelivered: null };
+  if (missed === null) return { players, undelivered: null, fullNotice };
   if (
     !isRecord(missed) ||
     typeof missed.tag !== "string" ||
@@ -69,5 +78,6 @@ export function mapAttackAlerts(value: unknown): AttackAlerts | null {
       reason: missed.reason as UndeliveredReason,
       at: missed.at,
     },
+    fullNotice,
   };
 }

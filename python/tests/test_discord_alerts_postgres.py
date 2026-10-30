@@ -107,6 +107,26 @@ def _summary_switch(database: ApiDatabase, account_id: int, tag: str, on: bool) 
     ).status_code
 
 
+def _full_notice_switch(database: ApiDatabase, account_id: int, on: bool) -> int:
+    """Turn the account's full details in the notification on or off as the
+    website does, through the private API."""
+    return api_discord_alerts.set_full_notice(
+        database,
+        RequestBinding(
+            request_id=str(uuid4()),
+            caller="typescript-website",
+            provider="discord",
+            provider_subject=DISCORD_ID,
+            account_id=account_id,
+            operation="account.update",
+            method="POST",
+            request_target="/v1/account/discord-alerts",
+            identity={"full_notice": on},
+        ),
+        on=on,
+    ).status_code
+
+
 def _defend(connection_info: str, player_id: int, *, saved_ago: timedelta = timedelta(0)) -> None:
     """A defense of the player by a new untracked opponent, saved `saved_ago` ago."""
     with psycopg.connect(connection_info, autocommit=True) as connection:
@@ -340,6 +360,35 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     assert cleared["undelivered"] is None
     assert discord.sent[0][1].notice == "🛡️ \u2068Unnamed\u2069  −16 🏆"
     assert "# ★☆☆  ·  33%" in discord.sent[0][1].text.splitlines()
+
+
+def test_full_details_switch_puts_the_attack_in_the_notification_until_turned_off(
+    database_url: str,
+) -> None:
+    """Full details are off until the Clasher turns them on; then the next
+    alert's notification text names the attacker, stars and destruction and
+    their stats, and after turning them off the next alert's text is the one
+    short line again."""
+    with _alerts_on(database_url) as (connection_info, api, mine, player):
+        loop = AlertLoop(AlertStore(api, Store(api)), discord := FakeDiscord(), SITE,
+                         now=lambda: SEASON + timedelta(hours=3))
+        before = api_discord_alerts.get_attack_alerts(api, mine)["full_notice"]
+        assert _full_notice_switch(api, mine, True) == 200
+        after = api_discord_alerts.get_attack_alerts(api, mine)["full_notice"]
+        _defend(connection_info, player)
+        asyncio.run(loop.tick())
+        assert _full_notice_switch(api, mine, False) == 200
+        _defend(connection_info, player)
+        asyncio.run(loop.tick())
+
+    assert (before, after) == (False, True)
+    assert [reply.notice.splitlines() for _, reply in discord.sent] == [
+        [
+            "🛡️ \u2068Unnamed\u2069  −16 🏆  ·  ⚔️ \u2068Unnamed\u2069  ★☆☆  ·  33%",
+            "Not tracked by Clash Lens yet",
+        ],
+        ["🛡️ \u2068Unnamed\u2069  −16 🏆"],
+    ]
 
 
 def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(

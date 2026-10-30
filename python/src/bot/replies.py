@@ -97,7 +97,7 @@ class Reply:
     # and plain errors meant for them. Every other reply is a normal message
     # anyone in the conversation can see and forward.
     private: bool = False
-    # The one line a phone's notification shows. Discord's cards cannot carry
+    # The text a phone's notification shows. Discord's cards cannot carry
     # it, so a reply with one goes in Discord's older layout: this line, then
     # each card as a box, the last ending in `footer`, then the buttons.
     notice: str | None = None
@@ -610,7 +610,12 @@ def stats_reply(
 
 
 def attack_alert(
-    site: Site, alert: Mapping[str, Any], attacker: Mapping[str, Any], colour: int
+    site: Site,
+    alert: Mapping[str, Any],
+    attacker: Mapping[str, Any],
+    colour: int,
+    *,
+    full_notice: bool = False,
 ) -> Reply:
     """The DM sent when one of the person's players is attacked. Its first
     line, all a phone's notification shows, is the defending player, named
@@ -618,14 +623,19 @@ def attack_alert(
     is headed by the attacker; the stars and destruction come first and
     largest, then, under "Attacker stats", their trophies at the Reset, live
     rank and hit rate in the battle's Season, each known one by its icon,
-    then their clan, then links to the battle and alert settings."""
+    then their clan, then links to the battle and alert settings. With
+    `full_notice`, the account's switch for every detail in the notification,
+    the first line goes on with the attacker, stars and destruction, and a
+    second line has the attacker's stats and clan."""
     lost = alert["trophies_lost"]
     stars = "★" * alert["stars"] + "☆" * (3 - alert["stars"])
-    lines = [f"# {stars}  ·  {alert['destruction_percentage']}%", "-# Attacker stats"]
+    result = f"{stars}  ·  {alert['destruction_percentage']}%"
+    lines = [f"# {result}", "-# Attacker stats"]
     if attacker["hit_rate"] == "not tracked yet":
-        lines.append("Not tracked by Clash Lens yet")
+        stats = "Not tracked by Clash Lens yet"
+        lines.append(stats)
     else:
-        stats = [
+        known = [
             (icon, value)
             for icon, value in (
                 ("🏆", attacker["start_trophies"] and number(attacker["start_trophies"])),
@@ -634,18 +644,26 @@ def attack_alert(
             )
             if value
         ]
-        lines.append("   ".join(f"{icon} **{value}**" for icon, value in stats))
-    if attacker["clan"]:
-        lines.append(f"-# Clan {isolated(safe(attacker['clan']))}")
+        stats = "   ".join(f"{icon} {value}" for icon, value in known)
+        lines.append("   ".join(f"{icon} **{value}**" for icon, value in known))
+    clan = attacker["clan"] and isolated(safe(attacker["clan"]))
+    if clan:
+        lines.append(f"-# Clan {clan}")
     battle = site.battle(alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"])
+    notice = (
+        f"🛡️ {isolated(safe(alert['defender_name']))}  "
+        f"{f'−{number(lost)}' if lost else '0'} 🏆"
+    )
+    if full_notice:
+        notice = "\n".join(filter(None, [
+            f"{notice}  ·  ⚔️ {isolated(safe(alert['attacker_name']))}  {result}",
+            "  ·  ".join(filter(None, [stats, clan and f"Clan {clan}"])),
+        ]))
     return Reply(
         (Card(("\n".join(lines),), colour),),
         # The box's top line shows no markup, so the name is not escaped.
         title=isolated(" ".join((alert["attacker_name"] or "Unnamed").split())),
-        notice=(
-            f"🛡️ {isolated(safe(alert['defender_name']))}  "
-            f"{f'−{number(lost)}' if lost else '0'} 🏆"
-        ),
+        notice=notice,
         footer=f"[Open battle]({battle})  ·  [Alert settings]({site.url(DISCORD_ALERTS)})",
     )
 

@@ -5,7 +5,10 @@ Discord bot sends a confirmation and then the alerts, and logs each one; the
 website reads that log only to show a DM Discord would not deliver. The
 Legend day summary is off until turned on too; each player turned on has a
 discord_day_summary_on row, deleted when the player leaves the account, so
-moving a player away and back leaves it off.
+moving a player away and back leaves it off. One more switch, for the whole
+account, puts every detail of an attack alert into the line a phone's
+notification shows; it is off until turned on, and on while the account has a
+discord_alert_full_notice row.
 """
 
 from __future__ import annotations
@@ -49,6 +52,10 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
                 (account_id,),
             ).fetchall()
         }
+        full_notice = connection.execute(
+            "SELECT EXISTS (SELECT 1 FROM discord_alert_full_notice WHERE account_id = %s)",
+            (account_id,),
+        ).fetchone()[0]
         newest = connection.execute(
             """
             SELECT delivery.state, delivery.reason, delivery.finished_at,
@@ -79,6 +86,7 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
             for player in players
         ],
         "undelivered": undelivered,
+        "full_notice": bool(full_notice),
     }
 
 
@@ -166,5 +174,28 @@ def set_day_summary(
                         (binding.account_id, link[0]),
                     )
                 result = OperationResult(200, {"tag": normalized_tag, "summary_on": on})
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
+def set_full_notice(database: ApiDatabase, binding: RequestBinding, *, on: bool) -> OperationResult:
+    """Turn the account's full details in the notification on or off."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            if on:
+                connection.execute(
+                    "INSERT INTO discord_alert_full_notice (account_id) VALUES (%s)"
+                    " ON CONFLICT (account_id) DO NOTHING",
+                    (binding.account_id,),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM discord_alert_full_notice WHERE account_id = %s",
+                    (binding.account_id,),
+                )
+            result = OperationResult(200, {"full_notice": on})
             api_db._complete_request(connection, binding.request_id, result)
             return result

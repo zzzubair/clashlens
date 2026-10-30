@@ -68,6 +68,7 @@ const ALERTS = {
     { ...PLAYERS[1], on: false, summary_on: true },
   ],
   undelivered: null,
+  full_notice: false,
 };
 
 function post(fields: Record<string, string>): Request {
@@ -134,7 +135,8 @@ describe("Discord attack alerts settings", () => {
   it("shows one row per player with two switches that say where they are", async () => {
     const html = await renderPage();
     const rows = html.split("<li").slice(1);
-    expect(rows).toHaveLength(2);
+    // Two players, then the account's full details switch.
+    expect(rows).toHaveLength(3);
     const switchOf = (row: string, label: string) =>
       row.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`))?.[0] ?? "";
     // Wanderer: attack alerts on, summary off; Nightfall the other way round.
@@ -155,7 +157,10 @@ describe("Discord attack alerts settings", () => {
     expect(rows[0]).toMatch(
       /value="attack-alert"[\s\S]*?name="on" value="off"[\s\S]*?value="day-summary"[\s\S]*?name="on" value="on"/,
     );
-    expect(html.match(/role="switch"/g)).toHaveLength(4);
+    expect(switchOf(rows[2], "Full details in notifications")).toContain(
+      'aria-checked="false"',
+    );
+    expect(html.match(/role="switch"/g)).toHaveLength(5);
     // The state is said once, by the switch: no badges or sentences repeat it.
     for (const text of ["✓ On", ">Off<", "No alerts for", "Turn on", "Turn off"])
       expect(html).not.toContain(text);
@@ -175,7 +180,7 @@ describe("Discord attack alerts settings", () => {
   it("says Discord connected after connecting it from this page", async () => {
     const html = await renderPage("?saved=discord-connected");
     expect(html).toMatch(/role="status"[^>]*>Discord connected\.</);
-    expect(html.match(/role="switch"/g)).toHaveLength(4);
+    expect(html.match(/role="switch"/g)).toHaveLength(5);
   });
 
   it("names a player with no saved name by its tag, as Settings and the profile do", async () => {
@@ -183,6 +188,7 @@ describe("Discord attack alerts settings", () => {
       kind: "discord-attack-alerts",
       players: [{ tag: "#L82PYUC9J", name: null, on: false, summary_on: false }],
       undelivered: null,
+      full_notice: false,
     });
     const html = await renderPage();
     expect(html).not.toContain("Unnamed");
@@ -295,6 +301,35 @@ describe("Discord attack alerts settings", () => {
     );
   });
 
+  it("saves the account's full details switch without naming a player", async () => {
+    const response = await alertsAction({
+      request: post({ intent: "full-notice", on: "on" }),
+    } as never);
+    expect(mocks.requestJson).toHaveBeenCalledWith(
+      "/v1/account/discord-alerts",
+      "POST",
+      Buffer.from(JSON.stringify({ on: true, alert: "full_notice" })),
+      undefined,
+      KEY,
+      IDENTITY,
+    );
+    expect(response.headers.get("Location")).toBe("/account/discord-alerts?full=on");
+  });
+
+  it("shows full details on, with the attack in the example notification", async () => {
+    mocks.requestJson.mockResolvedValue({
+      kind: "discord-attack-alerts",
+      ...ALERTS,
+      full_notice: true,
+    });
+    const html = await renderPage("?full=on");
+    expect(html).toContain('role="status">Full details in notifications on.</p>');
+    expect(html).toMatch(
+      /<button[^>]*aria-checked="true"[^>]*aria-label="Full details in notifications"/,
+    );
+    expect(html).toContain("🛡️ Wanderer −24 🏆 · ⚔️ Drift ★★☆ · 87%<br/>🏆 5,312");
+  });
+
   it("refuses a switch that is neither on nor off", async () => {
     const response = await alertsAction({
       request: post({ intent: "attack-alert", tag: "#8QQ", on: "yes" }),
@@ -311,12 +346,15 @@ describe("Discord attack alerts settings", () => {
       mapAttackAlerts({
         players: [{ tag: "#2PP", name: null, on: true }],
         undelivered: null,
+        full_notice: false,
       }),
     ).toBe(null);
+    expect(mapAttackAlerts({ players: [], undelivered: null })).toBe(null);
     expect(
       mapAttackAlerts({
         players: [],
         undelivered: { tag: "#2PP", reason: "banned", at: "2026-10-12T06:00:00Z" },
+        full_notice: false,
       }),
     ).toBe(null);
     mocks.requestJson.mockResolvedValue({ kind: "discord-attack-alerts", players: 1 });

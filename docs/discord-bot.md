@@ -63,7 +63,12 @@ box's top line because a heading after any other line leaves a gap above it,
 and the stats use icons rather than Discord's columns because phones stack
 columns one under another. Each name in it is wrapped in Unicode
 isolation marks, so a name written right to left cannot move the numbers
-beside it. Messages about one of the
+beside it. A Clasher who wants the whole attack in the notification turns on
+"Full details in notifications" on the Discord alerts page, one switch for
+the account, off until turned on. The first line then goes on with the
+attacker, stars and destruction ("🛡️ Wanderer −24 🏆 · ⚔️ Drift ★★☆ · 87%"),
+and a second line has the attacker's stats and clan as the box shows them;
+the box is unchanged. Messages about one of the
 Clasher's own linked accounts (attack alerts, the alerts-on message, that
 account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account

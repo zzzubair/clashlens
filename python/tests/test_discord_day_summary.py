@@ -318,7 +318,8 @@ class _OneAttack:
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": RESET,
-                 "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0]}]
+                 "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0],
+                 "full_notice": False}]
 
     def attacker(self, *_read: object) -> dict:
         return {"clan": None, "rank": None, "start_trophies": None, "hit_rate": "Unavailable"}

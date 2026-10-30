@@ -14,13 +14,23 @@ const PAGE = "/account/discord-alerts";
 
 export const handle: BackHandle = { back: { to: "/account", label: "Your profile" } };
 
+type Kind = "attack" | "summary" | "full";
+
 /** The outcome of the last switch, its player and which switch it was,
- * shown once at the top of the page. */
+ * shown once at the top of the page. The full details switch names no player. */
 type Saved = {
   outcome: "on" | "off" | "failed";
   tag: string;
-  kind: "attack" | "summary";
+  kind: Kind;
 } | null;
+
+/** Each switch's form intent and its query parameter after saving. */
+const INTENTS = {
+  attack: "attack-alert",
+  summary: "day-summary",
+  full: "full-notice",
+} as const;
+const PARAMS = { attack: "alerts", summary: "summary", full: "full" } as const;
 
 export interface DiscordAlertsLoaderData {
   connected: boolean;
@@ -44,8 +54,12 @@ export async function loader({
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const params = new URL(request.url).searchParams;
-  const kind = params.has("summary") ? "summary" : "attack";
-  const outcome = params.get(kind === "summary" ? "summary" : "alerts");
+  const kind: Kind = params.has("summary")
+    ? "summary"
+    : params.has("full")
+      ? "full"
+      : "attack";
+  const outcome = params.get(PARAMS[kind]);
   const saved: Saved =
     outcome === "on" || outcome === "off" || outcome === "failed"
       ? { outcome, tag: params.get("tag") ?? "", kind }
@@ -86,8 +100,8 @@ export async function loader({
 
 /**
  * POST /account/discord-alerts — turn one player's attack alerts or Legend
- * day summary on or off, or start connecting Discord, which comes back to
- * this page.
+ * day summary on or off, or the account's full details in the notification,
+ * or start connecting Discord, which comes back to this page.
  */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") {
@@ -132,8 +146,10 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
     }
   }
   let on = form["on"];
-  const summary = form["intent"] === "day-summary";
-  if ((!summary && form["intent"] !== "attack-alert") || (on !== "on" && on !== "off")) {
+  const kind = (Object.keys(INTENTS) as Kind[]).find(
+    (one) => INTENTS[one] === form["intent"],
+  );
+  if (kind === undefined || (on !== "on" && on !== "off")) {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
   try {
@@ -143,15 +159,13 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       form["tag"] ?? "",
       on === "on",
       form["idempotencyKey"] ?? "",
-      summary ? "day_summary" : "attack",
+      kind === "full" ? "full_notice" : kind === "summary" ? "day_summary" : "attack",
     );
   } catch {
     on = "failed";
   }
-  const tag = encodeURIComponent(form["tag"] ?? "");
-  return redirect(`${PAGE}?${summary ? "summary" : "alerts"}=${on}&tag=${tag}`, {
-    headers: NO_STORE,
-  });
+  const tag = kind === "full" ? "" : `&tag=${encodeURIComponent(form["tag"] ?? "")}`;
+  return redirect(`${PAGE}?${PARAMS[kind]}=${on}${tag}`, { headers: NO_STORE });
 }
 
 export function headers() {
@@ -235,7 +249,11 @@ function ConnectDiscord({
   );
 }
 
-const SWITCH_NAMES = { attack: "Attack alerts", summary: "Daily summary" } as const;
+const SWITCH_NAMES = {
+  attack: "Attack alerts",
+  summary: "Daily summary",
+  full: "Full details in notifications",
+} as const;
 
 /** A player with no saved name goes by its tag, as on Settings and the profile. */
 function nameAndTag(player: { name: string | null; tag: string }): string {
@@ -266,7 +284,8 @@ function SavedNote({
   );
 }
 
-/** One row per verified player, each with its two switches. */
+/** One row per verified player, each with its two switches, then the
+ * account's full details switch and an example alert as it would arrive. */
 function AlertRows({
   alerts,
   idempotencyKey,
@@ -319,11 +338,13 @@ function AlertRows({
               <AlertSwitch
                 player={player}
                 kind="attack"
+                saved={player.on}
                 idempotencyKey={idempotencyKey}
               />
               <AlertSwitch
                 player={player}
                 kind="summary"
+                saved={player.summaryOn}
                 idempotencyKey={idempotencyKey}
               />
             </div>
@@ -335,12 +356,40 @@ function AlertRows({
         The daily summary arrives after each Reset&apos;s Daily board is published, with
         the day&apos;s trophies, attacks, defenses and place.
       </p>
+      <ul className="settings-list">
+        <li className="settings-row">
+          <div className="settings-label">
+            <span>{SWITCH_NAMES.full}</span>
+            <p className="form-help">
+              Your phone&apos;s notification shows the attacker, stars, destruction and
+              their stats, not just the trophies lost.
+            </p>
+          </div>
+          <div className="settings-control">
+            <AlertSwitch
+              player={null}
+              kind="full"
+              saved={alerts.fullNotice}
+              idempotencyKey={idempotencyKey}
+            />
+          </div>
+        </li>
+      </ul>
       <figure className="attack-alert-example">
         <figcaption className="form-help">
-          An attack alert looks like this. Your phone&apos;s notification shows its first
-          line:
+          An attack alert looks like this. Your phone&apos;s notification shows the text
+          above the box:
         </figcaption>
-        <strong>{`🛡️ ${example.name ?? example.tag} −24 🏆`}</strong>
+        <strong>
+          {`🛡️ ${example.name ?? example.tag} −24 🏆`}
+          {alerts.fullNotice ? (
+            <>
+              {" · ⚔️ Drift ★★☆ · 87%"}
+              <br />
+              {"🏆 5,312 🌍 #1,204 🎯 62%"}
+            </>
+          ) : null}
+        </strong>
         <div className="attack-alert-message">
           <strong>Drift</strong>
           <strong className="attack-alert-result">★★☆ · 87%</strong>
@@ -353,30 +402,33 @@ function AlertRows({
   );
 }
 
-/** One switch that saves as soon as it is flipped. While the save runs it
- * already shows where it is going, and no switch saves again until the page
- * has the next request key. */
+/** One switch that saves as soon as it is flipped, for a player or, with no
+ * player, for the account. While the save runs it already shows where it is
+ * going, and no switch saves again until the page has the next request key. */
 function AlertSwitch({
   player,
   kind,
+  saved,
   idempotencyKey,
 }: {
-  player: AttackAlertPlayer;
-  kind: "attack" | "summary";
+  player: AttackAlertPlayer | null;
+  kind: Kind;
+  saved: boolean;
   idempotencyKey: string;
 }) {
-  const intent = kind === "attack" ? "attack-alert" : "day-summary";
+  const intent = INTENTS[kind];
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
   const pending = navigation.formData;
-  const flipping = pending?.get("intent") === intent && pending.get("tag") === player.tag;
-  const saved = kind === "attack" ? player.on : player.summaryOn;
+  const flipping =
+    pending?.get("intent") === intent &&
+    (player === null || pending.get("tag") === player.tag);
   const on = flipping ? pending.get("on") === "on" : saved;
   return (
     <Form method="post" className="inline-form" preventScrollReset replace>
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-      <input type="hidden" name="tag" value={player.tag} />
+      {player ? <input type="hidden" name="tag" value={player.tag} /> : null}
       <input type="hidden" name="on" value={saved ? "off" : "on"} />
       <button
         type="submit"
@@ -386,7 +438,9 @@ function AlertSwitch({
         onClick={(event) => {
           if (busy) event.preventDefault();
         }}
-        aria-label={`${SWITCH_NAMES[kind]} for ${nameAndTag(player)}`}
+        aria-label={
+          player ? `${SWITCH_NAMES[kind]} for ${nameAndTag(player)}` : SWITCH_NAMES[kind]
+        }
         className="switch"
       >
         <span className="switch-track" aria-hidden="true" />

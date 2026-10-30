@@ -134,6 +134,35 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
     assert "view" not in message
 
 
+def test_full_details_put_the_attacker_and_their_stats_in_the_phone_notification() -> None:
+    """With the account's full details switch on, the message's own text goes
+    on with the attacker, stars and destruction, then a second line has the
+    attacker's stats and clan, without markup or pings; the box is unchanged.
+    Only what is known about the attacker is shown."""
+    alert = {"defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
+             "attacker_name": "@everyone  *Drift*", "stars": 3, "destruction_percentage": 100,
+             "trophies_lost": 40, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+             "battle_id": 41, "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC)}
+    attacker = {"clan": "@here _Night_", "rank": 3800, "start_trophies": 5239, "hit_rate": "57%"}
+    short = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0])
+    full = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0], full_notice=True)
+    unknown = attack_alert(
+        SITE, alert, {"clan": None, "rank": None, "start_trophies": None,
+                      "hit_rate": "not tracked yet"},
+        PLAYER_COLOURS[0], full_notice=True,
+    )
+
+    assert full.notice.splitlines() == [
+        (
+            "🛡️ \u2068Wanderer\u2069  −40 🏆  ·  ⚔️ \u2068@\u200beveryone \\*Drift\\*\u2069"
+            "  ★★★  ·  100%"
+        ),
+        "🏆 5,239   🌍 #3,800   🎯 57%  ·  Clan \u2068@\u200bhere \\_Night\\_\u2069",
+    ]
+    assert (full.cards, full.title, full.footer) == (short.cards, short.title, short.footer)
+    assert unknown.notice.splitlines()[1] == "Not tracked by Clash Lens yet"
+
+
 def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
     """An attacker off the leaderboard shows no rank, and one Clash Lens has
     not tracked shows that in place of their stats; neither shows a clan
@@ -332,14 +361,15 @@ class ResetRound(AlertStore):
     def confirmations_due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "player_id": 2, "tag": "#2PP",
                  "name": "Wanderer", "confirm_requested_at": self.reset,
-                 "colour": PLAYER_COLOURS[0]}]
+                 "colour": PLAYER_COLOURS[0], "full_notice": False}]
 
     def due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": self.reset,
-                 "ranked_day_start": self.reset, "colour": PLAYER_COLOURS[0]}]
+                 "ranked_day_start": self.reset, "colour": PLAYER_COLOURS[0],
+                 "full_notice": False}]
 
     def claim(self, delivery: object) -> int:
         return 3 if delivery.battle_id else 2  # type: ignore[attr-defined]

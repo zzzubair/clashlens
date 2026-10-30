@@ -180,14 +180,28 @@ class AlertStore:
     def due(self) -> list[dict[str, Any]]:
         """Alerts for battles saved within `WINDOW`, by the database's clock,
         the clock that stamps each battle as saved, each with the defending
-        player's colour."""
+        player's colour and whether its account wants every detail in the
+        notification."""
         with self.database.pool.connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM clashlens_discord_attack_alerts_due(clock_timestamp() - %s)",
-                (WINDOW,),
-            ).fetchall()
+            rows = [
+                dict(zip(_DUE_COLUMNS, row, strict=True))
+                for row in connection.execute(
+                    "SELECT * FROM clashlens_discord_attack_alerts_due(clock_timestamp() - %s)",
+                    (WINDOW,),
+                ).fetchall()
+            ]
+            if not rows:
+                return []
+            full_notice = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT account_id FROM discord_alert_full_notice WHERE account_id = ANY(%s)",
+                    (sorted({row["account_id"] for row in rows}),),
+                ).fetchall()
+            }
             return _coloured(
-                connection, [dict(zip(_DUE_COLUMNS, row, strict=True)) for row in rows],
+                connection,
+                [{**row, "full_notice": row["account_id"] in full_notice} for row in rows],
                 "defender_tag",
             )
 
@@ -365,7 +379,10 @@ class AlertLoop:
                     alert["discord_user_id"],
                     alert["battle_id"],
                     alert["saved_at"],
-                    replies.attack_alert(self.site, alert, attacker, alert["colour"]),
+                    replies.attack_alert(
+                        self.site, alert, attacker, alert["colour"],
+                        full_notice=alert["full_notice"],
+                    ),
                 )
             )
         return sent
