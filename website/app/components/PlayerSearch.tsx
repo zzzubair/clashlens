@@ -126,10 +126,13 @@ export function SearchSuggestions({
               >
                 <span className="search-suggestion-player">
                   <strong>
-                    <bdi>{user.displayName}</bdi>
+                    <bdi>
+                      <Matched text={user.displayName} query={search?.query} />
+                    </bdi>
                   </strong>
                   <small>
-                    @{user.username} · {user.linkedPlayerCount} linked{" "}
+                    @<Matched text={user.username} query={search?.query} /> ·{" "}
+                    {user.linkedPlayerCount} linked{" "}
                     {user.linkedPlayerCount === 1 ? "account" : "accounts"}
                   </small>
                 </span>
@@ -146,10 +149,12 @@ export function SearchSuggestions({
               >
                 <span className="search-suggestion-player">
                   <strong>
-                    <bdi>{result.name}</bdi>
+                    <bdi>
+                      <Matched text={result.name} query={search?.query} />
+                    </bdi>
                   </strong>
                   <small>
-                    {result.tag}
+                    <Matched text={result.tag} query={search?.query} />
                     {result.clan ? (
                       <>
                         {" · "}
@@ -188,6 +193,26 @@ export function SearchSuggestions({
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** `text` with the first run of the typed letters marked, ignoring case. */
+function Matched({ text, query }: { text: string; query: string | undefined }) {
+  const typed = query?.trim().replace(/^@/, "") ?? "";
+  const lower = text.toLocaleLowerCase();
+  // Some letters change length when lowered; leave those names unmarked.
+  const start =
+    typed === "" || lower.length !== text.length
+      ? -1
+      : lower.indexOf(typed.toLocaleLowerCase());
+  if (start < 0) return text;
+  const end = start + typed.length;
+  return (
+    <>
+      {text.slice(0, start)}
+      <mark className="search-match">{text.slice(start, end)}</mark>
+      {text.slice(end)}
+    </>
   );
 }
 
@@ -360,6 +385,7 @@ export function HeaderSearch() {
               className="header-search-close"
               onClick={() => collapse(true)}
             >
+              <kbd aria-hidden="true">Esc</kbd>
               Close
             </button>
           </form>

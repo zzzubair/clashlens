@@ -42,7 +42,7 @@
 .dash-label {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 
@@ -84,7 +84,7 @@
 .dash-estimate {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
 
@@ -111,11 +111,10 @@
 .dash-size-chip {
   display: inline-block;
   padding: 0 0.45rem;
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border: 1px solid var(--cl-action-border);
+  color: var(--cl-muted);
+  border: 1px solid var(--cl-card-line);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 800;
 }
 
@@ -139,12 +138,12 @@
   border: 0;
   border-radius: 8px;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 800;
   cursor: pointer;
 }
 
-/* The chosen option lifts out of the track, as on every other switch. */
+/* The chosen option is flat and bright in the track, as on every other switch. */
 /* A thumb gets 44px of height to hit, beyond the switch's small look. */
 @media (pointer: coarse) {
   .dash-switch button {
@@ -161,40 +160,40 @@
 .dash-switch button[aria-pressed="true"] {
   color: var(--cl-ink);
   background: var(--cl-surface);
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.12),
-    0 0 0 1px var(--cl-card-line);
+  box-shadow: 0 0 0 1px var(--cl-card-line);
 }
 :root[data-theme="dark"] .dash-switch button[aria-pressed="true"] {
   background: var(--cl-raised);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
-    0 1px 2px rgb(0 0 0 / 0.5);
 }
 
 /* ---------- Account tabs and the Customise divider ---------- */
 
-/* One segmented control: a sunken track, the chosen player lifted out of it
-   with an arrow to their player page. Link player sits at the end. */
+/* One segmented control: a sunken track, the chosen player raised in it
+   with a link to their player page. Link player is its own button after it. */
 .dash-accounts {
-  /* Holds the hidden Link player text, which would otherwise widen the page. */
+  /* Holds Link player's hidden name on a phone, which would otherwise widen the page. */
   position: relative;
   display: flex;
   align-items: stretch;
-  gap: 0.25rem;
+  gap: 0.375rem;
   justify-self: start;
   max-width: 100%;
   margin-bottom: 1rem;
+}
+
+.dash-account-track {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
   padding: 0.25rem;
   overflow-x: auto;
   background: var(--cl-panel);
   border: 1px solid var(--cl-card-line);
   border-radius: 14px;
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.1);
   scrollbar-width: none;
 }
 
-.dash-accounts::-webkit-scrollbar {
+.dash-account-track::-webkit-scrollbar {
   display: none;
 }
 
@@ -228,7 +227,7 @@
 
 .dash-account-line {
   color: var(--cl-muted);
-  font-size: 0.76rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -237,13 +236,10 @@
   color: var(--cl-ink);
 }
 
-/* The chosen player: lifted, bright, with its page arrow joined on. */
+/* The chosen player: flat and bright, with its page link joined on. */
 .dash-account-tab:has(> [aria-current="page"]) {
   background: var(--cl-surface);
-  box-shadow:
-    var(--cl-glass-shine),
-    0 1px 2px rgb(0 0 0 / 0.14),
-    0 0 0 1px var(--cl-card-line);
+  box-shadow: 0 0 0 1px var(--cl-card-line);
 }
 
 :root[data-theme="dark"] .dash-account-tab:has(> [aria-current="page"]) {
@@ -257,13 +253,18 @@
 
 .dash-account-page {
   display: none;
+  gap: 0.3rem;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
   margin: 0.25rem 0.25rem 0.25rem 0;
+  padding: 0 0.6rem;
   color: var(--cl-action-text);
-  border-radius: 8px;
+  border-left: 1px solid var(--cl-card-line);
+  border-radius: 0 8px 8px 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .dash-account[aria-current="page"] + .dash-account-page {
@@ -271,23 +272,27 @@
 }
 
 .dash-account-page .dash-icon {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 1rem;
+  height: 1rem;
 }
 
-.dash-account-page:is(:hover, :focus-visible) {
+.dash-account-page:is(:hover, :focus-visible),
+.dash-account-add:is(:hover, :focus-visible) {
   background: var(--cl-action-soft);
 }
 
 .dash-account-add {
-  flex-direction: row;
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 0.35rem;
-  margin-left: 0.15rem;
-  padding: 0 0.85rem;
-  color: var(--cl-muted);
+  padding: 0 0.9rem;
+  color: var(--cl-ink);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 12px;
   font-size: 0.9rem;
   font-weight: 650;
+  text-decoration: none;
 }
 
 .dash-account-add .dash-icon {
@@ -350,22 +355,37 @@
   flex-shrink: 0;
 }
 
-/* iPads and small laptops: 2 columns; Medium and Large take the row. */
+/* iPads and small laptops: 2 columns; Small takes half, Medium and Large the
+   row, so a Medium card keeps a laptop's width. Paired Small cards differ in
+   height; each keeps its own rather than stretching into an empty panel. */
 @media (min-width: 40.01rem) and (max-width: 64rem) {
   .dash-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
   }
 
   .dash-card {
     grid-column: span var(--span-2, 1);
     order: var(--order-2, 0);
   }
+
+  /* The arrow alone opens the player page, so the next player's tab fits;
+     its name stays for screen readers. */
+  .dash-account-page > span {
+    font-size: 0;
+  }
 }
 
 .dash-card h2 {
   min-width: 0;
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.4rem;
+}
+
+/* The card's own small ember mark; supporting cards stay flat otherwise. */
+.dash-card h2 > .dash-icon {
+  margin-right: 0.4rem;
+  color: var(--cl-action-text);
 }
 
 .dash-card-head {
@@ -394,7 +414,7 @@
 .dash-card-foot {
   margin: auto 0 0;
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
 }
 
 .dash-card-note {
@@ -483,10 +503,23 @@
   margin-bottom: 1rem;
   padding: 0.75rem 1rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-action-border);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-overlay-shadow);
+}
+
+/* A button's text and its longer ending are separate flex items, which drop
+   a leading space; keep it, so "Add" and "a card" never run together. */
+.dash-editbar-long {
+  white-space: pre;
+}
+
+/* "Use default" greys out once the layout is the default; nothing is pending. */
+.dash-editbar .button:disabled:not([aria-busy]) {
+  cursor: default;
+  opacity: 0.4;
+  box-shadow: none;
 }
 
 .dash-editbar-title {
@@ -522,7 +555,7 @@
 }
 
 @media (max-width: 40rem) {
-  .dash-grid-editing .dash-card > :not(.dash-edit-strip, .dash-card-settings) {
+  .dash-grid-editing .dash-card > :not(.dash-edit-strip) {
     display: none;
   }
 }
@@ -582,35 +615,15 @@
   opacity: 0.35;
 }
 
-/*
- * "⚙ Settings", filled apart from the outlined controls: a full row under the
- * strip, and on a wide screen the top-right corner of a Medium or Large card.
- */
+/* "⚙ Settings" sits in the strip beside the moves, never over the card. */
 .dash-card-settings {
-  gap: 0.4rem;
-  margin-top: 0.4rem;
-  min-height: 2.4rem;
-  padding: 0.3rem 0.8rem;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+  min-height: 2.2rem;
+  padding: 0.2rem 0.7rem;
   font: inherit;
-  font-weight: 800;
-}
-
-@media not (max-width: 40rem) {
-  :is(.dash-card-m, .dash-card-l) > .dash-card-settings {
-    position: absolute;
-    z-index: 1;
-    top: 3.3rem;
-    right: 1rem;
-    margin: 0;
-  }
-
-  /* There the button takes the corner the card's note uses. */
-  :is(.dash-card-m, .dash-card-l)
-    > .dash-card-settings
-    ~ .dash-card-head
-    .dash-card-meta {
-    visibility: hidden;
-  }
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .dash-dialog {
@@ -618,7 +631,7 @@
   max-height: min(100% - 2rem, 44rem);
   padding: 1rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
@@ -772,10 +785,10 @@
 
 .dash-welcome-badge {
   padding: 0 0.4rem;
-  color: var(--cl-surface);
+  color: var(--cl-solid);
   background: var(--cl-positive);
   border-radius: 6px;
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 800;
 }
 
@@ -788,9 +801,20 @@
     gap: 0.75rem;
   }
 
+  /* A phone card is tighter, so the first screen reaches the next card. */
   .dash-card {
     grid-column: 1 / -1;
     order: 0;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem 0.85rem;
+  }
+
+  .dash-card-meta {
+    font-size: 0.8125rem;
+  }
+
+  .dash-card h2 {
+    font-size: 1.3rem;
   }
 
   /* Every card is full width here, so its size says nothing and the room
@@ -900,32 +924,60 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* On a phone the row holds names only; the day card below shows the
-     chosen player's numbers. */
+  /* On a phone each tab holds the name and its net today, packed to one
+     finger's height; the day card below shows the chosen player's other numbers. */
   .dash-account {
     min-height: 2.75rem;
-    padding-inline: 0.75rem;
+    padding: 0 0.6rem;
   }
 
   .dash-account-line {
+    font-size: 0.8125rem;
+    line-height: 1.2;
+  }
+
+  .dash-account-stats {
     display: none;
   }
 
-  /* Customise and Link player keep only their icons; their names stay for
-     screen readers. */
-  .dash-customise {
-    width: 3.1rem;
-    min-height: 3.1rem;
+  /* One calm strip: the tabs, the chosen player's page as a quiet arrow, and
+     Link player as a + at its end; Customise is the gear beside it. Their
+     full names stay for screen readers. */
+  .dash-accounts {
+    gap: 0;
+    background: var(--cl-panel);
+    border: 1px solid var(--cl-card-line);
+    border-radius: 14px;
+  }
+
+  .dash-accounts,
+  .dash-divider {
+    margin-bottom: 0.6rem;
+    padding-top: 0;
+  }
+
+  .dash-account-track {
+    padding: 0.125rem;
+    background: none;
+    border: 0;
+  }
+
+  .dash-divider .dash-customise {
+    width: 3rem;
+    min-height: 3rem;
     padding: 0;
   }
 
-  .dash-account-add {
-    min-width: 2.75rem;
+  .dash-account-add,
+  .dash-account-page {
     justify-content: center;
+    min-width: 2.75rem;
     padding: 0;
+    border: 0;
   }
 
-  .dash-account-add-text,
+  .dash-account-add > span,
+  .dash-account-page > span,
   .dash-customise-text {
     position: absolute;
     width: 1px;
@@ -949,4 +1001,419 @@
   .dash-editbar > .button {
     flex-basis: calc(50% - 0.25rem);
   }
+}
+
+/* Last Reset, Now on its rank plate, and Next Reset: one sunken strip of
+   three cells, each holding one number. Under all three, the range the next
+   Reset can land in, drawn as a line with end caps and the projected place
+   marked on it, so the forecast reads as a spread, not a fact. */
+.legend-day-ranks {
+  display: grid;
+  grid-template: auto 1fr auto / repeat(3, minmax(0, 1fr));
+  margin: 0;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 10px;
+}
+
+.legend-day-ranks > div {
+  display: grid;
+  grid-row: 1 / 3;
+  align-content: start;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+}
+
+.legend-day-ranks > div + div,
+.legend-day-ranks > .legend-day-projected > *,
+.legend-day-range > dt {
+  border-left: 1px solid var(--cl-card-line);
+}
+
+.legend-day-ranks > :is(.legend-day-projected, .legend-day-range) {
+  display: contents;
+}
+
+.legend-day-ranks > :is(.legend-day-projected, .legend-day-range) > * {
+  min-width: 0;
+  padding-inline: 0.75rem;
+}
+
+.legend-day-range > dt {
+  grid-area: 1 / 3;
+  padding-block: 0.6rem 0.3rem;
+}
+
+.legend-day-projected > dd {
+  grid-area: 2 / 3;
+  padding-bottom: 0.6rem;
+}
+
+.legend-day-projected > dt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.legend-day-ranks dt {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.legend-day-ranks dd {
+  margin: 0;
+  font: 700 1.35rem/1.15 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.legend-day-ranks dd .rank-mark {
+  font-size: 1.2rem;
+}
+
+/* The range row: best place, the line, worst place, then "estimate". */
+.legend-day-range > dd {
+  display: flex;
+  grid-area: 3 / 1 / 4 / -1;
+  gap: 0.6rem;
+  align-items: center;
+  padding-block: 0.45rem;
+  color: var(--cl-muted);
+  border-top: 1px solid var(--cl-card-line);
+  font: 700 0.95rem/1.2 var(--cl-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-range-ends {
+  display: contents;
+}
+
+.legend-day-range-ends > :first-child {
+  order: 1;
+}
+
+.legend-day-range-ends > :last-child {
+  order: 3;
+}
+
+.legend-day-range-bar {
+  position: relative;
+  flex: 1;
+  order: 2;
+  height: 10px;
+  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+    no-repeat;
+  border-inline: 2px solid var(--cl-outline);
+}
+
+/* The projected place: an ember diamond, not a round handle to drag. */
+.legend-day-range-bar::after {
+  position: absolute;
+  top: 50%;
+  left: var(--at);
+  width: 0.6rem;
+  height: 0.6rem;
+  background: var(--cl-action);
+  border: 2px solid var(--cl-solid);
+  content: "";
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+/* Before any projection, the range is Next Reset's own number. */
+.legend-day-ranks:not(:has(.legend-day-projected)) .legend-day-range > dd {
+  flex-wrap: wrap;
+  grid-area: 2 / 3;
+  gap: 0 0.3rem;
+  align-content: start;
+  border-top: 0;
+  border-left: 1px solid var(--cl-card-line);
+}
+
+/* With the line drawn, the dash between the two places goes. */
+.legend-day-range-bar + .legend-day-range-ends > .legend-day-range-dash {
+  display: none;
+}
+
+.legend-day-range-dash {
+  color: var(--cl-faint);
+}
+
+/* Said on every screen, so a phone never shows the forecast as a fact. */
+.legend-day-est {
+  order: 4;
+  color: var(--cl-muted);
+  font: 600 0.8125rem/1.2 var(--cl-font);
+}
+
+/* With the line drawn, "Next Reset range" names it from the front. */
+.legend-day-est-label {
+  order: 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+/* The projected place wears the line's ember diamond, tying the two. */
+.legend-day-ranks:has(.legend-day-range-bar) .legend-day-projected > dd::before {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0 0.45rem 0.2rem 0.15rem;
+  background: var(--cl-action);
+  content: "";
+  transform: rotate(45deg);
+  vertical-align: middle;
+}
+
+/* A phone's rank strip packs tighter, so Bases you attacked shows sooner. */
+@container (max-width: 30rem) {
+  .legend-day-ranks > div,
+  .legend-day-range > dt {
+    gap: 0;
+    padding: 0.3rem 0.6rem;
+  }
+
+  .legend-day-ranks > :is(.legend-day-projected, .legend-day-range) > * {
+    padding-inline: 0.6rem;
+  }
+
+  .legend-day-projected > dd {
+    padding-bottom: 0.3rem;
+  }
+
+  .legend-day-ranks > div:not(.legend-day-range) dd {
+    font-size: 1.2rem;
+  }
+
+  .legend-day-range > dd {
+    padding-block: 0.2rem;
+  }
+
+  .dash-page .legend-day-ranks .legend-day-now .rank-mark {
+    font-size: 1.3rem;
+  }
+}
+
+/* Legend day: Now is the rank the card is about, so it carries the tint and
+   the biggest plate; the estimates beside it stay plain. */
+.dash-page .legend-day-ranks {
+  overflow: hidden;
+}
+
+.dash-page .legend-day-now {
+  background: var(--cl-action-soft);
+}
+
+.dash-page .legend-day-now dt {
+  color: var(--cl-action-text);
+}
+
+.dash-page .legend-day-now .rank-mark {
+  font-size: 1.5rem;
+}
+
+/* Bases you attacked: a phone shows the three hardest bases, then Show all. */
+.dash-page .opponents-more {
+  display: none;
+}
+
+@media (max-width: 40rem) {
+  .dash-page .opponents:not(.opponents-all) > .opponents-row:nth-child(n + 5) {
+    display: none;
+  }
+
+  .dash-page .opponents-more {
+    display: flex;
+    width: 100%;
+    min-height: 2.75rem;
+    margin-top: 0.25rem;
+  }
+}
+
+/* ---------- Goal ---------- */
+
+.goal-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.form-big {
+  font-family: var(--cl-font-heading);
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.goal-need {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.4rem;
+  margin: 0;
+}
+
+/* One headline: the verdict in its colour, then the gap in ink. */
+.goal-headline {
+  margin: 0;
+  font: 700 1.3rem/1.15 var(--cl-font-score);
+}
+
+.goal-headline > span {
+  color: var(--cl-ink);
+}
+
+.goal-pace-ahead,
+.goal-pace-on {
+  color: var(--cl-positive);
+}
+
+.goal-pace-behind {
+  color: var(--cl-negative);
+}
+
+.consistency-rows {
+  margin: 0;
+}
+
+.consistency-rows > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.12rem 0;
+  border-top: 1px solid var(--cl-border);
+  font-size: 0.88rem;
+}
+
+.consistency-rows dd {
+  margin: 0;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* Rest days sit under the number they change. */
+.goal-shield {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  line-height: 1.25;
+}
+
+/* Its title explains it on hover; the dotted line says there is one. */
+.goal-rest {
+  text-decoration: underline dotted var(--cl-muted);
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
+
+.goal-chart {
+  width: 100%;
+  height: auto;
+  margin-top: auto;
+}
+
+/* The dashed goal line takes the text colour, so it shows in light and dark. */
+.goal-line {
+  fill: none;
+  stroke: var(--cl-ink);
+  stroke-dasharray: 5 4;
+  stroke-width: 2;
+}
+
+.goal-you {
+  fill: none;
+  stroke: var(--cl-action);
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.goal-end {
+  fill: var(--cl-ink);
+  stroke: var(--cl-solid);
+  stroke-width: 1.5;
+}
+
+.goal-end-you {
+  fill: var(--cl-action);
+}
+
+/* Each line's end: its name, then its trophies in the line's colour. */
+.goal-label {
+  fill: var(--cl-ink);
+  font: 700 16px var(--cl-font-score);
+}
+
+.goal-grid {
+  stroke: var(--cl-card-line);
+}
+
+.goal-label-you {
+  fill: var(--cl-accent);
+}
+
+.goal-axis {
+  fill: var(--cl-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Goal: your pace on a bar from 0 to twice the need, green when on pace. */
+.dash-page .goal-race {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-page .goal-race b {
+  color: var(--cl-ink);
+  font: 700 1.05rem var(--cl-font-score);
+}
+
+.goal-race-track {
+  position: relative;
+  height: 8px;
+  background: var(--cl-outline);
+  border-radius: 4px;
+}
+
+.goal-race-track i {
+  display: block;
+  width: var(--pace);
+  height: 100%;
+  background: var(--cl-negative);
+  border-radius: 4px;
+}
+
+.goal-race-track[data-on] i {
+  background: var(--cl-positive);
+}
+
+.goal-race-track::after {
+  position: absolute;
+  inset: -5px auto -5px var(--need);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--cl-ink);
+  content: "";
+}
+
+.goal-race-scale {
+  display: flex;
+  justify-content: space-between;
+}
+
+.goal-race-scale > :last-child {
+  margin-left: auto;
 }

@@ -16,10 +16,12 @@ export function BattleStatistics({
   player,
   now,
   menu,
+  strip,
 }: {
   player: PlayerPage;
   now: number;
   menu?: React.ReactNode;
+  strip?: React.ReactNode;
 }) {
   const stats = battleStatistics(player, "season", now);
   const shape = seasonShape(player, now);
@@ -98,6 +100,7 @@ export function BattleStatistics({
       ]}
       attack={side(stats.attack)}
       defense={side(stats.defense)}
+      strip={strip}
     />
   );
 }

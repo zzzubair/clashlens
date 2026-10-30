@@ -747,6 +747,7 @@ export function Dashboard({
             }}
           >
             <DashboardIcon name="gear" />{" "}
+            {/* A phone shows only the gear; the button keeps its full name. */}
             <span className="dash-customise-text">Customise dashboard</span>
           </button>
         ) : null}
@@ -842,9 +843,18 @@ export function Dashboard({
                   ⠿
                 </button>
                 <span className="dash-edit-name">{CARDS[card].title}</span>
-                <span className="dash-size-chip">
-                  {CARD_SIZE_LABELS[CARDS[card].size]}
-                </span>
+                {CARDS[card].settings ? (
+                  <button
+                    type="button"
+                    className="button button-secondary dash-card-settings"
+                    aria-label={`${CARDS[card].title} settings`}
+                    disabled={saving}
+                    onClick={() => setEditingSettings(card)}
+                  >
+                    <DashboardIcon name="gear" />
+                    <span className="dash-card-settings-label">Settings</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="dash-icon-button"
@@ -882,18 +892,6 @@ export function Dashboard({
                   <DashboardIcon name="x" />
                 </button>
               </div>
-            ) : null}
-            {editing && CARDS[card].settings ? (
-              <button
-                type="button"
-                className="button button-secondary dash-card-settings"
-                aria-label={`${CARDS[card].title} settings`}
-                disabled={saving}
-                onClick={() => setEditingSettings(card)}
-              >
-                <DashboardIcon name="gear" />
-                <span className="dash-card-settings-label">Settings</span>
-              </button>
             ) : null}
             {cardBody(card, reads, editing, context)}
           </section>

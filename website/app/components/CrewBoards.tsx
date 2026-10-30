@@ -119,23 +119,33 @@ export function emptyBoardText(board: BoardKey, period: CrewPeriod, dayNumber: n
 
 /**
  * Ranked rows; each opens the player's page, whose Back returns here. The
- * signed-in clasher's own accounts are marked.
+ * signed-in clasher's own accounts are marked. Every board is one list with
+ * rank, name and number in the same columns; the top three wear their medal,
+ * and on Live every account below first says under its name how far it
+ * trails. Tags stay for screen readers, to tell same-named players apart.
+ * Averages and streaks add a slim bar under the name, scaled to the board's
+ * biggest number, so the spread shows at a glance.
  */
 export function BoardRows({
   rows,
   board,
   period,
   backLabel,
+  limit,
 }: {
   rows: BoardRow[];
   board: BoardKey;
   period: CrewPeriod;
   backLabel: string;
+  limit?: number;
 }) {
   const backState = useBackState(backLabel);
+  const shown = rows.slice(0, limit);
+  const lead = rows[0]?.kind === "trophies" ? rows[0].trophies : null;
+  const most = Math.max(0, ...rows.map(rowNumber));
   return (
     <ol className="crew-rows">
-      {rows.map((row, index) => (
+      {shown.map((row, index) => (
         <li key={row.tag} className={row.you ? "crew-row-you" : undefined}>
           <Link className="crew-row" to={canonicalPlayerPath(row.tag)} state={backState}>
             <span
@@ -149,7 +159,27 @@ export function BoardRows({
                 {row.name ?? row.tag}
                 {row.you ? <span className="crew-chip crew-chip-you">You</span> : null}
               </b>
-              <span>{row.tag}</span>
+              {row.name ? <span className="sr-only">{row.tag}</span> : null}
+              {row.kind !== "trophies" && most > 0 ? (
+                <span
+                  className="crew-bar"
+                  aria-hidden="true"
+                  style={
+                    {
+                      "--value": `${(rowNumber(row) / most) * 100}%`,
+                    } as React.CSSProperties
+                  }
+                />
+              ) : null}
+              {board === "live" &&
+              lead !== null &&
+              row.kind === "trophies" &&
+              lead > row.trophies ? (
+                <span className="crew-behind">
+                  {(lead - row.trophies).toLocaleString("en-US")} behind
+                  <span className="sr-only"> first</span>
+                </span>
+              ) : null}
             </span>
             <RowValue row={row} board={board} period={period} />
           </Link>
@@ -157,6 +187,13 @@ export function BoardRows({
       ))}
     </ol>
   );
+}
+
+/** The number a row is ranked on, without its sign: an average a day, or a streak. */
+function rowNumber(row: BoardRow): number {
+  if (row.kind === "trophies") return row.trophies;
+  if (row.kind === "streak") return row.best;
+  return row.total / row.days;
 }
 
 function RowValue({
@@ -186,9 +223,7 @@ function RowValue({
   }
   const battles = `${row.battles} ${board === "attackers" ? "attack" : "defense"}${row.battles === 1 ? "" : "s"}`;
   return (
-    <span
-      className={`crew-value ${board === "attackers" ? "score-positive" : "score-negative"}`}
-    >
+    <span className="crew-value">
       {formatAverage(row, board, period)}
       <small>
         {period === "today"

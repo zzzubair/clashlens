@@ -10,31 +10,34 @@
     var(--cl-brand-orange) 100%
   );
   --cl-brand-fill-hover: linear-gradient(180deg, #ffe27a 0%, #ffa040 100%);
-  /* Light theme: clean neutral white with the logo's orange and yellow as the
-     only colour. Dark is in appearance.css. */
-  --cl-ink: #0b0b0d;
-  --cl-paper: #f4f4f5;
-  --cl-surface: #ffffff;
-  --cl-panel: #f7f7f8;
-  --cl-raised: #ececef;
-  --cl-muted: #5b5b65;
-  --cl-faint: #66666f;
-  --cl-border: #e6e6e9;
-  --cl-outline: #d4d4d8;
-  --cl-accent: #b93c0a;
-  --cl-accent-contrast: #b93c0a;
+  /* Light theme, "ember day": warm paper under frosted white panels, with the
+     logo's orange and yellow as the only colour. Dark is in appearance.css. */
+  --cl-ink: #1c1510;
+  --cl-paper: #ede5dc;
+  /* Surfaces are see-through, so a panel takes the page's warm light. --cl-solid
+     is for anything that floats over other content (menus, sheets, dialogs). */
+  --cl-surface: rgb(255 255 255 / 0.66);
+  --cl-solid: #fffcf9;
+  --cl-panel: rgb(110 60 20 / 0.045);
+  --cl-raised: rgb(110 60 20 / 0.085);
+  --cl-muted: #5c5047;
+  --cl-faint: #655950;
+  --cl-border: rgb(90 50 20 / 0.11);
+  --cl-outline: rgb(90 50 20 / 0.2);
+  --cl-accent: #b4420c;
+  --cl-accent-contrast: #b4420c;
   --cl-action: #ff8a1f;
   --cl-action-hover: #ffa040;
   --cl-action-shade: #b3261e;
   --cl-on-action: #1a1206;
-  --cl-action-text: #b93c0a;
-  --cl-action-soft: #fff4e8;
-  --cl-action-border: #fbc189;
-  --cl-header-bg: rgb(255 255 255 / 0.74);
-  --cl-header-solid: #ffffff;
-  --cl-header-ink: #0b0b0d;
-  --cl-header-muted: #5b5b65;
-  --cl-header-soft: rgb(0 0 0 / 0.05);
+  --cl-action-text: #b4420c;
+  --cl-action-soft: rgb(255 138 31 / 0.11);
+  --cl-action-border: rgb(220 110 30 / 0.45);
+  --cl-header-bg: rgb(243 236 228 / 0.88);
+  --cl-header-solid: #f3ece4;
+  --cl-header-ink: #1c1510;
+  --cl-header-muted: #665a50;
+  --cl-header-soft: rgb(110 60 20 / 0.06);
   --cl-silver: #c9ccd2;
   --cl-bronze: #dca27a;
   --cl-medal-gold: #f2c641;
@@ -44,30 +47,33 @@
   /* Two and one star on a star split: greys, never a darkened gold. */
   --cl-star-2: #7a7a82;
   --cl-star-1: #b0b0b8;
-  /* Season heat map steps, worst (0) to best (4), and the text on them. */
-  --cl-heat-0: #e03131;
-  --cl-heat-1: #e29286;
-  --cl-heat-2: #a8a8ae;
-  --cl-heat-3: #8cc08c;
-  --cl-heat-4: #2fb344;
-  --cl-heat-text: #000;
+  /* Season heat map steps, worst (0) to best (4), and the text on them. The
+     middle step is warm sand, so an average day never reads as a missing one. */
+  --cl-heat-0: #c4362f;
+  --cl-heat-1: #ec917f;
+  --cl-heat-2: #e3d0b3;
+  --cl-heat-3: #8dc983;
+  --cl-heat-4: #237a3c;
+  --cl-heat-text: #1c1510;
   --cl-heat-0-text: #fff;
+  --cl-heat-4-text: #fff;
   --cl-sky: #b93c0a;
   --cl-sky-soft: #fff4e8;
   --cl-positive: #13773a;
   --cl-positive-soft: #e7f6ec;
   --cl-negative: #c81e1e;
   --cl-negative-soft: #fdebeb;
-  --cl-radius: 8px;
-  /* Panels: white cards with a hairline edge, a lit top and a soft drop. */
-  --cl-card-line: rgb(0 0 0 / 0.075);
-  --cl-card-radius: 14px;
-  --cl-card-drop: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 20px -16px rgb(0 0 0 / 0.14);
-  --cl-glass: rgb(255 255 255 / 0.74);
-  --cl-glass-strong: rgb(255 255 255 / 0.9);
-  --cl-glass-edge: rgb(0 0 0 / 0.08);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.9);
-  --cl-glow: rgb(255 138 31 / 0.1);
+  --cl-radius: 10px;
+  /* Panels: frosted glass with a hairline edge, a lit top and a soft warm drop. */
+  --cl-card-line: rgb(150 80 20 / 0.13);
+  --cl-card-radius: 18px;
+  --cl-card-drop: 0 1px 2px rgb(80 40 10 / 0.05), 0 18px 36px -24px rgb(80 40 10 / 0.28);
+  --cl-glass: rgb(255 252 248 / 0.72);
+  --cl-glass-strong: rgb(255 252 248 / 0.94);
+  --cl-glass-edge: rgb(90 50 20 / 0.1);
+  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  --cl-glow: rgb(255 150 50 / 0.2);
+  --cl-glow-2: rgb(255 196 90 / 0.18);
   --cl-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   /* Scoreboard numbers: trophies, ranks and results. --cl-font-heading is
      the older name for the same face. */
@@ -328,7 +334,7 @@ h3 {
   right: 0;
   left: 0;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   max-height: min(28rem, 60dvh);
   overflow-y: auto;
   border: 1px solid var(--cl-border);
@@ -418,7 +424,7 @@ h3 {
 .tag {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 400;
 }
 
@@ -483,7 +489,7 @@ h3 {
   color: var(--cl-muted);
   border-top: 1px solid var(--cl-border);
   font-family: var(--cl-font);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
 }
 
 .page-footer a {

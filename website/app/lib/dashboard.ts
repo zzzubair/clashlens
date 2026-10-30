@@ -130,8 +130,8 @@ export const CARD_IDS = Object.keys(CARDS) as CardId[];
  * The default layout, in order. Users on the default follow this list at
  * each release; cards not built yet are skipped until they are. On a wide
  * screen the tall heat map shares Rivals watch's row and the short Goal
- * shares Armies on defense's, so neither row leaves a hole; on an iPad the
- * heat map and Goal share a row.
+ * shares Armies on defense's, so neither row leaves a hole. An iPad keeps the
+ * same pairs, with the clock beside the Legend day.
  */
 export const DEFAULT_LAYOUT: readonly CardId[] = [
   "legend-day",
@@ -189,7 +189,8 @@ export function shownCards(layout: DashboardSettings["layout"]): CardId[] {
 
 /**
  * Where each card sits on a grid of `columns` columns: its span and its place
- * in reading order. Small takes 1, Medium 2 and Large the whole row. When the
+ * in reading order. Small takes 1, Medium 2 (the whole row on 2 columns, so
+ * an iPad gives a Medium card a laptop's width) and Large the whole row. When the
  * next card does not fit the room left in a row, the first later card that
  * does moves up into it, but never from past a Large card; with none, the
  * row's last card widens. So no row ever has a hole and every card in a row

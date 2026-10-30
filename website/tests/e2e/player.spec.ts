@@ -773,7 +773,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
       })
       .first();
     const day = page.locator(`[id="${await folded.getAttribute("id")}"]`);
-    await day.locator("summary").click();
+    await day.locator(":scope > summary.log-row").click();
     await day.getByRole("button", { name: "Show army" }).first().click();
     await expect(day.getByRole("button", { name: "Hide army" })).toBeVisible();
     await expect(day.locator(".battle-row[id]")).not.toHaveCount(0);

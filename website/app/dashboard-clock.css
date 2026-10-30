@@ -9,19 +9,13 @@
 /* Each battle's tap circle stays about 28px at this size. */
 .legend-clock-face {
   width: 100%;
-  max-width: 14rem;
+  max-width: 18rem;
   overflow: visible;
 }
 
 /* The countdown beside a small dial, and its switch, are for phones. The
    switch needs .button to outrank the shared button rule. */
 .legend-clock :is(.legend-clock-summary, .legend-clock-toggle.button) {
-  display: none;
-}
-
-/* The time zone shows in the card's foot, or after the Reset time when the
-   card spans a row. */
-.legend-clock-zone {
   display: none;
 }
 
@@ -34,11 +28,21 @@
    card spans a row. */
 .legend-clock-key {
   display: flex;
-  gap: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
   justify-content: center;
   margin: 0.5rem 0 0;
   color: var(--cl-ink);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
+}
+
+.legend-clock-key b {
+  font-weight: 600;
+}
+
+/* The Reset's time and zone name the arc only beside the dial. */
+.legend-clock-key-reset {
+  display: none;
 }
 
 .legend-clock-key > span {
@@ -52,10 +56,31 @@
   height: 1.25rem;
 }
 
-/* A phone starts with the clock as one strip, with no title: a small ring
-   (the arc and hand), the countdown and Show full clock, which opens the dial
-   whose battles can be tapped. */
-@media (max-width: 40rem) {
+/* Split in the two kinds' colours, as a bead with a count can be either. */
+.legend-clock-key-group i {
+  display: inline-grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  color: #1a1206;
+  background: linear-gradient(90deg, var(--cl-brand-orange) 50%, #7a8fa6 50%);
+  border-radius: 50%;
+  font: 700 0.8125rem/1 var(--cl-font);
+}
+
+.legend-clock-key-arc {
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 3px solid var(--cl-brand-orange);
+  border-color: var(--cl-brand-orange) var(--cl-brand-orange) transparent transparent;
+  border-radius: 50%;
+  transform: rotate(-45deg);
+}
+
+/* A phone or iPad starts with the clock as one strip, with no title: a small
+   ring (the arc and hand), the countdown and Show full clock, which opens the
+   dial whose battles can be tapped. */
+@media (max-width: 64rem) {
   .legend-clock .legend-clock-toggle.button {
     display: inline-flex;
     min-height: 2.75rem;
@@ -63,7 +88,7 @@
   }
 
   .dash-card:has(> .legend-clock:not([data-full])) {
-    padding-block: 0.75rem;
+    padding-block: 0.4rem;
   }
 
   .dash-card:has(> .legend-clock:not([data-full])) > .dash-card-head,
@@ -72,8 +97,10 @@
   .legend-clock:not([data-full])
     :is(
       .clock-hour,
-      .clock-tick,
-      .clock-reset-tab,
+      .clock-track,
+      .clock-reset-tick,
+      .clock-reset-pin,
+      .clock-reset-tag,
       .clock-reset-label,
       .clock-mark,
       .clock-center,
@@ -85,30 +112,30 @@
 
   .legend-clock:not([data-full]) {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
+    place-items: center start;
     column-gap: 0.9rem;
   }
 
-  /* The viewBox leaves room for hour labels; the margin takes it back, and
-     the ring's lines thicken to read at this size. */
+  /* The viewBox leaves room for the battle rings; the margin takes it back,
+     and the ring's lines thicken to read at this size. */
   .legend-clock:not([data-full]) .legend-clock-face {
-    width: 4.75rem;
-    margin: -0.65rem;
+    width: 4.4rem;
+    margin: -0.75rem;
   }
 
   .legend-clock:not([data-full]) :is(.clock-dial, .clock-hand) {
-    stroke-width: 9;
+    stroke-width: 11;
   }
 
   .legend-clock:not([data-full]) .clock-left {
-    stroke-width: 24;
+    stroke-width: 26;
   }
 
   .legend-clock:not([data-full]) .legend-clock-summary {
     display: block;
     margin: 0;
     color: var(--cl-muted);
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
     font-weight: 600;
   }
 
@@ -137,8 +164,9 @@
   }
 }
 
-/* Stretched across its row, the card sets the dial beside the countdown
-   instead of floating it in empty space, and stays as short as the dial. */
+/* Stretched across its row, the card sets today's counts as columns beside
+   the dial instead of floating it in empty space, and stays as short as the
+   dial. The countdown stays in the dial's middle. */
 .dash-card:has(> .legend-clock) {
   container-type: inline-size;
 }
@@ -147,42 +175,15 @@
   @container (min-width: 30rem) {
     .legend-clock {
       grid-template-columns: auto minmax(0, 1fr);
-      justify-items: start;
-      column-gap: 2.5rem;
-      padding-inline: 1rem;
+      column-gap: 2rem;
+      padding-inline: 0.5rem;
     }
 
     .legend-clock .legend-clock-face {
-      width: 13rem;
+      width: 17rem;
     }
 
-    .dash-card .legend-clock .legend-clock-summary {
-      display: block;
-      margin: 0;
-      color: var(--cl-muted);
-      font-size: 0.95rem;
-      font-weight: 600;
-    }
-
-    .legend-clock-summary b {
-      display: block;
-      color: var(--cl-ink);
-      font: 700 3.25rem/1 var(--cl-font-score);
-    }
-
-    .legend-clock :is(.clock-center, .clock-countdown, .clock-caption) {
-      display: none;
-    }
-
-    .legend-clock-summary {
-      align-self: end;
-    }
-
-    .legend-clock-zone {
-      display: inline;
-    }
-
-    /* The caption shows the zone; the foot stays for screen readers. */
+    /* The Reset column shows the zone; the foot stays for screen readers. */
     .legend-clock + .dash-card-foot {
       position: absolute;
       width: 1px;
@@ -192,19 +193,58 @@
       white-space: nowrap;
     }
 
-    .legend-clock .legend-clock-face {
-      grid-row: span 2;
+    .legend-clock-key {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+      gap: 1rem 0;
+      align-self: center;
+      width: 100%;
+      margin: 0;
+      color: var(--cl-muted);
     }
 
-    .legend-clock-key {
-      grid-column: 2;
-      align-self: start;
-      margin-top: 1.1rem;
-      font-size: 0.9rem;
+    .legend-clock-key > span {
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: flex-start;
+      padding-inline: 1.1rem;
+      border-left: 1px solid var(--cl-card-line);
+    }
+
+    .legend-clock-key b {
+      display: block;
+      margin-bottom: 0.15rem;
+      color: var(--cl-ink);
+      font: 700 2.25rem/1 var(--cl-font-score);
+    }
+
+    .legend-clock-key svg {
+      width: 1.6rem;
+      height: 1.6rem;
+    }
+
+    .legend-clock-key-arc {
+      width: 1.3rem;
+      height: 1.3rem;
+    }
+
+    .legend-clock-key-left {
+      display: none;
+    }
+
+    /* The key to a bead's count runs under the three columns. */
+    .legend-clock-key > .legend-clock-key-group {
+      grid-column: 1 / -1;
+      flex-direction: row;
+    }
+
+    .legend-clock-key-reset {
+      display: block;
     }
   }
 }
 
+/* One strong ring, the time left drawn on it in ember. */
 .clock-dial {
   fill: var(--cl-panel);
   stroke: var(--cl-ink);
@@ -215,36 +255,67 @@
   fill: none;
   stroke: var(--cl-brand-orange);
   stroke-linecap: round;
-  stroke-width: 10;
-  opacity: 0.9;
+  stroke-width: 9;
 }
 
-.clock-tick {
-  stroke: var(--cl-ink);
-  stroke-width: 2;
-}
-
+/* Shows at about 14px; a halo in the dial's colour keeps it clear of the hand. */
 .clock-hour {
   fill: var(--cl-muted);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--cl-panel);
+  stroke-width: 4;
 }
 
-/* An outlined tab: the orange fill is kept for the main action. */
-.clock-reset-tab {
-  fill: var(--cl-panel);
+.clock-reset-tick {
   stroke: var(--cl-brand-orange);
-  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-width: 5;
+}
+
+.clock-reset-pin,
+.clock-reset-tag {
+  fill: var(--cl-brand-orange);
 }
 
 .clock-reset-label {
-  fill: var(--cl-action-text);
-  font-size: 11px;
+  fill: #1a1206;
+  font-size: 15px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The two faint lanes the battles sit on, defenses inside, attacks outside;
+   each mark's bead in its kind's colour. */
+.clock-track {
+  fill: none;
+  stroke: var(--cl-card-line);
+  stroke-width: 1;
+}
+
+.clock-mark.clock-mark-defense {
+  --kind: #7a8fa6;
+}
+
+.clock-bead {
+  fill: var(--cl-solid);
+  stroke: var(--kind);
+  stroke-width: 2;
+}
+
+/* A shared bead is filled in its kind's colour behind the count. */
+g:has(> .clock-count-text) > .clock-bead {
+  fill: var(--kind);
+}
+
+.legend-clock-face text {
   text-anchor: middle;
+  pointer-events: none;
 }
 
 .clock-mark {
+  --kind: var(--cl-brand-orange);
   cursor: pointer;
   outline: none;
 }
@@ -276,15 +347,11 @@
   stroke-width: 1.6;
 }
 
-.clock-count {
-  fill: var(--cl-ink);
-}
-
 .clock-count-text {
-  fill: var(--cl-panel);
-  font-size: 10px;
-  font-weight: 800;
-  text-anchor: middle;
+  fill: #1a1206;
+  font-family: var(--cl-font);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .clock-hand {
@@ -294,8 +361,9 @@
   pointer-events: none;
 }
 
+/* Solid, so the hand stops at its edge instead of crossing the countdown. */
 .clock-center {
-  fill: var(--cl-surface);
+  fill: var(--cl-solid);
   stroke: var(--cl-ink);
   stroke-width: 2;
   pointer-events: none;
@@ -305,16 +373,12 @@
   fill: var(--cl-ink);
   font-family: var(--cl-font-heading);
   font-size: 22px;
-  text-anchor: middle;
-  pointer-events: none;
 }
 
 .clock-caption {
   fill: var(--cl-muted);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
-  text-anchor: middle;
-  pointer-events: none;
 }
 
 .clock-detail {

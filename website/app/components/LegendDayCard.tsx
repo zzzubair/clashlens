@@ -101,6 +101,7 @@ export function LegendDayCard({
     <div className="legend-day-card">
       {/* The tab above shows whose day this is; screen readers hear it here. */}
       <CardHead
+        icon="cal"
         title={
           <>
             {day?.dayNumber ? `Legend day ${day.dayNumber}` : "Legend day"}
@@ -112,7 +113,18 @@ export function LegendDayCard({
       <div className="legend-day-numbers">
         <span className="legend-day-score">
           <span className="sr-only">Trophies</span>
-          <TrophyMark />
+          {/* A Legend day means the account is in Legend League: its badge. */}
+          {day ? (
+            <img
+              className="legend-day-badge"
+              src="/images/legend-league.webp"
+              alt=""
+              width={151}
+              height={160}
+            />
+          ) : (
+            <TrophyMark />
+          )}
           <strong className="dash-big">
             {trophies === null ? "–" : trophies.toLocaleString("en-US")}
           </strong>
@@ -173,16 +185,36 @@ export function LegendDayCard({
         <div className="legend-day-range">
           <dt>Next Reset</dt>
           <dd>
+            {/* The projected place drawn on the range it always falls in. */}
+            {range && projected ? (
+              <span
+                className="legend-day-range-bar"
+                style={
+                  {
+                    "--at": `${(100 * (projected - range.best)) / Math.max(1, range.worst - range.best)}%`,
+                  } as React.CSSProperties
+                }
+                aria-hidden="true"
+              />
+            ) : null}
+            {/* The best and worst places sit at the range line's two ends. */}
             {range ? (
-              <>
-                {rankText(range.best)}
+              <span className="legend-day-range-ends">
+                <span>{rankText(range.best)}</span>
                 <span className="legend-day-range-dash">–</span>
-                {rankText(range.worst)}
-              </>
+                <span>{rankText(range.worst)}</span>
+              </span>
             ) : (
               "–"
             )}
-            <small className="legend-day-est"> estimate</small>
+            {/* Drawn first: the line is the range of Next Reset's place. */}
+            {range && projected ? (
+              <small className="legend-day-est legend-day-est-label">
+                <span aria-hidden="true">Next Reset </span>range
+              </small>
+            ) : (
+              <small className="legend-day-est"> estimate</small>
+            )}
           </dd>
         </div>
       </dl>

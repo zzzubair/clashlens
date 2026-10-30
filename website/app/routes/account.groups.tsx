@@ -385,10 +385,8 @@ export default function GroupsRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell">
       <section className="hero groups-hero" aria-labelledby="groups-title">
-        <div>
-          <h1 id="groups-title">Watchlists</h1>
-          <p className="lede">Private lists of up to 20 players, side by side.</p>
-        </div>
+        <h1 id="groups-title">Watchlists</h1>
+        <p className="lede">Private lists of up to 20 players, side by side.</p>
         {/* With lists to show, making one waits behind a button. */}
         {groups.length > 0 || loaderData.error ? (
           <details
@@ -466,6 +464,11 @@ function GroupCard({
   }, [add.state, add.data]);
   const editResult = actionData?.action === "add-player" ? undefined : actionData;
   const count = group.players.length;
+  const top = group.players.reduce<number | null>(
+    (best, player) =>
+      player.trophies === null ? best : Math.max(best ?? 0, player.trophies),
+    null,
+  );
   // Opened by its link without JavaScript, or kept open after that panel's form result.
   const [searchParams] = useSearchParams();
   const [panel, setPanel] = useState<Panel | null>(() =>
@@ -494,16 +497,41 @@ function GroupCard({
   return (
     <li id={`group-${id}`} className="group-card">
       <div className="group-card-head">
-        <h3>{group.name}</h3>
-        <Link className="button button-primary" to={`/account/watchlists/${id}`}>
-          Compare players
-        </Link>
-        <a className="button button-secondary" {...toggle("add")}>
+        <div className="group-card-title">
+          <h3>{group.name}</h3>
+          {count > 0 ? (
+            <p className="group-card-meta">
+              {count === 1 ? "1 player" : `${count} players`}
+              {top === null ? null : (
+                <span className="group-card-top"> · top {top.toLocaleString("en")}</span>
+              )}
+            </p>
+          ) : null}
+        </div>
+        {/* Adding and editing are the card's quiet extras, each a small
+            word-and-icon button. */}
+        <a className="group-text-button" {...toggle("add")}>
+          <LineIcon d="M12 5v14M5 12h14" />
           Add player
         </a>
-        <a className="button button-secondary" {...toggle("edit")}>
+        <a
+          className="group-text-button"
+          {...toggle("edit")}
+          title="Rename, remove players or delete"
+        >
+          <LineIcon d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
           Edit
         </a>
+        {/* The whole card opens the comparison; this link stretches over it,
+            and its word and arrow are all that shows of it. */}
+        <Link
+          className="group-card-open"
+          to={`/account/watchlists/${id}`}
+          aria-label={`Compare players in ${group.name}`}
+        >
+          Compare
+          <LineIcon d="M5 12h14M13 6l6 6-6 6" />
+        </Link>
       </div>
 
       {/* Both panels stay mounted while closed, so their request state survives. */}
@@ -564,14 +592,20 @@ function GroupCard({
         <EditGroup group={group} loaderData={loaderData} actionData={editResult} />
       </div>
 
+      {/* Names the gap column once; each gap keeps its words for screen readers. */}
+      {panel !== "edit" && count > 1 && top !== null ? (
+        <p className="group-members-key" aria-hidden="true">
+          Behind #1
+        </p>
+      ) : null}
       {panel === "edit" ? null : count > 0 ? (
         <ul
           className="player-action-list group-members"
           aria-label={`Players in ${group.name}`}
         >
-          {group.players.map((player) => (
+          {byTrophies(group.players).map((player) => (
             <li key={player.tag}>
-              <MemberName player={player} />
+              <MemberName player={player} top={top} />
             </li>
           ))}
         </ul>
@@ -716,14 +750,61 @@ function EditGroup({
   );
 }
 
-function MemberName({ player }: { player: GroupPlayer }) {
+/**
+ * A card lists its players highest first, as the comparison does. The saved
+ * list has no order of its own (it comes back by tag), so this only changes
+ * how it reads.
+ */
+function byTrophies(players: GroupPlayer[]): GroupPlayer[] {
+  return [...players].sort(
+    (left, right) =>
+      (right.trophies ?? -1) - (left.trophies ?? -1) || left.tag.localeCompare(right.tag),
+  );
+}
+
+/** A small line icon in the text colour, for the card's buttons. */
+function LineIcon({ d }: { d: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+/**
+ * A member's name and trophies. In a card's list (given the list's top) each
+ * player below the leader also shows how far behind it they are.
+ */
+function MemberName({ player, top }: { player: GroupPlayer; top?: number | null }) {
   const backState = useBackState("Your watchlists");
+  const behind =
+    top == null ||
+    player.state !== "tracking" ||
+    player.seasonResetPending ||
+    player.trophies === null
+      ? 0
+      : top - player.trophies;
   return (
     <span className="player-action-name">
       <Link to={canonicalPlayerPath(player.tag)} state={backState}>
         {player.name ?? player.tag}
       </Link>
       {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
+      {behind > 0 ? (
+        <span className="group-member-gap">
+          −{behind.toLocaleString("en")}
+          <span className="sr-only"> behind the top</span>
+        </span>
+      ) : null}
       <span className="group-member-detail">
         {player.state === "tracking" ? (
           player.seasonResetPending ? (

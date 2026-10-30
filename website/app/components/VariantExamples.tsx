@@ -50,6 +50,8 @@ export function ArmyDetail({
       });
   }, [openVariant]);
   const titleId = `${row.key}-title`;
+  // As on the list, the most-used variant fills its bar.
+  const shareMax = Math.max(0, ...variants.map((variant) => variant.usageRate));
   return (
     <dialog
       ref={dialog}
@@ -81,7 +83,7 @@ export function ArmyDetail({
             <dd>{formatRate(starRate(row, 3))}</dd>
           </div>
           <div>
-            <dt>Avg. trophies</dt>
+            <dt>Trophies per attack</dt>
             <dd>{row.averageTrophies?.toFixed(1) ?? "–"}</dd>
           </div>
           <div>
@@ -129,7 +131,9 @@ export function ArmyDetail({
                   <span className="meter" aria-hidden="true">
                     <span
                       style={
-                        { "--value": formatRate(variant.usageRate) } as CSSProperties
+                        {
+                          "--value": `${shareMax && (variant.usageRate / shareMax) * 100}%`,
+                        } as CSSProperties
                       }
                     />
                   </span>

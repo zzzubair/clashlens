@@ -250,7 +250,7 @@ test("Already have one? stays with its Sign in on a phone and on a desktop", asy
     [1280, 800, false],
   ] as const) {
     await page.setViewportSize({ width, height });
-    for (const path of ["/", "/crews", "/account/watchlists", "/account"]) {
+    for (const path of ["/crews", "/account/watchlists", "/account"]) {
       await page.goto(path);
       await expectAccountButtonsRead(page, phone);
     }

@@ -1,37 +1,134 @@
-/* Private group comparison: one row per player, cards on a phone. */
-.compare-page {
-  width: min(100% - 2rem, 84rem);
+/* Private group comparison: one row per player, the same columns on every
+   width so players compare straight down a column. A row's chevron (or a tap
+   anywhere on it) opens its days and the figures behind each number. A phone
+   keeps each row to its name, trophies and days, so more players fit a screen. */
+.compare-title-row {
+  display: flex;
+  gap: 0.75rem 1.5rem;
+  align-items: start;
+  justify-content: space-between;
 }
-
-/* Back lines up with this wider page. */
-.page-back:has(+ .compare-page) {
-  width: min(100% - 2rem, 84rem);
+/* Edit players stays small, beside the title, on every width. */
+.compare-title-row > .button {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.9rem;
 }
 
 .compare-head h1 {
-  margin: 0.2rem 0 0.4rem;
+  margin: 0 0 0.35rem;
+}
+
+.compare-span {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.92rem;
+  font-weight: 550;
 }
 
 .compare-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem 1.25rem;
-  margin-top: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1.25rem;
+}
+
+/* Sort: one button naming the current order, opening every order below it. */
+.compare-sort {
+  position: relative;
+  margin-left: auto;
+}
+.compare-sort > summary {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.8rem 0.35rem 0.95rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 650;
+  white-space: nowrap;
+  list-style: none;
+  cursor: pointer;
+}
+.compare-sort > summary::-webkit-details-marker {
+  display: none;
+}
+.compare-sort > summary::after {
+  width: 0.4rem;
+  height: 0.4rem;
+  margin: -0.2rem 0 0 0.2rem;
+  border-right: 2px solid currentcolor;
+  border-bottom: 2px solid currentcolor;
+  transform: rotate(45deg);
+  content: "";
+}
+.compare-sort[open] > summary::after {
+  margin-top: 0.2rem;
+  transform: rotate(225deg);
+}
+.compare-sort-label {
+  color: var(--cl-muted);
+  font-weight: 550;
+}
+.compare-sort > nav {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  display: grid;
+  min-width: 12rem;
+  padding: 0.35rem;
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+}
+.compare-sort > nav a {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.75rem;
+  color: var(--cl-ink);
+  border-radius: calc(var(--cl-radius) - 0.2rem);
+  font-weight: 600;
+  text-decoration: none;
+}
+.compare-sort > nav a:hover {
+  background: var(--cl-raised);
+}
+.compare-sort > nav a[aria-current="page"] {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+}
+.compare-sort > nav a[aria-current="page"]::after {
+  margin-left: auto;
+  content: "✓";
 }
 
 .compare-notice {
   margin: 1rem 0 0;
   padding: 0.7rem 0.9rem;
-  border-left: 3px solid var(--cl-action);
   background: var(--cl-panel);
+  border-left: 3px solid var(--cl-action);
+  border-radius: 0 var(--cl-radius) var(--cl-radius) 0;
 }
 
 .compare-board {
   margin-top: 1.25rem;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  background: var(--cl-surface);
-  box-shadow: var(--cl-shadow);
+  overflow: hidden;
+}
+/* Only the page's hero is drawn glass; the board under it is a quiet fill
+   with no edge or glow (stronger than the shared panel rule). */
+:root .compare-page .compare-board {
+  border-color: transparent;
+  box-shadow: var(--cl-card-quiet, none);
 }
 
 .compare-table {
@@ -42,70 +139,182 @@
 }
 
 .compare-table thead th {
-  padding: 0.7rem 0.8rem;
+  padding: 0.8rem 1rem 0.55rem;
   color: var(--cl-muted);
-  background: var(--cl-panel);
-  font-size: 0.74rem;
-  font-weight: 700;
+  border-bottom: 1px solid var(--cl-border);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
   vertical-align: bottom;
+}
+/* Sortable headings read as plain labels until hovered; the sorted one is ember. */
+.compare-table thead th a {
+  display: inline-block;
+  padding-block: 0.25rem;
+  color: inherit;
+  text-decoration: none;
+}
+.compare-table thead th a:hover {
+  color: var(--cl-ink);
+}
+.compare-table thead th.compare-sorted,
+.compare-table thead th.compare-sorted a {
+  color: var(--cl-action-text);
+}
+.compare-table thead th.compare-sorted a::after {
+  margin-left: 0.25rem;
+  font-size: 0.7em;
+  content: "▼" / "";
+}
+
+/* The column's two headings, matching the row's total and bars below: the
+   total's sortable name at the left, and over the bars their own name, the
+   shared scale (a dashed swatch matching the dashed line at the top of every
+   player's bars, at the board's best day) and the dates at the bars' ends. */
+.trend-head {
+  display: grid;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  gap: 0.15rem 0.75rem;
+  align-items: baseline;
+  width: min(100%, 16rem);
+}
+.trend-head > :first-child {
+  grid-row: 1 / 4;
+  grid-column: 1;
+  align-self: end;
+  white-space: normal;
+}
+.trend-title {
+  grid-row: 1;
+  grid-column: 2;
+}
+.trend-scale {
+  display: inline-flex;
+  grid-row: 2;
+  grid-column: 2;
+  gap: 0.35rem;
+  align-items: baseline;
+  justify-self: start;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trend-scale-line {
+  align-self: center;
+  width: 0.9rem;
+  border-top: 1px dashed currentcolor;
+}
+.trend-dates {
+  display: flex;
+  grid-row: 3;
+  grid-column: 2;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--cl-faint);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* A phone's stand-in for the heading row; see the phone rules below. */
+.compare-key {
+  display: none;
 }
 
 .compare-table tbody :is(th, td) {
-  padding: 0.8rem;
+  padding: 0.85rem 1rem;
   border-top: 1px solid var(--cl-border);
   font-weight: 400;
-  vertical-align: top;
+  vertical-align: middle;
+}
+.compare-table tbody tr:first-child :is(th, td) {
+  border-top: 0;
+}
+.compare-table tbody td.compare-sorted {
+  background: color-mix(in srgb, var(--cl-action) 5%, transparent);
 }
 
+.compare-row {
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .compare-row:hover > :is(th, td) {
+    background: var(--cl-raised);
+  }
+}
+
+/* Your own rows: the ember edge and a light wash, so the board stays one table. */
 .compare-table tbody tr.compare-you {
-  background: var(--cl-raised);
+  background: color-mix(in srgb, var(--cl-action) 6%, transparent);
 }
-
 .compare-table tbody tr.compare-you th {
   box-shadow: inset 3px 0 0 var(--cl-action);
 }
 
+.compare-who {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  min-width: 0;
+}
 .compare-name {
-  display: block;
+  min-width: 0;
+  font-size: 1rem;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
-.compare-tag {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.4rem;
-  align-items: center;
-  color: var(--cl-muted);
-  font-family: var(--cl-font-mono);
-  font-size: 0.78rem;
-}
-
 .compare-badge {
-  padding: 0 0.35rem;
+  flex: none;
+  padding: 0.05rem 0.4rem;
   color: var(--cl-on-action);
-  background: var(--cl-action);
+  background: var(--cl-brand-fill);
+  border-radius: 4px;
   font-family: var(--cl-font);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.compare-badge-note,
-.compare-status {
-  font-family: var(--cl-font);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
+  font-weight: 750;
 }
 
 .compare-status {
   display: block;
   margin-top: 0.3rem;
   color: var(--cl-action-text);
+  font-size: 0.875rem;
+}
+
+/* What the You badge means, said once under the board. */
+.compare-foot {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: var(--cl-muted);
+  border-top: 1px solid var(--cl-border);
+  font-size: 0.875rem;
+  font-weight: 550;
 }
 
 .compare-number {
   display: block;
-  font-size: 1.1rem;
+  font-family: var(--cl-font-score);
+  font-size: 1.45rem;
   font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+.compare-trophies {
+  font-size: 1.65rem;
+}
+.compare-star {
+  margin-left: 0.08em;
+  color: var(--cl-star);
+  font-size: 0.8em;
+}
+/* Stars a defense gave up are the other side's, so they are not gold. */
+.compare-star-allowed {
+  color: var(--cl-faint);
 }
 
 .compare-up {
@@ -119,7 +328,14 @@
 .compare-sub {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
+  font-weight: 550;
+}
+
+/* Change sorts by trophies a day, so that line stands out when it leads. */
+.compare-sorted .compare-sub-day {
+  color: var(--cl-ink);
+  font-weight: 700;
 }
 
 .compare-stale {
@@ -130,25 +346,245 @@
 .compare-empty {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.85rem;
-  font-style: italic;
+  font-size: 0.875rem;
+}
+.compare-empty-dash {
+  display: none;
 }
 
-.star-split {
+/* Today's attacks and defenses as two small counts. */
+.compare-battles {
   display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0 0.45rem;
+  gap: 0.25rem;
+  align-items: center;
+  margin-top: 0.2rem;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.compare-battles svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  opacity: 0.8;
+}
+.compare-battles svg:not(:first-child) {
+  margin-left: 0.3rem;
 }
 
-.trend {
+/* The days' total and daily average beside their bars, so the bars can be
+   tall without making the row taller. */
+.compare-change {
   display: flex;
-  gap: 2px;
+  gap: 0.75rem;
+  align-items: center;
+}
+.compare-net {
+  display: flex;
+  flex: 0 0 5.25rem;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+/* Attack and defense lead with their success share (triples, held), so both
+   bars read "higher is better"; the average stars are the smaller figure. */
+.compare-rate {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 8rem;
+}
+.compare-rate-head {
+  display: flex;
+  gap: 0.3rem;
+  align-items: baseline;
+}
+.compare-rate-head .compare-number {
+  display: inline;
+}
+.compare-rate-word {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.compare-rate-average {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The row's chevron: a quiet round button that turns when its details open. */
+.compare-table tbody td.compare-toggle-cell {
+  width: 3rem;
+  padding: 0 0.5rem 0 0;
+  text-align: right;
+}
+.compare-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  color: var(--cl-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .compare-toggle:hover {
+    color: var(--cl-ink);
+    background: var(--cl-raised);
+  }
+}
+.compare-toggle svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms ease;
+}
+.compare-toggle[aria-expanded="true"] {
+  color: var(--cl-action-text);
+}
+.compare-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* A row's details: its days at full size beside the figures behind each number. */
+.compare-table tbody tr.compare-detail > td {
+  padding: 0.25rem 1rem 1.1rem;
+  border-top: 0;
+  cursor: auto;
+}
+.compare-table tbody tr.compare-you + tr.compare-detail {
+  background: color-mix(in srgb, var(--cl-action) 6%, transparent);
+}
+.compare-table tbody tr.compare-you + tr.compare-detail > td {
+  box-shadow: inset 3px 0 0 var(--cl-action);
+}
+.compare-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 28rem) minmax(0, 1fr);
+  gap: 1rem 2rem;
+  align-items: start;
+  padding: 1rem;
+  background: var(--cl-panel);
+  border-radius: var(--cl-radius);
+}
+.compare-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem 1.25rem;
+  margin: 0;
+}
+.compare-facts dt {
+  margin-bottom: 0.2rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.compare-facts dd {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 550;
+  line-height: 1.5;
+}
+.compare-facts dd .compare-number {
+  color: var(--cl-ink);
+  font-size: 1.2rem;
+}
+.compare-facts dd .compare-number.compare-up {
+  color: var(--cl-positive);
+}
+.compare-facts dd .compare-number.compare-down {
+  color: var(--cl-negative);
+}
+.compare-star-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.6rem;
+}
+
+/* Daily bars grow up (won) or down (lost) from one zero line, on one shared
+   scale, so the same height means the same trophies for every player. The
+   page sets --zero so the board's biggest gain and loss both fit. */
+.trend {
+  position: relative;
+  display: flex;
+  gap: 3px;
   align-items: stretch;
-  width: min(100%, 9rem);
-  height: 2.4rem;
-  margin-top: 0.4rem;
-  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 1px
-    no-repeat;
+  flex: 1 1 auto;
+  min-width: 4rem;
+  max-width: 10rem;
+  height: 5rem;
+}
+/* The shared scale's top: a faint dashed line at the board's biggest gain. */
+.trend::before {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  border-top: 1px dashed var(--cl-outline);
+  content: "";
+  pointer-events: none;
+}
+.trend:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--cl-action-text);
+  outline-offset: 4px;
+}
+/* The bar being read stays bright; the rest step back while one is read. */
+.trend:has(.trend-active) .trend-day:not(.trend-active) {
+  opacity: 0.45;
+}
+/* That bar's date and result, in a small label over the bars, centred on the
+   bar or held to the bars' edge at either end. */
+.trend-readout {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 0.3rem);
+  left: var(--at);
+  padding: 0.15rem 0.45rem;
+  color: var(--cl-muted);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 6px;
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.trend-readout[data-edge="start"] {
+  left: 0;
+  transform: none;
+}
+.trend-readout[data-edge="end"] {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+.trend-readout strong {
+  color: var(--cl-ink);
+  font-weight: 750;
+}
+.trend-readout strong.compare-up {
+  color: var(--cl-positive);
+}
+.trend-readout strong.compare-down {
+  color: var(--cl-negative);
+}
+
+.trend::after,
+.day-chart .trend-day::after {
+  position: absolute;
+  inset-inline: 0;
+  top: var(--zero, 50%);
+  height: 1px;
+  background: var(--cl-muted);
+  content: "";
+  pointer-events: none;
 }
 
 .trend-day {
@@ -160,25 +596,29 @@
 .trend-day .day-bar {
   position: absolute;
   inset-inline: 0;
+  width: auto;
+  border-radius: 2px;
 }
 
 .trend-up .day-bar {
-  bottom: 50%;
+  bottom: calc(100% - var(--zero, 50%));
+  border-radius: 2px 2px 0 0;
 }
 
 .trend-down .day-bar {
-  top: 50%;
+  top: calc(var(--zero, 50%) + 1px);
+  border-radius: 0 0 2px 2px;
 }
 
 .trend-flat .day-bar {
-  top: calc(50% - 1px);
+  top: calc(var(--zero, 50%) - 1px);
   height: 2px;
   background: var(--cl-muted);
 }
 
 .trend-day .day-missing,
 .trend-day .day-retired {
-  top: calc(50% - 3px);
+  top: calc(var(--zero, 50%) - 3px);
   height: 6px;
   background: transparent;
 }
@@ -196,24 +636,13 @@
   background: var(--cl-negative);
 }
 
-.trend-day .day-bar {
-  width: auto;
-}
-
 .day-correcting {
   opacity: 0.55;
   outline: 1px dashed currentcolor;
   outline-offset: -1px;
 }
 
-.day-partial {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--cl-muted) 0 2px,
-    transparent 2px 4px
-  );
-}
-
+.day-partial,
 .trend .day-partial {
   background: repeating-linear-gradient(
     135deg,
@@ -223,100 +652,533 @@
 }
 
 .day-missing {
-  border: 1px dotted var(--cl-muted);
   background: transparent;
+  border: 1px dotted var(--cl-muted);
 }
 
 .day-retired {
-  border: 1px solid var(--cl-muted);
   background: transparent;
+  border: 1px solid var(--cl-muted);
+}
+
+/* The open row's chart: each day's exact result above its bar, its date below.
+   The zero line runs through the middle of the bars' band. */
+.day-chart {
+  --value-row: 1.1rem;
+  --date-row: 1.1rem;
+  position: relative;
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* Each day draws its own piece of the zero line, joined across the gaps. */
+.day-chart .trend-day::after {
+  inset-inline: -2px;
+}
+.day-chart li {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-rows: var(--value-row) 5rem var(--date-row);
+  min-width: 0;
+  text-align: center;
+}
+.day-chart .trend-day {
+  min-width: 0;
+}
+.day-chart-value {
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.day-chart .trend-up .day-chart-value {
+  color: var(--cl-positive);
+}
+.day-chart .trend-down .day-chart-value {
+  color: var(--cl-negative);
+}
+.day-chart-date {
+  padding-top: 0.15rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .compare-empty-group {
   margin-top: 1.25rem;
 }
 
-/* On a phone each player becomes a card with one full-width row per section:
-   label and headline number on the left, details on the right. A shared
-   subgrid keeps both columns aligned down the whole card. */
-@media (max-width: 52rem) {
-  .compare-page {
-    width: min(100% - 2rem, 84rem);
-  }
-
-  .compare-board {
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-
-  .compare-table,
-  .compare-table tbody {
-    display: block;
-  }
-
-  .compare-table thead {
+/* Only a phone needs this: the desktop shows Today in its own column. */
+.compare-today-short {
+  display: none;
+}
+@media (min-width: 52.01rem) {
+  .compare-sort {
     display: none;
-  }
-
-  .compare-table tbody tr {
-    display: grid;
-    grid-template-columns: 6.75rem minmax(0, 1fr);
-    column-gap: 1rem;
-    margin-bottom: 0.9rem;
-    border: 1px solid var(--cl-border);
-    background: var(--cl-surface);
-    box-shadow: var(--cl-raise);
-  }
-
-  .compare-table tbody :is(th, td) {
-    min-width: 0;
-    padding: 0.6rem 0.75rem;
-    border-top: 1px solid var(--cl-border);
-  }
-
-  .compare-table tbody th {
-    grid-column: 1 / -1;
-    border-top: 0;
-    background: var(--cl-panel);
-  }
-
-  .compare-table tbody td {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-    align-content: start;
-    align-items: baseline;
-  }
-
-  .compare-table tbody td::before {
-    content: attr(data-label);
-    grid-row: 1;
-    grid-column: 1;
-    color: var(--cl-muted);
-    font-size: 0.7rem;
-    font-weight: 700;
-    line-height: 1rem;
-  }
-
-  /* The number sits under its label across the detail rows, so the detail
-     lines stack evenly however many there are or however they wrap. */
-  .compare-table tbody td > :not(.compare-sub, .trend) {
-    grid-row: 1 / span 4;
-    grid-column: 1;
-    align-self: start;
-    margin-top: 1.15rem;
-  }
-
-  .compare-table tbody td > :is(.compare-sub, .trend) {
-    grid-column: 2;
   }
 }
 
-/* Four sort buttons share a 320 px phone without pushing the page sideways. */
-@media (max-width: 34rem) {
-  .compare-controls .leaderboard-view-switch .button {
-    min-width: 0;
-    padding-inline: 0.3rem;
+@media (max-width: 64rem) {
+  .compare-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
+  .compare-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* On a phone each player is one short row: the name over trophies and today's
+   change on the left, the days' total over its bars on the right, then the
+   chevron. Sorting moves to the Sort menu; attack, defense, Today's battles
+   and the average stars wait in the details, except the attack or defense
+   the list is sorted by, which shows as a third line. */
+@media (max-width: 52rem) {
+  .compare-board {
+    margin-inline: -0.25rem;
+  }
+
+  .compare-table,
+  .compare-table :is(thead, tbody) {
+    display: block;
+  }
+  .compare-table :is(th, td).compare-extra,
+  .compare-wide,
+  .compare-net .compare-sub,
+  .compare-rate-average,
+  .compare-table tbody td .compare-stale {
+    display: none;
+  }
+  .compare-sorted .compare-net .compare-sub-day {
+    display: block;
+  }
+
+  .compare-table tbody tr.compare-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 8.25rem) 2.75rem;
+    gap: 0.1rem 0.6rem;
+    align-items: center;
+    padding: 0.55rem 0.25rem 0.6rem 0.9rem;
+    border-top: 1px solid var(--cl-border);
+  }
+  .compare-table tbody tr.compare-row:first-child {
+    border-top: 0;
+  }
+  .compare-table tbody tr.compare-row > :is(th, td) {
+    padding: 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    vertical-align: top;
+  }
+  @media (hover: hover) {
+    .compare-row:hover {
+      background: var(--cl-raised);
+    }
+  }
+  /* Your rows keep the ember side bar. */
+  .compare-table tbody tr.compare-you {
+    box-shadow: inset 3px 0 0 var(--cl-action);
+  }
+  .compare-table tbody tr.compare-you th {
+    box-shadow: none;
+  }
+
+  /* The name leads the row, with the You badge. */
+  .compare-table tbody tr.compare-row > th {
+    display: flex;
+    flex-wrap: wrap;
+    grid-row: 1;
+    grid-column: 1;
+    gap: 0.1rem 0.5rem;
+    align-items: center;
+    align-self: center;
+    min-width: 0;
+  }
+  .compare-who {
+    max-width: 100%;
+  }
+  .compare-name {
+    overflow: hidden;
+    font-size: 1.02rem;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+  .compare-empty-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .compare-status {
+    flex-basis: 100%;
+    margin: 0;
+  }
+  .compare-table tbody td.compare-toggle-cell {
+    grid-row: 1 / 3;
+    grid-column: 3;
+    justify-self: end;
+    width: auto;
+  }
+
+  /* Trophies with today's change under the name; the days' total over its
+     bars beside both. */
+  .compare-table tbody td[data-label="Trophies now"] {
+    display: flex;
+    flex-wrap: wrap;
+    grid-row: 2;
+    grid-column: 1;
+    gap: 0 0.55rem;
+    align-items: baseline;
+    min-width: 0;
+  }
+  .compare-change {
+    display: contents;
+  }
+  .compare-net {
+    flex: none;
+  }
+  .compare-table tbody td[data-label$="-day change"] {
+    display: flex;
+    flex-direction: column;
+    grid-row: 1 / 3;
+    grid-column: 2;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+  .compare-net .compare-number {
+    font-size: 1.05rem;
+  }
+  .compare-table tbody td .trend {
+    flex: none;
+    width: 100%;
+    max-width: none;
+    height: 3rem;
+    gap: 3px;
+  }
+
+  /* The attack or defense the list is sorted by: its share and bar, with the
+     average stars the order follows beside the share. */
+  .compare-table tbody td:is([data-label="Avg attack"], [data-label="Avg defense"]) {
+    grid-row: 3;
+    grid-column: 1 / 3;
+    min-width: 0;
+    padding-top: 0.3rem;
+  }
+  .compare-rate {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.25rem 0.5rem;
+    align-items: baseline;
+    max-width: 16rem;
+  }
+  .compare-rate .meter {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 3px;
+  }
+  .compare-rate-head .compare-number {
+    font-family: var(--cl-font);
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+  /* The tablet's heading row; a phone swaps it for the bars' key. */
+  .compare-table thead tr {
+    display: grid;
+    gap: 0 0.75rem;
+    padding: 0.45rem 0.4rem 0.4rem 0.9rem;
+    border-bottom: 1px solid var(--cl-border);
+  }
+  .compare-table thead th {
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    font-size: 0.8125rem;
+    text-overflow: ellipsis;
+  }
+  .compare-table
+    thead
+    th:is(
+      [data-col="player"],
+      [data-col="toggle"],
+      [data-col="attack"],
+      [data-col="defense"]
+    ) {
+    display: none;
+  }
+  .compare-table thead th a {
+    padding-block: 0;
+  }
+  .compare-table thead .compare-wide {
+    display: inline;
+  }
+  /* The bars' column is narrow here, so its name, scale and dates stack. */
+  .trend-head {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+  .trend-head > :is(:first-child, .trend-scale, .trend-dates) {
+    grid-row: auto;
+    grid-column: 1;
+  }
+  /* The total sits right over the bars here, so the heading names both; the
+     dashed line's "best day" says the bars are single days. */
+  .trend-title {
+    display: none;
+  }
+
+  /* Today's result, small beside trophies, in place of the Today column. */
+  .compare-today-short {
+    display: block;
+    color: var(--cl-muted);
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+  .compare-today-short > span {
+    font-weight: 750;
+  }
+
+  .compare-number,
+  .compare-trophies {
+    font-size: 1.3rem;
+  }
+  .compare-trophies-stale {
+    color: var(--cl-action-text);
+  }
+  .compare-star {
+    font-size: 0.85em;
+  }
+
+  .compare-empty-dash {
+    display: inline;
+  }
+
+  .compare-table tbody tr.compare-detail:not([hidden]),
+  .compare-table tbody tr.compare-detail > td {
+    display: block;
+  }
+  .compare-table tbody tr.compare-detail > td {
+    padding: 0 0.5rem 0.75rem;
+    text-align: left;
+  }
+  .compare-table tbody tr.compare-you + tr.compare-detail {
+    box-shadow: inset 3px 0 0 var(--cl-action);
+  }
+  .compare-table tbody tr.compare-you + tr.compare-detail > td {
+    box-shadow: none;
+  }
+  .compare-detail-grid {
+    padding: 0.8rem;
+  }
+  .compare-facts {
+    gap: 0.75rem 1rem;
+  }
+  .compare-facts dd {
+    font-size: 0.875rem;
+  }
+}
+
+/* A tablet has room for the name beside the figures, one line per player,
+   so the headings sit over every column again. */
+@media (min-width: 34rem) and (max-width: 52rem) {
+  .compare-table tbody tr.compare-row,
+  .compare-table thead tr {
+    grid-template-columns:
+      minmax(0, 1.3fr) minmax(0, 0.8fr) minmax(0, 1.5fr) repeat(2, minmax(0, 1fr))
+      2.75rem;
+  }
+  .compare-table tbody tr.compare-row {
+    align-items: center;
+    padding-block: 0.75rem;
+  }
+  .compare-table tbody tr.compare-row > :is(th, td),
+  .compare-table tbody tr.compare-row > td:is([data-label], .compare-toggle-cell),
+  .compare-table thead th[data-col] {
+    grid-row: 1;
+    grid-column: auto;
+  }
+  .compare-table
+    thead
+    th:is([data-col="player"], [data-col="attack"], [data-col="defense"]) {
+    display: block;
+  }
+  .compare-table tbody td[data-label$="-day change"] {
+    flex-direction: column;
+    gap: 0.25rem;
+    align-items: stretch;
+  }
+  .compare-table tbody td .trend {
+    max-width: 8rem;
+    height: 3.5rem;
+  }
+  .compare-table thead .trend-head {
+    width: min(100%, 8rem);
+  }
+  .compare-table tbody td:is([data-label="Avg attack"], [data-label="Avg defense"]) {
+    padding-top: 0;
+  }
+  .compare-rate {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A phone keeps the introduction short: a smaller title and the days and
+   sort controls on one line, so the first players show on the first screen. */
+@media (max-width: 34rem) {
+  .compare-head h1 {
+    margin-bottom: 0.15rem;
+  }
+  .compare-span {
+    font-size: 0.84rem;
+  }
+  .compare-controls {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    margin-top: 0.85rem;
+  }
+  .compare-controls .leaderboard-view-switch {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+  .compare-controls .leaderboard-view-switch .button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 0.4rem;
+    font-size: 0.85rem;
+  }
+  .compare-sort > summary {
+    padding-inline: 0.7rem 0.75rem;
+    font-size: 0.85rem;
+  }
+  /* "Sort:" becomes a small up-down mark; its word stays for screen readers. */
+  .compare-sort-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .compare-sort > summary::before {
+    color: var(--cl-muted);
+    content: "⇅" / "";
+  }
+  /* The Sort menu turns every row to the measure it sorts by; these tabs
+     pick another without reordering. */
+  .compare-sort > nav {
+    z-index: 6;
+  }
+  .compare-board {
+    margin-top: 0.85rem;
+  }
+  /* The Sort menu sorts here, so the heading row goes; its place takes tabs
+     picking the one measure every row shows beside its name, then, for the
+     daily bars, their scale and dates over the bars' column. */
+  .compare-table thead {
+    display: none;
+  }
+  .compare-key {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 8.25rem) 2.75rem;
+    gap: 0 0.6rem;
+    align-items: baseline;
+    padding: 0 0.25rem 0.45rem 0.9rem;
+    color: var(--cl-muted);
+    border-bottom: 1px solid var(--cl-border);
+    font-size: 0.8125rem;
+    font-weight: 550;
+  }
+  .compare-metric {
+    display: flex;
+    grid-column: 1 / -1;
+    gap: 1.1rem;
+    margin: 0 0 0.35rem -0.15rem;
+    border-bottom: 1px solid var(--cl-border);
+  }
+  .compare-key:not(:has(.trend-head)) {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+  .compare-key:not(:has(.trend-head)) .compare-metric {
+    margin-bottom: 0;
+  }
+  .compare-metric button {
+    min-height: 2.75rem;
+    margin-bottom: -1px;
+    padding: 0.2rem 0.15rem 0;
+    color: var(--cl-muted);
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+  .compare-metric button[aria-pressed="true"] {
+    color: var(--cl-action-text);
+    border-bottom-color: var(--cl-action);
+  }
+  .compare-metric button:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid var(--cl-action-text);
+    outline-offset: -2px;
+  }
+  .compare-key .trend-head {
+    grid-column: 2;
+    width: 100%;
+    white-space: nowrap;
+  }
+  /* Every row shows the picked measure where the days' total and bars sit. */
+  .compare-board:not([data-metric="attack"]) td[data-label="Avg attack"],
+  .compare-board:not([data-metric="defense"]) td[data-label="Avg defense"],
+  .compare-board:not([data-metric="change"]) td[data-label$="-day change"] {
+    display: none;
+  }
+  .compare-table tbody td:is([data-label="Avg attack"], [data-label="Avg defense"]) {
+    grid-row: 1 / 3;
+    grid-column: 2;
+    align-self: center;
+    padding-top: 0;
+  }
+  .compare-table tbody td .compare-rate {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+  }
+  .compare-table tbody td .compare-rate-head .compare-number {
+    font-family: var(--cl-font-score);
+    font-size: 1.3rem;
+  }
+  .compare-table tbody td .compare-rate .meter {
+    grid-row: auto;
+    height: 4px;
+  }
+  .compare-table tbody td .compare-rate-average {
+    display: block;
+    font-size: 0.8125rem;
+  }
+  /* Fourteen days are too narrow for their numbers on a phone, so they wrap
+     into two weeks of seven. */
+  .day-chart-dense {
+    flex-wrap: wrap;
+    row-gap: 0.6rem;
+  }
+  .day-chart-dense li {
+    flex: 0 0 calc((100% - 6 * 4px) / 7);
+  }
+}
+
+/* The average's star stays as large as its digits beside them. */
+.compare-rate-average .compare-star {
+  font-size: 1em;
 }

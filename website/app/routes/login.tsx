@@ -3,6 +3,8 @@ import { Link, useLoaderData } from "react-router";
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/login";
 import { ProviderMark } from "../components/ProviderMark";
+import { TeaserBoard } from "../components/DashboardTeaser";
+import "../front-page.css";
 
 export function meta() {
   return [{ title: "Sign in · Clash Lens" }];
@@ -55,43 +57,56 @@ export default function LoginRoute() {
     );
   }
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      <h1>Sign in</h1>
-      {data.crewName ? <p className="lede">To join {data.crewName}.</p> : null}
-      {data.loginAvailable ? (
-        <section className="form-panel sign-in-panel" aria-label="Sign in">
-          <p className="button-row">
-            <Link
-              className="button button-primary"
-              to={`/auth/google?returnPath=${back}`}
-            >
-              <ProviderMark provider="google" />
-              Sign in with Google
-            </Link>
-            <Link
-              className="button button-secondary"
-              to={`/auth/discord?returnPath=${back}`}
-            >
-              <ProviderMark provider="discord" />
-              Sign in with Discord
-            </Link>
-          </p>
-          <p className="account-buttons">
-            <span>New to Clash Lens?</span>
-            <Link className="button button-secondary" to={`/signup?returnPath=${back}`}>
-              Create account
-            </Link>
-          </p>
-          <p className="section-note">Clash Lens never asks for your email address.</p>
-        </section>
-      ) : (
-        <div className="empty-state" role="alert">
-          <h2>Sign-in is not available</h2>
-          <p>
-            Sign-in is not configured right now. Public player data remains available.
-          </p>
-        </div>
-      )}
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="page-shell narrow-shell sign-in-page"
+    >
+      <div className="sign-in-main">
+        <h1>Sign in</h1>
+        <p className="lede">
+          {data.crewName ? `To join ${data.crewName}, use` : "Use"} the Google or Discord
+          account you made Clash Lens with.
+        </p>
+        {data.loginAvailable ? (
+          <>
+            <section className="form-panel sign-in-panel" aria-label="Sign in">
+              <p className="button-row">
+                <Link
+                  className="button button-secondary sign-in-google"
+                  to={`/auth/google?returnPath=${back}`}
+                >
+                  <ProviderMark provider="google" />
+                  Sign in with Google
+                </Link>
+                <Link
+                  className="button button-secondary"
+                  to={`/auth/discord?returnPath=${back}`}
+                >
+                  <ProviderMark provider="discord" />
+                  Sign in with Discord
+                </Link>
+              </p>
+              <p className="sign-in-new">
+                New to Clash Lens?{" "}
+                <Link to={`/signup?returnPath=${back}`}>Create account</Link>
+              </p>
+            </section>
+            <p className="sign-in-privacy">
+              Clash Lens never asks for your email. <Link to="/privacy">Privacy</Link>
+            </p>
+          </>
+        ) : (
+          <div className="empty-state" role="alert">
+            <h2>Sign-in is not available</h2>
+            <p>
+              Sign-in is not configured right now. Public player data remains available.
+            </p>
+          </div>
+        )}
+      </div>
+      {/* A quiet picture of what signing in opens, where there is room. */}
+      {data.loginAvailable ? <TeaserBoard link={false} /> : null}
     </main>
   );
 }

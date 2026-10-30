@@ -45,11 +45,18 @@
   letter-spacing: 0;
   text-shadow: none;
 }
+/* Section and card titles too, a size up, since the face runs small; any
+   small note inside a title stays in the body face. */
 :root h2 {
-  font-size: clamp(1.15rem, 1.05rem + 0.45vw, 1.35rem);
+  font-family: var(--cl-font-heading);
+  font-size: clamp(1.35rem, 1.2rem + 0.5vw, 1.55rem);
   font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+  line-height: 1.15;
+  letter-spacing: 0.005em;
+}
+:root h2 small {
+  font-family: var(--cl-font);
+  letter-spacing: 0;
 }
 :root h3 {
   font-size: 1rem;
@@ -258,11 +265,20 @@
 /* ---------- Panels: one hairline edge, a lit top, one corner size ---------- */
 
 :root {
-  --cl-card-fill: var(--cl-surface);
+  /* Frosted paper, warmed at the top by the same ember light as the page. */
+  --cl-card-fill: linear-gradient(
+    180deg,
+    rgb(255 246 236 / 0.88) 0%,
+    rgb(255 255 255 / 0.62) 100%
+  );
 }
 :root[data-theme="dark"] {
-  /* Dark panels lift off the black: a shade lighter at the top, lit along the edge. */
-  --cl-card-fill: linear-gradient(180deg, #121215 0%, #0c0c0e 100%);
+  /* Smoked glass: a shade lighter at the top, lit along the edge. */
+  --cl-card-fill: linear-gradient(
+    180deg,
+    rgb(255 236 218 / 0.065) 0%,
+    rgb(255 236 218 / 0.03) 100%
+  );
 }
 :root
   :is(
@@ -277,18 +293,56 @@
     .compare-board,
     .linked-player-card,
     .dash-card,
-    .blog-list article,
     .analytics-empty,
     .search-results,
     .table-wrap,
     .search-dropdown,
-    .header-search-panel,
-    .home-page .search-controls
-  ) {
+    .header-search-panel
+  ),
+/* Apart from the list, so their heavier selectors don't weigh down every
+   panel's rule and beat the quieter one below. */
+:root .blog-list article,
+:root .home-page .search-controls {
   background: var(--cl-card-fill);
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
+}
+/* Panels below a page's hero are quieter: a smoked fill with no drawn edge
+   or deep drop, so only the hero reads as raised glass and the page stops
+   looking like a wall of identical boxes. On cream, a soft shadow keeps a
+   white panel apart from the page. */
+:root {
+  --cl-card-quiet: 0 1px 2px rgb(90 50 20 / 0.06), 0 10px 28px -16px rgb(90 50 20 / 0.16);
+}
+:root[data-theme="dark"] {
+  --cl-card-quiet: 0 18px 40px -32px rgb(0 0 0 / 0.9);
+}
+:root
+  :is(
+    .dash-card,
+    .group-card,
+    .linked-player-card,
+    .season-summary,
+    .compare-board,
+    .home-leaderboard,
+    .standings-board
+  ) {
+  border-color: transparent;
+  box-shadow: var(--cl-glass-shine), var(--cl-card-quiet);
+}
+/* On cream a white panel needs a faint warm edge to keep its shape. */
+:root:not([data-theme="dark"])
+  :is(
+    .dash-card,
+    .group-card,
+    .linked-player-card,
+    .season-summary,
+    .compare-board,
+    .home-leaderboard,
+    .standings-board
+  ) {
+  border-color: rgb(150 80 20 / 0.08);
 }
 /* Pop-ups are real frosted glass over the page. */
 :root :is(.search-dropdown, .header-search-panel) {
@@ -300,6 +354,81 @@
 :root :is(.home-leaderboard, .standings-board, .season-summary) {
   overflow: hidden;
 }
+/* ---------- Each page's one hero panel ----------
+   The panel a page is about rises above the rest: frosted glass over the
+   ember glow, an edge lit from the top left in the logo's orange, and a warm
+   halo under it. Every other panel stays quiet, so the eye lands here first. */
+:root {
+  --cl-hero-fill: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.92),
+    rgb(255 249 242 / 0.74)
+  );
+  --cl-hero-edge: linear-gradient(
+    135deg,
+    rgb(240 130 30 / 0.7),
+    rgb(240 130 30 / 0.16) 34%,
+    rgb(240 130 30 / 0.06) 68%,
+    rgb(250 180 80 / 0.45)
+  );
+  --cl-hero-halo: 0 26px 56px -30px rgb(200 90 10 / 0.42);
+}
+:root[data-theme="dark"] {
+  --cl-hero-fill: linear-gradient(
+    160deg,
+    rgb(255 160 70 / 0.11),
+    rgb(255 236 218 / 0.04) 42%,
+    rgb(255 236 218 / 0.025)
+  );
+  --cl-hero-edge: linear-gradient(
+    135deg,
+    rgb(255 170 70 / 0.6),
+    rgb(255 150 60 / 0.14) 34%,
+    rgb(255 150 60 / 0.04) 68%,
+    rgb(255 196 100 / 0.32)
+  );
+  --cl-hero-halo: 0 34px 80px -34px rgb(255 110 20 / 0.38);
+}
+:root
+  :is(
+    .dash-card[data-card="legend-day"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  ) {
+  position: relative;
+  background: var(--cl-hero-fill);
+  border: 1px solid transparent;
+  border-radius: calc(var(--cl-card-radius) + 4px);
+  box-shadow: var(--cl-glass-shine), var(--cl-hero-halo);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
+}
+/* The lit edge: a gradient ring, masked to the 1px border. */
+:root
+  :is(
+    .dash-card[data-card="legend-day"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  )::after {
+  position: absolute;
+  inset: -1px;
+  padding: 1px;
+  background: var(--cl-hero-edge);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.player-page .player-hero {
+  padding: 1.25rem 1.5rem 0.9rem;
+}
+
 /* A panel inside a panel is just a section of it. */
 :root
   :is(
@@ -337,7 +466,7 @@
   color: var(--cl-faint);
   background: transparent;
   border-bottom: 1px solid var(--cl-border);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -353,7 +482,7 @@
 }
 
 /* Rank plates: a slanted scoreboard tab, gold, silver and bronze on the podium. */
-:root :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
+:root :is(.rank-mark, .crew-rank) {
   display: inline-grid;
   flex: none;
   place-items: center;
@@ -372,18 +501,16 @@
   font-variant-numeric: tabular-nums;
   box-shadow: none;
 }
-/* On white, a plate below the podium needs a darker grey to show. */
-:root:not([data-theme="dark"])
-  :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
-  background: #e1e1e6;
+/* On white, a plate below the podium takes a warm sand to show. */
+:root:not([data-theme="dark"]) :is(.rank-mark, .crew-rank) {
+  background: #efe0cb;
 }
 :root
   :is(
     .leaderboard-row[data-podium-rank] .rank-mark,
     .log-rank[data-podium-rank] .rank-mark,
     .rank-mark[data-podium-rank],
-    .crew-rank[data-podium-rank],
-    [data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank
+    .crew-rank[data-podium-rank]
   ) {
   color: var(--cl-brand-night);
   border: 0;
@@ -394,8 +521,7 @@
     .leaderboard-row[data-podium-rank="1"] .rank-mark,
     .log-rank[data-podium-rank="1"] .rank-mark,
     .rank-mark[data-podium-rank="1"],
-    .crew-rank[data-podium-rank="1"],
-    [data-ranked] .analytics-row:nth-child(1) .analytics-rank
+    .crew-rank[data-podium-rank="1"]
   ) {
   background: linear-gradient(180deg, #ffe38a, #f2b51d);
 }
@@ -404,8 +530,7 @@
     .leaderboard-row[data-podium-rank="2"] .rank-mark,
     .log-rank[data-podium-rank="2"] .rank-mark,
     .rank-mark[data-podium-rank="2"],
-    .crew-rank[data-podium-rank="2"],
-    [data-ranked] .analytics-row:nth-child(2) .analytics-rank
+    .crew-rank[data-podium-rank="2"]
   ) {
   background: linear-gradient(180deg, #eef0f4, #b9bec8);
 }
@@ -414,8 +539,7 @@
     .leaderboard-row[data-podium-rank="3"] .rank-mark,
     .log-rank[data-podium-rank="3"] .rank-mark,
     .rank-mark[data-podium-rank="3"],
-    .crew-rank[data-podium-rank="3"],
-    [data-ranked] .analytics-row:nth-child(3) .analytics-rank
+    .crew-rank[data-podium-rank="3"]
   ) {
   background: linear-gradient(180deg, #f4c19c, #c9814f);
 }
@@ -565,7 +689,7 @@
 }
 :root .stat :is(dt, .stat-label) {
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 550;
 }
 :root .stat :is(dd, .stat-value) {

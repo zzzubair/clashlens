@@ -48,7 +48,7 @@
   padding: 0.35rem;
   list-style: none;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-radius);
   box-shadow: var(--cl-shadow);

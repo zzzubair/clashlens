@@ -17,6 +17,7 @@ import {
 
 import { UnitArt } from "../components/ArmyPortraits";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { TrophyMark } from "../components/LeaderboardShared";
 import { LocalTimestamp } from "../components/Provenance";
 import { ArmyDetail } from "../components/VariantExamples";
 import {
@@ -354,7 +355,7 @@ const sortColumns = {
   "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
   "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
   "average-trophies": {
-    label: "Avg. trophies",
+    label: "Trophies per attack",
     value: (row: ArmyRow) => row.averageTrophies ?? 0,
   },
   "average-stars": {
@@ -369,7 +370,7 @@ const sortColumns = {
 } as const;
 type SortColumn = keyof typeof sortColumns;
 type TableSort = { column: SortColumn; direction: "ascending" | "descending" };
-// The phone's sort chips, most asked-for first.
+// The phone's Sort menu, most asked-for first.
 const menuOrder: SortColumn[] = [
   "usage-rate",
   "three-star-rate",
@@ -377,6 +378,14 @@ const menuOrder: SortColumn[] = [
   "usage-count",
   "name",
   "quantity",
+  "two-star-rate",
+  "one-star-rate",
+  "average-stars",
+  "average-destruction",
+];
+// Armies lead with Usage, 3-star, Trophies per attack and Battles; these wait behind
+// More columns, except the one the table is sorted by.
+const extraColumns: SortColumn[] = [
   "two-star-rate",
   "one-star-rate",
   "average-stars",
@@ -466,22 +475,51 @@ function namedVariantCount(row: ArmyRow) {
   return row.variants?.filter((variant) => variant.variantId !== 0).length ?? 0;
 }
 
-/** A variant under its army's name, without repeating it: "Revenge" for Revenge Hydra. */
-function variantShort(army: string, variant: string) {
-  return variant.endsWith(` ${army}`) ? variant.slice(0, -army.length - 1) : variant;
+/** The usage bars' full track: the top share rounded up to a clean number,
+ * such as 25% for 21.4%, so every row reads on one stated scale. */
+function usageScaleFor(top: number) {
+  const step = top <= 0.1 ? 0.01 : top <= 0.5 ? 0.05 : 0.1;
+  return Math.min(1, Math.ceil(top / step - 1e-9) * step);
+}
+
+// Each bar's scale, under its heading: 0 where the bar starts, its full value
+// where the track ends. Usage and 3-star differ, so neither bar is read
+// against the other.
+function BarScale({ end }: { end: number }) {
+  return (
+    <span className="analytics-scale" aria-hidden="true">
+      <span>0</span>
+      <span>{Math.round(end * 100)}%</span>
+    </span>
+  );
+}
+
+// The mark on every 3-star bar, named once beside its heading, with what
+// the rate's colour means. Screen readers hear both in the footnote.
+function AverageKey({ average }: { average: number }) {
+  return (
+    <span className="analytics-average-key" aria-hidden="true">
+      avg {formatRate(average)}
+      <span className="analytics-colour-key">
+        <span data-compared="above">above</span> ·{" "}
+        <span data-compared="below">below</span>
+      </span>
+    </span>
+  );
 }
 
 function ResultCell({
   row,
   column,
   sorted,
-  topSorted,
+  threeStarAverage,
+  usageScale,
 }: {
   row: ArmyRow;
   column: Exclude<SortColumn, "name">;
   sorted: boolean;
-  /** The sorted column's highest value. */
-  topSorted: number;
+  threeStarAverage: number | null;
+  usageScale: number;
 }) {
   const stars =
     column === "three-star-rate"
@@ -517,18 +555,21 @@ function ResultCell({
                   row.usageCount.toLocaleString(),
                   `of ${row.usageDenominator.toLocaleString()}`,
                 ];
-  // Usage's bar, and the sorted number's on a phone. A rate fills a 0 to 100%
-  // track, as in the army's sheet; any other number is beside the row with the most.
+  // Usage and the 3-star rate are the two bars. Usage bars measure against
+  // the stated usage scale, so close shares look apart; a 3-star bar is a
+  // rate on a 0 to 100% track, marked at the average of every attack.
   const bar =
     column === "usage-rate"
-      ? row.usageRate
-      : !sorted
-        ? null
-        : column.endsWith("-rate")
-          ? Number(sortColumns[column].value(row))
-          : topSorted
-            ? Number(sortColumns[column].value(row)) / topSorted
-            : null;
+      ? usageScale && row.usageRate / usageScale
+      : column === "three-star-rate"
+        ? starRate(row, 3)
+        : null;
+  const average = column === "three-star-rate" ? threeStarAverage : null;
+  // Only a 3-star rate more than 5 points from the average is coloured; the
+  // bar stays neutral, so small differences don't read as good or bad. Other
+  // and Unreadable are no army to judge, so they stay neutral too.
+  const gap = average === null || isLeftover(row) ? 0 : starRate(row, 3) - average;
+  const compared = gap > 0.05 ? "above" : gap < -0.05 ? "below" : undefined;
   return (
     <td
       role="cell"
@@ -536,9 +577,21 @@ function ResultCell({
       data-label={sortColumns[column].label}
       data-sorted={sorted || undefined}
     >
-      <strong className="analytics-value">{value}</strong>
+      <strong className="analytics-value" data-compared={compared}>
+        {column === "average-trophies" ? <TrophyMark /> : null}
+        {value}
+      </strong>
       {bar !== null ? (
-        <span className="meter" aria-hidden="true">
+        <span
+          className="meter"
+          aria-hidden="true"
+          data-average={average !== null || undefined}
+          style={
+            average !== null
+              ? ({ "--average": `${average * 100}%` } as CSSProperties)
+              : undefined
+          }
+        >
           <span style={{ "--value": `${bar * 100}%` } as CSSProperties} />
         </span>
       ) : null}
@@ -553,7 +606,8 @@ function ArmyResultRow({
   row,
   columns,
   sort,
-  topSorted,
+  threeStarAverage,
+  usageScale,
   more,
   open,
   onOpen,
@@ -561,7 +615,8 @@ function ArmyResultRow({
   row: ArmyRow;
   columns: SortColumn[];
   sort: SortColumn;
-  topSorted: number;
+  threeStarAverage: number | null;
+  usageScale: number;
   more: boolean;
   open: boolean;
   onOpen: (key: string) => void;
@@ -578,7 +633,17 @@ function ArmyResultRow({
       <th scope="row" role="rowheader" data-sorted={sort === "name" || undefined}>
         <div className="analytics-name-cell">
           <span className="analytics-rank" aria-hidden="true" />
-          <UnitArt unitKey={row.key} />
+          {/* Other and Unreadable have no troops to show; a plain tile keeps
+              their names in line with the armies'. */}
+          {isLeftover(row) ? (
+            <span
+              className="unit-art analytics-leftover-art"
+              aria-hidden="true"
+              data-kind={row.key === "army-type:1" ? "other" : "unreadable"}
+            />
+          ) : (
+            <UnitArt unitKey={row.key} />
+          )}
           {named ? (
             <button
               type="button"
@@ -589,16 +654,8 @@ function ArmyResultRow({
             >
               <span className="analytics-name">
                 {row.label}
-                <small>
-                  {" "}
-                  {named === 1
-                    ? variantShort(
-                        row.label,
-                        row.variants!.find((variant) => variant.variantId !== 0)!.label,
-                      )
-                    : `${named} variants`}
-                  {row.variants!.length > named ? " + Other" : null}
-                </small>
+                {/* Only the count, on every screen; the sheet names them. */}
+                <small> {named === 1 ? "1 variant" : `${named} variants`}</small>
               </span>
               <span className="analytics-chevron" aria-hidden="true" />
             </button>
@@ -614,7 +671,8 @@ function ArmyResultRow({
             row={row}
             column={column}
             sorted={sort === column}
-            topSorted={topSorted}
+            threeStarAverage={threeStarAverage}
+            usageScale={usageScale}
           />
         ),
       )}
@@ -698,8 +756,8 @@ export default function ArmyAnalyticsRoute() {
   const navigationType = useNavigationType();
   const navigate = useNavigate();
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
-  const [moreSorts, setMoreSorts] = useState(false);
   const [shownAll, setShownAll] = useState<string | null>(null);
+  const [moreColumns, setMoreColumns] = useState(false);
   const [defaultVisit, setDefaultVisit] = useState(location.key);
   // An open army's sheet is its own step in history, so Back closes it and
   // keeps the filters, sort and scroll.
@@ -730,29 +788,47 @@ export default function ArmyAnalyticsRoute() {
     selected?.sort && Object.hasOwn(sortColumns, selected.sort)
       ? (selected.sort as SortColumn)
       : "usage-rate";
-  const columns: SortColumn[] = [
-    "name",
-    ...(isHistorical ? ["quantity" as const] : []),
-    "usage-rate",
-    "three-star-rate",
-    "two-star-rate",
-    "one-star-rate",
-    ...(armyTypes ? ["average-trophies" as const] : []),
-    ...(!isHistorical ? ["average-stars" as const, "average-destruction" as const] : []),
-    "usage-count",
-  ];
+  // Armies keep their four main numbers first, so More columns adds to the
+  // right without moving them.
+  const columns: SortColumn[] = armyTypes
+    ? [
+        "name",
+        "usage-rate",
+        "three-star-rate",
+        "average-trophies",
+        "usage-count",
+        ...extraColumns,
+      ]
+    : [
+        "name",
+        ...(isHistorical ? ["quantity" as const] : []),
+        "usage-rate",
+        "three-star-rate",
+        "two-star-rate",
+        "one-star-rate",
+        ...(!isHistorical
+          ? ["average-stars" as const, "average-destruction" as const]
+          : []),
+        "usage-count",
+      ];
   const tableSort: TableSort =
     chosenSort && columns.includes(chosenSort.column)
       ? chosenSort
       : { column: defaultColumn, direction: "descending" };
+  const shownColumns =
+    armyTypes && !moreColumns
+      ? columns.filter(
+          (column) => !extraColumns.includes(column) || column === tableSort.column,
+        )
+      : columns;
   const rows = analytics ? sortedRows(analytics.rows, tableSort) : [];
-  const topSorted =
-    tableSort.column === "name"
-      ? 0
-      : Math.max(
-          0,
-          ...rows.map((row) => Number(sortColumns[tableSort.column].value(row))),
-        );
+  // Every attack has one army type, so the rows add up to every attack.
+  const attackCount = rows.reduce((sum, row) => sum + row.usageCount, 0);
+  const threeStarAverage =
+    armyTypes && attackCount
+      ? rows.reduce((sum, row) => sum + starCount(row, 3), 0) / attackCount
+      : null;
+  const usageScale = usageScaleFor(Math.max(0, ...rows.map((row) => row.usageRate)));
   const listKey = `${category} ${population} ${requestedSeason}`;
   const collapsed = rows.length > FIRST_ROWS + 5 && shownAll !== listKey;
   const opened = rows.find((row) => row.key === openArmy && namedVariantCount(row));
@@ -1001,6 +1077,19 @@ export default function ArmyAnalyticsRoute() {
                   ? `Days ${dayList(coveredDays)} of 28`
                   : `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`}
             </span>
+            {armyTypes ? (
+              <button
+                type="button"
+                className="analytics-more-columns"
+                aria-pressed={moreColumns}
+                aria-controls="army-results-table"
+                title="2-star, 1-star, Avg. stars and Avg. destruction"
+                onClick={() => setMoreColumns(!moreColumns)}
+              >
+                <span className="analytics-more-icon" aria-hidden="true" />
+                More columns
+              </button>
+            ) : null}
           </div>
           <p className="analytics-note" id="army-selection-help">
             <span className="sr-only">
@@ -1011,66 +1100,71 @@ export default function ArmyAnalyticsRoute() {
               ? `Days not tracked: ${dayList(untrackedDays)}.`
               : null}
           </p>
-          <div className="analytics-coverage" role="group" aria-label="Battle coverage">
-            <span>
-              Battle records <strong>{recordedBattleRecords.toLocaleString()}</strong>
-            </span>
-            <span>
-              Included <strong>{includedBattleRecords.toLocaleString()}</strong>
-            </span>
-            <span>
-              Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
-            </span>
-          </div>
-          {/* Phones and iPads: the four most used sorts as chips, the rest behind
-              More; a second tap on the lit chip flips the order. */}
-          <div className="analytics-sort-menu" role="group" aria-label="Sort by">
-            {menuOrder
-              .filter((column) => columns.includes(column))
-              .filter(
-                (column, index) => index < 4 || moreSorts || column === tableSort.column,
-              )
-              .map((column) => {
-                const active = tableSort.column === column;
-                const next = nextSort(column, tableSort);
-                return (
-                  <button
-                    key={column}
-                    type="button"
-                    className="analytics-sort-chip"
-                    data-column={column}
-                    aria-pressed={active}
-                    title={sortName(next)}
-                    onClick={() => setChosenSort(next)}
-                  >
-                    {sortColumns[column].label}
-                    {active ? (
-                      <span className="analytics-sort-arrow">
-                        <span aria-hidden="true">
-                          {tableSort.direction === "ascending" ? "↑" : "↓"}
-                        </span>
-                        <span className="sr-only">
-                          {tableSort.direction === "ascending"
-                            ? column === "name"
-                              ? ", A to Z"
-                              : ", lowest first"
-                            : column === "name"
-                              ? ", Z to A"
-                              : ", highest first"}
-                        </span>
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
+          {/* Phones and iPads: one Sort menu with every choice, and its direction
+              beside it; wide screens sort by the table's headings. */}
+          <div className="analytics-sort-menu" role="group" aria-label="Sort">
+            <label className="analytics-sort-field">
+              <span>Sort</span>
+              <select
+                value={tableSort.column}
+                onChange={(event) =>
+                  setChosenSort(nextSort(event.target.value as SortColumn, tableSort))
+                }
+              >
+                {menuOrder
+                  .filter((column) => columns.includes(column))
+                  .map((column) => (
+                    <option key={column} value={column}>
+                      {sortColumns[column].label}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <button
               type="button"
-              className="analytics-sort-chip analytics-sort-more"
-              aria-expanded={moreSorts}
-              onClick={() => setMoreSorts((open) => !open)}
+              className="analytics-sort-button analytics-sort-direction"
+              data-column={tableSort.column}
+              title={sortName(nextSort(tableSort.column, tableSort))}
+              onClick={() => setChosenSort(nextSort(tableSort.column, tableSort))}
             >
-              {moreSorts ? "Fewer sorts" : "More sorts"}
+              <span aria-hidden="true">
+                {tableSort.direction === "ascending" ? "↑" : "↓"}
+              </span>
+              <span className="sr-only">
+                {tableSort.direction === "ascending"
+                  ? tableSort.column === "name"
+                    ? "A to Z"
+                    : "Lowest first"
+                  : tableSort.column === "name"
+                    ? "Z to A"
+                    : "Highest first"}
+              </span>
             </button>
+          </div>
+          {/* Phones: one strip names the cards' numbers and the bars' scales,
+              so each card shows only values. Screen readers hear each
+              card's own labels. */}
+          <div
+            className="analytics-phone-key"
+            aria-hidden="true"
+            data-view={armyTypes ? "armies" : "units"}
+          >
+            {shownColumns.map((column) =>
+              column === "name" ? null : (
+                <span
+                  key={column}
+                  data-column={column}
+                  data-sorted={tableSort.column === column || undefined}
+                >
+                  {sortColumns[column].label}
+                  {column === "usage-rate" && usageScale ? (
+                    <small>0–{Math.round(usageScale * 100)}%</small>
+                  ) : column === "three-star-rate" && threeStarAverage !== null ? (
+                    <AverageKey average={threeStarAverage} />
+                  ) : null}
+                </span>
+              ),
+            )}
           </div>
           <div
             className="analytics-table-wrap"
@@ -1079,12 +1173,14 @@ export default function ArmyAnalyticsRoute() {
             aria-label="Army results table"
           >
             <table
+              id="army-results-table"
               className="analytics-results-table"
               role="table"
               aria-label="Army analytics results"
               aria-describedby="army-selection-help"
               data-view={armyTypes ? "armies" : "units"}
               data-sort={tableSort.column}
+              data-more={(armyTypes && moreColumns) || undefined}
               // Ranks and the top three show for a highest-first number sort.
               data-ranked={
                 (tableSort.column !== "name" && tableSort.direction === "descending") ||
@@ -1093,7 +1189,7 @@ export default function ArmyAnalyticsRoute() {
             >
               <thead role="rowgroup">
                 <tr role="row">
-                  {columns.map((column) => (
+                  {shownColumns.map((column) => (
                     <th
                       key={column}
                       scope="col"
@@ -1108,6 +1204,14 @@ export default function ArmyAnalyticsRoute() {
                         sort={tableSort}
                         onSort={setChosenSort}
                       />
+                      {column === "three-star-rate" && threeStarAverage !== null ? (
+                        <AverageKey average={threeStarAverage} />
+                      ) : null}
+                      {column === "usage-rate" && usageScale ? (
+                        <BarScale end={usageScale} />
+                      ) : column === "three-star-rate" ? (
+                        <BarScale end={1} />
+                      ) : null}
                     </th>
                   ))}
                 </tr>
@@ -1115,7 +1219,7 @@ export default function ArmyAnalyticsRoute() {
               <tbody role="rowgroup" data-collapsed={collapsed || undefined}>
                 {analytics.rows.length === 0 ? (
                   <tr role="row" className="analytics-row-empty">
-                    <td role="cell" colSpan={columns.length}>
+                    <td role="cell" colSpan={shownColumns.length}>
                       No recognized components in this selection.
                     </td>
                   </tr>
@@ -1124,9 +1228,10 @@ export default function ArmyAnalyticsRoute() {
                   <ArmyResultRow
                     key={row.key}
                     row={row}
-                    columns={columns}
+                    columns={shownColumns}
                     sort={tableSort.column}
-                    topSorted={topSorted}
+                    threeStarAverage={threeStarAverage}
+                    usageScale={usageScale}
                     more={index >= FIRST_ROWS}
                     open={opened?.key === row.key}
                     onOpen={openSheet}
@@ -1154,16 +1259,6 @@ export default function ArmyAnalyticsRoute() {
               </noscript>
             </>
           ) : null}
-          <p className="analytics-footnote">
-            {armyTypes
-              ? "Avg. trophies counts every attack. Every attack is included, even if its army could not be read. "
-              : excludedBattleRecords > 0
-                ? "Excluded: opponent or army details missing. "
-                : null}
-            {partialArmies > 0
-              ? `${partialArmies.toLocaleString()} of the included armies ${partialArmies === 1 ? "is" : "are"} partly readable. Known troops, spells and equipment count; unknown items do not.`
-              : null}
-          </p>
           {analytics.pagination ? (
             <div className="analytics-pages">
               <span>
@@ -1184,6 +1279,33 @@ export default function ArmyAnalyticsRoute() {
               ) : null}
             </div>
           ) : null}
+          {/* What was counted, and how, a tap away under the list. */}
+          <details className="analytics-footnote">
+            <summary>How these are counted</summary>
+            <div className="analytics-coverage" role="group" aria-label="Battle coverage">
+              <span>
+                Battle records <strong>{recordedBattleRecords.toLocaleString()}</strong>
+              </span>
+              <span>
+                Included <strong>{includedBattleRecords.toLocaleString()}</strong>
+              </span>
+              <span>
+                Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
+              </span>
+            </div>
+            {armyTypes || excludedBattleRecords > 0 || partialArmies > 0 ? (
+              <p>
+                {armyTypes
+                  ? `Trophies per attack counts every attack. Every attack is included, even if its army could not be read. The mark on each 3-star bar is the rate over every attack${threeStarAverage === null ? "" : `, ${formatRate(threeStarAverage)}`}. An army's 3-star rate is green when more than 5 points above it and red when more than 5 points below. `
+                  : excludedBattleRecords > 0
+                    ? "Excluded: opponent or army details missing. "
+                    : null}
+                {partialArmies > 0
+                  ? `${partialArmies.toLocaleString()} of the included armies ${partialArmies === 1 ? "is" : "are"} partly readable. Known troops, spells and equipment count; unknown items do not.`
+                  : null}
+              </p>
+            ) : null}
+          </details>
           {opened ? (
             <ArmyDetail
               key={opened.key}

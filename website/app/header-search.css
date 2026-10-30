@@ -28,13 +28,17 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The picked result: a soft tint with an accent bar, and a thin ring for the
+   keyboard, so the row stays easy to read. */
 .search-suggestion:is(:focus-visible, :active) {
   color: var(--cl-ink);
   background: var(--cl-action-soft);
+  box-shadow: inset 3px 0 0 var(--cl-action);
 }
 
 .search-suggestion:focus-visible {
-  outline-offset: -3px;
+  outline: 1px solid var(--cl-action-border);
+  outline-offset: -1px;
 }
 
 .search-suggestion-player {
@@ -47,7 +51,7 @@
   overflow: hidden;
   font-family: var(--cl-font);
   font-size: 0.95rem;
-  font-weight: 800;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -55,9 +59,17 @@
 .search-suggestion-player small {
   min-width: 0;
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+/* The typed letters stand out in each name and tag. */
+.search-match {
+  padding: 0;
+  color: var(--cl-action-text);
+  background: none;
+  font-weight: 800;
 }
 
 .search-suggestion-meta {
@@ -73,7 +85,7 @@
   max-width: 8rem;
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   text-align: right;
   white-space: normal;
@@ -105,13 +117,15 @@
   background: var(--cl-header-soft);
 }
 
-/* Open, it dims the page under the bar so the results stand apart; a tap
-   there closes it. */
+/* Open, it dims and softens the page under the bar so a big headline
+   behind never competes with the results; a tap there closes it. */
 .header-search:has(.header-search-panel)::before {
   position: fixed;
   z-index: 39;
   inset: var(--cl-header-h) 0 0;
-  background: rgb(10 6 4 / 0.45);
+  background: rgb(10 6 4 / 0.7);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   content: "";
 }
 
@@ -123,7 +137,7 @@
   width: min(32rem, calc(100% - 3rem));
   padding: 0.6rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-card-radius);
 }
@@ -132,7 +146,7 @@
    whole box, not the bare input. */
 .header-search-panel .search-controls {
   padding: 0.3rem 0.3rem 0.3rem 0.85rem;
-  background: var(--cl-surface);
+  background: var(--cl-raised);
   border-color: color-mix(in srgb, var(--cl-muted) 72%, var(--cl-surface));
   border-radius: var(--cl-radius);
 }
@@ -148,17 +162,83 @@
   outline: none;
 }
 
-/* Suggestions stay inside the panel instead of floating over the page. */
-:root .header-search-panel .search-dropdown {
+/* Calm glass: nearly solid, one light blur, so the page behind never shows
+   as colour patches under the names. */
+:root #header-search-panel {
+  background: color-mix(in srgb, var(--cl-solid) 98%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* Suggestions stay inside the panel instead of floating over the page, on its
+   fill rather than a second layer of glass. */
+:root #header-search-panel .search-dropdown {
   position: static;
   margin: 0.5rem -0.6rem -0.6rem;
+  background: transparent;
   border-width: 1px 0 0;
   border-radius: 0 0 var(--cl-card-radius) var(--cl-card-radius);
   box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Close sits beside the box on every screen, apart from the box's own ×
+   that only clears the text. Keyboards see that Escape does the same. */
+.header-search-panel .search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 0.35rem;
+}
+
+.header-search-panel .search-controls {
+  grid-area: 1 / 1;
 }
 
 .header-search-close {
-  display: none;
+  display: inline-flex;
+  grid-area: 1 / 2;
+  gap: 0.45rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.6rem;
+  color: var(--cl-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--cl-radius);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.header-search-close:hover {
+  color: var(--cl-ink);
+}
+
+.header-search-close:focus-visible {
+  outline: 2px solid var(--cl-action-text);
+  outline-offset: 2px;
+}
+
+.header-search-close kbd {
+  padding: 0.05rem 0.35rem;
+  color: var(--cl-muted);
+  border: 1px solid var(--cl-outline);
+  border-radius: 0.3rem;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+:root .header-search-panel .search-dropdown {
+  grid-area: 2 / 1 / 3 / -1;
+}
+
+/* Touch screens have no Escape key to hint at. */
+@media (hover: none) {
+  .header-search-close kbd {
+    display: none;
+  }
 }
 
 /* Below the header, stay inside the screen: the suggestions shrink and scroll
@@ -171,8 +251,7 @@
   }
 
   .header-search-panel .search-form {
-    display: flex;
-    flex-direction: column;
+    grid-template-rows: auto minmax(0, 1fr);
     min-height: 0;
   }
 }
@@ -189,8 +268,8 @@
   }
 }
 
-/* Phones: a sheet across the top of the screen with Close beside the box,
-   the suggestions edge to edge under both, and the page dimmed below. */
+/* Phones: a sheet across the top of the screen, Close in the accent, the
+   suggestions edge to edge under the box, over the same dimmed page. */
 @media (max-width: 34rem) {
   .header-search-panel {
     position: absolute;
@@ -204,41 +283,23 @@
     border-radius: 0 0 var(--cl-card-radius) var(--cl-card-radius);
   }
 
-  .header-search-panel::after {
-    position: fixed;
-    z-index: -1;
-    inset: 0;
-    background: rgb(10 6 4 / 0.45);
-    content: "";
-    pointer-events: none;
-  }
-
   .header-search-panel .search-form {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0 0.5rem;
   }
 
-  .header-search-panel .search-controls {
-    grid-area: 1 / 1;
-  }
-
   .header-search-close {
-    display: inline-flex;
-    grid-area: 1 / 2;
-    align-items: center;
     min-height: 3.4rem;
     padding: 0 0.25rem;
     color: var(--cl-action-text);
-    background: transparent;
-    border: 0;
     font-size: 0.9rem;
     font-weight: 800;
-    cursor: pointer;
+  }
+
+  .header-search-close kbd {
+    display: none;
   }
 
   :root .header-search-panel .search-dropdown {
-    grid-area: 2 / 1 / 3 / -1;
     max-height: calc(100dvh - 5rem - var(--cl-bottom-tabs, 0px));
     margin: 0.6rem -1rem -0.6rem;
   }

@@ -855,7 +855,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cards["heat-map"]).toContain('aria-label="Day 9: today, not finished yet"');
     expect(cards["heat-map"]).toContain('aria-label="Day 10: not played yet"');
     expect(cards["heat-map"]).toMatch(
-      /background:var\(--cl-heat-4\)[^>]*><button[^>]*aria-label="Day 8: \+86"/,
+      /background:var\(--cl-heat-4\)[^>]*><span[^>]*>D8<\/span><button[^>]*aria-label="Day 8: \+86"/,
     );
     expect(cards["heat-map"]).toMatch(
       /background:var\(--cl-heat-0\)[^>]*><button[^>]*aria-label="Day 6: \+2"/,
@@ -890,12 +890,12 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Goal: 76 behind the Top 200 line with 20 days left, the line moving 40 a day.
     const goal = text(cards.goal!);
     expect(goal).toContain("Top 200");
-    expect(goal).toContain("+44 a day needed Behind pace by 4 a day");
-    expect(goal).toContain("Gap at last Reset 76 short");
-    expect(goal).toContain("Days left 20");
-    expect(goal).toContain("Top 200 line moving (7 days) +40 a day");
-    expect(goal).toContain("Your pace (7 days) +40 a day");
-    expect(goal).toContain("Behind pace by 4 a day Shield days None 1 2 3 Gap at");
+    expect(goal).toContain("Behind by 4 /day a day · 76 short of #200 at last Reset");
+    expect(goal).toContain("+44 a day needed · 20 days left");
+    expect(goal).toContain("Top 200 line +40 a day over 7 days");
+    expect(goal).toContain("Your pace +40 /day a day over 7 days 0 +88 Rest days");
+    expect(goal).not.toContain("Needed");
+    expect(goal).toContain("Top 200 5,400 You 5,324 7 days earlier at last Reset");
     expect(cards.goal).toContain('aria-label="Lens Main against the Top 200 line"');
 
     // Cutoffs: the account slotted between Top 200 and Top 500.
@@ -910,15 +910,14 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Rivals watch: 3 above and 3 below live, moves since the Reset, each a player link.
     const rivals = text(cards["rivals-watch"]!);
     expect(rivals).toContain("Today so far");
-    expect(rivals.match(/#3\d\d/g)).toEqual([
-      "#313",
-      "#314",
-      "#315",
-      "#316",
-      "#317",
-      "#318",
-      "#319",
-    ]);
+    expect(rivals.match(/#3\d\d/g)?.join(" ")).toBe("#313 #314 #315 #316 #317 #318 #319");
+    // A phone shows you and 2 either side until Show all 7.
+    expect(
+      cards["rivals-watch"]!.split('class="rival-far"')
+        .slice(1)
+        .map((row) => /#3\d\d/.exec(text(row))?.[0]),
+    ).toEqual(["#313", "#319"]);
+    expect(rivals).toContain("Show all 7");
     expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
     expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
     expect(rivals).toContain("#317 Player 317 5,365 – – –");
@@ -1181,7 +1180,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Bases you attacked: hardest first against 41% held at similar trophies.
     const bases = text(cards.bases!);
     expect(bases).toContain("Bases you attacked · today · 2 of 8");
-    expect(bases).toContain("Base strength today");
+    expect(bases).toContain("Base strength vs Legend avg");
     expect(bases).toContain("Ava 5,712 ★★★ 100% +40 · 07:10");
     expect(bases).toContain("Hard held 5 of 6 · 83% vs Legend avg 41%");
     expect(bases).toContain("Bo 5,688 ★★☆ 88% +31 · 07:25");
@@ -1192,12 +1191,12 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const armiesDefense = text(cards["armies-defense"]!);
     expect(armiesDefense).toContain("Armies on defense 3 days 7 days Custom");
     expect(armiesDefense).toContain("Last 7 days · 8 defenses");
+    expect(armiesDefense).toContain("Legends average Army type Share Held Avg lost");
     expect(armiesDefense).toContain(
-      "Army type Share Held / Legends avg Avg lost / Legends avg",
+      "Thrower 63% of defenses Held 60% avg 29% Legends 29%",
     );
-    expect(armiesDefense).toContain("Thrower 63% of defenses Held 60% / Legends 29%");
-    expect(armiesDefense).toContain("Held 0% / Legends 50% Avg lost −40 / Legends −33");
-    expect(armiesDefense).toContain("All defenses 100% of defenses Held 38% / Legends");
+    expect(armiesDefense).toContain("Held 0% avg 50% Legends 50% Avg lost −40 avg −33");
+    expect(armiesDefense).toContain("All defenses 100% of defenses Held 38% avg 52%");
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);
@@ -1226,7 +1225,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
-    expect(bases).toContain("Base strength today");
+    expect(bases).toContain("Base strength vs Legend avg");
     expect(bases).toContain("Hard lost −90 in 6 defenses · Legend avg −216");
     expect(bases).toContain("Easy lost −151 in 4 defenses · Legend avg −144");
   });
@@ -1317,8 +1316,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       history: [5044, 5114, 5114, 5122, 5186, 5188, null, 5444],
     });
     const goal = text(cardsIn(await render(data)).goal!);
-    expect(goal).toContain("Gap at last Reset 44 ahead");
-    expect(goal).toContain("Your pace (7 days) +40 a day");
+    expect(goal).toContain("On pace · 44 ahead of #200 at last Reset");
+    expect(goal).toContain("Your pace +40 /day a day");
   });
 
   it("hides the day's numbers once the Legend day they were read for ends", async () => {

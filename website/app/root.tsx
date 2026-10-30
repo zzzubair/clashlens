@@ -299,6 +299,10 @@ const TAB_ICONS = {
   analytics: "M5 20V11M12 20V5M19 20v-7",
   crews:
     "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 3-5 6-5s6 2 6 5M17 11a2.5 2.5 0 1 0 0-5M18 15c2 .5 3 2 3 4",
+  watchlists:
+    "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  blog: "M5 4h14v16H5zM9 8h6M9 12h6M9 16h3",
+  chat: "M21 12a8 8 0 0 1-11.7 7.1L4 20.5l1.3-4.8A8 8 0 1 1 21 12zM9 12h.01M15 12h.01",
 } as const;
 
 function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
@@ -373,21 +377,23 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
           <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
+            <TabIcon name="watchlists" />
             Watchlists
           </NavLink>
           <NavLink to="/blog" onClick={ignoreRepeatTap}>
+            <TabIcon name="blog" />
             Blog
           </NavLink>
         </div>
         <div className="site-menu-extras">
-          <DiscordLink />
+          <DiscordLink icon />
         </div>
       </SiteMenu>
     </nav>
   );
 }
 
-function DiscordLink() {
+function DiscordLink({ icon = false }: { icon?: boolean }) {
   return (
     <a
       className="nav-link nav-discord"
@@ -395,6 +401,7 @@ function DiscordLink() {
       target="_blank"
       rel="noopener noreferrer"
     >
+      {icon ? <TabIcon name="chat" /> : null}
       Join Discord
       <span className="sr-only">, opens in a new tab</span>
     </a>

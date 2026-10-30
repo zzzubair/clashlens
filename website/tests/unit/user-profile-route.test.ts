@@ -334,7 +334,9 @@ it("gives the owner one small Edit button and their two tools, and no settings",
   expect(tools[0]).toContain("On for 1 of 2 players");
   expect(tools[1]).toContain('href="/account/obs-overlay"');
   expect(tools[1]).toContain("Stream overlay");
-  expect(tools[1]).toContain("Not set up");
+  // A tool that is not set up shows the step that starts it.
+  expect(tools[1]).toContain('<span class="profile-tool-start">Set up</span>');
+  expect(tools[1]).not.toContain("Not set up");
   for (const text of ["Make default", "Sign-in", "OBS overlay", "Default"])
     expect(html).not.toContain(text);
   // The cards are the same ones every visitor sees.

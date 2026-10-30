@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -126,24 +126,44 @@ function heldShare(defenses: OpponentRow["defenses"]): number {
   return defenses.filter((defense) => defense.stars < 3).length / defenses.length;
 }
 
+/** What Legends at similar trophies lost over as many defenses as the base's. */
+function legendsLost({ defenses, legends }: OpponentRow): number | null {
+  return legends?.defenses && legends.lost !== null
+    ? Math.round((legends.lost * defenses.length) / legends.defenses)
+    : null;
+}
+
 /**
- * Trophies mode's line: the trophies the base lost today, what Legends at
- * similar trophies lost over as many defenses, then the defense count both
- * cover, such as "lost −185 · avg −194 · in 6 defenses".
+ * Trophies mode's line: the trophies the base lost today in its defenses,
+ * then what Legends at similar trophies lost over as many, such as
+ * "lost −185 in 6 defenses · Legend avg −194".
  */
 function trophiesLine(row: OpponentRow): string {
   const count = row.defenses.length;
-  const { legends } = row;
-  const average =
-    legends?.defenses && legends.lost !== null
-      ? (legends.lost * count) / legends.defenses
-      : null;
+  const average = legendsLost(row);
   const early = count < BASE_STRENGTH_MIN_DEFENSES;
   return [
     `lost ${signed(-trophiesGivenUp(row.defenses))} in ${count} defense${count === 1 ? "" : "s"}`,
-    ...(average !== null ? [`Legend avg ${signed(-Math.round(average))}`] : []),
+    ...(average !== null ? [`Legend avg ${signed(-average)}`] : []),
     ...(!early && average === null ? ["no comparison yet"] : []),
   ].join(" · ");
+}
+
+/**
+ * The numbers behind a verdict, short: the base's held share or trophies lost
+ * against Legends' at similar trophies, "83% · avg 41%" or "−145 · avg −144".
+ * Null without a comparison.
+ */
+function compareNumbers(row: OpponentRow, mode: BasesMode): string | null {
+  const { legends } = row;
+  if (mode === "held")
+    return legends?.defenses
+      ? `${Math.round(heldShare(row.defenses) * 100)}% · avg ${Math.round((100 * legends.held) / legends.defenses)}%`
+      : null;
+  const average = legendsLost(row);
+  return average === null
+    ? null
+    : `${signed(-trophiesGivenUp(row.defenses))} · avg ${signed(-average)}`;
 }
 
 /**
@@ -156,6 +176,9 @@ function trophiesLine(row: OpponentRow): string {
  * on average over as many defenses.
  * Colours follow the attacker: green is good for you, red is bad.
  */
+/** Bases a phone shows before Show all. */
+const PHONE_ROWS = 3;
+
 export function OpponentsCard({
   dayNumber,
   days,
@@ -176,6 +199,8 @@ export function OpponentsCard({
   comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();
+  // A phone shows the first few bases until asked for every one.
+  const [allShown, setAllShown] = useState(false);
   const format = timeFormatter(timeZone);
   const { chosen, read } = days;
   const earlier = chosen !== null && dayNumber !== null && chosen < dayNumber;
@@ -208,7 +233,13 @@ export function OpponentsCard({
       meta={
         day !== null && dayNumber !== null ? (
           <span className="bases-day-meta">
-            {updated ? <span>{updated}</span> : null}
+            {/* A phone drops "updated" from sight, so the time fits one line. */}
+            {updated ? (
+              <span>
+                <span className="bases-updated-word">updated </span>
+                {updated.replace(/^updated /, "")}
+              </span>
+            ) : null}
             <DayStepper
               day={day}
               today={dayNumber}
@@ -256,18 +287,47 @@ export function OpponentsCard({
   return (
     <>
       {head}
-      <div className="opponents">
+      <div className={allShown ? "opponents opponents-all" : "opponents"}>
         <div className="opponents-head" aria-hidden="true">
           <span>Player · trophies at Reset</span>
           <span>Your hit</span>
-          <span>Their defenses {when}</span>
-          <span title={`Against Legends at similar trophies ${when}`}>
-            Base strength {when}
+          {/* The day is on the day button, so each heading names its column
+              and keys its marks instead. */}
+          <span className="opponents-head-defenses">
+            Their defenses
+            <span className="opponents-key">
+              <i className="opponents-block is-tripled" />
+              tripled
+              <i className="opponents-block is-held" />
+              held
+              <i className="opponents-block opponents-you" />
+              your hit
+            </span>
+          </span>
+          <span
+            className="opponents-head-strength"
+            title={`Against Legends at similar trophies ${when}`}
+          >
+            Base strength
+            <span className="opponents-key">vs Legend avg</span>
           </span>
           <span />
         </div>
         {sorted.map(({ row, strength }, index) => {
           const held = row.defenses.filter((defense) => defense.stars < 3).length;
+          const verdict = !["early", "unavailable"].includes(strength);
+          const compare = verdict ? compareNumbers(row, mode) : null;
+          // The exact numbers the bar draws, read aloud and shown on hover.
+          const exact =
+            mode === "held"
+              ? `held ${held} of ${row.defenses.length}${
+                  row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
+                    ? ""
+                    : row.legends?.defenses
+                      ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
+                      : " · no comparison yet"
+                }`
+              : trophiesLine(row);
           const open = () => void navigate(canonicalPlayerPath(row.tag));
           return (
             <div
@@ -299,19 +359,34 @@ export function OpponentsCard({
                 </b>
                 <span className="dash-muted"> · {format.format(row.hit.at)}</span>
               </div>
+              {/* The day's 8 defenses, filled for tripled and outlined for held;
+                  the exact stars are in each slot's title and read aloud. */}
               <ol
-                className="opponents-blocks"
+                className="dash-star-boxes opponents-blocks"
                 aria-label={`held ${held} of ${row.defenses.length}`}
               >
-                {row.defenses.map((defense, at) => (
-                  <li
-                    key={at}
-                    className={`opponents-block ${defense.stars === 3 ? "is-tripled" : "is-held"}${defense.yours ? " is-yours" : ""}`}
-                    title={`${defense.stars === 3 ? "tripled" : "held"}${defense.yours ? " · your attack" : ""}`}
-                  />
-                ))}
+                {Array.from(
+                  { length: Math.max(ATTACKS, row.defenses.length) },
+                  (_, at) => {
+                    const defense = row.defenses[at];
+                    if (!defense)
+                      return (
+                        <li key={at} className="dash-star-box dash-star-box-empty" />
+                      );
+                    const said = `${defense.stars} star${defense.stars === 1 ? "" : "s"} ${defense.stars === 3 ? "tripled" : "held"}${defense.yours ? ", your attack" : ""}`;
+                    return (
+                      <li
+                        key={at}
+                        className={`dash-star-box opponents-block ${defense.stars === 3 ? "is-tripled" : "is-held"}${defense.yours ? " is-yours" : ""}`}
+                        title={said}
+                      >
+                        <span className="sr-only">{said}</span>
+                      </li>
+                    );
+                  },
+                )}
               </ol>
-              <div className="opponents-strength">
+              <div className="opponents-strength" title={exact}>
                 <span
                   className={`dash-strength dash-strength-${strength}`}
                   title={
@@ -324,26 +399,12 @@ export function OpponentsCard({
                     ? "Too few"
                     : STRENGTH_LABELS[strength]}
                 </span>
-                <span className="dash-muted">
-                  {(mode === "held"
-                    ? `held ${held} of ${row.defenses.length}${
-                        row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
-                          ? ""
-                          : row.legends?.defenses
-                            ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
-                            : " · no comparison yet"
-                      }`
-                    : trophiesLine(row)
-                  )
-                    .split(" · ")
-                    // Each part stays whole, so a label never wraps away from its number.
-                    .map((part, index) => (
-                      <Fragment key={index}>
-                        {index ? " · " : null}
-                        <span className="opponents-part">{part}</span>
-                      </Fragment>
-                    ))}
-                </span>
+                <span className="sr-only">{exact}</span>
+                {compare ? (
+                  <span className="opponents-compare" aria-hidden="true">
+                    {compare}
+                  </span>
+                ) : null}
               </div>
               <div className="opponents-action">
                 <Link
@@ -353,18 +414,23 @@ export function OpponentsCard({
                   onClick={(event) => event.stopPropagation()}
                 >
                   <DashboardIcon name="plus" />
-                  Watchlist
+                  <span className="opponents-watch-text">Watchlist</span>
                 </Link>
               </div>
             </div>
           );
         })}
       </div>
-      <p className="dash-card-foot opponents-key" aria-hidden="true">
-        Their defenses: <span className="opponents-block is-tripled" /> tripled
-        <span className="opponents-block is-held" /> held
-        <span className="opponents-block is-held is-yours" /> your attack
-      </p>
+      {sorted.length > PHONE_ROWS ? (
+        <button
+          type="button"
+          className="button button-secondary opponents-more"
+          aria-expanded={allShown}
+          onClick={() => setAllShown(!allShown)}
+        >
+          {allShown ? "Show fewer" : `Show all ${sorted.length}`}
+        </button>
+      ) : null}
     </>
   );
 }

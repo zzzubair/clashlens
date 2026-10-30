@@ -1,5 +1,7 @@
-/* The signed-out front page: search first, then a peek at the dashboard an
-   account unlocks, then the Top 10. Wide screens put the peek beside them. */
+/* The signed-out front page: search first, then what an account adds, the
+   way in, the example dashboard and the Top 10. Wide screens set the title,
+   search and way in as one block, centred down the left of the example, with
+   the Top 10 across the page under them. */
 
 .front-grid {
   display: grid;
@@ -13,43 +15,67 @@
 }
 
 @media (min-width: 64rem) {
+  /* The way in's parts join the page grid, so the example can stand beside
+     them and the search; free rows above and below share the example's extra
+     height, so the left reads as one block, not two with a gap between. */
   .front-grid-pitch {
     grid-template-areas:
-      "hero teaser"
-      "top teaser";
-    grid-template-columns: minmax(0, 1fr) 30rem;
-    grid-template-rows: auto 1fr;
-    gap: 1.75rem 2.5rem;
+      ". board"
+      "hero board"
+      "pitch board"
+      "points board"
+      "join board"
+      ". board"
+      "top top";
+    grid-template-columns: minmax(0, 1fr) minmax(0, 31rem);
+    grid-template-rows: 1fr auto auto auto auto 1fr auto;
+    gap: 0 3.5rem;
+  }
+
+  .front-grid-pitch > .teaser-cta {
+    display: contents;
   }
 
   .front-grid-pitch .front-hero {
     grid-area: hero;
+    gap: 1.5rem;
+    padding: 0 0 2rem;
   }
 
-  .front-grid-pitch .front-teaser {
-    position: sticky;
-    top: 5.5rem;
-    grid-area: teaser;
+  .front-grid-pitch .teaser-cta h2 {
+    grid-area: pitch;
+    margin-bottom: 0.85rem;
+  }
+
+  .front-grid-pitch .teaser-points {
+    grid-area: points;
+    margin-bottom: 1.25rem;
+  }
+
+  .front-grid-pitch .teaser-cta > :is(.button-primary, p[role="status"]) {
+    grid-area: join;
+    justify-self: start;
+  }
+
+  .front-grid-pitch .front-hero h1 {
+    font-size: 4.6rem;
+    line-height: 1;
+  }
+
+  .front-grid-pitch .teaser-board {
+    grid-area: board;
   }
 
   .front-grid-pitch .home-leaderboard {
     grid-area: top;
-  }
-
-  /* The wider column lets the example's small labels read at a normal size. */
-  .front-grid-pitch :is(.teaser-label, .teaser-rivals > span) {
-    font-size: 0.8rem;
-  }
-
-  .front-grid-pitch :is(.teaser-ranks small, .teaser-clock small) {
-    font-size: 0.76rem;
+    margin-top: 2.5rem;
   }
 }
 
 /* Between a phone and a laptop the example keeps about the shape it has on
    them, centred, instead of stretching across the page. */
 @media (min-width: 40rem) and (max-width: 63.99rem) {
-  .front-grid-pitch .front-teaser {
+  .teaser-cta .teaser-board {
     justify-self: center;
     width: min(100%, 34rem);
   }
@@ -71,43 +97,31 @@
 
 /* ---------- The dashboard, as an example ---------- */
 
-.front-teaser {
-  position: relative;
-  display: grid;
-  gap: 1rem;
-  overflow: hidden;
-  padding: 0.75rem;
-  background: var(--cl-card-fill);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
-}
-
-/* An example dashboard, readable in full. */
+/* An example dashboard, readable in full, on the page's one glass panel. */
 .teaser-board {
   position: relative;
   display: grid;
-  padding-top: 0.7rem;
+  overflow: hidden;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   gap: 0.5rem;
+  padding: 0.75rem;
   color: inherit;
   text-decoration: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Sits on the first card's top edge, like a tab. */
+/* Its own line over the cards, so it never crowds the day's title. */
 .teaser-example {
-  position: absolute;
-  z-index: 1;
-  top: 0.05rem;
-  left: 0.75rem;
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-left: 0.25rem;
   padding: 0.1rem 0.45rem;
   color: var(--cl-muted);
   background: var(--cl-glass-strong);
   border: 1px solid var(--cl-glass-edge);
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 
@@ -122,16 +136,17 @@
   border-radius: 10px;
 }
 
-/* The day across the top: score on the left, the 8 attacks and 8 defenses
-   on the right, the rank strip under both. */
+/* The day across the top: the score beside the rank strip, then a row of
+   attacks and a row of defenses, as the real Legend day card sets them. */
 .teaser-day {
   grid-column: 1 / -1;
   grid-template-areas:
-    "label slots"
-    "score slots"
-    "ranks ranks";
+    "label ranks"
+    "score ranks"
+    "attacks attacks"
+    "defenses defenses";
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.35rem 1.25rem;
+  gap: 0.35rem 1.5rem;
   padding: 0.8rem 0.9rem;
 }
 
@@ -145,23 +160,21 @@
 
 .teaser-day .teaser-ranks {
   grid-area: ranks;
-  margin-top: 0.25rem;
+  align-self: center;
 }
 
-.teaser-day .teaser-attack {
-  grid-area: slots;
-  align-self: start;
-  margin-top: 0.2rem;
+.teaser-day .teaser-attacks {
+  grid-area: attacks;
+  margin-top: 0.4rem;
 }
 
-.teaser-day .teaser-defense {
-  grid-area: slots;
-  align-self: end;
+.teaser-day .teaser-defenses {
+  grid-area: defenses;
 }
 
 .teaser-label {
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -184,53 +197,93 @@
   font-size: 1rem;
 }
 
-.teaser-slots {
-  display: flex;
-  gap: 3px;
-  align-items: center;
+/* "Attacks 6/8 · +208" over its 8 tiles. */
+.teaser-battles {
+  display: grid;
+  gap: 0.25rem;
 }
 
-.teaser-slots .dash-icon {
+.teaser-battles-head {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.teaser-battles-head .dash-icon {
   width: 0.8rem;
   height: 0.8rem;
-  margin-right: 0.2rem;
-  color: var(--cl-muted);
 }
 
-.teaser-slots {
-  justify-content: flex-end;
+.teaser-battles-name {
+  color: var(--cl-ink);
 }
 
-.teaser-slots i {
-  flex: 1;
-  max-width: 1rem;
-  aspect-ratio: 1;
+.teaser-battles-head b {
+  margin-left: auto;
+  font-size: 0.95rem;
+}
+
+/* Attacks in green, defenses in red, as on the dashboard. */
+.teaser-attacks :is(.teaser-battles-head b, .teaser-tiles > span) {
+  color: var(--cl-positive);
+}
+
+.teaser-defenses :is(.teaser-battles-head b, .teaser-tiles > span) {
+  color: var(--cl-negative);
+}
+
+.teaser-tiles {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+}
+
+/* Stars over trophies, the dashboard's tile in miniature. */
+.teaser-tiles > span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 0;
+  min-height: 2.3rem;
   background: var(--cl-raised);
-  border-radius: 3px;
+  border: 1px solid var(--cl-card-line);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  font: 700 0.875rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
 }
 
-.teaser-attack i[data-stars="3"] {
-  background: var(--cl-star);
+.teaser-tiles small {
+  font: 800 0.8125rem/1 var(--cl-font);
+  letter-spacing: -0.08em;
 }
 
-.teaser-attack i[data-stars="2"] {
-  background: color-mix(in srgb, var(--cl-star) 65%, var(--cl-raised));
+.teaser-defenses .teaser-tiles > span {
+  background: var(--cl-panel);
 }
 
-.teaser-attack i[data-stars="1"] {
-  background: color-mix(in srgb, var(--cl-star) 35%, var(--cl-raised));
+/* A three-star attack is the one to aim for: a faint gold edge. */
+.teaser-attacks [data-stars="3"] {
+  border-color: color-mix(in srgb, var(--cl-gold) 45%, transparent);
 }
 
-.teaser-defense i[data-stars="0"] {
-  background: var(--cl-positive);
+/* On white, a pale yellow tile with an orange edge, not tan. */
+:root:not([data-theme="dark"]) .teaser-attacks [data-stars="3"] {
+  background: #fff6d8;
+  border-color: #f2b45a;
 }
 
-.teaser-defense i:is([data-stars="1"], [data-stars="2"]) {
-  background: color-mix(in srgb, var(--cl-negative) 45%, var(--cl-raised));
-}
-
-.teaser-defense i[data-stars="3"] {
-  background: var(--cl-negative);
+/* A slot still to play is an empty dashed box. */
+.teaser-tiles > .teaser-tile-empty {
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
+  box-shadow: none;
 }
 
 /* Last Reset, Now and Next Reset, read as the real Legend day card does. */
@@ -252,7 +305,7 @@
 
 .teaser-ranks small {
   font-family: var(--cl-font);
-  font-size: 0.62rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -308,7 +361,7 @@
 
 .teaser-clock small {
   color: var(--cl-muted);
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
 }
 
 .teaser-rivals {
@@ -322,7 +375,7 @@
   gap: 0.35rem;
   align-items: center;
   padding: 0.15rem 0.25rem;
-  font-size: 0.72rem;
+  font-size: 0.875rem;
 }
 
 .teaser-rivals > span > span {
@@ -343,69 +396,161 @@
   font-weight: 650;
 }
 
+/* The Season as the dashboard draws it: a week to a row, wide tiles with an
+   edge, today's dashed in the accent. */
 .teaser-heat {
   grid-column: 1 / -1;
-  grid-template-columns: repeat(14, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 3px;
 }
 
 .teaser-heat i {
-  aspect-ratio: 1;
-  background: var(--cl-raised);
-  border-radius: 3px;
+  height: 1.05rem;
+  border: 1px solid var(--cl-card-line);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
 }
 
-.teaser-heat i[data-net="up"] {
-  background: var(--cl-positive);
+.teaser-heat i.teaser-today {
+  border: 1.5px dashed var(--cl-action);
+  box-shadow: none;
 }
 
-.teaser-heat i[data-net="down"] {
-  background: var(--cl-negative);
+.teaser-heat .teaser-label {
+  grid-column: 1 / -1;
 }
 
-/* The way in, under the example. */
+/* The way in: a heading, three short points, the example and Create
+   account, under the search. */
 .teaser-cta {
   display: grid;
-  gap: 0.4rem;
-  justify-items: center;
-  padding: 0 0.5rem 0.5rem;
-  text-align: center;
+  gap: 0.85rem;
+  justify-items: start;
+}
+
+.teaser-cta .teaser-board {
+  justify-self: stretch;
 }
 
 .teaser-cta h2 {
   margin: 0;
+  font-size: clamp(1.6rem, 1.3rem + 1vw, 2.1rem);
+  line-height: 1.05;
 }
 
-.teaser-cta p {
-  max-width: 24rem;
+.teaser-cta > p[role="status"] {
   margin: 0;
   color: var(--cl-muted);
   font-size: 0.9rem;
 }
 
-.teaser-cta .account-buttons {
-  justify-content: center;
-  margin-top: 0.2rem;
+/* What the example shows, each behind an ember icon, in one row. */
+.teaser-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  color: var(--cl-muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+  list-style: none;
 }
 
-.teaser-cta .account-buttons .button {
+.teaser-points li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.teaser-points .dash-icon {
+  box-sizing: content-box;
+  width: 1rem;
+  height: 1rem;
+  padding: 0.35rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  border-radius: 8px;
+}
+
+.teaser-cta .button-primary {
   min-height: 2.75rem;
+  padding-inline: 1.35rem;
+  font-size: 1rem;
 }
 
-/* A phone shows the example's Legend day alone, so the Top 10 starts near
-   the first screen. */
+/* A phone shows the example's Legend day as one flat card with the Season
+   a week to a row under it, the points as three small icons over their
+   names in one row, and Create account across the screen. */
 @media (max-width: 40rem) {
-  .teaser-board > :is(.teaser-clock, .teaser-rivals, .teaser-heat) {
+  .teaser-board > :is(.teaser-clock, .teaser-rivals) {
     display: none;
   }
-}
 
-/* A small phone keeps Create account above the tab bar and a one-line title. */
-@media (max-width: 23.5rem) {
+  .teaser-board > .teaser-day {
+    padding: 0 0.25rem;
+    background: none;
+    border: 0;
+  }
+
+  .teaser-board > .teaser-heat {
+    margin-top: 0.35rem;
+    padding: 0 0.25rem;
+    background: none;
+    border: 0;
+  }
+
+  .teaser-points {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    justify-self: stretch;
+    margin: 0;
+    font-size: 0.8125rem;
+    text-align: center;
+  }
+
+  .teaser-points li {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .teaser-points .dash-icon {
+    width: 0.9rem;
+    height: 0.9rem;
+    padding: 0.3rem;
+  }
+
+  .teaser-cta .button-primary {
+    justify-self: stretch;
+    justify-content: center;
+  }
+
   .front-grid {
     gap: 1rem;
   }
+}
 
+/* A narrow card puts the rank strip under the score. */
+@media (max-width: 30rem) {
+  .teaser-day {
+    grid-template-areas:
+      "label"
+      "score"
+      "ranks"
+      "attacks"
+      "defenses";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teaser-day .teaser-ranks {
+    margin-top: 0.35rem;
+  }
+}
+
+/* A small phone keeps a one-line title. */
+@media (max-width: 23.5rem) {
   .front-hero {
     gap: 0.75rem;
     padding-top: 0;
@@ -416,7 +561,7 @@
   }
 
   .teaser-cta h2 {
-    font-size: 1.2rem;
+    font-size: 1.4rem;
     white-space: nowrap;
   }
 }
@@ -450,7 +595,7 @@
   grid-column: 1 / -1;
   margin: 0;
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   line-height: 1.45;
 }
@@ -471,4 +616,58 @@
 /* The update time sits under the title; stale rows are counted there too. */
 .home-leaderboard .leaderboard-table :is(thead th:last-child, td:last-child) {
   display: none;
+}
+
+/* A wide screen sets ranks 1 to 5 beside 6 to 10, so the rows are as wide
+   as their names, clans and trophies need, with no empty band between. The
+   rank plate, trophy cup and arrow say what each column is, so the column
+   headings are left to screen readers. */
+@media (min-width: 64rem) {
+  .home-leaderboard .leaderboard-table tbody {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(5, auto);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-leaderboard .leaderboard-row {
+    display: grid;
+    grid-template-columns: 3.75rem minmax(0, 1fr) minmax(0, 0.8fr) auto;
+    align-items: center;
+  }
+
+  .home-leaderboard .leaderboard-row:nth-child(n + 6) {
+    box-shadow: inset 1px 0 0 var(--cl-border);
+  }
+
+  .home-leaderboard .leaderboard-row:nth-child(5) > * {
+    border-bottom: 0;
+  }
+
+  .home-leaderboard .leaderboard-row > * {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .home-leaderboard .leaderboard-row > .rank-cell {
+    align-items: center;
+  }
+
+  .home-leaderboard .leaderboard-row > .trophy-cell {
+    flex-direction: row;
+    gap: 0.3rem;
+    align-items: center;
+    justify-content: end;
+  }
+
+  .home-leaderboard .leaderboard-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }

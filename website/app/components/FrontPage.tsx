@@ -29,7 +29,7 @@ export interface FrontPageData {
 
 /**
  * What `/` shows anyone not signed in, and search engines: search first,
- * then a peek at the dashboard an account unlocks, then the top players.
+ * then what an account adds with an example dashboard, then the top players.
  */
 export function FrontPage({ data }: { data: FrontPageData }) {
   // Set by /logout: logged out, or logged out here but not recorded.
@@ -171,7 +171,8 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 >
                   <bdi>{entry.name}</bdi>
                 </Link>
-                <span className="player-tag">{entry.tag}</span>
+                {/* Left to screen readers, to tell two players of one name apart. */}
+                <span className="sr-only"> {entry.tag}</span>
               </th>
               <td data-label="Clan">
                 <bdi>{entry.clan}</bdi>

@@ -250,8 +250,9 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("Ice Golem");
     expect(text).toContain("5 of 10");
     expect(text).toContain("50.0%");
-    // Even the most-used row's bar is on a 0 to 100% track, as in the army's sheet.
-    expect(html).toContain('style="--value:50%"');
+    // Usage bars measure against the most-used row, so it fills its track
+    // while its text keeps the share.
+    expect(html).toContain('style="--value:100%"');
     expect(text).toContain("1 battle");
     expect(text).toContain("2 battles");
   });
@@ -435,12 +436,16 @@ describe("army analytics route historical reads", () => {
     );
     expect(text).toContain("Unreadable 16.7%");
     expect(text).toContain("2 of 12");
+    // Thrower's 3-star rate, 12.5 points over the 37.5% average, is coloured;
+    // Unreadable's, far under it, stays neutral, being no army to judge.
+    expect(html).toContain('class="analytics-value" data-compared="above"');
+    expect(html).not.toContain('class="analytics-value" data-compared="below"');
     expect(html).toContain(
       'href="/analytics/armies?season=current&amp;lens=defense&amp;category=troops"',
     );
   });
 
-  it("shows Avg. trophies after the star rates on Armies only, sortable", async () => {
+  it("shows Trophies per attack after the star rates on Armies only, sortable", async () => {
     const row = (
       label: string,
       threeStars: number,
@@ -481,11 +486,34 @@ describe("army analytics route historical reads", () => {
     expect(query.get("sort")).toBe("average-trophies");
     expect(rowNames(html)).toEqual(["Thrower", "Hydra"]);
     expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
-    // The table's headings: Avg. trophies after 3-star, sorted highest first.
-    expect(text).toContain("1-star Avg. trophies ↓ Avg. stars");
-    expect(text).toContain("50.0% 2 battles 0.0% 0 battles 36.0 32.1 below 3 stars");
-    expect(text).toContain("25.0% 1 battle 0.0% 0 battles 35.5 22.0 below 3 stars");
-    expect(text).toContain("Avg. trophies counts every attack.");
+    // The table's headings: Trophies per attack after 3-star, sorted highest
+    // first, then Battles; the quieter numbers wait behind More columns. The
+    // 3-star heading names the mark on its bars and what its colours mean.
+    // Each bar's heading states its scale, usage rounded up from its top share.
+    expect(text).toContain(
+      "Name Usage 0 50% 3-star avg 62.5% above · below 0 100% Trophies per attack ↓ Battles Thrower",
+    );
+    expect(html).toContain('role="columnheader" data-column="usage-count"');
+    expect(html).not.toContain('role="columnheader" data-column="two-star-rate"');
+    expect(html).toContain('aria-pressed="false"');
+    expect(text).toContain("50.0% 2 battles 36.0 32.1 below 3 stars");
+    expect(text).toContain("75.0% 3 battles 35.5 22.0 below 3 stars");
+    expect(text).toContain("Trophies per attack counts every attack.");
+    expect(text).toContain(
+      "green when more than 5 points above it and red when more than 5 points below.",
+    );
+    // Each 3-star bar marks the rate over every attack, 5 of 8 here.
+    expect(html).toContain("--average:62.5%");
+    expect(text).toContain(
+      "The mark on each 3-star bar is the rate over every attack, 62.5%.",
+    );
+
+    // Sorted by a quieter number, its column shows without More columns.
+    getArmyAnalytics.mockResolvedValue(view("army-types", "two-star-rate"));
+    const byTwoStars = await renderArmyRoute("season=current&sort=two-star-rate");
+    expect(byTwoStars).toContain('data-column="two-star-rate" aria-sort="descending"');
+    expect(byTwoStars).not.toContain('role="columnheader" data-column="one-star-rate"');
+    expect(rowNames(byTwoStars)).toEqual(["Thrower", "Hydra"]);
 
     // A type with variants shows, closed, that it opens and how many named
     // variants it has, its Other (id 0) apart.
@@ -505,7 +533,8 @@ describe("army analytics route historical reads", () => {
     getArmyAnalytics.mockResolvedValue(hydra([1, 0]));
     const closed = await renderArmyRoute("season=current");
     expect(closed).toContain('aria-haspopup="dialog" aria-expanded="false"');
-    expect(renderedText(closed)).toContain("Hydra Hydra + Other 50.0%");
+    // Every screen shows the same count; the sheet names the variants.
+    expect(renderedText(closed)).toContain("Hydra 1 variant 50.0%");
     expect(closed).not.toContain("<dialog");
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
@@ -524,14 +553,14 @@ describe("army analytics route historical reads", () => {
       rows: [{ ...row("Dragons", 4, 40, null) }],
     });
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "100.0% 4 battles 0.0% 0 battles 0.0% 0 battles 40.0 all 3 stars",
+      "100.0% 4 battles 40.0 all 3 stars",
     );
 
     // Unit usage has no trophies column.
     getArmyAnalytics.mockResolvedValue(view("troops", "usage-rate"));
     const units = await renderArmyRoute("season=current&category=troops");
     expect(units).not.toContain("average-trophies");
-    expect(units).not.toContain("Avg. trophies");
+    expect(units).not.toContain("Trophies per attack");
 
     // Leaving Armies drops that sort, this Season or a past one.
     const unitUsage = (page: string) =>
@@ -624,7 +653,8 @@ describe("army analytics route historical reads", () => {
     expect(text).not.toContain("These numbers cover");
     expect(text).not.toContain("Star rates show");
     expect(text).not.toContain("Full star breakdown");
-    expect(html).not.toContain("<details");
+    // Only the record counts sit behind "How these are counted".
+    expect(html.match(/<details.*?<\/details>/s)?.[0]).not.toContain("<p>");
   });
 
   it("offers Clan Castle Troops as a unit type, keeping old checkbox links", async () => {

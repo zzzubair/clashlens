@@ -106,13 +106,15 @@ it("keeps rank and update explanations off the page but in hover and screen-read
   expect(html).not.toContain("2026-10-02T11:30:00Z");
   expect(html).not.toContain("Tracked player rankings");
   expect(html).toMatch(
-    /<p class="standings-range"><a aria-label="Previous 100" href="[^"]*page=1"[^>]*>‹<\/a><span>101–101<span class="standings-total"> of 101<\/span><\/span><\/p>/,
+    /<p class="standings-range"><a aria-label="Previous 100" title="Previous 100" href="[^"]*page=1"[^>]*>‹<\/a><span>101–101<span class="standings-total"> of 101<\/span><\/span><\/p>/,
   );
   expect(html).toContain('<span class="pagination-status">101–101 of 101</span>');
   expect(html).toContain(">Previous 100</a>");
   expect(html).toContain('<span class="rank-mark">101</span>');
-  // Phones show the age beside the tag; "Last updated" is read out, not shown.
-  expect(html).toMatch(/<summary><span class="sr-only">Last updated <\/span>20 min ago/);
+  // Phones show an old row's age beside its clan; "Last updated" is read out, not shown.
+  expect(html).toMatch(
+    /<summary><span class="sr-only">Last updated <\/span><span>20 min ago/,
+  );
   expect(html).toContain("Over 10 min old");
   expect(html).toMatch(/<details[^>]*>.*dateTime="2026-10-02T11:40:00Z".*<\/details>/);
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
@@ -135,8 +137,9 @@ it.each([
     fixture.entries[0].freshness = { ...fixture.entries[0].freshness, observedAt };
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render();
+    // On phones every row shows its age; screen readers hear "Last updated" first.
     expect(html).toContain(
-      `<summary><span class="sr-only">Last updated </span>${age.replace("minutes", "min")} ago`,
+      `<summary><span class="sr-only">Last updated </span><span>${age.replace("minutes", "min")} ago`,
     );
     expect(html).toContain(
       `${age.replace("minutes", "min")} ago${stale ? '<span class="sr-only"> · Over 10 min old</span>' : ""}</time>`,
@@ -174,6 +177,32 @@ it("marks only rows on equal trophies as a tie, keeps each rank its own and rese
   );
   // Untied rows keep the same empty slot, so every row's trophies line up.
   expect(rows[2]).toContain('<strong>5,290</strong><span class="tie-slot"></span>');
+});
+
+it("gives each row its trophy gap to the row above", async () => {
+  const fixture = structuredClone(board);
+  const row = fixture.entries[0];
+  fixture.entries = [
+    { ...row, rank: 101, tag: "#2PP", trophies: 5340 },
+    { ...row, rank: 102, tag: "#9PJYL8RQ0", trophies: 5300 },
+    { ...row, rank: 103, tag: "#LQ2UV9GJC", trophies: 5290 },
+    { ...row, rank: 104, tag: "#8QU8J9LP", trophies: 5290 },
+  ];
+  mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+  const { html } = await render();
+  const gaps = html
+    .split('<tr class="leaderboard-row"')
+    .slice(1)
+    .map(
+      (item) =>
+        item.match(/<td class="gap-cell" data-label="To player above">(.*?)<\/td>/)![1],
+    );
+  // The page's first row has no row above it here, even past page 1.
+  expect(gaps[0]).toBe("");
+  expect(gaps[1]).toBe('<span class="gap-value">−40</span>');
+  expect(gaps[2]).toBe('<span class="gap-value">−10</span>');
+  expect(gaps[3]).toBe('<span class="gap-value" data-zero="true">0</span>');
+  expect(html).toContain('<th scope="col" class="gap-cell">To player above</th>');
 });
 
 it("formats large ranks without explaining unlisted tracked players", async () => {

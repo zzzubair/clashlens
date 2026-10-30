@@ -281,17 +281,17 @@ function signed(value: number, negative: boolean, digits: number): string {
 }
 
 /**
- * An average board's number: trophies a Legend day with one decimal over a
- * longer period, whole trophies so far today. Defense is shown as a loss.
+ * An average board's number in whole trophies (a tenth of a trophy is noise
+ * here): trophies a Legend day over a longer period, the day's total today.
+ * Defense is shown as a loss.
  */
 export function formatAverage(
   row: { total: number; days: number },
   board: BoardKey,
   period: CrewPeriod,
 ): string {
-  const negative = board !== "attackers";
-  if (period === "today") return signed(row.total, negative, 0);
-  return signed(row.total / row.days, negative, 1);
+  const value = Math.round(period === "today" ? row.total : row.total / row.days);
+  return signed(value, board !== "attackers", 0);
 }
 
 export function mapCrewList(value: unknown): CrewList | null {

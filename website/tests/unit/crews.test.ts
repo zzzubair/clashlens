@@ -243,14 +243,14 @@ describe("crews switch", () => {
 });
 
 describe("crew board numbers", () => {
-  it("shows averages a Legend day with one decimal and today's totals whole", () => {
-    expect(formatAverage({ total: 1139, days: 5 }, "attackers", "season")).toBe("+227.8");
+  it("shows averages a Legend day and today's totals in whole trophies", () => {
+    expect(formatAverage({ total: 1139, days: 5 }, "attackers", "season")).toBe("+228");
     expect(formatAverage({ total: 1504, days: 6 }, "worst_defenders", "week")).toBe(
-      "-250.7",
+      "-251",
     );
     expect(formatAverage({ total: 120, days: 1 }, "attackers", "today")).toBe("+120");
     expect(formatAverage({ total: 80, days: 1 }, "best_defenders", "today")).toBe("-80");
-    expect(formatAverage({ total: 0, days: 3 }, "best_defenders", "season")).toBe("0.0");
+    expect(formatAverage({ total: 0, days: 3 }, "best_defenders", "season")).toBe("0");
   });
 
   it("refuses a boards answer that is missing a board or an average without days", () => {
@@ -281,7 +281,7 @@ describe("crew page", () => {
     const attackers = html.slice(html.indexOf('id="board-attackers"'));
     const card = attackers.slice(0, attackers.indexOf("</section>"));
     expect(card.match(/class="crew-row"/g)).toHaveLength(5);
-    expect(card).toContain("+227.8");
+    expect(card).toContain("+228");
     expect(card).toContain("See all 7");
     expect(card).toContain("2 accounts have no data here.");
     expect(card).toContain(`href="/crews/${CREW_ID}/boards/attackers#not-on-board"`);

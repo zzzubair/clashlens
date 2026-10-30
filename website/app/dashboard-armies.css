@@ -1,9 +1,17 @@
 /* Armies on defense and Armies on offense (components/ArmyCards.tsx). */
 
+/* Beside a taller card, the rows share the spare height, so the table
+   reaches the card's foot. */
 .army-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
   gap: 0.25rem;
   transition: opacity 150ms ease;
+}
+
+.army-card > :is(.army-defense-row, .army-offense-row):not(.army-head) {
+  flex-grow: 1;
 }
 
 .army-card.is-loading {
@@ -52,8 +60,26 @@
 
 .army-head {
   color: var(--cl-muted);
-  font-size: 0.7rem;
-  font-weight: 900;
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+/* The days and defenses, then the key to the bars' tick. */
+.army-sub {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.2rem 1rem;
+}
+
+.army-key b {
+  display: inline-block;
+  width: 2px;
+  height: 0.85rem;
+  margin-right: 0.2rem;
+  vertical-align: -0.1rem;
+  background: var(--cl-ink);
+  border-radius: 1px;
 }
 
 .army-defense-row,
@@ -66,8 +92,153 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The card is measured, so a wide card keeps its columns on any screen. */
+.dash-card:has(> .army-card) {
+  container-type: inline-size;
+}
+
+/* Wide gaps between columns, so each bar reads with its own number. */
 .army-defense-row {
-  grid-template-columns: minmax(0, 1fr) 3rem 5.75rem 6rem;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 8rem 8rem;
+  column-gap: 1.5rem;
+}
+
+.army-head.army-defense-row > :nth-child(n + 2) {
+  text-align: left;
+}
+
+/* Each army's troop art before its name, as on Analytics. */
+.army-type {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.army-type .unit-art {
+  display: inline-flex;
+  flex: none;
+}
+
+.army-type .unit-art img {
+  width: 1.9rem;
+  height: 1.9rem;
+  background: var(--cl-panel);
+  border-radius: 0.45rem;
+}
+
+.army-type .unit-art img + img {
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-left: -0.4rem;
+  align-self: flex-end;
+  box-shadow: 0 0 0 2px var(--cl-solid);
+}
+
+/* Each number after its bar, the bars in one fixed column, so every row's
+   bar starts at the same place. */
+.army-share,
+.army-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.75rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.army-share > :last-child {
+  grid-column: 2;
+}
+
+/* Room after each Held and Avg lost number for its ▲ or ▼, so the numbers
+   line up whether or not they carry one. */
+.army-stat {
+  padding-right: 0.8rem;
+}
+
+.army-bar {
+  position: relative;
+  height: 6px;
+  background: var(--cl-raised);
+  border-radius: 3px;
+}
+
+.army-bar i {
+  display: block;
+  height: 100%;
+  background: var(--cl-action);
+  border-radius: 3px;
+}
+
+/* Held and Avg lost bars stay neutral, read against the tick, but clearly
+   stronger than their track; only their number turns green or red, with a
+   ▲ or ▼, and only when well clear of the Legends. */
+.army-bar.is-measured i {
+  background: color-mix(in srgb, var(--cl-ink) 62%, transparent);
+}
+
+.army-own {
+  position: relative;
+}
+
+/* The Legends' number is the bar's tick and its hover text; a touch screen
+   or phone has no hover, so it shows under the user's number there. */
+.army-legends-touch {
+  display: none;
+  color: var(--cl-muted);
+  font-size: 0.8em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (hover: none), (max-width: 40rem) {
+  .army-legends-touch {
+    display: block;
+    grid-column: 2;
+    margin-top: -0.35rem;
+  }
+}
+
+.army-own.is-better {
+  color: var(--cl-positive);
+}
+
+.army-own.is-worse {
+  color: var(--cl-negative);
+}
+
+/* So better or worse never rests on colour alone; screen readers already
+   hear the Legends' number beside it. */
+.army-own.is-better::after {
+  content: "▲";
+  content: "▲" / "";
+}
+
+.army-own.is-worse::after {
+  content: "▼";
+  content: "▼" / "";
+}
+
+.army-own::after {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  margin-left: 0.2rem;
+  font-size: 0.7em;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+/* Every tracked player's number, as a tick across the bar. */
+.army-bar b {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--cl-ink);
+  border-radius: 1px;
+  /* A gap either side, so the tick stands clear of the fill it crosses. */
+  box-shadow: 0 0 0 1.5px var(--cl-solid);
 }
 
 .army-offense-row {
@@ -85,19 +256,6 @@
 
 :is(.army-defense-row, .army-offense-row) > :nth-child(n + 2) {
   text-align: right;
-}
-
-/* Every tracked player's number after the user's, and its header. */
-.army-legends {
-  font-weight: 600;
-}
-
-.army-legends-head {
-  display: block;
-  color: var(--cl-muted);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .army-defense-row.is-all {
@@ -156,9 +314,9 @@
   white-space: nowrap;
 }
 
-/* A phone drops the column headers: the army and its share on one line,
-   Held and Avg lost under it, each labelled, with the Legends number beside. */
-@media (max-width: 40rem) {
+/* A narrow card (a phone, or a Small card) drops the column headers: the
+   army and its share on one line, Held and Avg lost under it, each labelled. */
+@container (max-width: 36rem) {
   .army-defense-row.army-head {
     display: none;
   }
@@ -184,8 +342,14 @@
 
   .army-defense-row > .army-share {
     grid-area: share;
+    grid-template-columns: minmax(0, 1fr) auto;
     color: var(--cl-muted);
     font-size: 0.85rem;
+  }
+
+  /* Room for the widest share, so every bar ends at the same place. */
+  .army-share > :last-child {
+    min-width: 6.4rem;
   }
 
   .army-defense-row > :nth-child(3),
@@ -194,10 +358,9 @@
   }
 
   .army-stat {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 0.5rem;
-    align-items: baseline;
+    grid-template-columns: minmax(0, 5rem) auto;
+    justify-content: start;
+    row-gap: 0.15rem;
     font-family: var(--cl-font-score);
     font-size: 1.15rem;
     font-weight: 700;
@@ -213,21 +376,31 @@
     clip-path: none;
   }
 
+  /* Held and Avg lost show on the first army only (screen readers still hear
+     them on every row); the rows below line up under them. */
+  .army-defense-row:not(.army-head)
+    ~ .army-defense-row:not(.is-all)
+    .army-stat
+    > .army-stat-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
   .army-stat > .army-stat-label {
     grid-column: 1 / -1;
     color: var(--cl-muted);
     font-family: var(--cl-font);
-    font-size: 0.7rem;
+    font-size: 0.8125rem;
     font-weight: 650;
   }
+}
 
-  .army-slash {
+/* A phone shows the top 3 armies and All defenses, then Show all. */
+@media (max-width: 40rem) {
+  .army-card:not(.army-all) > .army-defense-row.is-extra {
     display: none;
-  }
-
-  .army-legends {
-    font-family: var(--cl-font);
-    font-size: 0.78rem;
-    font-weight: 600;
   }
 }

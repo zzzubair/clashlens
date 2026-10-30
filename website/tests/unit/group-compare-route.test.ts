@@ -226,9 +226,17 @@ describe("group comparison", () => {
         context,
       }),
     );
-    // Each day bar still says what it means on hover and to screen readers.
-    expect(html).toContain('title="5 Aug: may still change, +40"');
+    // Each day bar says what it means to screen readers; the bars take keyboard
+    // focus (pointing or the arrow keys then show one day's date and result), and
+    // their column names the shared scale and the first and last dates.
+    expect(html).toContain("5 Aug may still change +40");
     expect(html).toContain("4 Aug incomplete +10");
+    expect(html).toMatch(
+      /<span class="trend" role="img" aria-label="[^"]*" tabindex="0"/,
+    );
+    expect(html).toContain(
+      '<i class="trend-scale-line"></i>best day <!-- -->+40</span><span class="trend-dates" aria-hidden="true"><span>3 Aug</span><span>5 Aug</span></span>',
+    );
     const text = html
       .replaceAll("<!-- -->", "")
       .replaceAll("&#x27;", "'")
@@ -238,8 +246,9 @@ describe("group comparison", () => {
     expect(text).not.toContain("Some battles are missing");
     expect(text).not.toContain("Attack and defense also use every battle recorded");
     expect(text).toContain("Not yet proven");
-    expect(text).toContain("Recorded: +80 won · −16 lost");
-    expect(text).toContain("Recorded: 2 attacks, 1 defense");
+    // The smaller figures wait in each row's details instead of filling the table.
+    expect(text).toContain("+80 won · −16 lost");
+    expect(text).toContain("2 attacks, 1 defense");
   });
 
   it("offers to reload the comparison when it could not be read", async () => {
@@ -281,7 +290,7 @@ describe("group comparison", () => {
 
   it("keeps a full group of worst-case players readable", async () => {
     const html = await renderComparison(worstComparison());
-    expect(html.match(/<tr/g)).toHaveLength(21);
+    expect(html.match(/<th scope="row"/g)).toHaveLength(20);
     // Totals over 14 days pass 1,000 trophies, and each count reads in the singular.
     for (const text of ["−1,234", "+3,808 won · −3,360 lost", "1 defense gave up 1 star"])
       expect(html).toContain(text);
@@ -292,7 +301,7 @@ describe("group comparison", () => {
     const comparison = worstComparison(3);
     comparison.players = comparison.players.filter((player) => !player.inGroup);
     const html = await renderComparison(comparison);
-    expect(html.match(/<tr/g)).toHaveLength(2);
+    expect(html.match(/<th scope="row"/g)).toHaveLength(1);
     expect(html).toContain("not in this watchlist");
     expect(html).not.toContain("No players in this watchlist yet");
   });

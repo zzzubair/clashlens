@@ -383,7 +383,8 @@ describe("dashboard grid", () => {
       "1@5",
       "2@6",
     ]);
-    // On 2 columns the clock widens (Bases is Large) and Goal pairs with the heat map.
+    // On 2 columns Medium takes the row, so the clock widens under the Legend
+    // day and the heat map pairs with Goal.
     expect(places(DEFAULT_LAYOUT, 2)).toEqual([
       "2@0",
       "2@1",
@@ -396,39 +397,45 @@ describe("dashboard grid", () => {
   });
 
   it("fills a row's hole with a later Small card, never from past a Large card", () => {
-    expect(places(["goal", "armies-defense", "heat-map"], 2)).toEqual([
-      "1@0",
-      "2@2",
+    expect(places(["armies-defense", "rivals-watch", "heat-map"], 3)).toEqual([
+      "2@0",
+      "3@2",
       "1@1",
     ]);
-    // Customising shows the saved order, so Goal widens instead.
-    expect(places(["goal", "armies-defense", "heat-map"], 2, false)).toEqual([
-      "2@0",
+    // Customising shows the saved order, so Armies on defense widens instead.
+    expect(places(["armies-defense", "rivals-watch", "heat-map"], 3, false)).toEqual([
+      "3@0",
       "2@1",
-      "2@2",
+      "1@2",
     ]);
-    expect(places(["goal", "bases", "heat-map"], 2)).toEqual(["2@0", "2@1", "2@2"]);
+    expect(places(["goal", "bases", "heat-map"], 3)).toEqual(["3@0", "3@1", "3@2"]);
   });
 });
 
 describe("Legend clock", () => {
   const dayStart = Date.UTC(2026, 9, 7, 5);
 
-  it("merges battles within 20 minutes of each other into one mark", () => {
+  it("merges battles about an icon apart into one mark: 45 minutes for attacks, 55 for defenses", () => {
     const marks = clockMarks(
       [
         fight("attack", 7, 10, 3, 40),
         fight("attack", 7, 25, 3, 40),
         fight("attack", 7, 44, 2, 31),
         fight("attack", 12, 6, 2, 29),
+        fight("attack", 12, 50, 3, 40),
+        fight("attack", 14, 0, 3, 40),
         fight("defense", 7, 30, 3, -40),
+        fight("defense", 8, 20, 2, -24),
+        fight("defense", 11, 0, 3, -40),
         fight("defense", 4, 0, 1, -16),
       ],
       dayStart,
     );
     expect(marks.map((mark) => [mark.kind, mark.battles.length])).toEqual([
       ["attack", 3],
+      ["attack", 2],
       ["attack", 1],
+      ["defense", 2],
       ["defense", 1],
     ]);
   });
@@ -442,7 +449,7 @@ describe("Legend clock", () => {
       }),
     );
     expect(html).toContain("to Reset at 05:00");
-    expect(text(html)).toContain("Reset 05:00");
+    expect(html).toMatch(/class="clock-reset-label"[^>]*>05:00</);
     expect(text(html)).toContain("3h 00m");
     expect(text(html)).not.toContain("now ");
   });
@@ -485,10 +492,10 @@ describe("Legend day card", () => {
       ),
     );
 
-  it("shows the projected place beside the outer range, labelled an estimate", () => {
+  it("shows the projected place beside the outer range, labelled its range", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
     expect(html).toContain("Projected #3,000 at Reset. ");
-    expect(html).toContain("Next Reset #1 – #12,270 estimate");
+    expect(html).toContain("Next Reset #1 – #12,270 Next Reset range");
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
     );
@@ -600,18 +607,18 @@ describe("Bases you attacked", () => {
       }),
     );
     const plain = text(html);
-    expect(plain).toContain("Base strength today");
+    expect(plain).toContain("Base strength vs Legend avg");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
     expect(plain).toContain("Hard held 5 of 6 · 83% vs Legend avg 41%");
     expect(plain).toContain("Easy held 1 of 4 · 25% vs Legend avg 41%");
-    expect(plain).toContain("Too early held 0 of 2");
+    expect(plain).toContain("Too early held 0 of 2 Watchlist");
     expect(html).toContain('title="Needs 3+ defenses for a rating">Too early<');
     expect(plain).not.toContain("not yet");
     // Each opponent can be saved into one of the account's groups.
     expect(html).toContain('href="/account/watchlists/add/8PP"');
-    // One square per attack, and one in the key under the rows.
-    expect(html.match(/is-yours/g)).toHaveLength(4);
+    // One ringed slot per attack, with no key beside them.
+    expect(html.match(/is-yours/g)).toHaveLength(3);
   });
 
   it("shows a base with 3+ defenses but no comparison as unavailable, not too early", async () => {
@@ -703,7 +710,7 @@ describe("Bases you attacked", () => {
         }),
       ),
     );
-    expect(plain).toContain("Base strength today");
+    expect(plain).toContain("Base strength vs Legend avg");
     // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense,
     // against 32 a defense, 192 over 6, at similar trophies.
     expect(plain).toContain("Hard lost −165 in 6 defenses · Legend avg −192");
@@ -711,12 +718,12 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Easy lost −145 in 4 defenses · Legend avg −128");
     // The same base near players losing 36 a defense is Average.
     expect(plain).toContain(
-      "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 in 4 defenses · Legend avg −144",
+      "Near 36 5,712 ★★★ 100 % +40 · 07:20 2 stars held 3 stars tripled 3 stars tripled 3 stars tripled, your attack Average lost −145 in 4 defenses · Legend avg −144",
     );
     expect(plain).toContain("– lost −145 in 4 defenses · no comparison yet");
     // Under 3 defenses the rating waits, but the day's total so far shows
     // beside the average.
-    expect(plain).toContain("Too early lost −65 in 2 defenses · Legend avg −64");
+    expect(plain).toContain("Too early lost −65 in 2 defenses · Legend avg −64 Watch");
     expect(plain).toContain("Too early lost −40 in 1 defense · Legend avg −32");
     expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
@@ -1478,7 +1485,7 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    expect(plain).toContain("Rank, rivals, Reset clock and goal. Free.");
-    expect(plain).toContain("Create account Already have one? Sign in");
+    // One way in; Sign in stays in the header.
+    expect(plain).toContain("Season heat map Create account");
   });
 });

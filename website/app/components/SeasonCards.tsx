@@ -43,6 +43,8 @@ const FIRST_DAY_NOTE = "Results start after the Season's first Reset.";
 export function HeatMapCard({ data }: { data: SeasonData }) {
   const [mode, setMode] = useState<HeatMode>("net");
   const [picked, setPicked] = useState<number | null>(null);
+  // The day under the pointer or keyboard focus, read out under the grid.
+  const [pointed, setPointed] = useState<number | null>(null);
   const cells = heatCells(data, mode);
   const byDay = new Map(data.days.map((day) => [day.day, day]));
   const pickedCell = cells.find((cell) => cell.day === picked) ?? null;
@@ -50,6 +52,7 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
     pickedCell === null || pickedCell.kind in NO_RESULT
       ? null
       : (byDay.get(pickedCell.day) ?? null);
+  const shownCell = cells.find((cell) => cell.day === (pointed ?? picked)) ?? null;
   return (
     <>
       <CardHead
@@ -72,19 +75,30 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
           <HeatSquare
             key={cell.day}
             cell={cell}
+            loss={mode === "net" && cell.value !== null && cell.value < 0}
             picked={picked === cell.day}
             onPick={() => setPicked(picked === cell.day ? null : cell.day)}
+            onPoint={(on) => setPointed(on ? cell.day : null)}
           />
         ))}
       </ol>
-      <p className="dash-muted heat-tip" aria-live="polite">
-        {pickedDay
-          ? `Day ${pickedDay.day} · ended on ${count(pickedDay.endTrophies)}${isShieldDay(pickedDay) ? " · no battles" : ""}`
-          : pickedCell && pickedCell.kind in NO_RESULT
-            ? `Day ${pickedCell.day}: ${NO_RESULT[pickedCell.kind as keyof typeof NO_RESULT]}`
-            : data.today !== null && data.today > 1
-              ? "Coloured against your own Season: best days green, worst red."
-              : FIRST_DAY_NOTE}
+      {/* The day's readout covers the key, which keeps its room so nothing jumps. */}
+      <p
+        className={`dash-muted heat-tip${shownCell ? " is-reading" : ""}`}
+        aria-live="polite"
+      >
+        {shownCell ? (
+          <span className="heat-readout">
+            {dayReadout(shownCell, byDay.get(shownCell.day), mode)}
+          </span>
+        ) : null}
+        <span>
+          {data.today !== null && data.today > 1 ? (
+            <HeatKey net={mode === "net"} />
+          ) : (
+            FIRST_DAY_NOTE
+          )}
+        </span>
       </p>
       <dl className="heat-summary">
         {pickedDay ? (
@@ -97,6 +111,32 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
   );
 }
 
+/** The five shades from the Season's worst day to its best. */
+function HeatKey({ net }: { net: boolean }) {
+  return (
+    <span className="heat-key">
+      <span className="sr-only">
+        Coloured against your own Season: best days green, worst red.
+      </span>
+      <span aria-hidden="true">Your worst</span>
+      {[0, 1, 2, 3, 4].map((step) => (
+        <i
+          key={step}
+          aria-hidden="true"
+          style={{ background: `var(--cl-heat-${step})` }}
+        />
+      ))}
+      <span aria-hidden="true">your best</span>
+      {/* Relative colours can paint a small gain red; a lost day is marked. */}
+      {net ? (
+        <span className="heat-key-loss" aria-hidden="true">
+          <b /> lost trophies
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** What a day without a result says when tapped. */
 const NO_RESULT = {
   today: "in progress",
@@ -104,14 +144,27 @@ const NO_RESULT = {
   missing: "no saved result",
 } as const;
 
+/** One line on a pointed or picked day: its number, result and finish. */
+function dayReadout(cell: HeatCell, day: SeasonDay | undefined, mode: HeatMode): string {
+  if (cell.kind in NO_RESULT || day === undefined)
+    return `Day ${cell.day}: ${NO_RESULT[cell.kind as keyof typeof NO_RESULT] ?? NO_RESULT.missing}`;
+  const result = isShieldDay(day) ? "no battles" : `${signedOr(cell.value)} ${mode}`;
+  return `Day ${cell.day} · ${result} · ended on ${count(day.endTrophies)}`;
+}
+
 function HeatSquare({
   cell,
+  loss,
   picked,
   onPick,
+  onPoint,
 }: {
   cell: HeatCell;
+  /** A Net day that lost trophies, marked apart from a small gain. */
+  loss: boolean;
   picked: boolean;
   onPick: () => void;
+  onPoint: (on: boolean) => void;
 }) {
   const label =
     cell.kind === "today"
@@ -133,17 +186,26 @@ function HeatSquare({
           color: `var(--cl-heat-${step}-text, var(--cl-heat-text))`,
         };
   return (
-    <li className={`heat-day heat-${cell.kind}`} style={style}>
+    <li className={`heat-day heat-${cell.kind}${loss ? " is-loss" : ""}`} style={style}>
+      {/* Each row is a week, named by its first day in the gutter. */}
+      {cell.day % 7 === 1 ? (
+        <span className="heat-week" aria-hidden="true">
+          D{cell.day}
+        </span>
+      ) : null}
       <button
         type="button"
         aria-pressed={picked}
         aria-label={`Day ${cell.day}: ${label}`}
-        title={`Day ${cell.day}: ${label}`}
         onClick={onPick}
+        onMouseEnter={() => onPoint(true)}
+        onMouseLeave={() => onPoint(false)}
+        onFocus={() => onPoint(true)}
+        onBlur={() => onPoint(false)}
       >
         <small>{cell.day}</small>
         {cell.kind === "today"
-          ? "today"
+          ? "now"
           : cell.kind === "missing"
             ? "–"
             : cell.kind in NO_RESULT

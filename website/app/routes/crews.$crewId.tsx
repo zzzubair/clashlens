@@ -156,17 +156,20 @@ export default function CrewRoute() {
           <h1 id="crew-title">{crew.name}</h1>
           {myRole === null ? (
             <p className="crew-meta">By invite only</p>
-          ) : clashers === null ? null : (
+          ) : myRole === "member" ? null : (
             <p className="crew-meta">
-              {clashers} {clashers === 1 ? "clasher" : "clashers"}
               <RoleChip role={myRole} />
             </p>
           )}
         </div>
         <div className="crew-places">
+          {/* Accounts fill places; the clashers who own them may hold several each. */}
           <p>
             <span>
-              {crew.used} of {crew.size} places
+              {crew.used} of {crew.size} places filled
+              {clashers === null
+                ? null
+                : ` · ${clashers} ${clashers === 1 ? "clasher" : "clashers"}`}
             </span>
             {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
           </p>
@@ -310,7 +313,8 @@ function BoardCard({
       </div>
       {rows.length > 0 ? (
         <BoardRows
-          rows={rows.slice(0, CARD_ROWS)}
+          rows={rows}
+          limit={CARD_ROWS}
           board={board}
           period={period}
           backLabel={crew.name}

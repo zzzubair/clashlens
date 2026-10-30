@@ -353,53 +353,61 @@ function AccountTabs({
   const [searchParams] = useSearchParams();
   return (
     <nav className="dash-accounts" aria-label="Your Clash players">
-      {players.map((player) => {
-        const next = new URLSearchParams(searchParams);
-        next.set("player", player.tag);
-        const net =
-          !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
-        const name = player.name ?? player.tag;
-        // The tab switches the dashboard; Page beside it opens the player page.
-        return (
-          <span key={player.tag} className="dash-account-tab">
-            <Link
-              className="dash-account"
-              to={`?${next.toString()}`}
-              aria-current={player.tag === selectedTag ? "page" : undefined}
-              preventScrollReset
-              replace
-            >
-              <bdi className="dash-name" title={name}>
-                {name}
-              </bdi>
-              <span className="dash-account-line">
-                {accountLine(player)}
-                {net !== null ? (
-                  <>
-                    {" · "}
-                    <b
-                      className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}
-                    >
-                      {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
-                    </b>{" "}
-                    today
-                  </>
-                ) : null}
-              </span>
-            </Link>
-            <Link
-              className="dash-account-page"
-              to={canonicalPlayerPath(player.tag)}
-              aria-label={`${name} player page`}
-            >
-              <DashboardIcon name="open" />
-            </Link>
-          </span>
-        );
-      })}
-      <Link className="dash-account dash-account-add" to="/account/verify-player">
-        <DashboardIcon name="plus" />{" "}
-        <span className="dash-account-add-text">Link player</span>
+      <span className="dash-account-track">
+        {players.map((player) => {
+          const next = new URLSearchParams(searchParams);
+          next.set("player", player.tag);
+          const net =
+            !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
+          const name = player.name ?? player.tag;
+          // The tab switches the dashboard; the arrow beside it opens the player page.
+          return (
+            <span key={player.tag} className="dash-account-tab">
+              <Link
+                className="dash-account"
+                to={`?${next.toString()}`}
+                aria-current={player.tag === selectedTag ? "page" : undefined}
+                preventScrollReset
+                replace
+              >
+                <bdi className="dash-name" title={name}>
+                  {name}
+                </bdi>
+                <span className="dash-account-line">
+                  {/* A phone keeps only the net today, as a chip under the name. */}
+                  <span className="dash-account-stats">
+                    {accountLine(player)}
+                    {net !== null ? " · " : null}
+                  </span>
+                  {net !== null ? (
+                    <>
+                      <b
+                        className={
+                          net > 0 ? "positive" : net < 0 ? "negative" : undefined
+                        }
+                      >
+                        {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
+                      </b>{" "}
+                      today
+                    </>
+                  ) : null}
+                </span>
+              </Link>
+              <Link
+                className="dash-account-page"
+                to={canonicalPlayerPath(player.tag)}
+                aria-label={`${name} player page`}
+              >
+                <DashboardIcon name="open" />
+                <span>View page</span>
+              </Link>
+            </span>
+          );
+        })}
+      </span>
+      {/* Its own button, apart from the tabs, so it never reads as part of one. */}
+      <Link className="dash-account-add" to="/account/verify-player">
+        <DashboardIcon name="plus" /> <span>Link player</span>
       </Link>
     </nav>
   );

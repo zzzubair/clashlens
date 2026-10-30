@@ -319,12 +319,14 @@ describe("adding and removing one group player", () => {
   it("opens adding and editing below the card's buttons without needing JavaScript", async () => {
     const html = await renderGroups(worstGroups());
     const card = html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`));
-    // The three buttons share one row; each panel below it holds ordinary forms, closed at first.
+    // Add player, Edit and Compare share one row, each named by its own visible words; each panel below it holds ordinary forms, closed at first.
     expect(card).toMatch(
       new RegExp(
-        `^<li[^>]*><div class="group-card-head"><h3>[^<]*</h3><a [^>]*>Compare players</a>` +
-          `<a class="button button-secondary" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*>Add player</a>` +
-          `<a class="button button-secondary" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*>Edit</a></div>` +
+        `^<li[^>]*><div class="group-card-head"><div class="group-card-title"><h3>[^<]*</h3>(?:<p class="group-card-meta">[^]*?</p>)?</div>` +
+          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*><svg[^]*?</svg>Add player</a>` +
+          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]* title="[^"]+"><svg[^]*?</svg>Edit</a>` +
+          `<a class="group-card-open" [^>]*aria-label="Compare players in [^"]*"[^>]*>Compare<svg[^]*?</a></div>` +
+          `(?:<p class="group-members-key" aria-hidden="true">Behind #1</p>)?` +
           `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/watchlists" method="post"><input type="hidden" name="action" value="add-player"/>`,
       ),
     );
@@ -344,8 +346,9 @@ describe("adding and removing one group player", () => {
     );
     expect(card(add)).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
     expect(card(add)).toContain(
-      `href="/account/watchlists#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add">Add player</a>`,
+      `href="/account/watchlists#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add"><svg`,
     );
+    expect(card(add)).toContain("</svg>Add player</a>");
     expect(add.match(/class="group-panel">/g)).toHaveLength(1);
 
     const edit = await renderGroups(

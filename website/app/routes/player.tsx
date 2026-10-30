@@ -13,7 +13,13 @@ import {
 import { usePlayerLookupEvent } from "../components/Analytics";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { DayBattles, LegendLog, legendDayDate, validDay } from "../components/LegendLog";
+import {
+  DayBattles,
+  LegendLog,
+  TodaySlots,
+  legendDayDate,
+  validDay,
+} from "../components/LegendLog";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
@@ -25,6 +31,7 @@ import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
 import { SeasonStory } from "../components/SeasonStory";
 import { SelectedSeason } from "../components/SelectedSeason";
+import { SeasonHeatStrip } from "../components/SeasonSummary";
 import { TrophyLine } from "../components/TrophyLine";
 import { TagSearchAgain } from "../components/TagSearchAgain";
 import {
@@ -426,6 +433,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         kind: gap.kind,
       }))
     : [];
+  // The Season summary's heat strip, from the days the log shows.
+  const heatStrip = shape ? (
+    <SeasonHeatStrip
+      history={history}
+      seasonStart={shape.seasonStart}
+      today={shape.today}
+    />
+  ) : null;
   // A player now outside Legend I shows the total they left on.
   const leftOn =
     player && shape?.outsideNow && shape.lastLegendDay
@@ -683,6 +698,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             player={current}
             now={statisticsTime}
             menu={seasonMenu(current !== null)}
+            strip={heatStrip}
           />
         ) : (
           seasonMenu(false)
@@ -736,49 +752,29 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               </>
             ) : (
               <strong className="player-trophy-count">
-                <TrophyMark />
+                {/* The Legend League badge while the profile and this week's
+                    league both put the player there; otherwise a trophy. */}
+                {trackedPlayer.profile.eligibility === "legend-i" &&
+                !shape?.outsideNow ? (
+                  <img
+                    className="player-league-badge"
+                    src="/images/legend-league.webp"
+                    alt=""
+                    width={151}
+                    height={160}
+                  />
+                ) : (
+                  <TrophyMark />
+                )}
                 {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
               </strong>
             )}
           </div>
-          <PlayerActions tag={trackedPlayer.tag}>
-            <refreshFetcher.Form
-              className="player-refresh-form"
-              action={refreshActionPath}
-              method="post"
-            >
-              <input
-                type="hidden"
-                name="idempotencyKey"
-                value={data.noJsIdempotencyKey}
-                readOnly
-              />
-              <button
-                type="submit"
-                className="button secondary"
-                disabled={refreshFetcher.state !== "idle" || refreshing}
-                name="refresh"
-                value="public"
-                onClick={(event) => {
-                  event.preventDefault();
-                  startRefresh(
-                    { idempotencyKey: data.noJsIdempotencyKey },
-                    refreshActionPath,
-                  );
-                }}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
-                </svg>
-                <span>
-                  {refreshFetcher.state === "submitting" || refreshing
-                    ? "Refreshing…"
-                    : "Refresh"}
-                </span>
-              </button>
-            </refreshFetcher.Form>
-          </PlayerActions>
         </div>
+        {/* Today's battles so far, under the trophies they moved. */}
+        {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
+          <TodaySlots day={today} />
+        ) : null}
         {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
           <TrophyLine
             history={history}
@@ -787,13 +783,52 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             current={trackedPlayer.profile.trophies}
           />
         )}
+        {/* The card's foot: when it was saved, a quiet jump to the log below
+            the Season summary, and Refresh, so the controls sit together
+            under what they act on. */}
         <PlayerFreshness profile={trackedPlayer.profile} />
-        {/* The log sits below the Season summary; this reaches it in one tap. */}
         {data.selectedSeason === null ? (
           <a className="player-log-jump" href="#season-days-title">
-            Daily Legend log <span aria-hidden="true">↓</span>
+            Daily log <span aria-hidden="true">↓</span>
           </a>
         ) : null}
+        <PlayerActions tag={trackedPlayer.tag}>
+          <refreshFetcher.Form
+            className="player-refresh-form"
+            action={refreshActionPath}
+            method="post"
+          >
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={data.noJsIdempotencyKey}
+              readOnly
+            />
+            <button
+              type="submit"
+              className="button secondary"
+              disabled={refreshFetcher.state !== "idle" || refreshing}
+              name="refresh"
+              value="public"
+              onClick={(event) => {
+                event.preventDefault();
+                startRefresh(
+                  { idempotencyKey: data.noJsIdempotencyKey },
+                  refreshActionPath,
+                );
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+              </svg>
+              <span>
+                {refreshFetcher.state === "submitting" || refreshing
+                  ? "Refreshing…"
+                  : "Refresh"}
+              </span>
+            </button>
+          </refreshFetcher.Form>
+        </PlayerActions>
         {visibleStatus ? (
           <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
         ) : null}
@@ -822,6 +857,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           player={trackedPlayer}
           now={statisticsTime}
           menu={seasonMenu(true)}
+          strip={heatStrip}
         />
       )}
       {dayBattles}

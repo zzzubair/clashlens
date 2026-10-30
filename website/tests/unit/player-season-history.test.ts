@@ -236,6 +236,51 @@ describe("Daily Legend log days", () => {
   });
 });
 
+describe("Daily Legend log fold", () => {
+  // Days 15 to 28 of the September Season, read an hour before its last Reset.
+  const client = () => {
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    return {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        profile: {
+          ...PLAYER.profile,
+          freshness: { ...PLAYER.profile.freshness, observedAt: "2026-10-05T04:00:00Z" },
+        },
+        season: {
+          id: SEASON,
+          anchor: "2026-09-07T05:00:00Z",
+          currentDayNumber: 28,
+          dayCount: 28,
+          anchorSource: "official_league_history",
+          anchorObservedAt: "2026-09-07T05:10:00Z",
+        },
+        recentDays: Array.from({ length: 14 }, (_, index) => legendDay(28 - index)),
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+    };
+  };
+  const fold = (html: string) => html.match(/<details class="log-older"[^>]*>/)?.[0];
+
+  it("shows the latest seven days and keeps every older day one tap away", async () => {
+    const html = await loadAndRender(client(), null);
+    expect(fold(html)).toBe('<details class="log-older">');
+    expect(html).toContain("Show all 14 days");
+    const at = (text: string) => html.indexOf(text);
+    expect(at("<small>Day 22</small>")).toBeLessThan(at("log-older"));
+    expect(at("log-older")).toBeLessThan(at("<small>Day 21</small>"));
+    for (let number = 15; number <= 28; number += 1)
+      expect(html).toContain(`<small>Day ${number}</small>`);
+  });
+
+  it("opens the fold for a linked older day", async () => {
+    // Day 15 began on 21 Sep.
+    const html = await loadAndRender(client(), null, "2026-09-21");
+    expect(fold(html)).toBe('<details class="log-older" open="">');
+    expect(html).toContain('id="legend-day-2026-09-21" open=""');
+  });
+});
+
 describe("past-Season view", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();

@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
+
+import { DashboardIcon, type IconName } from "./DashboardIcon";
 
 /** A signed number rounded to `digits` places; "–" when unknown. */
 export function signedOr(value: number | null, digits = 0): string {
@@ -43,11 +45,50 @@ export function lastDaysLabel(asked: number | "season", span: number): string {
   return `Last ${asked} days`;
 }
 
+/** Each card's mark before its title, so cards differ by what they hold. */
+const CARD_ICONS: Record<string, IconName> = {
+  "Legend day": "cal",
+  "Legend clock": "clock",
+  "Bases you attacked": "swords",
+  Goal: "flag",
+  "Armies on defense": "shield",
+  "Armies on offense": "target",
+  "Rivals watch": "users",
+  "Season heat map": "grid",
+  Cutoffs: "trophy",
+  "Season graph": "chart",
+  "Recent form": "bars",
+  "Offense consistency": "star",
+  Watchlist: "list",
+};
+
+/** The card's name: the title, or the first words of one built with markup. */
+function titleText(title: ReactNode): string {
+  if (typeof title === "string") return title;
+  if (!isValidElement<{ children?: ReactNode }>(title)) return "";
+  const children = title.props.children;
+  const first = Array.isArray(children) ? children[0] : children;
+  return typeof first === "string" ? first.trim() : "";
+}
+
 /** The card's title row; `meta` sits at the right end. */
-export function CardHead({ title, meta }: { title: ReactNode; meta?: ReactNode }) {
+export function CardHead({
+  title,
+  meta,
+  icon,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  /** Defaults to the card's own mark, found from its title. */
+  icon?: IconName;
+}) {
+  const mark = icon ?? CARD_ICONS[titleText(title)];
   return (
     <header className="dash-card-head">
-      <h2>{title}</h2>
+      <h2>
+        {mark ? <DashboardIcon name={mark} /> : null}
+        {title}
+      </h2>
       {meta ? <span className="dash-card-meta">{meta}</span> : null}
     </header>
   );

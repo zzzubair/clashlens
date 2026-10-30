@@ -6,7 +6,14 @@ import { nextResetMs } from "../lib/dashboard";
 const DAY_MINUTES = 1440;
 const RING = 100;
 /** Battles closer than this share one mark on the dial. */
-const MERGE_MINUTES = 20;
+// About one icon's width on each ring (attacks outer, defenses inner), so no
+// two icons overlap.
+const MERGE_MINUTES = { attack: 45, defense: 55 } as const;
+/** Battles sit on two tracks hugging the dial, clear of the hours inside it:
+    defenses on the inner one, attacks on the outer. */
+const MARK_RADIUS = { attack: 136, defense: 114 } as const;
+/** Each mark's bead, sized so neighbours on a track never touch. */
+const BEAD = 12.5;
 
 export function timeFormatter(timeZone: string): Intl.DateTimeFormat {
   return new Intl.DateTimeFormat("en-GB", {
@@ -38,6 +45,19 @@ export function starText(stars: number): string {
   return "★".repeat(shown) + "☆".repeat(3 - shown);
 }
 
+/**
+ * A time zone as a Clasher says it, with the short name the player page's
+ * times use: "Europe/London" is "London time (GMT)", or (BST) in summer.
+ */
+export function zoneName(timeZone: string): string {
+  const place = timeZone.split("/").at(-1)?.replaceAll("_", " ");
+  if (!place || timeZone === "UTC") return "UTC";
+  const short = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" })
+    .formatToParts(Date.now())
+    .find((part) => part.type === "timeZoneName")?.value;
+  return short ? `${place} time (${short})` : `${place} time`;
+}
+
 /** The point on the dial `minutes` after the Reset, which sits on top. */
 function point(minutes: number, radius: number): [number, number] {
   const angle = (minutes / DAY_MINUTES) * 2 * Math.PI;
@@ -51,7 +71,7 @@ export interface ClockMark {
   battles: ClockBattle[];
 }
 
-/** Group each kind's battles into marks; a battle within 20 minutes of the last one joins it. */
+/** Group each kind's battles into marks; a battle within MERGE_MINUTES of the last one joins it. */
 export function clockMarks(battles: ClockBattle[], dayStartMs: number): ClockMark[] {
   const marks: ClockMark[] = [];
   for (const kind of ["attack", "defense"] as const) {
@@ -63,7 +83,7 @@ export function clockMarks(battles: ClockBattle[], dayStartMs: number): ClockMar
       .filter(({ minutes }) => minutes >= 0 && minutes <= DAY_MINUTES)
       .sort((a, b) => a.minutes - b.minutes);
     for (const { battle, minutes } of sorted) {
-      if (current && minutes - lastMinutes <= MERGE_MINUTES) {
+      if (current && minutes - lastMinutes <= MERGE_MINUTES[kind]) {
         current.battles.push(battle);
       } else {
         current = { kind, minutes, battles: [battle] };
@@ -174,16 +194,25 @@ export function LegendClock({
     null,
   );
   const [phone, setPhone] = useState(false);
-  // A phone starts with the small clock; the full one has battles to tap.
+  // A phone or iPad starts with the small clock; the full one has battles to tap.
+  const [compact, setCompact] = useState(false);
   const [full, setFull] = useState(false);
   const detail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const query = window.matchMedia("(max-width: 40rem)");
-    const update = () => setPhone(query.matches);
+    const phoneQuery = window.matchMedia("(max-width: 40rem)");
+    const compactQuery = window.matchMedia("(max-width: 64rem)");
+    const update = () => {
+      setPhone(phoneQuery.matches);
+      setCompact(compactQuery.matches);
+    };
     update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
+    for (const query of [phoneQuery, compactQuery])
+      query.addEventListener("change", update);
+    return () => {
+      for (const query of [phoneQuery, compactQuery])
+        query.removeEventListener("change", update);
+    };
   }, []);
 
   useEffect(() => {
@@ -211,20 +240,20 @@ export function LegendClock({
   const countdown = nowMs === null ? "–" : resetCountdown(nowMs).text;
   const resetLabel = resetMs === null ? "--:--" : format.format(resetMs);
   const marks = dayStart === null ? [] : clockMarks(battles, dayStart);
-  const [arcX, arcY] = point(elapsed ?? 0, RING - 8);
-  const [handX, handY] = point(elapsed ?? 0, RING - 4);
+  const [arcX, arcY] = point(elapsed ?? 0, RING);
+  const [handX, handY] = point(elapsed ?? 0, RING - 6);
   const toggle = (index: number, target: Element) =>
     setOpen((current) =>
       current?.index === index ? null : { index, anchor: target.getBoundingClientRect() },
     );
   const openMark = open ? marks[open.index] : undefined;
-  const small = phone && !full;
+  const small = compact && !full;
 
   return (
     <div className="legend-clock" ref={detail} data-full={full || undefined}>
       <svg
         className="legend-clock-face"
-        viewBox="-138 -138 276 276"
+        viewBox="-152 -152 304 304"
         role="group"
         aria-label={`Legend clock: ${countdown} to Reset at ${resetLabel}`}
       >
@@ -232,47 +261,32 @@ export function LegendClock({
         {elapsed !== null && left !== null && left > 0 ? (
           <path
             className="clock-left"
-            d={`M${arcX.toFixed(1)} ${arcY.toFixed(1)}A${RING - 8} ${RING - 8} 0 ${left > DAY_MINUTES / 2 ? 1 : 0} 1 0 ${-(RING - 8)}`}
+            d={`M${arcX.toFixed(1)} ${arcY.toFixed(1)}A${RING} ${RING} 0 ${left > DAY_MINUTES / 2 ? 1 : 0} 1 0 ${-RING}`}
           />
         ) : null}
-        {Array.from({ length: 8 }, (_, index) => {
-          const minutes = index * 180;
-          const [x1, y1] = point(minutes, RING);
-          const [x2, y2] = point(minutes, RING - 12);
-          // Side labels start just past the ring and grow outward, so a larger
-          // label never runs into the ring; the bottom one sits centred below.
-          const bottom = index === 4;
-          const [lx, ly] = point(minutes, bottom ? RING + 18 : RING + 6);
-          const anchor = bottom ? "middle" : lx < 0 ? "end" : "start";
-          return (
-            <g key={minutes}>
-              <line className="clock-tick" x1={x1} y1={y1} x2={x2} y2={y2} />
-              {index > 0 && dayStart !== null ? (
-                <text className="clock-hour" x={lx} y={ly + 4} textAnchor={anchor}>
-                  {format.format(dayStart + minutes * 60_000)}
-                </text>
-              ) : null}
-            </g>
-          );
-        })}
-        <rect
-          className="clock-reset-tab"
-          x="-40"
-          y="-132"
-          width="80"
-          height="22"
-          rx="5"
-        />
-        <text className="clock-reset-label" x="0" y="-117">
-          Reset {resetLabel}
+        {/* The two tracks the battles sit on. */}
+        <circle className="clock-track" r={MARK_RADIUS.defense} />
+        <circle className="clock-track" r={MARK_RADIUS.attack} />
+        {/* The Reset: an ember pointer and tick at the top, its time on an
+            ember tag under it; "to Reset" in the middle names it. */}
+        <line className="clock-reset-tick" x1="0" y1={-RING} x2="0" y2={-RING + 14} />
+        <path className="clock-reset-pin" d={`M-7 ${-RING - 11}h14l-7 11z`} />
+        <rect className="clock-reset-tag" x="-26" y="-75" width="52" height="21" rx="6" />
+        <text className="clock-reset-label" x="0" y="-59.5">
+          {resetLabel}
         </text>
         {marks.map((mark, index) => {
-          const [x, y] = point(mark.minutes, mark.kind === "attack" ? 78 : 56);
+          // A shared mark sits at the middle of its battles' times.
+          const at =
+            mark.battles.reduce((sum, battle) => sum + battle.at, 0) /
+              mark.battles.length -
+            (dayStart ?? 0);
+          const radius = MARK_RADIUS[mark.kind];
+          const [x, y] = point(at / 60_000, radius);
           return (
             <g
               key={`${mark.kind}-${mark.minutes}`}
-              className="clock-mark"
-              transform={`translate(${x.toFixed(1)} ${y.toFixed(1)})`}
+              className={`clock-mark clock-mark-${mark.kind}`}
               role="button"
               tabIndex={small ? -1 : 0}
               aria-label={markLabel(mark)}
@@ -285,49 +299,84 @@ export function LegendClock({
                 }
               }}
             >
-              <circle r="18" className="clock-hit" />
-              <g transform="scale(1.3)">{mark.kind === "attack" ? SWORD : SHIELD}</g>
-              {mark.battles.length > 1 ? (
-                <>
-                  <circle className="clock-count" cx="11" cy="-10" r="7" />
-                  <text className="clock-count-text" x="11" y="-6.6">
+              <g transform={`translate(${x.toFixed(1)} ${y.toFixed(1)})`}>
+                <circle r={BEAD + 4} className="clock-hit" />
+                {/* A bead on its kind's track: one battle shows its kind's
+                    icon, battles close together share one with their count. */}
+                <circle r={BEAD} className="clock-bead" />
+                {mark.battles.length > 1 ? (
+                  <text className="clock-count-text" y="5">
                     {mark.battles.length}
                   </text>
-                </>
-              ) : null}
+                ) : (
+                  <g transform="scale(0.85)">{mark.kind === "attack" ? SWORD : SHIELD}</g>
+                )}
+              </g>
             </g>
           );
         })}
         {elapsed !== null ? (
           <line className="clock-hand" x1="0" y1="0" x2={handX} y2={handY} />
         ) : null}
-        <circle className="clock-center" r="40" />
-        <text className="clock-countdown" y="3">
+        {/* Hours every 6, clear of the ring and the middle, in place of
+            ticks; the Reset's own tag is on top. The hand stands in for an
+            hour it is passing, so it never crosses one. */}
+        {dayStart === null
+          ? null
+          : [360, 720, 1080]
+              .filter((minutes) => elapsed === null || Math.abs(elapsed - minutes) >= 60)
+              .map((minutes) => {
+                const [x, y] = point(minutes, 68);
+                return (
+                  <text key={minutes} className="clock-hour" x={x} y={y + 5}>
+                    {format.format(dayStart + minutes * 60_000)}
+                  </text>
+                );
+              })}
+        <circle className="clock-center" r="36" />
+        <text className="clock-countdown" y="4">
           {countdown}
         </text>
-        <text className="clock-caption" y="18">
+        <text className="clock-caption" y="19">
           to Reset
         </text>
       </svg>
-      {/* The countdown beside a small dial on a phone, or beside the dial when
-          the card spans a row; today's count of each mark under or beside the
-          dial; and the phone's switch to the full clock and back. */}
+      {/* The countdown beside a small dial on a phone; today's count of each
+          mark under the dial, or as columns beside it when the card spans a
+          row; and the phone's switch to the full clock and back. */}
       <p className="legend-clock-summary" aria-hidden="true">
         <b>{countdown}</b> to Reset
         <span className="legend-clock-at"> at {resetLabel}</span>
-        <span className="legend-clock-zone"> · {timeZone}</span>
       </p>
       <p className="legend-clock-key" aria-hidden="true">
+        {/* The orange arc is the part of the Legend day still to play; beside
+            the dial it names the Reset it runs to instead. */}
+        <span>
+          <i className="legend-clock-key-arc" />
+          <span className="legend-clock-key-left">Time left</span>
+          <span className="legend-clock-key-reset">
+            <b>{resetLabel}</b> Reset · {zoneName(timeZone)}
+          </span>
+        </span>
         {(["attack", "defense"] as const).map((kind) => {
           const total = battles.filter((battle) => battle.kind === kind).length;
           return (
             <span key={kind}>
               <svg viewBox="-13 -13 26 26">{kind === "attack" ? SWORD : SHIELD}</svg>
-              {total} {kind}
-              {total === 1 ? "" : "s"}
+              <span>
+                <b>{total}</b> {kind}
+                {total === 1 ? "" : "s"}
+              </span>
             </span>
           );
         })}
+        {/* A bead with a number holds that many battles close together. */}
+        {marks.some((mark) => mark.battles.length > 1) ? (
+          <span className="legend-clock-key-group">
+            <i>2</i>
+            <span>battles close together</span>
+          </span>
+        ) : null}
       </p>
       <button
         type="button"

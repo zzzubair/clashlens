@@ -1,13 +1,21 @@
 /* Private groups list: members with names, and add and edit opened below the buttons. */
 
-/* The title with New watchlist beside it; its form opens under the button. */
+/* The title with New watchlist level with it, the line under both; its form
+   opens under the button. */
 .groups-hero {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  align-items: end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 1rem;
+  align-items: center;
   max-width: none;
+}
+.groups-hero > h1 {
+  margin: 0;
+}
+.groups-hero > .lede {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0.6rem 0 0;
 }
 
 .group-create {
@@ -33,24 +41,26 @@
 }
 
 @media (max-width: 34rem) {
-  .group-create {
-    flex: 1 1 100%;
-  }
-
-  .group-create > summary {
-    width: 100%;
-  }
-
   .group-create > .form-panel {
-    width: auto;
-    left: 0;
+    width: min(26rem, calc(100vw - 1rem));
   }
 }
 
-/* A watchlist's players, one line each: name and tag, trophies and an arrow.
-   The whole row opens the player. Its columns may shrink below a row's one
-   line, so a long name ends in "…" instead of widening the page. */
-.group-card-list,
+/* A narrow card has room in its head for the count only, as the list
+   shows the top. */
+.group-card {
+  container-type: inline-size;
+}
+@container (max-width: 22rem) {
+  .group-card-top {
+    display: none;
+  }
+}
+
+/* A watchlist's players, one line each: name and tag, then trophies. The card
+   itself opens the comparison, so a row's name is the only way to the player.
+   Its columns may shrink below a row's one line, so a long name ends in "…"
+   instead of widening the page. */
 .group-card,
 .group-card .group-members {
   grid-template-columns: minmax(0, 1fr);
@@ -61,7 +71,6 @@
 }
 
 .group-card .group-members.player-action-list li {
-  position: relative;
   padding: 0.65rem 0.25rem 0.65rem 0.5rem;
   background: transparent;
   border: 0;
@@ -78,6 +87,57 @@
   align-items: center;
 }
 
+/* Each row's place in the watchlist, as the rows run highest first. */
+.group-card .group-members.player-action-list {
+  counter-reset: member;
+}
+.group-card .group-members .player-action-name::before {
+  flex: none;
+  width: 1.4rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  counter-increment: member;
+  content: counter(member) / "";
+}
+/* The name is enough to tell players apart here; the tag stays for screen
+   readers, and shows in Edit, where players are removed. */
+.group-card .group-members .player-action-name > .player-tag {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* How far each player trails the list's leader, in a column of its own
+   before the trophies, so the race reads down the card. */
+.group-card .group-members .group-member-gap {
+  flex: none;
+  min-width: 3.5rem;
+  margin-left: auto;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.group-card .group-members .group-member-gap + .group-member-detail {
+  margin-left: 0.9rem;
+}
+/* The gap column's heading, right-aligned over it: the trophies' fixed width
+   and the space between the two columns set where that column ends. */
+.group-members-key {
+  margin: 0 0 -0.6rem;
+  padding: 0 calc(0.25rem + 5.5rem + 0.6rem + 0.9rem) 0.15rem 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: right;
+}
+
 .group-card .group-members .player-action-name a {
   overflow: hidden;
   color: inherit;
@@ -86,20 +146,9 @@
   white-space: nowrap;
 }
 
-.group-card .group-members .player-action-name a::after {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  content: "";
-}
-
-.group-card .group-members .player-action-name a:focus-visible {
-  outline: none;
-}
-
-.group-card .group-members .player-action-name a:focus-visible::after {
-  outline: 3px solid var(--cl-action-text);
-  outline-offset: -3px;
+.group-card .group-members .player-action-name a:hover {
+  color: var(--cl-action-text);
+  text-decoration: underline;
 }
 
 .group-card .group-members .group-member-detail {
@@ -107,6 +156,8 @@
   flex: 0 0 auto;
   gap: 0.3rem;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 5.5rem;
   margin-left: auto;
   font-size: 0.9rem;
   font-weight: 600;
@@ -117,33 +168,141 @@
   font-size: 1.1rem;
 }
 
-.group-card .group-members li::after {
-  flex: 0 0 auto;
-  width: 0.4rem;
-  height: 0.4rem;
-  margin: 0 0.35rem 0 0.1rem;
-  border-top: 2px solid var(--cl-muted);
-  border-right: 2px solid var(--cl-muted);
-  transform: rotate(45deg);
-  content: "";
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .group-card .group-members.player-action-list li:hover {
-    background: var(--cl-raised);
-    border-radius: 8px;
-  }
-}
-
 .group-card-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem 0.5rem;
+  gap: 0.25rem;
   align-items: center;
 }
 
-.group-card-head > h3 {
-  flex: 1 1 12rem;
+.group-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Card titles use the site's condensed heading face, as the dashboard's do. */
+.group-card-title > h3 {
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+/* A narrow card puts its three buttons on their own line under the name,
+   Compare still at the right edge. */
+@container (max-width: 27rem) {
+  .group-card-title {
+    flex-basis: 100%;
+  }
+  .group-text-button:first-of-type {
+    margin-left: -0.65rem;
+  }
+  .group-card-open {
+    margin-left: auto;
+  }
+}
+
+.group-card-meta {
+  margin: 0.15rem 0 0;
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A watchlist is a supporting list, not a feature panel: only the page's
+   hero is drawn glass, so a card is a quiet fill with no edge or glow. */
+:root .group-card-list > .group-card {
+  gap: 0.6rem;
+  padding: 0.85rem 1rem 0.6rem;
+  border-color: transparent;
+  box-shadow: var(--cl-card-quiet, none);
+}
+
+/* The whole card is one link to its comparison. Its Compare link stretches
+   over the card; the icon buttons, names and open panels sit above it. */
+.group-card {
+  position: relative;
+  transition: border-color 160ms ease;
+}
+.group-card-open {
+  display: inline-flex;
+  flex: none;
+  gap: 0.3rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.15rem 0 0.65rem;
+  color: var(--cl-action-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.group-card-open::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+}
+.group-card-open:focus-visible {
+  outline: none;
+}
+.group-card-open:focus-visible::after {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: 2px;
+}
+.group-card-open svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  transition: transform 160ms ease;
+}
+.group-card:has(> .group-card-head > .group-card-open:hover) {
+  border-color: var(--cl-action-border);
+}
+.group-card-open:hover svg {
+  transform: translateX(3px);
+}
+/* The card's name lights up with it, as the card is the link. */
+.group-card:has(> .group-card-head > .group-card-open:hover) .group-card-title > h3 {
+  color: var(--cl-action-text);
+}
+.group-card :is(.group-text-button, .group-members a, .group-panel) {
+  position: relative;
+  z-index: 2;
+}
+
+/* Add player and Edit: quiet word-and-icon buttons, plain text until hovered. */
+.group-text-button {
+  display: inline-flex;
+  flex: none;
+  gap: 0.35rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.65rem;
+  color: var(--cl-muted);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.group-text-button svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+.group-text-button:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+}
+.group-text-button[aria-expanded="true"] {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
 }
 
 .group-card .player-action-list li {
@@ -229,37 +388,11 @@
   gap: 0.5rem;
 }
 
-/* A wide screen sets watchlists side by side, so a row is not mostly gap. */
-@media (min-width: 64rem) {
-  .group-card-list {
-    grid-template-columns: repeat(auto-fill, minmax(30rem, 1fr));
-    align-items: start;
-  }
-
-  /* The name takes its own line and the three actions sit together under it. */
-  .group-card-head > h3 {
-    flex-basis: 100%;
-  }
-}
-
-/* On a phone, Add player and Edit sit small beside the name, and Compare
-   players takes the row under it. */
-@media (max-width: 34rem) {
-  .group-card-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
-  .group-card-head > .button-primary {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
-
-  .group-card-head > .button-secondary {
-    min-height: 2.5rem;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.88rem;
-  }
+/* Watchlists sit side by side in as many columns as fit, filling the width,
+   so a row is not mostly gap: two on an iPad, up to three on a desktop. */
+.group-card-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  align-items: start;
 }
 
 /* Edit holds renaming, removing players and deleting. */

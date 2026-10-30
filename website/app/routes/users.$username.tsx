@@ -9,7 +9,9 @@ import {
 } from "react-router";
 
 import { useBackState } from "../components/BackLink";
+import { DashboardIcon } from "../components/DashboardIcon";
 import { TrophyMark } from "../components/LeaderboardShared";
+import { ProviderMark } from "../components/ProviderMark";
 import { SavedLine } from "../components/SavedLine";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
@@ -172,19 +174,27 @@ export default function UserRoute() {
         <SavedLine>{justLinked.name ?? justLinked.tag} linked.</SavedLine>
       ) : null}
       <section className="hero profile-hero" aria-labelledby="user-title">
-        <div className="profile-name">
-          <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
-          {isOwnProfile ? (
-            <Link
-              className="button button-secondary profile-edit"
-              to="/account/settings"
-              aria-label="Edit your profile in Settings"
-            >
-              Edit
-            </Link>
-          ) : null}
+        <div className="profile-id">
+          {/* A monogram stands in for a picture; the name beside it says the same. */}
+          <span className="profile-avatar" aria-hidden="true">
+            {initial(data.user?.displayName ?? "")}
+          </span>
+          <div>
+            <div className="profile-name">
+              <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
+              {isOwnProfile ? (
+                <Link
+                  className="button button-secondary profile-edit"
+                  to="/account/settings"
+                  aria-label="Edit your profile in Settings"
+                >
+                  Edit
+                </Link>
+              ) : null}
+            </div>
+            <p className="player-tag">@{data.user?.username ?? ""}</p>
+          </div>
         </div>
-        <p className="player-tag">@{data.user?.username ?? ""}</p>
       </section>
 
       <div className="profile-body">
@@ -221,20 +231,45 @@ export default function UserRoute() {
   );
 }
 
-/** The owner's two tools, each one card with what it does and its status. */
+/** A tool that is not working yet shows the step that starts it instead of its state. */
+const NEXT_STEPS: Record<string, string> = {
+  "Discord not connected": "Connect Discord",
+  "Not set up": "Set up",
+  Off: "Turn on",
+};
+
+/** The owner's two tools, one row each: its mark and name, then whether it is on. */
 function YourTools({ tools }: { tools: OwnerTools | null }) {
-  const cards = [
+  const rows = [
     {
       to: "/account/discord-alerts",
       title: "Discord alerts",
       text: "A Discord message when someone attacks your players.",
       status: tools?.alerts ?? null,
+      mark: <ProviderMark provider="discord" />,
     },
     {
       to: "/account/obs-overlay",
       title: "Stream overlay",
       text: "Your live Legend day on your stream.",
       status: tools?.overlay ?? null,
+      mark: (
+        // A screen with a live dot, drawn here as no shared icon shows a stream.
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <rect x="2.5" y="4" width="19" height="13" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+          <circle cx="12" cy="10.5" r="2.2" fill="currentColor" stroke="none" />
+        </svg>
+      ),
     },
   ];
   return (
@@ -244,13 +279,23 @@ function YourTools({ tools }: { tools: OwnerTools | null }) {
     >
       <h2 id="your-tools-title">Your tools</h2>
       <ul className="profile-tools">
-        {cards.map((card) => (
-          <li key={card.to}>
-            <Link className="profile-tool" to={card.to}>
-              <strong>{card.title}</strong>
-              <span>{card.text}</span>
-              {card.status === null ? null : (
-                <span className="profile-tool-status">{card.status}</span>
+        {rows.map((row) => (
+          <li key={row.to}>
+            <Link className="profile-tool" to={row.to}>
+              <span className="profile-tool-mark">{row.mark}</span>
+              <strong>{row.title}</strong>
+              {/* What the tool does: a quiet line under the name, and part
+                  of the link's name. */}
+              <span className="profile-tool-text">{row.text}</span>
+              {row.status === null ? null : NEXT_STEPS[row.status] ? (
+                <span className="profile-tool-start">{NEXT_STEPS[row.status]}</span>
+              ) : (
+                <span
+                  className="profile-tool-status"
+                  data-on={/^(On|Showing)\b/.test(row.status) ? "" : undefined}
+                >
+                  {row.status}
+                </span>
               )}
             </Link>
           </li>
@@ -274,6 +319,10 @@ function LinkedPlayer({
 }) {
   const backState = useBackState(backLabel);
   const id = `linked-player-${player.tag.slice(1)}`;
+  // The Legend League badge, as on the dashboard, while the player's newest
+  // profile or a Leaderboard place puts them there; otherwise a trophy.
+  const legend =
+    player.league === null ? player.rank !== null : player.league === "Legend I";
   const note =
     player.state === "tracking" && player.reason === null
       ? null
@@ -311,8 +360,18 @@ function LinkedPlayer({
                 : "Unknown"}
             </span>
           ) : (
-            <strong>
-              <TrophyMark />
+            <strong className="linked-player-trophies">
+              {legend ? (
+                <img
+                  className="linked-player-badge"
+                  src="/images/legend-league.webp"
+                  alt=""
+                  width={151}
+                  height={160}
+                />
+              ) : (
+                <TrophyMark />
+              )}
               {player.trophies.toLocaleString("en-GB")}
             </strong>
           )}
@@ -338,21 +397,24 @@ function LinkedPlayer({
           {player.today === null ? (
             <span className="linked-player-wait">Not available yet</span>
           ) : (
-            <>
-              <span>
-                <strong className={netTone(player.today.net)}>
-                  {formatNet(player.today.net)}
-                </strong>
-                {player.today.net === null ? null : " so far"}
-              </span>
-              {player.today.attacks !== null && player.today.defenses !== null ? (
-                <span className="linked-player-battles">
-                  {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
-                </span>
-              ) : null}
-            </>
+            <span>
+              <strong className={netTone(player.today.net)}>
+                {formatNet(player.today.net)}
+              </strong>
+              {player.today.net === null ? null : " so far"}
+            </span>
           )}
         </span>
+        {/* The strips sit under the row of three numbers, across the card. */}
+        {player.today?.attacks != null && player.today.defenses !== null ? (
+          <span className="linked-player-battles">
+            <span className="sr-only">
+              {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
+            </span>
+            <BattleTiles icon="swords" count={player.today.attacks} />
+            <BattleTiles icon="shield" count={player.today.defenses} />
+          </span>
+        ) : null}
       </span>
       {note === null ? null : (
         <span className="linked-player-note" id={`${id}-note`}>
@@ -360,6 +422,25 @@ function LinkedPlayer({
         </span>
       )}
     </Link>
+  );
+}
+
+/**
+ * How many of today's eight attacks or defenses are recorded: a filled mark for
+ * each, an empty one for each still to come. The profile knows only the
+ * counts, so the marks say nothing about how the battles went.
+ */
+function BattleTiles({ icon, count }: { icon: "swords" | "shield"; count: number }) {
+  return (
+    <span className="battle-tiles" data-kind={icon} aria-hidden="true">
+      <span className="battle-tiles-count">
+        <DashboardIcon name={icon} />
+        {count}/8
+      </span>
+      {Array.from({ length: 8 }, (_, index) => (
+        <i key={index} data-used={index < count ? "" : undefined} />
+      ))}
+    </span>
   );
 }
 
@@ -371,4 +452,8 @@ function formatNet(value: number | null): string {
 function netTone(value: number | null): string | undefined {
   if (value === null || value === 0) return undefined;
   return value > 0 ? "linked-player-gain" : "linked-player-loss";
+}
+
+function initial(name: string): string {
+  return Array.from(name.trim())[0]?.toUpperCase() ?? "?";
 }

@@ -292,7 +292,7 @@ describe("today's Legend day wording", () => {
     );
     // An open day says where it started, at every width.
     expect(cell(html, "2026-10-07", "Defenses")).toContain(
-      '<span class="log-fact-start">Started on 5,992</span>',
+      '<span class="log-fact-start">Started at <b>5,992</b></span>',
     );
     const gap = "Battles add up to 5,050; next day started at 5,992.";
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,992<\/strong>/);
@@ -359,6 +359,46 @@ describe("today's Legend day wording", () => {
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,200<\/strong>/);
     expect(mark(html, "2026-10-06")).toContain(
       '<span class="day-mark day-mark-verified"',
+    );
+  });
+
+  it("says a verified day's result was checked, and counts its battles out of 8", async () => {
+    const html = await page(WAITING, undefined, [
+      ended(7, {
+        startTrophies: 5960,
+        trophyChange: 40,
+        offense: { attacks: 8, threeStars: 2, trophyGain: 100 },
+        defense: { defenses: 6, threeStarsAgainst: 1, trophyLoss: 60 },
+      }),
+    ]);
+    const day = html.split('id="legend-day-2026-10-07"')[1];
+    // The reading confirms the day's result, which stands with 2 defenses unsaved.
+    expect(day).toContain("<summary>Day result verified</summary>");
+    expect(day).toContain("<small>8 of 8 recorded</small>");
+    expect(day).toContain("<small>6 of 8 recorded</small>");
+  });
+
+  it("colours each finished day in the Season summary against the player's own days", async () => {
+    const html = await page(WAITING, undefined, [
+      ended(7, { startTrophies: 5960, trophyChange: 40 }),
+      ended(6, { startTrophies: 5980, trophyChange: -20 }),
+      ended(5, { startTrophies: 5970, trophyChange: 10 }),
+    ]);
+    const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
+    const cell = (day: number) =>
+      summary.split(`<span class="sr-only">Day ${day}: `)[0].split("<li").at(-1) ?? "";
+    // Best day green, worst red and marked as a loss; today and later days unshaded.
+    expect(cell(3)).toContain("--heat:var(--cl-heat-4)");
+    expect(cell(2)).toContain('class="season-heat-played is-loss"');
+    expect(cell(2)).toContain("--heat:var(--cl-heat-0)");
+    expect(cell(1)).toContain("--heat:var(--cl-heat-2)");
+    expect(summary).toContain("Day 2: −20</span>");
+    expect(summary).toContain("Day 4: today, not finished yet</span>");
+    expect(summary).toContain("Day 28: not played yet</span>");
+    // Each cell shows its result as the dashboard's do; today shows its day over "now".
+    expect(summary).toContain('Day 2: −20</span><span aria-hidden="true">−20</span>');
+    expect(summary).toContain(
+      'not finished yet</span><span aria-hidden="true">4</span><span aria-hidden="true">now</span>',
     );
   });
 });

@@ -74,10 +74,11 @@ test("the front page and the full leaderboard show collected synthetic players",
     "href",
     "/signup?returnPath=%2F",
   );
-  await expect(preview.getByRole("link", { name: "Sign in" })).toHaveAttribute(
-    "href",
-    "/login?returnPath=%2F",
-  );
+  // Sign in is the header's; the hero keeps one action.
+  await expect(preview.getByRole("link", { name: "Sign in" })).toHaveCount(0);
+  await expect(
+    page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true }),
+  ).toHaveAttribute("href", "/login?returnPath=%2F");
   await expect(page.getByRole("heading", { name: "Top 10 now" })).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),
@@ -85,7 +86,10 @@ test("the front page and the full leaderboard show collected synthetic players",
   const homeTable = page.getByRole("table", { name: "Latest saved standings" });
   await expect(homeTable).toBeVisible();
   await expect(homeTable.getByText("Synthetic Clasher 001")).toBeVisible();
-  await expect(homeTable.getByText("#2PP", { exact: true })).toBeVisible();
+  // Tags stay off the Top 10; the row still opens the saved player.
+  await expect(
+    homeTable.getByRole("link", { name: "Synthetic Clasher 001" }),
+  ).toHaveAttribute("href", /\/players\/%232PP$/);
 
   await page.getByRole("link", { name: "All rankings" }).click();
   await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);

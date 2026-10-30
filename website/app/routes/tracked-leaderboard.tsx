@@ -273,6 +273,14 @@ export default function TrackedLeaderboardRoute() {
     view === "live" && ageSeconds(observedAt) > OLD_UPDATE_SECONDS;
   const anyOld = entries.some((entry) => isOld(entry.freshness.observedAt));
   const oldNote = <span className="sr-only"> · Over 10 min old</span>;
+  // Each row's trophy gap to the one above it on this page. The page's first
+  // row has no row above it here.
+  const gaps = entries.map((entry, index) =>
+    index ? entries[index - 1].trophies - entry.trophies : null,
+  );
+  // The website reads a profile without a clan as "Unknown"; it shows as no clan.
+  const clanName = (clan: string) =>
+    clan === "Unknown" ? <span className="no-clan">No clan</span> : <bdi>{clan}</bdi>;
   const secondsBeforeReset = (observedAt: string) =>
     daily ? Math.max(0, (Date.parse(daily.resetAt) - Date.parse(observedAt)) / 1000) : 0;
   const newestInput = daily ? leaderboard?.provenance.observedAt : null;
@@ -308,7 +316,16 @@ export default function TrackedLeaderboardRoute() {
               </p>
             ) : newestObservedAt ? (
               <p className="rankings-date">
+                {/* One update time for the whole board; rows show theirs only
+                    when they fall behind. The pulse goes once the board does. */}
+                {ageSeconds(newestObservedAt) <= OLD_UPDATE_SECONDS ? (
+                  <span className="live-pip" aria-hidden="true" />
+                ) : null}
                 Updated <LocalTimestamp value={newestObservedAt} />
+                <span className="rankings-age">
+                  {" "}
+                  · {shortAge(ageSeconds(newestObservedAt))} ago
+                </span>
               </p>
             ) : null}
           </div>
@@ -403,7 +420,7 @@ export default function TrackedLeaderboardRoute() {
                 name="q"
                 defaultValue={query}
                 key={query}
-                placeholder="Your name or #tag"
+                placeholder="Find me: name or #tag"
                 maxLength={MAX_SEARCH_QUERY_LENGTH}
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -476,6 +493,7 @@ export default function TrackedLeaderboardRoute() {
                 {range && leaderboard.hasPrevious ? (
                   <Link
                     aria-label={`Previous ${PAGE_SIZE}`}
+                    title={`Previous ${PAGE_SIZE}`}
                     to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}
                   >
                     ‹
@@ -492,6 +510,7 @@ export default function TrackedLeaderboardRoute() {
                 {range && leaderboard.hasNext ? (
                   <Link
                     aria-label={`Next ${nextCount}`}
+                    title={`Next ${nextCount}`}
                     to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
                   >
                     ›
@@ -499,9 +518,18 @@ export default function TrackedLeaderboardRoute() {
                 ) : null}
               </p>
             </div>
-            {anyOld ? (
+            {/* Phones key the clock each Live row carries; screen readers
+                hear "Last updated" on every row instead. */}
+            {view === "live" ? (
               <p className="standings-key">
-                <span aria-hidden="true">●</span> Not updated for over 10 min
+                <span className="standings-key-clock" aria-hidden="true">
+                  Tap for a player's last update
+                </span>
+                {anyOld ? (
+                  <span className="standings-key-old">
+                    <span aria-hidden="true">●</span> Not updated for over 10 min
+                  </span>
+                ) : null}
               </p>
             ) : null}
           </div>
@@ -541,7 +569,12 @@ export default function TrackedLeaderboardRoute() {
                         Rank
                       </th>
                       <th scope="col">Player</th>
-                      <th scope="col">Clan</th>
+                      <th scope="col" className="clan-cell">
+                        Clan
+                      </th>
+                      <th scope="col" className="gap-cell">
+                        To player above
+                      </th>
                       <th scope="col">Trophies</th>
                       <th
                         scope="col"
@@ -551,12 +584,12 @@ export default function TrackedLeaderboardRoute() {
                             : undefined
                         }
                       >
-                        Last updated
+                        <span className="sr-only">Last updated</span>
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {entries.map((entry) => (
+                    {entries.map((entry, index) => (
                       <tr
                         className="leaderboard-row"
                         data-selected={entry.tag === focusTag ? "true" : undefined}
@@ -581,17 +614,27 @@ export default function TrackedLeaderboardRoute() {
                           >
                             <bdi>{entry.name}</bdi>
                           </Link>
-                          {/* Phones show the tag and update age on one line. */}
+                          {/* The clan sits under the name, so the board needs no
+                              wide Clan column; phones swap the tag for the update age. */}
                           <div className="player-meta">
+                            <span className="player-clan" data-label="Clan">
+                              {clanName(entry.clan)}
+                            </span>
                             <span className="player-tag">{entry.tag}</span>
+                            {/* An old row says how old it is beside an ember dot; a
+                                fresh Live row, as new as the heading's time, shows
+                                only a quiet clock that opens its exact time. */}
                             <details
                               className="player-update-mobile"
+                              data-view={view}
                               data-old={isOld(entry.freshness.observedAt) || undefined}
                             >
                               <summary>
                                 <span className="sr-only">Last updated </span>
                                 {view === "live" ? (
-                                  `${shortAge(ageSeconds(entry.freshness.observedAt))} ago`
+                                  <span>
+                                    {shortAge(ageSeconds(entry.freshness.observedAt))} ago
+                                  </span>
                                 ) : (
                                   <LocalTimestamp
                                     value={entry.freshness.observedAt}
@@ -605,7 +648,18 @@ export default function TrackedLeaderboardRoute() {
                             </details>
                           </div>
                         </th>
-                        <td data-label="Clan">{entry.clan}</td>
+                        {/* Wide screens give the clan its own column. */}
+                        <td className="clan-cell">{clanName(entry.clan)}</td>
+                        <td className="gap-cell" data-label="To player above">
+                          {gaps[index] !== null ? (
+                            <span
+                              className="gap-value"
+                              data-zero={!gaps[index] || undefined}
+                            >
+                              {gaps[index] ? `−${gaps[index]!.toLocaleString()}` : "0"}
+                            </span>
+                          ) : null}
+                        </td>
                         <td className="trophy-cell" data-label="Trophies">
                           <TrophyMark />
                           <strong>{entry.trophies.toLocaleString()}</strong>
@@ -621,7 +675,8 @@ export default function TrackedLeaderboardRoute() {
                           </span>
                         </td>
                         <td data-label="Last updated">
-                          {/* Live shows the age; the exact time is in its tooltip. */}
+                          {/* Live shows the age only on an old row or under the pointer;
+                              the exact time is in its tooltip. */}
                           {view === "live" ? (
                             <time
                               className="local-time player-update-age"
@@ -634,7 +689,11 @@ export default function TrackedLeaderboardRoute() {
                             </time>
                           ) : (
                             <>
-                              <LocalTimestamp value={entry.freshness.observedAt} />
+                              {/* The board's date is in its heading; the time is enough. */}
+                              <LocalTimestamp
+                                value={entry.freshness.observedAt}
+                                timeOnly
+                              />
                               {savedBeforeReset(entry.freshness.observedAt)}
                             </>
                           )}
@@ -663,6 +722,17 @@ export default function TrackedLeaderboardRoute() {
                   </Link>
                 ) : null}
               </nav>
+              {/* A page of 100 is long on a phone. */}
+              <button
+                type="button"
+                className="back-to-top"
+                onClick={() => {
+                  window.scrollTo({ top: 0 });
+                  document.getElementById("main-content")?.focus({ preventScroll: true });
+                }}
+              >
+                Back to top
+              </button>
             </>
           )}
         </section>
