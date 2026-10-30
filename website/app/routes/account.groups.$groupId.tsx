@@ -527,8 +527,9 @@ function PlayerRow({
               ) : null}
             </>
           )}
-          {/* A phone drops the Today column, so today's result rides under trophies. */}
-          {player.today?.net == null ? null : (
+          {/* A phone drops the Today column, so today's result rides under
+              trophies, except while they wait for the Season reset. */}
+          {player.seasonResetPending || player.today?.net == null ? null : (
             <span className="compare-today-short">
               today{" "}
               <span className={tone(player.today.net)}>{signed(player.today.net)}</span>

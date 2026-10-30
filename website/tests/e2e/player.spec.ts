@@ -524,7 +524,7 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await seasonMenu.selectOption("");
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
   await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("−1,288", { exact: true })).toBeVisible();
+  await expect(page.locator(".log-day strong", { hasText: "−1,288" })).toBeVisible();
   await expect(page.getByText(/1,284 days old/)).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
   const nameless = page.locator(".battle-row-attack").nth(8);
