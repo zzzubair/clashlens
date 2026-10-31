@@ -199,7 +199,7 @@ export default function CrewRoute() {
             )}
           </div>
         )}
-        <CrewDay live={boards.boards.live.rows} />
+        <CrewDay live={boards.boards.live} />
       </section>
 
       {/* The dock sticks under the top bar; its bar fills in only once stuck

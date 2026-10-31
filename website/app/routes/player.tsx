@@ -792,11 +792,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             )}
           </div>
           {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
-            <LiveRank
-              rank={data.liveRank}
-              since={lastResetRank(trackedPlayer, now)}
-              tag={trackedPlayer.tag}
-            />
+            <LiveRank rank={data.liveRank} tag={trackedPlayer.tag} />
           )}
         </div>
         {/* When the count was saved, and Refresh, beside the count it acts on. */}
@@ -1004,18 +1000,6 @@ const QUALITY_WORDS: Record<string, string> = {
   "stale/Stale saved profile":
     "This profile hasn't been confirmed recently, so it may be behind.",
 };
-
-// The player's place on the last Reset's Daily board as the Daily Legend log
-// shows it, for when the live board doesn't say: that of the day the Reset ended.
-function lastResetRank(player: PlayerPage, now: number): number | null {
-  const day = [player.currentDay, ...player.seasonDays, ...player.recentDays].find(
-    (day) => {
-      const ended = now - Date.parse(day?.period.split(" – ")[1] ?? "");
-      return ended >= 0 && ended < 86_400_000;
-    },
-  );
-  return day?.resetRank ?? null;
-}
 
 // When the server read this profile, so the page's clock starts from it.
 function profileLoadedAt(profile: PlayerProfile): string | undefined {

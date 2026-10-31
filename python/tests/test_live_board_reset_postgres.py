@@ -38,7 +38,7 @@ from test_reset_scenarios_postgres import (
     defenses,
 )
 
-from clashlens import api_crew_boards, api_leaderboard, api_players
+from clashlens import api_accounts, api_crew_boards, api_leaderboard, api_players
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 
@@ -82,6 +82,29 @@ def _live(story: Story, now, focus_tag: str | None = None) -> dict[str, tuple]:
     return served
 
 
+def _profile(site: Site, now, live: dict[str, tuple]) -> dict[str, tuple]:
+    """Each player linked to the owner's public profile: its place at the
+    last Reset and this Season's days as (Season day, result), as the
+    profile's cards read them. Each agrees with its Live row: the same place
+    and, before today, the same results."""
+    read = api_accounts.get_public_user_days(site.api, "owner", now=now)
+    assert read is not None
+    assert read["season_start"] == ranked_day_for(now).season_start.isoformat()
+    today = ranked_day_for(now).day_number
+    profile = {
+        player["tag"]: (player["reset_position"],
+                        [(saved[0], saved[3]) for saved in player["days"]])
+        for player in read["players"]
+    }
+    for tag, (place, days) in profile.items():
+        assert place == live[tag][2], tag
+        assert [(number, change) for number, change in days
+                if number < today and change is not None] == [
+            (number, change) for number, change in live[tag][4] if change is not None
+        ], tag
+    return profile
+
+
 def _page_day(page: dict, numbers: list[int]) -> tuple[int | None, list[tuple]]:
     """What the player page shows: today's net as the dashboard's Legend day
     card counts a running day, its battles' gain less loss once they are
@@ -111,6 +134,11 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        CLIMBER, STILL, NEWCOMER)
+        # A public profile links CLIMBER and STILL.
+        site = Site(connection_info)
+        site.account("owner")
+        site.link("owner", CLIMBER)
+        site.link("owner", STILL)
         players = story.players
         # Day 1: CLIMBER ends at 5,000 + 40 - 8 * 20 = 4,880, STILL at 4,920.
         players[CLIMBER].battles = attacks(day_1, 40) + defenses(day_1, *[20] * 8)
@@ -129,6 +157,7 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
         season_end_board = story.served_board(day_1)
         # Day 1: the newest Daily board is the previous Season's last.
         first_day = _live(story, day_1 + timedelta(minutes=30))
+        first_profile = _profile(site, day_1 + timedelta(minutes=30), first_day)
 
         ends = {CLIMBER: 4880, STILL: 4920}
         story.reads(day_2 - timedelta(minutes=10), ends)
@@ -141,6 +170,7 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
                     {CLIMBER: 5000, STILL: 4920, NEWCOMER: 4960})
         story.run_worker()
         second_day = _live(story, day_2 + timedelta(hours=6))
+        second_profile = _profile(site, day_2 + timedelta(hours=6), second_day)
         focused = _live(story, day_2 + timedelta(hours=6), focus_tag=NEWCOMER)
 
         day_2_ends = {CLIMBER: 5000, NEWCOMER: 4960}
@@ -158,6 +188,8 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
         story.wait(timedelta(hours=1))
         day_3_board = story.served_board(day_4)
         fourth_day = _live(story, day_4 + timedelta(hours=2))
+        fourth_profile = _profile(site, day_4 + timedelta(hours=2), fourth_day)
+        site.close()
         unfinished = story.unfinished_jobs()
 
     assert unfinished == []
@@ -167,6 +199,11 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
     assert _ranked(season_end_board) == {STILL: 5400, CLIMBER: 5300}
     assert {tag: row[1:] for tag, row in first_day.items()} == {
         CLIMBER: (5000, None, 0, []), STILL: (5000, None, 0, [])}
+    # So does the public profile: no move since that Reset, and none of
+    # the previous Season's days, Day 28 included.
+    assert {tag: place for tag, (place, _) in first_profile.items()} == {
+        CLIMBER: None, STILL: None}
+    assert all(number == 1 for _, days in first_profile.values() for number, _ in days)
     assert _ranked(day_1_board) == {STILL: 4920, CLIMBER: 4880}
     # CLIMBER moved from 2nd to 1st; STILL fell to 3rd on the same 4,920.
     # NEWCOMER was on no Daily board. Day 1 is each one's result there.
@@ -177,6 +214,9 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
     }
     # The focused page around one player says the same.
     assert focused == second_day
+    # The public profile's cards say the same places and Day 1.
+    assert {tag: (place, days[:1]) for tag, (place, days) in second_profile.items()} == {
+        CLIMBER: (2, [(1, -120)]), STILL: (1, [(1, -80)])}
     # Three finished days of this Season, oldest first, each by its own day.
     # STILL missed the Day 3 Reset, so neither Day 2 nor Day 3 has a result:
     # two empty days, not one merged day. NEWCOMER's Day 2 had no start.
@@ -187,6 +227,8 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
         NEWCOMER: (2, [(1, 0), (2, None), (3, 0)]),
         STILL: (3, [(1, -80), (2, None), (3, None)]),
     }
+    assert {tag: place for tag, (place, _) in fourth_profile.items()} == {
+        CLIMBER: 1, STILL: 3}
 
 
 def test_each_day_keeps_its_own_date_whatever_the_boards(

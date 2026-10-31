@@ -295,15 +295,15 @@ describe("the player page header", () => {
         },
       ],
     } satisfies PlayerPage;
-    // The live board's own place at the last Reset comes first, as Rankings
-    // shows it; the log's day stands in when the board has none.
+    // The move is the live board's own place at the last Reset, as Rankings
+    // shows it.
     const board = (resetRank: number | null) => ({
       entries: [
         { rank: 129, tag: "#2PP", resetRank: 140 },
         { rank: 130, tag: TAG, resetRank },
       ],
     });
-    const getTrackedLeaderboard = vi.fn().mockResolvedValue(board(null));
+    const getTrackedLeaderboard = vi.fn().mockResolvedValue(board(150));
     mocks.createPythonClient.mockReset().mockReturnValue({
       getPlayer: vi.fn().mockResolvedValue(yesterday),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
@@ -317,20 +317,20 @@ describe("the player page header", () => {
       'href="/leaderboards/tracked?view=live&amp;page=3&amp;player=%23PC2QRC9QY"',
     );
     expect(rank).toContain(
-      'aria-label="Live rank 130, up 43 since the last Reset. Open the Leaderboard"',
+      'aria-label="Live rank 130, up 20 since the last Reset. Open the Leaderboard"',
     );
     expect(rank).toContain(">#130</strong>");
     // The move says what it is against, as the profile's cards do.
     expect(rank).toContain(
-      '>▲43</span><span class="player-live-rank-since">since Reset</span>',
+      '>▲20</span><span class="player-live-rank-since">since Reset</span>',
     );
 
-    getTrackedLeaderboard.mockResolvedValue(board(150));
-    const fromBoard = await renderPlayer(true);
-    expect(fromBoard).toContain(
-      'aria-label="Live rank 130, up 20 since the last Reset. Open the Leaderboard"',
-    );
-    expect(fromBoard).toContain(">▲20</span>");
+    // With no place at the last Reset on the board, the log's day doesn't
+    // stand in: Rankings shows no move either.
+    getTrackedLeaderboard.mockResolvedValue(board(null));
+    const unplaced = await renderPlayer(true);
+    expect(unplaced).toContain('aria-label="Live rank 130. Open the Leaderboard"');
+    expect(unplaced).not.toContain("since Reset");
 
     getTrackedLeaderboard.mockRejectedValue(
       new PythonApiError(404, { error: "missing" }),
@@ -338,6 +338,63 @@ describe("the player page header", () => {
     const missing = await renderPlayer(true);
     expect(missing).toContain("VANGUARD");
     expect(missing).not.toContain("player-live-rank");
+  });
+
+  it("shows no move on a new Season's first Legend day against the Season before", async () => {
+    // Seven hours into the November Season's Day 1. The board at its first
+    // Reset belongs to the October Season, so the live board has no Reset
+    // place, though the recent log still holds October's Day 28, ranked 173.
+    const fresh = {
+      state: "fresh" as const,
+      observedAt: "2026-11-02T12:00:00Z",
+      ageSeconds: 0,
+    };
+    const dayOne = {
+      ...page("Titans2.0", "#2CLAN"),
+      profile: { ...page("Titans2.0", "#2CLAN").profile, freshness: fresh },
+      provenance: {
+        ...page("Titans2.0", "#2CLAN").provenance,
+        observedAt: fresh.observedAt,
+      },
+      season: {
+        id: "2026-11",
+        anchor: "2026-11-02T05:00:00Z",
+        currentDayNumber: 1,
+        dayCount: 28,
+        anchorSource: "daily_publication",
+        anchorObservedAt: "2026-11-02T05:10:00Z",
+      },
+      recentDays: [
+        {
+          dayNumber: 28,
+          label: "Day 28",
+          period: "2026-11-01T05:00:00Z – 2026-11-02T05:00:00Z",
+          state: "Complete",
+          resetRank: 173,
+          offense: { attacks: 8, threeStars: 6, trophyGain: 300 },
+          defense: { defenses: 8, threeStarsAgainst: 4, trophyLoss: 240 },
+          trophyChange: 60,
+          offenseEvents: [],
+          defenseEvents: [],
+          completeness: { state: "complete", reason: "" },
+          uncertainty: [],
+        },
+      ],
+    } satisfies PlayerPage;
+    mocks.createPythonClient.mockReset().mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue(dayOne),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      getTrackedLeaderboard: vi.fn().mockResolvedValue({
+        entries: [{ rank: 130, tag: TAG, resetRank: null }],
+      }),
+    });
+    const rank =
+      (await renderPlayer(true)).match(/<a class="player-live-rank"[\s\S]*?<\/a>/)?.[0] ??
+      "";
+    expect(rank).toContain('aria-label="Live rank 130. Open the Leaderboard"');
+    expect(rank).toContain(">#130</strong>");
+    expect(rank).not.toContain("▲");
+    expect(rank).not.toContain("since Reset");
   });
 });
 

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from itertools import product
+from typing import Any
+
 from test_api_db_organization import create_owner
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
@@ -7,6 +13,7 @@ from test_group_comparison_postgres import battle, link_player, seed_day
 
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 
 def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
@@ -308,3 +315,107 @@ def test_profile_without_linked_players_does_not_read_the_live_board(
             assert [entry["tag"] for entry in board["entries"]] == ["#2PP"]
         finally:
             database.close()
+
+
+def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
+    database_url: str,
+) -> None:
+    """A public profile's cards add each player's place at the last Reset and
+    this Season's days in a fixed number of reads, however many players are
+    linked, for at most the 500 players the cards show, and never a previous
+    Season's day."""
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_id = create_owner(database)
+            seed_profile(database, "#2PP", 5300)
+            link_player(database, account_id, "#2PP")
+            # NOW is the Season's Day 25: today, yesterday, and 25 days ago
+            # the previous Season's Day 28.
+            assert ranked_day_for(NOW).day_number == 25
+            seed_day(database, "#2PP", 0, net=None, state="Live",
+                     gained=40, lost=12, attacks=1, defenses=1)
+            seed_day(database, "#2PP", 1, net=-20, gained=280, lost=300,
+                     attacks=8, defenses=8)
+            seed_day(database, "#2PP", 25, net=99, gained=399, lost=300,
+                     attacks=8, defenses=8)
+            # 500 more, past what the cards show.
+            more = ["#2" + "".join(code) for code in product("89PYLQGRJCUV", repeat=3)][:500]
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    SELECT unnest(%s::text[]), true, 'eligible'
+                    """,
+                    (more,),
+                )
+            for tag in more:
+                link_player(database, account_id, tag)
+            # Each of them has played every day of the Season so far.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, ranked_day_end, version, state,
+                        coverage, confidence, net_trophy_change, attack_gain,
+                        defense_loss, attack_count, defense_count
+                    )
+                    SELECT player.id, start, start + interval '1 day', 1, 'Complete',
+                           'complete', 'exact', -1234, 1000, 2234, 8, 8
+                    FROM players AS player
+                    CROSS JOIN generate_series(
+                        %s::timestamptz, %s::timestamptz, interval '1 day') AS start
+                    WHERE player.normalized_tag = ANY(%s)
+                    """,
+                    (ranked_day_for(NOW).season_start, ranked_day_for(NOW).start, more),
+                )
+
+            counted = _CountedReads(database)
+            days = api_accounts.get_public_user_days(counted, "groupowner", now=NOW)
+            assert api_accounts.get_public_user_days(database, "nobody", now=NOW) is None
+        finally:
+            database.close()
+
+    assert days is not None
+    # The account, its players, which board tables exist, their days and
+    # Reset places, and their weeks: the same five for any number of players.
+    assert counted.reads == 5
+    players = days["players"]
+    assert [player["tag"] for player in players] == sorted(["#2PP", *more])[:500]
+    assert days["season_start"] == "2026-07-13T05:00:00+00:00"
+    shown = next(player for player in players if player["tag"] == "#2PP")
+    # No Daily board is published here, so no place at the last Reset.
+    assert shown["reset_position"] is None
+    assert shown["season_weeks"] == []
+    # Yesterday and today as [Season day, attacks, defenses, result,
+    # unplayed, listed], oldest first; the previous Season's day is left out.
+    assert shown["days"] == [[24, 8, 8, -20, False, True], [25, 1, 1, None, False, True]]
+    # Every other one has all 25 days, and 500 players' Seasons so far stay
+    # well under the website's 2 MiB limit for one answer.
+    assert {len(player["days"]) for player in players if player["tag"] != "#2PP"} == {25}
+    assert players[1]["days"][0] == [1, 8, 8, -1234, False, True]
+    assert len(json.dumps(days).encode()) < 1024 * 1024
+
+
+class _CountedReads:
+    """``database`` with each statement its connections run counted."""
+
+    def __init__(self, database: ApiDatabase) -> None:
+        self.database = database
+        self.pool = self
+        self.reads = 0
+
+    @contextmanager
+    def connection(self) -> Iterator[Any]:
+        counter = self
+
+        with self.database.pool.connection() as connection:
+
+            class Counted:
+                def execute(self, *args: Any, **kwargs: Any) -> Any:
+                    counter.reads += 1
+                    return connection.execute(*args, **kwargs)
+
+            yield Counted()

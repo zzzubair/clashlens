@@ -369,15 +369,40 @@ describe("crew page", () => {
     expect(card("top")).not.toContain("Show all");
     // The crew's day under its name: the three accounts whose day is known
     // counted up, level and down, and their trophies today added together.
-    const day = html.slice(
-      html.indexOf('<section class="crew-day"'),
-      html.indexOf('<div class="crew-tabs-dock">'),
-    );
+    // Four more Live accounts have no day yet and one Legend account is
+    // missing from Live, so that is the total of 3 of 8 accounts, never the
+    // crew's; the account outside Legend League has no day to know.
+    const crewDay = (page: string) =>
+      page.slice(
+        page.indexOf('<section class="crew-day"'),
+        page.indexOf('<div class="crew-tabs-dock">'),
+      );
+    const day = crewDay(html);
     expect(day).toContain("Since the last Reset");
-    expect(day).toContain('Crew total <b class="crew-day-up">+10</b>');
-    expect(day).toMatch(
-      /<span class="crew-day-up">1 up<\/span><span class="crew-day-bar" aria-hidden="true">.*<\/span><span>1 level · <span class="crew-day-down">1 down<\/span><\/span>/,
+    expect(day).toContain(
+      '<p class="crew-day-total" data-partial="">Total of 3 of 8 accounts <b class="crew-day-up">+10</b>',
     );
+    expect(day).not.toContain("Crew total");
+    expect(day).toMatch(
+      /<span class="crew-day-up">1 up<\/span><span class="crew-day-bar" aria-hidden="true">.*<\/span><span>1 level · <span class="crew-day-down">1 down<\/span> · 5 unknown<\/span>/,
+    );
+
+    // Once every Legend account's day is known, it is the crew total.
+    payload.boards.live.rows.forEach((row, index) => {
+      (row as { today_change?: number | null }).today_change =
+        [20, 0, -10, 5, 5, -5, 0][index] ?? null;
+    });
+    payload.boards.live.missing = payload.boards.live.missing.slice(0, 1);
+    const known = crewDay(
+      (await render(`/crews/${CREW_ID}`, crewRoute)).replaceAll("<!-- -->", ""),
+    );
+    expect(known).toContain(
+      '<p class="crew-day-total">Crew total <b class="crew-day-up">+15</b>',
+    );
+    expect(known).toContain(
+      '<span>2 level · <span class="crew-day-down">2 down</span></span>',
+    );
+    expect(known).not.toContain("unknown");
   });
 
   it("shows a signed-out visitor the boards and accounts, but nothing to manage", async () => {

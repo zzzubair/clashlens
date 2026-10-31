@@ -91,16 +91,15 @@ export interface LiveRankRead {
  * The player's place on the live Leaderboard now, and the places they moved
  * since the last Reset's Daily board. It streams in after the page and leaves
  * nothing when the board doesn't hold the player or can't be read. It opens
- * the board at the player.
+ * the board at the player. The move is the live board's alone, as Rankings
+ * shows it: with no place at the last Reset, such as on a Season's first
+ * Legend day, when that board belongs to the Season before, it shows none.
  */
 export function LiveRank({
   rank,
-  since,
   tag,
 }: {
   rank: Promise<LiveRankRead | null> | undefined;
-  /** The place on the last Reset's Daily board when the live board has none. */
-  since: number | null;
   tag: string;
 }) {
   if (rank === undefined) return null;
@@ -109,8 +108,7 @@ export function LiveRank({
       <Await resolve={rank} errorElement={null}>
         {(read) => {
           if (read === null) return null;
-          const { now } = read;
-          const atReset = read.atReset ?? since;
+          const { now, atReset } = read;
           const moved = atReset === null ? 0 : atReset - now;
           const places = Math.abs(moved).toLocaleString("en-GB");
           return (

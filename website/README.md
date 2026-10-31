@@ -354,7 +354,9 @@ between Today, Last 7 days and Season (the default). Live rows add what each
 account has won or lost today so far, counted as on the Rankings page ("+25
 today"), and a Since the last Reset line under the crew's header totals those
 moves and counts the accounts up, level and down; it is left out until any
-account's day is known. Best and Worst defenders
+account's day is known. While some Legend League account's day is unknown, on
+Live or missing from it, the line says whose total it is ("Total of 3 of 8
+accounts") and counts those unknown beside the others; never as level. Best and Worst defenders
 share one card with a Best | Worst switch. On a phone a row of tabs (Live,
 Reset, Attack, Defense, Streaks) shows one board at a time. Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
@@ -611,8 +613,11 @@ league its newest saved profile names, or "Unranked" when none is known) with
 its ▲ or ▼ places moved since the last Reset, and today's net so far; the
 attacks and defenses done are only read aloud. Below the card sits that
 player's Season heat map as a small grid. The one profile read returns every
-card, and each player's page is read once more for the Reset place and the
-heat map, leaving those out for a page that cannot be read. An account without current results also shows its
+card at once; one more read, `/v1/users/:username/days`, then streams in every
+linked player's place at the last Reset and this Season's saved days, for the
+moves and heat maps, leaving those out when it cannot be read. On a Season's
+first Legend day there is no move: the Daily board at its Reset is the Season
+before's, as on Rankings. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
 last accepted profile, its rank whenever it is on the board, and "Unknown" or
 "Not available yet" where nothing valid is saved. An account outside Legend I,

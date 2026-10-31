@@ -28,6 +28,7 @@ from .api_db import (
 )
 from .domain import (
     RANKED_DAY_DURATION,
+    SEASON_DURATION,
     SEASON_START_TROPHIES,
     ranked_day_for,
     season_opening_reset,
@@ -693,6 +694,136 @@ def _frozen_publications(connection: Any) -> tuple[str, bool, bool]:
     )
 
 
+def _reset_place_sql(connection: Any) -> tuple[str, str]:
+    """The newest Daily board published at ``%(reset)s`` for Season
+    ``%(season_id)s``, as a ``WITH`` clause, and the joins that give each
+    ``player`` row its ``place.position`` there, or none off it. A Season's
+    first Legend day has no such board: the one at its Reset is the Season
+    before's."""
+    publications, _, snapshots_exist = _frozen_publications(connection)
+    v2_entry = (
+        """
+        SELECT position FROM leaderboard_snapshot_entries
+        WHERE board.source = 'v2' AND snapshot_id = board.id
+          AND player_id = player.id
+        UNION ALL
+        """
+        if snapshots_exist
+        else ""
+    )
+    return (
+        f"""
+        WITH board AS (
+            SELECT source, id
+            FROM ({publications}) AS publication
+            WHERE boundary_at = %(reset)s AND official_season_id = %(season_id)s
+            ORDER BY (source = 'v2') DESC, version DESC, generation DESC, id DESC
+            LIMIT 1
+        )
+        """,
+        f"""
+        LEFT JOIN board ON true
+        LEFT JOIN LATERAL (
+            {v2_entry}
+            SELECT position FROM api_frozen_leaderboard_entries
+            WHERE board.source = 'legacy' AND leaderboard_id = board.id
+              AND player_id = player.id
+        ) AS place ON true
+        """,
+    )
+
+
+def linked_season_days(
+    connection: Any, tags: list[str], now: datetime
+) -> list[dict[str, Any]]:
+    """What a public profile's player cards add to their numbers, for every
+    tag at once in a fixed number of reads: each player's place on the newest
+    Daily board published at the last Reset (none on a Season's first Legend
+    day, as on the Live board), this Season's weekly league records, and each
+    Legend day saved so far this Season, today's included, oldest first.
+
+    Each day is its newest saved log, read as the player page's Daily Legend
+    log shows it, and is only what its Season heat map draws, as ``[Season
+    day, attacks, defenses, result, unplayed, listed]``, so 500 players' full
+    Seasons stay well under the website's 2 MiB response limit. ``unplayed``
+    is a day known to be 5,000 to 5,000 with no battles; ``listed`` is false
+    for a day outside Legend I that the player page's log leaves out. Its
+    battles are never read."""
+    if not tags:
+        return []
+    board, place = _reset_place_sql(connection)
+    day = ranked_day_for(now)
+    rows = connection.execute(
+        f"""
+        {board}
+        SELECT player.id, player.normalized_tag, place.position,
+               daily.ranked_day_start, daily.attack_count, daily.defense_count,
+               daily.net_trophy_change, daily.coverage, daily.partial_reasons,
+               ranked_day.start_trophies
+        FROM players AS player
+        {place}
+        LEFT JOIN LATERAL (
+            SELECT DISTINCT ON (saved.ranked_day_start)
+                   saved.ranked_day_start, saved.attack_count, saved.defense_count,
+                   saved.net_trophy_change, saved.coverage, saved.partial_reasons,
+                   saved.ranked_day_version_id
+            FROM api_player_daily_logs AS saved
+            WHERE saved.player_id = player.id
+              AND saved.ranked_day_start BETWEEN %(first)s AND %(reset)s
+            ORDER BY saved.ranked_day_start DESC, saved.version DESC
+        ) AS daily ON true
+        LEFT JOIN ranked_day_versions AS ranked_day
+            ON ranked_day.id = daily.ranked_day_version_id
+        WHERE player.normalized_tag = ANY(%(tags)s)
+        ORDER BY player.normalized_tag, daily.ranked_day_start
+        """,
+        {
+            "first": day.season_start,
+            "reset": day.start,
+            "season_id": day.official_season_id,
+            "tags": tags,
+        },
+    ).fetchall()
+    players: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        player = players.setdefault(int(row[0]), {
+            "tag": _text(row[1]),
+            "reset_position": None if row[2] is None else int(row[2]),
+            "season_weeks": [],
+            "days": [],
+        })
+        if row[3] is None:
+            continue
+        attacks = None if row[4] is None else int(row[4])
+        defenses = None if row[5] is None else int(row[5])
+        reasons = _json_array(row[8])
+        result = _shown_total(row[6], _text(row[7]), attacks, defenses, reasons)
+        player["days"].append([
+            (row[3] - day.season_start) // RANKED_DAY_DURATION + 1,
+            attacks,
+            defenses,
+            result,
+            attacks == 0 and defenses == 0 and result == 0
+            and row[9] == SEASON_START_TROPHIES,
+            "player_not_eligible" not in reasons or "not_enrolled" in reasons
+            or bool(attacks) or bool(defenses),
+        ])
+    for player_id, week_start, league, entry in connection.execute(
+        """
+        SELECT player_id, week_start, league, entry FROM player_league_weeks
+        WHERE player_id = ANY(%s) AND week_start >= %s AND week_start < %s
+        ORDER BY player_id, week_start
+        """,
+        (list(players), day.season_start, day.season_start + SEASON_DURATION),
+    ).fetchall():
+        players[int(player_id)]["season_weeks"].append({
+            "week_start": week_start.astimezone(UTC).isoformat(),
+            "league": _text(league),
+            "entry": None if entry is None else _text(entry),
+        })
+    return list(players.values())
+
+
 def _reset_entries(
     connection: Any, tags: list[str], now: datetime
 ) -> dict[str, tuple[int | None, int | None, list[dict[str, Any]]]]:
@@ -709,17 +840,7 @@ def _reset_entries(
     tags' rows."""
     if not tags:
         return {}
-    publications, _, snapshots_exist = _frozen_publications(connection)
-    v2_entry = (
-        """
-        SELECT position FROM leaderboard_snapshot_entries
-        WHERE board.source = 'v2' AND snapshot_id = board.id
-          AND player_id = player.id
-        UNION ALL
-        """
-        if snapshots_exist
-        else ""
-    )
+    board, place = _reset_place_sql(connection)
     day = ranked_day_for(now)
     window = [
         start
@@ -728,25 +849,13 @@ def _reset_entries(
     ]
     rows = connection.execute(
         f"""
-        WITH board AS (
-            SELECT source, id
-            FROM ({publications}) AS publication
-            WHERE boundary_at = %(reset)s AND official_season_id = %(season_id)s
-            ORDER BY (source = 'v2') DESC, version DESC, generation DESC, id DESC
-            LIMIT 1
-        )
+        {board}
         SELECT player.normalized_tag, place.position, daily.ranked_day_start,
                daily.attack_count, daily.attack_gain, daily.defense_count,
                daily.defense_loss, daily.net_trophy_change, daily.coverage,
                daily.partial_reasons
         FROM players AS player
-        LEFT JOIN board ON true
-        LEFT JOIN LATERAL (
-            {v2_entry}
-            SELECT position FROM api_frozen_leaderboard_entries
-            WHERE board.source = 'legacy' AND leaderboard_id = board.id
-              AND player_id = player.id
-        ) AS place ON true
+        {place}
         LEFT JOIN LATERAL (
             SELECT DISTINCT ON (saved.ranked_day_start)
                    saved.ranked_day_start, saved.attack_count, saved.attack_gain,

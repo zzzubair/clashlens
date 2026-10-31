@@ -1,5 +1,6 @@
+import { PassThrough } from "node:stream";
 import { createElement } from "react";
-import { renderToString } from "react-dom/server";
+import { renderToPipeableStream } from "react-dom/server";
 import {
   createStaticHandler,
   createStaticRouter,
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   getAttackAlerts: vi.fn(),
   getOverlay: vi.fn(),
+  getPublicUserDays: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -48,6 +50,10 @@ vi.mock("../../app/services/discord-alerts.server", () => ({
 
 vi.mock("../../app/services/obs-overlay.server", () => ({
   getOverlay: mocks.getOverlay,
+}));
+
+vi.mock("../../app/services/public-user-days.server", () => ({
+  getPublicUserDays: mocks.getPublicUserDays,
 }));
 
 import UserRoute, { loader } from "../../app/routes/users.$username";
@@ -149,6 +155,7 @@ beforeEach(() => {
     players: [{ tag: "#2PP", name: "Nova", league: null }],
   });
   mocks.createPythonClient.mockReturnValue(client);
+  mocks.getPublicUserDays.mockRejectedValue(new PythonApiError(503, { error: "x" }));
 });
 
 /** The profile page; `signedInAs` is who the top bar says is signed in. */
@@ -171,13 +178,30 @@ async function renderProfile(
     new Request(`https://clashlens.example/users/nova88${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  )
+  // The page once everything streaming in has arrived.
+  const html = await new Promise<string>((resolve, reject) => {
+    const sink = new PassThrough();
+    let text = "";
+    sink.on("data", (chunk) => (text += chunk));
+    sink.on("end", () => resolve(text));
+    const { pipe } = renderToPipeableStream(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+      { onAllReady: () => pipe(sink), onShellError: reject },
+    );
+  });
+  // A part that streamed in after the page follows it hidden, with a script
+  // that swaps it in for its stand-in: read it in that place.
+  const streamed = html.indexOf('<div hidden id="S:0">');
+  const page =
+    streamed === -1
+      ? html
+      : html.slice(0, html.indexOf("<!--$?-->")) + html.slice(streamed);
+  return page
+    .replace(/<!--\/?\$-->/g, "")
     .replaceAll("<!-- -->", "")
     .replaceAll(' data-discover="true"', "");
 }
@@ -276,56 +300,39 @@ async function loadProfile() {
   return result.data;
 }
 
+/** One saved Legend day of the profile's read, Season day `day`. */
+const savedDay = (day: number, trophyChange: number | null, attacks = 8) => ({
+  day,
+  attacks,
+  defenses: 8,
+  trophyChange,
+  unplayed: false,
+  listed: true,
+});
+
 it("shows each linked player's Season heat map and their rank's move since the Reset", async () => {
   const hour = 3_600_000;
-  const at = (offset: number) => new Date(Date.now() + offset).toISOString();
   // Today is the Season's third Legend day, 5 hours old.
-  const start = Date.parse(at(-5 * hour));
-  const period = (from: number) =>
-    `${new Date(from).toISOString()} – ${new Date(from + 24 * hour).toISOString()}`;
-  const battle = (stars: number, trophyChange: number, offset: number) => ({
-    stars,
-    trophyChange,
-    battleTimestamp: at(offset),
-    opponent: { tag: "#OPP", name: "Rival" },
-  });
-  const saved = (from: number, trophyChange: number, resetRank: number) => ({
-    period: period(from),
-    resetRank,
-    trophyChange,
-    offense: { attacks: 8, threeStars: 6, trophyGain: 300 },
-    defense: { defenses: 8, threeStarsAgainst: 4, trophyLoss: 300 - trophyChange },
-    offenseEvents: [],
-    defenseEvents: [],
-    uncertainty: [],
-  });
-  client.getPlayer.mockImplementation(async (tag: string) => {
-    if (tag !== "#2PP") throw new PythonApiError(503, { error: "unavailable" });
-    return {
-      season: { anchor: new Date(start - 48 * hour).toISOString() },
-      currentDay: {
-        dayNumber: 3,
-        period: period(start),
-        offense: { attacks: 2, threeStars: 1, trophyGain: 72 },
-        defense: { defenses: 1, threeStarsAgainst: 0, trophyLoss: 16 },
-        trophyChange: null,
-        // Out of order, as saved; the card shows them as played.
-        offenseEvents: [battle(2, 32, -hour), battle(3, 40, -2 * hour)],
-        defenseEvents: [battle(1, -16, -3 * hour)],
-        uncertainty: [],
+  const start = Date.now() - 5 * hour;
+  const seasonStart = start - 48 * hour;
+  mocks.getPublicUserDays.mockResolvedValue({
+    seasonStart: new Date(seasonStart).toISOString(),
+    // The read has nothing for the others yet.
+    players: [
+      {
+        tag: "#2PP",
+        resetRank: 1300,
+        seasonWeeks: [],
+        days: [savedDay(1, -20), savedDay(2, 40), savedDay(3, null, 2)],
       },
-      seasonDays: [
-        saved(start - 24 * hour, 40, 1300),
-        saved(start - 48 * hour, -20, 1400),
-      ],
-      recentDays: [],
-    };
+    ],
   });
-  const loaded = (await loadProfile()) as { days?: Record<string, unknown> };
-  expect(client.getPlayer).toHaveBeenCalledTimes(4);
-  // Only what the card draws reaches the page, not each battle's details.
-  expect(Object.keys(loaded.days ?? {})).toEqual(["#2PP"]);
-  expect(JSON.stringify(loaded.days)).not.toContain("Rival");
+  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  expect(Object.keys((await loaded.days) ?? {})).toEqual(["#2PP"]);
+  // One read for every linked player, never a player page each.
+  expect(mocks.getPublicUserDays).toHaveBeenCalledTimes(1);
+  expect(mocks.getPublicUserDays).toHaveBeenCalledWith("nova88");
+  expect(client.getPlayer).not.toHaveBeenCalled();
 
   const html = await renderProfile("", { ...data, days: loaded.days });
   const [card = "", other = ""] =
@@ -351,38 +358,71 @@ it("shows each linked player's Season heat map and their rank's move since the R
   // Only the card's link takes focus: no toggle, no buttons in the grid.
   expect(card).not.toContain("tabindex");
   expect(card).not.toContain("<button");
-  // A player whose page could not be read keeps the counts, and no heat map.
+  // A player the read has no days for keeps the counts, and no heat map.
   expect(other).toContain("linked-player-stats");
   expect(other).not.toContain("season-heat");
+
+  // When the read fails, every card still shows its numbers.
+  mocks.getPublicUserDays.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  const failed = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  expect(await failed.days).toEqual({});
+  const plain = await renderProfile("", { ...data, days: failed.days });
+  expect(plain.match(/<article class="linked-player-card"/g)).toHaveLength(4);
+  expect(plain).toContain("#1,234");
+  expect(plain).not.toContain("since Reset");
+  expect(plain).not.toContain("season-heat");
 });
 
-it("shows no heat map and no key on a Season's Day 1, before its first Reset", async () => {
+it("shows no move, heat map or key on a Season's Day 1, before its first Reset", async () => {
   const hour = 3_600_000;
   const start = Date.now() - 5 * hour;
-  const period = `${new Date(start).toISOString()} – ${new Date(start + 24 * hour).toISOString()}`;
-  client.getPlayer.mockImplementation(async (tag: string) => {
-    if (tag !== "#2PP") throw new PythonApiError(503, { error: "unavailable" });
-    return {
-      season: { anchor: new Date(start).toISOString() },
-      currentDay: {
-        dayNumber: 1,
-        period,
-        offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
-        defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
-        trophyChange: null,
-        offenseEvents: [],
-        defenseEvents: [],
-        uncertainty: [],
+  // The previous Season's Day 28 ended at this Reset, ranked 1,300 on its
+  // Daily board; the board at a Season's first Reset is the Season before's,
+  // so the read has no place for this Season, and only today's Day 1.
+  mocks.getPublicUserDays.mockResolvedValue({
+    seasonStart: new Date(start).toISOString(),
+    players: [
+      {
+        tag: "#2PP",
+        resetRank: null,
+        seasonWeeks: [],
+        days: [savedDay(1, null, 0)],
       },
-      seasonDays: [],
-      recentDays: [],
-    };
+    ],
   });
-  const loaded = (await loadProfile()) as { days?: Record<string, unknown> };
+  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
   const html = await renderProfile("", { ...data, days: loaded.days });
-  expect(html).toContain('<article class="linked-player-card"');
+  const card =
+    html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/)?.[0] ?? "";
+  expect(card).toContain("#1,234");
+  expect(card).not.toContain("▲");
+  expect(card).not.toContain("since Reset");
   expect(html).not.toContain("season-heat-key");
   expect(html).not.toContain("linked-player-heat");
+});
+
+it("shows up to 500 linked players' cards at once, with one read for all their days", async () => {
+  // 500 is the most a public profile shows.
+  const tags = Array.from(
+    { length: 500 },
+    (_, index) =>
+      `#2${[...index.toString(12).padStart(3, "0")].map((digit) => "089PYLQGRJCU"[parseInt(digit, 12)]).join("")}`,
+  );
+  expect(new Set(tags).size).toBe(500);
+  client.getPublicUser.mockResolvedValue({
+    ...data.user,
+    verifiedPlayers: tags.map((tag) => ({ ...data.user.verifiedPlayers[0], tag })),
+  });
+  // The read never answers: the cards don't wait for it.
+  mocks.getPublicUserDays.mockReturnValue(new Promise(() => {}));
+  const loaded = (await loadProfile()) as {
+    user: { verifiedPlayers: unknown[] };
+    days?: Promise<unknown>;
+  };
+  expect(loaded.user.verifiedPlayers).toHaveLength(500);
+  expect(loaded.days).toBeInstanceOf(Promise);
+  await vi.waitFor(() => expect(mocks.getPublicUserDays).toHaveBeenCalledTimes(1));
+  expect(client.getPlayer).not.toHaveBeenCalled();
 });
 
 it("reads the owner's tool statuses only for the profile's signed-in owner", async () => {

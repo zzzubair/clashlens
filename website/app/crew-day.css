@@ -28,6 +28,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A total of only some accounts says so, so it takes its own line. */
+.crew-day-total[data-partial] {
+  grid-column: 1 / -1;
+}
+
 .crew-day-total b {
   font-family: var(--cl-font-score);
   font-size: 1.25rem;

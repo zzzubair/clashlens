@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import {
+  Await,
   Link,
   data,
   redirect,
@@ -14,18 +16,15 @@ import { TrophyMark } from "../components/LeaderboardShared";
 import { ProviderMark } from "../components/ProviderMark";
 import { SavedLine } from "../components/SavedLine";
 import { HeatKey } from "../components/SeasonHeatGrid";
-import { SeasonHeatMap, heatDays, heatMapShown } from "../components/SeasonSummary";
+import { SeasonHeatMap, heatMapShown } from "../components/SeasonSummary";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
+import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { SeasonDay } from "../lib/dashboard-cards";
-import {
-  LOOKUP_MESSAGES,
-  lookupExplanation,
-  selectPlayerHistory,
-} from "../lib/player-lookup-text";
+import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import { inGap, logGaps, seasonShape } from "../lib/season-shape";
+import { logGaps, shapeOf } from "../lib/season-shape";
+import type { PublicUserDays } from "../services/public-user-days.server";
 import type { Route } from "./+types/users.$username";
 import type { RootLoaderData } from "../root";
 
@@ -40,8 +39,9 @@ export interface UserLoaderData {
   /** Only for the signed-in owner of this profile, null for everyone else. */
   owner: OwnerTools | null;
   /** Each linked player's rank at the last Reset and Season, by tag, from
-   *  their player page; a player whose page could not be read has none. */
-  days?: Record<string, LinkedDay>;
+   *  one read of every linked player, streamed in after their cards; none
+   *  when it could not be read. */
+  days?: Promise<Record<string, LinkedDay>>;
 }
 
 /** What a linked player's card draws from their player page. */
@@ -84,10 +84,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       client.getPublicUser(username),
       ownerTools(request, username),
     ]);
-    const days = await linkedDays(
-      user.verifiedPlayers.map((player) => player.tag),
-      (tag) => client.getPlayer(tag),
-    );
+    // Not awaited: the cards show their numbers at once, and their Reset
+    // moves and heat maps follow.
+    const days =
+      user.verifiedPlayers.length === 0
+        ? Promise.resolve({})
+        : import("../services/public-user-days.server")
+            .then((api) => api.getPublicUserDays(username))
+            .then((read) => linkedDays(read, Date.now()))
+            .catch(() => ({}));
     return data<UserLoaderData>(
       { user, notFound: false, error: null, owner, days },
       { headers: NO_STORE },
@@ -108,57 +113,56 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 }
 
+const DAY_MS = 86_400_000;
+
 /**
- * Each linked player's rank at the last Reset and Season heat map, read from
- * their player page, one read per player (a Clasher links only a few). A
- * page that can't be read leaves that player out, and their card shows its
- * numbers only.
+ * Each linked player's rank at the last Reset and Season heat map, from one
+ * read of every linked player's place and saved days this Season. The heat
+ * map colours the days the player page's Season summary does: those its log
+ * shows, without a partial Season's stretches outside Legend I.
  */
-async function linkedDays(
-  tags: string[],
-  read: (tag: string) => Promise<PlayerPage>,
-): Promise<Record<string, LinkedDay>> {
-  const now = Date.now();
-  const days = await Promise.all(
-    tags.map(async (tag) => {
-      try {
-        const page = await read(tag);
-        const day = page.currentDay;
-        const live = day !== null && Date.parse(day.period.split(" – ")[1]) > now;
-        // The day that ended at today's start holds the last Reset's rank.
-        const start = day ? Date.parse(day.period.split(" – ")[0]) : NaN;
-        const reset = [...page.seasonDays, ...page.recentDays].find(
-          (saved) => Date.parse(saved.period.split(" – ")[1]) === start,
-        );
-        // The days the player page's Season summary colours: those its log
-        // shows, without a partial Season's stretches outside Legend I.
-        const shape = seasonShape(page, now);
-        const gaps = shape.partial ? logGaps(shape) : [];
-        const history = selectPlayerHistory(page, now).filter(
-          ({ day: saved }) => !inGap(gaps, shape, saved),
-        );
-        return [
-          [
-            tag,
-            {
-              resetRank: live ? (reset?.resetRank ?? null) : null,
-              season:
-                history.length > 0
-                  ? {
-                      start: shape.seasonStart,
-                      today: shape.today,
-                      days: heatDays(history, shape.seasonStart),
-                    }
-                  : null,
-            },
-          ] as const,
-        ];
-      } catch {
-        return [];
-      }
+function linkedDays(read: PublicUserDays, now: number): Record<string, LinkedDay> {
+  const seasonStart = Date.parse(read.seasonStart);
+  const today = Math.min(28, Math.floor((now - seasonStart) / DAY_MS) + 1);
+  return Object.fromEntries(
+    read.players.map((player) => {
+      const saved = new Map(player.days.map((day) => [day.day, day] as const));
+      const shape = shapeOf(
+        seasonStart,
+        today,
+        player.seasonWeeks,
+        saved,
+        (day) => day.unplayed,
+      );
+      const gaps = shape.partial ? logGaps(shape) : [];
+      const days = player.days
+        .filter(
+          (kept) =>
+            kept.listed &&
+            !gaps.some((gap) => gap.first <= kept.day && kept.day <= gap.last),
+        )
+        .map((kept): SeasonDay => ({
+          day: kept.day,
+          attacks: kept.attacks,
+          defenses: kept.defenses,
+          offense: null,
+          defense: null,
+          net: kept.trophyChange,
+          triples: null,
+          held: null,
+          endTrophies: null,
+          rank: null,
+          hits: null,
+        }));
+      return [
+        player.tag,
+        {
+          resetRank: player.resetRank,
+          season: days.length > 0 ? { start: seasonStart, today, days } : null,
+        },
+      ];
     }),
   );
-  return Object.fromEntries(days.flat());
 }
 
 /** The owner's tool statuses, or null when the visitor is anyone else. */
@@ -245,6 +249,33 @@ export default function UserRoute() {
     );
   }
   const players = data.user?.verifiedPlayers ?? [];
+  // The cards first with their numbers, then each one's Reset move and
+  // heat map once the read of them arrives.
+  const playerList = (days?: Record<string, LinkedDay>) => (
+    <>
+      <div className="profile-players-head">
+        <h2 id="user-players-title">Clash players</h2>
+        {/* One key for every card's Season heat map, while one draws. */}
+        {players.some((player) => {
+          const season = days?.[player.tag]?.season;
+          return season ? heatMapShown(season.today) : false;
+        }) ? (
+          <HeatKey />
+        ) : null}
+      </div>
+      <ul className="linked-player-cards">
+        {players.map((player) => (
+          <li key={player.tag}>
+            <LinkedPlayer
+              player={player}
+              day={days?.[player.tag]}
+              backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
+  );
   return (
     <main id="main-content" tabIndex={-1} className="page-shell">
       {justLinked ? (
@@ -282,29 +313,20 @@ export default function UserRoute() {
 
       <div className="profile-body">
         <section className="data-section" aria-labelledby="user-players-title">
-          <div className="profile-players-head">
-            <h2 id="user-players-title">Clash players</h2>
-            {/* One key for every card's Season heat map, while one draws. */}
-            {players.some((player) => {
-              const season = data.days?.[player.tag]?.season;
-              return season ? heatMapShown(season.today) : false;
-            }) ? (
-              <HeatKey />
-            ) : null}
-          </div>
-          {players.length > 0 ? (
-            <ul className="linked-player-cards">
-              {players.map((player) => (
-                <li key={player.tag}>
-                  <LinkedPlayer
-                    player={player}
-                    day={data.days?.[player.tag]}
-                    backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : isOwnProfile ? (
+          {players.length === 0 ? (
+            <div className="profile-players-head">
+              <h2 id="user-players-title">Clash players</h2>
+            </div>
+          ) : data.days === undefined ? (
+            playerList()
+          ) : (
+            <Suspense fallback={playerList()}>
+              <Await resolve={data.days} errorElement={playerList()}>
+                {(days) => playerList(days)}
+              </Await>
+            </Suspense>
+          )}
+          {players.length > 0 ? null : isOwnProfile ? (
             <div className="empty-state">
               <p>Link your Clash player to see your Legend days here.</p>
               <Link className="button button-primary" to="/account/verify-player">

@@ -802,6 +802,20 @@ def create_app(
             raise ApiError(404, "user_not_found")
         return JSONResponse(status_code=200, content=result)
 
+    @app.get("/v1/users/{username}/days")
+    def public_user_days(username: str, request: Request) -> JSONResponse:
+        _authorize(request, "user.read", production_database)
+        try:
+            normalized_username = normalize_username(username)
+        except ValueError as error:
+            raise ApiError(404, "user_not_found") from error
+        result = api_accounts.get_public_user_days(
+            production_database, normalized_username, now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "user_not_found")
+        return JSONResponse(status_code=200, content=result)
+
     @app.post("/v1/account")
     def create_account(body: AccountCreateBody, request: Request) -> JSONResponse:
         context = _authorize(
