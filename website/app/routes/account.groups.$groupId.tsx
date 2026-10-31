@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { data, Link, redirect, useLoaderData, useLocation } from "react-router";
+import { useState } from "react";
+import {
+  data,
+  Link,
+  redirect,
+  useLoaderData,
+  useLocation,
+  useNavigate,
+} from "react-router";
 
-import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { GainLines, pointed, type Light } from "../components/GainLines";
+import { ShieldIcon, Stars, SwordIcon } from "../components/GameIcons";
+import { dayBar, dayLabel, dayRange, rowScale } from "../components/DayScale";
+import { LastDays } from "../components/LastDays";
 import { formatAge } from "../components/Provenance";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
@@ -32,6 +42,8 @@ type SortKey = keyof typeof SORTS;
 /** What a phone row shows beside the name: there is room for only one of these. */
 const METRICS = { change: "Change", attack: "Attack", defense: "Defense" } as const;
 type Metric = keyof typeof METRICS;
+/** Each measure's own order: its heading sorts by it. */
+const MEASURE_SORT = { change: "net", attack: "attack", defense: "defense" } as const;
 
 export const handle: BackHandle = {
   back: { to: "/account/watchlists", label: "Your watchlists" },
@@ -56,9 +68,11 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const requestedDays = Number(url.searchParams.get("days") ?? "7");
   const days = COMPARISON_DAYS.find((value) => value === requestedDays) ?? 7;
-  const requestedSort = url.searchParams.get("sort") ?? "trophies";
+  // The days compared are what the page is for, so it opens best gain first;
+  // the Trophies heading still sorts by trophies now.
+  const requestedSort = url.searchParams.get("sort") ?? "net";
   const sort = (
-    Object.keys(SORTS).includes(requestedSort) ? requestedSort : "trophies"
+    Object.keys(SORTS).includes(requestedSort) ? requestedSort : "net"
   ) as SortKey;
   const empty = {
     comparison: null,
@@ -121,15 +135,20 @@ export default function GroupCompareRoute() {
     useLoaderData<typeof loader>();
   const location = useLocation();
   const seasonEnded = useSeasonEnded(comparison?.season ?? null);
-  // A phone row shows the measure the list is sorted by until the Clasher picks
-  // another; sorting again shows the new order's measure.
-  const [picked, setPicked] = useState<{ sort: SortKey; metric: Metric } | null>(null);
-  const metric: Metric =
-    picked?.sort === sort
-      ? picked.metric
-      : sort === "attack" || sort === "defense"
-        ? sort
-        : "change";
+  const navigate = useNavigate();
+  // A phone row shows the measure the list is sorted by, so the order is always
+  // the one on screen; sorted by trophies, it keeps the measure last picked.
+  const [picked, setPicked] = useState<Metric>("change");
+  // The player pointed at, or picked with a click or tap, lit up on the
+  // chart and in the table; a pick stays until it is clicked again.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const lit = hovered ?? pinned;
+  const light: Light = {
+    hover: setHovered,
+    pin: (tag) => setPinned((current) => (current === tag ? null : tag)),
+  };
+  const metric: Metric = sort === "trophies" ? picked : sort === "net" ? "change" : sort;
   if (comparison === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -164,38 +183,29 @@ export default function GroupCompareRoute() {
     comparison.players.some((player) => player.days[index].state === "retired"),
   ).length;
   const hasYou = comparison.players.some((player) => player.you);
-  // Your own players outside the list are explained once, under the board.
-  const outside = comparison.players.filter((player) => player.you && !player.inGroup);
-  // Every player's bars share this one scale, so equal heights mean equal trophies.
-  // The zero line sits where the board's biggest gain and biggest loss both fit,
-  // with a little room below it even when nobody lost a day.
-  const nets = comparison.players.flatMap((player) =>
-    player.days.map((day) => day.net ?? 0),
-  );
-  const up = Math.max(1, ...nets);
-  const scale: BarScale = {
-    up,
-    down: Math.max(up * 0.15, ...nets.map((net) => -net)),
-    largest: Math.max(1, ...nets.map(Math.abs)),
+  // Said by the title: who the list holds, and your own players shown beside it.
+  const watched = comparison.players.filter((player) => player.inGroup).length;
+  const yours = comparison.players.length - watched;
+  // The best of each measure, the player first when sorted by it.
+  const leads = {
+    net: leaders(players, "net"),
+    attack: leaders(players, "attack"),
+    defense: leaders(players, "defense"),
   };
   // Switching views replaces this history entry, so the browser's Back skips past them.
   const query = (next: { days?: number; sort?: SortKey }) =>
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
   const showVsGroup = comparison.players.some((player) => player.vsGroup !== null);
-  const firstDay = formatDay(comparison.dayStarts[0]);
-  const lastDay = formatDay(comparison.dayStarts[comparison.dayStarts.length - 1]);
-  const change = `${days}-day change`;
+  const change = `${days}-day gain`;
   // A heading sorts by its column; the arrow sits outside the link's name.
-  // An aside shares the link's line, as the bars' scale does.
+  // An aside shares the link's line: what a cell's two numbers are.
   const heading = (key: SortKey, label: React.ReactNode, aside?: React.ReactNode) => (
     <th
       scope="col"
       data-col={key}
       className={key === sort ? "compare-sorted" : undefined}
-      aria-sort={
-        key === sort ? (key === "defense" ? "ascending" : "descending") : undefined
-      }
+      aria-sort={key === sort ? "descending" : undefined}
     >
       {aside === undefined ? (
         <Link to={query({ sort: key })} preventScrollReset replace>
@@ -212,6 +222,23 @@ export default function GroupCompareRoute() {
     </th>
   );
 
+  // A phone's two headings sort the same way; the sorted one carries the
+  // arrow. Sorting by trophies keeps the measure on screen.
+  const keySort = (key: SortKey, label: string, aside?: React.ReactNode) => (
+    <Link
+      className="compare-key-sort"
+      to={query({ sort: key })}
+      aria-current={key === sort ? "true" : undefined}
+      onClick={() => setPicked(metric)}
+      preventScrollReset
+      replace
+    >
+      <span>{label}</span>
+      {aside}
+      {key === sort ? <span className="sr-only">, sorted</span> : null}
+    </Link>
+  );
+
   return (
     <main id="main-content" tabIndex={-1} className="page-shell compare-page">
       <section className="compare-head" aria-labelledby="compare-title">
@@ -219,9 +246,18 @@ export default function GroupCompareRoute() {
           <div>
             <h1 id="compare-title">{comparison.name}</h1>
             <p className="compare-span">
-              {firstDay} – {lastDay} · {days} finished{" "}
-              <span className="compare-wide">Legend </span>
-              days
+              {watched} watched{yours > 0 ? ` + ${yours} yours` : ""}
+              {/* A phone's days menu already says how many. */}
+              <span className="compare-span-days"> · {days} finished days</span>
+              {/* The crown on each measure's best number, keyed once up here;
+                  screen readers hear it on the number itself. */}
+              {leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
+                <span className="compare-lead-key" aria-hidden="true">
+                  {" · "}
+                  <span className="compare-crown" />
+                  best in this watchlist
+                </span>
+              ) : null}
             </p>
           </div>
           <a
@@ -252,7 +288,6 @@ export default function GroupCompareRoute() {
               </Link>
             ))}
           </nav>
-          <SortMenu key={sort} sort={sort} query={query} />
         </div>
       </section>
 
@@ -271,94 +306,156 @@ export default function GroupCompareRoute() {
       ) : null}
 
       {comparison.players.length > 0 ? (
-        <div className="compare-board" data-metric={metric}>
-          {/* A phone has no heading row and room for one measure a row: this
-              picks it for every row, and over the bars puts their scale and
-              dates; the table says the same for screen readers. */}
-          <div className="compare-key">
-            <div className="compare-metric" role="group" aria-label="Show on each row">
-              {(Object.keys(METRICS) as Metric[]).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  aria-pressed={key === metric}
-                  onClick={() => setPicked({ sort, metric: key })}
+        <>
+          <GainLines
+            lines={comparison.players.flatMap((player) =>
+              player.net === null
+                ? []
+                : [
+                    {
+                      tag: player.tag,
+                      name: player.name ?? player.tag,
+                      you: player.you,
+                      days: player.days,
+                    },
+                  ],
+            )}
+            dayStarts={comparison.dayStarts}
+            lit={lit}
+            light={light}
+          />
+          <div className="compare-board open-board" data-metric={metric}>
+            {/* A phone has no heading row and room for one measure a row: the
+              tabs pick it for every row, and the two headings under them sort
+              by trophies or by that measure. */}
+            <div className="compare-key">
+              <div
+                className="leaderboard-view-switch compare-metric"
+                role="group"
+                aria-label="Show on each row"
+              >
+                {(Object.keys(METRICS) as Metric[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={key === metric}
+                    onClick={() => {
+                      setPicked(key);
+                      // Picking a measure sorts by it, best first; the
+                      // Trophies heading still sorts by trophies.
+                      void navigate(query({ sort: MEASURE_SORT[key] }), {
+                        replace: true,
+                        preventScrollReset: true,
+                      });
+                    }}
+                  >
+                    {METRICS[key]}
+                  </button>
+                ))}
+              </div>
+              {/* A phone picks the days here, beside the measures, instead of a
+                row of its own above the list. */}
+              <label className="compare-days">
+                <span className="sr-only">Days compared</span>
+                <select
+                  value={days}
+                  onChange={(event) =>
+                    void navigate(query({ days: Number(event.target.value) }), {
+                      replace: true,
+                      preventScrollReset: true,
+                    })
+                  }
                 >
-                  {METRICS[key]}
-                </button>
-              ))}
+                  {COMPARISON_DAYS.map((value) => (
+                    <option key={value} value={value}>
+                      {value} days
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {keySort("trophies", "Trophies")}
+              {keySort(
+                MEASURE_SORT[metric],
+                metric === "change" ? "Gain" : metric === "attack" ? "Triples" : "Held",
+                metric === "change" ? undefined : (
+                  <small className="compare-key-range">and avg ★</small>
+                ),
+              )}
             </div>
-            {metric === "change" ? (
-              <span className="trend-head" aria-hidden="true">
-                <TrendKey scale={scale} firstDay={firstDay} lastDay={lastDay} />
-              </span>
-            ) : null}
-          </div>
-          <table className="compare-table">
-            <caption className="sr-only">
-              {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col" data-col="player">
-                  Player
-                </th>
-                {heading("trophies", "Trophies")}
-                <th scope="col" data-col="today" className="compare-extra">
-                  Today
-                </th>
-                {heading(
-                  "net",
-                  change,
-                  // The total keeps this heading; the bars have their own name,
-                  // and the shared scale is spelt out in full for screen readers.
-                  <>
-                    <TrendKey scale={scale} firstDay={firstDay} lastDay={lastDay} />
-                    <span className="sr-only">
-                      One bar a day from {firstDay} to {lastDay}, on the same scale for
-                      every player: the tallest is {scale.largest.toLocaleString("en")}{" "}
-                      trophies, and the dashed line is the best day, {signed(scale.up)}.
-                    </span>
-                  </>,
-                )}
-                {showVsGroup ? (
-                  <th scope="col" data-col="vs" className="compare-extra">
-                    Vs the watchlist
+            <table className="compare-table">
+              <caption className="sr-only">
+                {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
+              </caption>
+              <thead>
+                {/* Wide screens group the columns: where each player is now, and
+                  the finished days compared. */}
+                <tr className="compare-groups">
+                  <td />
+                  <th scope="colgroup" colSpan={2}>
+                    <span>Now</span>
                   </th>
-                ) : null}
-                {heading("attack", "Attack")}
-                {heading("defense", "Defense")}
-                <th scope="col" data-col="toggle">
-                  <span className="sr-only">Details</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {players.map((player) => (
-                <PlayerRow
-                  key={player.tag}
-                  group={comparison.name}
-                  player={player}
-                  scale={scale}
-                  days={days}
-                  change={change}
-                  sort={sort}
-                  showVsGroup={showVsGroup}
-                />
-              ))}
-            </tbody>
-          </table>
-          {outside.length > 0 ? (
-            <p className="compare-foot">
-              <span className="compare-badge" aria-hidden="true">
-                You
-              </span>{" "}
-              {outside.length === comparison.players.filter((player) => player.you).length
-                ? "Your own players, shown for comparison; they aren't in this watchlist."
-                : `Your own players; ${outside.map((player) => player.name ?? player.tag).join(", ")} ${outside.length === 1 ? "is" : "are"} shown for comparison and not in this watchlist.`}
-            </p>
-          ) : null}
-        </div>
+                  <th scope="colgroup" colSpan={showVsGroup ? 4 : 3}>
+                    {/* The days compared, named once here, their dates behind the ⓘ. */}
+                    <span>
+                      <LastDays count={days} range={dayRange(comparison.dayStarts)} />
+                    </span>
+                  </th>
+                  <td />
+                </tr>
+                <tr>
+                  <th scope="col" data-col="player">
+                    Player
+                  </th>
+                  {heading("trophies", "Trophies")}
+                  <th scope="col" data-col="today" className="compare-extra">
+                    Today
+                  </th>
+                  {/* The gain and its daily bars share one short heading. */}
+                  {heading("net", "Gain")}
+                  {showVsGroup ? (
+                    <th scope="col" data-col="vs" className="compare-extra">
+                      Vs the watchlist
+                    </th>
+                  ) : null}
+                  {/* What each cell's two numbers are, said once here. */}
+                  {heading(
+                    "attack",
+                    "Attack",
+                    <small className="compare-head-sub">Triples · avg ★</small>,
+                  )}
+                  {heading(
+                    "defense",
+                    "Defense",
+                    <small className="compare-head-sub">Held · avg ★</small>,
+                  )}
+                  <th scope="col" data-col="toggle">
+                    <span className="sr-only">Details</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {players.map((player) => (
+                  <PlayerRow
+                    key={player.tag}
+                    group={comparison.name}
+                    player={player}
+                    days={days}
+                    change={change}
+                    sort={sort}
+                    lead={{
+                      net: leads.net.has(player.tag),
+                      attack: leads.attack.has(player.tag),
+                      defense: leads.defense.has(player.tag),
+                    }}
+                    showVsGroup={showVsGroup}
+                    lit={player.tag === lit}
+                    light={light}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <div className="empty-state compare-empty-group">
           <h2>No players in this watchlist yet</h2>
@@ -372,81 +469,28 @@ export default function GroupCompareRoute() {
   );
 }
 
-/** "Sort: Trophies", opening every sort in a small list; it closes like a menu. */
-function SortMenu({
-  sort,
-  query,
-}: {
-  sort: SortKey;
-  query: (next: { sort: SortKey }) => string;
-}) {
-  const menu = useRef<HTMLDetailsElement>(null);
-  const toggle = useRef<HTMLElement>(null);
-  useEffect(() => {
-    function handlePointerDown(event: PointerEvent) {
-      if (menu.current?.open && !menu.current.contains(event.target as Node)) {
-        menu.current.open = false;
-      }
-    }
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, []);
-  return (
-    <details
-      ref={menu}
-      className="compare-sort"
-      onKeyDown={(event) => {
-        if (event.currentTarget.open && event.key === "Escape") {
-          event.preventDefault();
-          event.currentTarget.open = false;
-          toggle.current?.focus();
-        }
-      }}
-      onBlur={(event) => {
-        if (
-          event.relatedTarget !== null &&
-          !event.currentTarget.contains(event.relatedTarget)
-        ) {
-          event.currentTarget.open = false;
-        }
-      }}
-    >
-      <summary ref={toggle}>
-        <span className="compare-sort-label">Sort:</span> {SORTS[sort]}
-      </summary>
-      <nav aria-label="Sort by">
-        {(Object.keys(SORTS) as SortKey[]).map((key) => (
-          <Link
-            key={key}
-            to={query({ sort: key })}
-            aria-current={key === sort ? "page" : undefined}
-            preventScrollReset
-            replace
-          >
-            {SORTS[key]}
-          </Link>
-        ))}
-      </nav>
-    </details>
-  );
-}
-
 function PlayerRow({
   group,
   player,
-  scale,
   days,
   change,
   sort,
+  lead,
   showVsGroup,
+  lit,
+  light,
 }: {
   group: string;
   player: ComparedPlayer;
-  scale: BarScale;
   days: number;
   change: string;
   sort: SortKey;
+  /** Whether this player leads each measure, marked on its number. */
+  lead: Record<"net" | "attack" | "defense", boolean>;
   showVsGroup: boolean;
+  /** Lit up here and on the chart, from either. */
+  lit: boolean;
+  light: Light;
 }) {
   const { attack, defense } = player;
   const backState = useBackState(group);
@@ -457,12 +501,18 @@ function PlayerRow({
   const tripleShare = attack.count ? attack.threeStars / attack.count : 0;
   // Defenses that kept the third star: the defense side's answer to triples.
   const heldShare = defense.count ? 1 - defense.starCounts[3] / defense.count : 0;
+  // The bars' own scale: this player's biggest day fills the band.
+  const scale = rowScale(player.days.map((day) => day.net));
   return (
     <>
       <tr
         className={`compare-row${player.you ? " compare-you" : ""}`}
-        // The whole row opens its details for a pointer; keyboards use the button.
+        data-lit={lit || undefined}
+        {...pointed(light, player.tag)}
+        // The whole row opens its details for a pointer, and picks its line;
+        // keyboards use the button.
         onClick={(event) => {
+          light.pin(player.tag);
           if (!(event.target as Element).closest("a, button")) setOpen(!open);
         }}
       >
@@ -477,7 +527,7 @@ function PlayerRow({
             </Link>
             {player.you ? (
               <span
-                className="compare-badge"
+                className="you-badge"
                 aria-hidden="true"
                 title={
                   player.inGroup ? "Your player" : "Your player, not in this watchlist"
@@ -551,9 +601,9 @@ function PlayerRow({
                   className="compare-battles"
                   aria-label={`${plural(player.today.attacks, "attack")} and ${plural(player.today.defenses, "defense")} recorded`}
                 >
-                  <DashboardIcon name="swords" />
+                  <SwordIcon />
                   {player.today.attacks}
-                  <DashboardIcon name="shield" />
+                  <ShieldIcon />
                   {player.today.defenses}
                 </span>
               ) : null}
@@ -563,7 +613,11 @@ function PlayerRow({
         <td data-label={change} className={sorted("net")}>
           <span className="compare-change">
             <span className="compare-net">
-              {player.net === null ? <Empty /> : <Signed value={player.net} />}
+              {player.net === null ? (
+                <Empty />
+              ) : (
+                <Signed value={player.net} lead={lead.net} />
+              )}
               {player.netPerDay !== null ? (
                 <span className="compare-sub compare-sub-day">
                   {signed(player.netPerDay, 1)} a day
@@ -593,9 +647,10 @@ function PlayerRow({
           ) : (
             <Rate
               share={tripleShare}
-              word="triples"
+              shareWords="of attacks tripled"
               average={attack.stars / attack.count}
               averageWords="stars an attack"
+              lead={lead.attack}
             />
           )}
         </td>
@@ -605,10 +660,10 @@ function PlayerRow({
           ) : (
             <Rate
               share={heldShare}
-              word="held"
+              shareWords="of defenses held"
               average={defense.stars / defense.count}
               averageWords="stars given up a defense"
-              allowed
+              lead={lead.defense}
             />
           )}
         </td>
@@ -725,7 +780,7 @@ function PlayerRow({
                       {defense.starCounts.map((count, stars) => (
                         <span key={stars}>
                           <span aria-hidden="true">
-                            {stars}★ {count}
+                            <Stars count={stars} /> {count}
                           </span>
                           <span className="sr-only">
                             {plural(count, "defense")} gave up {plural(stars, "star")}
@@ -748,86 +803,56 @@ function PlayerRow({
 /**
  * Attack or defense led by its success share (triples, or defenses held), the
  * one where higher is better on both sides, over a bar of that share; the
- * average stars follow as the smaller figure.
+ * average stars follow as the quieter figure. The heading names both once;
+ * screen readers hear the words on each.
  */
 function Rate({
   share,
-  word,
+  shareWords,
   average,
   averageWords,
-  allowed = false,
+  lead = false,
 }: {
   share: number;
-  word: string;
+  shareWords: string;
   average: number;
   averageWords: string;
-  allowed?: boolean;
+  lead?: boolean;
 }) {
   return (
     <span className="compare-rate">
       <span className="compare-rate-head">
-        <strong className="compare-number">{Math.round(share * 100)}%</strong>
-        <span className="compare-rate-word">{word}</span>
+        <strong
+          className={`compare-number${lead ? " compare-lead" : ""}`}
+          title={lead ? LEAD_TITLE : undefined}
+        >
+          {`${Math.round(share * 100)}%`}
+          <span className="sr-only">{` ${shareWords}`}</span>
+          <LeadWords lead={lead} />
+        </strong>
+        <span className="compare-sub compare-rate-average">
+          {average.toFixed(2)}
+          <span aria-hidden="true">★</span>
+          <span className="sr-only">{` ${averageWords}`}</span>
+        </span>
       </span>
       <span className="meter" aria-hidden="true">
         <span style={{ "--value": `${share * 100}%` } as React.CSSProperties} />
-      </span>
-      <span className="compare-sub compare-rate-average">
-        {average.toFixed(2)}
-        <span
-          className={`compare-star${allowed ? " compare-star-allowed" : ""}`}
-          aria-hidden="true"
-        >
-          ★
-        </span>
-        <span className="sr-only"> {averageWords}</span>
-        <span aria-hidden="true"> avg</span>
       </span>
     </span>
   );
 }
 
 /**
- * The bars' name, scale and dates, over their column: the dashed line at the
- * top of every player's bars is the board's best single day, and the bars run
- * from the first day on the left to the last on the right.
- */
-function TrendKey({
-  scale,
-  firstDay,
-  lastDay,
-}: {
-  scale: BarScale;
-  firstDay: string;
-  lastDay: string;
-}) {
-  return (
-    <>
-      <span className="trend-title" aria-hidden="true">
-        Daily change
-      </span>
-      <span className="trend-scale" aria-hidden="true">
-        <i className="trend-scale-line" />
-        best day {signed(scale.up)}
-      </span>
-      <span className="trend-dates" aria-hidden="true">
-        <span>{firstDay}</span>
-        <span>{lastDay}</span>
-      </span>
-    </>
-  );
-}
-
-/**
- * A player's days as small bars. Pointing at a bar, or stepping through them
+ * A player's days as thin bars. Pointing at a bar, or stepping through them
  * with the arrow keys once the bars have focus, shows that day's date and result.
  */
-function Trend({ days, scale }: { days: DayResult[]; scale: BarScale }) {
+function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const [active, setActive] = useState<number | null>(null);
   const summary = days
     .map(
       (day) =>
-        `${formatDay(day.start)} ${DAY_LABELS[day.state]}${day.net === null ? "" : ` ${signed(day.net)}`}`,
+        `${dayLabel(day.start)} ${DAY_LABELS[day.state]}${day.net === null ? "" : ` ${signed(day.net)}`}`,
     )
     .join("; ");
   const shown = active === null ? undefined : days[active];
@@ -837,7 +862,6 @@ function Trend({ days, scale }: { days: DayResult[]; scale: BarScale }) {
       role="img"
       aria-label={`Daily results: ${summary}`}
       tabIndex={0}
-      style={zeroLine(scale)}
       onFocus={() => setActive((index) => index ?? days.length - 1)}
       onBlur={() => setActive(null)}
       onMouseLeave={() => setActive(null)}
@@ -870,7 +894,7 @@ function Trend({ days, scale }: { days: DayResult[]; scale: BarScale }) {
             { "--at": `${((active + 0.5) / days.length) * 100}%` } as React.CSSProperties
           }
         >
-          {formatDay(shown.start)}{" "}
+          {dayLabel(shown.start)}{" "}
           <strong className={tone(shown.net ?? 0)}>
             {shown.net === null ? DAY_LABELS[shown.state] : signed(shown.net)}
           </strong>
@@ -884,12 +908,11 @@ function Trend({ days, scale }: { days: DayResult[]; scale: BarScale }) {
 }
 
 /** One player's days at full size: each bar with its exact result and date. */
-function DayChart({ days, scale }: { days: DayResult[]; scale: BarScale }) {
+function DayChart({ days, scale }: { days: DayResult[]; scale: number }) {
   return (
     <ol
       className={`day-chart${days.length > 7 ? " day-chart-dense" : ""}`}
       aria-label="Each Legend day"
-      style={zeroLine(scale)}
     >
       {days.map((day) => (
         <li key={day.start} className={direction(day)}>
@@ -903,7 +926,7 @@ function DayChart({ days, scale }: { days: DayResult[]; scale: BarScale }) {
             {new Date(day.start).getUTCDate()}
           </span>
           <span className="sr-only">
-            {formatDay(day.start)}: {DAY_LABELS[day.state]}
+            {dayLabel(day.start)}: {DAY_LABELS[day.state]}
             {day.net === null ? "" : `, ${signed(day.net)}`}
           </span>
         </li>
@@ -917,40 +940,45 @@ function direction(day: DayResult): string {
   return day.net > 0 ? "trend-up" : "trend-down";
 }
 
-/** The board's one scale: its biggest gain and loss, and the largest of the two. */
-interface BarScale {
-  up: number;
-  down: number;
-  largest: number;
-}
-
-/** Where the zero line sits, from the top, so the biggest gain and loss both fit. */
-function zeroLine(scale: BarScale): React.CSSProperties {
-  return {
-    "--zero": `${(scale.up / (scale.up + scale.down)) * 100}%`,
-  } as React.CSSProperties;
-}
-
-/** A bar up or down from the zero line, its height on the shared scale. */
-function DayBar({ day, scale }: { day: DayResult; scale: BarScale }) {
-  const height =
-    day.net === null || day.net === 0
-      ? undefined
-      : {
-          height: `max(3px, ${(Math.abs(day.net) / (scale.up + scale.down)) * 100}%)`,
-        };
+/** A bar up or down from the zero line, its height on the player's own scale. */
+function DayBar({ day, scale }: { day: DayResult; scale: number }) {
   return (
     <span
       className={`day-bar day-${day.state === "uncertain" ? "partial" : day.state}`}
-      style={height}
+      style={
+        day.net === null || day.net === 0
+          ? undefined
+          : { height: `max(4px, ${dayBar(day.net, scale)})` }
+      }
     />
   );
 }
 
-function Signed({ value, decimals = 0 }: { value: number; decimals?: number }) {
+function Signed({
+  value,
+  decimals = 0,
+  lead = false,
+}: {
+  value: number;
+  decimals?: number;
+  lead?: boolean;
+}) {
   return (
-    <strong className={`compare-number ${tone(value)}`}>{signed(value, decimals)}</strong>
+    <strong
+      className={`compare-number ${tone(value)}${lead ? " compare-lead" : ""}`}
+      title={lead ? LEAD_TITLE : undefined}
+    >
+      {signed(value, decimals)}
+      <LeadWords lead={lead} />
+    </strong>
   );
+}
+
+const LEAD_TITLE = "The best in this watchlist";
+
+/** The leading number's mark, said for screen readers. */
+function LeadWords({ lead }: { lead: boolean }) {
+  return lead ? <span className="sr-only">, the best in this watchlist</span> : null;
 }
 
 function tone(value: number): string {
@@ -988,26 +1016,56 @@ const DAY_LABELS: Record<DayResult["state"], string> = {
   retired: "history no longer kept",
 };
 
-function sortPlayers(players: ComparedPlayer[], sort: SortKey): ComparedPlayer[] {
-  const value = (player: ComparedPlayer): number | null => {
-    if (sort === "trophies") return player.trophies;
-    if (sort === "net") return player.netPerDay;
-    if (sort === "attack") {
-      return player.attack.count === 0 ? null : player.attack.stars / player.attack.count;
-    }
-    // Fewer stars given up is the better defense.
-    return player.defense.count === 0
+/**
+ * What an order ranks by, bigger first: the number its column shows big (a
+ * gain a day, so a missed day costs nothing; the share of triples; the share
+ * of defenses held), then average stars to break a tie. Null has nothing to
+ * rank.
+ */
+function rankBy(player: ComparedPlayer, sort: SortKey): [number, number] | null {
+  const { attack, defense } = player;
+  if (sort === "trophies") return player.trophies === null ? null : [player.trophies, 0];
+  // The total gain shown big in its column, the number its crown sits on.
+  if (sort === "net") return player.net === null ? null : [player.net, 0];
+  if (sort === "attack") {
+    return attack.count === 0
       ? null
-      : -player.defense.stars / player.defense.count;
-  };
+      : [attack.threeStars / attack.count, attack.stars / attack.count];
+  }
+  // Fewer stars given up is the better defense.
+  return defense.count === 0
+    ? null
+    : [1 - defense.starCounts[3] / defense.count, -defense.stars / defense.count];
+}
+
+function byRank(a: [number, number], b: [number, number]): number {
+  return b[0] - a[0] || b[1] - a[1];
+}
+
+function sortPlayers(players: ComparedPlayer[], sort: SortKey): ComparedPlayer[] {
   return [...players].sort((left, right) => {
-    const a = value(left);
-    const b = value(right);
+    const a = rankBy(left, sort);
+    const b = rankBy(right, sort);
     if (a === null || b === null) {
       return a === b ? left.tag.localeCompare(right.tag) : a === null ? 1 : -1;
     }
-    return b - a || left.tag.localeCompare(right.tag);
+    return byRank(a, b) || left.tag.localeCompare(right.tag);
   });
+}
+
+/** Who leads a measure, ties included: no one when fewer than two have a
+ *  result or every one of them ties. */
+function leaders(players: ComparedPlayer[], sort: SortKey): Set<string> {
+  const ranked = players.flatMap((player) => {
+    const rank = rankBy(player, sort);
+    return rank === null ? [] : [{ tag: player.tag, rank }];
+  });
+  const best = ranked.reduce<[number, number] | null>(
+    (top, entry) => (top === null || byRank(entry.rank, top) < 0 ? entry.rank : top),
+    null,
+  );
+  const top = ranked.filter((entry) => best !== null && byRank(entry.rank, best) === 0);
+  return new Set(top.length === ranked.length ? [] : top.map((entry) => entry.tag));
 }
 
 function signed(value: number, decimals = 0): string {
@@ -1020,13 +1078,4 @@ function signed(value: number, decimals = 0): string {
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function formatDay(value: string | undefined): string {
-  if (value === undefined) return "";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(new Date(value));
 }

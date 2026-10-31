@@ -1,0 +1,510 @@
+/* The player page's Season summary: rank, trophies and hit rate, the Season
+   heat map (season-heat.css), and each side's battles by stars with its
+   averages. Loaded after player.css. Phone first; a wide screen sets the
+   heat map in a column beside the numbers. */
+
+/* Open on the page (.open-board in brand.css), its edges in line with the
+   sections around it. */
+.player-page .season-summary {
+  padding: 1rem 0 1.1rem;
+}
+.player-page .season-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+}
+.player-page .season-summary-head h2 {
+  margin: 0;
+}
+.player-page .season-summary-meta {
+  margin: 0.2rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+/* The Season menu: a tinted fill with no edge, as the site's quiet buttons. */
+.player-page .season-menu {
+  min-width: 0;
+  max-width: 100%;
+}
+.player-page .season-menu .filter-field {
+  display: block;
+}
+.player-page .season-menu select {
+  width: auto;
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0.4rem 2.25rem 0.4rem 0.9rem;
+  color: var(--cl-ink);
+  background: var(--cl-raised)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23927f70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 0.75rem center / 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--cl-radius);
+  /* 16px keeps iPhones from zooming the page when the menu opens. */
+  font-size: 1rem;
+  font-weight: 600;
+  appearance: none;
+  cursor: pointer;
+}
+.player-page .season-menu select:hover {
+  background-color: var(--cl-fill-hover);
+}
+
+/* ---------- Headline: rank, trophies, hit rate ---------- */
+
+/* Numbers sit in a row split by hairlines, not boxes. */
+.player-page .season-summary-headline,
+.player-page .season-summary-averages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
+  gap: 0;
+  margin: 1.1rem 0 0;
+}
+.player-page .season-summary-headline > div,
+.player-page .season-summary-averages > div {
+  min-width: 0;
+  padding: 0.1rem 0.75rem;
+}
+.player-page .season-summary-headline > div:first-child,
+.player-page .season-summary-averages > div:nth-child(odd) {
+  padding-left: 0;
+}
+.player-page .season-summary-headline > div + div,
+.player-page .season-summary-averages > div:nth-child(even) {
+  border-left: 1px solid var(--cl-border);
+}
+.player-page .season-summary dt {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  line-height: 1.2;
+}
+.player-page .season-summary dd {
+  margin: 0.3rem 0 0;
+  font-family: var(--cl-font-score);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.player-page .season-summary-headline dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: clamp(1.4rem, 6.4vw, 1.6rem);
+  line-height: 1;
+}
+/* The rank comes first and reads as a rank, as in the log: #1,288. It never
+   breaks, and the size above keeps #13,183 in its column on a 360px phone. */
+.player-page .season-summary-headline > div:first-child dd:not(.summary-words) {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.player-page .season-summary-headline > div:first-child dd:not(.summary-words)::before {
+  content: "#";
+}
+.player-page .season-summary-headline dd.summary-words {
+  font-family: var(--cl-font);
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+.player-page .season-summary dd small {
+  flex-basis: 100%;
+  margin-top: 0.2rem;
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.player-page .season-summary dd .meter {
+  flex-basis: 100%;
+  margin-top: 0.45rem;
+}
+/* A final rank takes a row of its own; the two numbers under it share the next. */
+.player-page .season-summary-headline:has(> .season-summary-rank) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  row-gap: 0.9rem;
+}
+.player-page .season-summary-headline > .season-summary-rank {
+  grid-column: 1 / -1;
+}
+.player-page .season-summary-headline > .season-summary-rank + div {
+  padding-left: 0;
+  border-left: 0;
+}
+.player-page .season-summary-rank dd {
+  color: var(--cl-action-text);
+  font-size: 2.1rem;
+}
+/* Each column as wide as its label, so "Reset trophies" keeps one line. */
+.player-page .season-summary-headline:not(:has(> .season-summary-rank)) {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+/* On a 360px phone three columns squeeze "Unavailable", so Hit rate takes the
+   next row. */
+@media (max-width: 23.5rem) {
+  .player-page .season-summary-headline:not(:has(> .season-summary-rank)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.9rem;
+  }
+  .player-page
+    .season-summary-headline:not(:has(> .season-summary-rank))
+    > :nth-child(3) {
+    grid-column: 1 / -1;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* ---------- Battles by stars ----------
+   Each side's name and total, then its 3-, 2-, 1- and 0-star counts in four
+   even columns, each count over its own thin bar as long as its share of
+   the side's battles (the --share SeasonSummary sets), so the count and its
+   bar are one thing. Huge counts scroll inside instead of widening the page. */
+.player-page .season-summary-table {
+  position: relative;
+  margin-top: 1.25rem;
+  padding-top: 1.1rem;
+  overflow-x: auto;
+  border-top: 1px solid var(--cl-border);
+}
+.player-page .season-summary-table table {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.player-page .season-summary-table :is(thead, tbody) {
+  display: contents;
+}
+.player-page .season-summary-table tbody tr {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.player-page .season-summary-table tbody th {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  text-align: left;
+}
+.player-page .season-summary-table th .game-mark {
+  color: var(--cl-muted);
+  font-size: 0.9375rem;
+}
+.player-page .season-summary-table tbody td:nth-child(2) {
+  color: var(--cl-muted);
+  font-family: var(--cl-font-score);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+/* The counts stay in the table for screen readers; the row under shows them. */
+.player-page .season-summary-table td[data-stars] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* Four even columns across the side, the same in both sides. */
+.player-page .season-summary-table tr.season-summary-key {
+  display: block;
+  margin-bottom: 0.6rem;
+}
+.player-page .season-summary-key td {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.player-page .season-summary-key span[data-stars] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.25rem 0.3rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+/* The number of stars, then one star: 3★. */
+.player-page .season-summary-key .game-star {
+  width: 1em;
+  height: 1em;
+  font-size: 0.95rem;
+}
+.player-page .season-summary-key b {
+  grid-column: 1 / -1;
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.player-page .season-summary-key [data-empty] b {
+  color: var(--cl-muted);
+}
+/* The count's bar on a faint track the column's width: the whole side. A
+   count above none keeps a 3px sliver. */
+.player-page .season-summary-key span[data-stars]::after {
+  grid-column: 1 / -1;
+  height: 0.375rem;
+  margin-top: 0.2rem;
+  background:
+    linear-gradient(var(--seg), var(--seg)) 0 0 / max(3px, var(--share)) 100% no-repeat,
+    var(--cl-raised);
+  border-radius: 2px;
+  content: "";
+}
+.player-page .season-summary-key span[data-empty]::after {
+  background: var(--cl-raised);
+}
+/* Attacks: gold for three stars, then greys; defenses: red for three
+   stars given up, green for a clean hold. */
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="3"] {
+  --seg: var(--cl-star);
+}
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="2"] {
+  --seg: var(--cl-star-2);
+}
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="1"] {
+  --seg: var(--cl-star-1);
+}
+.player-page .season-summary-table [data-side="Attacks"] [data-stars="0"] {
+  --seg: var(--cl-outline);
+}
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="3"] {
+  --seg: var(--cl-negative);
+}
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="2"] {
+  --seg: color-mix(in oklab, var(--cl-negative) 60%, white);
+}
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="1"] {
+  --seg: color-mix(in oklab, var(--cl-negative) 30%, white);
+}
+.player-page .season-summary-table [data-side="Defenses"] [data-stars="0"] {
+  --seg: color-mix(in srgb, var(--cl-positive) 70%, var(--cl-raised));
+}
+
+/* ---------- Averages ---------- */
+
+/* Each side's pair on its own line on a phone. */
+.player-page .season-summary-averages {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  row-gap: 0.9rem;
+  margin-top: 0.6rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--cl-border);
+}
+.player-page .season-summary-averages dd {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+.player-page .season-summary-sides > .section-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.8125rem;
+}
+.player-page .season-summary > .season-heat-map {
+  margin-top: 1.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--cl-card-line);
+}
+
+/* A phone shows the headline and heat map, the sides folded under one Show
+   all row; wider screens show the sides with no row. A browser that can't
+   style a fold's content keeps the row. */
+.player-page .season-summary-sides > summary {
+  margin-top: 1rem;
+  border-top: 1px solid var(--cl-card-line);
+}
+@supports selector(::details-content) {
+  @media (min-width: 48rem) {
+    .player-page .season-summary-sides > summary {
+      display: none;
+    }
+    .player-page .season-summary-sides::details-content {
+      display: contents;
+      content-visibility: visible;
+    }
+  }
+}
+
+/* From tablet width the attack and defense sides sit next to each other,
+   each pair of averages under its own side. */
+@media (min-width: 48rem) {
+  .player-page .season-summary {
+    padding: 1.25rem 0 1.4rem;
+  }
+  .player-page .season-summary-headline dd {
+    font-size: 1.85rem;
+  }
+  .player-page .season-summary-rank dd {
+    font-size: 2.4rem;
+  }
+  .player-page .season-summary-headline:has(> .season-summary-rank) {
+    grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
+  }
+  .player-page .season-summary-headline > .season-summary-rank {
+    grid-column: auto;
+  }
+  .player-page .season-summary-headline > .season-summary-rank + div {
+    padding-left: 0.75rem;
+    border-left: 1px solid var(--cl-border);
+  }
+  .player-page .season-summary-table table {
+    grid-template-rows: auto auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: column;
+    column-gap: 2.5rem;
+  }
+  .player-page .season-summary-table tr.season-summary-key {
+    margin: 0.35rem 0 0;
+  }
+  .player-page .season-summary-key td {
+    font-size: 0.9375rem;
+  }
+  .player-page .season-summary-key b {
+    font-size: 1.85rem;
+  }
+  /* Two columns for each side's pair, and a gap as wide as the sides' between
+     them, so each pair starts under its own side. */
+  .player-page .season-summary-averages {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) 2.5rem repeat(2, minmax(0, 1fr));
+    margin-top: 1.1rem;
+  }
+  .player-page .season-summary-averages > div:nth-child(3) {
+    grid-column: 4;
+    padding-left: 0;
+    border-left: 0;
+  }
+  .player-page .season-summary-averages dd {
+    font-size: 1.6rem;
+  }
+}
+/* A wide screen gives the headline a column of its own, its numbers stacked
+   and split by hairlines, beside the two sides, whose averages sit level
+   with its foot; the heat map runs under both. */
+@media (min-width: 60rem) {
+  .player-page .season-summary:has(.season-summary-sides):not(:has(.season-heat-map)) {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+    column-gap: 2.5rem;
+  }
+  .player-page .season-summary > * {
+    grid-column: 1 / -1;
+  }
+  /* The rank across the column, the other two side by side under it. */
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    > .season-summary-headline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-column: 1;
+    align-content: start;
+    gap: 0;
+    margin-top: 1.4rem;
+    padding-right: 2.5rem;
+    border-right: 1px solid var(--cl-border);
+  }
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    > .season-summary-headline
+    > div {
+    grid-column: auto;
+    padding: 1rem 0 0;
+    border-left: 0;
+  }
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    > .season-summary-headline
+    > div:first-child {
+    grid-column: 1 / -1;
+    padding: 0 0 1rem;
+    border-bottom: 1px solid var(--cl-border);
+  }
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    > .season-summary-headline
+    > div:nth-child(3) {
+    padding-left: 1rem;
+    border-left: 1px solid var(--cl-border);
+  }
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    .season-summary-headline
+    dd:not(.summary-words) {
+    font-size: 1.9rem;
+  }
+  .player-page
+    .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
+    .season-summary-headline
+    > div:first-child
+    dd:not(.summary-words) {
+    font-size: 2.75rem;
+  }
+  .player-page .season-summary > .season-summary-sides {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    grid-row: 2;
+    grid-column: 2;
+    margin-top: 1.4rem;
+  }
+  .player-page .season-summary-sides > .season-summary-table {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .player-page .season-summary-sides > .season-summary-averages {
+    margin-top: 1.25rem;
+    padding-top: 1.1rem;
+  }
+  /* The heat map in a column of its own beside the numbers: the headline
+     over the attack and defense sides on the left. */
+  .player-page .season-summary:has(.season-heat-map) {
+    display: grid;
+    grid-template-areas: "head head" "headline heat" "sides heat";
+    grid-template-rows: auto auto 1fr;
+    grid-template-columns: minmax(0, 1fr) clamp(26rem, 32vw, 30rem);
+    column-gap: 3rem;
+  }
+  .player-page .season-summary:has(.season-heat-map) > .season-summary-head {
+    grid-area: head;
+  }
+  .player-page .season-summary:has(.season-heat-map) > .season-summary-headline {
+    grid-area: headline;
+  }
+  .player-page .season-summary:has(.season-heat-map) > .season-summary-sides {
+    grid-area: sides;
+  }
+  /* The map runs the block's full height: its weeks share the room, so
+     its last row and key end level with the averages. */
+  .player-page .season-summary > .season-heat-map {
+    display: flex;
+    flex-direction: column;
+    grid-area: heat;
+    margin-top: 1.4rem;
+    padding: 0 0 0 3rem;
+    border-top: 0;
+    border-left: 1px solid var(--cl-card-line);
+  }
+  .player-page .season-heat-map > .season-heat {
+    display: grid;
+    flex: 1;
+  }
+  .player-page .season-heat-map .season-heat-days {
+    grid-auto-rows: minmax(2.75rem, 1fr);
+  }
+  .player-page .season-heat-map .season-heat-days > li {
+    height: auto;
+  }
+}
+
+/* The stars table is a chart, not a board: no row lines from .open-board. */
+.player-page .season-summary .season-summary-table tbody > tr > :is(td, th) {
+  border-bottom: 0;
+}

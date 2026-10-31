@@ -16,6 +16,13 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   await expect(header.getByRole("button", { name: "Dark mode" })).toBeVisible();
   await expect(header.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.locator("details.site-menu > summary")).toHaveText("More");
+  // The same tabs for everyone: Home, Rankings, Watchlists and Crews, then More.
+  await expect(bar.locator(":scope > a")).toHaveText([
+    "Home",
+    "Rankings",
+    "Watchlists",
+    "Crews",
+  ]);
   for (const item of await bar.locator(":scope > a, summary").all()) {
     const box = (await item.boundingBox())!;
     expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
@@ -29,22 +36,22 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
     "page",
   );
 
-  // More holds Watchlists, Blog and Join Discord; the dimmed page closes it.
+  // More holds Analytics, Blog and Join Discord; the dimmed page closes it.
   const more = page.locator("details.site-menu");
   await more.locator("summary").click();
   await expect(more).toHaveAttribute("open", "");
   const sheet = more.locator(".site-menu-panel");
-  const watchlists = sheet.getByRole("link", { name: "Watchlists" });
-  await expect(watchlists).toBeVisible();
-  // Join Discord is a full row in the sheet's own colours, like Watchlists.
+  const analytics = sheet.getByRole("link", { name: "Analytics" });
+  await expect(analytics).toBeVisible();
+  // Join Discord is a full row in the sheet's own colours, like Analytics.
   const discord = sheet.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toBeVisible();
   await expect(discord).toContainText("Join Discord");
   const row = (await discord.boundingBox())!;
   expect(row.height).toBeGreaterThanOrEqual(44);
-  expect(row.width).toBe((await watchlists.boundingBox())!.width);
+  expect(row.width).toBe((await analytics.boundingBox())!.width);
   const colour = (link: Locator) => link.evaluate((el) => getComputedStyle(el).color);
-  expect(await colour(discord)).toBe(await colour(watchlists));
+  expect(await colour(discord)).toBe(await colour(analytics));
   await page.mouse.click(195, 200);
   await expect(more).not.toHaveAttribute("open");
   await more.locator("summary").click();
@@ -89,7 +96,7 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/blog");
   const bar = tabs(page);
-  const analytics = bar.getByRole("link", { name: "Analytics" });
+  const rankings = bar.getByRole("link", { name: "Rankings" });
   const more = page.locator("details.site-menu > summary");
   // A chosen tab takes the accent colour.
   const chosen = (tab: Locator) =>
@@ -110,18 +117,18 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
   let release = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   await page.route(
-    (url) => url.pathname === "/analytics/armies.data",
+    (url) => url.pathname === "/leaderboards/tracked.data",
     async (route) => {
       loads += 1;
       await held;
       await route.continue();
     },
   );
-  await analytics.click();
-  await expect.poll(() => chosen(analytics)).toBe(true);
-  expect(await loading(analytics)).toBe(true);
+  await rankings.click();
+  await expect.poll(() => chosen(rankings)).toBe(true);
+  expect(await loading(rankings)).toBe(true);
   expect(await chosen(more)).toBe(false);
-  await analytics.click();
+  await rankings.click();
   await expect(page).toHaveURL(/\/blog$/);
   // Ctrl/Cmd and middle clicks are left to the browser, which opens the tab's
   // page in a new tab. Headless Chromium does not open one every time, so
@@ -132,17 +139,17 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
     for (const type of ["click", "auxclick"])
       window.addEventListener(type, (event) => kept.push(!event.defaultPrevented));
   });
-  await analytics.click({ modifiers: ["ControlOrMeta"] });
-  await analytics.click({ button: "middle" });
+  await rankings.click({ modifiers: ["ControlOrMeta"] });
+  await rankings.click({ button: "middle" });
   expect(
     await page.evaluate(() => (window as unknown as { kept: boolean[] }).kept),
   ).toEqual([true, true]);
   await expect(page).toHaveURL(/\/blog$/);
   release();
 
-  await expect(page).toHaveURL(/\/analytics\/armies$/);
-  await expect(analytics).toHaveAttribute("aria-current", "page");
-  expect(await loading(analytics)).toBe(false);
+  await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
+  await expect(rankings).toHaveAttribute("aria-current", "page");
+  expect(await loading(rankings)).toBe(false);
   expect(loads).toBe(1);
 });
 
@@ -200,19 +207,21 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
       0,
     );
     await expect(name).toHaveText(shown);
-    await expect(bar.locator(":scope > a").first()).toHaveText("Dashboard");
+    // Home opens the dashboard; More names the account.
+    await expect(bar.locator(":scope > a").first()).toHaveText("Home");
+    await expect(more.locator(".site-menu-who")).toHaveText(`Signed in as ${shown}`);
   };
   for (const [tab, path] of [
     ["Rankings", /\/leaderboards\/tracked\?view=live/],
-    ["Dashboard", /\/$/],
-    ["Analytics", /\/analytics\/armies$/],
+    ["Home", /\/$/],
+    ["Watchlists", /\/account\/watchlists$/],
     ["Crews", /\/crews$/],
   ] as const) {
     await bar.getByRole("link", { name: tab }).click();
     await stillSignedIn(path);
   }
   for (const [item, path] of [
-    ["Watchlists", /\/account\/watchlists$/],
+    ["Analytics", /\/analytics\/armies$/],
     ["Blog", /\/blog$/],
   ] as const) {
     await more.locator("summary").click();

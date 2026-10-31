@@ -111,15 +111,40 @@ test("leaderboard updates stay visible and expandable on a 375 px phone", async 
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/leaderboards/tracked?view=live&page=1");
+  // The board shows one update time; a row shows its own only when it fell
+  // over 10 minutes behind the board's newest. Move that newest 20 minutes on.
+  const saved = await page.request.get("/leaderboards/tracked.data?view=live&page=1");
+  const original = await saved.text();
+  const body = original.replace(
+    /("newestObservedAt",)"([^"]+)"/,
+    (_, key: string, at: string) =>
+      `${key}"${new Date(Date.parse(at) + 20 * 60_000).toISOString()}"`,
+  );
+  expect(body).not.toBe(original);
+  await page.route("**/leaderboards/tracked.data*", (route) =>
+    route.fulfill({ contentType: saved.headers()["content-type"], body }),
+  );
+  await page.goto("/blog");
+  await page.evaluate(() => {
+    history.pushState(null, "", "/leaderboards/tracked?view=live&page=1");
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
+  const board = page.locator(".rankings-date");
+  await expect(board).toBeVisible();
+  await expect(board).toContainText(/Updated .+ ago/);
+  await expect(board.locator("time")).toHaveAttribute("datetime", /.+/);
+  await expect(board.locator("time")).toHaveAttribute("title", /UTC$/);
   const table = page.getByRole("table", { name: "Live Leaderboard", exact: true });
   const rows = table.locator("tbody tr");
   expect(await rows.count()).toBeGreaterThan(0);
-  for (const row of await rows.all()) {
-    await expect(row.locator("summary")).toBeVisible();
+  // Every row's update is read out; each row behind shows it.
+  for (const row of await rows.all())
     await expect(row.locator("summary")).toContainText("Last updated");
-  }
-  const update = rows.first().locator("details");
+  const behind = rows.filter({ has: page.locator(".player-update-mobile[data-old]") });
+  expect(await behind.count()).toBeGreaterThan(0);
+  for (const row of await behind.all())
+    await expect(row.locator("summary")).toBeVisible();
+  const update = behind.first().locator("details");
   await update.locator("summary").click();
   await expect(update.locator("time")).toBeVisible();
   await expect(update.locator("time")).toHaveAttribute("datetime", /.+/);
@@ -146,20 +171,30 @@ test("leaderboard ages and old-data labels advance while the page stays open", a
     history.pushState(null, "", "/leaderboards/tracked?view=live&page=1");
     dispatchEvent(new PopStateEvent("popstate"));
   });
+  // The board's one update time advances; its live pulse shows only while
+  // that update is at most 10 minutes old. Each row's own age, read out,
+  // advances too.
+  const board = page.locator(".rankings-date");
+  const pulse = board.locator(".live-pip");
   const update = page
     .getByRole("table", { name: "Live Leaderboard", exact: true })
     .locator('tbody tr td[data-label="Last updated"]')
     .first();
-  await expect(update).toContainText("Over 10 min old");
+  await expect(board).toContainText("1 hour ago");
+  await expect(pulse).toHaveCount(0);
+  await expect(update).toContainText("1 hour ago");
   const observedAt = Date.parse(
-    (await update.locator("time").getAttribute("datetime")) ?? "",
+    (await board.locator("time").getAttribute("datetime")) ?? "",
   );
   await page.clock.setSystemTime(observedAt + 2 * 60_000);
   await page.clock.runFor(30_000);
-  await expect(update).toContainText("2 min ago");
-  await expect(update).not.toContainText("Over 10 min old");
+  await expect(board).toContainText("2 min ago");
+  await expect(pulse).toHaveCount(1);
   await page.clock.runFor(9 * 60_000);
-  await expect(update).toContainText("11 min ago · Over 10 min old");
+  await expect(board).toContainText("11 min ago");
+  await expect(pulse).toHaveCount(0);
+  await expect(update).not.toContainText("hour");
+  await expect(update).toContainText(/\d+ min ago/);
 });
 
 test("an out-of-range leaderboard page offers a working link to page one", async ({

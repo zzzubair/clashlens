@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   checkPlayerTag: vi.fn(),
   addGroupPlayer: vi.fn(),
   removeGroupPlayer: vi.fn(),
+  getGroupComparison: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -27,13 +28,17 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
+vi.mock("../../app/services/group-comparison.server", () => ({
+  getGroupComparison: mocks.getGroupComparison,
+}));
+
 vi.mock("../../app/services/group-players.server", () => ({
   checkPlayerTag: mocks.checkPlayerTag,
   addGroupPlayer: mocks.addGroupPlayer,
   removeGroupPlayer: mocks.removeGroupPlayer,
 }));
 
-import GroupsRoute, { action } from "../../app/routes/account.groups";
+import GroupsRoute, { action, loader } from "../../app/routes/account.groups";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -44,7 +49,7 @@ import {
 import { mapGroups } from "../../app/lib/account-contracts";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
-import { worstGroups } from "../fixtures/worst-case-accounts";
+import { worstComparison, worstGroups } from "../fixtures/worst-case-accounts";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -177,6 +182,7 @@ describe("adding and removing one group player", () => {
         Component: GroupsRoute,
         loader: () => ({
           groups: listed?.groups ?? [],
+          previews: {},
           // No Season: this checks the server's waiting flag, not the clock.
           season: null,
           error: null,
@@ -310,6 +316,81 @@ describe("adding and removing one group player", () => {
     );
   });
 
+  it("shows each list's today and last 7 days, with the Clasher's own players marked", async () => {
+    const groups = worstGroups();
+    const [full, single] = groups;
+    // The full list's comparison reads; the one-player list's fails and loses
+    // only its bars; the empty list is not read at all.
+    const comparison = worstComparison(7);
+    comparison.players = [
+      { ...comparison.players[0]!, tag: full!.players[0]!.tag, name: "Theo" },
+      {
+        ...comparison.players[1]!,
+        tag: "#2QQ",
+        name: "Ember",
+        you: true,
+        inGroup: false,
+        status: "tracking",
+        trophies: 6364,
+        seasonResetPending: false,
+        today: { net: -42, gained: 40, lost: 82, attacks: 1, defenses: 2 },
+      },
+    ];
+    comparison.players[0]!.today = {
+      net: 65,
+      gained: 105,
+      lost: 40,
+      attacks: 3,
+      defenses: 1,
+    };
+    mocks.listGroups.mockResolvedValue({ season: "1791176400", groups });
+    mocks.getGroupComparison.mockImplementation(async (_, groupId: string) => {
+      if (groupId === full!.groupId) return comparison;
+      throw new PythonApiError(503, { error: "unavailable" });
+    });
+    const loaded = await loader({
+      request: new Request(`${ORIGIN}/account/watchlists`),
+    } as never);
+    expect(mocks.getGroupComparison).toHaveBeenCalledTimes(2);
+    expect(mocks.getGroupComparison).toHaveBeenCalledWith(IDENTITY, full!.groupId, 7);
+    expect(Object.keys(loaded.previews ?? {})).toEqual([full!.groupId]);
+    expect(loaded.previewDays).toBe("30 Jul – 5 Aug");
+
+    const html = (
+      await renderGroups(groups, undefined, "", loaded.previews, loaded.previewDays)
+    ).replaceAll("−", "-");
+    const fullCard = html.slice(html.indexOf(`<li id="group-${full!.groupId}"`));
+    const singleCard = html.slice(html.indexOf(`<li id="group-${single!.groupId}"`));
+    // Who the list holds, then the Clasher's own players shown beside it.
+    expect(fullCard).toContain("20 watched + 1 yours");
+    expect(fullCard).toMatch(
+      /Theo<\/a>[^]*?Today <\/span><span class="score-positive">\+65</,
+    );
+    expect(fullCard).toMatch(
+      /<li class="group-member-you">[^]*?Ember<\/a><span class="you-badge" aria-hidden="true">You<\/span>[^]*?#2QQ, you, not in this watchlist[^]*?-42/,
+    );
+    expect(fullCard.match(/class="group-day-bars"/g)).toHaveLength(2);
+    // The bars are named "Last 7 days" as Rankings names its own, their
+    // dates on hover and behind the ⓘ with how they are scaled; no range
+    // caption under them.
+    expect(fullCard).toMatch(
+      /<span class="last-days">Last 7 days<details class="last-days-info"><summary title="30 Jul – 5 Aug">[^]*?30 Jul – 5 Aug, one bar a day\. Each player&#x27;s bars have their own scale/,
+    );
+    expect(fullCard).not.toMatch(/ a day<\/small>/);
+    // Each row on its own scale: its biggest day reaches the band's edge.
+    const rows = fullCard.match(
+      /<span class="group-day-bars"[^]*?<\/span><\/span>(?=<span class="sr-only"|<span class="group-member)/g,
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows!) expect(row).toContain("--size:50%");
+    // A list without its comparison still shows names and trophies, without bars.
+    expect(singleCard.slice(0, singleCard.indexOf("</li></ol>"))).not.toContain(
+      "group-day-bars",
+    );
+    expect(singleCard).toContain("1 watched");
+    expect(singleCard).not.toContain("yours");
+  });
+
   it("lists a full, a one-player and an empty group with worst-case names", async () => {
     const html = await renderGroups(worstGroups());
     for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
@@ -319,14 +400,16 @@ describe("adding and removing one group player", () => {
   it("opens adding and editing below the card's buttons without needing JavaScript", async () => {
     const html = await renderGroups(worstGroups());
     const card = html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`));
-    // Add player, Edit and Compare share one row, each named by its own visible words; each panel below it holds ordinary forms, closed at first.
+    // The title, then one quiet "⋯" menu holding Add player and Edit, then
+    // Compare, the card's one filled button; each panel below holds ordinary
+    // forms, closed at first.
     expect(card).toMatch(
       new RegExp(
         `^<li[^>]*><div class="group-card-head"><div class="group-card-title"><h3>[^<]*</h3>(?:<p class="group-card-meta">[^]*?</p>)?</div>` +
+          `<details class="group-more"><summary title="[^"]+"><span aria-hidden="true">⋯</span><span class="sr-only">More for [^<]*</span></summary><div class="group-more-menu">` +
           `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*><svg[^]*?</svg>Add player</a>` +
-          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]* title="[^"]+"><svg[^]*?</svg>Edit</a>` +
-          `<a class="group-card-open" [^>]*aria-label="Compare players in [^"]*"[^>]*>Compare<svg[^]*?</a></div>` +
-          `(?:<p class="group-members-key" aria-hidden="true">Behind #1</p>)?` +
+          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*><svg[^]*?</svg>Edit</a></div></details>` +
+          `<a class="group-card-open button-primary" [^>]*aria-label="Compare players in [^"]*"[^>]*>Compare<svg[^]*?</a></div>` +
           `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/watchlists" method="post"><input type="hidden" name="action" value="add-player"/>`,
       ),
     );
@@ -425,6 +508,8 @@ async function renderGroups(
   groups: ReturnType<typeof worstGroups>,
   actionData?: object,
   search = "",
+  previews: object = {},
+  previewDays: string | null = null,
 ) {
   const keys = Object.fromEntries(
     groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
@@ -436,6 +521,8 @@ async function renderGroups(
       action: () => actionData,
       loader: () => ({
         groups,
+        previews,
+        previewDays,
         season: null,
         error: null,
         createIdempotencyKey: IDEMPOTENCY_KEY,

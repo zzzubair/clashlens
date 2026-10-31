@@ -49,20 +49,23 @@ test("a Clasher can sign in and use account features against the real backend", 
   const players = warPlan.getByRole("list", { name: "Players in War plan" });
   if ((await players.count()) === 0) {
     // Players join one at a time, after the game confirms the tag.
+    await warPlan.locator(".group-more > summary").click();
     await warPlan.getByRole("link", { name: "Add player" }).click();
     await warPlan.getByLabel("Player tag").fill("#2PP");
     await warPlan.getByRole("button", { name: "Add", exact: true }).click();
   }
   await expect(players).toBeVisible();
-  // Renaming, removing and deleting wait behind Edit.
+  // Renaming, removing and deleting wait behind Edit, in the card's ⋯ menu.
   await expect(warPlan.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  const cardMenu = warPlan.locator(".group-more > summary");
   const editToggle = warPlan.getByRole("link", { name: "Edit", exact: true });
-  const closedAt = await editToggle.boundingBox();
+  const closedAt = await cardMenu.boundingBox();
+  await cardMenu.click();
   await editToggle.click();
   const edit = warPlan.locator(".group-edit");
   await expect(edit).toBeVisible();
-  // Opening Edit leaves its button where it was; the panel opens below the row.
-  expect(await editToggle.boundingBox()).toEqual(closedAt);
+  // Opening Edit leaves the menu where it was; the panel opens below the row.
+  expect(await cardMenu.boundingBox()).toEqual(closedAt);
   await expect(edit.getByLabel("Watchlist name")).toHaveValue("War plan");
   await expect(
     edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
@@ -72,6 +75,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   await expect(yesDelete).toBeVisible();
   await edit.getByRole("link", { name: "Keep watchlist" }).click();
   await expect(yesDelete).toBeHidden();
+  await cardMenu.click();
   await editToggle.click();
   await expect(edit).toBeHidden();
   await expect(players).toBeVisible();
@@ -110,14 +114,15 @@ test("a Clasher can sign in and use account features against the real backend", 
     await expect(page.getByRole("heading", { name: "Your watchlists" })).toBeVisible();
   }
 
-  // A player opened from the comparison goes Back to it, on the same view.
+  // A player opened from the comparison goes Back to it, on the same view
+  // (sorted by Gain, its default).
   await warPlan.getByRole("link", { name: "Compare players" }).click();
   await page.getByRole("link", { name: "14 days", exact: true }).click();
-  await expect(page).toHaveURL(/days=14/);
+  await expect(page).toHaveURL(/days=14&sort=net$/);
   await page.locator(".compare-name").first().click();
   await expect(page).toHaveURL(/\/players\//);
   await page.getByRole("link", { name: "Back to War plan" }).click();
-  await expect(page).toHaveURL(/\/account\/watchlists\/[^/]+\?days=14&sort=trophies$/);
+  await expect(page).toHaveURL(/\/account\/watchlists\/[^/]+\?days=14&sort=net$/);
 
   await page.goto("/account/verify-player");
   await linkPlayer(page, "#2PP", /\/users\/[a-z][a-z0-9_]+\?linked=%232PP$/);
@@ -133,7 +138,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   expectNoPageErrors(errors);
 });
 
-test("the account name opens your profile, tools, Settings and Log out beside Join Discord", async ({
+test("the account name opens your profile, tools, Settings and Sign out beside Join Discord", async ({
   page,
   browser,
   baseURL,
@@ -148,9 +153,9 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
   const menu = header.locator("details.account-menu");
   const toggle = menu.locator("summary");
   const account = header.getByRole("link", { name: "Your profile", exact: true });
-  const logOut = header.getByRole("button", { name: "Log out" });
+  const signOut = header.getByRole("button", { name: "Sign out" });
   await expect(menu).not.toHaveAttribute("open");
-  await expect(logOut).toBeHidden();
+  await expect(signOut).toBeHidden();
 
   await toggle.focus();
   await page.keyboard.press("Enter");
@@ -163,14 +168,14 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
   await expect(toggle).toBeFocused();
 
   await toggle.click();
-  await expect(logOut).toBeVisible();
+  await expect(signOut).toBeVisible();
   await page.getByRole("heading", { name: "Blog", exact: true }).click();
-  await expect(logOut).toBeHidden();
+  await expect(signOut).toBeHidden();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await toggle.click();
   // On a phone Join Discord sits in the bottom bar's More sheet.
-  for (const control of [toggle, account, logOut]) {
+  for (const control of [toggle, account, signOut]) {
     const box = await control.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
@@ -190,7 +195,7 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
     await noScriptPage.goto("/blog");
     const noScriptHeader = noScriptPage.getByRole("banner");
     await noScriptHeader.locator("details.account-menu > summary").click();
-    await expect(noScriptHeader.getByRole("button", { name: "Log out" })).toBeVisible();
+    await expect(noScriptHeader.getByRole("button", { name: "Sign out" })).toBeVisible();
     await noScriptHeader.getByRole("link", { name: "Your profile", exact: true }).click();
     await expect(noScriptPage).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   } finally {
@@ -207,7 +212,7 @@ test("the account name opens your profile, tools, Settings and Log out beside Jo
       "href",
       path,
     );
-  await logOut.click();
+  await signOut.click();
   await expect(page).toHaveURL("/?saved=logout");
   await expect(
     header.getByRole("link", { name: "Sign in", exact: true }),
@@ -238,8 +243,8 @@ test("a page that needs an account says why, with Create account and Sign in", a
       `/login?returnPath=${back}`,
     );
   }
-  // Before an account exists there is no Account menu or Log out.
-  await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+  // Before an account exists there is no Account menu or Sign out.
+  await expect(page.getByRole("banner").getByText("Sign out")).toHaveCount(0);
 });
 
 test("Already have one? stays with its Sign in on a phone and on a desktop", async ({

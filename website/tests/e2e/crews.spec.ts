@@ -92,7 +92,11 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     await mate.page.getByRole("button", { name: "Join with 2 players" }).click();
     await expect(mate.page).toHaveURL(`${crewPath}?saved=joined`);
     await expect(mate.page.getByRole("status")).toHaveText("You joined Night Owls.");
-    await expect(mate.page.getByText("4 of 10 places")).toBeVisible();
+    // The crew counts accounts and the Clashers who own them, and its room.
+    const places = mate.page.locator(".crew-places");
+    await expect(places).toContainText("4 accounts · 2 Clashers");
+    await expect(places).toContainText("4/10");
+    await expect(places).toContainText("Room for 10 accounts, 6 free");
 
     // Anyone can look inside, signed out too: from a player's page to the crew
     // and a board, with nothing to manage and no Clash Lens account named.
@@ -169,7 +173,7 @@ test("an invite is accepted with 2 of 3 accounts, a signed-out visitor looks ins
     await x.click();
     await row.getByRole("button", { name: "Kick", exact: true }).click();
     await expect(page.getByText(`Kicked ${MATE_TAGS[0]}.`)).toBeVisible();
-    await expect(page.getByText("2 clashers · 3 of 10 places")).toBeVisible();
+    await expect(page.getByText("3 accounts · 2 Clashers")).toBeVisible();
 
     // Places can't go below the 3 in use, in the form or behind it.
     await page.goto(`${crewPath}/settings`);

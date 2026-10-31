@@ -246,10 +246,10 @@ describe("crew board numbers", () => {
   it("shows averages a Legend day and today's totals in whole trophies", () => {
     expect(formatAverage({ total: 1139, days: 5 }, "attackers", "season")).toBe("+228");
     expect(formatAverage({ total: 1504, days: 6 }, "worst_defenders", "week")).toBe(
-      "-251",
+      "−251",
     );
     expect(formatAverage({ total: 120, days: 1 }, "attackers", "today")).toBe("+120");
-    expect(formatAverage({ total: 80, days: 1 }, "best_defenders", "today")).toBe("-80");
+    expect(formatAverage({ total: 80, days: 1 }, "best_defenders", "today")).toBe("−80");
     expect(formatAverage({ total: 0, days: 3 }, "best_defenders", "season")).toBe("0");
   });
 
@@ -275,19 +275,109 @@ describe("crew page", () => {
     answerCrew();
     const html = await render(`/crews/${CREW_ID}`, crewRoute);
     expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
-    expect(html).toContain("9 of 50 places");
-    expect(html).toContain("41 open");
-    // Seven attackers: five on the card, then See all.
+    // Counts in words a Clasher uses, and the room as a meter with its count.
+    expect(html).toContain("9 accounts · 3 Clashers");
+    expect(html).toContain('<span aria-hidden="true">9/50</span>');
+    expect(html).not.toMatch(/\d places|open</);
+    // Seven attackers: five on the card, and the card's title opens all seven.
     const attackers = html.slice(html.indexOf('id="board-attackers"'));
     const card = attackers.slice(0, attackers.indexOf("</section>"));
     expect(card.match(/class="crew-row"/g)).toHaveLength(5);
     expect(card).toContain("+228");
-    expect(card).toContain("See all 7");
+    expect(card).toMatch(
+      new RegExp(
+        `<a class="crew-board-open" href="/crews/${CREW_ID}/boards/attackers"[^>]*>Top attackers<span class="sr-only">, all 7</span></a>`,
+      ),
+    );
     expect(card).toContain("2 accounts have no data here.");
     expect(card).toContain(`href="/crews/${CREW_ID}/boards/attackers#not-on-board"`);
     expect(html).toContain(`href="/players/${encodeURIComponent(TAGS[0]!)}"`);
     expect(html).toMatch(/class="crew-row-you"[^]*?Player 2[^]*?You/);
     expect(html).toContain("No Reset reading yet");
+  });
+
+  it("ranks every board alike, names the Reset board, sums up the crew's day and shows all", async () => {
+    // Today Player 1 won 20 and Player 3 lost 10. Player 2 has not played:
+    // it is 10 below the Reset board only by the automatic defense loss its
+    // Reset reading was taken before, so its day so far is level.
+    const payload = boardsPayload();
+    payload.boards.top = {
+      rows: [
+        { ...player(TAGS[1]!, "Player 2", true), trophies: 5400 },
+        { ...player(TAGS[2]!, "Player 3"), trophies: 5390 },
+        { ...player(TAGS[0]!, "Player 1"), trophies: 5380 },
+      ],
+      missing: [],
+    };
+    payload.boards.live.rows.forEach((row, index) => {
+      (row as { today_change?: number | null }).today_change =
+        [20, 0, -10][index] ?? null;
+    });
+    mocks.requestJson.mockImplementation(async (target: string) =>
+      target.includes("/boards") ? payload : crewPayload,
+    );
+    const html = (await render(`/crews/${CREW_ID}`, crewRoute)).replaceAll(
+      "<!-- -->",
+      "",
+    );
+    const card = (board: string) => {
+      const from = html.slice(html.indexOf(`id="board-${board}"`));
+      return from.slice(0, from.indexOf("</section>"));
+    };
+    // One row style on every board, each board's top three on podium plates
+    // and every other rank plain, and on both trophy boards how far each
+    // account below first trails, so side-by-side rows line up.
+    const podium = [
+      'data-podium-rank="1"',
+      'data-podium-rank="2"',
+      'data-podium-rank="3"',
+    ];
+    expect(card("live").match(/data-podium-rank="\d"/g)).toEqual(podium);
+    const boards = [...html.matchAll(/id="board-([\w-]+)"/g)].map((match) => match[1]!);
+    expect(boards).toEqual(expect.arrayContaining(["live", "top", "attackers"]));
+    for (const board of boards) {
+      const ranks = card(board).match(/class="crew-rank/g) ?? [];
+      expect(card(board).match(/data-podium-rank="\d"/g) ?? []).toEqual(
+        // Worst defenders ranks the worst first, so its plates win no medal.
+        board === "worst_defenders" ? [] : podium.slice(0, Math.min(3, ranks.length)),
+      );
+    }
+    expect(card("live")).toContain(
+      '<span class="crew-behind">10 behind<span class="sr-only"> first</span></span>',
+    );
+    expect(card("top")).toContain(
+      '<span class="crew-behind">20 behind<span class="sr-only"> first</span></span>',
+    );
+    // Live rows also say how each account has done since the Reset, signed
+    // and coloured; the Reset board itself has nothing to compare.
+    expect(card("live")).toContain('<small class="score-positive">+20 today</small>');
+    expect(
+      card("live").match(/<small class="score-negative">−10 today<\/small>/g),
+    ).toHaveLength(1);
+    expect(card("live")).toContain("<small>0 today</small>");
+    expect(card("top")).not.toContain(" today</small>");
+    // A defense's loss takes the minus sign, not a hyphen.
+    expect(card("best_defenders")).toContain('<span class="crew-value">−228<small>');
+    expect(card("best_defenders")).not.toMatch(/>-\d/);
+    expect(card("top")).toMatch(/>At last Reset<span class="sr-only">/);
+    expect(card("top")).toContain("Trophies when this Legend day began");
+    // A board longer than its card opens in full from Show all under it; a
+    // short one needs none.
+    expect(card("attackers")).toMatch(
+      /<a class="show-all" href="\/crews\/[^"]+\/boards\/[^"]+"[^>]*>Show all 7<span class="sr-only"> on /,
+    );
+    expect(card("top")).not.toContain("Show all");
+    // The crew's day under its name: the three accounts whose day is known
+    // counted up, level and down, and their trophies today added together.
+    const day = html.slice(
+      html.indexOf('<section class="crew-day"'),
+      html.indexOf('<div class="crew-tabs-dock">'),
+    );
+    expect(day).toContain("Since the last Reset");
+    expect(day).toContain('Crew total <b class="crew-day-up">+10</b>');
+    expect(day).toMatch(
+      /<span class="crew-day-up">1 up<\/span><span class="crew-day-bar" aria-hidden="true">.*<\/span><span>1 level · <span class="crew-day-down">1 down<\/span><\/span>/,
+    );
   });
 
   it("shows a signed-out visitor the boards and accounts, but nothing to manage", async () => {
@@ -310,7 +400,7 @@ describe("crew page", () => {
     expect(html).toContain("By invite only");
     // The Live leaderboard names every account; there is no second list.
     expect(html).toMatch(/aria-labelledby="board-live"[^]*?Player 2/);
-    for (const hidden of ["Invite", "Members", "Edit", "clasher", "Owner"]) {
+    for (const hidden of ["Invite", "Members", "Edit", "Clasher", "Owner"]) {
       expect(html).not.toContain(hidden);
     }
   });
@@ -354,6 +444,13 @@ describe("crew page", () => {
     expect(html).toMatch(/aria-labelledby="board-worst_defenders" data-current=""/);
     expect(html).toMatch(/class="crew-period-bar" data-current=""/);
     expect(html).not.toContain('id="board-best_defenders"');
+    // Worst first is no award: its top three keep the plate's shape, plain,
+    // while every other board's take the podium colours.
+    const worst = html.slice(html.indexOf('id="board-worst_defenders"'));
+    const worstCard = worst.slice(0, worst.indexOf("</section>"));
+    expect(worstCard.match(/class="crew-rank rank-mark"/g)).toHaveLength(3);
+    expect(worstCard).not.toContain("data-podium-rank");
+    expect(html).toContain('data-podium-rank="1"');
     expect(html).toMatch(/aria-current="page"[^>]*>Defense<\/a>/);
     expect(html).toContain(
       `href="/crews/${CREW_ID}?board=worst-defenders&amp;period=today"`,

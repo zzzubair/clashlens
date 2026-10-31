@@ -2,6 +2,7 @@ import { data, Link, redirect, useLoaderData } from "react-router";
 
 import { PlacesMeter, RoleChip } from "../components/CrewBoards";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Crest } from "../components/GameIcons";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { MAX_CREWS, type CrewList } from "../lib/crew-contracts";
 import type { Route } from "./+types/crews";
@@ -46,7 +47,7 @@ export default function CrewsRoute() {
   const max = list?.maxCrews ?? MAX_CREWS;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
-      <header className="page-head">
+      <header className="page-hero">
         <h1>Crews</h1>
         <p>Invite-only groups of Legend accounts with shared boards.</p>
       </header>
@@ -73,9 +74,7 @@ export default function CrewsRoute() {
           {crews.map((crew) => (
             <li key={crew.crewId}>
               <Link className="crew-panel crew-list-item" to={`/crews/${crew.crewId}`}>
-                <span className="crew-icon" aria-hidden="true">
-                  {Array.from(crew.name)[0]}
-                </span>
+                <Crest name={crew.name} />
                 <span className="crew-list-name">
                   <b>{crew.name}</b>
                   <span>

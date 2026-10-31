@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { preload, preloadModule } from "react-dom";
 import {
+  Form,
   Link,
   NavLink,
   isRouteErrorResponse,
@@ -153,6 +154,14 @@ function useBarePage(): boolean {
   return useMatches().some((match) => (match.handle as BareHandle | undefined)?.bare);
 }
 
+// The files of the @font-face rules in brand.css: Inter, and the scoreboard
+// face at both weights the first screen of a page uses.
+const FONT_FILES = [
+  "/fonts/inter-latin.woff2",
+  "/fonts/barlow-condensed-600-latin.woff2",
+  "/fonts/barlow-condensed-700-latin.woff2",
+];
+
 export function Layout({ children }: { children: ReactNode }) {
   if (useBarePage()) {
     return (
@@ -175,12 +184,24 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#faf5ef" suppressHydrationWarning />
+        <meta name="theme-color" content="#eee5d8" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="/favicon.ico" sizes="32x32" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
         <link rel="manifest" href="/site.webmanifest" />
+        {/* The faces brand.css uses on every page, fetched with the page
+            instead of after its styles are read. */}
+        {FONT_FILES.map((href) => (
+          <link
+            key={href}
+            rel="preload"
+            href={href}
+            as="font"
+            type="font/woff2"
+            crossOrigin="anonymous"
+          />
+        ))}
         <Meta />
         <Links />
       </head>
@@ -273,14 +294,15 @@ function usePreloadTabCode(crews: boolean) {
   }, [manifest, crews]);
 }
 
-// The tabs, most useful first. Dashboard and Crews follow their switches; the
-// front page is Home until signed in, as on the phone tabs.
+// The tabs, most useful first. Home and Crews follow their switches. Home is
+// the front page, or the dashboard once signed in, as on the phone tabs. A
+// player's page is none of them, so no tab is lit there.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
   return (
     <>
       {data?.dashboardEnabled && (
         <NavLink to="/" end>
-          {data.loggedIn ? "Dashboard" : "Home"}
+          Home
         </NavLink>
       )}
       <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
@@ -303,6 +325,11 @@ const TAB_ICONS = {
     "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   blog: "M5 4h14v16H5zM9 8h6M9 12h6M9 16h3",
   chat: "M21 12a8 8 0 0 1-11.7 7.1L4 20.5l1.3-4.8A8 8 0 1 1 21 12zM9 12h.01M15 12h.01",
+  profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21v-1a8 8 0 0 1 16 0v1",
+  settings: "M4 7h9M17 7h3M15 5v4M4 17h3M11 17h9M9 15v4",
+  // An arrow going in through a door on the right; Sign out leaves by the left.
+  signIn: "M14 4h5v16h-5M10 8l4 4-4 4M14 12H4",
+  signOut: "M10 4H5v16h5M15 8l4 4-4 4M19 12h-9",
 } as const;
 
 function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
@@ -324,16 +351,40 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-// Below 64rem: the four most useful tabs, then More with Watchlists, Blog
-// and Join Discord. `/` is Home while it shows the front page. A tapped tab
-// looks chosen, with a loading line, from the tap until its page shows (the
-// `pending` class NavLink adds); see site-header.css.
-function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
+/** The signed-in account, for the More sheet's account rows. */
+interface SheetAccount {
+  /** Null while a busy moment leaves the name unread (see SiteHeader). */
+  label: string | null;
+  path: string;
+  logoutIdempotencyKey: string;
+}
+
+// Below 64rem, the same tabs for everyone: Home (the front page, or the
+// dashboard once signed in), Rankings, Watchlists and Crews, then More with
+// Analytics, Blog, Join Discord and the account: your profile, Settings and
+// Sign out, or Sign in. Watchlists and Crews explain why they need an account
+// when opened signed out (NeedsAccount). A tapped tab looks chosen, with a
+// loading line, from the tap until its page shows (the `pending` class
+// NavLink adds); see site-header.css.
+function BottomTabs({
+  data,
+  account,
+  signIn,
+}: {
+  data: RootLoaderData | undefined;
+  account: SheetAccount | null;
+  signIn: string | null;
+}) {
   const location = useLocation();
   const navigation = useNavigation();
-  const inMore = ["/account/watchlists", "/blog"].some(
-    (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
-  );
+  // The profile matches only itself: while the name is unread its path is
+  // /account, and every /account/... page (Watchlists among them) would light
+  // More beside its own tab.
+  const inMore =
+    location.pathname === account?.path ||
+    ["/analytics", "/blog", "/account/settings"].some(
+      (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+    );
   // Tapping a tab again while its page loads would start the load over.
   function ignoreRepeatTap(event: MouseEvent<HTMLAnchorElement>) {
     const next = navigation.location;
@@ -354,7 +405,7 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
     <nav className="bottom-tabs" aria-label="Main navigation">
       <NavLink className="bottom-tab" to="/" end onClick={ignoreRepeatTap}>
         <TabIcon name="home" />
-        {data?.dashboardEnabled && data.loggedIn ? "Dashboard" : "Home"}
+        Home
       </NavLink>
       <NavLink
         className="bottom-tab"
@@ -364,9 +415,9 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
         <TabIcon name="rankings" />
         Rankings
       </NavLink>
-      <NavLink className="bottom-tab" to="/analytics/armies" onClick={ignoreRepeatTap}>
-        <TabIcon name="analytics" />
-        Analytics
+      <NavLink className="bottom-tab" to="/account/watchlists" onClick={ignoreRepeatTap}>
+        <TabIcon name="watchlists" />
+        Watchlists
       </NavLink>
       {data?.crewsEnabled && (
         <NavLink className="bottom-tab" to="/crews" onClick={ignoreRepeatTap}>
@@ -376,9 +427,9 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
-            <TabIcon name="watchlists" />
-            Watchlists
+          <NavLink to="/analytics/armies" onClick={ignoreRepeatTap}>
+            <TabIcon name="analytics" />
+            Analytics
           </NavLink>
           <NavLink to="/blog" onClick={ignoreRepeatTap}>
             <TabIcon name="blog" />
@@ -388,6 +439,45 @@ function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
         <div className="site-menu-extras">
           <DiscordLink icon />
         </div>
+        {account ? (
+          <div className="site-menu-tabs site-menu-account">
+            <p className="site-menu-who">
+              {account.label === null ? (
+                "Signed in"
+              ) : (
+                <>
+                  Signed in as <bdi>{account.label}</bdi>
+                </>
+              )}
+            </p>
+            <NavLink to={account.path} end onClick={ignoreRepeatTap}>
+              <TabIcon name="profile" />
+              Your profile
+            </NavLink>
+            <NavLink to="/account/settings" onClick={ignoreRepeatTap}>
+              <TabIcon name="settings" />
+              Settings
+            </NavLink>
+            <Form method="post" action="/logout">
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={account.logoutIdempotencyKey}
+              />
+              <button type="submit">
+                <TabIcon name="signOut" />
+                Sign out
+              </button>
+            </Form>
+          </div>
+        ) : signIn ? (
+          <div className="site-menu-tabs site-menu-account">
+            <Link to={signIn}>
+              <TabIcon name="signIn" />
+              Sign in
+            </Link>
+          </div>
+        ) : null}
       </SiteMenu>
     </nav>
   );
@@ -437,6 +527,9 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   if (data?.loggedIn && data.accountLabel !== null) named.current = data;
   else if (named.current?.loginKey !== data?.loginKey) named.current = undefined;
   const account = named.current ?? data;
+  const accountPath = account?.accountUsername
+    ? `/users/${encodeURIComponent(account.accountUsername)}`
+    : "/account";
   return (
     <header className="site-header">
       <PageLoading />
@@ -461,11 +554,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         {data?.loggedIn ? (
           <AccountMenu
             label={account?.accountLabel ?? "Account"}
-            accountPath={
-              account?.accountUsername
-                ? `/users/${encodeURIComponent(account.accountUsername)}`
-                : "/account"
-            }
+            accountPath={accountPath}
             logoutIdempotencyKey={data.logoutIdempotencyKey ?? ""}
           />
         ) : location.pathname === "/login" ? null : (
@@ -477,7 +566,19 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
           <DiscordLink />
         </span>
       </div>
-      <BottomTabs data={data} />
+      <BottomTabs
+        data={data}
+        account={
+          data?.loggedIn
+            ? {
+                label: account?.accountLabel ?? null,
+                path: accountPath,
+                logoutIdempotencyKey: data.logoutIdempotencyKey ?? "",
+              }
+            : null
+        }
+        signIn={location.pathname === "/login" ? null : signIn}
+      />
     </header>
   );
 }

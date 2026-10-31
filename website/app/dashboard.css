@@ -1,8 +1,9 @@
 /*
  * Dashboard: account tabs, the "Customise dashboard" divider, the 3-column
- * card grid, Customise and the cards. Cards share the brand's outline and
- * drop (brand.css); colours come from the --cl-* tokens so light and dark
- * both work.
+ * card grid, Customise and the cards. Cards take the brand's quiet surface
+ * (brand.css: the faintest fill, no edge or shadow; the Legend day card is
+ * the one hero); colours come from the --cl-* tokens so light and dark both
+ * work.
  */
 
 /* The player tabs and Customise share the top row; everything else spans it. */
@@ -36,7 +37,7 @@
 
 .dash-muted {
   color: var(--cl-muted);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
 }
 
 .dash-label {
@@ -74,13 +75,6 @@
   unicode-bidi: isolate;
 }
 
-.dash-stars {
-  color: var(--cl-gold);
-  font-weight: 800;
-  letter-spacing: -0.05em;
-  white-space: nowrap;
-}
-
 .dash-estimate {
   display: block;
   color: var(--cl-muted);
@@ -97,14 +91,14 @@
   background: var(--cl-action-soft);
   border: 1px solid var(--cl-action-border);
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
 
 .dash-small-button {
   min-height: 2rem;
   padding: 0.2rem 0.55rem;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   white-space: nowrap;
 }
 
@@ -119,6 +113,7 @@
 }
 
 /* A choice flipped while looking at the card. */
+/* A sunken track with no edge; only the chosen option is raised and ringed. */
 .dash-switch {
   display: inline-flex;
   flex: 0 0 auto;
@@ -126,7 +121,6 @@
   gap: 0.15rem;
   padding: 0.15rem;
   background: var(--cl-panel);
-  border: 1px solid var(--cl-border);
   border-radius: 10px;
 }
 
@@ -166,42 +160,35 @@
   background: var(--cl-raised);
 }
 
-/* ---------- Account tabs and the Customise divider ---------- */
+/* ---------- Account tabs and the toolbar beside them ---------- */
 
-/* One segmented control: a sunken track, the chosen player raised in it
-   with a link to their player page. Link player is its own button after it. */
+/* One segmented control: a sunken track with the chosen player raised in
+   it, then Link player after it. Only the chosen tab has an edge. */
 .dash-accounts {
-  /* Holds Link player's hidden name on a phone, which would otherwise widen the page. */
-  position: relative;
   display: flex;
-  align-items: stretch;
-  gap: 0.375rem;
+  align-items: center;
+  gap: 0.4rem;
   justify-self: start;
   max-width: 100%;
   margin-bottom: 1rem;
 }
 
+/* Positioned, so the words a phone hides for screen readers in each chip
+   scroll inside the track instead of widening the page. */
 .dash-account-track {
+  position: relative;
   display: flex;
   gap: 0.25rem;
   min-width: 0;
   padding: 0.25rem;
   overflow-x: auto;
   background: var(--cl-panel);
-  border: 1px solid var(--cl-card-line);
   border-radius: 14px;
   scrollbar-width: none;
 }
 
 .dash-account-track::-webkit-scrollbar {
   display: none;
-}
-
-.dash-account-tab {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: stretch;
-  border-radius: 10px;
 }
 
 .dash-account {
@@ -236,92 +223,97 @@
   color: var(--cl-ink);
 }
 
-/* The chosen player: flat and bright, with its page link joined on. */
-.dash-account-tab:has(> [aria-current="page"]) {
+/* The chosen player: flat and bright in the track. */
+.dash-account[aria-current="page"] {
+  color: var(--cl-ink);
   background: var(--cl-surface);
   box-shadow: 0 0 0 1px var(--cl-card-line);
 }
 
-:root[data-theme="dark"] .dash-account-tab:has(> [aria-current="page"]) {
+:root[data-theme="dark"] .dash-account[aria-current="page"] {
   background: var(--cl-raised);
 }
 
-.dash-account[aria-current="page"] {
-  color: var(--cl-ink);
-  padding-right: 0.35rem;
-}
-
-.dash-account-page {
-  display: none;
-  gap: 0.3rem;
+/* Link player, Player page and Customise: quiet named actions with an
+   ember mark, no box until pointed at. */
+.dash-account-add,
+.dash-tool,
+.dash-more {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.4rem;
   align-items: center;
   justify-content: center;
-  margin: 0.25rem 0.25rem 0.25rem 0;
-  padding: 0 0.6rem;
-  color: var(--cl-action-text);
-  border-left: 1px solid var(--cl-card-line);
-  border-radius: 0 8px 8px 0;
-  font-size: 0.8125rem;
-  font-weight: 700;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0 0.7rem;
+  color: var(--cl-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  font: 650 0.875rem var(--cl-font);
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.dash-account[aria-current="page"] + .dash-account-page {
-  display: flex;
-}
-
-.dash-account-page .dash-icon {
-  width: 1rem;
-  height: 1rem;
-}
-
-.dash-account-page:is(:hover, :focus-visible),
-.dash-account-add:is(:hover, :focus-visible) {
+:is(.dash-account-add, .dash-tool, .dash-more):is(:hover, :focus-visible) {
+  color: var(--cl-action-text);
   background: var(--cl-action-soft);
 }
 
-.dash-account-add {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0 0.9rem;
-  color: var(--cl-ink);
-  border: 1px solid var(--cl-card-line);
-  border-radius: 12px;
-  font-size: 0.9rem;
-  font-weight: 650;
-  text-decoration: none;
+.dash-tool:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
-.dash-account-add .dash-icon {
+:is(.dash-account-add, .dash-tool) .dash-icon {
   width: 1rem;
   height: 1rem;
+  color: var(--cl-action-text);
 }
 
+/* The toolbar: Player page and Customise; the ⋯ that holds them on a phone. */
 .dash-divider {
+  position: relative;
   display: flex;
   grid-column: 2;
-  align-items: flex-start;
+  gap: 0.25rem;
+  align-items: center;
   justify-content: flex-end;
-  margin-bottom: 0.8rem;
-  padding-top: 0.2rem;
+  min-width: 0;
+  margin-bottom: 1rem;
 }
 
-.dash-divider:empty {
+.dash-tools {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.dash-more {
   display: none;
 }
 
-.dash-customise {
-  gap: 0.4rem;
-  min-height: 3.6rem;
+.dash-more .dash-icon {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
-/* Beside the player tabs, Customise matches their height. */
-.dash-divider .dash-customise {
-  min-height: 3.6rem;
-  border-radius: 14px;
+.dash-more[aria-expanded="true"] {
+  background: var(--cl-raised);
+}
+
+/* Only when the Legend day card, which says it, is not shown. */
+.dash-fresh {
+  min-width: 0;
+  margin-right: 0.35rem;
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
@@ -356,23 +348,16 @@
 }
 
 /* iPads and small laptops: 2 columns; Small takes half, Medium and Large the
-   row, so a Medium card keeps a laptop's width. Paired Small cards differ in
-   height; each keeps its own rather than stretching into an empty panel. */
+   row, so a Medium card keeps a laptop's width. Paired Small cards share
+   the taller one's height, as on a laptop, so the row has no hole. */
 @media (min-width: 40.01rem) and (max-width: 64rem) {
   .dash-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
   }
 
   .dash-card {
     grid-column: span var(--span-2, 1);
     order: var(--order-2, 0);
-  }
-
-  /* The arrow alone opens the player page, so the next player's tab fits;
-     its name stays for screen readers. */
-  .dash-account-page > span {
-    font-size: 0;
   }
 }
 
@@ -396,15 +381,103 @@
   gap: 0.3rem 0.6rem;
 }
 
+/* The header's one control sits at its right end, and wraps under the
+   title, still at the right, when the card is narrow. */
 .dash-card-meta {
+  margin-left: auto;
   color: var(--cl-muted);
-  font-size: 0.82rem;
+  font-size: 0.8125rem;
 }
 
-/* One place for every card's switch: its own line under the title, as on
-   Rivals watch and Cutoffs. */
-.dash-card-meta:has(.dash-switch) {
-  flex-basis: 100%;
+/* A quiet note before the header's control, such as the one reference a
+   card's numbers are against: "vs Legend avg". */
+.dash-card-meta:has(> .dash-card-ref) {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.75rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.dash-card-ref {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* A card's one ⓘ right after its title: what its short headings mean. Its
+   finger-sized target overlaps the row above and below, not the title; it
+   opens under the header, from the card's left edge. */
+.dash-card-head:has(> .dash-info) {
+  position: relative;
+}
+
+.dash-info {
+  margin: -0.5rem auto -0.5rem -0.35rem;
+}
+
+.dash-info > summary {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--cl-muted);
+  font-size: 1rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.dash-info > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dash-info[open] > summary {
+  color: var(--cl-action-text);
+}
+
+.dash-info-body {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 0.4rem;
+  max-width: 24rem;
+  padding: 0.6rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.dash-info-body p {
+  margin: 0;
+}
+
+/* A finger-sized ⓘ. */
+@media (pointer: coarse) {
+  .dash-info > summary {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
+/* A small phone keeps the note and the control on one line. */
+@media (max-width: 24rem) {
+  .dash-card-meta:has(> .dash-card-ref) {
+    column-gap: 0.5rem;
+  }
+
+  .dash-card-ref {
+    font-size: 0.75rem;
+  }
 }
 
 .dash-card-sub {
@@ -431,24 +504,11 @@
   text-decoration: none;
 }
 
-.dash-card-tools-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem 0.8rem;
-  margin-top: -0.2rem;
-}
-
 .dash-message {
   display: grid;
   gap: 0.6rem;
   justify-items: start;
   padding: 2.5rem 1.5rem;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
 }
 
 .dash-message h2 {
@@ -504,7 +564,7 @@
   padding: 0.75rem 1rem;
   color: var(--cl-ink);
   background: var(--cl-solid);
-  border: 1px solid var(--cl-action-border);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-overlay-shadow);
 }
@@ -515,7 +575,8 @@
   white-space: pre;
 }
 
-/* "Use default" greys out once the layout is the default; nothing is pending. */
+/* The buttons grey out while the layout saves, and "Use default" while the
+   layout is already the default. */
 .dash-editbar .button:disabled:not([aria-busy]) {
   cursor: default;
   opacity: 0.4;
@@ -531,21 +592,25 @@
 .dash-editbar-state {
   flex: 1 1 auto;
   color: var(--cl-muted);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
 .dash-editbar-error {
   flex-basis: 100%;
   margin: 0;
-  color: #ffb4b4;
+  color: var(--cl-negative);
   font-weight: 700;
 }
 
+/* While editing, every card wears the same quiet boundary, a dashed
+   hairline in muted ember, the hero's lit edge included. */
 :root .dash-grid-editing .dash-card {
-  border-style: dashed;
-  border-color: var(--cl-action);
-  box-shadow: none;
+  border: 1px dashed color-mix(in srgb, var(--cl-action) 40%, transparent);
+}
+
+:root .dash-grid-editing .dash-card[data-card="legend-day"]::after {
+  display: none;
 }
 
 /* While editing, the strip names each card, so its own title steps aside; a
@@ -564,24 +629,31 @@
   opacity: 0.45;
 }
 
+/* The handles sit open on the card, over a hairline, not in a box. */
 .dash-edit-strip {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   margin: -0.4rem -0.5rem 0;
-  padding: 0.3rem 0.4rem;
-  background: var(--cl-panel);
-  border-radius: var(--cl-radius);
+  padding: 0 0.4rem 0.4rem;
+  border-bottom: 1px solid var(--cl-card-line);
   touch-action: none;
 }
 
+/* The card's title as it reads outside Customise: its mark, then its name
+   in the heading font. */
 .dash-edit-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-weight: 800;
+  font: 700 1.3rem/1.2 var(--cl-font-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dash-edit-name > .dash-icon {
+  margin-right: 0.4rem;
+  color: var(--cl-action-text);
 }
 
 .dash-grip {
@@ -615,6 +687,12 @@
   opacity: 0.35;
 }
 
+/* Remove card turns red under the pointer or focus. */
+.dash-remove:not(:disabled):is(:hover, :focus-visible) {
+  color: var(--cl-negative);
+  border-color: color-mix(in srgb, var(--cl-negative) 55%, transparent);
+}
+
 /* "⚙ Settings" sits in the strip beside the moves, never over the card. */
 .dash-card-settings {
   flex: 0 0 auto;
@@ -622,7 +700,7 @@
   min-height: 2.2rem;
   padding: 0.2rem 0.7rem;
   font: inherit;
-  font-size: 0.86rem;
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
@@ -634,7 +712,7 @@
   background: var(--cl-solid);
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
+  box-shadow: var(--cl-overlay-shadow);
 }
 
 .dash-dialog::backdrop {
@@ -703,7 +781,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 999px;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   font-weight: 800;
   cursor: pointer;
 }
@@ -768,13 +846,16 @@
   justify-items: start;
   padding: 1rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-raised);
+  border: 0;
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.dash-welcome-option:is(:hover, :focus-visible) {
+  background: var(--cl-action-soft);
 }
 
 .dash-welcome-option b {
@@ -805,8 +886,8 @@
   .dash-card {
     grid-column: 1 / -1;
     order: 0;
-    gap: 0.6rem;
-    padding: 0.75rem 1rem 0.85rem;
+    gap: 0.5rem;
+    padding: 0.65rem 1rem 0.75rem;
   }
 
   .dash-card-meta {
@@ -903,9 +984,10 @@
     position: absolute;
     inset: auto 0.5rem calc(100% + 0.4rem);
     padding: 0.5rem 0.75rem;
-    background: var(--cl-surface);
+    background: var(--cl-solid);
     border: 1px solid var(--cl-card-line);
     border-radius: var(--cl-radius);
+    box-shadow: var(--cl-overlay-shadow);
   }
 
   .dash-page:has(.dash-editbar) {
@@ -924,67 +1006,104 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* On a phone each tab holds the name and its net today, packed to one
-     finger's height; the day card below shows the chosen player's other numbers. */
+  /* One row: each player a chip with their net today, the + to link
+     another, and ⋯ for the player page and Customise. The chips scroll in
+     their track when there are more than fit. */
+  .dash-page {
+    padding-top: 0.5rem;
+  }
+
+  .dash-accounts,
+  .dash-divider {
+    margin-bottom: 0.5rem;
+  }
+
+  .dash-account-track {
+    padding: 0.2rem;
+  }
+
   .dash-account {
-    min-height: 2.75rem;
+    flex-direction: row;
+    gap: 0.4rem;
+    align-items: center;
+    min-height: 2.5rem;
     padding: 0 0.6rem;
   }
 
+  .dash-account > .dash-name {
+    font-size: 0.9375rem;
+  }
+
   .dash-account-line {
-    font-size: 0.8125rem;
-    line-height: 1.2;
+    font-size: 0.875rem;
+    font-weight: 600;
   }
 
   .dash-account-stats {
     display: none;
   }
 
-  /* One calm strip: the tabs, the chosen player's page as a quiet arrow, and
-     Link player as a + at its end; Customise is the gear beside it. Their
-     full names stay for screen readers. */
-  .dash-accounts {
-    gap: 0;
-    background: var(--cl-panel);
-    border: 1px solid var(--cl-card-line);
-    border-radius: 14px;
-  }
-
-  .dash-accounts,
-  .dash-divider {
-    margin-bottom: 0.6rem;
-    padding-top: 0;
-  }
-
-  .dash-account-track {
-    padding: 0.125rem;
-    background: none;
-    border: 0;
-  }
-
-  .dash-divider .dash-customise {
-    width: 3rem;
-    min-height: 3rem;
-    padding: 0;
-  }
-
-  .dash-account-add,
-  .dash-account-page {
-    justify-content: center;
-    min-width: 2.75rem;
-    padding: 0;
-    border: 0;
-  }
-
-  .dash-account-add > span,
-  .dash-account-page > span,
-  .dash-customise-text {
+  /* Named for screen readers, out of the way on screen. */
+  :is(.dash-account-today, .dash-account-add-text) {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+
+  .dash-account-add {
+    padding: 0;
+  }
+
+  .dash-account-add .dash-icon {
+    width: 1.2rem;
+    height: 1.2rem;
+  }
+
+  /* The ⋯ alone, a finger-sized square no taller than the players beside
+     it; its name is for screen readers. */
+  .dash-more {
+    display: inline-flex;
+    padding: 0;
+  }
+
+  .dash-more-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .dash-tools {
+    display: none;
+  }
+
+  .dash-divider.is-open .dash-tools {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    display: grid;
+    gap: 0.15rem;
+    min-width: 12rem;
+    padding: 0.35rem;
+    background: var(--cl-solid);
+    border: 1px solid var(--cl-card-line);
+    border-radius: var(--cl-radius);
+    box-shadow: var(--cl-overlay-shadow);
+  }
+
+  .dash-tools .dash-tool {
+    justify-content: flex-start;
+    font-size: 0.9375rem;
+  }
+
+  .dash-tools .dash-fresh {
+    padding: 0.35rem 0.7rem;
   }
 }
 
@@ -1003,222 +1122,11 @@
   }
 }
 
-/* Last Reset, Now on its rank plate, and Next Reset: one sunken strip of
-   three cells, each holding one number. Under all three, the range the next
-   Reset can land in, drawn as a line with end caps and the projected place
-   marked on it, so the forecast reads as a spread, not a fact. */
-.legend-day-ranks {
-  display: grid;
-  grid-template: auto 1fr auto / repeat(3, minmax(0, 1fr));
-  margin: 0;
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-card-line);
-  border-radius: 10px;
-}
-
-.legend-day-ranks > div {
-  display: grid;
-  grid-row: 1 / 3;
-  align-content: start;
-  gap: 0.3rem;
-  min-width: 0;
-  padding: 0.6rem 0.75rem;
-}
-
-.legend-day-ranks > div + div,
-.legend-day-ranks > .legend-day-projected > *,
-.legend-day-range > dt {
-  border-left: 1px solid var(--cl-card-line);
-}
-
-.legend-day-ranks > :is(.legend-day-projected, .legend-day-range) {
-  display: contents;
-}
-
-.legend-day-ranks > :is(.legend-day-projected, .legend-day-range) > * {
-  min-width: 0;
-  padding-inline: 0.75rem;
-}
-
-.legend-day-range > dt {
-  grid-area: 1 / 3;
-  padding-block: 0.6rem 0.3rem;
-}
-
-.legend-day-projected > dd {
-  grid-area: 2 / 3;
-  padding-bottom: 0.6rem;
-}
-
-.legend-day-projected > dt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-
-.legend-day-ranks dt {
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.legend-day-ranks dd {
-  margin: 0;
-  font: 700 1.35rem/1.15 var(--cl-font-score);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.legend-day-ranks dd .rank-mark {
-  font-size: 1.2rem;
-}
-
-/* The range row: best place, the line, worst place, then "estimate". */
-.legend-day-range > dd {
-  display: flex;
-  grid-area: 3 / 1 / 4 / -1;
-  gap: 0.6rem;
-  align-items: center;
-  padding-block: 0.45rem;
-  color: var(--cl-muted);
-  border-top: 1px solid var(--cl-card-line);
-  font: 700 0.95rem/1.2 var(--cl-font);
-  font-variant-numeric: tabular-nums;
-}
-
-.legend-day-range-ends {
-  display: contents;
-}
-
-.legend-day-range-ends > :first-child {
-  order: 1;
-}
-
-.legend-day-range-ends > :last-child {
-  order: 3;
-}
-
-.legend-day-range-bar {
-  position: relative;
-  flex: 1;
-  order: 2;
-  height: 10px;
-  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
-    no-repeat;
-  border-inline: 2px solid var(--cl-outline);
-}
-
-/* The projected place: an ember diamond, not a round handle to drag. */
-.legend-day-range-bar::after {
-  position: absolute;
-  top: 50%;
-  left: var(--at);
-  width: 0.6rem;
-  height: 0.6rem;
-  background: var(--cl-action);
-  border: 2px solid var(--cl-solid);
-  content: "";
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-/* Before any projection, the range is Next Reset's own number. */
-.legend-day-ranks:not(:has(.legend-day-projected)) .legend-day-range > dd {
-  flex-wrap: wrap;
-  grid-area: 2 / 3;
-  gap: 0 0.3rem;
-  align-content: start;
-  border-top: 0;
-  border-left: 1px solid var(--cl-card-line);
-}
-
-/* With the line drawn, the dash between the two places goes. */
-.legend-day-range-bar + .legend-day-range-ends > .legend-day-range-dash {
-  display: none;
-}
-
-.legend-day-range-dash {
-  color: var(--cl-faint);
-}
-
-/* Said on every screen, so a phone never shows the forecast as a fact. */
-.legend-day-est {
-  order: 4;
-  color: var(--cl-muted);
-  font: 600 0.8125rem/1.2 var(--cl-font);
-}
-
-/* With the line drawn, "Next Reset range" names it from the front. */
-.legend-day-est-label {
-  order: 0;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  white-space: nowrap;
-}
-
-/* The projected place wears the line's ember diamond, tying the two. */
-.legend-day-ranks:has(.legend-day-range-bar) .legend-day-projected > dd::before {
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  margin: 0 0.45rem 0.2rem 0.15rem;
-  background: var(--cl-action);
-  content: "";
-  transform: rotate(45deg);
-  vertical-align: middle;
-}
-
-/* A phone's rank strip packs tighter, so Bases you attacked shows sooner. */
-@container (max-width: 30rem) {
-  .legend-day-ranks > div,
-  .legend-day-range > dt {
-    gap: 0;
-    padding: 0.3rem 0.6rem;
-  }
-
-  .legend-day-ranks > :is(.legend-day-projected, .legend-day-range) > * {
-    padding-inline: 0.6rem;
-  }
-
-  .legend-day-projected > dd {
-    padding-bottom: 0.3rem;
-  }
-
-  .legend-day-ranks > div:not(.legend-day-range) dd {
-    font-size: 1.2rem;
-  }
-
-  .legend-day-range > dd {
-    padding-block: 0.2rem;
-  }
-
-  .dash-page .legend-day-ranks .legend-day-now .rank-mark {
-    font-size: 1.3rem;
-  }
-}
-
-/* Legend day: Now is the rank the card is about, so it carries the tint and
-   the biggest plate; the estimates beside it stay plain. */
-.dash-page .legend-day-ranks {
-  overflow: hidden;
-}
-
-.dash-page .legend-day-now {
-  background: var(--cl-action-soft);
-}
-
-.dash-page .legend-day-now dt {
-  color: var(--cl-action-text);
-}
-
-.dash-page .legend-day-now .rank-mark {
-  font-size: 1.5rem;
-}
-
-/* Bases you attacked: a phone shows the three hardest bases, then Show all. */
-.dash-page .opponents-more {
+/* Bases you attacked: a phone shows the three hardest bases, then Show all
+   (the site's one .show-all row); Armies and Rivals share it. A wider
+   screen shows every row and no Show all, and Customise hides it with the
+   rest of the card. */
+:root .dash-page .opponents-more {
   display: none;
 }
 
@@ -1227,20 +1135,12 @@
     display: none;
   }
 
-  .dash-page .opponents-more {
+  :root .dash-page .dash-grid:not(.dash-grid-editing) .opponents-more {
     display: flex;
-    width: 100%;
-    min-height: 2.75rem;
-    margin-top: 0.25rem;
   }
 }
 
 /* ---------- Goal ---------- */
-
-.goal-title {
-  font-size: 1.05rem;
-  font-weight: 800;
-}
 
 .form-big {
   font-family: var(--cl-font-heading);
@@ -1250,22 +1150,21 @@
   font-variant-numeric: tabular-nums;
 }
 
-.goal-need {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 0.4rem;
-  margin: 0;
-}
-
 /* One headline: the verdict in its colour, then the gap in ink. */
 .goal-headline {
   margin: 0;
-  font: 700 1.3rem/1.15 var(--cl-font-score);
+  font: 700 1.35rem/1.15 var(--cl-font-score);
 }
 
 .goal-headline > span {
   color: var(--cl-ink);
+}
+
+/* When the gap was measured, so it isn't read as the chart's Season end. */
+.goal-when {
+  color: var(--cl-muted);
+  font: 600 0.875rem var(--cl-font);
+  white-space: nowrap;
 }
 
 .goal-pace-ahead,
@@ -1275,6 +1174,55 @@
 
 .goal-pace-behind {
   color: var(--cl-negative);
+}
+
+/* What a day needs and what you're doing: two bars from zero on one
+   scale, the need in ink like the goal line, yours in ember. */
+.goal-pace {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.goal-pace > p {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr) 4.75rem;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.goal-pace b {
+  color: var(--cl-ink);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.goal-pace-you b {
+  color: var(--cl-action-text);
+}
+
+.goal-pace-track {
+  position: relative;
+  height: 0.6rem;
+  background: var(--cl-raised);
+  border-radius: 999px;
+}
+
+.goal-pace-track i {
+  position: absolute;
+  inset-block: 0;
+  background: var(--cl-ink);
+  border-radius: 999px;
+}
+
+.goal-pace-you .goal-pace-track i {
+  background: var(--cl-action);
 }
 
 .consistency-rows {
@@ -1288,7 +1236,7 @@
   gap: 0.5rem;
   padding: 0.12rem 0;
   border-top: 1px solid var(--cl-border);
-  font-size: 0.88rem;
+  font-size: 0.875rem;
 }
 
 .consistency-rows dd {
@@ -1297,35 +1245,89 @@
   white-space: nowrap;
 }
 
-/* Rest days sit under the number they change. */
-.goal-shield {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 0 0.5rem;
-  font-size: 0.88rem;
-  line-height: 1.25;
+/* "Plan: skip 0 days ▾" in the header: a small menu with one line on what
+   a skipped day is, then the choices. */
+.goal-plan {
+  position: relative;
 }
 
-/* Its title explains it on hover; the dotted line says there is one. */
-.goal-rest {
-  text-decoration: underline dotted var(--cl-muted);
-  text-underline-offset: 0.2em;
-  cursor: help;
+.goal-plan > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 0.6rem;
+  color: var(--cl-muted);
+  background: var(--cl-control-fill);
+  border: 1px solid var(--cl-control-edge);
+  border-radius: var(--cl-radius);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: pre;
+  list-style: none;
+  cursor: pointer;
+}
+
+.goal-plan > summary::-webkit-details-marker {
+  display: none;
+}
+
+.goal-plan > summary b {
+  color: var(--cl-ink);
+}
+
+.goal-plan-menu {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  width: max-content;
+  max-width: min(17rem, 80vw);
+  padding: 0.6rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  white-space: normal;
+}
+
+.goal-plan-menu p {
+  margin: 0;
 }
 
 .goal-chart {
+  display: block;
   width: 100%;
   height: auto;
-  margin-top: auto;
+  margin-block: auto;
+  overflow: visible;
 }
 
-/* The dashed goal line takes the text colour, so it shows in light and dark. */
+/* The days still to play: a faint wash, so the projection reads as a guess. */
+.goal-future {
+  fill: color-mix(in srgb, var(--cl-ink) 3%, transparent);
+}
+
+.goal-grid {
+  stroke: var(--cl-card-line);
+  stroke-width: 1;
+}
+
+.goal-today {
+  stroke: var(--cl-muted);
+  stroke-dasharray: 3 3;
+  stroke-width: 1.25;
+}
+
+/* The goal line takes the text colour, so it shows in light and dark. */
 .goal-line {
   fill: none;
   stroke: var(--cl-ink);
-  stroke-dasharray: 5 4;
+  stroke-linejoin: round;
   stroke-width: 2;
 }
 
@@ -1334,6 +1336,12 @@
   stroke: var(--cl-action);
   stroke-linejoin: round;
   stroke-width: 3;
+}
+
+/* Carried on to the Season's end: the same lines, dashed. */
+.goal-guess {
+  stroke-dasharray: 5 4;
+  stroke-width: 2;
 }
 
 .goal-end {
@@ -1346,74 +1354,54 @@
   fill: var(--cl-action);
 }
 
-/* Each line's end: its name, then its trophies in the line's colour. */
-.goal-label {
+/* A projected end is a ring: where the line is guessed to finish. */
+.goal-end-guess {
+  fill: var(--cl-solid);
+  stroke: var(--cl-ink);
+  stroke-width: 2;
+}
+
+.goal-end-you.goal-end-guess {
+  stroke: var(--cl-action);
+}
+
+/* Days skipped: a heavier wash at the end, where your line goes flat. */
+.goal-skip {
+  fill: color-mix(in srgb, var(--cl-ink) 9%, transparent);
+}
+
+.goal-skip-label {
   fill: var(--cl-ink);
-  font: 700 16px var(--cl-font-score);
 }
 
-.goal-grid {
-  stroke: var(--cl-card-line);
+/* Each projected end named beside its ring in one font: the name, then
+   the count in bold. */
+.goal-name {
+  fill: var(--cl-muted);
+  font: 600 12.5px var(--cl-font);
+  font-variant-numeric: tabular-nums;
 }
 
-.goal-label-you {
-  fill: var(--cl-accent);
+.goal-name tspan {
+  fill: var(--cl-ink);
+  font-weight: 700;
+}
+
+.goal-name-you tspan {
+  fill: var(--cl-action-text);
 }
 
 .goal-axis {
   fill: var(--cl-muted);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-/* Goal: your pace on a bar from 0 to twice the need, green when on pace. */
-.dash-page .goal-race {
-  display: grid;
-  gap: 0.35rem;
-  color: var(--cl-muted);
-  font-size: 0.875rem;
+  font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.dash-page .goal-race b {
-  color: var(--cl-ink);
-  font: 700 1.05rem var(--cl-font-score);
+.goal-axis-today {
+  fill: var(--cl-ink);
 }
 
-.goal-race-track {
-  position: relative;
-  height: 8px;
-  background: var(--cl-outline);
-  border-radius: 4px;
-}
-
-.goal-race-track i {
-  display: block;
-  width: var(--pace);
-  height: 100%;
-  background: var(--cl-negative);
-  border-radius: 4px;
-}
-
-.goal-race-track[data-on] i {
-  background: var(--cl-positive);
-}
-
-.goal-race-track::after {
-  position: absolute;
-  inset: -5px auto -5px var(--need);
-  width: 2px;
-  margin-left: -1px;
-  background: var(--cl-ink);
-  content: "";
-}
-
-.goal-race-scale {
-  display: flex;
-  justify-content: space-between;
-}
-
-.goal-race-scale > :last-child {
-  margin-left: auto;
+.goal-axis-trophies {
+  font-weight: 500;
 }

@@ -1,45 +1,134 @@
-/* Public profile: one card per linked player, each card one link. */
+/* Public profile: the Clasher's crest and name, the owner's tools, then one
+   compact card per linked player, each card one link to the player page: who
+   they are, their numbers now and their Season heat map (season-heat.css).
+   Phone first. */
+
+/* ---------- The Clasher ---------- */
+
+.profile-hero {
+  max-width: none;
+  margin-bottom: 0;
+}
+.profile-id {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  min-width: 0;
+}
+.profile-id > div {
+  min-width: 0;
+}
+.profile-id .player-tag {
+  margin: 0.2rem 0 0;
+}
+/* The badge, or the Clasher's crest, with the page's one glow: small and
+   soft, as the profile's header is its hero. */
+.profile-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  font-size: 1.3rem;
+  filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--cl-action) 30%, transparent));
+}
+/* The badge stands as tall as the crest would. */
+.profile-avatar img {
+  width: auto;
+  height: 2.75em;
+}
+/* The owner's name with its small Edit button beside it. */
+.profile-name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+}
+.profile-name h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.profile-edit.button {
+  min-height: 2.75rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.86rem;
+}
+.profile-body > .data-section {
+  margin-top: 1.75rem;
+}
+.profile-body > .data-section > h2 {
+  margin: 0 0 0.75rem;
+}
+
+/* The players' heading, with the one key for every card's heat map. */
+.profile-players-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.25rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 0.75rem;
+}
+.profile-players-head h2 {
+  margin: 0;
+}
+
+/* ---------- A linked player ---------- */
+
+/* Each player a card on the site's one card surface (brand.css). */
 .linked-player-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
   gap: 0.75rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-
-.linked-player-cards li {
+.linked-player-cards > li {
   display: flex;
   min-width: 0;
 }
-
+/* The link's layer covers the whole card, so the card opens the player page. */
 .linked-player-card {
   position: relative;
   display: grid;
   flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.9rem;
   align-content: start;
-  gap: 0.6rem;
   min-width: 0;
   padding: 0.9rem 1rem 1rem;
   color: var(--cl-ink);
+}
+.linked-player-card:has(.linked-player-link:hover) {
+  background: var(--cl-fill-hover);
+}
+.linked-player-link {
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  color: inherit;
   font-weight: 400;
-  background: var(--cl-card-fill);
-  border: 1px solid transparent;
-  border-radius: var(--cl-card-radius);
+  text-decoration: none;
 }
-
-/* Only the page's hero is drawn glass; the cards below it are a quiet fill
-   with no edge or glow (stronger than the shared panel rule). */
-:root .profile-body .linked-player-card,
-:root .profile-body .profile-tools {
-  border-color: transparent;
-  box-shadow: var(--cl-card-quiet, none);
+.linked-player-link::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
 }
-
-/* An arrow at the top right, as on the tool cards, says the card opens. */
+.linked-player-link:hover {
+  color: inherit;
+}
+.linked-player-link:focus-visible {
+  outline: none;
+}
+.linked-player-link:focus-visible::before {
+  outline: 3px solid var(--cl-accent);
+  outline-offset: 2px;
+}
+/* An arrow at the top right, level with the name, says the card opens the
+   player page. */
 .linked-player-card::after {
   position: absolute;
-  top: 1.45rem;
+  top: 1.5rem;
   right: 1.1rem;
   width: 0.5rem;
   height: 0.5rem;
@@ -47,38 +136,27 @@
   border-right: 2px solid var(--cl-faint);
   transform: rotate(45deg);
   content: "";
+  pointer-events: none;
 }
-
-.linked-player-card:hover,
-.linked-player-card:focus-visible {
-  color: var(--cl-ink);
-  background: var(--cl-raised);
-}
-
-.linked-player-card:hover .linked-player-name,
-.linked-player-card:focus-visible .linked-player-name {
+.linked-player-link:is(:hover, :focus-visible) .linked-player-name {
   color: var(--cl-accent-contrast);
 }
-
+/* The name and its tag and clan share a line where they fit. */
 .linked-player-identity {
-  padding-right: 1.5rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.15rem 0.6rem;
+  gap: 0.1rem 0.6rem;
   align-items: baseline;
   min-width: 0;
+  padding-right: 1.5rem;
 }
-
-/* A player's name is in the interface face; the condensed face is kept for
-   headings and the numbers under it. */
 .linked-player-name {
-  flex-basis: 100%;
-  font-size: 1.15rem;
+  font-family: var(--cl-font-heading);
+  font-size: 1.45rem;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.1;
   overflow-wrap: anywhere;
 }
-
 .linked-player-clan {
   min-width: 0;
   color: var(--cl-muted);
@@ -86,35 +164,32 @@
   overflow-wrap: anywhere;
 }
 
-/* Trophies, rank and today's change share one row; the battle strips run
-   across the card under them. */
+/* Trophies, rank and today's change in one row, read as a scoreboard. The
+   columns are shares of the card, not of what they hold, so every card's
+   line up. */
 .linked-player-stats {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  gap: 0.6rem clamp(1rem, 7%, 2rem);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.6rem 1rem;
 }
-
 .linked-player-stat {
   display: grid;
   align-content: start;
-  gap: 0.1rem;
+  gap: 0.15rem;
   min-width: 0;
 }
-
 .linked-player-stat small {
   color: var(--cl-muted);
   font-size: 0.8125rem;
   font-weight: 650;
 }
-
-/* Trophies, rank and today's net read as the scoreboard does elsewhere. */
 .linked-player-stat strong {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   justify-self: start;
   font-family: var(--cl-font-score);
-  font-size: 1.45rem;
+  font-size: 1.6rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -128,88 +203,64 @@
   height: 1.1rem;
   margin: 0;
 }
-/* Trophies lead the card, behind the league's badge as on the dashboard. */
+/* Trophies lead, behind the league's badge as on the dashboard. */
 .linked-player-stat strong.linked-player-trophies {
   gap: 0.35rem;
-  font-size: 1.75rem;
+  font-size: 1.85rem;
   line-height: 1;
 }
 .linked-player-badge {
   flex: none;
   width: auto;
-  height: 2.1rem;
+  height: 2.2rem;
   margin: 0.1rem 0 0 -0.1rem;
-  filter: drop-shadow(0 3px 8px color-mix(in srgb, var(--cl-gold) 35%, transparent));
 }
-
-/* "so far" stays quieter than the change itself. */
+/* "so far" stays quieter than the change itself, and on its line. */
 .linked-player-today > span:not(.linked-player-wait) {
   color: var(--cl-muted);
   font-size: 0.8125rem;
   font-weight: 600;
+  white-space: nowrap;
 }
-
 .linked-player-wait {
   color: var(--cl-muted);
-  font-size: 0.86rem;
+  font-size: 0.875rem;
 }
-
-/* Today's attacks and defenses as counts out of eight, one thin row each: a
-   filled mark per battle recorded, ember for attacks used and a quiet tone for
-   defenses received, and an empty one per battle still to come. They show how
-   many, not how well, so no green or red. */
-.linked-player-battles {
+/* The rank's plate over its move since the last Reset, as in the log. */
+.linked-player-rank {
   display: grid;
-  grid-column: 1 / -1;
+  justify-items: start;
   gap: 0.15rem;
-  padding-top: 0.55rem;
-  border-top: 1px solid var(--cl-border);
-}
-.battle-tiles {
-  display: grid;
-  grid-template-columns: 3.4rem repeat(8, minmax(0, 1fr));
-  gap: 4px;
-  align-items: center;
-}
-.battle-tiles-count {
-  display: inline-flex;
-  gap: 0.3rem;
-  align-items: center;
-  color: var(--cl-muted);
-  font-family: var(--cl-font);
-  font-size: 0.8125rem;
-  font-weight: 650;
+  font: 700 0.95rem var(--cl-font-score);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.battle-tiles-count svg {
-  width: 0.95rem;
-  height: 0.95rem;
-}
-.battle-tiles i {
-  height: 0.4rem;
-  background: var(--cl-raised);
-  box-shadow: inset 0 0 0 1px var(--cl-card-line);
-  border-radius: 999px;
-}
-.battle-tiles i[data-used] {
-  background: var(--cl-action);
-  box-shadow: none;
-}
-.battle-tiles[data-kind="shield"] i[data-used] {
-  background: color-mix(in srgb, var(--cl-muted) 70%, transparent);
-}
-
 .linked-player-gain {
   color: var(--cl-positive);
 }
-
+/* The move says what it is against, quieter, and wraps whole when narrow. */
+.linked-player-rank > span {
+  white-space: normal;
+}
+.linked-player-since {
+  color: var(--cl-muted);
+  font: 600 0.8125rem var(--cl-font);
+  white-space: nowrap;
+}
 .linked-player-loss {
   color: var(--cl-negative);
 }
-
 .linked-player-note {
   color: var(--cl-muted);
   font-size: 0.9rem;
+}
+
+/* The Season at a glance: the heat map's one form, its cells a size down. */
+.linked-player-heat .season-heat-days {
+  --heat-font: 0.875rem;
+}
+.linked-player-heat .season-heat-days > li {
+  height: 1.9rem;
 }
 
 .linked-player-default {
@@ -226,237 +277,103 @@
   border-radius: var(--cl-radius);
 }
 
-/* The Clasher's monogram and name, close above their players. */
-.profile-hero {
-  max-width: none;
-  margin-bottom: 0;
+/* ---------- Your tools ----------
+   A quiet area after the players, under a small heading: two rows, open on
+   the page and split by a hairline, each tool's mark, its name over one line
+   on what it does, and a green pill when it is on or an ember step that
+   starts it. A wide screen sets the two side by side. */
+.profile-body > .profile-tools-section > h2 {
+  margin-bottom: 0.25rem;
+  font-size: 1.125rem;
 }
-.profile-body > .data-section {
-  margin-top: 1.75rem;
-}
-
-.profile-id {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-  min-width: 0;
-}
-
-.profile-id > div {
-  min-width: 0;
-}
-
-.profile-id .player-tag {
-  margin: 0.2rem 0 0;
-}
-
-.profile-avatar {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 4.5rem;
-  height: 4.5rem;
-  color: var(--cl-on-action);
-  background: var(--cl-brand-fill);
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 3px var(--cl-action-soft),
-    0 10px 28px -12px var(--cl-action);
-  font-family: var(--cl-font-score);
-  font-size: 2.3rem;
-  font-weight: 700;
-  line-height: 1;
-}
-
-/* The owner's name with its small Edit button beside it. */
-.profile-name {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.9rem;
-  align-items: center;
-}
-
-.profile-name h1 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.profile-edit.button {
-  min-height: 2.75rem;
-  padding: 0.35rem 0.85rem;
-  font-size: 0.86rem;
-}
-
-@media (max-width: 34rem) {
-  .profile-avatar {
-    width: 3.5rem;
-    height: 3.5rem;
-    font-size: 1.8rem;
-  }
-}
-
-/* On a wide screen your players take the page and your tools a column beside them. */
-@media (min-width: 64rem) {
-  .profile-body:has(> .profile-tools-section) {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 24rem;
-    gap: 0 2rem;
-    align-items: start;
-  }
-
-  .profile-tools-section {
-    grid-row: 1;
-    grid-column: 2;
-  }
-}
-
-/* Your tools: one panel in the players' card style, a divided row per tool:
-   its mark, its name over one line on what it does, then a green pill when it
-   is on, or an ember button-like step that starts it. */
 .profile-tools {
+  display: grid;
   margin: 0;
-  padding: 0.25rem 0;
-  overflow: hidden;
+  padding: 0;
   list-style: none;
-  background: var(--cl-card-fill);
-  border-radius: var(--cl-card-radius);
 }
-
 .profile-tools li + li {
-  border-top: 1px solid var(--cl-border);
+  border-top: 1px solid var(--cl-card-line);
 }
-
 .profile-tool {
   position: relative;
   display: grid;
   grid-template-areas:
     "mark name state"
-    "mark text text";
+    "mark text state";
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.15rem 0.75rem;
+  gap: 0.1rem 0.75rem;
   align-items: center;
-  min-height: 4rem;
-  padding: 0.85rem 2.5rem 0.85rem 0.85rem;
+  height: 100%;
+  min-height: 3.5rem;
+  padding: 0.6rem 0.25rem;
   color: var(--cl-ink);
   font-weight: 400;
+  border-radius: var(--cl-radius);
 }
-
 .profile-tool:hover,
 .profile-tool:focus-visible {
   color: var(--cl-ink);
-  background: var(--cl-raised);
+  background: var(--cl-fill-hover);
 }
-
 .profile-tool:focus-visible {
   outline-offset: -3px;
 }
-
-/* A tool that is on ends in an arrow, as the player cards do, saying the row
-   opens its settings; one not set up has its labelled step instead. */
-.profile-tool::after {
-  position: absolute;
-  top: 50%;
-  right: 1.1rem;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-top: 2px solid var(--cl-faint);
-  border-right: 2px solid var(--cl-faint);
-  transform: translateY(-50%) rotate(45deg);
-  content: "";
-}
-.profile-tool:has(> .profile-tool-start) {
-  padding-right: 0.85rem;
-}
-.profile-tool:has(> .profile-tool-start)::after {
-  content: none;
-}
-
-.profile-tool-mark {
-  grid-area: mark;
-}
-
-.profile-tool strong {
-  grid-area: name;
-  align-self: center;
-  min-width: 0;
-  font-family: var(--cl-font);
-  font-size: 0.98rem;
-  font-weight: 700;
-}
-
-/* What a tool does: a short line under its name. */
-.profile-tool-text {
-  grid-area: text;
-  align-self: start;
-  color: var(--cl-muted);
-  font-size: 0.875rem;
-  line-height: 1.35;
-}
-
-:is(.profile-tool-start, .profile-tool-status) {
-  grid-area: state;
-}
-
-@media (min-width: 64rem) {
-  /* The narrow side column puts each tool's state under what it does. */
-  .profile-tool {
-    grid-template-areas:
-      "mark name"
-      "mark text"
-      "mark state";
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.15rem 0.85rem;
-    align-items: start;
-    padding-block: 1rem;
-  }
-  .profile-tool-mark {
-    align-self: start;
-  }
-  :is(.profile-tool-start, .profile-tool-status) {
-    justify-self: start;
-    margin-top: 0.45rem;
-  }
-}
-
 .profile-tool-mark {
   display: grid;
-  flex: none;
+  grid-area: mark;
   place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2.25rem;
+  height: 2.25rem;
   color: var(--cl-action-text);
   background: var(--cl-raised);
-  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
 }
 .profile-tool-mark svg {
-  width: 1.3rem;
-  height: 1.3rem;
+  width: 1.2rem;
+  height: 1.2rem;
 }
-
-/* Not working yet: the step that starts it, drawn as a small ember button. The
-   whole row is the link, so this is part of its name, not a second control. */
-.profile-tool-start {
-  padding: 0.35rem 0.8rem;
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border: 1px solid var(--cl-action-border);
-  border-radius: 999px;
-  font-size: 0.84rem;
+.profile-tool strong {
+  grid-area: name;
+  align-self: end;
+  min-width: 0;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
   font-weight: 700;
+}
+.profile-tool-text {
+  grid-area: text;
+  align-self: start;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.profile-tool-start, .profile-tool-status) {
+  grid-area: state;
+  justify-self: end;
+}
+/* The step that starts a tool, in the site's outlined secondary button
+   (brand.css), a size down. The whole row is the link, so this is part of
+   its name, not a second control. */
+.profile-tool-start {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
   white-space: nowrap;
 }
 .profile-tool:hover .profile-tool-start {
-  color: var(--cl-on-action);
-  background: var(--cl-action);
-  border-color: var(--cl-action);
+  background: var(--cl-control-fill-hover);
 }
-
 .profile-tool-status {
   display: inline-flex;
   gap: 0.4rem;
   align-items: center;
-  max-width: 100%;
+  max-width: 9rem;
   padding: 0.2rem 0.6rem;
   color: var(--cl-muted);
   background: var(--cl-raised);
@@ -465,7 +382,6 @@
   font-weight: 650;
   overflow-wrap: anywhere;
 }
-
 .profile-tool-status::before {
   flex: none;
   width: 0.45rem;
@@ -475,19 +391,68 @@
   opacity: 0.6;
   content: "";
 }
-
 .profile-tool-status[data-on] {
   color: var(--cl-positive);
   background: color-mix(in srgb, var(--cl-positive) 12%, transparent);
 }
-
 .profile-tool-status[data-on]::before {
   opacity: 1;
 }
 
-/* Settings: each row is a name, one short line, and its control on the right. */
+@media (min-width: 48rem) {
+  .profile-avatar {
+    font-size: 1.65rem;
+  }
+  .profile-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 2rem;
+  }
+  .profile-tools li + li {
+    border-top: 0;
+  }
+  .profile-tool {
+    padding-inline: 0.5rem;
+  }
+  .profile-tool-mark {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+  .linked-player-card {
+    padding: 1.1rem 1.25rem 1.2rem;
+  }
+  .linked-player-card::after {
+    top: 1.8rem;
+  }
+  .linked-player-name {
+    font-size: 1.6rem;
+  }
+  .linked-player-note {
+    grid-column: 1 / -1;
+  }
+}
+/* A wide screen: who and the numbers on the left, the Season on the right,
+   so a card is one compact row: the name level with its first week and the
+   arrow, the numbers level with its last. */
+@media (min-width: 64rem) {
+  .linked-player-card {
+    grid-template-columns: minmax(0, 1fr) 23rem;
+    column-gap: 2.5rem;
+    padding-right: 3rem;
+  }
+  .linked-player-link {
+    align-content: space-between;
+  }
+  .linked-player-stats {
+    gap: 0.6rem 1.5rem;
+  }
+}
+
+/* Settings: each group one sheet (brand.css), its heading over rows split
+   by hairlines; each row is a name, one short line, and its control on the
+   right. A list outside a group (Discord alerts) is a sheet of its own. */
 .settings-group {
-  margin: 0 0 1.75rem;
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.25rem 0.75rem;
 }
 
 .settings-group h2 {
@@ -499,6 +464,12 @@
   padding: 0;
   list-style: none;
 }
+.settings-list:not(.settings-group .settings-list) {
+  padding: 0 1.25rem;
+}
+.settings-list:not(.settings-group .settings-list) > .settings-row:first-child {
+  border-top: 0;
+}
 
 .settings-row {
   display: flex;
@@ -506,15 +477,8 @@
   gap: 0.6rem 1rem;
   align-items: center;
   justify-content: space-between;
-  padding: 0.85rem 1rem;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-}
-
-.settings-row + .settings-row,
-.settings-list .settings-row + .settings-row {
-  margin-top: 0.5rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--cl-card-line);
 }
 
 .settings-label {

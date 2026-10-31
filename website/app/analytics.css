@@ -10,47 +10,260 @@
 
 /* ---------- Heading and view switch ---------- */
 
+/* The list is the page's main table, open on the page (.open-board in
+   brand.css): its rows and their tints span the page column, as Rankings'
+   do, and their contents sit a little inside (--sheet-pad). */
 .analytics-results {
+  --sheet-pad: 0.5rem;
   display: flex;
   flex-direction: column;
+  padding: 0.25rem 0 0.5rem;
+}
+
+/* The armies at a glance over the table: use across, 3-star rate up, each
+   army drawn as its troops (a phone: its number in the table), over faint
+   lines every ten points and a dashed cross at the averages, its quarters
+   named quietly in their corners. */
+.army-map {
+  --map-h: 15rem;
+  margin: 0.75rem 0 1.5rem;
+}
+.army-map figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.army-map-title {
+  color: var(--cl-ink);
+  font-weight: 700;
+}
+.army-map-key::before {
+  display: inline-block;
+  width: 1rem;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+  border-top: 1px dashed var(--cl-muted);
+  content: "";
+}
+.army-map-plot {
+  position: relative;
+  height: var(--map-h);
+  margin: 0 1.5rem 2.75rem 4rem;
+  border-bottom: 1px solid var(--cl-outline);
+  border-left: 1px solid var(--cl-outline);
+}
+.army-map-cross,
+.army-map-rate,
+.army-map-grid {
+  position: absolute;
+  pointer-events: none;
+}
+.army-map-cross[data-axis="rate"],
+.army-map-rate,
+.army-map-grid {
+  inset-inline: 0;
+}
+.army-map-cross[data-axis="rate"] {
+  border-top: 1px dashed color-mix(in srgb, var(--cl-muted) 60%, transparent);
+}
+.army-map-cross[data-axis="use"] {
+  inset-block: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--cl-muted) 60%, transparent);
+}
+.army-map-grid {
+  top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--cl-muted) 16%, transparent);
+}
+.army-map-tick,
+.army-map-axis,
+.army-map-quarter {
+  position: absolute;
+  color: var(--cl-faint);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.army-map-tick[data-axis="rate"] {
+  right: calc(100% + 0.5rem);
+  translate: 0 -50%;
+}
+.army-map-tick[data-axis="use"] {
+  top: calc(100% + 0.35rem);
+  translate: -50% 0;
+}
+/* Each axis named: usage under its steps, saying they are multiples, so
+   the many little-used armies spread out; the 3-star rate up the left. */
+.army-map-axis[data-axis="use"] {
+  top: calc(100% + 1.45rem);
+  left: 50%;
+  translate: -50% 0;
+}
+.army-map-axis[data-axis="rate"] {
+  top: 50%;
+  left: -3.15rem;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+/* Each quarter's name, small in its outer corner, where it fits clear of
+   the armies (worked out for each screen size). */
+.army-map-quarter {
+  display: none;
+  font-size: 0.6875rem;
+  line-height: 14px;
+  pointer-events: none;
+}
+.army-map-quarter[data-wide] {
+  display: block;
+}
+.army-map-quarter[data-corner^="top"] {
+  top: 4px;
+}
+.army-map-quarter[data-corner^="bottom"] {
+  bottom: 4px;
+}
+.army-map-quarter[data-corner$="left"] {
+  left: 4px;
+}
+.army-map-quarter[data-corner$="right"] {
+  right: 4px;
+}
+.army-map-point {
+  position: absolute;
+  translate: -50% -50%;
+  cursor: pointer;
+}
+.army-map-point:is(:hover, [data-named]) {
+  z-index: 2;
+}
+.army-map-point .unit-art img {
+  width: 2rem;
+  height: 2rem;
+  box-shadow: 0 0 0 2px var(--cl-paper);
+}
+.army-map-point .unit-art img + img {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+/* A phone's stand-in for the troops: the army's number in the table. */
+.army-map-number {
+  display: none;
+}
+/* Its name beside it, on the side worked out to fit this screen: clear of
+   the other icons, names and the average lines; its number where the name
+   has no room. Faint lines pass behind it. */
+.army-map-label {
+  position: absolute;
+  top: 50%;
+  display: none;
+  padding: 0 0.2rem;
+  color: var(--cl-muted);
+  background: var(--cl-paper);
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1rem;
+  white-space: nowrap;
+  translate: 0 -50%;
+  pointer-events: none;
+}
+.army-map-label[data-mode="wide"] {
+  display: block;
+}
+.army-map-label[data-side^="right"] {
+  left: calc(100% + 3px);
+}
+.army-map-label[data-side^="left"] {
+  right: calc(100% + 3px);
+}
+.army-map-label[data-side$="-up"] {
+  top: 0;
+}
+.army-map-label[data-side$="-down"] {
+  top: 100%;
+}
+.army-map-label:is([data-side="above"], [data-side="below"]) {
+  left: 50%;
+  translate: -50% 0;
+}
+.army-map-label[data-side="above"] {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+.army-map-label[data-side="below"] {
+  top: calc(100% + 2px);
+}
+.army-map-point:is(:hover, [data-named]) .army-map-label {
+  display: none;
+}
+/* Its name, and its two numbers, over it while pointed at or tapped; near
+   either edge it opens inward. */
+.army-map-name {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 50%;
+  display: none;
+  padding: 0.2rem 0.5rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 6px;
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  white-space: nowrap;
+  translate: -50% 0;
+}
+.army-map-point[data-edge="start"] .army-map-name {
+  left: -0.25rem;
+  translate: none;
+}
+.army-map-point[data-edge="end"] .army-map-name {
+  right: -0.25rem;
+  left: auto;
+  translate: none;
+}
+.army-map-point:is(:hover, [data-named]) .army-map-name {
+  display: block;
 }
 .analytics-view-switch {
   display: flex;
-  order: 2;
-  width: 100%;
 }
 .analytics-view-switch .button {
-  flex: 1 1 0;
+  flex: 0 0 auto;
   justify-content: center;
   min-height: 2.75rem;
   font-size: 0.95rem;
 }
-/* Phones keep the switch beside the title when it fits, so the first army
-   comes sooner; a narrower phone wraps it under. */
-@media (max-width: 39.99rem) {
+/* The switch sits in the page header beside the title. The shared header
+   stacks it under the title on phones; here it stays beside the title when
+   it fits, so the first army comes sooner, and wraps under on a narrower
+   phone. */
+@media (max-width: 40rem) {
   :root .analytics-page .analytics-head {
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    column-gap: 0.75rem;
+    justify-content: space-between;
+    gap: 0.6rem 0.75rem;
     margin-bottom: 0.75rem;
   }
-  .analytics-head .analytics-view-switch {
-    flex: 0 1 auto;
-    order: 1;
+  /* Above the shared rule that stretches every view switch on phones. */
+  :root .analytics-head > .analytics-view-switch {
     width: auto;
+    margin-top: 0;
   }
   .analytics-head .analytics-view-switch .button {
     flex: 0 0 auto;
-    min-width: 0;
     padding-inline: 0.75rem;
   }
 }
 @media (min-width: 40rem) {
-  .analytics-view-switch {
-    order: 1;
-    width: auto;
-  }
   .analytics-view-switch .button {
-    flex: 0 0 auto;
     min-width: 8.5rem;
   }
 }
@@ -137,8 +350,10 @@
   padding: 1.15rem 2.25rem 0.35rem 0.9rem;
   overflow: hidden;
   color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-border);
+  /* Filled, not outlined, like the site's other quiet controls; an edge is
+     kept for the control in use. */
+  background: var(--cl-raised);
+  border: 1px solid transparent;
   border-radius: var(--cl-radius);
   font: inherit;
   /* 16px or more, so a phone does not zoom in on it. */
@@ -174,7 +389,7 @@
 }
 @media (hover: hover) and (pointer: fine) {
   .analytics-field select:not(:disabled):hover {
-    border-color: var(--cl-outline);
+    background: var(--cl-fill-hover);
   }
 }
 
@@ -201,12 +416,19 @@
 .analytics-results-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 0.25rem 1rem;
 }
+/* The chosen tab above already names the list; screen readers keep the
+   heading. */
 .analytics-results-head h2 {
-  margin: 0 auto 0 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 /* More columns: the four quieter army numbers, a click away. */
 .analytics-more-columns {
@@ -217,8 +439,8 @@
   min-height: 2.25rem;
   padding: 0 0.8rem;
   color: var(--cl-muted);
-  background: none;
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
   border-radius: 999px;
   font: inherit;
   font-size: 0.8125rem;
@@ -246,13 +468,58 @@
 @media (hover: hover) and (pointer: fine) {
   .analytics-more-columns:hover {
     color: var(--cl-ink);
-    border-color: var(--cl-outline);
+    background: var(--cl-fill-hover);
   }
 }
 .analytics-days {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
   color: var(--cl-muted);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   font-weight: 700;
+}
+/* What the table's differences are against, said once beside the days;
+   the averages and the colour rule behind its ⓘ, on hover or a tap. */
+.analytics-average-key {
+  display: inline-flex;
+  align-items: center;
+  color: var(--cl-faint);
+  font-weight: 600;
+}
+.analytics-average-key::before {
+  margin: 0 0.4rem 0 0.2rem;
+  content: "·" / "";
+}
+.analytics-rule {
+  position: relative;
+}
+.analytics-rule > summary {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1rem;
+  list-style: none;
+  cursor: pointer;
+}
+.analytics-rule > summary::-webkit-details-marker {
+  display: none;
+}
+.analytics-rule > p {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  right: 0;
+  width: max-content;
+  max-width: min(18rem, 80vw);
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
 }
 .analytics-note {
   margin: 0.35rem 0 0;
@@ -343,8 +610,8 @@
 .analytics-sort-direction {
   min-height: 2.75rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
   border-radius: 999px;
   font: inherit;
   cursor: pointer;
@@ -368,14 +635,13 @@
   width: 2.75rem;
   padding: 0;
   color: var(--cl-action-text);
-  border-color: var(--cl-action-border);
   font-size: 1.1rem;
   font-weight: 800;
 }
 @media (hover: hover) and (pointer: fine) {
   .analytics-sort-field select:hover,
   .analytics-sort-direction:hover {
-    border-color: var(--cl-outline);
+    background: var(--cl-fill-hover);
   }
 }
 @media (min-width: 64rem) {
@@ -391,18 +657,13 @@
   }
 }
 
-/* ---------- Results: one card of rows ---------- */
+/* ---------- Results: ruled rows open on the page ---------- */
 
+/* Hairlines between rows that run the page column's width, the rows'
+   contents kept to its inset. */
 .analytics-table-wrap {
-  margin-top: 1rem;
+  margin: 0.75rem 0 0;
   overflow: hidden;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
-}
-.analytics-phone-key + .analytics-table-wrap {
-  margin-top: 0;
 }
 .analytics-results-table {
   --row-display: table-row;
@@ -467,11 +728,14 @@
   font-weight: 800;
   text-align: left;
 }
+/* Room for a name and its variants on every row, so a row with none is
+   just as tall and the rows keep one rhythm. */
 .analytics-name-cell {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   min-width: 0;
+  min-height: 2.375rem;
 }
 .unit-art {
   display: inline-flex;
@@ -483,11 +747,10 @@
   background: var(--cl-panel);
   border-radius: 0.5rem;
 }
-/* An army shows one or two troops; its slot fits two, a lone troop centred
-   in it, so every army's name starts at the same place. */
+/* An army shows its main troop, and a second one small on its corner; the
+   slot fits both, so every army's name starts at the same place. */
 [data-view="armies"] .unit-art {
-  justify-content: center;
-  min-width: 3.65rem;
+  min-width: 2.75rem;
 }
 /* Other and Unreadable: a plain tile where an army's troops would be. */
 .analytics-leftover-art::before {
@@ -505,11 +768,16 @@
   content: "?" / "";
 }
 .unit-art img + img {
-  width: 1.75rem;
-  height: 1.75rem;
-  margin-left: -0.35rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin: 0 0 -0.2rem -0.75rem;
   align-self: flex-end;
+  border-radius: 0.35rem;
   box-shadow: 0 0 0 2px var(--cl-solid);
+}
+/* The battle count under a name is a phone's; wider screens have its column. */
+.analytics-name-battles {
+  display: none;
 }
 .analytics-name {
   display: grid;
@@ -519,20 +787,23 @@
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
+/* "3 variants": a small pill, so a row that opens says so by its name. */
 .analytics-name small {
+  justify-self: start;
+  margin-top: 0.1rem;
+  padding: 0 0.45rem;
   color: var(--cl-muted);
+  background: var(--cl-panel);
+  border-radius: 999px;
   font-size: 0.8125rem;
-  font-weight: 700;
+  font-weight: 650;
 }
-/* The arrow sits at the name cell's right edge, so it lines up row to row. */
+/* The whole row opens the sheet, so the name needs no tall tap target. */
 .analytics-row-open {
   display: flex;
   flex: 1;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
   min-width: 0;
-  min-height: 2.75rem;
   padding: 0;
   color: inherit;
   background: none;
@@ -546,8 +817,14 @@
   outline-offset: 3px;
   border-radius: 6px;
 }
+/* One arrow column at the row's end, the arrow at the same place on every
+   row that opens and its place kept on one that doesn't. */
+.analytics-open-cell {
+  width: 1.75rem;
+  text-align: right;
+}
 .analytics-chevron {
-  flex: none;
+  display: inline-block;
   width: 0.5rem;
   height: 0.5rem;
   margin-right: 0.2rem;
@@ -569,8 +846,8 @@
   font-weight: 600;
   white-space: nowrap;
 }
-/* Usage and the 3-star rate are the two numbers to scan: big, each over a
-   bar, Usage in ember and 3-star in a neutral fill against its average. */
+/* Usage and the 3-star rate are the two numbers to scan: big, Usage over
+   its ember bar and 3-star beside its difference from the average. */
 .analytics-results-table
   :is([data-column="usage-rate"], [data-column="three-star-rate"])
   .analytics-value {
@@ -586,58 +863,27 @@
   overflow: visible;
 }
 .analytics-results-table td[data-column="three-star-rate"] .meter > span {
-  background: color-mix(in srgb, var(--cl-ink) 42%, transparent);
+  background: color-mix(in srgb, var(--cl-ink) 26%, transparent);
 }
-/* Only a rate more than 5 points off the average is coloured, the number
-   alone, as on the dashboard's Armies card. */
-.analytics-value[data-compared="above"] {
-  color: var(--cl-positive);
-}
-.analytics-value[data-compared="below"] {
-  color: var(--cl-negative);
-}
-/* The average: a short upright mark across the 3-star track, named once by
-   the key beside the 3-star heading. */
-.analytics-results-table .meter[data-average]::after {
-  position: absolute;
-  top: -0.2rem;
-  bottom: -0.2rem;
-  left: var(--average);
-  width: 2px;
-  margin-left: -1px;
-  background: var(--cl-ink);
-  border-radius: 1px;
-  opacity: 0.75;
-  content: "";
-}
-/* The key: the same mark, then "avg 62.5%". */
-.analytics-average-key {
-  margin-left: 0.6rem;
+/* The 3-star rate and trophies per attack: the army's number, then one
+   signed difference from every attack's, named once under the heading
+   ("vs avg 69.3%"). Only a clear difference is coloured. */
+.analytics-difference {
+  margin-left: 0.45rem;
   color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: 0.875rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.analytics-average-key::before {
-  display: inline-block;
-  width: 2px;
-  height: 0.8rem;
-  margin-right: 0.35rem;
-  vertical-align: -0.15rem;
-  background: var(--cl-ink);
-  border-radius: 1px;
-  opacity: 0.75;
-  content: "";
-}
-/* What the 3-star colours mean, after the average. */
-.analytics-colour-key {
-  margin-left: 0.5rem;
-}
-.analytics-colour-key [data-compared="above"] {
+.analytics-difference[data-compared="above"] {
   color: var(--cl-positive);
 }
-.analytics-colour-key [data-compared="below"] {
+.analytics-difference[data-compared="below"] {
   color: var(--cl-negative);
+}
+.analytics-results-table td:has(> .analytics-difference) .analytics-value {
+  display: inline;
 }
 /* A bar's scale under its heading: 0 at the bar's start, its full value at
    the track's end. */
@@ -655,12 +901,6 @@
 .analytics-phone-key {
   display: none;
 }
-/* Average trophies carry the trophy, so the number says what it counts. */
-.analytics-value .trophy-mark {
-  width: 0.9rem;
-  height: 0.9rem;
-  margin-right: 0.25rem;
-}
 .analytics-results-table
   td[data-sorted]:not([data-column="usage-rate"], [data-column="three-star-rate"])
   .analytics-value {
@@ -674,7 +914,7 @@
   .analytics-results {
     flex-flow: row wrap;
     align-items: center;
-    column-gap: 0.75rem;
+    column-gap: 0.5rem;
   }
 
   .analytics-results > * {
@@ -701,15 +941,120 @@
     margin-bottom: 0.75rem;
   }
 
-  /* The chosen tab above already names the list; screen readers keep the
-     heading. */
-  .analytics-results-head h2 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
+  /* One line a field: the chosen value says what it is, and screen readers
+     still hear the label. */
+  .analytics-field > span {
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+  .analytics-field select {
+    min-height: 2.75rem;
+    padding-block: 0;
+  }
+
+  .analytics-note {
+    margin: 0;
+  }
+
+  .analytics-days-of {
+    display: none;
+  }
+  /* Under the days, at the head's right edge, beside Sort. */
+  .analytics-days {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 0;
+  }
+  .analytics-average-key {
+    flex-basis: 100%;
+    justify-content: flex-end;
+    margin-block: -0.4rem -0.5rem;
+  }
+  .analytics-average-key::before {
+    content: none;
+  }
+
+  /* The key's rule is the list's top edge. */
+  .analytics-table-wrap {
+    margin-top: 0;
+  }
+
+  /* A variant count sits beside its name, so a row is a line shorter. */
+  .analytics-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.45rem;
+  }
+  .analytics-name small {
+    margin-top: 0;
+  }
+  /* The name, with its battle count quietly under it; the rank and the
+     troops span both lines. */
+  .analytics-name-cell {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    column-gap: 0.6rem;
+    min-height: 1.9rem;
+  }
+  .analytics-name-cell
+    > :not(.analytics-name-battles, :is(.analytics-name, .analytics-row-open)) {
+    grid-row: 1 / 3;
+  }
+  .analytics-name-battles {
+    display: block;
+    grid-row: 2;
+    grid-column: 3;
+    color: var(--cl-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  /* Each army is one block with a hairline under it, not one per number. */
+  .analytics-results.open-board .analytics-results-table tbody > tr > :is(td, th) {
+    border-bottom: 0;
+  }
+  /* The same chart across the phone, taller for its height, each army its
+     number in the table under it; a tap names it. */
+  .army-map {
+    --map-h: 12rem;
+    margin: 0.25rem 0 1rem;
+  }
+  .army-map-plot {
+    margin: 0 0.75rem 2.75rem 3.5rem;
+  }
+  .army-map-axis[data-axis="rate"] {
+    left: -2.85rem;
+  }
+  .army-map-quarter[data-wide] {
+    display: none;
+  }
+  .army-map-quarter[data-narrow] {
+    display: block;
+  }
+  .army-map-point .unit-art,
+  .army-map-label[data-mode="wide"] {
+    display: none;
+  }
+  .army-map-number {
+    display: grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    color: var(--cl-ink);
+    background: var(--cl-raised);
+    border: 1px solid var(--cl-outline);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1.5px var(--cl-paper);
+    font-size: 0.6875rem;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+  .army-map-point[data-named] .army-map-number {
+    color: var(--cl-action-text);
+    border-color: var(--cl-action-text);
+  }
+  .army-map-name {
+    font-size: 0.75rem;
   }
 
   .analytics-results-table,
@@ -722,12 +1067,13 @@
   .analytics-results-table thead {
     display: none;
   }
-  /* Snug cards, so neighbouring armies sit close enough to compare. */
+  /* Snug rows, so neighbouring armies sit close enough to compare. */
   .analytics-results-table tbody > tr {
+    position: relative;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.3rem 0.75rem;
-    padding: 0.5rem 0.85rem 0.55rem;
+    padding: 0.5rem var(--sheet-pad) 0.55rem;
   }
   .analytics-results-table tbody .unit-art img,
   .analytics-results-table tbody .analytics-leftover-art::before {
@@ -735,11 +1081,11 @@
     height: 1.9rem;
   }
   .analytics-results-table tbody .unit-art img + img {
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.05rem;
+    height: 1.05rem;
   }
   .analytics-results-table[data-view="armies"] tbody .unit-art {
-    min-width: 3.1rem;
+    min-width: 2.4rem;
   }
   .analytics-results-table tbody th {
     display: block;
@@ -747,12 +1093,9 @@
     min-width: 0;
     padding: 0;
   }
-  /* The whole card opens the sheet, so the name needs no tall tap target. */
-  .analytics-row-open {
-    min-height: 0;
-  }
   /* Under the name, one row of numbers, each under its name in the strip
-     above the list; Usage and 3-star are a little wider for their bars. */
+     above the list, which says once what each is; Usage and 3-star are a
+     little wider for their bars. */
   .analytics-results-table td,
   .analytics-phone-key > span {
     display: block;
@@ -768,42 +1111,20 @@
   }
   .analytics-results-table td .analytics-value {
     display: block;
-    font-size: 1rem;
+    font-size: 1.05rem;
     line-height: 1.3;
     white-space: nowrap;
   }
-  .analytics-results-table
-    td:is([data-column="usage-rate"], [data-column="three-star-rate"])
-    .analytics-value {
-    font-size: 1.15rem;
-  }
   .analytics-results-table td .meter {
-    margin-top: 0.25rem;
+    margin-top: 0.3rem;
   }
-  /* Each number carries a small unit, so it reads without looking up at the
-     strip. Screen readers hear the column's name instead. */
-  .analytics-results-table td .analytics-value::after {
-    margin-left: 0.2rem;
-    color: var(--cl-muted);
-    font-family: var(--cl-font);
-    font-size: 0.8125rem;
-    font-weight: 600;
-  }
-  td[data-column="usage-rate"] .analytics-value::after {
-    content: "use" / "";
-  }
-  td[data-column="three-star-rate"] .analytics-value::after {
-    content: "3★" / "";
-  }
-  td[data-column="average-trophies"] .analytics-value::after {
-    content: "per attack" / "";
-  }
-  /* Battles has no bar, so its longer unit sits where a bar would be. */
-  td[data-column="usage-count"] .analytics-value::after {
+  /* The difference under its number, small, as the bar is under Usage's. */
+  .analytics-results-table td .analytics-difference {
     display: block;
-    margin: 0.1rem 0 0;
-    line-height: 1;
-    content: "battles" / "";
+    margin-left: 0;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+    white-space: nowrap;
   }
   /* Screen readers still hear each number's name; the strip shows it once. */
   .analytics-results-table td::before {
@@ -815,8 +1136,8 @@
     white-space: nowrap;
     content: attr(data-label);
   }
-  /* The strip sits on the list's top edge and stays under the top bar while
-     the cards scroll. */
+  /* The strip takes the list's top rule and stays under the top bar while
+     the rows scroll, on the page's own colour. */
   .analytics-phone-key {
     position: sticky;
     top: var(--cl-header-h);
@@ -824,29 +1145,24 @@
     display: flex;
     align-items: flex-end;
     gap: 0 0.75rem;
-    padding: 0.55rem calc(0.85rem + 1px) 0.5rem;
+    padding: 0.45rem var(--sheet-pad) 0.4rem;
     color: var(--cl-muted);
-    background: var(--cl-solid);
-    border: 1px solid var(--cl-card-line);
-    border-bottom: 0;
-    border-radius: var(--cl-card-radius) var(--cl-card-radius) 0 0;
+    background: var(--cl-paper);
+    border-bottom: 1px solid var(--cl-border);
     font-size: 0.8125rem;
     font-weight: 700;
     line-height: 1.25;
   }
-  .analytics-phone-key + .analytics-table-wrap {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-  }
   .analytics-phone-key > [data-sorted] {
     color: var(--cl-action-text);
   }
-  .analytics-phone-key :is(small, .analytics-average-key, .analytics-colour-key) {
+  .analytics-phone-key small {
     display: block;
     margin: 0;
     color: var(--cl-muted);
     font-size: 0.8125rem;
     font-weight: 600;
+    white-space: nowrap;
   }
   /* Notes such as misses wait for the army's sheet or a wider screen. */
   .analytics-note-value {
@@ -866,31 +1182,43 @@
     flex-basis: 100%;
   }
 
-  /* Armies: Usage and 3-star, the two with bars, share the line under the
-     name and are all the strip names; the rest follow on one quiet line,
-     such as "36.2 · 8,961 battles". */
-  [data-view="armies"] td:has(.meter) {
-    flex: 1 1 40%;
+  /* Armies: three places under the strip's three names, Usage, 3-star and
+     trophies per attack; a quieter number the list is sorted by takes the
+     third. 3-star is the widest, for its difference. */
+  :is(
+    .analytics-results-table[data-view="armies"] td,
+    .analytics-phone-key[data-view="armies"] > span
+  ) {
+    flex: 1 1 26%;
   }
-  [data-view="armies"] td:not(:has(.meter)) {
-    flex: 0 0 auto;
+  :is(
+    .analytics-results-table[data-view="armies"] td,
+    .analytics-phone-key[data-view="armies"] > span
+  )[data-column="three-star-rate"] {
+    flex-basis: 34%;
   }
-  [data-view="armies"] td:not(:has(.meter), [data-sorted]) .analytics-value {
-    color: var(--cl-muted);
-    font-size: 0.9rem;
-    font-weight: 600;
+  /* The arrow column at the name line's end, clear of the name. */
+  .analytics-results-table[data-view="armies"] tbody th {
+    padding-right: 1.5rem;
   }
-  [data-view="armies"] td:not(:has(.meter)) ~ td .analytics-value::before {
-    margin-right: 0.75rem;
-    color: var(--cl-faint);
-    content: "·" / "";
+  .analytics-results-table tbody td.analytics-open-cell {
+    position: absolute;
+    top: 0.5rem;
+    right: var(--sheet-pad);
+    display: flex;
+    align-items: center;
+    width: auto;
+    height: 1.9rem;
   }
-  [data-view="armies"] td[data-column="usage-count"] .analytics-value::after {
-    display: inline;
-    margin: 0 0 0 0.2rem;
-  }
-  .analytics-phone-key[data-view="armies"]
-    > :not([data-column="usage-rate"], [data-column="three-star-rate"]) {
+  :is(.analytics-results-table, .analytics-phone-key)[data-view="armies"]
+    :is(td, span)[data-column="usage-count"]:not([data-sorted]),
+  :is(.analytics-results-table, .analytics-phone-key)[data-view="armies"]:not(
+      [data-sort="name"],
+      [data-sort="usage-rate"],
+      [data-sort="three-star-rate"],
+      [data-sort="average-trophies"]
+    )
+    :is(td, span)[data-column="average-trophies"] {
     display: none;
   }
 }
@@ -901,14 +1229,9 @@
   .analytics-table-wrap {
     overflow-x: auto;
   }
-  /* The arrow follows the name, not the far edge of a wide cell. */
-  .analytics-row-open {
-    justify-content: flex-start;
-  }
-  .analytics-results-table thead th {
+  .analytics-results-table thead :is(th, td) {
     padding: 0.35rem 0.75rem;
     color: var(--cl-muted);
-    background: var(--cl-panel);
     font-size: 0.8125rem;
     font-weight: 700;
     text-align: right;
@@ -917,9 +1240,13 @@
     vertical-align: top;
     border-bottom: 1px solid var(--cl-border);
   }
+  /* The rows' contents line up with the day range over them. */
   .analytics-results-table thead th:first-child {
-    padding-left: 1rem;
+    padding-left: var(--sheet-pad);
     text-align: left;
+  }
+  .analytics-results-table tr > :last-child {
+    padding-right: var(--sheet-pad);
   }
   .analytics-results-table thead th[aria-sort] {
     color: var(--cl-action-text);
@@ -946,19 +1273,17 @@
   }
   .analytics-results-table tbody th {
     min-width: 17rem;
-    padding-left: 1rem;
+    padding-left: var(--sheet-pad);
     text-align: left;
   }
-  /* Usage and 3-star: the number, then its bar on one line. The number's
-     box is one width, so every row's bar starts at the same place. */
-  .analytics-results-table
-    :is(th, td):is([data-column="usage-rate"], [data-column="three-star-rate"]) {
+  /* Usage, and units' 3-star rate: the number, then its bar on one line. The
+     number's box is one width, so every row's bar starts at the same place. */
+  .analytics-results-table :is(th, td)[data-column="usage-rate"],
+  .analytics-results-table[data-view="units"] :is(th, td)[data-column="three-star-rate"] {
     text-align: left;
     white-space: nowrap;
   }
-  .analytics-results-table
-    td:is([data-column="usage-rate"], [data-column="three-star-rate"])
-    .analytics-value {
+  .analytics-results-table td:has(.meter) .analytics-value {
     display: inline-block;
     min-width: 3.6rem;
     text-align: right;
@@ -977,8 +1302,18 @@
   .analytics-results-table td .analytics-note-value {
     display: none;
   }
-  .analytics-results-table [data-column="usage-count"] {
-    padding-right: 1rem;
+  /* Each number and its difference share a line; the differences line up
+     down their column. */
+  .analytics-results-table td:has(> .analytics-difference) {
+    white-space: nowrap;
+  }
+  .analytics-results-table td .analytics-difference {
+    display: inline-block;
+    min-width: 2.75rem;
+    text-align: right;
+  }
+  .analytics-results-table td[data-column="three-star-rate"] .analytics-difference {
+    min-width: 4.5rem;
   }
 }
 /* On iPads the table leaves the rarer numbers to the Sort menu, unless sorted
@@ -1014,19 +1349,6 @@
   }
 }
 
-.analytics-show-all {
-  display: flex;
-  width: 100%;
-  justify-content: center;
-  margin-top: 0.75rem;
-}
-@media (min-width: 40rem) {
-  .analytics-show-all {
-    width: auto;
-    margin-inline: auto;
-    padding-inline: 2rem;
-  }
-}
 .analytics-pages {
   display: flex;
   flex-wrap: wrap;
@@ -1038,389 +1360,6 @@
   font-size: 0.85rem;
 }
 
-/* ---------- An opened army: a sheet ---------- */
-
-:root:has(.analytics-sheet[open]) {
-  overflow: hidden;
-}
-.analytics-sheet {
-  inset: auto 0 0;
-  width: 100%;
-  max-width: 100%;
-  max-height: calc(100dvh - 2.5rem);
-  margin: 0;
-  padding: 0;
-  color: var(--cl-ink);
-  background: var(--cl-solid);
-  border: 0;
-  border-radius: 20px 20px 0 0;
-  box-shadow: var(--cl-overlay-shadow);
-}
-.analytics-sheet[open] {
-  display: flex;
-  flex-direction: column;
-  animation: analytics-sheet-up 280ms var(--cl-ease-out);
-}
-.analytics-sheet::backdrop {
-  background: rgb(10 6 4 / 0.6);
-}
-.analytics-sheet[open]::backdrop {
-  animation: analytics-fade 200ms ease-out;
-}
-@keyframes analytics-sheet-up {
-  from {
-    transform: translateY(100%);
-  }
-}
-@keyframes analytics-sheet-in {
-  from {
-    transform: translateX(100%);
-  }
-}
-@keyframes analytics-fade {
-  from {
-    opacity: 0;
-  }
-}
-@media (min-width: 48rem) {
-  .analytics-sheet {
-    inset: 0 0 0 auto;
-    width: min(34rem, 100%);
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 20px 0 0 20px;
-  }
-  .analytics-sheet[open] {
-    animation-name: analytics-sheet-in;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .analytics-sheet[open],
-  .analytics-sheet[open]::backdrop {
-    animation: none;
-  }
-}
-.analytics-sheet-body {
-  flex: 1;
-  min-height: 0;
-  padding: 0 1rem calc(1.5rem + env(safe-area-inset-bottom));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* Armies loading under the open variant must not move it. */
-  overflow-anchor: none;
-}
-@media (min-width: 48rem) {
-  .analytics-sheet-body {
-    padding-inline: 1.5rem;
-  }
-}
-.analytics-sheet-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.1rem 0 0.6rem;
-  background: var(--cl-solid);
-}
-/* The phone sheet's grab bar. */
-.analytics-sheet-head::before {
-  content: "";
-  position: absolute;
-  top: 0.45rem;
-  left: 50%;
-  width: 2.5rem;
-  height: 0.3rem;
-  background: var(--cl-outline);
-  border-radius: 999px;
-  transform: translateX(-50%);
-}
-@media (min-width: 48rem) {
-  .analytics-sheet-head {
-    padding-top: 1.25rem;
-  }
-  .analytics-sheet-head::before {
-    content: none;
-  }
-}
-.analytics-sheet-head h2 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.analytics-sheet-close {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 2.75rem;
-  padding: 0 1rem;
-  color: var(--cl-ink);
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-outline);
-  border-radius: 999px;
-  font: inherit;
-  font-size: 0.9rem;
-  font-weight: 800;
-  cursor: pointer;
-}
-.analytics-sheet-note {
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-}
-/* A scoreboard row: each number over its label, split by hairlines. */
-.analytics-sheet-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 0.9rem 0 0.6rem;
-  padding-block: 0.7rem;
-  border-block: 1px solid var(--cl-card-line);
-}
-.analytics-sheet-stats > div {
-  display: flex;
-  flex-direction: column-reverse;
-  justify-content: flex-end;
-  min-width: 0;
-  padding: 0 0.6rem;
-  border-left: 1px solid var(--cl-card-line);
-}
-.analytics-sheet-stats > div:first-child {
-  padding-left: 0;
-  border-left: 0;
-}
-.analytics-sheet-stats dt {
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  line-height: 1.25;
-}
-.analytics-sheet-stats dd {
-  margin: 0 0 0.2rem;
-  font-family: var(--cl-font-score);
-  font-size: 1.6rem;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: 0;
-}
-.analytics-sheet-section {
-  margin: 1.25rem 0 0.15rem;
-}
-.analytics-sheet-section + .analytics-sheet-note {
-  margin-bottom: 0.6rem;
-}
-
-/* Variants: a row each; the open one shows its most-used armies. */
-.analytics-variants {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid var(--cl-card-line);
-  list-style: none;
-}
-.analytics-variant {
-  overflow: hidden;
-  border-bottom: 1px solid var(--cl-card-line);
-}
-.analytics-variant-toggle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-areas:
-    "name share chevron"
-    "meter meter chevron"
-    "stats stats chevron";
-  align-items: center;
-  gap: 0.35rem 0.75rem;
-  width: 100%;
-  min-height: 2.75rem;
-  padding: 0.75rem 0.5rem;
-  color: inherit;
-  background: none;
-  border: 0;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  scroll-margin-top: 4.75rem;
-  -webkit-tap-highlight-color: transparent;
-}
-.analytics-variant[data-open="true"] .analytics-variant-toggle {
-  background: var(--cl-action-soft);
-}
-.analytics-variant-toggle:focus-visible {
-  outline: 3px solid var(--cl-action-text);
-  outline-offset: -3px;
-  border-radius: var(--cl-radius);
-}
-.analytics-variant-name {
-  grid-area: name;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-.analytics-variant-share {
-  grid-area: share;
-  font-family: var(--cl-font-heading);
-  font-size: 1.2rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-.analytics-variant-toggle .meter {
-  grid-area: meter;
-}
-.analytics-variant-stats {
-  grid-area: stats;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-.analytics-variant-toggle .analytics-chevron {
-  grid-area: chevron;
-  transform: rotate(45deg);
-  transition: transform 160ms var(--cl-ease-out);
-}
-.analytics-variant[data-open="true"] .analytics-chevron {
-  transform: rotate(-135deg);
-}
-@media (prefers-reduced-motion: reduce) {
-  .analytics-variant-toggle .analytics-chevron {
-    transition: none;
-  }
-}
-@media (hover: hover) and (pointer: fine) {
-  .analytics-variant:not([data-open="true"]) .analytics-variant-toggle:hover,
-  .analytics-sheet-close:hover {
-    background: var(--cl-panel);
-  }
-}
-
-/* A variant's most-used armies. */
-.analytics-examples {
-  display: grid;
-  gap: 0.6rem;
-  padding: 0.75rem 0.9rem 0.9rem;
-  border-top: 1px solid var(--cl-border);
-}
-.analytics-examples-rule {
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-}
-.analytics-examples-more {
-  justify-self: start;
-}
-.analytics-examples-list {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.analytics-examples-list > li {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.75rem 0;
-}
-.analytics-examples-list > li[hidden] {
-  display: none;
-}
-.analytics-examples-list > li + li {
-  border-top: 1px solid var(--cl-border);
-}
-.analytics-example-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-.analytics-examples-share {
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-}
-.analytics-examples-share strong {
-  color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
-  font-size: 1.2rem;
-  font-weight: 700;
-}
-.analytics-example-head .battle-army {
-  flex: none;
-  margin: 0;
-  font-weight: 800;
-}
-
-/* Army portraits, sized to read on a phone. */
-.analytics-page .army-portraits {
-  display: grid;
-  gap: 0.4rem;
-}
-.analytics-page :is(.army-row, .army-castle, .army-hero) {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem;
-}
-.analytics-page .army-unit {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 2.6rem;
-  height: 2.6rem;
-  background: var(--cl-panel);
-  border-radius: 0.45rem;
-}
-.analytics-page .army-unit img {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-}
-.analytics-page .army-unit-small {
-  width: 1.9rem;
-  height: 1.9rem;
-}
-.analytics-page .army-unit-name {
-  width: auto;
-  max-width: 7rem;
-  padding: 0 0.35rem;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  line-height: 1.1;
-}
-.analytics-page .army-unit-name > span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.analytics-page .army-count {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  min-width: 1rem;
-  padding: 0 0.2rem;
-  color: #fff;
-  background: rgb(0 0 0 / 78%);
-  border-radius: 0.4rem 0 0.4rem 0;
-  font-size: 0.8125rem;
-  font-weight: 800;
-  line-height: 1rem;
-  text-align: center;
-}
-.analytics-page .army-castle {
-  padding-left: 0.4rem;
-  border-left: 1px solid var(--cl-border);
-}
-.analytics-page .army-castle-label {
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 800;
-}
-.analytics-page .army-hero {
-  gap: 0.15rem;
-  padding: 0.15rem 0.3rem 0.15rem 0.15rem;
-  background: color-mix(in srgb, var(--cl-panel) 70%, transparent);
-  border-radius: 0.6rem;
-}
 /* On a wide screen the name keeps its own width and the numbers share the
    rest, so each row's arrow sits beside its army. Longer bars while the
    table has room for them. */
@@ -1428,19 +1367,20 @@
   .analytics-results-table tbody th {
     width: 22rem;
   }
-  /* Armies' four columns: the name takes under a third, so short names
-     leave no wide gap before Usage, and the two bars stretch to fill their
-     columns, which keeps Trophies per attack and Battles close beside them. */
+  /* Armies' four columns: the name takes about a quarter, with the sheet's
+     inset just room for a long name, so Usage's bar follows it closely; the
+     two numbers read against the average share most of the rest, so none
+     is squeezed. */
   .analytics-results-table[data-view="armies"]:not([data-more]) tbody th {
-    width: 30%;
-  }
-  .analytics-results-table[data-view="armies"]:not([data-more])
-    :is(th, td):is([data-column="average-trophies"], [data-column="usage-count"]) {
-    width: 1%;
-  }
-  .analytics-results-table[data-view="armies"]:not([data-more])
-    td:is([data-column="usage-rate"], [data-column="three-star-rate"]) {
     width: 28%;
+  }
+  .analytics-results-table[data-view="armies"]:not([data-more])
+    td[data-column="usage-rate"] {
+    width: 26%;
+  }
+  .analytics-results-table[data-view="armies"]:not([data-more])
+    :is(th, td):is([data-column="three-star-rate"], [data-column="average-trophies"]) {
+    width: 17%;
   }
   .analytics-results-table[data-view="armies"]:not([data-more])
     :is(td .meter, th .analytics-scale) {

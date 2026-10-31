@@ -72,7 +72,7 @@ test("Discord completes a local sign-in without cloud credentials", async ({
     // out, so pages that need an account still explain why.
     await expect(page.getByRole("heading", { name: "No account found" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Try Google instead" })).toBeVisible();
-    await expect(page.getByRole("banner").getByText("Log out")).toHaveCount(0);
+    await expect(page.getByRole("banner").getByText("Sign out")).toHaveCount(0);
     expect(await loginCookie(context)).toBeUndefined();
     await page.goto("/account/watchlists");
     await expect(page.getByText("Sign in to keep them.")).toBeVisible();
@@ -144,9 +144,9 @@ test("an account can link, use, and unlink a second sign-in provider", async ({
   await expect(discordRow.getByRole("button", { name: "Disconnect" })).toBeVisible();
 
   await page.locator("details.account-menu > summary").click();
-  await page.getByRole("button", { name: "Log out" }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL("/?saved=logout");
-  await expect(page.getByRole("status")).toHaveText("You're logged out.");
+  await expect(page.getByRole("status")).toHaveText("You're signed out.");
   await signInDiscord(page);
   await expect(page.getByText(accountLabel!, { exact: true })).toBeVisible();
 
@@ -198,9 +198,9 @@ test("a signed-in visit restarts the 30 days, and a 30-day-old login no longer s
   );
   expect(renewedSession?.issuedAtMs).toBeGreaterThanOrEqual(visitedAt - 1_000);
 
-  // Logging out also ends the copy from before the renewal.
+  // Signing out also ends the copy from before the renewal.
   await accountMenu.click();
-  await page.getByRole("button", { name: "Log out" }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL("/?saved=logout");
   // Wait for the signed-out header so the logout itself has finished.
   await expect(accountMenu).toBeHidden();

@@ -85,10 +85,10 @@ function renderedText(html: string) {
     .trim();
 }
 
-/** The results' row names, in the order shown. */
+/** The results' row names, in the order shown, without a phone's battle count. */
 function rowNames(html: string) {
   return [...html.matchAll(/role="rowheader"[^>]*>(.*?)<\/th>/g)].map(([, name]) =>
-    renderedText(name),
+    renderedText(name.replace(/<small class="analytics-name-battles".*?<\/small>/, "")),
   );
 }
 
@@ -420,26 +420,43 @@ describe("army analytics route historical reads", () => {
     expect(html).not.toContain('name="lens"');
     expect(text).toContain("Analytics Armies Unit usage");
     expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
-    expect(text).toContain("Thrower 50.0%");
+    // A phone shows each army's battles under its name.
+    expect(text).toContain("Thrower 6 battles 50.0%");
     expect(text).toContain("6 of 12");
-    // A type shows the troop it is named after; Unreadable shows none.
+    // A type shows the troop it is named after; an unidentified army shows none.
     expect(html.match(/<span class="unit-art"[^>]*>(?:<img[^>]*>)+<\/span>/g)).toEqual([
       expect.stringMatching(
         /^<span class="unit-art"[^>]*><img [^>]*src="[^"]*troop-132\.webp[^"]*"[^>]*><\/span>$/,
       ),
     ]);
     expect(text).not.toContain("not which army is best");
-    // Unreadable attacks are a row of their own, not excluded.
+    // Unidentified armies are a row of their own, named for what a Clasher
+    // sees, not excluded.
     expect(text).toContain("Battle records 12 Included 12 Excluded 0");
     expect(text).toContain(
       "Every attack is included, even if its army could not be read.",
     );
-    expect(text).toContain("Unreadable 16.7%");
+    expect(text).toContain("Army not identified 2 battles 16.7%");
+    expect(text.slice(0, text.indexOf("window.__static"))).not.toContain("Unreadable");
     expect(text).toContain("2 of 12");
-    // Thrower's 3-star rate, 12.5 points over the 37.5% average, is coloured;
-    // Unreadable's, far under it, stays neutral, being no army to judge.
-    expect(html).toContain('class="analytics-value" data-compared="above"');
-    expect(html).not.toContain('class="analytics-value" data-compared="below"');
+    // Each 3-star rate is followed by its one difference from the 37.5%
+    // average, in points: one rule, behind the ⓘ by the day range, colours every
+    // row 5% of that average away (1.9 points of 37.5), Thrower's 12.5 over and
+    // Unreadable's 37.5 under alike.
+    expect(html).toContain(
+      '<span class="analytics-difference" data-compared="above">+<!-- -->12.5<span aria-hidden="true"> pts</span><span class="sr-only"> points<!-- --> against the average</span>',
+    );
+    expect(html).toContain(
+      '<span class="analytics-difference" data-compared="below">−<!-- -->37.5<span aria-hidden="true"> pts</span>',
+    );
+    // "vs Legend avg" is said once for the table; the average and the
+    // colouring rule open from its ⓘ, not a sentence over the table.
+    const rule =
+      "Differences are against the Legend average: 37.5% 3-star. Green or red when 5% or more from it: 1.9+ pts for 3-star.";
+    expect(renderedText(html)).toContain(`vs Legend avg ⓘ`);
+    expect(renderedText(html)).toContain(rule);
+    expect(html).toContain(`<details class="analytics-rule"><summary title="${rule}">`);
+    expect(html).not.toMatch(/class="analytics-note"[^]*?Green or red/);
     expect(html).toContain(
       'href="/analytics/armies?season=current&amp;lens=defense&amp;category=troops"',
     );
@@ -467,7 +484,7 @@ describe("army analytics route historical reads", () => {
       unknownExcludedAttacks: 0,
     });
     // Same use, and Thrower 3-stars less often, yet wins more an attack.
-    const rows = [row("Hydra", 3, 35.5, 22), row("Thrower", 2, 36.04, 32.08)];
+    const rows = [row("Hydra", 3, 33.5, 22), row("Thrower", 2, 36.04, 32.08)];
     const view = (category: string, sort: string) => {
       const analytics = currentAnalytics("top-100", [1], 1);
       return {
@@ -486,27 +503,72 @@ describe("army analytics route historical reads", () => {
     expect(query.get("sort")).toBe("average-trophies");
     expect(rowNames(html)).toEqual(["Thrower", "Hydra"]);
     expect(html).toContain('data-column="average-trophies" aria-sort="descending"');
-    // The table's headings: Trophies per attack after 3-star, sorted highest
-    // first, then Battles; the quieter numbers wait behind More columns. The
-    // 3-star heading names the mark on its bars and what its colours mean.
-    // Each bar's heading states its scale, usage rounded up from its top share.
-    expect(text).toContain(
-      "Name Usage 0 50% 3-star avg 62.5% above · below 0 100% Trophies per attack ↓ Battles Thrower",
-    );
+    // The table's short headings: trophies Per attack after 3-star, sorted
+    // highest first, then Battles; the quieter numbers wait behind More
+    // columns. Usage states its bar's scale, rounded up from its top share;
+    // the average the differences are against is named once, not per column.
+    expect(text).toContain("Name Usage 0 50% 3-star Per attack ↓ Battles Thrower");
+    expect(text).not.toContain("vs avg");
     expect(html).toContain('role="columnheader" data-column="usage-count"');
     expect(html).not.toContain('role="columnheader" data-column="two-star-rate"');
+    // Over the table, each army at its use and 3-star rate, with the averages
+    // it is read against named beside the chart.
+    expect(text).toContain("Usage vs 3-star rate Averages: 62.5% 3-star, 50.0% use");
+    expect(html.match(/class="army-map-point"/g)).toHaveLength(2);
+    // Both are used alike, so both sit at the right end of the use scale;
+    // each is named beside its own icon, and carries its number in the
+    // table, which a phone draws in place of the icon; the table numbers
+    // its armies whatever the sort.
+    for (const [number, name] of [
+      ["1", "Thrower"],
+      ["2", "Hydra"],
+    ]) {
+      expect(html).toMatch(
+        new RegExp(
+          `<span class="army-map-point"[^>]* style="left:97%;[^"]*">(?:(?!army-map-point).)*?<span class="army-map-number">${number}</span><span class="army-map-label" data-mode="wide" data-side="[a-z-]+">${name}</span>`,
+        ),
+      );
+    }
+    expect(html).toMatch(/<table[^>]*data-view="armies"[^>]*data-ranked="true"/);
+    // Both axes are named, the 3-star rate has faint lines every ten points
+    // between its ends, and the quarters the averages make are named.
+    expect(text).toContain("Usage (log scale) 3-star rate");
+    expect(html.match(/class="army-map-grid"/g)).toHaveLength(3);
+    for (const words of [
+      "Popular and strong",
+      "Niche but strong",
+      "Popular, weaker",
+      "Niche, weaker",
+    ])
+      expect(text).toContain(words);
     expect(html).toContain('aria-pressed="false"');
-    expect(text).toContain("50.0% 2 battles 36.0 32.1 below 3 stars");
-    expect(text).toContain("75.0% 3 battles 35.5 22.0 below 3 stars");
+    expect(text).toContain(
+      "50.0% −12.5 pts points against the average 2 battles 36.0 +1.3 against the average 32.1 below 3 stars",
+    );
+    expect(text).toContain(
+      "75.0% +12.5 pts points against the average 3 battles 33.5 −1.3 against the average 22.0 below 3 stars",
+    );
     expect(text).toContain("Trophies per attack counts every attack.");
+    // Each 3-star rate is followed by its difference from the rate over every
+    // attack, 5 of 8 here: Hydra's 75% 12.5 points over, coloured, and
+    // Thrower's 50% 12.5 under; trophies per attack by the same rule, against
+    // every attack's 34.8, but 1.3 apart is under the 1.7 (5%) that colours.
     expect(text).toContain(
-      "green when more than 5 points above it and red when more than 5 points below.",
+      "Thrower 4 battles 50.0% 50.0% −12.5 pts points against the average",
     );
-    // Each 3-star bar marks the rate over every attack, 5 of 8 here.
-    expect(html).toContain("--average:62.5%");
     expect(text).toContain(
-      "The mark on each 3-star bar is the rate over every attack, 62.5%.",
+      "Hydra 4 battles 50.0% 75.0% +12.5 pts points against the average",
     );
+    expect(html).toContain(
+      '<span class="analytics-difference" data-compared="below">−<!-- -->12.5',
+    );
+    expect(html).toContain('<span class="analytics-difference">+<!-- -->1.3');
+    expect(html).toContain('<span class="analytics-difference">−<!-- -->1.3');
+    // The rule is said once, behind the ⓘ, not again in the footnote.
+    expect(text).toContain(
+      "Differences are against the Legend average: 62.5% 3-star, 34.8 trophies per attack. Green or red when 5% or more from it: 3.1+ pts for 3-star, 1.7+ for trophies per attack.",
+    );
+    expect(text).not.toContain("green when more than 5 points above");
 
     // Sorted by a quieter number, its column shows without More columns.
     getArmyAnalytics.mockResolvedValue(view("army-types", "two-star-rate"));
@@ -533,19 +595,22 @@ describe("army analytics route historical reads", () => {
     getArmyAnalytics.mockResolvedValue(hydra([1, 0]));
     const closed = await renderArmyRoute("season=current");
     expect(closed).toContain('aria-haspopup="dialog" aria-expanded="false"');
-    // Every screen shows the same count; the sheet names the variants.
-    expect(renderedText(closed)).toContain("Hydra 1 variant 50.0%");
+    // One variant gets no count, as the arrow already says it opens; the
+    // sheet names it.
+    expect(renderedText(closed)).toMatch(/Hydra \d+ battles 50\.0%/);
+    expect(closed).not.toContain("1 variant");
     expect(closed).not.toContain("<dialog");
+    // Two or more show how many, the same on every screen.
     getArmyAnalytics.mockResolvedValue(hydra([1, 2]));
-    expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "Hydra 2 variants 50.0%",
+    expect(renderedText(await renderArmyRoute("season=current"))).toMatch(
+      /Hydra 2 variants \d+ battles 50\.0%/,
     );
     // Only its Other: a plain row with nothing to open.
     getArmyAnalytics.mockResolvedValue(hydra([0]));
     const otherOnly = await renderArmyRoute("season=current");
     expect(otherOnly).not.toContain('aria-haspopup="dialog"');
     expect(otherOnly).not.toContain("data-opens");
-    expect(renderedText(otherOnly)).toContain("Hydra 50.0%");
+    expect(renderedText(otherOnly)).toMatch(/Hydra \d+ battles 50\.0%/);
     expect(renderedText(otherOnly)).not.toContain("Tap an army");
 
     getArmyAnalytics.mockResolvedValue({
@@ -553,7 +618,7 @@ describe("army analytics route historical reads", () => {
       rows: [{ ...row("Dragons", 4, 40, null) }],
     });
     expect(renderedText(await renderArmyRoute("season=current"))).toContain(
-      "100.0% 4 battles 40.0 all 3 stars",
+      "100.0% ±0.0 pts points against the average 4 battles 40.0 ±0.0 against the average all 3 stars",
     );
 
     // Unit usage has no trophies column.

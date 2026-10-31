@@ -11,6 +11,7 @@ import { seasonDates } from "../lib/season-end";
 import { gapLabel, inGap, logGaps, pastSeasonShape } from "../lib/season-shape";
 import { DayMark, DayStatusNote, provisional } from "./DayStatus";
 import { ErrorNotice } from "./ErrorNotice";
+import { ShieldIcon, SwordIcon } from "./GameIcons";
 import {
   LogDate,
   LogHead,
@@ -102,14 +103,18 @@ function SeasonFinish({
       controls={menu}
       {...(partial
         ? {
-            meta:
-              saved < expected
-                ? `${saved} of ${expected} Legend I days recorded`
-                : `${expected} Legend I ${expected === 1 ? "day" : "days"} · all recorded`,
+            meta: `${expected} Legend I ${expected === 1 ? "day" : "days"}${
+              saved < expected ? ` · ${expected - saved} missing` : ""
+            }`,
           }
         : tracked &&
           summary.coverageState !== "complete" && {
-            meta: `${summary.daysObserved} of 28 days recorded`,
+            // Every day can be saved and the Season still partial, when a day
+            // or a total isn't confirmed.
+            meta:
+              summary.daysObserved < 28
+                ? `${28 - summary.daysObserved} of 28 days missing`
+                : "All 28 days saved, not all confirmed",
           })}
       rank={
         left
@@ -272,12 +277,14 @@ function SeasonDay({
         <span className="log-battles">
           <span className="log-stat">
             <small>Attacks</small>
+            <SwordIcon />
             <strong className={valueTone(day.attackGain)}>
               {formatSigned(day.attackGain)}
             </strong>
           </span>
           <span className="log-stat">
             <small>Defenses</small>
+            <ShieldIcon />
             <strong className={valueTone(defense)}>{formatSigned(defense)}</strong>
           </span>
         </span>

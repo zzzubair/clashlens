@@ -78,6 +78,11 @@ const PATHS = {
   plus: <path d="M12 5v14M5 12h14" />,
   open: <path d="M7 17 17 7M9 7h8v8" />,
   x: <path d="M6 6l12 12M18 6 6 18" />,
+  // The Watchlists tab's eye.
+  eye: (
+    <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
+  ),
+  trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5" />,
   up: <path d="M12 19V5M6 11l6-6 6 6" />,
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
   check: <path d="m5 12 5 5 9-10" />,

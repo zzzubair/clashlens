@@ -20,7 +20,7 @@
 
 .nav-account-name {
   min-width: 0;
-  max-width: 8rem;
+  max-width: 7rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -49,9 +49,9 @@
   list-style: none;
   color: var(--cl-ink);
   background: var(--cl-solid);
-  border: 1px solid var(--cl-border);
+  border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
-  box-shadow: var(--cl-shadow);
+  box-shadow: var(--cl-overlay-shadow);
 }
 
 .account-menu-panel form {

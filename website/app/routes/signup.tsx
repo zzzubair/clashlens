@@ -3,6 +3,7 @@ import { Link, useLoaderData } from "react-router";
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/signup";
 import { ProviderMark } from "../components/ProviderMark";
+import { SignInReason } from "../components/SignInReason";
 import { TeaserBoard } from "../components/DashboardTeaser";
 import "../front-page.css";
 
@@ -34,7 +35,18 @@ export default function SignupRoute() {
       className="page-shell narrow-shell sign-in-page"
     >
       <div className="sign-in-main">
-        <h1>Create your Clash Lens account</h1>
+        {/* The brand's small mark, so the page reads as Clash Lens's own. */}
+        <img
+          className="sign-in-mark"
+          src="/images/mark-cl-block.svg"
+          alt=""
+          width="56"
+          height="56"
+        />
+        <h1>
+          Create your <span className="brand-name">Clash Lens</span> account
+        </h1>
+        <SignInReason returnPath={data.returnPath} />
         <p className="lede">
           {data.crewName
             ? `To join ${data.crewName}.`
@@ -42,7 +54,7 @@ export default function SignupRoute() {
         </p>
         {data.loginAvailable ? (
           <>
-            <section className="form-panel sign-in-panel" aria-label="Create account">
+            <section className="sign-in-panel" aria-label="Create account">
               <p className="button-row">
                 <Link
                   className="button button-secondary sign-in-google"
@@ -60,8 +72,7 @@ export default function SignupRoute() {
                 </Link>
               </p>
               <p className="sign-in-new">
-                Already have an account?{" "}
-                <Link to={`/login?returnPath=${back}`}>Sign in</Link>
+                Have an account? <Link to={`/login?returnPath=${back}`}>Sign in</Link>
               </p>
             </section>
             <p className="sign-in-privacy">

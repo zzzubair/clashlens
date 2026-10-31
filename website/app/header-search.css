@@ -91,9 +91,13 @@
   white-space: normal;
 }
 
+/* Lowered from the baseline so the trophy centres on the digits, not above
+   them. */
 .search-suggestion-meta .trophy-mark {
-  width: 0.95rem;
-  height: 0.95rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-right: 0.2rem;
+  vertical-align: -0.2em;
 }
 
 .search-dropdown-status {
@@ -115,6 +119,100 @@
 
 .header-search-toggle[aria-expanded="true"] {
   background: var(--cl-header-soft);
+}
+
+/* With a mouse on a wide screen the search shows as a small labelled field
+   with its / key, so it is found before it is opened. A narrower desktop
+   drops the word and keeps the key; phones and touch screens keep the icon
+   alone (below). */
+:root .site-header .header-search .header-search-toggle {
+  flex: 0 0 auto;
+  gap: 0.5rem;
+  width: auto;
+  padding: 0 0.4rem 0 0.7rem;
+  color: var(--cl-header-muted);
+  background: var(--cl-header-soft);
+  border-radius: var(--cl-radius);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+:root
+  .site-header
+  .header-search
+  .header-search-toggle:is(:hover, [aria-expanded="true"]) {
+  color: var(--cl-header-ink);
+  background: var(--cl-fill-hover);
+}
+
+.header-search-label {
+  padding-right: 0.75rem;
+}
+
+@media (max-width: 75rem) {
+  .header-search-label {
+    display: none;
+  }
+}
+
+.header-search-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.35rem;
+  color: var(--cl-header-muted);
+  background: var(--cl-raised);
+  border-radius: 0.35rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* A page with its own search box marks it data-page-search; the header then
+   keeps its search to the icon alone, as on phones, so the screen shows one
+   search box. */
+:root:has([data-page-search]) .site-header .header-search .header-search-toggle {
+  flex: 0 0 2.75rem;
+  width: 2.75rem;
+  padding: 0;
+  color: var(--cl-header-ink);
+  background: transparent;
+  border-radius: 999px;
+}
+
+:root:has([data-page-search])
+  .site-header
+  .header-search
+  .header-search-toggle:is(:hover, [aria-expanded="true"]) {
+  background: var(--cl-header-soft);
+}
+
+:root:has([data-page-search]) :is(.header-search-label, .header-search-key) {
+  display: none;
+}
+
+@media (max-width: 64rem), (hover: none) and (pointer: coarse) {
+  :root .site-header .header-search .header-search-toggle {
+    flex: 0 0 2.75rem;
+    width: 2.75rem;
+    padding: 0;
+    color: var(--cl-header-ink);
+    background: transparent;
+    border-radius: 999px;
+  }
+
+  :root .site-header .header-search .header-search-toggle[aria-expanded="true"] {
+    background: var(--cl-header-soft);
+  }
+
+  .header-search-label,
+  .header-search-key {
+    display: none;
+  }
 }
 
 /* Open, it dims and softens the page under the bar so a big headline
@@ -142,8 +240,10 @@
   border-radius: var(--cl-card-radius);
 }
 
-/* The box's edge keeps 3:1 contrast with its fill; the ring goes round the
-   whole box, not the bare input. */
+/* The box's edge keeps 3:1 contrast with its fill. With focus in it, that
+   edge itself turns into a 2px ember ring round the whole box: one clear
+   ring, not a grey edge inside an ember one. The ring is an outline laid
+   over the edge, so high-contrast modes, which drop shadows, keep it. */
 .header-search-panel .search-controls {
   padding: 0.3rem 0.3rem 0.3rem 0.85rem;
   background: var(--cl-raised);
@@ -152,8 +252,9 @@
 }
 
 .header-search-panel .search-controls:focus-within {
+  border-color: var(--cl-action-text);
   outline: 2px solid var(--cl-action-text);
-  outline-offset: 2px;
+  outline-offset: -1px;
 }
 
 .header-search-panel .search-controls input {
@@ -226,7 +327,7 @@
   border: 1px solid var(--cl-outline);
   border-radius: 0.3rem;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.4;
 }
 
@@ -256,15 +357,17 @@
   }
 }
 
-/* Make room for the search icon so the header never gains a row. Home has no
-   icon but keeps the same spacing, so the menu sits still between pages. */
+/* Make room for the wordmark and the labelled search so the header never
+   gains a row, even beside the longest account name. The search page has no
+   search button but keeps the same spacing, so the menu sits still between
+   pages. */
 @media (min-width: 64.0625rem) {
   .site-header {
-    column-gap: 2rem;
+    column-gap: 1.25rem;
   }
 
   .site-header .primary-nav a {
-    padding-inline: 0.7rem;
+    padding-inline: 0.55rem;
   }
 }
 

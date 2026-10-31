@@ -190,6 +190,7 @@ export function TrophyLine({
             <line
               key={week}
               className="trophy-line-week"
+              data-near-end={week / last > 0.8 || undefined}
               x1={x(week)}
               x2={x(week)}
               y1="0"

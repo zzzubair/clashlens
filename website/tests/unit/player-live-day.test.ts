@@ -137,7 +137,7 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
-    expect(summary).toContain("of 3 days saved");
+    expect(summary).toContain("3 days missing");
     expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
@@ -372,8 +372,10 @@ describe("today's Legend day wording", () => {
       }),
     ]);
     const day = html.split('id="legend-day-2026-10-07"')[1];
-    // The reading confirms the day's result, which stands with 2 defenses unsaved.
-    expect(day).toContain("<summary>Day result verified</summary>");
+    // The profile confirms the day's total, so the battles with no record of
+    // their own are already counted in it.
+    expect(day).toContain("<summary>Total confirmed from the profile</summary>");
+    expect(day).toContain("8 defenses not listed, already in the total");
     expect(day).toContain("<small>8 of 8 recorded</small>");
     expect(day).toContain("<small>6 of 8 recorded</small>");
   });
@@ -386,19 +388,31 @@ describe("today's Legend day wording", () => {
     ]);
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
     const cell = (day: number) =>
-      summary.split(`<span class="sr-only">Day ${day}: `)[0].split("<li").at(-1) ?? "";
+      summary.split(`aria-label="Day ${day}: `)[0].split("<li").at(-1) ?? "";
     // Best day green, worst red and marked as a loss; today and later days unshaded.
     expect(cell(3)).toContain("--heat:var(--cl-heat-4)");
     expect(cell(2)).toContain('class="season-heat-played is-loss"');
+    // Only a day that lost trophies is named a loss, never a gain; its signed
+    // value is what shows it.
+    expect(cell(1)).not.toContain("is-loss");
+    expect(cell(3)).not.toContain("is-loss");
     expect(cell(2)).toContain("--heat:var(--cl-heat-0)");
     expect(cell(1)).toContain("--heat:var(--cl-heat-2)");
-    expect(summary).toContain("Day 2: −20</span>");
-    expect(summary).toContain("Day 4: today, not finished yet</span>");
-    expect(summary).toContain("Day 28: not played yet</span>");
-    // Each cell shows its result as the dashboard's do; today shows its day over "now".
-    expect(summary).toContain('Day 2: −20</span><span aria-hidden="true">−20</span>');
+    // Each day is a button named for screen readers, showing its result as
+    // the dashboard's do; today says so, and the days to come are empty.
+    expect(summary).toContain('aria-label="Day 2: −20">−20</button>');
+    expect(summary).toContain('aria-label="Day 1: +10">+10</button>');
     expect(summary).toContain(
-      'not finished yet</span><span aria-hidden="true">4</span><span aria-hidden="true">now</span>',
+      'aria-label="Day 4: today, not finished yet">Today</button>',
+    );
+    expect(summary).toContain('aria-label="Day 28: not played yet"></button></li>');
+    // The key reads the scale, as on the dashboard, with no separate loss mark.
+    expect(summary).toContain("Season: worst");
+    expect(summary).not.toContain("lost trophies");
+    // A phone, with no pointer, reads out today under the grid until a day
+    // is tapped.
+    expect(summary).toMatch(
+      /<span class="season-heat-readout is-fallback">Day 4 · \d{1,2} [A-Z][a-z]{2} · in progress<\/span>/,
     );
   });
 });

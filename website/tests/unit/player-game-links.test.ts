@@ -125,7 +125,10 @@ async function renderPlayer(
   });
 }
 
-const header = (html: string) => html.match(/<header class="player-hero">.*?<\/p>/s)?.[0];
+const header = (html: string) =>
+  html.match(/<header class="player-hero"[^>]*>.*?<\/p>/s)?.[0];
+// The clan opens with its word, before the name.
+const CLAN = '<span class="player-clan"><span class="player-clan-label">Clan</span>';
 
 describe("in-game links", () => {
   it("opens the player's and the clan's profile by tag, keeping the #", () => {
@@ -154,15 +157,17 @@ describe("the player page header", () => {
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
     });
 
-  it("links the name into the game and shows the saved clan as plain text first", async () => {
+  it("links the tag into the game and shows the saved clan as plain text first", async () => {
     tracked(page("Titans2.0", "#2CLAN"));
     const html = header(await renderPlayer());
+    // The name stays plain, so the link's mark is not read as part of it.
+    expect(html).toContain("<h1><bdi>VANGUARD</bdi></h1>");
     expect(html).toContain(
-      `<h1><a class="game-link" href="${PLAYER_LINK}" target="_blank" ` +
+      `<a class="game-link player-tag prominent" href="${PLAYER_LINK}" target="_blank" ` +
         `rel="noopener noreferrer" aria-label="Open VANGUARD in Clash of Clans" ` +
-        `title="Open in Clash of Clans"><bdi>VANGUARD</bdi><svg`,
+        `title="Open in Clash of Clans"><bdi>${TAG}</bdi><svg`,
     );
-    expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(html).toContain(`${CLAN}<bdi>Titans2.0</bdi></span>`);
     expect(html).not.toContain("OpenClanProfile");
   });
 
@@ -180,7 +185,7 @@ describe("the player page header", () => {
     const html = header(await renderPlayer(true, { address: "203.0.113.9" }));
     expect(mocks.getLiveClan).toHaveBeenCalledWith("203.0.113.9", TAG);
     expect(html).toContain(
-      `<span class="player-clan"><a class="game-link" href="${CLAN_LINK}" ` +
+      `${CLAN}<a class="game-link" href="${CLAN_LINK}" ` +
         `target="_blank" rel="noopener noreferrer" ` +
         `aria-label="Open Titans3.0 in Clash of Clans" title="Open in Clash of Clans">` +
         `<bdi>Titans3.0</bdi><svg`,
@@ -203,7 +208,7 @@ describe("the player page header", () => {
     tracked(page("Titans2.0", "#2CLAN"));
     answer();
     const html = header(await renderPlayer(true));
-    expect(html).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(html).toContain(`${CLAN}<bdi>Titans2.0</bdi></span>`);
     expect(html).not.toContain("OpenClanProfile");
   });
 
@@ -224,7 +229,7 @@ describe("the player page header", () => {
     });
     const first = header(await renderPlayer());
     expect(first).toContain(`href="${PLAYER_LINK}"`);
-    expect(first).toContain('<span class="player-clan"><bdi>Titans2.0</bdi></span>');
+    expect(first).toContain(`${CLAN}<bdi>Titans2.0</bdi></span>`);
     expect(first).not.toContain("OpenClanProfile");
     mocks.getLiveClan.mockResolvedValue({ clan: { name: "Titans2.0", tag: "#2CLAN" } });
     const streamed = header(await renderPlayer(true));
@@ -258,9 +263,7 @@ describe("the player page header", () => {
       expect(clanReads).toHaveBeenCalledTimes(6);
       expect(headers[5]).toContain(`href="${CLAN_LINK}"`);
       expect(headers[6]).toContain(PLAYER_LINK);
-      expect(headers[6]).toContain(
-        '<span class="player-clan"><bdi>Titans2.0</bdi></span>',
-      );
+      expect(headers[6]).toContain(`${CLAN}<bdi>Titans2.0</bdi></span>`);
       expect(headers[6]).not.toContain("OpenClanProfile");
 
       const other = header(await renderPlayer(true, { address: "203.0.113.10" }));
@@ -269,6 +272,72 @@ describe("the player page header", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("shows the live rank and its move since the last Reset, or nothing when the board can't say", async () => {
+    // The day that ended at the last Reset, 7 hours before the page was read.
+    const yesterday = {
+      ...page("Titans2.0", "#2CLAN"),
+      seasonDays: [
+        {
+          dayNumber: 18,
+          label: "Day 18",
+          period: "2026-10-22T05:00:00Z – 2026-10-23T05:00:00Z",
+          state: "Complete",
+          resetRank: 173,
+          offense: { attacks: 8, threeStars: 6, trophyGain: 300 },
+          defense: { defenses: 8, threeStarsAgainst: 4, trophyLoss: 240 },
+          trophyChange: 60,
+          offenseEvents: [],
+          defenseEvents: [],
+          completeness: { state: "complete", reason: "" },
+          uncertainty: [],
+        },
+      ],
+    } satisfies PlayerPage;
+    // The live board's own place at the last Reset comes first, as Rankings
+    // shows it; the log's day stands in when the board has none.
+    const board = (resetRank: number | null) => ({
+      entries: [
+        { rank: 129, tag: "#2PP", resetRank: 140 },
+        { rank: 130, tag: TAG, resetRank },
+      ],
+    });
+    const getTrackedLeaderboard = vi.fn().mockResolvedValue(board(null));
+    mocks.createPythonClient.mockReset().mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue(yesterday),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      getTrackedLeaderboard,
+    });
+    const html = await renderPlayer(true);
+    expect(getTrackedLeaderboard).toHaveBeenCalledWith(1, "live", 0, undefined, TAG);
+    const rank = html.match(/<a class="player-live-rank"[\s\S]*?<\/a>/)?.[0] ?? "";
+    // Rank 130 is on Rankings' third page of 50 (101–150).
+    expect(rank).toContain(
+      'href="/leaderboards/tracked?view=live&amp;page=3&amp;player=%23PC2QRC9QY"',
+    );
+    expect(rank).toContain(
+      'aria-label="Live rank 130, up 43 since the last Reset. Open the Leaderboard"',
+    );
+    expect(rank).toContain(">#130</strong>");
+    // The move says what it is against, as the profile's cards do.
+    expect(rank).toContain(
+      '>▲43</span><span class="player-live-rank-since">since Reset</span>',
+    );
+
+    getTrackedLeaderboard.mockResolvedValue(board(150));
+    const fromBoard = await renderPlayer(true);
+    expect(fromBoard).toContain(
+      'aria-label="Live rank 130, up 20 since the last Reset. Open the Leaderboard"',
+    );
+    expect(fromBoard).toContain(">▲20</span>");
+
+    getTrackedLeaderboard.mockRejectedValue(
+      new PythonApiError(404, { error: "missing" }),
+    );
+    const missing = await renderPlayer(true);
+    expect(missing).toContain("VANGUARD");
+    expect(missing).not.toContain("player-live-rank");
   });
 });
 

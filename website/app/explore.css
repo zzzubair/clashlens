@@ -1,11 +1,12 @@
 /* Standings and search: the front page, Rankings and /search, phones first.
    Standings tables keep rank, player and trophies on a phone and add clan and
    last update when there is room. */
+/* Tables and numbers set their own even figures; prose keeps Inter's own
+   hyphens and dashes, which even figures would widen. */
 .home-page,
 .rankings-page {
   max-width: 72rem;
   padding-top: clamp(1.25rem, 3vw, 2.5rem);
-  font-variant-numeric: tabular-nums;
 }
 
 .button.secondary,
@@ -195,7 +196,7 @@
   justify-items: end;
   max-width: 45%;
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
   text-align: right;
 }
@@ -209,7 +210,7 @@
 .home-page .search-result-profile > span {
   flex: 0 1 auto;
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   text-align: right;
 }
 
@@ -221,7 +222,7 @@
   color: var(--cl-sky);
   background: var(--cl-sky-soft);
   font-family: var(--cl-font);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 800;
   line-height: 1.5;
   vertical-align: 0.1em;
@@ -236,6 +237,9 @@
 
 /* ---------- Standings tables: the front page Top 10 and Rankings ---------- */
 
+/* Columns by class: the rank plate, places moved since Reset, the player,
+   their clan, trophies since Reset, the Tie slot, trophies and (Rankings)
+   the update age. Everything but the player and clan takes only its width. */
 .leaderboard-table {
   width: 100%;
   min-width: 0;
@@ -244,68 +248,156 @@
 }
 
 .leaderboard-table :is(th, td) {
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--cl-border);
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--cl-border) 55%, transparent);
   vertical-align: middle;
   font-size: 0.9rem;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .leaderboard-table thead th {
   padding-block: 0.55rem;
-  white-space: nowrap;
-}
-
-/* Rank, trophies and update age take only their width, so the trophies sit
-   by the age on the right and the names get the room. */
-@media (min-width: 40.01rem) {
-  .leaderboard-table :is(thead th:first-child, thead th:nth-last-child(-n + 2)) {
-    width: 1%;
-  }
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .leaderboard-table tbody tr:last-child > * {
   border-bottom: 0;
 }
 
-/* Rankings: the column headings stick under the top bar, so they stay in view
-   down a page of 100. A blur doesn't reach through table cells, so the band is
-   solid. The board stops scrolling sideways
-   for it; its columns fit at every width. */
-:root .rankings-page .standings-board .tracked-leaderboard-viewport {
-  overflow: visible;
+.leaderboard-table
+  :is(.rank-cell, .move-cell, .today-cell, .tie-slot, .trophy-cell, .update-cell) {
+  width: 1%;
 }
 
-:root .rankings-page .tracked-leaderboard-viewport thead th {
-  position: sticky;
-  z-index: 2;
-  top: var(--cl-header-h);
-  color: var(--cl-muted);
-  border-bottom: 0;
-  background: var(--cl-solid);
-  /* Collapsed borders stay behind when the row sticks; a shadow travels with it. */
-  box-shadow: inset 0 -1px 0 var(--cl-card-line);
+.leaderboard-table .rank-cell {
+  padding-right: 0.3rem;
+  padding-left: 1rem;
+  text-align: center;
+}
+
+.leaderboard-table :is(.today-cell, .trophy-cell, .update-cell) {
+  text-align: right;
+}
+
+/* ▲ and ▼ are places moved since Reset, kept tight to the plate. */
+.leaderboard-table .move-cell {
+  padding-inline: 0.3rem 0.5rem;
+}
+
+.rank-move {
+  color: var(--cl-negative);
   font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.rank-move[data-up] {
+  color: var(--cl-positive);
+}
+
+.rank-move > [aria-hidden] {
+  letter-spacing: -0.02em;
+}
+
+.rank-move:is([data-new], [data-held]) {
+  color: var(--cl-faint);
+  font-weight: 500;
+}
+
+/* Trophies since Reset: green up, red down, quiet when level. */
+.today-change {
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.today-change[data-sign="up"] {
+  color: var(--cl-positive);
+}
+
+.today-change[data-sign="down"] {
+  color: var(--cl-negative);
+}
+
+/* The Tie slot sits just before the trophies and takes no room on a page
+   without a tie, so trophies line up on every row. */
+.leaderboard-table .tie-slot {
+  padding-inline: 0;
+  text-align: right;
+}
+
+/* Trophies equal to another player's; the Rank still orders them. Most rows
+   lower down tie, so the word stays quiet. */
+.tie-pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  color: var(--cl-faint);
+  font-family: var(--cl-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Trophies, the number a Clasher came for, in the game's own face. */
+.trophy-cell strong {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 1.3rem;
   font-weight: 700;
+  letter-spacing: 0;
 }
 
-/* A firmer line every 10 ranks gives the eye places to rest. */
-.tracked-leaderboard-viewport tbody tr:nth-child(10n):not(:last-child) > * {
-  border-bottom-color: var(--cl-outline);
+/* The game's trophy, about as tall as the numbers' capitals. */
+.leaderboard-table .trophy-mark {
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-right: 0.25rem;
+  vertical-align: -0.17rem;
 }
 
-/* Row tints name :root and tbody to outrank the shared rule that clears
-   every other row's fill. */
-@media (hover: hover) {
-  :root .tracked-leaderboard-viewport tbody .leaderboard-row:hover {
-    background: var(--cl-action-soft);
-  }
+.leaderboard-table .player-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cl-ink);
+  font-family: var(--cl-font);
+  font-size: 0.95rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+/* The name, and "You" on the same line however narrow the column. */
+.leaderboard-table .player-id {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The clan's own smaller line under the name. */
+.leaderboard-table .player-sub {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.leaderboard-table .player-sub > .player-clan {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
 }
 
 .leaderboard-row {
   position: relative;
-  /* Rows reached with the arrow keys stay clear of the sticky bars and the
-     column headings stuck under the top one. */
-  scroll-margin-block: calc(var(--cl-header-h) + 3rem) 5.5rem;
+  /* The page already keeps a jump clear of the top and bottom bars
+     (appearance.css, site-header.css); a row reached by a jump or the arrow
+     keys also clears the column headings stuck under the top bar. */
+  scroll-margin-top: 3rem;
   /* Safari before 2026 ignores position on table rows; the transform keeps each
      row's full-row link inside its row instead of covering the top of the page. */
   transform: translate(0);
@@ -323,150 +415,25 @@
   outline-offset: -3px;
 }
 
-/* Wider screens keep the phone's arrow, at the right end of the row. The
-   front page's Top 10 hides its last column, so there it follows the trophies. */
-@media (min-width: 40.01rem) {
-  .leaderboard-table :is(.leaderboard-row > :last-child, thead th:last-child),
-  .home-leaderboard :is(.leaderboard-row > .trophy-cell, thead th:nth-last-child(2)) {
-    padding-right: 2.25rem;
-  }
-
-  .leaderboard-row > :last-child::after,
-  .home-leaderboard .leaderboard-row > .trophy-cell::after {
-    position: absolute;
-    top: 50%;
-    right: 1rem;
-    width: 0.45rem;
-    height: 0.45rem;
-    margin-top: -0.25rem;
-    border-top: 2px solid var(--cl-muted);
-    border-right: 2px solid var(--cl-muted);
-    transform: rotate(45deg);
-    content: "";
-    pointer-events: none;
+/* Row tints name :root and tbody to outrank the shared rule that clears
+   every other row's fill. */
+@media (hover: hover) {
+  :root .leaderboard-table tbody .leaderboard-row:hover {
+    background: var(--cl-action-soft);
   }
 }
 
-.leaderboard-table :is(.rank-cell, thead th:first-child) {
-  width: 3.75rem;
-  padding-right: 0.25rem;
-  padding-left: 1rem;
-  text-align: center;
+/* After a jump to a row, a pointer left where it pressed lights nothing
+   until it moves, so the picked row is the only one that stands out. */
+.standings-board[data-still] tbody {
+  pointer-events: none;
 }
 
-/* Gold, silver and bronze plates are in brand.css. On Rankings the podium's
-   rows also catch a wash of their metal from the left and a larger name.
-   Plain grey melts into the warm page, so silver leans cool and washes a
-   little stronger. */
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank] {
-  --podium: #f2b51d;
-  --podium-wash: 16%;
-}
-
-:root .tracked-leaderboard-viewport tbody .leaderboard-row[data-podium-rank] {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--podium) var(--podium-wash), transparent),
-    transparent 60%
-  );
-}
-
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank="2"] {
-  --podium: #c3cede;
-  --podium-wash: 20%;
-}
-
-:root:not([data-theme="dark"])
-  .tracked-leaderboard-viewport
-  .leaderboard-row[data-podium-rank="2"] {
-  --podium: #7d8fae;
-}
-
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank="3"] {
-  --podium: #c9814f;
-}
-
-/* Rows stay compact so more of the ladder fits on a screen; the podium's stand
-   taller. Faint lines between rows let the firmer line every 10 ranks lead. */
-.tracked-leaderboard-viewport tbody :is(th, td) {
-  padding-block: 0.45rem;
-  border-bottom-color: color-mix(in srgb, var(--cl-border) 45%, transparent);
-}
-
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank] > * {
-  padding-block: 0.8rem;
-}
-
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank] .player-name {
-  font-size: 1.08rem;
-}
-
-.tracked-leaderboard-viewport .leaderboard-row[data-podium-rank] .trophy-cell strong {
-  font-size: 1.5rem;
-}
-
-/* The player Find your rank opened: the "you" colour. */
-:root .leaderboard-table tbody .leaderboard-row[data-selected="true"] {
-  background: var(--cl-sky-soft);
-}
-
-.leaderboard-row[data-selected="true"] > :first-child {
-  box-shadow: inset 4px 0 0 var(--cl-sky);
-}
-
-.leaderboard-row[data-selected="true"]:focus {
-  outline: 2px solid var(--cl-sky);
-  outline-offset: -2px;
-}
-
-.leaderboard-table .player-name {
-  display: block;
-  max-width: 24rem;
-  color: var(--cl-ink);
-  font-family: var(--cl-font);
-  font-size: 0.95rem;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.leaderboard-table .player-tag {
-  display: block;
-  margin-top: 0.1rem;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-/* Clan */
-.leaderboard-table td[data-label="Clan"] {
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-  overflow-wrap: anywhere;
-}
-
-/* Rankings' clan, then tag, on one quiet line under the name. */
-.tracked-leaderboard-viewport .player-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 0.5rem;
-  align-items: baseline;
-  margin-top: 0.1rem;
-}
-
-.player-clan {
+.leaderboard-table .player-clan {
   min-width: 0;
   color: var(--cl-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.tracked-leaderboard-viewport .player-meta .player-tag {
-  margin: 0;
-  color: var(--cl-faint);
-  font-size: 0.8125rem;
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 /* A player without a clan: said quietly, so it never reads as a clan's name. */
@@ -476,82 +443,124 @@
   font-style: italic;
 }
 
-/* Wide screens give the clan its own column; narrower ones keep it under the
-   name. */
-.leaderboard-table .clan-cell {
+/* Rankings: the column headings stick under the top bar, so they stay in view
+   down a page of 100. A blur doesn't reach through table cells, so the band is
+   solid. The board doesn't scroll sideways; its columns fit at every width. */
+:root .rankings-page .standings-board .tracked-leaderboard-viewport {
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.rankings-page .tracked-leaderboard-viewport:focus-visible {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+}
+
+:root .rankings-page .tracked-leaderboard-viewport thead th {
+  position: sticky;
+  z-index: 2;
+  top: var(--cl-header-h);
   color: var(--cl-muted);
-  font-size: 0.85rem;
+  border-bottom: 0;
+  /* The page's own colour, so the open table shows no band behind its
+     headings, yet rows passing under them stay hidden. */
+  background: var(--cl-paper);
+  /* Collapsed borders stay behind when the row sticks; a shadow travels with it. */
+  box-shadow: inset 0 -1px 0 var(--cl-outline);
+}
+
+/* A firmer line every 10 ranks gives the eye places to rest. */
+.tracked-leaderboard-viewport tbody tr:nth-child(10n):not(:last-child) > * {
+  border-bottom-color: var(--cl-outline);
+}
+
+/* Gold, pewter and bronze plates, and their colours, are in brand.css. The
+   podium's rows also catch a wash of their metal from the left, at the same
+   height and type as every other row. */
+.leaderboard-row[data-podium-rank] {
+  --podium: var(--cl-podium-1);
+  --podium-wash: 16%;
+}
+
+.leaderboard-row[data-podium-rank="3"] {
+  --podium: var(--cl-podium-3);
+}
+
+:root
+  :is(.tracked-leaderboard-viewport, .home-leaderboard)
+  tbody
+  .leaderboard-row[data-podium-rank] {
+  /* Once across the row: a repeat showed as a thin edge at its right end. */
+  background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--podium) var(--podium-wash), transparent),
+      transparent 60%
+    )
+    no-repeat;
+}
+
+/* The Clasher's own row and the player a jump opened, as watchlists and
+   crews mark theirs: an ember edge at the start of the row and a light
+   wash. A jump flashes the row brighter for a moment, fading to that. */
+:root .leaderboard-table tbody .leaderboard-row:is([data-you], [data-selected="true"]) {
+  background: var(--cl-you-wash);
+}
+
+.leaderboard-row:is([data-you], [data-selected="true"]) > :first-child {
+  box-shadow: inset 3px 0 0 var(--cl-action);
+}
+
+:root .leaderboard-table tbody .leaderboard-row[data-selected="true"] {
+  animation: row-found 1.2s ease-out;
+}
+
+@keyframes row-found {
+  from {
+    background-color: color-mix(in srgb, var(--cl-action) 30%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root .leaderboard-table tbody .leaderboard-row[data-selected="true"] {
+    animation: none;
+  }
+}
+
+.leaderboard-row[data-selected="true"]:focus-visible {
+  outline: 2px solid var(--cl-action);
+  outline-offset: -2px;
+}
+
+/* Each player's tag, read out after the name; wide screens show it after
+   the clan on hover or keyboard focus, so a page of 100 isn't a column of
+   grey codes. */
+.leaderboard-table .player-tag {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.clan-tag {
+  flex: none;
+  color: var(--cl-faint);
+  font-size: 0.8125rem;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
-/* Wide screens: the tag follows the name on one line, and the spare width
-   falls after it, so clan, gap and trophies read together on the right. */
-@media (min-width: 64rem) {
-  .tracked-leaderboard-viewport .player-meta .player-clan {
-    display: none;
-  }
-
-  .tracked-leaderboard-viewport .player-name {
-    display: inline;
-  }
-
-  .tracked-leaderboard-viewport .player-meta {
-    display: inline-flex;
-    margin: 0 0 0 0.6rem;
-  }
-
-  .tracked-leaderboard-viewport .clan-cell {
-    width: 18%;
-  }
-
-  :root .tracked-leaderboard-viewport .leaderboard-table .gap-cell {
-    width: 12%;
-  }
-
-  .tracked-leaderboard-viewport thead th:nth-last-child(2) {
-    width: 20%;
-  }
-}
-
-@media (max-width: 63.99rem) {
-  .leaderboard-table .clan-cell {
-    display: none;
-  }
-}
-
-/* With a pointer, a row's tag shows on hover or focus, so a page of 100
-   isn't a column of grey codes; screen readers still hear every one. */
-@media (min-width: 64rem) and (hover: hover) {
-  .tracked-leaderboard-viewport .player-meta .player-tag {
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-
-  .tracked-leaderboard-viewport
-    .leaderboard-row:is(:hover, :focus-within, [data-selected])
-    .player-tag {
-    opacity: 1;
-  }
-}
-
-.leaderboard-table
-  :is(.trophy-cell, td[data-label="Last updated"], thead th:nth-last-child(-n + 2)) {
-  text-align: right;
-}
-
-.leaderboard-table :is(th, td):last-child {
-  padding-right: 1rem;
-}
-
-/* The heading lines up with the numbers, not with the Tie slot after them. */
-.tracked-leaderboard-viewport thead th:nth-last-child(2) {
-  padding-right: calc(0.75rem + 2.9rem);
+.leaderboard-row:is(:hover, :has(.player-name:focus-visible)) .clan-tag {
+  opacity: 1;
 }
 
 .leaderboard-table time {
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
 }
 
 .local-time {
@@ -570,22 +579,17 @@
   font-size: 0.8125rem;
 }
 
-/* A Live row not updated for over 10 minutes gets an ember dot, keyed once
-   above the board. */
 .leaderboard-table time.player-update-age {
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-/* Only an old Live row (and At Reset's "before Reset" warning) shows its
-   time. Screen readers still hear every time. */
-.leaderboard-table time.player-update-age:not([data-old]) {
-  color: var(--cl-faint);
-}
-
-/* A row as fresh as the heading's time keeps its own for screen readers
-   only, so the column takes no room unless a row has fallen behind. */
-.tracked-leaderboard-viewport td:last-child > .local-time:not([data-old]) {
+/* The board's update time is under the title, once. Each row's own is for
+   screen readers and the tooltip; a Live row more than 10 minutes behind the
+   board's newest update shows only an ember dot. At Reset shows a row's time
+   only when an incomplete Reset saved it long before. */
+.tracked-leaderboard-viewport .update-cell > .local-time:not([data-old]),
+.leaderboard-table .update-words {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -594,36 +598,13 @@
   white-space: nowrap;
 }
 
-.leaderboard-table time.player-update-age[data-old] {
-  color: var(--cl-ink);
-}
-
 .leaderboard-table time.player-update-age[data-old]::before {
-  margin-right: 0.3rem;
-  color: var(--cl-action-text);
-  font-size: 0.7em;
-  vertical-align: 0.1em;
-  content: "●" / "";
-}
-
-/* Each row's trophy gap to the row above, as a plain number centred under
-   its heading. */
-:root .leaderboard-table .gap-cell {
-  width: 1%;
-  padding-inline: 1rem;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.gap-value {
-  color: var(--cl-muted);
-  font-family: var(--cl-font);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.gap-value[data-zero] {
-  color: var(--cl-faint);
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  background: var(--cl-action);
+  border-radius: 50%;
+  content: "";
 }
 
 /* The heading's one age wraps whole on a narrow phone. */
@@ -631,181 +612,215 @@
   white-space: nowrap;
 }
 
-/* Trophies, the number a Clasher came for, in the game's own face. */
-.trophy-cell {
-  white-space: nowrap;
+/* The name and the Clan column share what the numbers leave and never push
+   them off, so the chart, Today and Trophies sit together at the right; each
+   row is one line. A phone puts the clan under the name instead. */
+.leaderboard-table .player-cell {
+  width: 55%;
+  max-width: 0;
 }
 
-.trophy-cell strong {
-  color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
-  font-size: 1.15rem;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.tracked-leaderboard-viewport .trophy-cell strong {
-  font-family: var(--cl-font-score);
-  font-size: 1.3rem;
-}
-
-/* Every row keeps room for the Tie pill after its trophies, so trophies line
-   up whether or not a row has one. */
-.tie-slot {
-  display: inline-block;
-  width: 2.5rem;
-  margin-left: 0.4rem;
-  text-align: left;
-}
-
-/* Trophies equal to another player's; the Rank still orders them. Most rows
-   lower down tie, so the word stays quiet. */
-.tie-pill {
-  display: inline-block;
+.leaderboard-table .clan-cell {
+  width: 45%;
+  max-width: 0;
+  overflow: hidden;
   color: var(--cl-muted);
-  font-family: var(--cl-font);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  line-height: 1.3;
-  vertical-align: 0.15rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
 }
 
-.trophy-mark {
-  display: inline-block;
-  width: 1rem;
-  height: 1rem;
-  margin-right: 0.3rem;
-  overflow: visible;
-  color: var(--cl-star);
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.35;
-  vertical-align: -0.17rem;
+.leaderboard-table td.clan-cell .clan-tag {
+  margin-left: 0.5rem;
 }
 
-/* The update age under a name shows only on phones; wider screens have a column. */
-.player-meta {
-  display: block;
+.leaderboard-table .player-id {
+  line-height: 1.25rem;
 }
 
-.player-update-mobile {
-  display: none;
+/* The tag after the clan is for pointing at a row on wide screens. */
+@media (max-width: 64rem) {
+  .leaderboard-table .clan-tag {
+    display: none;
+  }
 }
 
-/* Phones: rank, player and trophies; the clan (the tag on the front page)
-   and update age share one line. */
-@media (max-width: 40rem) {
-  .leaderboard-table
-    :is(
-      td[data-label="Clan"],
-      td[data-label="Last updated"],
-      thead th:last-child,
-      .gap-cell
-    ),
-  .home-leaderboard thead th:nth-child(3),
-  .tracked-leaderboard-viewport .player-meta .player-tag {
+@media (min-width: 40.01rem) {
+  .leaderboard-table :is(.player-update-mobile, .player-sub) {
     display: none;
   }
 
   .leaderboard-table :is(th, td) {
-    padding: 0.55rem 0.5rem;
+    padding-block: 0.35rem;
   }
 
-  .leaderboard-table :is(.rank-cell, thead th:first-child) {
-    width: 1%;
-    padding-right: 0.25rem;
-    padding-left: 0.75rem;
-  }
-
-  .leaderboard-table :is(.trophy-cell, thead th:nth-last-child(2)) {
-    width: 1%;
+  /* "Since Reset" heads the arrows' column, so the arrows say from when;
+     a gap after Rank keeps the two headings apart. */
+  .leaderboard-table .rank-cell {
     padding-right: 0.9rem;
   }
 
-  .leaderboard-table tbody :is(th, td) {
-    padding-block: 0.45rem;
+  .leaderboard-table .move-cell {
+    padding-right: 1rem;
   }
 
-  .rank-mark {
-    min-width: 1.9rem;
-    height: 1.9rem;
-    font-size: 0.85rem;
+  .leaderboard-table .today-cell {
+    width: 5rem;
   }
 
-  .trophy-cell strong {
-    font-size: 1.1rem;
-    line-height: 1.15;
+  .leaderboard-table .trophy-cell {
+    width: 8rem;
   }
 
-  /* The whole row opens the player; a small arrow says so, as on Analytics.
-     Taps pass through it to the row's link. */
-  .leaderboard-row .trophy-cell strong::after {
+  /* Every number takes the podium's larger width, so each row's trophy sits
+     in one line down the board. */
+  .leaderboard-table .trophy-cell strong {
     display: inline-block;
-    width: 0.4rem;
-    height: 0.4rem;
-    margin: 0 0.1rem 0.12rem 0.45rem;
+    min-width: 3.4rem;
+    text-align: right;
+  }
+
+  /* Rows read at 14px, names a step up. */
+  .leaderboard-table .player-name {
+    font-size: 0.9375rem;
+  }
+
+  .leaderboard-table :is(.rank-move, .today-change) {
+    font-size: 0.875rem;
+  }
+
+  .leaderboard-table .update-cell {
+    padding-right: 2.25rem;
+  }
+
+  .leaderboard-row > .update-cell::after {
+    position: absolute;
+    top: 50%;
+    right: 1rem;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-top: -0.25rem;
     border-top: 2px solid var(--cl-muted);
     border-right: 2px solid var(--cl-muted);
     transform: rotate(45deg);
     content: "";
     pointer-events: none;
   }
+}
 
-  /* A Tie pill sits under the trophies instead of beside them. */
-  .tie-slot {
+/* Phones: compact rows of two lines, the name over its clan, with Today and
+   Trophies in their own columns at one size, so every row's numbers line up.
+   An old row's age, or an At Reset row's time, follows its clan. */
+@media (max-width: 40rem) {
+  .leaderboard-table :is(.update-cell, .clan-cell) {
+    display: none;
+  }
+
+  .leaderboard-table :is(th, td) {
+    padding: 0.45rem 0.35rem;
+  }
+
+  .leaderboard-table .rank-cell {
+    padding-right: 0.15rem;
+    padding-left: 0.75rem;
+  }
+
+  .leaderboard-table .player-cell {
+    padding-left: 0.4rem;
+  }
+
+  .leaderboard-table .move-cell {
+    padding-inline: 0.15rem 0.3rem;
+  }
+
+  /* "Since Reset" stays over the arrows, on two short lines, so a phone
+     says what they count from. */
+  .move-head {
     display: block;
-    width: auto;
-    margin: 0;
-    line-height: 1;
-    text-align: right;
+    width: min-content;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  .leaderboard-table .today-cell {
+    min-width: 3.25rem;
+  }
+
+  .leaderboard-table .trophy-cell {
+    padding-right: 0.9rem;
+    padding-left: 0.5rem;
+  }
+
+  /* A long name wraps to a second line rather than being cut; the clan
+     under it may shorten. */
+  .leaderboard-table .player-cell {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .leaderboard-table .player-name {
+    font-size: 0.9375rem;
+    overflow-wrap: anywhere;
+  }
+
+  .leaderboard-table .player-sub {
+    white-space: nowrap;
+  }
+
+  .leaderboard-table .rank-mark {
+    min-width: 1.85rem;
+    height: 1.6rem;
+    padding: 0 0.4rem;
+    font-size: 0.95rem;
+  }
+
+  .trophy-cell strong {
+    font-size: 1.15rem;
+    line-height: 1.15;
+  }
+
+  .leaderboard-table .trophy-mark {
+    width: 1.05rem;
+    height: 1.05rem;
+    margin-right: 0.2rem;
+  }
+
+  /* The whole row opens the player. With no room for an arrow, a tap
+     lights the row as it goes. */
+  :root .leaderboard-table tbody .leaderboard-row:active {
+    background: var(--cl-action-soft);
   }
 
   .tie-pill {
-    font-size: 0.8125rem;
-    line-height: 1.25;
-    vertical-align: 0;
+    margin-left: 0.3rem;
   }
 
-  /* The age's dot sits in the tag's right margin; when the age wraps to its
-     own line, the dot falls past the left edge and is cut off. */
-  .player-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    margin-top: 0.1rem;
-    overflow-x: clip;
-  }
-
-  .player-meta :is(.player-tag, .player-clan) {
-    margin: 0 0.9rem 0 0;
-  }
-
-  .tracked-leaderboard-viewport .player-meta {
-    gap: 0;
-  }
-
-  .player-clan {
-    font-size: 0.8125rem;
-  }
-
+  /* After the clan: an ember dot on a Live row behind the rest, which a tap
+     opens to its exact time, or an At Reset row's time and how long before
+     an incomplete Reset it was saved. Other rows' are for screen readers. */
   .player-update-mobile {
     position: relative;
     z-index: 1;
-    display: block;
-    min-width: 0;
-    margin-left: -0.9rem;
+    flex: none;
     color: var(--cl-muted);
     font-size: 0.8125rem;
     font-weight: 600;
   }
 
+  .player-update-mobile:not([data-shown]) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .player-update-mobile summary {
     display: block;
-    /* A taller tap area than the line it sits on. */
-    margin-block: -0.6rem;
-    padding-block: 0.6rem;
+    /* A larger tap area than the line it sits on. */
+    margin: -0.85rem -0.9rem;
+    padding: 0.85rem 0.9rem;
     list-style: none;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -815,89 +830,19 @@
     display: none;
   }
 
-  .player-update-mobile summary::before {
-    display: inline-block;
-    width: 0.9rem;
-    text-align: center;
-    content: "·" / "";
-  }
-
-  /* A fresh row's age stays faint; an old row's reads in full beside its dot. */
-  .player-update-mobile:not([data-old]) summary {
-    color: var(--cl-faint);
-    font-weight: 500;
-  }
-
-  /* A fresh Live row would only repeat the heading's age, so it shows a quiet
-     clock instead: a full-size tap target that opens the exact time. Screen
-     readers still hear the age. */
-  .player-update-mobile[data-view="live"]:not([data-old]) {
-    flex: 1 1 0;
-    min-width: 2.75rem;
-    margin-left: 0;
-  }
-
-  .tracked-leaderboard-viewport
-    .player-meta:has(> [data-view="live"]:not([data-old]))
-    .player-clan {
-    margin-right: 0.4rem;
-  }
-
-  /* Opened, the exact time takes a line of its own under the clan, so it
-     doesn't wrap into the narrow space after the clock. */
-  .tracked-leaderboard-viewport
-    .player-meta:has(> [data-view="live"][open]:not([data-old])) {
-    position: relative;
-    padding-bottom: 1.3rem;
-  }
-
-  .player-update-mobile[data-view="live"][open]:not([data-old]) {
-    position: static;
-  }
-
-  .player-update-mobile[data-view="live"]:not([data-old]) summary {
-    position: relative;
-  }
-
-  .player-update-mobile[data-view="live"]:not([data-old]) > time {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    padding: 0;
-    white-space: nowrap;
-  }
-
-  /* The clock follows the clan as part of the player's line, so it never
-     floats between the name and the trophies; the key above names it. */
-  .player-update-mobile[data-view="live"]:not([data-old]) summary {
-    display: grid;
-    place-items: center start;
-    width: 2.75rem;
-    height: 2.75rem;
-    margin: -0.85rem 0;
-    padding: 0;
-  }
-
-  .player-update-mobile[data-view="live"]:not([data-old]) summary::before {
-    width: 0.85rem;
-    height: 0.85rem;
-    background: currentColor;
-    -webkit-mask: var(--clock) center / contain no-repeat;
-    mask: var(--clock) center / contain no-repeat;
-    content: "" / "";
-  }
-
-  .player-update-mobile[data-view="live"]:not([data-old]) summary > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  .player-update-mobile[data-old] summary {
+  .player-update-mobile[data-shown] summary {
     color: var(--cl-ink);
+  }
+
+  .player-update-mobile[data-old] summary::before {
+    display: inline-block;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-right: 0.25rem;
+    background: var(--cl-action);
+    border-radius: 50%;
+    vertical-align: 0.05em;
+    content: "";
   }
 
   .player-update-mobile .player-update-age {
@@ -910,97 +855,138 @@
     content: " · ";
   }
 
-  .player-update-mobile[data-old] summary::before {
-    color: var(--cl-action-text);
-    font-size: 0.55rem;
-    vertical-align: 0.1em;
-    content: "●" / "";
+  /* Each row is its own layer, so the row with an open time sits above the
+     next one, which its time overlaps. */
+  .leaderboard-row:has(.player-update-mobile[open]) {
+    z-index: 2;
   }
 
-  /* Indented past the dot, so it shows whole when the age wraps under the tag. */
-  .player-update-mobile > time {
-    display: block;
-    margin-top: 0.15rem;
-    padding-left: 0.9rem;
+  /* Opened, the exact time shows over the row, so the row keeps its height
+     and the clan beside the dot keeps its width. */
+  .leaderboard-table .player-update-mobile > time {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    z-index: 3;
+    padding: 0.3rem 0.5rem;
     color: var(--cl-ink);
+    background: var(--cl-solid);
+    border: 1px solid var(--cl-card-line);
+    border-radius: var(--cl-radius);
+    box-shadow: var(--cl-overlay-shadow);
     font-size: 0.8125rem;
-    white-space: normal;
+    white-space: nowrap;
   }
 }
 
-/* The board's key: the phone's clock and the ember dot of a row that fell
-   behind. */
-.standings-board {
-  --clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.4'/%3E%3Cpath d='M8 4.6V8l2.3 1.4'/%3E%3C/svg%3E");
+/* ---------- Last 7 days ---------- */
+
+/* Each finished Legend day's trophies won (up, green) or lost (down, red)
+   as a thin bar from a zero line across the middle, on the row's own scale
+   (ResetChange.tsx), every day at full strength; today is the Today
+   column's. Compact, right before Today, so rank, name and trophies keep the
+   weight; the heading's tooltip names the dates. */
+.leaderboard-table .recent-cell {
+  width: 1%;
+  padding-inline: 1rem 0.5rem;
 }
 
-.standings-toolbar .standings-key {
+.leaderboard-table th.recent-cell {
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Above the row's link, so pointing at a bar reads its day out. */
+.recent-days {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.15rem 1rem;
+  width: 15rem;
+  height: 1.5rem;
+  cursor: default;
+  touch-action: manipulation;
 }
 
-.standings-key-clock::before {
-  display: inline-block;
-  width: 0.85rem;
-  height: 0.85rem;
-  margin-right: 0.35rem;
-  vertical-align: -0.1rem;
-  background: currentColor;
-  mask: var(--clock) center / contain no-repeat;
+.recent-days::after {
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--cl-muted);
   content: "";
 }
 
-/* Wide screens show no clocks, so their key appears only for an old row. */
-@media (min-width: 40.01rem) {
-  .standings-key-clock,
-  .standings-key:not(:has(.standings-key-old)) {
-    display: none;
+/* A whole seventh of the chart, so a bar is easy to point at or tap. */
+.recent-day {
+  position: relative;
+  flex: 1 1 0;
+}
+
+/* A thin bar in the middle of its day, under half its slot; even a small
+   day stays visible. */
+.recent-day::before {
+  position: absolute;
+  left: 50%;
+  width: min(45%, 0.5rem);
+  height: max(2px, var(--h, 0px));
+  translate: -50% 0;
+  content: "";
+}
+
+.recent-day[data-sign="up"]::before {
+  bottom: 50%;
+  background: var(--cl-positive);
+  border-radius: 2px 2px 0 0;
+}
+
+.recent-day[data-sign="down"]::before {
+  top: calc(50% + 1px);
+  background: var(--cl-negative);
+  border-radius: 0 0 2px 2px;
+}
+
+/* A level day: a short mark on the zero line. */
+.recent-day[data-sign="flat"]::before {
+  top: calc(50% - 1px);
+  height: 3px;
+  background: var(--cl-muted);
+  border-radius: 1px;
+}
+
+/* A day's readout, over its bar; the row lifts so it clears the headings. */
+.recent-tip {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 50%;
+  z-index: 2;
+  padding: 0.3rem 0.5rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.leaderboard-row:has(.recent-tip) {
+  z-index: 3;
+}
+
+@media (max-width: 64rem) {
+  .recent-days {
+    width: 10rem;
   }
 }
 
-.standings-toolbar .standings-key > span {
-  color: inherit;
-  font-size: inherit;
-  vertical-align: baseline;
-}
-
-.standings-toolbar .standings-key > span > span {
-  margin-right: 0.2rem;
-  color: var(--cl-action-text);
-  font-size: 0.7em;
-  vertical-align: 0.1em;
-}
-
-/* A quiet way back up after a long page. */
-.back-to-top {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  width: 100%;
-  min-height: 2.75rem;
-  color: var(--cl-muted);
-  background: none;
-  border: 0;
-  border-top: 1px solid var(--cl-border);
-  font: inherit;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.back-to-top::before {
-  content: "↑" / "";
-}
-
-.back-to-top:hover {
-  color: var(--cl-action-text);
-}
-
-.back-to-top:focus-visible {
-  outline: 3px solid var(--cl-action-text);
-  outline-offset: -3px;
+/* A phone keeps the numbers; the player page has the days. */
+@media (max-width: 40rem) {
+  .leaderboard-table .recent-cell {
+    display: none;
+  }
 }
 
 /* Live's update line opens with a green pulse, apart from the ember dot that
@@ -1077,7 +1063,7 @@
 .filter-field {
   display: grid;
   gap: 0.5rem;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 

@@ -16,6 +16,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import {
   DayBattles,
   LegendLog,
+  LogBarsKey,
   TodaySlots,
   legendDayDate,
   validDay,
@@ -24,22 +25,17 @@ import { TrophyMark } from "../components/LeaderboardShared";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
-import { PlayerHeading } from "../components/PlayerHeading";
+import { LiveRank, PlayerHeading, type LiveRankRead } from "../components/PlayerHeading";
 import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonMenu } from "../components/SeasonMenu";
 import { SeasonStory } from "../components/SeasonStory";
 import { SelectedSeason } from "../components/SelectedSeason";
-import { SeasonHeatStrip } from "../components/SeasonSummary";
+import { SeasonHeatMap, heatDays } from "../components/SeasonSummary";
 import { TrophyLine } from "../components/TrophyLine";
 import { TagSearchAgain } from "../components/TagSearchAgain";
-import {
-  LocalTimestamp,
-  formatAge,
-  useCurrentTime,
-  useServerTime,
-} from "../components/Provenance";
+import { LocalTimestamp, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
   dayEnd,
@@ -83,6 +79,9 @@ import type { LiveClan } from "../services/live-clan.server";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
 import detailsStyles from "../details.css?url";
 import "../player.css";
+import "../player-hero.css";
+import "../season-tiles.css";
+import "../season-summary.css";
 import "../legend-log.css";
 
 export function links() {
@@ -109,6 +108,9 @@ export interface PlayerLoaderData {
   liveClan?: Promise<LiveClan | null>;
   // Null when the crews answer is unavailable or arrives after the other reads.
   crews?: PlayerCrew[] | null;
+  // Streams in after the page: the player's place on the live Leaderboard,
+  // null when the board doesn't hold them or can't be read.
+  liveRank?: Promise<LiveRankRead | null>;
   // The site's public address, for absolute links in link previews.
   origin?: string;
 }
@@ -170,6 +172,15 @@ export async function loader({
     .then(([api, { clientAddressContext }]) =>
       api.getLiveClan(context?.get(clientAddressContext), normalizedTag),
     )
+    .catch(() => null);
+  // The player's live place and their place on the last Reset's Daily board,
+  // as Rankings shows them; nothing when the board can't be read.
+  const liveRank = client
+    .then((api) => api.getTrackedLeaderboard(1, "live", 0, undefined, normalizedTag))
+    .then((board) => {
+      const entry = board.entries.find((row) => row.tag === normalizedTag);
+      return entry ? { now: entry.rank, atReset: entry.resetRank } : null;
+    })
     .catch(() => null);
   const crews = import("../services/crews.server")
     .then((api) => api.getPlayerCrews(normalizedTag))
@@ -265,6 +276,7 @@ export async function loader({
     lookupError,
     pastSeasons,
     liveClan,
+    liveRank,
     crews: await Promise.race([crews, null]),
     origin: await origin,
   };
@@ -433,10 +445,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         kind: gap.kind,
       }))
     : [];
-  // The Season summary's heat strip, from the days the log shows.
-  const heatStrip = shape ? (
-    <SeasonHeatStrip
-      history={history}
+  // The Season summary's heat map, from the days the log shows.
+  const heatMap = shape ? (
+    <SeasonHeatMap
+      days={heatDays(history, shape.seasonStart)}
       seasonStart={shape.seasonStart}
       today={shape.today}
     />
@@ -698,15 +710,21 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             player={current}
             now={statisticsTime}
             menu={seasonMenu(current !== null)}
-            strip={heatStrip}
+            heatMap={heatMap}
           />
         ) : (
           seasonMenu(false)
         )}
         {dayBattles}
         {data.selectedSeason === null && player && allHistory.length > 0 ? (
-          <section className="data-section legend-log" aria-label="Saved Legend history">
-            <h2>Saved Legend history</h2>
+          <section
+            className="data-section legend-log open-board"
+            aria-label="Saved Legend history"
+          >
+            <div className="log-title">
+              <h2>Saved Legend history</h2>
+              <LogBarsKey />
+            </div>
             <LegendLog
               history={history}
               player={player}
@@ -728,7 +746,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell player-page">
-      <header className="player-hero">
+      {/* A phone's long page: one row of links to its parts, kept under the
+          site header. */}
+      {data.selectedSeason === null ? <PlayerJumps /> : null}
+      <header className="player-hero" id="player-now">
         <PlayerHeading
           name={trackedPlayer.profile.name}
           tag={trackedPlayer.tag}
@@ -770,28 +791,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               </strong>
             )}
           </div>
+          {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
+            <LiveRank
+              rank={data.liveRank}
+              since={lastResetRank(trackedPlayer, now)}
+              tag={trackedPlayer.tag}
+            />
+          )}
         </div>
-        {/* Today's battles so far, under the trophies they moved. */}
-        {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
-          <TodaySlots day={today} />
-        ) : null}
-        {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
-          <TrophyLine
-            history={history}
-            player={trackedPlayer}
-            now={statisticsTime}
-            current={trackedPlayer.profile.trophies}
-          />
-        )}
-        {/* The card's foot: when it was saved, a quiet jump to the log below
-            the Season summary, and Refresh, so the controls sit together
-            under what they act on. */}
+        {/* When the count was saved, and Refresh, beside the count it acts on. */}
         <PlayerFreshness profile={trackedPlayer.profile} />
-        {data.selectedSeason === null ? (
-          <a className="player-log-jump" href="#season-days-title">
-            Daily log <span aria-hidden="true">↓</span>
-          </a>
-        ) : null}
         <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
             className="player-refresh-form"
@@ -821,7 +830,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
               </svg>
-              <span>
+              <span className="player-refresh-label">
                 {refreshFetcher.state === "submitting" || refreshing
                   ? "Refreshing…"
                   : "Refresh"}
@@ -829,6 +838,18 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </button>
           </refreshFetcher.Form>
         </PlayerActions>
+        {/* Today's battles so far, under the trophies they moved. */}
+        {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
+          <TodaySlots day={today} />
+        ) : null}
+        {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
+          <TrophyLine
+            history={history}
+            player={trackedPlayer}
+            now={statisticsTime}
+            current={trackedPlayer.profile.trophies}
+          />
+        )}
         {visibleStatus ? (
           <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
         ) : null}
@@ -857,13 +878,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           player={trackedPlayer}
           now={statisticsTime}
           menu={seasonMenu(true)}
-          strip={heatStrip}
+          heatMap={heatMap}
         />
       )}
       {dayBattles}
       {data.selectedSeason !== null ? null : (
-        <section className="data-section legend-log" aria-labelledby="season-days-title">
-          <h2 id="season-days-title">Daily Legend log</h2>
+        <section
+          className="data-section legend-log open-board"
+          aria-labelledby="season-days-title"
+        >
+          <div className="log-title">
+            <h2 id="season-days-title">Daily Legend log</h2>
+            {allHistory.length > 0 ? <LogBarsKey /> : null}
+          </div>
           {/* Shown only while a day in the log carries the hollow dot. */}
           <p className="log-key" aria-hidden="true">
             <span className="day-mark log-key-dot" /> Not yet confirmed by a reading from
@@ -978,6 +1005,18 @@ const QUALITY_WORDS: Record<string, string> = {
     "This profile hasn't been confirmed recently, so it may be behind.",
 };
 
+// The player's place on the last Reset's Daily board as the Daily Legend log
+// shows it, for when the live board doesn't say: that of the day the Reset ended.
+function lastResetRank(player: PlayerPage, now: number): number | null {
+  const day = [player.currentDay, ...player.seasonDays, ...player.recentDays].find(
+    (day) => {
+      const ended = now - Date.parse(day?.period.split(" – ")[1] ?? "");
+      return ended >= 0 && ended < 86_400_000;
+    },
+  );
+  return day?.resetRank ?? null;
+}
+
 // When the server read this profile, so the page's clock starts from it.
 function profileLoadedAt(profile: PlayerProfile): string | undefined {
   const { observedAt, ageSeconds } = profile.freshness;
@@ -985,35 +1024,107 @@ function profileLoadedAt(profile: PlayerProfile): string | undefined {
   return Number.isNaN(loadedAt) ? undefined : new Date(loadedAt).toISOString();
 }
 
-// One short line: when the profile and the battle history were last saved.
-// A recent time shows only its clock time; an old one its date and age.
+// "Updated 15 min ago" by Refresh, from the profile's last check. Tapping
+// it shows the exact times of the profile and the battle history, so it
+// works on a phone too; an old time also says its date.
 function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
   const { observedAt } = profile.freshness;
   const now = useCurrentTime(profileLoadedAt(profile));
-  const time = (value: string, className: string) => {
-    const age = Math.floor((now - Date.parse(value)) / 1000);
-    const old = age > FRESHNESS_LIMIT_SECONDS;
-    return (
-      <>
-        <LocalTimestamp className={className} value={value} timeOnly={!old} />
-        {old ? ` · ${formatAge(age)} old` : null}
-      </>
-    );
-  };
-  return (
-    <p className="player-freshness">
-      <span>Updated {time(observedAt, "player-updated")}</span>
-      <span>
-        <span className="player-freshness-dot"> · </span>Battles{" "}
-        {profile.battleHistoryUpdatedAt
-          ? time(profile.battleHistoryUpdatedAt, "player-history-updated")
-          : "not updated yet"}
-      </span>
-    </p>
+  const age = (value: string) =>
+    Math.max(0, Math.floor((now - Date.parse(value)) / 1000));
+  const time = (value: string, className?: string) => (
+    <LocalTimestamp
+      className={className}
+      value={value}
+      timeOnly={age(value) <= FRESHNESS_LIMIT_SECONDS}
+    />
   );
+  return (
+    <details className="player-freshness">
+      <summary>
+        {/* A phone says only "6 min ago", under the Refresh it belongs to. */}
+        <span className="player-updated-word">Updated </span>
+        <time className="player-updated" dateTime={observedAt}>
+          {ago(age(observedAt))}
+        </time>
+      </summary>
+      <p>
+        <span>Profile {time(observedAt)}</span>
+        <span>
+          Battles{" "}
+          {profile.battleHistoryUpdatedAt
+            ? time(profile.battleHistoryUpdatedAt, "player-history-updated")
+            : "not saved yet"}
+        </span>
+      </p>
+    </details>
+  );
+}
+
+// An age in a few words: "just now", "15 min ago", "2 hours ago", "3 days ago".
+function ago(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days.toLocaleString("en-GB")} day${days === 1 ? "" : "s"} ago`;
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {
   const { safeWebsiteError } = await import("../server/errors.server");
   return safeWebsiteError(cause);
+}
+
+const JUMPS = [
+  ["player-now", "Today"],
+  ["season-summary-title", "Season"],
+  ["season-days-title", "Log"],
+] as const;
+
+/** The phone's jump links, with the part on screen lit: the last one whose
+ * start has passed the top third of the screen. Today is lit before scripts
+ * run, as the page opens at its top. */
+function PlayerJumps() {
+  const [current, setCurrent] = useState<string>(JUMPS[0][0]);
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      let next: string = JUMPS[0][0];
+      for (const [id] of JUMPS) {
+        const top = document.getElementById(id)?.getBoundingClientRect().top;
+        if (top !== undefined && top <= window.innerHeight / 3) next = id;
+      }
+      setCurrent(next);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, []);
+  return (
+    <nav className="player-jumps" aria-label="On this page">
+      <div className="leaderboard-view-switch">
+        {JUMPS.map(([id, label]) => (
+          <a
+            key={id}
+            className="button"
+            href={`#${id}`}
+            aria-current={current === id ? "location" : undefined}
+          >
+            {label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  );
 }

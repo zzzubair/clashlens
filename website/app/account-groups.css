@@ -1,23 +1,7 @@
 /* Private groups list: members with names, and add and edit opened below the buttons. */
 
-/* The title with New watchlist level with it, the line under both; its form
+/* New watchlist sits on the title's right (.page-hero, brand.css); its form
    opens under the button. */
-.groups-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0 1rem;
-  align-items: center;
-  max-width: none;
-}
-.groups-hero > h1 {
-  margin: 0;
-}
-.groups-hero > .lede {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  margin: 0.6rem 0 0;
-}
-
 .group-create {
   position: relative;
 }
@@ -46,126 +30,203 @@
   }
 }
 
-/* A narrow card has room in its head for the count only, as the list
-   shows the top. */
+/* A watchlist's players, one line each: place, name, today's result, the
+   last 7 days as small bars and trophies, in columns shared by every row and
+   named once over them. The card itself opens the comparison, so a row's name
+   is the only way to the player. A long name ends in "…" instead of widening
+   the page. */
 .group-card {
   container-type: inline-size;
-}
-@container (max-width: 22rem) {
-  .group-card-top {
-    display: none;
-  }
-}
-
-/* A watchlist's players, one line each: name and tag, then trophies. The card
-   itself opens the comparison, so a row's name is the only way to the player.
-   Its columns may shrink below a row's one line, so a long name ends in "…"
-   instead of widening the page. */
-.group-card,
-.group-card .group-members {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.group-card .group-members.player-action-list {
-  gap: 0;
+/* --bars-h is the mini bars' height: 24px, each row on its own scale. */
+.group-members {
+  --group-columns: 1.5rem minmax(0, 1fr) 3.25rem 7rem 5rem;
+  --bars-h: 1.5rem;
 }
 
-.group-card .group-members.player-action-list li {
-  padding: 0.65rem 0.25rem 0.65rem 0.5rem;
-  background: transparent;
-  border: 0;
-  border-top: 1px solid var(--cl-border);
-  border-radius: 0;
-}
-
-.group-card .group-members.player-action-list li:first-child {
-  border-top: 0;
-}
-
-.group-card .group-members .player-action-name {
-  flex-wrap: nowrap;
+.group-members-key,
+.group-member-list > li {
+  display: grid;
+  grid-template-columns: var(--group-columns);
+  gap: 0 0.75rem;
   align-items: center;
 }
 
-/* Each row's place in the watchlist, as the rows run highest first. */
-.group-card .group-members.player-action-list {
+/* One short label a column; the bars' dates and scale wait behind their ⓘ. */
+.group-members-key {
+  align-items: end;
+  margin: 0;
+  padding: 0 0.25rem 0.35rem 0.6rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.group-members-key > span {
+  text-align: right;
+  white-space: nowrap;
+}
+.group-members-key > .last-days {
+  justify-content: center;
+}
+.group-members-key > :first-child {
+  grid-column: 3;
+}
+
+.group-member-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   counter-reset: member;
 }
-.group-card .group-members .player-action-name::before {
-  flex: none;
-  width: 1.4rem;
+
+/* The rank keeps clear of a You row's ember edge. */
+.group-member-list > li {
+  min-height: 2.9rem;
+  padding: 0.35rem 0.25rem 0.35rem 0.6rem;
+  border-top: 1px solid var(--cl-card-line);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Each row's place in the watchlist, as the rows run highest first. */
+.group-member-list > li::before {
   color: var(--cl-muted);
   font-size: 0.8125rem;
   font-weight: 650;
-  font-variant-numeric: tabular-nums;
   counter-increment: member;
   content: counter(member) / "";
 }
-/* The name is enough to tell players apart here; the tag stays for screen
-   readers, and shows in Edit, where players are removed. */
-.group-card .group-members .player-action-name > .player-tag {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+
+/* The Clasher's own players: the ember edge and wash the comparison uses. */
+.group-member-list > li.group-member-you {
+  background: var(--cl-you-wash);
+  box-shadow: inset 3px 0 0 var(--cl-action);
 }
 
-/* How far each player trails the list's leader, in a column of its own
-   before the trophies, so the race reads down the card. */
-.group-card .group-members .group-member-gap {
-  flex: none;
-  min-width: 3.5rem;
-  margin-left: auto;
-  color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-.group-card .group-members .group-member-gap + .group-member-detail {
-  margin-left: 0.9rem;
-}
-/* The gap column's heading, right-aligned over it: the trophies' fixed width
-   and the space between the two columns set where that column ends. */
-.group-members-key {
-  margin: 0 0 -0.6rem;
-  padding: 0 calc(0.25rem + 5.5rem + 0.6rem + 0.9rem) 0.15rem 0;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-align: right;
+.group-member-who {
+  display: flex;
+  grid-column: 2;
+  gap: 0.45rem;
+  align-items: center;
+  min-width: 0;
 }
 
-.group-card .group-members .player-action-name a {
+.group-member-who a {
   overflow: hidden;
   color: inherit;
+  font-weight: 650;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.group-card .group-members .player-action-name a:hover {
+.group-member-who a:hover {
   color: var(--cl-action-text);
   text-decoration: underline;
 }
 
-.group-card .group-members .group-member-detail {
+.group-member-list .group-member-today {
+  grid-column: 3;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.group-member-list .group-member-trophies {
   display: inline-flex;
-  flex: 0 0 auto;
+  grid-column: 5;
   gap: 0.3rem;
   align-items: center;
   justify-content: flex-end;
-  min-width: 5.5rem;
-  margin-left: auto;
-  font-size: 0.9rem;
-  font-weight: 600;
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 1.15rem;
+  font-weight: 700;
 }
 
-.group-card .group-members .group-member-detail .score {
-  color: var(--cl-ink);
-  font-size: 1.1rem;
+.group-member-list .group-member-state {
+  grid-column: 3 / -1;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  text-align: right;
+}
+
+/* Thin bars up (won) or down (lost) from a visible zero line in the middle,
+   each at full strength in its gain or loss colour, as Rankings draws its
+   own; even a small day is a real bar. */
+.group-day-bars {
+  position: relative;
+  display: flex;
+  grid-column: 4;
+  height: var(--bars-h);
+}
+.group-day-bars::after {
+  position: absolute;
+  inset-inline: 0;
+  top: var(--zero, 50%);
+  height: 1px;
+  background: color-mix(in srgb, var(--cl-muted) 70%, transparent);
+  content: "";
+}
+.group-day-bars > span {
+  position: relative;
+  flex: 1 1 0;
+}
+.group-day-bars > span::before {
+  position: absolute;
+  left: 50%;
+  /* Under half of its day, so even a phone's narrow bars keep their gaps. */
+  width: min(45%, 0.5rem);
+  height: max(4px, var(--size));
+  translate: -50% 0;
+  content: "";
+}
+.group-day-bars > [data-net="up"]::before {
+  bottom: calc(100% - var(--zero, 50%));
+  background: var(--cl-positive);
+  border-radius: 2px 2px 0 0;
+}
+.group-day-bars > [data-net="down"]::before {
+  top: calc(var(--zero, 50%) + 1px);
+  background: var(--cl-negative);
+  border-radius: 0 0 2px 2px;
+}
+.group-day-bars > [data-net="flat"]::before {
+  top: calc(var(--zero, 50%) - 1px);
+  height: 3px;
+  background: var(--cl-muted);
+  border-radius: 1px;
+}
+
+/* A phone-wide card tightens the columns so a name still has room. */
+@container (max-width: 24rem) {
+  .group-members {
+    --group-columns: 1.1rem minmax(0, 1fr) 2.9rem 3.5rem 3.4rem;
+  }
+  .group-members-key,
+  .group-member-list > li {
+    gap: 0 0.45rem;
+  }
+  /* "Last 7 days" is wider than its column here: it ends at the bars'
+     right edge, over the empty name column. */
+  .group-members-key > .last-days {
+    grid-area: 1 / 2 / 2 / 5;
+    justify-content: flex-end;
+  }
+  .group-members-key > :first-child {
+    grid-area: 2 / 3;
+  }
+  .group-members-key > :last-child {
+    grid-area: 2 / 5;
+  }
+  .group-member-list .group-member-trophies {
+    font-size: 1.05rem;
+  }
+  /* The heading over them says these are trophies. */
+  .group-member-trophies > .game-trophy {
+    display: none;
+  }
 }
 
 .group-card-head {
@@ -189,20 +250,6 @@
   overflow-wrap: anywhere;
 }
 
-/* A narrow card puts its three buttons on their own line under the name,
-   Compare still at the right edge. */
-@container (max-width: 27rem) {
-  .group-card-title {
-    flex-basis: 100%;
-  }
-  .group-text-button:first-of-type {
-    margin-left: -0.65rem;
-  }
-  .group-card-open {
-    margin-left: auto;
-  }
-}
-
 .group-card-meta {
   margin: 0.15rem 0 0;
   overflow: hidden;
@@ -213,29 +260,25 @@
   white-space: nowrap;
 }
 
-/* A watchlist is a supporting list, not a feature panel: only the page's
-   hero is drawn glass, so a card is a quiet fill with no edge or glow. */
+/* Each watchlist is one of the site's sheets (brand.css), its rows open
+   inside it. */
 :root .group-card-list > .group-card {
   gap: 0.6rem;
-  padding: 0.85rem 1rem 0.6rem;
-  border-color: transparent;
-  box-shadow: var(--cl-card-quiet, none);
 }
 
 /* The whole card is one link to its comparison. Its Compare link stretches
    over the card; the icon buttons, names and open panels sit above it. */
 .group-card {
   position: relative;
-  transition: border-color 160ms ease;
 }
-.group-card-open {
+/* Compare: the card's one filled button. */
+:root .group-card-open {
   display: inline-flex;
   flex: none;
   gap: 0.3rem;
   align-items: center;
-  min-height: 2.75rem;
-  padding: 0 0.15rem 0 0.65rem;
-  color: var(--cl-action-text);
+  min-height: 2.25rem;
+  padding: 0 0.7rem 0 0.9rem;
   font-size: 0.875rem;
   font-weight: 700;
   text-decoration: none;
@@ -260,9 +303,6 @@
   height: 1.2rem;
   transition: transform 160ms ease;
 }
-.group-card:has(> .group-card-head > .group-card-open:hover) {
-  border-color: var(--cl-action-border);
-}
 .group-card-open:hover svg {
   transform: translateX(3px);
 }
@@ -270,22 +310,66 @@
 .group-card:has(> .group-card-head > .group-card-open:hover) .group-card-title > h3 {
   color: var(--cl-action-text);
 }
-.group-card :is(.group-text-button, .group-members a, .group-panel) {
+.group-card :is(.group-more, .group-members a, .last-days-info, .group-panel) {
   position: relative;
   z-index: 2;
 }
+.group-card .group-more[open] {
+  z-index: 4;
+}
 
-/* Add player and Edit: quiet word-and-icon buttons, plain text until hovered. */
+/* "⋯": the card's quiet menu, holding Add player and Edit. */
+.group-more > summary {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  color: var(--cl-muted);
+  border-radius: 999px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+  list-style: none;
+  cursor: pointer;
+}
+.group-more > summary::-webkit-details-marker {
+  display: none;
+}
+.group-more > summary:is(:hover, :focus-visible),
+.group-more[open] > summary {
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+}
+.group-more-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  min-width: 10rem;
+  padding: 0.3rem;
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 10px;
+  box-shadow: var(--cl-overlay-shadow);
+}
+@media (pointer: coarse) {
+  .group-more > summary {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
+/* Add player and Edit: word-and-icon rows in the menu, plain until hovered. */
 .group-text-button {
   display: inline-flex;
   flex: none;
   gap: 0.35rem;
   align-items: center;
-  min-height: 2.75rem;
+  min-height: 2.5rem;
   padding: 0 0.65rem;
   color: var(--cl-muted);
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 8px;
   font-size: 0.875rem;
   font-weight: 650;
   text-decoration: none;
@@ -392,6 +476,7 @@
    so a row is not mostly gap: two on an iPad, up to three on a desktop. */
 .group-card-list {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1.5rem 2rem;
   align-items: start;
 }
 
@@ -462,8 +547,4 @@
   color: var(--cl-muted);
   font-size: 0.9rem;
   font-weight: 500;
-}
-
-.group-card .group-members .group-member-detail .trophy-mark {
-  margin: 0;
 }

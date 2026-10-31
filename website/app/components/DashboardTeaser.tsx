@@ -1,6 +1,10 @@
+import type { CSSProperties } from "react";
 import { Link } from "react-router";
-import { DashboardIcon } from "./DashboardIcon";
-import { signed, starText } from "./LegendClock";
+
+import type { HeatCell } from "../lib/dashboard-cards";
+import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
+import { signed } from "./LegendClock";
+import { HeatFoot, HeatKey, SeasonHeatGrid } from "./SeasonHeatGrid";
 
 // An example Legend day, drawn small: what a dashboard shows, not anyone's data.
 // Each battle is its stars and trophies; the day's net is their sum.
@@ -20,83 +24,60 @@ const DEFENSES = [
   [1, -16],
 ] as const;
 const SLOTS = 8;
-const RIVALS = [
-  { rank: 1186, name: "Sky Lord", trophies: 5248, up: true },
-  { rank: 1188, name: "You", trophies: 5244, you: true },
-  { rank: 1189, name: "Nightfall", trophies: 5240, up: false },
-] as const;
-// Net trophies of 28 Legend days: gains, losses, today (day 23) and the days
-// still to come.
-const HEAT = [
-  24,
-  -8,
-  40,
-  12,
-  -30,
-  18,
-  6,
-  32,
-  -12,
-  26,
-  8,
-  -4,
-  38,
-  14,
-  22,
-  -20,
-  10,
-  30,
-  -6,
-  16,
-  34,
-  -14,
-  null,
-  null,
-  null,
-  null,
-  null,
-  null,
-] as const;
-const TODAY = 22;
+// The places the day card reads: the last Reset, now, the projected place
+// and the Next Reset range it falls in.
+const PLACES = { lastReset: 1288, now: 1188, projected: 1140, best: 1105, worst: 1190 };
+// Net trophies of the Season's played days, 1 to 22; today is day 23. The
+// eight losing days fill the heat map's two red shades, so every red day
+// here carries the lost-trophies mark and no gain is painted red.
+const NETS = [
+  72, -18, 110, 45, -61, 88, -27, 124, -23, 96, 40, -8, 143, 57, 80, -47, 35, 101, -12,
+  66, 118, -33,
+];
+const RANKED = [...NETS].sort((a, b) => a - b);
+// The Season as the dashboard's heat map draws it: each played day ranked
+// against the others, worst to best, then today and the days to come.
+const HEAT: HeatCell[] = Array.from({ length: 28 }, (_, index) => {
+  const day = index + 1;
+  const value = NETS[index];
+  if (value === undefined)
+    return {
+      day,
+      kind: day === NETS.length + 1 ? "today" : "future",
+      value: null,
+      shade: null,
+    };
+  return {
+    day,
+    kind: "played",
+    value,
+    shade: RANKED.indexOf(value) / (RANKED.length - 1),
+  };
+});
 
-// Each played day's place in the example Season, worst (0) to best (4), as
-// the real heat map colours a Season against itself.
-const PLAYED: number[] = HEAT.filter((net) => net !== null).sort((a, b) => a - b);
-function heatStep(net: number): number {
-  return Math.min(4, Math.floor((5 * PLAYED.indexOf(net)) / PLAYED.length));
-}
+const place = (rank: number) => `#${rank.toLocaleString("en-GB")}`;
 
 /**
- * What the dashboard holds, shown to a visitor who is not signed in: three
- * short points, the way in and the example board, in the order a phone reads
- * them, so Create account shows on its first screen. Sign in stays in the
- * header.
+ * What the dashboard holds, shown to a visitor who is not signed in: the
+ * example board under its caption, a short title and the way in, set to the
+ * board's edges on every width, so Create account shows before the example
+ * without standing in its way. The
+ * example shows what an account adds, so no list repeats it. Sign in stays in
+ * the header.
  */
 export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean }) {
   return (
     <section className="teaser-cta" aria-labelledby="front-teaser-title">
-      <h2 id="front-teaser-title">Your Legend day, live</h2>
-      <ul className="teaser-points">
-        <li>
-          <DashboardIcon name="swords" />
-          Every battle
-        </li>
-        <li>
-          <DashboardIcon name="target" />
-          Next Reset rank
-        </li>
-        <li>
-          <DashboardIcon name="grid" />
-          Season heat map
-        </li>
-      </ul>
-      {loginAvailable ? (
-        <Link className="button button-primary" to="/signup?returnPath=%2F">
-          Create account
-        </Link>
-      ) : (
-        <p role="status">Sign-in is not available right now.</p>
-      )}
+      <div className="teaser-caption">
+        <h2 id="front-teaser-title">Your Legend day, live</h2>
+        {loginAvailable ? (
+          <Link className="button button-primary" to="/signup?returnPath=%2F">
+            Create account
+          </Link>
+        ) : (
+          <p role="status">Sign-in is not available right now.</p>
+        )}
+      </div>
       <TeaserBoard link={loginAvailable} />
     </section>
   );
@@ -108,59 +89,54 @@ export function TeaserBoard({ link }: { link: boolean }) {
     <Board link={link}>
       <span className="teaser-example">Example</span>
       <div className="teaser-card teaser-day">
-        <span className="teaser-label">Legend day 23</span>
+        <span className="teaser-label">Legend day {NETS.length + 1}</span>
         <span className="teaser-score">
           <strong className="score">5,244</strong>
-          <span className="teaser-net score">+104</span>
+          <span className="teaser-net score">
+            +104<small> today</small>
+          </span>
         </span>
-        <span className="teaser-ranks">
-          <span>
-            <small>Last Reset</small>#1,288
+        {/* The dashboard card's three places, split by hairlines, over the
+            Next Reset range with the projected place's diamond on it. */}
+        <span className="teaser-places">
+          <span className="teaser-ranks">
+            <span>
+              <small>Last Reset</small>
+              {place(PLACES.lastReset)}
+            </span>
+            <span className="teaser-now">
+              <small>Now</small>
+              <b className="rank-mark">{place(PLACES.now)}</b>
+            </span>
+            <span className="teaser-next">
+              <small>
+                <i className="teaser-diamond" />
+                Projected place
+              </small>
+              {place(PLACES.projected)}
+            </span>
           </span>
-          <i />
-          <span className="teaser-now">
-            <small>Now</small>
-            <b className="rank-mark">#1,188</b>
-          </span>
-          <i />
-          <span className="teaser-next">
-            <small>Next Reset</small>#1,140
-            <small>estimate</small>
+          <span className="teaser-range">
+            <span className="teaser-range-name">Next Reset range</span>
+            {place(PLACES.best)}
+            <i
+              style={
+                {
+                  "--at": `${(100 * (PLACES.projected - PLACES.best)) / (PLACES.worst - PLACES.best)}%`,
+                } as CSSProperties
+              }
+            />
+            {place(PLACES.worst)}
           </span>
         </span>
         <Battles battles={ATTACKS} kind="attack" />
         <Battles battles={DEFENSES} kind="defense" />
       </div>
-      <div className="teaser-card teaser-clock">
-        <svg viewBox="0 0 64 64">
-          <circle cx="32" cy="32" r="27" />
-          <circle className="teaser-clock-left" cx="32" cy="32" r="27" pathLength="100" />
-        </svg>
-        <span>
-          <strong className="score">9h 12m</strong>
-          <small>to Reset</small>
-        </span>
-      </div>
-      <div className="teaser-card teaser-rivals">
-        {RIVALS.map((rival) => (
-          <span key={rival.rank} className={"you" in rival ? "teaser-you" : undefined}>
-            <b className="score">#{rival.rank.toLocaleString("en-GB")}</b>
-            <span>{rival.name}</span>
-            <strong className="score">{rival.trophies.toLocaleString("en-GB")}</strong>
-          </span>
-        ))}
-      </div>
       <div className="teaser-card teaser-heat">
-        <span className="teaser-label">Season heat map</span>
-        {HEAT.map((net, day) => (
-          <i
-            key={day}
-            className={day === TODAY ? "teaser-today" : undefined}
-            style={
-              net === null ? undefined : { background: `var(--cl-heat-${heatStep(net)})` }
-            }
-          />
-        ))}
+        <SeasonHeatGrid cells={HEAT} label="An example Season" loss />
+        <HeatFoot readout={null}>
+          <HeatKey />
+        </HeatFoot>
       </div>
     </Board>
   );
@@ -199,7 +175,7 @@ function Battles({
   return (
     <span className={`teaser-battles teaser-${kind}s`}>
       <span className="teaser-battles-head">
-        <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
+        {kind === "attack" ? <SwordIcon /> : <ShieldIcon />}
         <span className="teaser-battles-name">
           {kind === "attack" ? "Attacks" : "Defenses"}
         </span>
@@ -211,7 +187,7 @@ function Battles({
           const battle = battles[index];
           return battle ? (
             <span key={index} data-stars={battle[0]}>
-              <small>{starText(battle[0])}</small>
+              <Stars count={battle[0]} />
               {signed(battle[1])}
             </span>
           ) : (

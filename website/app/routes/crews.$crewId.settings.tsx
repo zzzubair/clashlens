@@ -277,7 +277,7 @@ export default function CrewSettingsRoute() {
           <label className="crew-tick">
             <input type="checkbox" name="confirm" required />
             Delete {crew.name} for all {crew.members.length}{" "}
-            {crew.members.length === 1 ? "clasher" : "clashers"}
+            {crew.members.length === 1 ? "Clasher" : "Clashers"}
           </label>
           <button type="submit" className="button danger-button">
             Delete crew

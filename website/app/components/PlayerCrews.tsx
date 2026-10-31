@@ -2,6 +2,7 @@ import { Link } from "react-router";
 
 import type { PlayerCrew } from "../lib/crew-contracts";
 import { useBackState } from "./BackLink";
+import { Crest } from "./GameIcons";
 
 // None, or an unavailable answer, shows nothing.
 export function PlayerCrews({
@@ -22,9 +23,7 @@ export function PlayerCrews({
           {index > 0 ? " · " : null}
           {/* The Crew's crest, as on its page, sets it apart from the clan. */}
           <Link to={`/crews/${crew.crewId}`} state={backState}>
-            <span className="player-crew-crest" aria-hidden="true">
-              {Array.from(crew.name)[0]}
-            </span>
+            <Crest name={crew.name} />
             <bdi>{crew.name}</bdi>
           </Link>
         </span>

@@ -3,6 +3,7 @@ import { Link, useLoaderData } from "react-router";
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/login";
 import { ProviderMark } from "../components/ProviderMark";
+import { SignInReason } from "../components/SignInReason";
 import { TeaserBoard } from "../components/DashboardTeaser";
 import "../front-page.css";
 
@@ -36,7 +37,7 @@ export default function LoginRoute() {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
         <h1>No account found</h1>
-        <section className="form-panel sign-in-panel" aria-label="Create an account">
+        <section className="sign-in-panel" aria-label="Create an account">
           <p>No Clash Lens account uses this {PROVIDER_NAMES[none]} sign-in.</p>
           <p className="button-row">
             <Link
@@ -63,14 +64,23 @@ export default function LoginRoute() {
       className="page-shell narrow-shell sign-in-page"
     >
       <div className="sign-in-main">
+        {/* The brand's small mark, so the page reads as Clash Lens's own. */}
+        <img
+          className="sign-in-mark"
+          src="/images/mark-cl-block.svg"
+          alt=""
+          width="56"
+          height="56"
+        />
         <h1>Sign in</h1>
+        <SignInReason returnPath={data.returnPath} />
         <p className="lede">
-          {data.crewName ? `To join ${data.crewName}, use` : "Use"} the Google or Discord
-          account you made Clash Lens with.
+          {data.crewName ? `To join ${data.crewName}, use` : "Use"} the account you signed
+          up with.
         </p>
         {data.loginAvailable ? (
           <>
-            <section className="form-panel sign-in-panel" aria-label="Sign in">
+            <section className="sign-in-panel" aria-label="Sign in">
               <p className="button-row">
                 <Link
                   className="button button-secondary sign-in-google"
@@ -88,8 +98,7 @@ export default function LoginRoute() {
                 </Link>
               </p>
               <p className="sign-in-new">
-                New to Clash Lens?{" "}
-                <Link to={`/signup?returnPath=${back}`}>Create account</Link>
+                New here? <Link to={`/signup?returnPath=${back}`}>Create account</Link>
               </p>
             </section>
             <p className="sign-in-privacy">

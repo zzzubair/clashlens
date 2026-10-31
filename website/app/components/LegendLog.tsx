@@ -9,6 +9,7 @@ import { canonicalPlayerPath } from "../lib/player-tag";
 import { ArmyPortraits } from "./ArmyPortraits";
 import { DayMark, DayStatusNote } from "./DayStatus";
 import { FoldedBattles } from "./FoldedBattles";
+import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { linkedBattleId } from "./LinkedBattle";
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -91,7 +92,7 @@ function barScale(bars: DayBar[]): BarScale {
 
 /**
  * A day's split bar from the track's zero: attacks right in green, defenses
- * left in red, and a tick where the net lands.
+ * left in red, and a mark where the net lands, none when it is unknown.
  */
 function swing({ gain, loss, net }: DayBar, { up, down }: BarScale) {
   const span = up + down;
@@ -100,7 +101,7 @@ function swing({ gain, loss, net }: DayBar, { up, down }: BarScale) {
     "--gain": gain / span,
     "--loss": loss / span,
     "--net": (down + (net ?? 0)) / span,
-    "--tick": net === null ? "0px" : "3px",
+    "--net-mark": net === null ? "none" : "block",
   } as React.CSSProperties;
 }
 
@@ -167,59 +168,48 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
 }
 
 /**
- * The labels over a log's rows, for sighted readers; each row names its own
- * values. `show` keeps only the wide screen's columns or the phone's line.
+ * The labels over a wide screen's log columns, for sighted readers; each row
+ * names its own values. A phone's stacked rows read on their own.
  */
 export function LogHead({
-  show,
   scale,
 }: {
-  show?: "columns" | "phone";
-  /** The bars' track, marked over their column by its zero and its ends. */
+  /** The bars' track, its zero line marked over their column. */
   scale?: BarScale;
 }) {
   const zero = scale ? scale.down / (scale.up + scale.down) : 0;
   return (
-    <div className="log-head" data-show={show} aria-hidden="true">
+    <div className="log-head" aria-hidden="true">
       <span>Date</span>
       <span>End of day</span>
       {scale ? (
+        // The bars' zero line starts here; the key beside the title says
+        // what each side and the mark are.
         <span
           className="log-head-scale"
           style={{ "--zero": zero } as React.CSSProperties}
-        >
-          {/* The bars' key, in the words of the columns they draw. */}
-          <span className="log-head-key">
-            <i className="log-key-loss" />
-            Defenses
-            <i className="log-key-gain" />
-            Attacks
-            <i className="log-key-net" />
-            Change
-          </span>
-          {/* An end label too close to the zero would sit on it. */}
-          {zero >= 0.2 ? (
-            <span className="log-head-low">{formatSigned(-scale.down)}</span>
-          ) : null}
-          <span className="log-head-zero">0</span>
-          {zero <= 0.8 ? (
-            <span className="log-head-high">{formatSigned(scale.up)}</span>
-          ) : null}
-        </span>
+        />
       ) : (
         <span />
       )}
+      {/* Where each day's trophies came from, then its net result, named
+          with the bars' own mark. */}
       <span>Attacks</span>
       <span>Defenses</span>
-      <span>Change</span>
+      <span className="log-head-net">Net</span>
       <span>Reset rank</span>
-      <span className="log-head-phone">
-        <span />
-        <span>Battles</span>
-        <span>Change</span>
-        <span>Rank</span>
-      </span>
     </div>
+  );
+}
+
+/** What the bars' colours and mark are, in a few words beside the log's title. */
+export function LogBarsKey() {
+  return (
+    <p className="log-bars-key">
+      <span className="log-bars-lost">lost</span>
+      <span className="log-bars-gained">gained</span>
+      <span className="log-bars-net">net</span>
+    </p>
   );
 }
 
@@ -299,18 +289,16 @@ export function LegendLog({
       {/* On a wide screen the columns are named over today's row too. */}
       {current.length > 0 ? (
         <>
-          <LogHead show="columns" scale={scale} />
+          <LogHead scale={scale} />
           <div className="log-card log-today">{current.map(day)}</div>
         </>
       ) : null}
       <div className="log-card log-days">
-        {ended.length > 0 ? (
-          <LogHead show={current.length > 0 ? "phone" : undefined} scale={scale} />
-        ) : null}
+        {ended.length > 0 && current.length === 0 ? <LogHead scale={scale} /> : null}
         {(fold < 0 ? rows : rows.slice(0, fold)).map(row)}
         {older.length > 0 ? (
           <details className="log-older" open={linked || undefined}>
-            <summary>
+            <summary className="show-all">
               <span className="log-older-show">Show all {ended.length} days</span>
               <span className="log-older-hide">Show the latest {LATEST} days</span>
             </summary>
@@ -459,18 +447,23 @@ function LegendDay({
         <span className="log-battles">
           <span className="log-stat">
             <small>Attacks</small>
+            <SwordIcon />
             <strong className={valueTone(day.offense.trophyGain)}>
               {formatSigned(day.offense.trophyGain)}
             </strong>
           </span>
           <span className="log-stat">
             <small>Defenses</small>
+            <ShieldIcon />
             <strong className={valueTone(defense)}>{formatSigned(defense)}</strong>
           </span>
           {!soFar && day.trophyChange === null && battleNet !== null ? (
             <span>{formatSigned(battleNet)} from battles</span>
           ) : null}
         </span>
+        {/* The day's bar: beside the numbers on a wide screen, under them on
+            a phone. */}
+        <span className="log-swing" aria-hidden="true" />
       </summary>
       <div className="log-open">
         {/* The day's start leads; its status stays one quiet mark beside it. */}
@@ -490,10 +483,12 @@ function LegendDay({
             ) : null
           ) : (
             // An ended day's status, quiet. "Verified" says what a reading
-            // confirmed: the day's result, which can stand while a battle's
-            // own record is missing.
+            // confirmed: the day's total, from the profile, which counts every
+            // battle, even one whose own record is missing.
             <details className="day-status" data-status={status}>
-              <summary>{status === "Verified" ? "Day result verified" : status}</summary>
+              <summary>
+                {status === "Verified" ? "Total confirmed from the profile" : status}
+              </summary>
               <div className="day-status-tip">
                 <DayStatusNote status={status} reasons={reasons} />
                 {source}
@@ -517,6 +512,7 @@ function LegendDay({
                 checked={side === value}
                 onChange={() => setSide(value)}
               />
+              {value === "attack" ? <SwordIcon /> : <ShieldIcon />}
               {title} <strong className={valueTone(total)}>{formatSigned(total)}</strong>
             </label>
           ))}
@@ -531,6 +527,7 @@ function LegendDay({
             dayLabel={dayLabel}
             units={player.armyUnits ?? {}}
             live={isCurrentDay}
+            confirmed={!isCurrentDay && status === "Verified"}
           />
           <BattleList
             title="Defenses"
@@ -541,6 +538,7 @@ function LegendDay({
             dayLabel={dayLabel}
             units={player.armyUnits ?? {}}
             live={isCurrentDay}
+            confirmed={!isCurrentDay && status === "Verified"}
           />
         </FoldedBattles>
       </div>
@@ -548,14 +546,25 @@ function LegendDay({
   );
 }
 
-const STAR_TEXT = ["☆☆☆", "★☆☆", "★★☆", "★★★"];
+/** What today's slots need of a Legend day. */
+export interface TodayBattles {
+  dayNumber: number | null;
+  offense: Pick<RankedDaySummary["offense"], "attacks" | "trophyGain">;
+  defense: Pick<RankedDaySummary["defense"], "defenses" | "trophyLoss">;
+  offenseEvents: TodayBattle[];
+  defenseEvents: TodayBattle[];
+}
+type TodayBattle = Pick<
+  RankedDaySummary["offenseEvents"][number],
+  "battleTimestamp" | "stars" | "trophyChange"
+>;
 
 /**
  * Today's 8 attacks and 8 defenses as slots, as the dashboard's Legend day
  * card draws them: stars over the trophies each one moved, in the order
- * played, with dashed slots still to play.
+ * played, with dashed slots still to play, headed by the Legend day.
  */
-export function TodaySlots({ day }: { day: RankedDaySummary }) {
+export function TodaySlots({ day }: { day: TodayBattles }) {
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
   const sides = [
     ["attack", "Attacks", day.offense.attacks, day.offense.trophyGain, day.offenseEvents],
@@ -576,6 +585,7 @@ export function TodaySlots({ day }: { day: RankedDaySummary }) {
         return (
           <div key={side} className={`today-side today-side-${side}`}>
             <p className="today-head" aria-hidden="true">
+              {side === "attack" ? <SwordIcon /> : <ShieldIcon />}
               <span className="today-title">{title}</span> {count}/8
               {count > 0 ? (
                 <b className={valueTone(total)}>{formatSigned(total)}</b>
@@ -590,7 +600,7 @@ export function TodaySlots({ day }: { day: RankedDaySummary }) {
                       {battle.stars} stars, {formatSigned(battle.trophyChange)} trophies
                     </span>
                     <span className="today-stars" aria-hidden="true">
-                      {STAR_TEXT[Math.max(0, Math.min(3, battle.stars))]}
+                      <Stars count={battle.stars} />
                     </span>
                     <span aria-hidden="true">{formatSigned(battle.trophyChange)}</span>
                   </li>
@@ -679,6 +689,7 @@ function BattleList({
   dayLabel,
   units,
   live = false,
+  confirmed = false,
 }: {
   title: "Attacks" | "Defenses";
   total: number | null;
@@ -689,6 +700,8 @@ function BattleList({
   units: ArmyUnitNames;
   /** Today's empty slots are not recorded yet, not missing. */
   live?: boolean;
+  /** The day's total came from the profile, so it counts the missing ones. */
+  confirmed?: boolean;
 }) {
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
   const toggle = (battleId: string) =>
@@ -703,8 +716,10 @@ function BattleList({
   return (
     <section className={`battle-side battle-side-${side}`} aria-label={title}>
       <div className="battle-side-head">
+        {/* The log's words: attacks gained, defenses lost. */}
         <h3>
-          {title} <strong className={valueTone(total)}>{formatSigned(total)}</strong>{" "}
+          {title} <span>{side === "attack" ? "gained" : "lost"}</span>{" "}
+          <strong className={valueTone(total)}>{formatSigned(total)}</strong>{" "}
           <small>{recordedCount(count)}</small>
         </h3>
       </div>
@@ -723,8 +738,13 @@ function BattleList({
         ))}
         {missing > 0 ? (
           <li className="battle-missing">
-            {missing} {missing === 1 ? side : `${side}s`}{" "}
-            {live ? "not recorded yet" : "not recorded"}
+            {/* A confirmed day's unsaved battles still count in its total;
+                only their details are gone. */}
+            {live
+              ? `${missing} ${missing === 1 ? side : `${side}s`} not recorded yet`
+              : confirmed
+                ? `${missing} ${missing === 1 ? side : `${side}s`} not listed, already in the total`
+                : `${missing} ${side} record${missing === 1 ? "" : "s"} unavailable`}
           </li>
         ) : null}
       </ol>
@@ -750,9 +770,50 @@ function BattleRow({
   onToggle: () => void;
 }) {
   const opponent = event.opponent.name ?? event.opponent.tag;
-  const what = event.armyShareCode ? "army" : "opponent";
-  // The whole line is one button that opens the army; their log is one more
-  // tap, so a thumb on the name never leaves the page by accident.
+  const theirLog = `${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`;
+  const logName = `View ${opponent}'s Legend log for ${dayLabel}`;
+  // A battle with an army: the whole line is one button that opens it, and
+  // their log is one more tap, so a thumb on the name never leaves the page
+  // by accident. Without one there is nothing to open, so the name is the
+  // link to their log.
+  if (!event.armyShareCode) {
+    return (
+      <li className={`battle-row battle-row-${side}`} id={`battle-${event.battleId}`}>
+        <div className="battle-line">
+          <span className="sr-only">
+            {event.stars} stars, {event.destructionPercentage}% destruction,{" "}
+            {formatSigned(event.trophyChange)} trophies
+          </span>
+          <span className="battle-score" aria-hidden="true">
+            <Stars count={event.stars} />
+            <small>{event.destructionPercentage}%</small>
+          </span>
+          <span className="battle-who">
+            <Link
+              className="battle-name"
+              to={theirLog}
+              aria-label={logName}
+              title={event.opponent.tag}
+            >
+              <bdi>{opponent}</bdi>
+            </Link>
+            <small>
+              <BattleTime value={event.battleTimestamp} />
+              {event.perspectiveDisagreement ? (
+                <span className="battle-disagreement">Result awaiting confirmation</span>
+              ) : null}
+            </small>
+          </span>
+          <strong
+            className={`battle-change ${valueTone(event.trophyChange)}`}
+            aria-hidden="true"
+          >
+            {formatSigned(event.trophyChange)}
+          </strong>
+        </div>
+      </li>
+    );
+  }
   return (
     <li className={`battle-row battle-row-${side}`} id={`battle-${event.battleId}`}>
       <div className="battle-line">
@@ -787,7 +848,7 @@ function BattleRow({
           aria-controls={`more-${event.battleId}`}
           onClick={onToggle}
         >
-          <span className="sr-only">{open ? `Hide ${what}` : `Show ${what}`}</span>
+          <span className="sr-only">{open ? "Hide army" : "Show army"}</span>
         </button>
       </div>
       {/* Their log link is always in the page, so it is there before scripts run. */}
@@ -796,14 +857,10 @@ function BattleRow({
           {event.opponent.name ? (
             <span className="player-tag">{event.opponent.tag}</span>
           ) : null}
-          <Link
-            className="battle-link"
-            to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
-            aria-label={`View ${opponent}'s Legend log for ${dayLabel}`}
-          >
+          <Link className="battle-link" to={theirLog} aria-label={logName}>
             Their Legend log
           </Link>
-          {open && event.armyShareCode ? (
+          {open ? (
             <a
               className="battle-copy"
               href={copyArmyLink(event.armyShareCode)}
@@ -815,7 +872,7 @@ function BattleRow({
             </a>
           ) : null}
         </p>
-        {open && event.armyShareCode ? (
+        {open ? (
           <ArmyPortraits
             id={`army-${event.battleId}`}
             code={event.armyShareCode}
@@ -829,7 +886,8 @@ function BattleRow({
 
 let clock: Intl.DateTimeFormat | null = null;
 
-/** A battle's time of day: UTC as the server wrote it, then the viewer's own. */
+/** A battle's time of day: UTC as the server wrote it, then the viewer's own,
+ *  in the zone the open day names once. */
 function BattleTime({ value }: { value: string }) {
   const [local, setLocal] = useState<string | null>(null);
   useEffect(() => {
@@ -841,7 +899,7 @@ function BattleTime({ value }: { value: string }) {
     ? "Unknown"
     : new Date(value).toISOString().slice(11, 16);
   return (
-    <time className="local-time" dateTime={value} title={`${utc} UTC`}>
+    <time className="local-time" dateTime={value}>
       {local ?? utc}
     </time>
   );
@@ -851,44 +909,28 @@ function BattleTime({ value }: { value: string }) {
 function BattleZone({ day }: { day: RankedDaySummary }) {
   const first = day.offenseEvents[0] ?? day.defenseEvents[0];
   return first ? (
-    <small className="battle-zone">
-      Times in <TimeZone at={first.battleTimestamp} />
+    <small className="battle-zone" title="Times of these battles">
+      <TimeZone at={first.battleTimestamp} />
     </small>
   ) : null;
 }
 
-/** The zone a list's times are in, such as GMT: UTC until the page starts. */
+/**
+ * The zone a list's times are in, worded as the dashboard's clock says it
+ * ("London time (GMT)"), with the short name on the day itself, so a day
+ * before the clocks changed says BST: UTC until the page starts.
+ */
 function TimeZone({ at }: { at: string }) {
-  const [zone, setZone] = useState("UTC");
+  const [zone, setZone] = useState("UTC time");
   useEffect(() => {
     const date = Number.isNaN(Date.parse(at)) ? new Date() : new Date(at);
-    const name = new Intl.DateTimeFormat("en-GB", { timeZoneName: "short" })
+    const { timeZone } = new Intl.DateTimeFormat().resolvedOptions();
+    const place = timeZone.split("/").at(-1)?.replaceAll("_", " ");
+    const short = new Intl.DateTimeFormat("en-GB", { timeZoneName: "short" })
       .formatToParts(date)
       .find((part) => part.type === "timeZoneName")?.value;
-    if (name) setZone(name);
+    if (place && timeZone !== "UTC")
+      setZone(short ? `${place} time (${short})` : `${place} time`);
   }, [at]);
   return <>{zone}</>;
-}
-
-// Three stars like the game's: gold when won, grey when not.
-const STAR = "M6.5 .5 8 4.6l4.4.2L9 7.5l1.1 4.2-3.6-2.4-3.6 2.4L4 7.5.6 4.8 5 4.6Z";
-
-function Stars({ count }: { count: number }) {
-  return (
-    <svg
-      className="battle-stars"
-      viewBox="0 0 41 13"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {[0, 1, 2].map((star) => (
-        <path
-          key={star}
-          d={STAR}
-          transform={`translate(${star * 14} 0)`}
-          className={star < count ? "star-won" : undefined}
-        />
-      ))}
-    </svg>
-  );
 }

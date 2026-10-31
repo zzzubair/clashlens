@@ -1,0 +1,214 @@
+/* The Season heat map's one form (components/SeasonHeatGrid.tsx), on the
+   dashboard, the player page and a profile: seven days to a row, each row
+   named by its first day in a gutter, each cell its day's result. */
+
+/* The grid's own width sets the gutter's words and the cell sizes, so it
+   reads the same in a dashboard card, beside the Season summary or in a
+   profile's player card. */
+.season-heat {
+  /* A tablet's full width would make each day a wide bar, not a square. */
+  max-width: 30rem;
+  container-type: inline-size;
+}
+/* The scale: worst (0) to best (4) of the player's own Season, its
+   brightness rising step by step (OKLCH lightness 0.44, 0.555, 0.665, 0.74,
+   0.83): a deep red, a lighter red, a sand-grey middle, a clear green and a
+   bright green. The same steps in both themes, so neither reads duller; each
+   step's text is 4.5:1 or more on it (the lowest 4.83:1), checked with the
+   chart-colour checker. These replace the shared --cl-heat tokens, which
+   nothing else uses. */
+:is(.season-heat, .season-heat-key) {
+  --cl-heat-0: #971922;
+  --cl-heat-1: #b94a44;
+  --cl-heat-2: #9e9184;
+  --cl-heat-3: #67c377;
+  --cl-heat-4: #79e47a;
+  --cl-heat-0-text: #fff8f0;
+  --cl-heat-1-text: #fff8f0;
+  --cl-heat-2-text: #1c1510;
+  --cl-heat-3-text: #1c1510;
+  --cl-heat-4-text: #1c1510;
+}
+.season-heat-days {
+  /* A result's size; a three-digit one takes a size down, never under 13px. */
+  --heat-font: 0.9375rem;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0;
+  padding: 0 0 0 3.25rem;
+  list-style: none;
+}
+.season-heat-days > li {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 2.5rem;
+  color: var(--heat-text, var(--cl-ink));
+  background: var(--heat, transparent);
+  border-radius: 6px;
+  /* The font's own narrow figures, a touch closer: each cell is centred on
+     its own, so no column needs tabular ones. */
+  font: 700 var(--heat-font) / 1 var(--cl-font-score);
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+.season-heat-days > .is-long {
+  font-size: max(0.8125rem, var(--heat-font) - 0.0625rem);
+}
+/* The row's name, in the gutter level with its first day. */
+.season-heat-week {
+  position: absolute;
+  right: calc(100% + 0.5rem);
+  color: var(--cl-muted);
+  font: 600 0.8125rem/1 var(--cl-font);
+  white-space: nowrap;
+}
+.season-heat-days button {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.season-heat-days button:focus-visible {
+  outline: 2px solid var(--cl-ink);
+  outline-offset: 2px;
+}
+.season-heat-days button[aria-pressed="true"] {
+  outline: 3px solid var(--cl-action);
+  outline-offset: 2px;
+}
+/* A faint edge parts each result from the page, and an average day's tan
+   from the light theme's sand. */
+.season-heat-days .season-heat-played {
+  box-shadow: var(--cl-heat-ring);
+}
+/* A shield day played no battles; its result is 0. */
+.season-heat-days .season-heat-shield {
+  color: var(--cl-muted);
+  background: var(--cl-raised);
+}
+.season-heat-days .season-heat-missing {
+  color: var(--cl-muted);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--cl-outline) 0 1px,
+    transparent 1px 5px
+  );
+}
+.season-heat-days .season-heat-today {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  box-shadow: inset 0 0 0 2px var(--cl-action);
+  /* A word, not a result: a weight lighter and closer, to clear its ring. */
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+/* Days to come are a dotted outline, never a result: plain to see on ivory
+   or sand, and still quieter than any played day's fill. */
+.season-heat-days .season-heat-future {
+  border: 2px dotted color-mix(in srgb, var(--cl-ink) 42%, transparent);
+}
+:root[data-theme="dark"] .season-heat-days .season-heat-future {
+  border-color: color-mix(in srgb, var(--cl-ink) 30%, transparent);
+}
+
+/* A narrow grid: "D8" in a smaller gutter, closer cells, a size down. */
+@container (max-width: 20rem) {
+  .season-heat-days {
+    --heat-font: 0.875rem;
+    gap: 2px;
+    padding-left: 2rem;
+  }
+  .season-heat-week {
+    right: calc(100% + 0.35rem);
+  }
+  .season-heat-week span {
+    display: none;
+  }
+}
+/* Room enough: taller cells and results a size up. */
+@container (min-width: 24rem) {
+  .season-heat-days {
+    --heat-font: 1rem;
+    gap: 4px;
+  }
+  .season-heat-days > li {
+    height: 2.75rem;
+  }
+}
+
+/* ---------- The line under a grid ---------- */
+
+/* The pointed or picked day's readout covers the key, which keeps its room;
+   until then the key shows alone. */
+.season-heat-foot {
+  display: grid;
+  min-height: 1.3rem;
+  margin: 0.6rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.season-heat-foot > * {
+  grid-area: 1 / 1;
+}
+.season-heat-foot > .is-covered {
+  visibility: hidden;
+}
+.season-heat-foot > .is-fallback {
+  display: none;
+}
+.season-heat-readout {
+  color: var(--cl-ink);
+  font-weight: 650;
+}
+/* A phone has no pointer: the picked day, or else today, always reads out on
+   its own line, with the key under it. */
+@media (max-width: 47.99rem) {
+  .season-heat-foot {
+    gap: 0.35rem;
+  }
+  .season-heat-foot > * {
+    grid-area: auto;
+  }
+  .season-heat-foot > .is-covered {
+    visibility: visible;
+  }
+  .season-heat-foot > .is-fallback {
+    display: block;
+  }
+}
+
+/* "Season: worst ▬ best" */
+.season-heat-key {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.season-heat-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.season-heat-ramp {
+  display: inline-flex;
+  overflow: hidden;
+  border-radius: 3px;
+}
+.season-heat-ramp i {
+  width: 1.6rem;
+  height: 0.6rem;
+}

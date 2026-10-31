@@ -114,20 +114,26 @@ describe("Armies on defense", () => {
     const plain = await render(
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies: armies } }),
     );
-    // One of the 3 days has no army records.
-    expect(plain).toContain("Last 3 days · 2 with army data · 3 defenses");
-    expect(plain).toContain("Legends average Army type Share Held Avg lost");
+    // One of the 3 days has no army records, so the window line shows. The
+    // headings are one word each; the header says once what they compare with.
+    expect(plain).toContain(
+      "vs Legend avg 3 days 7 days Custom Last 3 days · 2 with army data · 3 defenses Army · usage Usage Not tripled Per defense Thrower",
+    );
+    expect(plain.match(/vs Legend avg/g)).toHaveLength(1);
     // Thrower: 2 of 3 defenses, 1 of 2 held, 69 lost; every tracked player
-    // held 2 of 4 against it and lost 119. Each number carries its own label
-    // for a phone, where the headings go.
+    // held 2 of 4 against it and lost 119. Each number is followed by its one
+    // difference from the Legends with its unit; screen readers hear it as a
+    // sentence.
     expect(plain).toContain(
-      "Thrower 67% of defenses Held 50% avg 50% Legends 50% Avg lost −35 avg −30 Legends −30",
+      "Thrower 67% of defenses 50% 0 pts Not tripled 50%, same as the Legends average −35 −5 Trophies per defense −35, 5 more lost than the Legends average",
     );
+    expect(plain).toContain("Hydra 33% of defenses 100% 0 pts Not tripled 100%,");
     expect(plain).toContain(
-      "Hydra 33% of defenses Held 100% avg 100% Legends 100% Avg lost −26 avg −26 Legends −26",
+      "All 3 defenses 67% +7 pts Not tripled 67%, 7 points above the Legends average −32 −3",
     );
+    // The one colouring rule, said once.
     expect(plain).toContain(
-      "All defenses 100% of defenses Held 67% avg 60% Legends 60% Avg lost −32 avg −29 Legends −29",
+      "Green or red when 5+ pts or 3+ trophies from the Legend average.",
     );
     expect(plain.indexOf("Thrower")).toBeLessThan(plain.indexOf("Hydra"));
   });
@@ -146,10 +152,10 @@ describe("Armies on defense", () => {
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies } }),
     );
     expect(plain).toContain(
-      "Thrower 67% of defenses Held 50% avg – Legends – Avg lost −35 avg – Legends –",
+      "Thrower 67% of defenses 50% – Not tripled 50%, no Legends average yet −35 –",
     );
     expect(plain).toContain(
-      "All defenses 100% of defenses Held 67% avg – Legends – Avg lost −32 avg – Legends –",
+      "All 3 defenses 67% – Not tripled 67%, no Legends average yet",
     );
   });
 
@@ -188,19 +194,19 @@ describe("Armies on defense", () => {
     ).toContain("No finished Legend days with army data yet.");
   });
 
-  it("colours a number only well clear of the Legends, never its bar", async () => {
+  it("colours only a difference well clear of the Legends, beside no average bar", async () => {
     // Every tracked player held 50% and lost 30 a defense against each army.
     const legends = outcome(10, 5, 300);
     const rows = [
-      [4, 260],
-      [5, 320],
-      [6, 340],
-      [5, 300],
-      [5, 300],
-    ].map(([tripled, lost], index) => ({
+      [10, 4, 260],
+      [10, 5, 320],
+      [10, 6, 340],
+      [10, 5, 330],
+      [20, 9, 600],
+    ].map(([battles, tripled, lost], index) => ({
       type_id: index + 3,
       name: `Army ${index + 1}`,
-      ...outcome(10, tripled, lost),
+      ...outcome(battles!, tripled!, lost!),
       legends,
     }));
     const armies = await read(
@@ -212,21 +218,24 @@ describe("Armies on defense", () => {
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies } }),
       true,
     );
-    // 10 points or 4 trophies away is coloured; 2 trophies away is not.
-    expect(html.match(/class="army-own[^"]*">[^<]+/g)).toEqual(
+    // 5 points or 3 trophies away is coloured, as the card's rule says; 2
+    // trophies away is not. Only the difference is coloured; fewer trophies
+    // lost is the better side.
+    expect(html.match(/class="army-diff[^"]*" aria-hidden="true">[^<]+/g)).toEqual(
       [
-        ["is-better", "60%", "is-better", "−26"],
-        ["", "50%", "", "−32"],
-        ["is-worse", "40%", "is-worse", "−34"],
-        ["", "50%", "", "−30"],
-        ["", "50%", "", "−30"],
-        ["", "50%", "", "−30"],
+        ["is-better", "+10 pts", "is-better", "+4"],
+        ["", "0 pts", "", "−2"],
+        ["is-worse", "−10 pts", "is-worse", "−4"],
+        ["", "0 pts", "is-worse", "−3"],
+        ["is-better", "+5 pts", "", "0"],
+        ["", "0 pts", "", "0"],
       ].flatMap(([held, heldText, lost, lostText]) => [
-        `class="army-own${held && ` ${held}`}">${heldText}`,
-        `class="army-own${lost && ` ${lost}`}">${lostText}`,
+        `class="army-diff${held && ` ${held}`}" aria-hidden="true">${heldText}`,
+        `class="army-diff${lost && ` ${lost}`}" aria-hidden="true">${lostText}`,
       ]),
     );
-    expect(html.match(/army-bar is-measured/g)).toHaveLength(12);
+    expect(html).not.toMatch(/army-own is-/);
+    expect(html.match(/army-bar/g)).toHaveLength(5);
     expect(html).not.toMatch(/army-bar is-(better|worse)/);
     // A phone shows the top 3 and All defenses until Show all.
     expect(

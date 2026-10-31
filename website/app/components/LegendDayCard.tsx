@@ -1,9 +1,9 @@
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { ClockBattle, PlayerDay, RankRange } from "../lib/dashboard";
-import { DashboardIcon } from "./DashboardIcon";
 import { CardHead, updatedAgo } from "./DashboardParts";
+import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { TrophyMark } from "./LeaderboardShared";
-import { resetCountdown, signed, starText } from "./LegendClock";
+import { resetCountdown, signed } from "./LegendClock";
 
 const SLOTS = 8;
 
@@ -28,7 +28,7 @@ function BattleRow({
   return (
     <div className={`legend-day-battles legend-day-${kind}s`}>
       <div className="legend-day-battles-head">
-        <DashboardIcon name={kind === "attack" ? "swords" : "shield"} />
+        {kind === "attack" ? <SwordIcon /> : <ShieldIcon />}
         <span className="legend-day-battles-name">
           {kind === "attack" ? "Attacks" : "Defenses"}
         </span>
@@ -52,14 +52,25 @@ function BattleRow({
               className={`dash-star-box dash-star-box-${kind}`}
               aria-label={`${battle.stars} stars, ${signed(battle.trophyChange)} trophies`}
             >
-              <span className="dash-stars">{starText(battle.stars)}</span>
-              {signed(battle.trophyChange)}
+              <Stars count={battle.stars} />
+              <b>{signed(battle.trophyChange)}</b>
             </li>
           );
         })}
       </ol>
     </div>
   );
+}
+
+/** When the card's numbers were read: the older of the day and the board behind the range. */
+export function dayReadAt(
+  day: PlayerDay | null,
+  rangeAtMs: number | null,
+): number | null {
+  const times = [day?.observedAtMs ?? null, rangeAtMs].filter(
+    (at): at is number => at !== null,
+  );
+  return times.length ? Math.min(...times) : null;
 }
 
 /**
@@ -92,15 +103,18 @@ export function LegendDayCard({
   const defenseCount = complete ? defenses.length : (day?.defenses ?? null);
   const net = day?.net ?? null;
   const trophies = day ? day.trophies : player.trophies;
-  // The oldest read shown, so the card never looks newer than it is.
-  const observed = [day?.observedAtMs ?? null, rangeAtMs].filter(
-    (at): at is number => at !== null,
-  );
   const countdown = nowMs === null ? null : resetCountdown(nowMs);
+  const fresh = updatedAgo(dayReadAt(day, rangeAtMs), nowMs);
   return (
     <div className="legend-day-card">
-      {/* The tab above shows whose day this is; screen readers hear it here. */}
+      {/* The tab above shows whose day this is; screen readers hear it here.
+          How old the numbers are is said once for the page, here. */}
       <CardHead
+        meta={
+          fresh ? (
+            <span className="legend-day-fresh">{fresh.replace(/^u/, "U")}</span>
+          ) : null
+        }
         icon="cal"
         title={
           <>
@@ -108,7 +122,6 @@ export function LegendDayCard({
             <span className="sr-only">, {player.name ?? player.tag}</span>
           </>
         }
-        meta={updatedAgo(observed.length ? Math.min(...observed) : null, nowMs)}
       />
       <div className="legend-day-numbers">
         <span className="legend-day-score">
@@ -157,67 +170,74 @@ export function LegendDayCard({
           </span>
         ) : null}
       </div>
-      <dl className="legend-day-ranks">
-        <div>
-          <dt>Last Reset</dt>
-          <dd>{rankText(day?.lastResetRank ?? null)}</dd>
-        </div>
-        <div className="legend-day-now">
-          <dt>Now</dt>
-          <dd>
-            <b className="rank-mark">{rankText(player.rank)}</b>
-          </dd>
-        </div>
-        {projected ? (
-          <div className="legend-day-projected">
-            <dt>Projected</dt>
+      {/* Last Reset and Now are seen; the next Reset is a forecast, so it
+          is named the projected place, drawn lighter, and its ember diamond
+          sits on the Next Reset range it always falls in, on the line under
+          the three. Before a projection the range is Next Reset's number. */}
+      <div className="legend-day-places">
+        <dl className="legend-day-ranks">
+          <div>
+            <dt>Last Reset</dt>
+            <dd>{rankText(day?.lastResetRank ?? null)}</dd>
+          </div>
+          <div className="legend-day-now">
+            <dt>Now</dt>
             <dd>
-              {rankText(projected)}
-              <span className="sr-only">
-                {" "}
-                at Reset. An estimate from how players in your spot finished on recent
-                days. It can be hundreds of places out while battles are left, and gets
-                closer through the day.
-              </span>
+              <b className="rank-mark">{rankText(player.rank)}</b>
             </dd>
           </div>
+          <div className="legend-day-next">
+            <dt>
+              {projected ? (
+                <>
+                  <i className="legend-day-diamond" aria-hidden="true" />
+                  Projected place
+                </>
+              ) : (
+                "Next Reset"
+              )}
+            </dt>
+            <dd>
+              {projected ? (
+                <span className="legend-day-projected">
+                  {rankText(projected)}
+                  <span className="sr-only">
+                    {" "}
+                    at Reset. An estimate from how players in your spot finished on recent
+                    days. It can be hundreds of places out while battles are left, and
+                    gets closer through the day.
+                  </span>
+                </span>
+              ) : range ? (
+                <span className="legend-day-range">
+                  <span>{rankText(range.best)}</span>
+                  <span className="legend-day-range-dash">–</span>
+                  <span>{rankText(range.worst)}</span>
+                  <span className="sr-only"> estimate</span>
+                </span>
+              ) : (
+                "–"
+              )}
+            </dd>
+          </div>
+        </dl>
+        {projected && range ? (
+          <p className="legend-day-range legend-day-range-line">
+            <span className="legend-day-range-name">Next Reset range</span>
+            <span>{rankText(range.best)}</span>
+            <span
+              className="legend-day-range-bar"
+              style={
+                {
+                  "--at": `${(100 * (projected - range.best)) / Math.max(1, range.worst - range.best)}%`,
+                } as React.CSSProperties
+              }
+              aria-hidden="true"
+            />
+            <span>{rankText(range.worst)}</span>
+          </p>
         ) : null}
-        <div className="legend-day-range">
-          <dt>Next Reset</dt>
-          <dd>
-            {/* The projected place drawn on the range it always falls in. */}
-            {range && projected ? (
-              <span
-                className="legend-day-range-bar"
-                style={
-                  {
-                    "--at": `${(100 * (projected - range.best)) / Math.max(1, range.worst - range.best)}%`,
-                  } as React.CSSProperties
-                }
-                aria-hidden="true"
-              />
-            ) : null}
-            {/* The best and worst places sit at the range line's two ends. */}
-            {range ? (
-              <span className="legend-day-range-ends">
-                <span>{rankText(range.best)}</span>
-                <span className="legend-day-range-dash">–</span>
-                <span>{rankText(range.worst)}</span>
-              </span>
-            ) : (
-              "–"
-            )}
-            {/* Drawn first: the line is the range of Next Reset's place. */}
-            {range && projected ? (
-              <small className="legend-day-est legend-day-est-label">
-                <span aria-hidden="true">Next Reset </span>range
-              </small>
-            ) : (
-              <small className="legend-day-est"> estimate</small>
-            )}
-          </dd>
-        </div>
-      </dl>
+      </div>
       <div className="legend-day-slots">
         <BattleRow
           battles={attacks}

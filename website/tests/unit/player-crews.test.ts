@@ -45,9 +45,9 @@ import { PythonApiError } from "../../app/services/python.server";
 const TAG = "#2PP";
 const CREW_ID = "6f1c2b9e-4a7d-4c1e-9b2a-0d5e8f7a6b3c";
 const OTHER_ID = "0b6c1f2e-3d4a-4b5c-8d6e-7f8091a2b3c4";
-/** The small crest before a Crew's name: its first letter. */
+/** The small crest before a Crew's name: its first letter on a shield. */
 const crest = (letter: string) =>
-  `<span class="player-crew-crest" aria-hidden="true">${letter}</span>`;
+  `<svg class="crest" viewBox="0 0 40 44" aria-hidden="true" focusable="false">.*?>${letter}</text></svg>`;
 
 const PLAYER = {
   kind: "player-page",

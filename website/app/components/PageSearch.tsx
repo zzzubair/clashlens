@@ -34,7 +34,8 @@ export function PageSearch({
   }, []);
 
   return (
-    <div className="player-search-panel">
+    // The page's own search, so the header's shows as its icon alone.
+    <div className="player-search-panel" data-page-search>
       <Form
         method="get"
         action="/search"

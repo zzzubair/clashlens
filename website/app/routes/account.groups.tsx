@@ -15,7 +15,9 @@ import {
 
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { TrophyMark } from "../components/LeaderboardShared";
+import { TrophyIcon } from "../components/GameIcons";
+import { dayBar, dayRange, rowScale } from "../components/DayScale";
+import { LastDays } from "../components/LastDays";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import { addedNotice, GROUP_LIMIT, STATE_LABELS } from "../lib/group-text";
 import {
@@ -26,6 +28,7 @@ import {
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
+import type { GroupComparison } from "../lib/group-comparison";
 import { canonicalPlayerPath, MAX_PLAYER_TAG_INPUT_LENGTH } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
@@ -36,8 +39,24 @@ const NO_STORE = { "Cache-Control": "no-store" };
 const ACTIONS = ["create", "update", "delete", "add-player", "remove-player"] as const;
 type GroupAction = (typeof ACTIONS)[number];
 
+/** One row of a card's preview: a player with their result today and on each
+ *  of the last 7 finished Legend days, and whether they are the Clasher's own. */
+export interface PreviewPlayer extends GroupPlayer {
+  you: boolean;
+  today: number | null;
+  /** The 7 days' total, for screen readers; the bars show it to the eye. */
+  net: number | null;
+  days: (number | null)[];
+}
+
 export interface GroupsLoaderData {
   groups: ListedGroup[];
+  /** Each list's players as its comparison reads them, with the Clasher's own
+   *  players beside them, by group; a list whose comparison could not be read
+   *  has none and shows names and trophies only. */
+  previews?: Record<string, PreviewPlayer[]>;
+  /** The 7 finished days every preview covers, named once over its bars. */
+  previewDays?: string | null;
   /** The Season the members' trophies were read in, once loaded. */
   season: string | null;
   /** Fresh idempotency key for the create form. */
@@ -83,6 +102,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const empty = {
     groups: [],
+    previews: {},
     season: null,
     createIdempotencyKey: freshIdempotencyKey(),
     updateIdempotencyKeys: {},
@@ -94,7 +114,31 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   try {
     const { createPythonClient } = await import("../services/python.server");
     const { groups, season } = await createPythonClient(identity).listGroups();
-    const loaded: GroupsLoaderData = { ...empty, groups, season };
+    const { getGroupComparison } = await import("../services/group-comparison.server");
+    // Each card shows today and the last 7 days without opening it: every
+    // list's comparison is read at once, and one that fails only loses its bars.
+    const comparisons = await Promise.all(
+      groups.map((group) =>
+        group.players.length === 0
+          ? null
+          : getGroupComparison(identity, group.groupId, 7).catch(() => null),
+      ),
+    );
+    const loaded: GroupsLoaderData = {
+      ...empty,
+      groups,
+      previews: Object.fromEntries(
+        groups.flatMap((group, index) => {
+          const comparison = comparisons[index];
+          return comparison == null ? [] : [[group.groupId, previewPlayers(comparison)]];
+        }),
+      ),
+      // Every list covers the same 7 days, up to the last Reset.
+      previewDays: dayRange(
+        comparisons.find((comparison) => comparison != null)?.dayStarts ?? [],
+      ),
+      season,
+    };
     for (const group of groups) {
       loaded.updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
       loaded.deleteIdempotencyKeys[group.groupId] = freshIdempotencyKey();
@@ -282,6 +326,20 @@ export async function action({ request, context }: Route.ActionArgs) {
   throw replace("/account/watchlists");
 }
 
+function previewPlayers(comparison: GroupComparison): PreviewPlayer[] {
+  return comparison.players.map((player) => ({
+    tag: player.tag,
+    name: player.name,
+    trophies: player.trophies,
+    seasonResetPending: player.seasonResetPending,
+    state: player.status,
+    you: player.you,
+    today: player.today?.net ?? null,
+    net: player.net,
+    days: player.days.map((day) => day.net),
+  }));
+}
+
 const GROUP_GONE: WebsiteErrorResponse = {
   error: {
     code: "conflict",
@@ -335,6 +393,11 @@ export default function GroupsRoute() {
         players: group.players.map(expireSeasonTrophies),
       }))
     : loaderData.groups;
+  const preview = (groupId: string) => {
+    const players = loaderData.previews?.[groupId];
+    if (players === undefined) return null;
+    return seasonEnded ? players.map(expireSeasonTrophies) : players;
+  };
   const navigation = useNavigation();
   const creating =
     navigation.state !== "idle" && navigation.formData?.get("action") === "create";
@@ -384,10 +447,11 @@ export default function GroupsRoute() {
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell">
-      <section className="hero groups-hero" aria-labelledby="groups-title">
+      <header className="page-hero">
         <h1 id="groups-title">Watchlists</h1>
-        <p className="lede">Private lists of up to 20 players, side by side.</p>
-        {/* With lists to show, making one waits behind a button. */}
+        <p>Private lists of up to 20 players, side by side.</p>
+        {/* With lists to show, making one waits behind a button, on the
+            title's right. */}
         {groups.length > 0 || loaderData.error ? (
           <details
             key={createKey}
@@ -398,7 +462,7 @@ export default function GroupsRoute() {
             {createForm}
           </details>
         ) : null}
-      </section>
+      </header>
 
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
@@ -418,6 +482,7 @@ export default function GroupsRoute() {
               <GroupCard
                 key={group.groupId}
                 group={group}
+                preview={preview(group.groupId)}
                 loaderData={loaderData}
                 actionData={
                   actionData?.groupId === group.groupId ? actionData : undefined
@@ -443,10 +508,13 @@ type Panel = (typeof PANELS)[number];
 
 function GroupCard({
   group,
+  preview,
   loaderData,
   actionData,
 }: {
   group: ListedGroup;
+  /** The list's players with today and their days, when the comparison was read. */
+  preview: PreviewPlayer[] | null;
   loaderData: GroupsLoaderData;
   /** A no-JavaScript form result for this group, if any. */
   actionData: GroupsActionData | undefined;
@@ -455,6 +523,7 @@ function GroupCard({
   const add = useFetcher<GroupsActionData>();
   const addForm = useRef<HTMLFormElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
+  const more = useRef<HTMLDetailsElement>(null);
   const addResult =
     add.data ?? (actionData?.action === "add-player" ? actionData : undefined);
   const checking = add.state !== "idle";
@@ -464,11 +533,12 @@ function GroupCard({
   }, [add.state, add.data]);
   const editResult = actionData?.action === "add-player" ? undefined : actionData;
   const count = group.players.length;
-  const top = group.players.reduce<number | null>(
-    (best, player) =>
-      player.trophies === null ? best : Math.max(best ?? 0, player.trophies),
-    null,
-  );
+  // The Clasher's own players outside the list still join its rows, as in the
+  // comparison, so the count says how many: "6 watched + 2 yours".
+  const yours =
+    preview?.filter(
+      (player) => player.you && !group.players.some(({ tag }) => tag === player.tag),
+    ).length ?? 0;
   // Opened by its link without JavaScript, or kept open after that panel's form result.
   const [searchParams] = useSearchParams();
   const [panel, setPanel] = useState<Panel | null>(() =>
@@ -489,6 +559,7 @@ function GroupCard({
     "aria-controls": `group-${id}-${name}`,
     onClick: (event: MouseEvent) => {
       event.preventDefault();
+      more.current?.removeAttribute("open");
       flushSync(() => setPanel(panel === name ? null : name));
       if (name === "add" && panel !== name) tagInput.current?.focus();
     },
@@ -501,31 +572,32 @@ function GroupCard({
           <h3>{group.name}</h3>
           {count > 0 ? (
             <p className="group-card-meta">
-              {count === 1 ? "1 player" : `${count} players`}
-              {top === null ? null : (
-                <span className="group-card-top"> · top {top.toLocaleString("en")}</span>
-              )}
+              {count} watched{yours > 0 ? ` + ${yours} yours` : ""}
             </p>
           ) : null}
         </div>
-        {/* Adding and editing are the card's quiet extras, each a small
-            word-and-icon button. */}
-        <a className="group-text-button" {...toggle("add")}>
-          <LineIcon d="M12 5v14M5 12h14" />
-          Add player
-        </a>
-        <a
-          className="group-text-button"
-          {...toggle("edit")}
-          title="Rename, remove players or delete"
-        >
-          <LineIcon d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
-          Edit
-        </a>
+        {/* Adding and editing wait in the card's one quiet menu, so its
+            title has room and Compare is the clear way on. */}
+        <details className="group-more" ref={more}>
+          <summary title="Add a player, rename, remove players or delete">
+            <span aria-hidden="true">⋯</span>
+            <span className="sr-only">More for {group.name}</span>
+          </summary>
+          <div className="group-more-menu">
+            <a className="group-text-button" {...toggle("add")}>
+              <LineIcon d="M12 5v14M5 12h14" />
+              Add player
+            </a>
+            <a className="group-text-button" {...toggle("edit")}>
+              <LineIcon d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
+              Edit
+            </a>
+          </div>
+        </details>
         {/* The whole card opens the comparison; this link stretches over it,
-            and its word and arrow are all that shows of it. */}
+            and its button is all that shows of it. */}
         <Link
-          className="group-card-open"
+          className="group-card-open button-primary"
           to={`/account/watchlists/${id}`}
           aria-label={`Compare players in ${group.name}`}
         >
@@ -592,23 +664,8 @@ function GroupCard({
         <EditGroup group={group} loaderData={loaderData} actionData={editResult} />
       </div>
 
-      {/* Names the gap column once; each gap keeps its words for screen readers. */}
-      {panel !== "edit" && count > 1 && top !== null ? (
-        <p className="group-members-key" aria-hidden="true">
-          Behind #1
-        </p>
-      ) : null}
       {panel === "edit" ? null : count > 0 ? (
-        <ul
-          className="player-action-list group-members"
-          aria-label={`Players in ${group.name}`}
-        >
-          {byTrophies(group.players).map((player) => (
-            <li key={player.tag}>
-              <MemberName player={player} top={top} />
-            </li>
-          ))}
-        </ul>
+        <Members group={group} preview={preview} days={loaderData.previewDays ?? null} />
       ) : (
         <p className="muted group-members">No players yet.</p>
       )}
@@ -755,7 +812,7 @@ function EditGroup({
  * list has no order of its own (it comes back by tag), so this only changes
  * how it reads.
  */
-function byTrophies(players: GroupPlayer[]): GroupPlayer[] {
+function byTrophies<T extends GroupPlayer>(players: T[]): T[] {
   return [...players].sort(
     (left, right) =>
       (right.trophies ?? -1) - (left.trophies ?? -1) || left.tag.localeCompare(right.tag),
@@ -781,30 +838,138 @@ function LineIcon({ d }: { d: string }) {
 }
 
 /**
- * A member's name and trophies. In a card's list (given the list's top) each
- * player below the leader also shows how far behind it they are.
+ * A card's players, highest first, each with today's result and the last 7
+ * days as small bars, so the race reads without opening the list. The
+ * Clasher's own players join it, marked You, as in the comparison.
  */
-function MemberName({ player, top }: { player: GroupPlayer; top?: number | null }) {
+function Members({
+  group,
+  preview,
+  days,
+}: {
+  group: ListedGroup;
+  preview: PreviewPlayer[] | null;
+  /** The bars' days, such as "22–28 Oct". */
+  days: string | null;
+}) {
   const backState = useBackState("Your watchlists");
-  const behind =
-    top == null ||
-    player.state !== "tracking" ||
-    player.seasonResetPending ||
-    player.trophies === null
-      ? 0
-      : top - player.trophies;
+  const rows: (GroupPlayer & Partial<PreviewPlayer>)[] = byTrophies(
+    preview ?? group.players,
+  );
+  return (
+    <div className="group-members">
+      {preview === null ? null : (
+        <div className="group-members-key">
+          <span aria-hidden="true">Today</span>
+          <LastDays count={7} range={days} />
+          <span aria-hidden="true">Trophies</span>
+        </div>
+      )}
+      <ol className="group-member-list" aria-label={`Players in ${group.name}`}>
+        {rows.map((player) => (
+          <li key={player.tag} className={player.you ? "group-member-you" : undefined}>
+            <span className="group-member-who">
+              <Link to={canonicalPlayerPath(player.tag)} state={backState}>
+                {player.name ?? player.tag}
+              </Link>
+              {player.you ? (
+                <span className="you-badge" aria-hidden="true">
+                  You
+                </span>
+              ) : null}
+            </span>
+            <span className="sr-only">
+              {player.tag}
+              {!player.you
+                ? ""
+                : group.players.some(({ tag }) => tag === player.tag)
+                  ? ", you"
+                  : ", you, not in this watchlist"}
+            </span>
+            {player.state !== "tracking" ? (
+              <span className="group-member-detail group-member-state">
+                {STATE_LABELS[player.state]}
+              </span>
+            ) : player.seasonResetPending ? (
+              <span className="group-member-detail group-member-state">
+                Waiting for this player&apos;s Season reset
+              </span>
+            ) : (
+              <>
+                {player.days === undefined ? null : (
+                  <>
+                    <span className="group-member-today">
+                      <span className="sr-only">Today </span>
+                      {player.today == null ? "–" : <Signed value={player.today} />}
+                    </span>
+                    <DayBars days={player.days} />
+                    {player.net == null ? null : (
+                      <span className="sr-only">, last 7 days {signed(player.net)}</span>
+                    )}
+                  </>
+                )}
+                <span className="group-member-detail group-member-trophies">
+                  {player.trophies === null ? (
+                    "Legend League"
+                  ) : (
+                    <>
+                      <TrophyIcon />
+                      {player.trophies.toLocaleString("en")}
+                      <span className="sr-only"> trophies</span>
+                    </>
+                  )}
+                </span>
+              </>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * One player's last days as thin bars up (won) or down (lost) from their
+ * zero line, on the player's own scale so every row shows its shape, all at
+ * one strength in their gain or loss colour, as Rankings draws its own.
+ */
+function DayBars({ days }: { days: (number | null)[] }) {
+  const scale = rowScale(days);
+  return (
+    <span className="group-day-bars" aria-hidden="true">
+      {days.map((net, index) => (
+        <span
+          key={index}
+          data-net={net === null || net === 0 ? "flat" : net > 0 ? "up" : "down"}
+          style={{ "--size": dayBar(net ?? 0, scale) } as React.CSSProperties}
+        />
+      ))}
+    </span>
+  );
+}
+
+function Signed({ value }: { value: number }) {
+  return (
+    <span className={value > 0 ? "score-positive" : value < 0 ? "score-negative" : ""}>
+      {signed(value)}
+    </span>
+  );
+}
+
+function signed(value: number): string {
+  const text = Math.abs(value).toLocaleString("en");
+  return value > 0 ? `+${text}` : value < 0 ? `−${text}` : text;
+}
+
+/** A member's name and trophies, in Edit's list beside their Remove button. */
+function MemberName({ player }: { player: GroupPlayer }) {
+  const backState = useBackState("Your watchlists");
   return (
     <span className="player-action-name">
       <Link to={canonicalPlayerPath(player.tag)} state={backState}>
         {player.name ?? player.tag}
       </Link>
       {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
-      {behind > 0 ? (
-        <span className="group-member-gap">
-          −{behind.toLocaleString("en")}
-          <span className="sr-only"> behind the top</span>
-        </span>
-      ) : null}
       <span className="group-member-detail">
         {player.state === "tracking" ? (
           player.seasonResetPending ? (
@@ -813,7 +978,7 @@ function MemberName({ player, top }: { player: GroupPlayer; top?: number | null 
             "Legend League"
           ) : (
             <>
-              <TrophyMark />
+              <TrophyIcon />
               <span className="score">{player.trophies.toLocaleString("en")}</span>
               <span className="sr-only"> trophies</span>
             </>

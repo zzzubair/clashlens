@@ -62,6 +62,11 @@ const CARD_ICONS: Record<string, IconName> = {
   Watchlist: "list",
 };
 
+/** A card's own mark, found from its title; Customise shows it too. */
+export function cardIcon(title: string): IconName | undefined {
+  return CARD_ICONS[title];
+}
+
 /** The card's name: the title, or the first words of one built with markup. */
 function titleText(title: ReactNode): string {
   if (typeof title === "string") return title;
@@ -74,10 +79,13 @@ function titleText(title: ReactNode): string {
 /** The card's title row; `meta` sits at the right end. */
 export function CardHead({
   title,
+  info,
   meta,
   icon,
 }: {
   title: ReactNode;
+  /** The card's ⓘ, right after its title. */
+  info?: ReactNode;
   meta?: ReactNode;
   /** Defaults to the card's own mark, found from its title. */
   icon?: IconName;
@@ -89,8 +97,25 @@ export function CardHead({
         {mark ? <DashboardIcon name={mark} /> : null}
         {title}
       </h2>
+      {info}
       {meta ? <span className="dash-card-meta">{meta}</span> : null}
     </header>
+  );
+}
+
+/**
+ * A card's one ⓘ in its header: what its short column names mean, opened
+ * with a tap or a click; its name is said aloud and is its tooltip.
+ */
+export function InfoTip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <details className="dash-info">
+      <summary title={label}>
+        <span aria-hidden="true">ⓘ</span>
+        <span className="sr-only">{label}</span>
+      </summary>
+      <div className="dash-info-body">{children}</div>
+    </details>
   );
 }
 

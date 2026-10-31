@@ -89,7 +89,10 @@ export function NeedsAccount({
   const { title, reason } = needsAccountText(pathname);
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      <h1>{title}</h1>
+      {/* The same title block as every other top-level page. */}
+      <header className="page-hero">
+        <h1>{title}</h1>
+      </header>
       <section className="form-panel needs-account" aria-label="Account needed">
         <p>{reason}</p>
         <AccountButtons returnPath={returnPath} />

@@ -9,15 +9,23 @@ import {
 } from "react-router";
 
 import { useBackState } from "../components/BackLink";
-import { DashboardIcon } from "../components/DashboardIcon";
+import { Crest } from "../components/GameIcons";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { ProviderMark } from "../components/ProviderMark";
 import { SavedLine } from "../components/SavedLine";
+import { HeatKey } from "../components/SeasonHeatGrid";
+import { SeasonHeatMap, heatDays, heatMapShown } from "../components/SeasonSummary";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
-import type { WebsiteErrorResponse } from "../lib/contracts";
-import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
+import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
+import type { SeasonDay } from "../lib/dashboard-cards";
+import {
+  LOOKUP_MESSAGES,
+  lookupExplanation,
+  selectPlayerHistory,
+} from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
+import { inGap, logGaps, seasonShape } from "../lib/season-shape";
 import type { Route } from "./+types/users.$username";
 import type { RootLoaderData } from "../root";
 
@@ -31,6 +39,17 @@ export interface UserLoaderData {
   error: WebsiteErrorResponse | null;
   /** Only for the signed-in owner of this profile, null for everyone else. */
   owner: OwnerTools | null;
+  /** Each linked player's rank at the last Reset and Season, by tag, from
+   *  their player page; a player whose page could not be read has none. */
+  days?: Record<string, LinkedDay>;
+}
+
+/** What a linked player's card draws from their player page. */
+export interface LinkedDay {
+  /** The place on the last Reset's Daily board. */
+  resetRank: number | null;
+  /** The Season heat map, as the player page's Season summary draws it. */
+  season: { start: number; today: number; days: SeasonDay[] } | null;
 }
 
 /** The status line on each of the owner's tools; null when it could not be read. */
@@ -60,12 +79,17 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
   try {
     const { createPythonClient } = await import("../services/python.server");
+    const client = createPythonClient();
     const [user, owner] = await Promise.all([
-      createPythonClient().getPublicUser(username),
+      client.getPublicUser(username),
       ownerTools(request, username),
     ]);
+    const days = await linkedDays(
+      user.verifiedPlayers.map((player) => player.tag),
+      (tag) => client.getPlayer(tag),
+    );
     return data<UserLoaderData>(
-      { user, notFound: false, error: null, owner },
+      { user, notFound: false, error: null, owner, days },
       { headers: NO_STORE },
     );
   } catch (cause) {
@@ -82,6 +106,59 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       { status: 422, headers: NO_STORE },
     );
   }
+}
+
+/**
+ * Each linked player's rank at the last Reset and Season heat map, read from
+ * their player page, one read per player (a Clasher links only a few). A
+ * page that can't be read leaves that player out, and their card shows its
+ * numbers only.
+ */
+async function linkedDays(
+  tags: string[],
+  read: (tag: string) => Promise<PlayerPage>,
+): Promise<Record<string, LinkedDay>> {
+  const now = Date.now();
+  const days = await Promise.all(
+    tags.map(async (tag) => {
+      try {
+        const page = await read(tag);
+        const day = page.currentDay;
+        const live = day !== null && Date.parse(day.period.split(" – ")[1]) > now;
+        // The day that ended at today's start holds the last Reset's rank.
+        const start = day ? Date.parse(day.period.split(" – ")[0]) : NaN;
+        const reset = [...page.seasonDays, ...page.recentDays].find(
+          (saved) => Date.parse(saved.period.split(" – ")[1]) === start,
+        );
+        // The days the player page's Season summary colours: those its log
+        // shows, without a partial Season's stretches outside Legend I.
+        const shape = seasonShape(page, now);
+        const gaps = shape.partial ? logGaps(shape) : [];
+        const history = selectPlayerHistory(page, now).filter(
+          ({ day: saved }) => !inGap(gaps, shape, saved),
+        );
+        return [
+          [
+            tag,
+            {
+              resetRank: live ? (reset?.resetRank ?? null) : null,
+              season:
+                history.length > 0
+                  ? {
+                      start: shape.seasonStart,
+                      today: shape.today,
+                      days: heatDays(history, shape.seasonStart),
+                    }
+                  : null,
+            },
+          ] as const,
+        ];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return Object.fromEntries(days.flat());
 }
 
 /** The owner's tool statuses, or null when the visitor is anyone else. */
@@ -175,9 +252,15 @@ export default function UserRoute() {
       ) : null}
       <section className="hero profile-hero" aria-labelledby="user-title">
         <div className="profile-id">
-          {/* A monogram stands in for a picture; the name beside it says the same. */}
-          <span className="profile-avatar" aria-hidden="true">
-            {initial(data.user?.displayName ?? "")}
+          {/* Their first player's Legend League badge, the dashboard's art,
+              stands in for a picture; with no player in Legend League, a
+              crest with their initial. The name beside it says who. */}
+          <span className="profile-avatar">
+            {players[0] && inLegend(players[0]) ? (
+              <img src="/images/legend-league.webp" alt="" width={151} height={160} />
+            ) : (
+              <Crest name={data.user?.displayName ?? ""} />
+            )}
           </span>
           <div>
             <div className="profile-name">
@@ -199,13 +282,23 @@ export default function UserRoute() {
 
       <div className="profile-body">
         <section className="data-section" aria-labelledby="user-players-title">
-          <h2 id="user-players-title">Clash players</h2>
+          <div className="profile-players-head">
+            <h2 id="user-players-title">Clash players</h2>
+            {/* One key for every card's Season heat map, while one draws. */}
+            {players.some((player) => {
+              const season = data.days?.[player.tag]?.season;
+              return season ? heatMapShown(season.today) : false;
+            }) ? (
+              <HeatKey />
+            ) : null}
+          </div>
           {players.length > 0 ? (
             <ul className="linked-player-cards">
               {players.map((player) => (
                 <li key={player.tag}>
                   <LinkedPlayer
                     player={player}
+                    day={data.days?.[player.tag]}
                     backLabel={isOwnProfile ? "Your profile" : data.user!.displayName}
                   />
                 </li>
@@ -224,7 +317,8 @@ export default function UserRoute() {
             </div>
           )}
         </section>
-
+        {/* The owner's tools after their players, a quiet second area, so a
+            phone opens on the players. */}
         {isOwnProfile ? <YourTools tools={data.owner} /> : null}
       </div>
     </main>
@@ -233,25 +327,27 @@ export default function UserRoute() {
 
 /** A tool that is not working yet shows the step that starts it instead of its state. */
 const NEXT_STEPS: Record<string, string> = {
-  "Discord not connected": "Connect Discord",
+  // The row says Discord already, so its step is one short word.
+  "Discord not connected": "Connect",
   "Not set up": "Set up",
   Off: "Turn on",
 };
 
-/** The owner's two tools, one row each: its mark and name, then whether it is on. */
+/** The owner's two tools, one row each: its mark, name and purpose, then
+ *  whether it is on or the step that starts it. */
 function YourTools({ tools }: { tools: OwnerTools | null }) {
   const rows = [
     {
       to: "/account/discord-alerts",
       title: "Discord alerts",
-      text: "A Discord message when someone attacks your players.",
+      text: "A ping when you're attacked",
       status: tools?.alerts ?? null,
       mark: <ProviderMark provider="discord" />,
     },
     {
       to: "/account/obs-overlay",
       title: "Stream overlay",
-      text: "Your live Legend day on your stream.",
+      text: "Live stats on your stream",
       status: tools?.overlay ?? null,
       mark: (
         // A screen with a live dot, drawn here as no shared icon shows a stream.
@@ -284,11 +380,13 @@ function YourTools({ tools }: { tools: OwnerTools | null }) {
             <Link className="profile-tool" to={row.to}>
               <span className="profile-tool-mark">{row.mark}</span>
               <strong>{row.title}</strong>
-              {/* What the tool does: a quiet line under the name, and part
-                  of the link's name. */}
+              {/* What the tool does: one quiet line under the name, and
+                  part of the link's name. */}
               <span className="profile-tool-text">{row.text}</span>
               {row.status === null ? null : NEXT_STEPS[row.status] ? (
-                <span className="profile-tool-start">{NEXT_STEPS[row.status]}</span>
+                <span className="profile-tool-start button-secondary">
+                  {NEXT_STEPS[row.status]}
+                </span>
               ) : (
                 <span
                   className="profile-tool-status"
@@ -306,140 +404,163 @@ function YourTools({ tools }: { tools: OwnerTools | null }) {
 }
 
 /**
- * The whole card is one link to the player page, named by the player's name
- * and tag; the numbers are its description. A player without current results
- * also says what their own page says.
+ * A linked player: a link to their player page, named by the player's name
+ * and tag, with their numbers now as its description, and their Season heat
+ * map beside them. The whole card opens the player page, where today's
+ * battles are.
  */
 function LinkedPlayer({
   player,
+  day,
   backLabel,
 }: {
   player: LinkedPlayerCard;
+  day?: LinkedDay;
   backLabel: string;
 }) {
   const backState = useBackState(backLabel);
   const id = `linked-player-${player.tag.slice(1)}`;
-  // The Legend League badge, as on the dashboard, while the player's newest
-  // profile or a Leaderboard place puts them there; otherwise a trophy.
-  const legend =
-    player.league === null ? player.rank !== null : player.league === "Legend I";
+  // The Legend League badge, as on the dashboard; otherwise a trophy.
+  const legend = inLegend(player);
   const note =
     player.state === "tracking" && player.reason === null
       ? null
       : ((player.state === "tracking"
           ? lookupExplanation(player.reason, player.name)
           : null) ?? LOOKUP_MESSAGES[player.state]);
+  const counts =
+    player.today?.attacks != null && player.today.defenses !== null
+      ? { attacks: player.today.attacks, defenses: player.today.defenses }
+      : null;
   return (
-    <Link
-      className="linked-player-card"
-      to={canonicalPlayerPath(player.tag)}
-      state={backState}
-      aria-labelledby={`${id}-name ${id}-tag`}
-      aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details${note === null ? "" : ` ${id}-note`}`}
-    >
-      <span className="linked-player-identity">
-        <strong className="linked-player-name" id={`${id}-name`}>
-          {player.name ?? player.tag}
-        </strong>
-        <span className="player-tag" id={`${id}-tag`}>
-          {player.tag}
-        </span>
-        {player.clan ? (
-          <span className="linked-player-clan" id={`${id}-clan`}>
-            {player.clan}
+    <article className="linked-player-card">
+      <Link
+        className="linked-player-link"
+        to={canonicalPlayerPath(player.tag)}
+        state={backState}
+        aria-labelledby={`${id}-name ${id}-tag`}
+        aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details${note === null ? "" : ` ${id}-note`}`}
+      >
+        <span className="linked-player-identity">
+          <strong className="linked-player-name" id={`${id}-name`}>
+            {player.name ?? player.tag}
+          </strong>
+          <span className="player-tag" id={`${id}-tag`}>
+            {player.tag}
           </span>
-        ) : null}
-      </span>
-      <span className="linked-player-stats" id={`${id}-details`}>
-        <span className="linked-player-stat">
-          <small>Trophies</small>
-          {player.trophies === null ? (
-            <span className="linked-player-wait">
-              {player.seasonResetPending
-                ? "Waiting for this player's Season reset"
-                : "Unknown"}
+          {player.clan ? (
+            <span className="linked-player-clan" id={`${id}-clan`}>
+              {player.clan}
             </span>
-          ) : (
-            <strong className="linked-player-trophies">
-              {legend ? (
-                <img
-                  className="linked-player-badge"
-                  src="/images/legend-league.webp"
-                  alt=""
-                  width={151}
-                  height={160}
-                />
-              ) : (
-                <TrophyMark />
-              )}
-              {player.trophies.toLocaleString("en-GB")}
-            </strong>
-          )}
+          ) : null}
         </span>
-        <span className="linked-player-stat">
-          <small>Rank</small>
-          {player.rank === null ? (
-            <strong className="linked-player-league">
-              {player.league ?? "Unranked"}
-            </strong>
-          ) : (
-            <strong
-              className="rank-mark"
-              data-podium-rank={player.rank <= 3 ? player.rank : undefined}
-            >
-              {/* A podium plate shows the bare place, as on Rankings. */}
-              {player.rank <= 3 ? player.rank : `#${player.rank.toLocaleString("en-GB")}`}
-            </strong>
-          )}
-        </span>
-        <span className="linked-player-stat linked-player-today">
-          <small>Today</small>
-          {player.today === null ? (
-            <span className="linked-player-wait">Not available yet</span>
-          ) : (
-            <span>
-              <strong className={netTone(player.today.net)}>
-                {formatNet(player.today.net)}
+        <span className="linked-player-stats" id={`${id}-details`}>
+          <span className="linked-player-stat">
+            <small>Trophies</small>
+            {player.trophies === null ? (
+              <span className="linked-player-wait">
+                {player.seasonResetPending
+                  ? "Waiting for this player's Season reset"
+                  : "Unknown"}
+              </span>
+            ) : (
+              <strong className="linked-player-trophies">
+                {legend ? (
+                  <img
+                    className="linked-player-badge"
+                    src="/images/legend-league.webp"
+                    alt=""
+                    width={151}
+                    height={160}
+                  />
+                ) : (
+                  <TrophyMark />
+                )}
+                {player.trophies.toLocaleString("en-GB")}
               </strong>
-              {player.today.net === null ? null : " so far"}
-            </span>
-          )}
-        </span>
-        {/* The strips sit under the row of three numbers, across the card. */}
-        {player.today?.attacks != null && player.today.defenses !== null ? (
-          <span className="linked-player-battles">
-            <span className="sr-only">
-              {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
-            </span>
-            <BattleTiles icon="swords" count={player.today.attacks} />
-            <BattleTiles icon="shield" count={player.today.defenses} />
+            )}
           </span>
-        ) : null}
-      </span>
-      {note === null ? null : (
-        <span className="linked-player-note" id={`${id}-note`}>
-          {note}
+          <span className="linked-player-stat">
+            <small>Rank</small>
+            {player.rank === null ? (
+              <strong className="linked-player-league">
+                {player.league ?? "Unranked"}
+              </strong>
+            ) : (
+              <span className="linked-player-rank">
+                <strong
+                  className="rank-mark"
+                  data-podium-rank={player.rank <= 3 ? player.rank : undefined}
+                >
+                  {/* A podium plate shows the bare place, as on Rankings. */}
+                  {player.rank <= 3
+                    ? player.rank
+                    : `#${player.rank.toLocaleString("en-GB")}`}
+                </strong>
+                <RankMove rank={player.rank} since={day?.resetRank ?? null} />
+              </span>
+            )}
+          </span>
+          <span className="linked-player-stat linked-player-today">
+            <small>Today</small>
+            {player.today === null ? (
+              <span className="linked-player-wait">Not available yet</span>
+            ) : (
+              <span>
+                <strong className={netTone(player.today.net)}>
+                  {formatNet(player.today.net)}
+                </strong>
+                {player.today.net === null ? null : " so far"}
+              </span>
+            )}
+          </span>
+          {/* The battles today in words, for the link's description. */}
+          {counts ? (
+            <span className="sr-only">
+              {counts.attacks}/8 attacks · {counts.defenses}/8 defenses
+            </span>
+          ) : null}
         </span>
-      )}
-    </Link>
+        {note === null ? null : (
+          <span className="linked-player-note" id={`${id}-note`}>
+            {note}
+          </span>
+        )}
+      </Link>
+      {day?.season && heatMapShown(day.season.today) ? (
+        <div className="linked-player-heat">
+          <SeasonHeatMap
+            days={day.season.days}
+            seasonStart={day.season.start}
+            today={day.season.today}
+            still
+          />
+        </div>
+      ) : null}
+    </article>
   );
 }
 
-/**
- * How many of today's eight attacks or defenses are recorded: a filled mark for
- * each, an empty one for each still to come. The profile knows only the
- * counts, so the marks say nothing about how the battles went.
- */
-function BattleTiles({ icon, count }: { icon: "swords" | "shield"; count: number }) {
+/** In Legend League, as the player's newest profile or a Leaderboard place says. */
+function inLegend(player: LinkedPlayerCard): boolean {
+  return player.league === null ? player.rank !== null : player.league === "Legend I";
+}
+
+/** Places moved since the last Reset's Daily board; nothing when unknown or none. */
+function RankMove({ rank, since }: { rank: number; since: number | null }) {
+  const moved = since === null ? 0 : since - rank;
+  if (!moved) return null;
+  const places = Math.abs(moved).toLocaleString("en-GB");
   return (
-    <span className="battle-tiles" data-kind={icon} aria-hidden="true">
-      <span className="battle-tiles-count">
-        <DashboardIcon name={icon} />
-        {count}/8
+    <span className={moved > 0 ? "linked-player-gain" : "linked-player-loss"}>
+      <span aria-hidden="true">
+        {moved > 0 ? "▲" : "▼"}
+        {places}
+        <span className="linked-player-since"> since Reset</span>
       </span>
-      {Array.from({ length: 8 }, (_, index) => (
-        <i key={index} data-used={index < count ? "" : undefined} />
-      ))}
+      <span className="sr-only">
+        , {moved > 0 ? "up" : "down"} {places} since the last Reset
+      </span>
     </span>
   );
 }
@@ -452,8 +573,4 @@ function formatNet(value: number | null): string {
 function netTone(value: number | null): string | undefined {
   if (value === null || value === 0) return undefined;
   return value > 0 ? "linked-player-gain" : "linked-player-loss";
-}
-
-function initial(name: string): string {
-  return Array.from(name.trim())[0]?.toUpperCase() ?? "?";
 }

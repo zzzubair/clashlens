@@ -245,6 +245,8 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     .toBeGreaterThan(smallHeight);
   await clock.getByRole("button", { name: "Show small clock" }).click();
   await expect.poll(async () => (await dial.boundingBox())!.height).toBe(smallHeight);
+  // A phone keeps Customise in the toolbar's Options menu.
+  await page.getByRole("button", { name: "Dashboard options" }).click();
   await page.getByRole("button", { name: "Customise dashboard" }).click();
   await expect(bar).toBeInViewport();
   await bar.getByRole("button", { name: "Done" }).click();

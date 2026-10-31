@@ -9,7 +9,10 @@ import {
 
 import { type BackHandle } from "../components/BackLink";
 import {
+  boardCaption,
   BoardRows,
+  boardTitle,
+  crewCount,
   crewSearch,
   DEFENSE_BOARDS,
   DefenseOrder,
@@ -19,11 +22,12 @@ import {
   RoleChip,
 } from "../components/CrewBoards";
 import { CrewInvite } from "../components/CrewForms";
+import { CrewDay, sinceReset } from "../components/CrewDay";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Crest } from "../components/GameIcons";
 import { SavedLine } from "../components/SavedLine";
 import {
   BOARDS,
-  boardDescription,
   boardFromSlug,
   crewPeriod,
   NOW_BOARDS,
@@ -35,6 +39,7 @@ import {
 } from "../lib/crew-contracts";
 import type { Route } from "./+types/crews.$crewId";
 import "../crews.css";
+import "../crew-day.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each card shows the top of its board; the board's own page shows the rest. */
@@ -149,9 +154,7 @@ export default function CrewRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       {joined && myRole !== null ? <SavedLine>You joined {crew.name}.</SavedLine> : null}
       <section className="crew-panel crew-head" aria-labelledby="crew-title">
-        <span className="crew-icon" aria-hidden="true">
-          {Array.from(crew.name)[0]}
-        </span>
+        <Crest name={crew.name} />
         <div className="crew-title">
           <h1 id="crew-title">{crew.name}</h1>
           {myRole === null ? (
@@ -163,17 +166,18 @@ export default function CrewRoute() {
           )}
         </div>
         <div className="crew-places">
-          {/* Accounts fill places; the clashers who own them may hold several each. */}
-          <p>
-            <span>
-              {crew.used} of {crew.size} places filled
-              {clashers === null
-                ? null
-                : ` · ${clashers} ${clashers === 1 ? "clasher" : "clashers"}`}
+          {/* Accounts fill a crew's room; the Clashers who own them may hold
+              several each. The meter says how full, with its count beside it. */}
+          <p>{crewCount(crew.used, clashers)}</p>
+          <span className="crew-room">
+            <PlacesMeter used={crew.used} size={crew.size} />
+            <span aria-hidden="true">
+              {crew.used}/{crew.size}
             </span>
-            {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
-          </p>
-          <PlacesMeter used={crew.used} size={crew.size} />
+            <span className="sr-only">
+              Room for {crew.size} accounts, {open} free
+            </span>
+          </span>
         </div>
         {myRole === null ? null : (
           <div className="crew-actions">
@@ -195,25 +199,33 @@ export default function CrewRoute() {
             )}
           </div>
         )}
+        <CrewDay live={boards.boards.live.rows} />
       </section>
 
-      <nav aria-label="Boards" className="tab-row crew-tabs">
-        {TABS.map(({ label, boards: keys }) => {
-          const current = keys.includes(shown);
-          return (
-            <Link
-              key={label}
-              to={{ search: crewSearch(period, current ? shown : keys[0]) }}
-              aria-current={current ? "page" : undefined}
-              replace
-              preventScrollReset
-              onClick={showBoardTop}
-            >
-              {label}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* The dock sticks under the top bar; its bar fills in only once stuck
+          (crews.css), so the header's glow fades out behind the switch. */}
+      <div className="crew-tabs-dock">
+        <div className="crew-tabs-bar">
+          <nav aria-label="Boards" className="leaderboard-view-switch crew-tabs">
+            {TABS.map(({ label, boards: keys }) => {
+              const current = keys.includes(shown);
+              return (
+                <Link
+                  key={label}
+                  className="button secondary"
+                  to={{ search: crewSearch(period, current ? shown : keys[0]) }}
+                  aria-current={current ? "page" : undefined}
+                  replace
+                  preventScrollReset
+                  onClick={showBoardTop}
+                >
+                  {label}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+      </div>
 
       {/* A phone shows only the picked board (crews.css); wider screens show them all. */}
       <div className="crew-boards" id="crew-boards">
@@ -284,6 +296,8 @@ function BoardCard({
 }) {
   const { rows, missing } = boards.boards[board];
   const fixed = NOW_BOARDS.includes(board);
+  // Live rows say what each account has won or lost since the last Reset.
+  const today = board === "live" ? sinceReset(boards.boards.live.rows) : undefined;
   // Boards with rows share their row on a wider screen (crews.css); an empty
   // one shrinks to a line under them. Both defender boards hold the same days.
   const filled = (
@@ -304,10 +318,19 @@ function BoardCard({
       data-empty={rows.length === 0 ? "" : undefined}
       style={rows.length === 0 ? undefined : span}
     >
+      {/* The title is the one way to a board's own page, with every account
+          and who is missing. */}
       <div className="crew-board-head">
         <div>
-          <h3 id={`board-${board}`}>{BOARDS[board].title}</h3>
-          <p>{boardDescription(board, period)}</p>
+          <h3 id={`board-${board}`}>
+            <Link className="crew-board-open" to={path}>
+              {boardTitle(board)}
+              <span className="sr-only">
+                {rows.length > CARD_ROWS ? `, all ${rows.length}` : ", in full"}
+              </span>
+            </Link>
+          </h3>
+          <p>{boardCaption(board, period)}</p>
         </div>
         {order}
       </div>
@@ -318,34 +341,35 @@ function BoardCard({
           board={board}
           period={period}
           backLabel={crew.name}
+          today={today}
         />
       ) : (
         <div className="crew-empty">
           <b>{emptyBoardText(board, period, boards.dayNumber)}</b>
           {missing.length > 0 ? (
             <Link to={`${path}#not-on-board`}>
-              See why<span className="sr-only"> no one is on {BOARDS[board].title}</span>
+              See why<span className="sr-only"> no one is on {boardTitle(board)}</span>
             </Link>
           ) : null}
         </div>
       )}
       <div className="crew-board-foot">
+        {/* The board's own page has every account, as Show all does on the
+            dashboard's lists. */}
+        {rows.length > CARD_ROWS ? (
+          <Link className="show-all" to={path}>
+            Show all {rows.length}
+            <span className="sr-only"> on {boardTitle(board)}</span>
+          </Link>
+        ) : null}
         {missing.length > 0 && rows.length > 0 ? (
           <span>
             {missing.length} {missing.length === 1 ? "account has" : "accounts have"} no
             data here.{" "}
             <Link to={`${path}#not-on-board`}>
-              See who<span className="sr-only"> is not on {BOARDS[board].title}</span>
+              See who<span className="sr-only"> is not on {boardTitle(board)}</span>
             </Link>
           </span>
-        ) : (
-          <span />
-        )}
-        {rows.length > CARD_ROWS ? (
-          <Link className="button secondary" to={path}>
-            See all {rows.length}
-            <span className="sr-only"> on {BOARDS[board].title}</span>
-          </Link>
         ) : null}
       </div>
     </section>

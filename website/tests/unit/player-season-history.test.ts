@@ -321,12 +321,33 @@ describe("past-Season view", () => {
         expect(html).not.toContain("Final trophies:");
         expect(html).not.toContain("A Legend day runs from 05:00 to 05:00 UTC.");
         expect(html).toContain("<small>Trophy change</small>");
-        expect(html).not.toContain(">Net<");
+        // "Net" names each day in the Daily log, not the Season's total.
+        expect(html).not.toContain("<small>Net</small>");
       }
     },
   );
 
-  it("says a partial total covers 5 of 28 days in one short line", async () => {
+  it("says a partial Season with every day saved isn't all confirmed, not 0 missing", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          daysObserved: 28,
+          daysMissing: [],
+          unresolvedFlags: [],
+        }),
+      },
+      SEASON,
+    );
+    expect(html).toContain(
+      '<p class="season-summary-meta" aria-live="polite">All 28 days saved, not all confirmed</p>',
+    );
+    expect(html).not.toContain("of 28 days missing");
+  });
+
+  it("says a partial total is missing 23 of 28 days in one short line", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -336,7 +357,7 @@ describe("past-Season view", () => {
       SEASON,
     );
     expect(html).toContain(
-      '<p class="season-summary-meta" aria-live="polite">5 of 28 days recorded</p>',
+      '<p class="season-summary-meta" aria-live="polite">23 of 28 days missing</p>',
     );
     expect(html).not.toContain("Partial Season history");
     // The summary drops the Season trophy change; it is ending trophies minus 5,000.
@@ -395,9 +416,9 @@ describe("past-Season view", () => {
     // Days outside Legend I are not missing, and a player who left has no
     // final placement: the page says when they left and what they left on.
     expect(html).toContain(
-      '<p class="season-summary-meta" aria-live="polite">14 Legend I days · all recorded</p>',
+      '<p class="season-summary-meta" aria-live="polite">14 Legend I days</p>',
     );
-    expect(html).not.toContain("of 28 days recorded");
+    expect(html).not.toContain("of 28 days missing");
     expect(html).toMatch(/<dt>Final rank<\/dt><dd[^>]*>Left Legend I after Day 14<\/dd>/);
     expect(html).toContain("<dt>Last Legend I trophies</dt><dd>4,916</dd>");
     expect(html).toContain("Days 1–14 · dropped to Legend II at the Mon 21 Sep Reset");
@@ -686,6 +707,13 @@ describe("past-Season view", () => {
     expect(html).toContain("Battles on 4 Oct 2026");
     expect(html.match(/id="battle-last-day-attack"/g)).toHaveLength(1);
     expect(html).toContain("/players/%239GJ?day=2026-10-04#battle-last-day-attack");
+    // With no army the battle has nothing to open: no button, and its name is
+    // the link to their log.
+    const row = html.split('id="battle-last-day-attack"')[1].split("</li>")[0];
+    expect(row).not.toContain("battle-toggle");
+    expect(row).toMatch(
+      /<a class="battle-name"[^>]*href="\/players\/%239GJ\?day=2026-10-04#/,
+    );
     expect(html).not.toContain("Daily Legend log");
   });
 

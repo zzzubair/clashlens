@@ -305,6 +305,14 @@ export function HeaderSearch() {
         onClick={() => (expanded ? collapse(false) : setExpanded(true))}
       >
         <SearchIcon />
+        {/* Shown beside the icon on wide screens with a mouse; the button's
+            label already names it for screen readers. */}
+        <span className="header-search-label" aria-hidden="true">
+          Search
+        </span>
+        <kbd className="header-search-key" aria-hidden="true">
+          /
+        </kbd>
       </button>
       {expanded ? (
         <div

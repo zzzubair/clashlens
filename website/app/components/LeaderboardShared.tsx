@@ -1,12 +1,14 @@
 import type { TrackedPlayerEntry } from "../lib/contracts";
+import { TrophyIcon } from "./GameIcons";
 
+/** Rankings' rows a page, 50 on every width: short enough to read through
+ *  without folding, with one pager at its foot. Links to a rank's page use it. */
+export const RANKINGS_PAGE_SIZE = 50;
+
+/** The game's trophy beside a trophy count, sized by each page's
+ *  `.trophy-mark` rules. */
 export function TrophyMark() {
-  return (
-    <svg className="trophy-mark" aria-hidden="true" viewBox="0 0 20 20">
-      <path d="M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z" />
-      <path d="M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5" />
-    </svg>
-  );
+  return <TrophyIcon className="trophy-mark" />;
 }
 
 export function latestObservation(entries: TrackedPlayerEntry[]) {

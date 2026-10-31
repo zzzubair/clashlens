@@ -16,21 +16,22 @@ import {
   hitPercent,
 } from "../lib/dashboard-armies";
 import { UnitArt } from "./ArmyPortraits";
-import { CardHead, CardNote, Name, Switch } from "./DashboardParts";
+import { CardHead, CardNote, InfoTip, Name, Switch } from "./DashboardParts";
+import { TrophyIcon } from "./GameIcons";
 import { signed } from "./LegendClock";
 
 /** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;
 /** A phone shows this many army types before Show all. */
 const PHONE_DEFENSE_ROWS = 3;
-/** Held is coloured only when more than this many points from the Legends... */
+/** Not tripled is coloured only when this many points or more from the Legends... */
 const HELD_MARGIN = 5;
-/** ...and Avg lost only when more than this many trophies. */
+/** ...and Avg lost only when this many trophies or more. */
 const LOST_MARGIN = 3;
+/** The colouring rule in words, the same as Analytics'. */
+const RULE = `Green or red when ${HELD_MARGIN}+ pts or ${LOST_MARGIN}+ trophies from the Legend average.`;
 /** Armies on offense lists this many before "Other armies". */
 const OFFENSE_ROWS = 3;
-/** A defense loses at most 40 trophies, the end of the Avg lost bar. */
-const MOST_LOST = 40;
 const DAY_OPTIONS = [
   ["3", "3 days"],
   ["7", "7 days"],
@@ -99,13 +100,18 @@ function legendsHit(army: ArmyRow): number | null {
 }
 
 /**
- * " is-better" when a is more than `margin` above b, " is-worse" when more
- * than `margin` below, and "" when closer or unknown, so a gap of a point or
- * two stays uncoloured.
+ * " is-better" when a is at least `margin` above b, " is-worse" when at least
+ * `margin` below, and "" when closer or unknown, so a gap of a point or two
+ * stays uncoloured. Both are whole numbers, as shown.
  */
 function beyond(a: number | null, b: number | null, margin: number): string {
-  if (a === null || b === null || Math.abs(a - b) <= margin) return "";
+  if (a === null || b === null || Math.abs(a - b) < margin) return "";
   return a > b ? " is-better" : " is-worse";
+}
+
+/** a − b, rounded; null when either is unknown. */
+function difference(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : Math.round(a - b);
 }
 
 function lost(outcome: ArmyOutcome | null): string {
@@ -113,60 +119,85 @@ function lost(outcome: ArmyOutcome | null): string {
   return average === null ? "–" : signed(-average);
 }
 
-/** The average trophies lost as a share of the most a defense can lose. */
-function lostShare(outcome: ArmyOutcome | null): number | null {
-  const average = outcome ? averageTrophies(outcome) : null;
-  return average === null ? null : (100 * average) / MOST_LOST;
+/** An army's share as an ember bar on a fixed scale, 0–100. */
+function Bar({ own }: { own: number | null }) {
+  return (
+    <span className="army-bar" aria-hidden="true">
+      <i style={{ width: `${Math.min(100, own ?? 0)}%` }} />
+    </span>
+  );
+}
+
+/** Not tripled's difference: "+10 pts", said "10 points above". */
+function pointsDiff(diff: number | null): [string, string] {
+  if (diff === null) return ["–", "no Legends average yet"];
+  if (diff === 0) return ["0 pts", "same as the Legends average"];
+  const points = `${Math.abs(diff)} point${Math.abs(diff) === 1 ? "" : "s"}`;
+  return [
+    `${signed(diff)} pts`,
+    `${points} ${diff > 0 ? "above" : "below"} the Legends average`,
+  ];
 }
 
 /**
- * A bar on a fixed scale, 0–100: ember for a share, or a neutral fill with a
- * tick at every tracked player's number, so only the number after it is
- * coloured.
+ * Trophies per defense's difference in the value's own sign, the value less the
+ * Legends': −27 against −32 is "+5", 5 fewer lost; −33 against −32 is "−1".
  */
-function Bar({ own, legends }: { own: number | null; legends?: number | null }) {
+function lostDiff(fewer: number | null): [string, string] {
+  if (fewer === null) return ["–", "no Legends average yet"];
+  if (fewer === 0) return ["0", "same as the Legends average"];
+  const word = fewer > 0 ? "fewer" : "more";
+  return [signed(fewer), `${Math.abs(fewer)} ${word} lost than the Legends average`];
+}
+
+/**
+ * One comparison: the user's number with its unit, then one signed
+ * difference from the Legends with its own, which the column heading names.
+ * Only the difference is coloured, by the rule the header's ⓘ states.
+ * Screen readers hear it as a sentence.
+ */
+function WithLegends({
+  label,
+  own,
+  unit,
+  diff,
+  tone,
+}: {
+  label: string;
+  own: string;
+  /** A unit drawn after the number, such as the trophy for trophies. */
+  unit?: React.ReactNode;
+  diff: [string, string];
+  tone: string;
+}) {
   return (
-    <span
-      className={`army-bar${legends === undefined ? "" : " is-measured"}`}
-      aria-hidden="true"
-    >
-      <i style={{ width: `${Math.min(100, own ?? 0)}%` }} />
-      {legends == null ? null : <b style={{ left: `${Math.min(100, legends)}%` }} />}
+    <span className="army-stat">
+      <span className="army-own" aria-hidden="true">
+        {own}
+        {unit}
+      </span>
+      <span className={`army-diff${tone}`} aria-hidden="true">
+        {diff[0]}
+      </span>
+      <span className="sr-only">{`${label} ${own}, ${diff[1]}`}</span>
     </span>
   );
 }
 
 /**
- * The user's number after its bar, green with ▲ when well ahead of the
- * Legends and red with ▼ when well behind; every tracked player's number is
- * the bar's tick, on hover, under the number on a touch screen or phone,
- * and read aloud. On a phone the column headers go, so each
- * number carries its own label.
+ * The days and battles the numbers cover: said aloud always, and shown only
+ * when the switch doesn't already say it, such as Custom days or days
+ * without army data.
  */
-function WithLegends({
-  label,
-  own,
-  legends,
-  bar,
-  tone,
-}: {
-  label: string;
-  own: string;
-  legends: string;
-  bar: React.ReactNode;
-  tone: string;
-}) {
+function WindowLine({ armies, noun }: { armies: PlayerArmies; noun: string }) {
+  const plain =
+    !armies.season &&
+    (armies.days === 3 || armies.days === 7) &&
+    armies.coveredDays.length === armies.days;
   return (
-    <span className="army-stat" title={`Legends ${legends}`}>
-      <small className="army-stat-label">{label} </small>
-      {bar}
-      <span className={`army-own${tone}`}>{own}</span>
-      {/* On a touch screen or phone, the Legends' number shows beside the user's. */}
-      <span className="army-legends-touch" aria-hidden="true">
-        avg {legends}
-      </span>
-      <span className="sr-only"> Legends {legends}</span>
-    </span>
+    <p className={plain ? "sr-only" : "dash-muted dash-card-sub"}>
+      {`${armyWindowLabel(armies)} · ${count(armies.total.battles, noun)}`}
+    </p>
   );
 }
 
@@ -279,30 +310,37 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
         )}
         {/* Bars against the most common army, so the gaps between armies show. */}
         <span className="army-share">
-          {all ? null : <Bar own={(100 * outcome.battles) / Math.max(1, mostBattles)} />}
-          <span>
-            {percent(share)}
-            <small className="army-stat-label"> of defenses</small>
-          </span>
+          {all ? null : (
+            <>
+              <Bar own={(100 * outcome.battles) / Math.max(1, mostBattles)} />
+              <span>
+                {percent(share)}
+                {/* Said aloud. */}
+                <span className="army-share-of"> of defenses</span>
+              </span>
+            </>
+          )}
         </span>
         <WithLegends
-          label="Held"
+          label="Not tripled"
           own={percent(heldPercent(outcome))}
-          legends={percent(legends ? heldPercent(legends) : null)}
-          bar={
-            <Bar own={heldPercent(outcome)} legends={legends && heldPercent(legends)} />
-          }
+          diff={pointsDiff(
+            difference(heldPercent(outcome), legends && heldPercent(legends)),
+          )}
           tone={beyond(
             heldPercent(outcome),
             legends && heldPercent(legends),
             HELD_MARGIN,
           )}
         />
+        {/* Trophies lost read as negatives, so fewer lost is above the Legends. */}
         <WithLegends
-          label="Avg lost"
+          label="Trophies per defense"
           own={lost(outcome)}
-          legends={lost(legends)}
-          bar={<Bar own={lostShare(outcome)} legends={lostShare(legends)} />}
+          unit={<TrophyIcon />}
+          diff={lostDiff(
+            difference(legends && averageTrophies(legends), averageTrophies(outcome)),
+          )}
           tone={beyond(
             legends && averageTrophies(legends),
             averageTrophies(outcome),
@@ -319,23 +357,45 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
     >
       <CardHead
         title="Armies on defense"
-        meta={<DaySwitch days={days} choose={choose} custom />}
+        // The short headings in full, and the one colouring rule.
+        info={
+          empty || !armies ? null : (
+            <InfoTip label="What the columns mean">
+              <p>Usage: your share of defenses against each army.</p>
+              <p>
+                Not tripled: kept the attacker under 3 stars. Per defense: trophies lost a
+                defense.
+              </p>
+              <p>
+                Differences are against all tracked Legend players&apos; defenses against
+                that army; + is better. {RULE}
+              </p>
+            </InfoTip>
+          )
+        }
+        meta={
+          <>
+            {/* The one reference every difference is against, said once. */}
+            {empty || !armies ? null : (
+              <span className="dash-card-ref">vs Legend avg</span>
+            )}
+            <DaySwitch days={days} choose={choose} custom />
+          </>
+        }
       />
       {empty || !armies ? (
         <CardNote>{empty}</CardNote>
       ) : (
         <>
-          <p className="dash-muted dash-card-sub army-sub">
-            {`${armyWindowLabel(armies)} · ${count(armies.total.battles, "defense")}`}
-            <span className="army-key" aria-hidden="true">
-              <b /> Legends average
-            </span>
-          </p>
+          <WindowLine armies={armies} noun="defense" />
+          {/* One word or two a column; a narrow card puts Usage with Army. */}
           <div className="army-defense-row army-head" aria-hidden="true">
-            <span>Army type</span>
-            <span>Share</span>
-            <span>Held</span>
-            <span>Avg lost</span>
+            <span>
+              Army<span className="army-head-usage"> · usage</span>
+            </span>
+            <span>Usage</span>
+            <span>Not tripled</span>
+            <span>Per defense</span>
           </div>
           {listed.map((army, index) =>
             row(
@@ -347,11 +407,16 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
               index >= PHONE_DEFENSE_ROWS,
             ),
           )}
-          {row("All defenses", armies.total, armies.legendsTotal, true)}
+          {row(
+            `All ${count(armies.total.battles, "defense")}`,
+            armies.total,
+            armies.legendsTotal,
+            true,
+          )}
           {listed.length > PHONE_DEFENSE_ROWS ? (
             <button
               type="button"
-              className="button button-secondary opponents-more"
+              className="show-all opponents-more"
               aria-expanded={allShown}
               onClick={() => setAllShown(!allShown)}
             >
@@ -401,9 +466,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
         <CardNote>{empty}</CardNote>
       ) : (
         <>
-          <p className="dash-muted dash-card-sub">
-            {`${armyWindowLabel(armies)} · ${count(total.battles, "attack")}`}
-          </p>
+          <WindowLine armies={armies} noun="attack" />
           {only ? (
             <OneArmy army={only} />
           ) : (

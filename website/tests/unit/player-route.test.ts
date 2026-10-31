@@ -577,7 +577,7 @@ describe("automatic tag lookup", () => {
     const html = await renderRoute(
       await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
     );
-    expect(html).toMatch(/<h1><a [^>]*><bdi>Sloothy<\/bdi>/);
+    expect(html).toContain("<h1><bdi>Sloothy</bdi></h1>");
     expect(html).toContain(note);
     expect(html).not.toMatch(/Season summary|This Season|Current trophies|refresh-form/);
     expect(html).toContain(`<option value="${SEASON}"`);
@@ -747,7 +747,7 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
-  it("shows an old profile's age and when battle history was last published", async () => {
+  it("shows an old profile's age and, on a tap, when it and its battle history were saved", async () => {
     const stale = {
       ...PLAYER,
       profile: {
@@ -772,20 +772,21 @@ describe("automatic tag lookup", () => {
       const html = (await renderRoute(result)).split("<script>")[0];
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
+    // One short age; the exact times open on a tap, an old one with its date.
     expect(await render(stale)).toContain(
-      "Updated 7 Sep 2026, 12:00 UTC · 2 hours old · Battles 7 Sep 2026, 11:40 UTC · 2 hours old",
+      "Updated 2 hours agoProfile 7 Sep 2026, 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
-    expect(fresh).toContain("Updated 12:00 UTC · Battles not updated yet");
+    expect(fresh).toContain("Updated just nowProfile 12:00 UTCBattles not saved yet");
     const oldHistory = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 12:00 UTC · Battles 7 Sep 2026, 11:40 UTC · 20 minutes old",
+      "Updated just nowProfile 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
     );
   });
 

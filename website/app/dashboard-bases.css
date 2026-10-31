@@ -1,0 +1,545 @@
+/* Bases you attacked (components/OpponentsCard.tsx): one row per base, its
+   eight defenses in order with your own hit ringed, and how strong it is
+   against Legends at similar trophies. */
+
+/* The day button: ‹ Day 9 · today ›. */
+.bases-day {
+  align-items: center;
+}
+
+.bases-day button {
+  min-width: 2.4rem;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.bases-day button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.bases-day-label {
+  min-width: 4.5rem;
+  padding: 0 0.55rem;
+  color: var(--cl-ink);
+  border-inline: 1px solid var(--cl-card-line);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  line-height: 1.8rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Shared tracks, so the headings sit over the same columns as every row,
+   spread across the card's width. The slots are a fixed size, so the slots'
+   column is too. */
+.opponents-head,
+.opponents-row {
+  --slot: 2rem;
+  --slot-gap: 0.35rem;
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) minmax(12rem, 1fr) calc(8 * var(--slot) + 7 * var(--slot-gap))
+    minmax(8.5rem, 1fr) 2.75rem;
+  gap: 0 1.25rem;
+  align-items: center;
+}
+
+.opponents-row {
+  grid-template-areas: "name hit blocks strength action";
+}
+
+.opponents-name {
+  grid-area: name;
+}
+
+.opponents-hit {
+  grid-area: hit;
+}
+
+.opponents-blocks {
+  grid-area: blocks;
+}
+
+.opponents-strength {
+  grid-area: strength;
+}
+
+.opponents-action {
+  grid-area: action;
+}
+
+.opponents-head {
+  align-items: end;
+  padding-bottom: 0.4rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* The slots' key, one line over the rows: each mark with its word. */
+.opponents-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.9rem;
+  margin: 0 0 0.75rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.opponents-key > span {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.opponents-key .opponents-block {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+/* The key's "You" is a plain slot with the ring. */
+.opponents-key .opponents-block.is-yours {
+  background: var(--cl-raised);
+}
+
+/* The key's copy in the header's ⓘ is for phones, which drop the line. */
+.dash-info-body .opponents-key {
+  display: none;
+  margin: 0;
+}
+
+.opponents-row {
+  margin: 0 -0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  cursor: pointer;
+}
+
+.opponents-row:is(:hover, :focus-visible) {
+  background: var(--cl-panel);
+  outline: none;
+}
+
+.opponents-row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--cl-action-text);
+}
+
+.opponents-row:is(:hover, :focus-visible) .opponents-name .dash-name {
+  color: var(--cl-accent);
+  text-decoration: underline;
+}
+
+/* The player's name with an arrow that says the row opens them, and their
+   trophies at Reset under it (beside it on a phone). */
+.opponents-name {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.opponents-name::after {
+  flex: 0 0 auto;
+  order: 1;
+  width: 0.38rem;
+  height: 0.38rem;
+  margin-bottom: 0.12rem;
+  border-top: 2px solid var(--cl-faint);
+  border-right: 2px solid var(--cl-faint);
+  transform: rotate(45deg);
+  content: "";
+}
+
+.opponents-name .dash-name {
+  font-weight: 800;
+}
+
+.opponents-trophies {
+  display: inline-flex;
+  flex-basis: 100%;
+  order: 2;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+}
+
+.opponents-trophies .game-trophy {
+  font-size: 0.95rem;
+}
+
+/* Row numbers keep Inter's own digits, as the Armies card does: its
+   same-width digits draw a 1 with a foot that reads as another font. */
+.opponents-hit {
+  font-size: 0.9375rem;
+  white-space: nowrap;
+}
+
+.opponents-hit .game-stars {
+  font-size: 1rem;
+}
+
+.opponents-time {
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+}
+
+/* The day's defenses as quiet square slots, all one size and evenly
+   spaced: a gold star on a faint gold tile where the base was tripled, a
+   shield where it held, a dot for one to come. Your hit is ringed in solid
+   ember inside its own slot, whatever happened, so nothing reaches into
+   its neighbours. */
+.opponents-blocks {
+  display: flex;
+  gap: var(--slot-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opponents-block {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--slot);
+  height: var(--slot);
+  background: radial-gradient(circle, var(--cl-outline) 0.14rem, transparent 0.18rem);
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.opponents-block.is-tripled {
+  background: color-mix(in srgb, var(--cl-star) 16%, transparent);
+}
+
+.opponents-block.is-held {
+  color: var(--cl-muted);
+  background: var(--cl-raised);
+}
+
+.opponents-block.is-yours {
+  box-shadow: inset 0 0 0 2px var(--cl-action);
+}
+
+/* The verdict: a three-bar meter in ember (three for a hard base), its word,
+   then the one result against the Legend average, all in neutral ink; it
+   wraps under the word where the column is narrow. A tap opens the base's
+   own number beside the average under it. */
+.opponents-strength {
+  position: relative;
+  min-width: 0;
+}
+
+.opponents-strength > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.55rem;
+  align-items: center;
+  width: fit-content;
+  list-style: none;
+  cursor: pointer;
+}
+
+.opponents-strength > summary::-webkit-details-marker {
+  display: none;
+}
+
+.opponents-strength .opponents-result {
+  text-decoration: underline dotted var(--cl-outline);
+  text-underline-offset: 3px;
+}
+
+.opponents-exact {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  width: max-content;
+  max-width: 15rem;
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.opponents-exact::first-letter {
+  text-transform: uppercase;
+}
+
+.opponents-result {
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.opponents-meter {
+  display: inline-flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 0.9rem;
+}
+
+.opponents-meter i {
+  width: 4px;
+  height: 45%;
+  background: var(--cl-outline);
+  border-radius: 1px;
+}
+
+.opponents-meter i:nth-child(2) {
+  height: 72%;
+}
+
+.opponents-meter i:nth-child(3) {
+  height: 100%;
+}
+
+.opponents-meter[data-bars="1"] i:nth-child(-n + 1),
+.opponents-meter[data-bars="2"] i:nth-child(-n + 2),
+.opponents-meter[data-bars="3"] i {
+  background: var(--cl-action);
+}
+
+.opponents-verdict {
+  font-size: 0.875rem;
+  font-weight: 750;
+}
+
+.opponents-verdict.is-unrated {
+  color: var(--cl-muted);
+  font-weight: 600;
+}
+
+.opponents-action {
+  justify-self: end;
+}
+
+/* Add to watchlist: the Watchlists tab's eye with a small plus badge, no
+   words, at the row's end; muted until pointed at or focused. */
+.opponents-watch {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--cl-muted);
+  border-radius: var(--cl-radius);
+}
+
+.opponents-watch > .dash-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.opponents-watch-plus {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.45rem;
+  display: grid;
+  place-items: center;
+  width: 0.8rem;
+  height: 0.8rem;
+  background: var(--cl-sheet-solid, var(--cl-solid));
+  border-radius: 50%;
+}
+
+.opponents-watch-plus .dash-icon {
+  width: 0.7rem;
+  height: 0.7rem;
+  stroke-width: 3.5;
+}
+
+.opponents-watch:is(:hover, :focus-visible) {
+  color: var(--cl-action-text);
+  background: var(--cl-raised);
+}
+
+/* The badge's cut-out follows what's behind it. */
+.opponents-row:is(:hover, :focus-visible) .opponents-watch-plus {
+  background: var(--cl-panel);
+}
+
+.opponents-watch:is(:hover, :focus-visible) .opponents-watch-plus {
+  background: var(--cl-raised);
+}
+
+/* With a mouse the action shows on the row being pointed at or focused;
+   a touch screen always shows it, as does the phone layout, which keeps
+   its place at the row's end. */
+@media (hover: hover) and (pointer: fine) and (min-width: 40.0625rem) {
+  .opponents-row:not(:hover, :focus-within) .opponents-watch {
+    opacity: 0;
+  }
+}
+
+/* An iPad keeps the table, on narrower tracks: your hit wraps under
+   itself. */
+@media (max-width: 56rem) {
+  .opponents-head,
+  .opponents-row {
+    --slot: 1.4rem;
+    --slot-gap: 0.2rem;
+    grid-template-columns:
+      minmax(0, 1fr) 7.5rem calc(8 * var(--slot) + 7 * var(--slot-gap))
+      13rem 2.75rem;
+    column-gap: 0.6rem;
+  }
+
+  /* The arrow stays beside the name, cut short if it must be, with the
+     trophies under both. */
+  .opponents-name {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) 0.6rem minmax(0, 1fr);
+  }
+
+  .opponents-name .dash-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .opponents-trophies {
+    grid-column: 1 / -1;
+  }
+
+  .opponents-hit > span {
+    display: block;
+  }
+}
+
+/* A phone: the slots' key moves into the header's ⓘ, leaving two short
+   headings on one line, "Their defenses" over the slots and "Strength" over
+   the verdicts. Each base reads in three lines: the player, never cut
+   short, with your hit's stars, % and gain on the right when they fit
+   beside it (under it when not) and Add to watchlist pinned at the row's
+   right edge; their trophies and the time, quieter; then their defenses
+   with the verdict and its result on the right. The name and hit boxes
+   step aside so their parts flow in that order. */
+@media (max-width: 40rem) {
+  .opponents-head {
+    display: flex;
+    justify-content: space-between;
+    padding-bottom: 0.3rem;
+  }
+
+  .opponents-head > span:nth-child(-n + 2),
+  .dash-card > .opponents-key {
+    display: none;
+  }
+
+  .dash-info-body .opponents-key {
+    display: flex;
+  }
+
+  .opponents-row {
+    --slot: 1.4rem;
+    --slot-gap: 3px;
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.3rem;
+    align-items: center;
+    padding-block: 0.55rem;
+  }
+
+  .opponents-name,
+  .opponents-hit,
+  .opponents-hit > span:last-child {
+    display: contents;
+  }
+
+  .opponents-name .dash-name {
+    order: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .opponents-name::after {
+    order: 2;
+    margin: 0 0.5rem 0 0;
+  }
+
+  .opponents-hit > span:first-child {
+    order: 3;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  /* Room at the first line's end for Add to watchlist. */
+  .opponents-hit b {
+    order: 4;
+    margin-right: 1.9rem;
+  }
+
+  /* The second and third lines start here, whatever fits on the one before. */
+  .opponents-row::before,
+  .opponents-row::after {
+    flex-basis: 100%;
+    order: 5;
+    content: "";
+  }
+
+  .opponents-row::after {
+    order: 8;
+  }
+
+  .opponents-trophies,
+  .opponents-time {
+    order: 6;
+    flex-basis: auto;
+    font-size: 0.8125rem;
+  }
+
+  .opponents-trophies .game-trophy {
+    font-size: 0.85rem;
+  }
+
+  /* Add to watchlist pinned to the row's right edge, level with the name;
+     its tall target overlaps the row's padding. */
+  .opponents-action {
+    position: absolute;
+    top: 0.05rem;
+    right: -0.25rem;
+  }
+
+  .opponents-blocks {
+    order: 9;
+    margin-top: 0.4rem;
+  }
+
+  .opponents-block {
+    font-size: 0.8125rem;
+  }
+
+  .opponents-strength {
+    flex: none;
+    order: 10;
+    margin: 0.4rem 0 0 auto;
+  }
+}
+
+/* A phone under 384px takes slightly smaller slots and a tighter verdict,
+   so the meter and "Average −1" still fit beside them. */
+@media (max-width: 24rem) {
+  .opponents-row {
+    --slot: 1.3rem;
+  }
+
+  .opponents-strength > summary {
+    column-gap: 0.4rem;
+  }
+}
