@@ -132,7 +132,9 @@ test("a Clasher can sign in and use account features against the real backend", 
 
   await page.goto("/users/lensscout");
   await expect(page.getByRole("heading", { name: "Lens Scout" })).toBeVisible();
-  await expect(page.getByText("#2PP", { exact: true })).toBeVisible();
+  // While the cards' days stream in, React holds a hidden copy of the cards
+  // after the main area for a moment before swapping it in.
+  await expect(page.getByRole("main").getByText("#2PP", { exact: true })).toBeVisible();
 
   expectNoPortRequests(requests, 8000, "private Python API");
   expectNoPageErrors(errors);
