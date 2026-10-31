@@ -14,10 +14,10 @@ const PAGE = "/account/discord-alerts";
 
 export const handle: BackHandle = { back: { to: "/account", label: "Your profile" } };
 
-type Kind = "attack" | "summary" | "full";
+type Kind = "attack" | "summary" | "dark";
 
 /** The outcome of the last switch, its player and which switch it was,
- * shown once at the top of the page. The full details switch names no player. */
+ * shown once at the top of the page. The dark picture switch names no player. */
 type Saved = {
   outcome: "on" | "off" | "failed";
   tag: string;
@@ -28,9 +28,9 @@ type Saved = {
 const INTENTS = {
   attack: "attack-alert",
   summary: "day-summary",
-  full: "full-notice",
+  dark: "dark-picture",
 } as const;
-const PARAMS = { attack: "alerts", summary: "summary", full: "full" } as const;
+const PARAMS = { attack: "alerts", summary: "summary", dark: "dark" } as const;
 
 export interface DiscordAlertsLoaderData {
   connected: boolean;
@@ -56,8 +56,8 @@ export async function loader({
   const params = new URL(request.url).searchParams;
   const kind: Kind = params.has("summary")
     ? "summary"
-    : params.has("full")
-      ? "full"
+    : params.has("dark")
+      ? "dark"
       : "attack";
   const outcome = params.get(PARAMS[kind]);
   const saved: Saved =
@@ -100,8 +100,8 @@ export async function loader({
 
 /**
  * POST /account/discord-alerts — turn one player's attack alerts or Legend
- * day summary on or off, or the account's full details in the notification,
- * or start connecting Discord, which comes back to this page.
+ * day summary on or off, or the account's dark attack alert picture, or
+ * start connecting Discord, which comes back to this page.
  */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") {
@@ -159,12 +159,12 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
       form["tag"] ?? "",
       on === "on",
       form["idempotencyKey"] ?? "",
-      kind === "full" ? "full_notice" : kind === "summary" ? "day_summary" : "attack",
+      kind === "dark" ? "dark_picture" : kind === "summary" ? "day_summary" : "attack",
     );
   } catch {
     on = "failed";
   }
-  const tag = kind === "full" ? "" : `&tag=${encodeURIComponent(form["tag"] ?? "")}`;
+  const tag = kind === "dark" ? "" : `&tag=${encodeURIComponent(form["tag"] ?? "")}`;
   return redirect(`${PAGE}?${PARAMS[kind]}=${on}${tag}`, { headers: NO_STORE });
 }
 
@@ -252,7 +252,7 @@ function ConnectDiscord({
 const SWITCH_NAMES = {
   attack: "Attack alerts",
   summary: "Daily summary",
-  full: "Full details in notifications",
+  dark: "Dark picture",
 } as const;
 
 /** A player with no saved name goes by its tag, as on Settings and the profile. */
@@ -285,7 +285,7 @@ function SavedNote({
 }
 
 /** One row per verified player, each with its two switches, then the
- * account's full details switch and an example alert as it would arrive. */
+ * account's dark picture switch and the picture each attack alert ends with. */
 function AlertRows({
   alerts,
   idempotencyKey,
@@ -309,7 +309,6 @@ function AlertRows({
   }
   const missed = alerts.undelivered;
   const missedPlayer = alerts.players.find((player) => player.tag === missed?.tag);
-  const example = alerts.players[0];
   return (
     <>
       {missed ? (
@@ -351,53 +350,31 @@ function AlertRows({
           </li>
         ))}
       </ul>
-      <p className="form-help">
-        Attack alerts message you as soon as Clash Lens saves an attack on that player.
-        The daily summary arrives after each Reset&apos;s Daily board is published, with
-        the day&apos;s trophies, attacks, defenses and place.
-      </p>
       <ul className="settings-list">
         <li className="settings-row">
           <div className="settings-label">
-            <span>{SWITCH_NAMES.full}</span>
+            <span>Alert picture</span>
             <p className="form-help">
-              Your phone&apos;s notification shows the attacker, stars, destruction and
-              their stats, not just the trophies lost.
+              Attack alerts and /stats show this picture of your day.
             </p>
           </div>
           <div className="settings-control">
             <AlertSwitch
               player={null}
-              kind="full"
-              saved={alerts.fullNotice}
+              kind="dark"
+              saved={alerts.darkPicture}
               idempotencyKey={idempotencyKey}
             />
           </div>
         </li>
       </ul>
-      <figure className="attack-alert-example">
-        <figcaption className="form-help">
-          An attack alert looks like this. Your phone&apos;s notification shows the text
-          above the box:
-        </figcaption>
-        <strong>
-          {`🛡️ ${example.name ?? example.tag} −24 🏆`}
-          {alerts.fullNotice ? (
-            <>
-              {" · ⚔️ Drift ★★☆ · 87%"}
-              <br />
-              {"🏆 5,312 🌍 #1,204 🎯 62%"}
-            </>
-          ) : null}
-        </strong>
-        <div className="attack-alert-message">
-          <strong>Drift</strong>
-          <strong className="attack-alert-result">★★☆ · 87%</strong>
-          <small>Attacker stats</small>
-          <span>🏆 5,312 · 🌍 #1,204 · 🎯 62%</span>
-          <small>Open battle · Alert settings</small>
-        </div>
-      </figure>
+      <img
+        className="attack-alert-example"
+        src={`/images/attack-alert-${alerts.darkPicture ? "dark" : "light"}.webp`}
+        alt="An attack alert's picture: the Legend day's trophies and rank since the Reset, then each attack and defense."
+        width={1200}
+        height={860}
+      />
     </>
   );
 }

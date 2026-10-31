@@ -14,6 +14,7 @@ the person who typed the command (`Reply.private`) are shown to them alone.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import time
 from collections.abc import Callable
@@ -39,6 +40,9 @@ READ_SLOTS = 4
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
+# The Legend day picture's file name, uploaded with the message that shows it.
+PICTURE = "legend-day.png"
+PICTURE_URL = f"attachment://{PICTURE}"
 # Discord's JSON error codes for a DM it will not deliver
 # (https://docs.discord.com/developers/topics/opcodes-and-status-codes):
 # 50278 "no mutual guilds", 50007 "Cannot send messages to this user",
@@ -53,14 +57,16 @@ _REFUSALS = {
 
 def lay_out(view: discord.ui.LayoutView, reply: Reply) -> None:
     """Put `reply` into `view`: its title, each card with its coloured edge
-    and a thin line between its parts, the small print below, then its
-    buttons."""
+    and a thin line between its parts, or its picture between the first two,
+    the small print below, then its buttons."""
     if reply.title:
         view.add_item(discord.ui.TextDisplay(f"## {reply.title}"))
     for card in reply.cards:
         items: list[discord.ui.Item[Any]] = []
         for index, part in enumerate(card.parts):
-            if index:
+            if index == 1 and card.picture is not None:
+                items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(PICTURE_URL)))
+            elif index:
                 items.append(discord.ui.Separator())
             text = discord.ui.TextDisplay(part)
             if card.button is not None and index == len(card.parts) - 1:
@@ -80,7 +86,17 @@ def lay_out_notice(reply: Reply) -> dict[str, Any]:
     a box with its coloured edge, topped by its own title in small bold, the
     first by `title` when given, which keeps a large first line in the box
     from leaving a gap, and the last ending in `footer` as small print, then
-    any buttons."""
+    any buttons. A `boxed` reply is one box with nothing above it: `title` in
+    bold and the card's first part, the text the notification shows, then
+    each later part as a section headed by its first line."""
+    if reply.boxed:
+        [card] = reply.cards
+        text, *sections = card.parts
+        box = discord.Embed(title=reply.title, description=text, colour=card.colour)
+        for section in sections:
+            name, _, value = section.partition("\n")
+            box.add_field(name=name, value=value, inline=False)
+        return {"embeds": [box]}
     embeds = []
     for card in reply.cards:
         embeds.append(discord.Embed(description="\n\n".join(card.parts), colour=card.colour))
@@ -139,8 +155,12 @@ class DiscordApp:
     def render(
         self, reply: Reply, owner: int, origin: discord.Interaction, *, private: bool
     ) -> dict[str, Any]:
-        """The reply as one message."""
-        return {"view": ReplyView(self, reply, owner, origin, private)}
+        """The reply as one message, with its picture uploaded with it."""
+        message: dict[str, Any] = {"view": ReplyView(self, reply, owner, origin, private)}
+        pictures = [card.picture for card in reply.cards if card.picture is not None]
+        if pictures:
+            message["files"] = [discord.File(io.BytesIO(png), PICTURE) for png in pictures]
+        return message
 
     async def respond(
         self,
@@ -220,8 +240,12 @@ class DiscordApp:
         """Send a rendered message for one interaction, in place of
         `replacing`'s message when given."""
         if replacing is not None:
-            # Without view=None Discord keeps the old buttons on the message.
-            await interaction.edit_original_response(**{"view": None, **message})
+            # Without view=None Discord keeps the old buttons on the message,
+            # and an edit's files replace the old ones as its attachments.
+            files = message.pop("files", [])
+            await interaction.edit_original_response(
+                **{"view": None, **message}, attachments=files
+            )
             # The old buttons are gone; their timeout must not put them back.
             replacing.stop()
         elif not interaction.response.is_done():
@@ -449,8 +473,8 @@ class DiscordMessenger:
 
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
-    ) -> None:
-        if reply.notice:
+    ) -> discord.Message:
+        if reply.notice or reply.boxed:
             message = lay_out_notice(reply)
         else:
             view = discord.ui.LayoutView(timeout=None)
@@ -461,7 +485,7 @@ class DiscordMessenger:
         self._sending += 1
         try:
             channel = await self.client.create_dm(discord.Object(int(discord_user_id)))
-            await channel.send(**message, nonce=nonce)
+            return await channel.send(**message, nonce=nonce)
         except asyncio.CancelledError:
             http._global_over.set()
             raise
@@ -482,6 +506,20 @@ class DiscordMessenger:
             self._sending -= 1
             if not self._sending:
                 http.max_ratelimit_timeout = self._limit
+
+    async def add_picture(self, message: discord.Message, picture: bytes) -> None:
+        """Put `picture` at the bottom of the box of the attack alert
+        `message`, by editing it, which sends no second notification. One
+        cut off in a wait for all of Discord opens that wait again, as
+        `send_dm` does."""
+        box = message.embeds[0].set_image(url=PICTURE_URL)
+        try:
+            await message.edit(
+                embed=box, attachments=[discord.File(io.BytesIO(picture), PICTURE)]
+            )
+        except asyncio.CancelledError:
+            self.client.http._global_over.set()
+            raise
 
 
 def build_client(commands: Commands) -> tuple[discord.Client, app_commands.CommandTree]:

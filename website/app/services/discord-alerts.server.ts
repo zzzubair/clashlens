@@ -20,14 +20,14 @@ export async function getAttackAlerts(
 }
 
 /** Turn one verified player's Discord attack alerts, or its Legend day
- * summary, on or off, or the account's full details in the notification,
- * which names no player. */
+ * summary, on or off, or the account's dark attack alert picture, which names
+ * no player. */
 export async function setAttackAlert(
   identity: GoogleAccountIdentity,
   tag: string,
   on: boolean,
   idempotencyKey: string,
-  alert: "attack" | "day_summary" | "full_notice" = "attack",
+  alert: "attack" | "day_summary" | "dark_picture" = "attack",
 ): Promise<void> {
   if (!isCanonicalUuid(idempotencyKey)) {
     throw new PythonApiError(400, { error: "invalid_input" });
@@ -36,7 +36,7 @@ export async function setAttackAlert(
     "/v1/account/discord-alerts",
     "POST",
     Buffer.from(
-      JSON.stringify(alert === "full_notice" ? { on, alert } : { tag, on, alert }),
+      JSON.stringify(alert === "dark_picture" ? { on, alert } : { tag, on, alert }),
       "utf8",
     ),
     undefined,

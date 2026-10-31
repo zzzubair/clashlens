@@ -6,9 +6,9 @@ website reads that log only to show a DM Discord would not deliver. The
 Legend day summary is off until turned on too; each player turned on has a
 discord_day_summary_on row, deleted when the player leaves the account, so
 moving a player away and back leaves it off. One more switch, for the whole
-account, puts every detail of an attack alert into the line a phone's
-notification shows; it is off until turned on, and on while the account has a
-discord_alert_full_notice row.
+account, draws the picture at the bottom of each attack alert dark rather
+than light; it is off until turned on, and on while the account has a
+discord_alert_dark_picture row.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
                 (account_id,),
             ).fetchall()
         }
-        full_notice = connection.execute(
-            "SELECT EXISTS (SELECT 1 FROM discord_alert_full_notice WHERE account_id = %s)",
+        dark_picture = connection.execute(
+            "SELECT EXISTS (SELECT 1 FROM discord_alert_dark_picture WHERE account_id = %s)",
             (account_id,),
         ).fetchone()[0]
         newest = connection.execute(
@@ -86,7 +86,7 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
             for player in players
         ],
         "undelivered": undelivered,
-        "full_notice": bool(full_notice),
+        "dark_picture": bool(dark_picture),
     }
 
 
@@ -178,8 +178,8 @@ def set_day_summary(
             return result
 
 
-def set_full_notice(database: ApiDatabase, binding: RequestBinding, *, on: bool) -> OperationResult:
-    """Turn the account's full details in the notification on or off."""
+def set_dark_picture(database: ApiDatabase, binding: RequestBinding, *, on: bool) -> OperationResult:
+    """Turn the account's dark attack alert picture on or off."""
     with database.pool.connection() as connection:
         with connection.transaction():
             existing = api_db._reserve_request(database, connection, binding)
@@ -187,15 +187,15 @@ def set_full_notice(database: ApiDatabase, binding: RequestBinding, *, on: bool)
                 return existing
             if on:
                 connection.execute(
-                    "INSERT INTO discord_alert_full_notice (account_id) VALUES (%s)"
+                    "INSERT INTO discord_alert_dark_picture (account_id) VALUES (%s)"
                     " ON CONFLICT (account_id) DO NOTHING",
                     (binding.account_id,),
                 )
             else:
                 connection.execute(
-                    "DELETE FROM discord_alert_full_notice WHERE account_id = %s",
+                    "DELETE FROM discord_alert_dark_picture WHERE account_id = %s",
                     (binding.account_id,),
                 )
-            result = OperationResult(200, {"full_notice": on})
+            result = OperationResult(200, {"dark_picture": on})
             api_db._complete_request(connection, binding.request_id, result)
             return result

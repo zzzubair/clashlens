@@ -318,8 +318,7 @@ class _OneAttack:
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": RESET,
-                 "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0],
-                 "full_notice": False}]
+                 "ranked_day_start": RESET, "colour": replies.PLAYER_COLOURS[0]}]
 
     def attacker(self, *_read: object) -> dict:
         return {"clan": None, "rank": None, "start_trophies": None, "hit_rate": "Unavailable"}
@@ -365,7 +364,7 @@ def test_slow_summary_dms_do_not_delay_an_attack_alert() -> None:
         discord.release.set()
         return alert_sent, during, await sending
 
-    alert = "🛡️ \u2068Wanderer\u2069  −24 🏆"
+    alert = "\u2068Wanderer\u2069  −24"
     assert asyncio.run(scenario()) == (1, [alert], 3)
     assert discord.sent == [alert, "one", "two", "three"]
     assert log.finished == [(7, "sent")]

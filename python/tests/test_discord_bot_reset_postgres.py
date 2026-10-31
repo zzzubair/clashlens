@@ -71,13 +71,13 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
     assert board is not None
     assert {entry["tag"]: entry["trophies"] for entry in board["entries"]}[FULL] == 5060
     # 5 three-stars in 7 attacks, 1 of 16 defenses tripled.
-    assert full.cards[0].parts[1].splitlines()[:3] == [
+    assert full.cards[0].parts[-1].splitlines()[:3] == [
         "**Season Stats**",
         "Attack hit rate: 71%",
         "Defenses held: 94%",
     ]
     # 2 three-stars in 2 attacks, none of 8 defenses tripled.
-    assert late.cards[0].parts[1].splitlines()[:3] == [
+    assert late.cards[0].parts[-1].splitlines()[:3] == [
         "**Season Stats**",
         "Attack hit rate: 100%",
         "Defenses held: 100%",

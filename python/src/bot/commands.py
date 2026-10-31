@@ -17,7 +17,7 @@ from typing import Any, Protocol, TypeVar
 from clashlens.api_db import AccountContext
 from clashlens.domain import ranked_day_for
 
-from . import replies
+from . import picture, replies
 from .replies import Reply, Site
 
 
@@ -27,6 +27,7 @@ class StoreReads(Protocol):
     def colours(self, account: AccountContext) -> dict[str, int]: ...
     def default_tag(self, account: AccountContext) -> str | None: ...
     def alert_switches(self, account: AccountContext) -> list[dict[str, Any]]: ...
+    def dark_picture(self, account: AccountContext) -> bool: ...
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
     def search(self, query: str, now: datetime) -> list[dict[str, Any]]: ...
 
@@ -151,7 +152,12 @@ class Commands:
             has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
             if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
                 return replies.player_status(self.site, page, status, now, colour)
-            return replies.stats_reply(self.site, page, now, colour)
+            # Today's picture, dark when the person's own account chose it.
+            day = picture.legend_day(page, ranked_day_for(now).start)
+            drawn = None if day is None else picture.draw(
+                day, account is not None and self.store.dark_picture(account)
+            )
+            return replies.stats_reply(self.site, page, now, colour, drawn)
 
     def _find(self, value: str, now: datetime) -> str | Reply:
         """The tag of a player typed as a tag (with or without "#") or a name."""

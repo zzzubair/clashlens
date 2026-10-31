@@ -161,8 +161,8 @@ class DefaultPlayerBody(StrictBody):
 class AttackAlertBody(StrictBody):
     on: bool
     # Which switch: the player's attack alerts or its Legend day summary, each
-    # naming the player, or the account's full details in the notification.
-    alert: Literal["attack", "day_summary", "full_notice"] = "attack"
+    # naming the player, or the account's dark attack alert picture.
+    alert: Literal["attack", "day_summary", "dark_picture"] = "attack"
     tag: str | None = Field(default=None, min_length=1, max_length=16)
 
 
@@ -1085,10 +1085,10 @@ def create_app(
     def set_attack_alert(body: AttackAlertBody, request: Request) -> JSONResponse:
         context = _authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
-        if body.alert == "full_notice":
-            return _operation_response(api_discord_alerts.set_full_notice(
+        if body.alert == "dark_picture":
+            return _operation_response(api_discord_alerts.set_dark_picture(
                 production_database,
-                _binding(request, context, "account.update", {"full_notice": body.on}),
+                _binding(request, context, "account.update", {"dark_picture": body.on}),
                 on=body.on,
             ))
         normalized_tag = _safe_tag(body.tag or "")

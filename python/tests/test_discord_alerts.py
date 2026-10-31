@@ -4,6 +4,7 @@ become, and the message itself."""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -14,7 +15,9 @@ import aiohttp
 import discord
 import pytest
 from aiohttp import web
+from PIL import Image
 
+from bot import picture
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
@@ -22,6 +25,8 @@ from bot.replies import PLAYER_COLOURS, Reply, Site, attack_alert, say
 from clashlens.domain import ranked_day_for
 
 SITE = Site("https://clashlens.test")
+# The website's light and dark page backgrounds.
+LIGHT, DARK = (0xF4, 0xF4, 0xF5), (0x05, 0x05, 0x06)
 
 
 class FakeClient:
@@ -90,13 +95,14 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
         assert outage.value.retry_after == wait
 
 
-def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification() -> None:
-    """The message's own text, all a phone's notification shows, is the
-    defender and the trophies lost, with a right-to-left name kept from
-    moving the number; the box below, in the defender's colour, is topped by
-    the attacker's name, then the stars and destruction, the attacker's
-    stats by icon and clan without pinging anyone, then links to the battle
-    and alert settings in place of buttons."""
+def test_an_alert_is_one_box_whose_top_the_phone_notification_shows() -> None:
+    """The message has no text of its own, so a phone's notification shows
+    the box's top, without markup: the defender and the trophies lost as the
+    box's bold title, with a right-to-left name kept from moving the number,
+    then the attacker, stars and destruction. Under "Attacker stats" come
+    their stats by icon and clan, without pings, then links to the battle
+    and alert settings in place of buttons; the box is in the defender's
+    colour."""
     client = FakeClient(None)
     reply = attack_alert(
         SITE,
@@ -117,12 +123,13 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
     )
     asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
     message = client.sent[0]
-    assert message["content"] == "🛡️ \u2068صقر الشمال\u2069  −24 🏆"
+    assert "content" not in message and "view" not in message
     [box] = message["embeds"]
-    assert box.author.name == "\u2068@everyone *Drift*\u2069"
-    assert box.description.splitlines() == [
-        "# ★★☆  ·  88%",
-        "-# Attacker stats",
+    assert (box.title, box.description) == (
+        "\u2068صقر الشمال\u2069  −24", "\u2068@\u200beveryone \\*Drift\\*\u2069  ★★☆  88%")
+    [stats] = box.fields
+    assert stats.name == "Attacker stats"
+    assert stats.value.splitlines() == [
         "🏆 **5,312**   🌍 **#1,204**   🎯 **62%**",
         "-# Clan \u2068@\u200bhere \\_Night\\_\u2069",
         (
@@ -131,36 +138,6 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
         ),
     ]
     assert box.colour.value == PLAYER_COLOURS[1]
-    assert "view" not in message
-
-
-def test_full_details_put_the_attacker_and_their_stats_in_the_phone_notification() -> None:
-    """With the account's full details switch on, the message's own text goes
-    on with the attacker, stars and destruction, then a second line has the
-    attacker's stats and clan, without markup or pings; the box is unchanged.
-    Only what is known about the attacker is shown."""
-    alert = {"defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
-             "attacker_name": "@everyone  *Drift*", "stars": 3, "destruction_percentage": 100,
-             "trophies_lost": 40, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
-             "battle_id": 41, "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC)}
-    attacker = {"clan": "@here _Night_", "rank": 3800, "start_trophies": 5239, "hit_rate": "57%"}
-    short = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0])
-    full = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0], full_notice=True)
-    unknown = attack_alert(
-        SITE, alert, {"clan": None, "rank": None, "start_trophies": None,
-                      "hit_rate": "not tracked yet"},
-        PLAYER_COLOURS[0], full_notice=True,
-    )
-
-    assert full.notice.splitlines() == [
-        (
-            "🛡️ \u2068Wanderer\u2069  −40 🏆  ·  ⚔️ \u2068@\u200beveryone \\*Drift\\*\u2069"
-            "  ★★★  ·  100%"
-        ),
-        "🏆 5,239   🌍 #3,800   🎯 57%  ·  Clan \u2068@\u200bhere \\_Night\\_\u2069",
-    ]
-    assert (full.cards, full.title, full.footer) == (short.cards, short.title, short.footer)
-    assert unknown.notice.splitlines()[1] == "Not tracked by Clash Lens yet"
 
 
 def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
@@ -173,15 +150,60 @@ def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
                  "trophies_lost": 0, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
                  "battle_id": 41, "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC)}
         reply = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0])
-        assert reply.notice == "🛡️ \u2068Wanderer\u2069  0 🏆"
-        return reply.cards[0].parts[0].splitlines()[1:]
+        assert (reply.title, reply.cards[0].parts[0]) == (
+            "\u2068Wanderer\u2069  0", "\u2068Drift\u2069  ☆☆☆  42%")
+        return reply.cards[0].parts[1].splitlines()[:-1]
 
     assert stats({"clan": None, "rank": None, "start_trophies": 5203,
                   "hit_rate": "Unavailable"}) == [
-        "-# Attacker stats", "🏆 **5,203**   🎯 **Unavailable**"]
+        "Attacker stats", "🏆 **5,203**   🎯 **Unavailable**"]
     assert stats({"clan": None, "rank": None, "start_trophies": None,
                   "hit_rate": "not tracked yet"}) == [
-        "-# Attacker stats", "Not tracked by Clash Lens yet"]
+        "Attacker stats", "Not tracked by Clash Lens yet"]
+
+
+def a_day(defenses: int = 1) -> dict:
+    """A Legend day as the alert's picture draws it, with 2 attacks and
+    `defenses` defenses, the last new; its start rank not known yet."""
+    battle = {"name": "Drift", "stars": 3, "destruction": 100, "trophies": 40, "new": False}
+    return {"name": "Wanderer", "day_number": 12, "date": datetime(2026, 10, 12, 5, tzinfo=UTC),
+            "start_trophies": 5312, "trophies": 80 - 40 * defenses + 5312, "start_rank": None,
+            "rank": 1187, "attacks": [battle, battle],
+            "defenses": [{**battle, "trophies": -40, "new": index == defenses - 1}
+                         for index in range(defenses)]}
+
+
+def background(png: bytes) -> tuple[int, ...]:
+    """The colour of a picture's bottom left corner."""
+    with Image.open(io.BytesIO(png)) as drawn:
+        assert (drawn.format, drawn.size) == ("PNG", (picture.WIDTH, picture.HEIGHT))
+        return drawn.convert("RGB").getpixel((4, picture.HEIGHT - 4))
+
+
+def test_the_picture_is_light_unless_the_clasher_chose_dark() -> None:
+    """The picture is a PNG on the website's light background, or its dark
+    one; a day of more than 8 defenses still fits, and a rank not known yet
+    is drawn as a dash rather than failing."""
+    for dark, paper in ((False, LIGHT), (True, DARK)):
+        for defenses in (1, 9):
+            assert background(picture.draw(a_day(defenses), dark)) == paper
+
+
+def test_the_picture_is_added_to_the_alert_by_editing_it() -> None:
+    """The picture goes into the bottom of the sent alert's box by an edit,
+    which sends no second notification."""
+    edits: list[dict] = []
+    box = discord.Embed(description="🛡️ Wanderer  −40 🏆")
+
+    async def edit(**change: object) -> None:
+        edits.append(change)
+
+    message = SimpleNamespace(embeds=[box], edit=edit)
+    asyncio.run(DiscordMessenger(FakeClient(None)).add_picture(message, b"png"))  # type: ignore[arg-type]
+    [change] = edits
+    assert change["embed"].image.url == "attachment://legend-day.png"
+    [file] = change["attachments"]  # type: ignore[misc]
+    assert (file.filename, file.fp.read()) == ("legend-day.png", b"png")
 
 
 def _json(payload: dict, status: int = 200, **headers: str) -> web.Response:
@@ -361,15 +383,14 @@ class ResetRound(AlertStore):
     def confirmations_due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "player_id": 2, "tag": "#2PP",
                  "name": "Wanderer", "confirm_requested_at": self.reset,
-                 "colour": PLAYER_COLOURS[0], "full_notice": False}]
+                 "colour": PLAYER_COLOURS[0]}]
 
     def due(self) -> list[dict]:
         return [{"account_id": 1, "discord_user_id": "1", "battle_id": 3,
                  "defender_player_id": 2, "defender_tag": "#2PP", "defender_name": "Wanderer",
                  "attacker_tag": "#8QQ", "attacker_name": "Drift", "stars": 2,
                  "destruction_percentage": 87, "trophies_lost": 24, "saved_at": self.reset,
-                 "ranked_day_start": self.reset, "colour": PLAYER_COLOURS[0],
-                 "full_notice": False}]
+                 "ranked_day_start": self.reset, "colour": PLAYER_COLOURS[0]}]
 
     def claim(self, delivery: object) -> int:
         return 3 if delivery.battle_id else 2  # type: ignore[attr-defined]

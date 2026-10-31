@@ -77,6 +77,8 @@ class Card:
     button: Link | None = None
     # The box's own small bold top line, in Discord's older layout only.
     title: str | None = None
+    # A PNG between the first two parts, in place of the line.
+    picture: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +99,14 @@ class Reply:
     # and plain errors meant for them. Every other reply is a normal message
     # anyone in the conversation can see and forward.
     private: bool = False
-    # The text a phone's notification shows. Discord's cards cannot carry
+    # The one line a phone's notification shows. Discord's cards cannot carry
     # it, so a reply with one goes in Discord's older layout: this line, then
     # each card as a box, the last ending in `footer`, then the buttons.
     notice: str | None = None
+    # Discord's older layout as one box with nothing above it, so the
+    # notification shows the box's own top: `title` and the card's first
+    # part. An attack alert.
+    boxed: bool = False
 
     @property
     def text(self) -> str:
@@ -134,6 +140,11 @@ class Site:
 
     def player(self, tag: str) -> str:
         return self.url(f"/players/{quote(tag, safe='')}")
+
+    def day(self, tag: str, day_start: datetime) -> str:
+        """The player's page opened at that Legend day."""
+        day = day_start.date().isoformat()
+        return f"{self.player(tag)}?day={day}#legend-day-{day}"
 
     def battle(self, tag: str, day_start: datetime, battle_id: int) -> str:
         """The player's page on that Legend day with the battle highlighted."""
@@ -525,18 +536,9 @@ def hit_rate(days: Sequence[Mapping[str, Any] | None]) -> str:
     return _rate(_total(days, "attack_three_star_count"), _total(days, "attack_count"))
 
 
-# Today's battles as squares in play order, green good for the player and red
-# bad, by stars; dark for those still to play out of the game's 8 a day.
-_ATTACK_SQUARES = {3: "🟩", 2: "🟨", 1: "🟧", 0: "🟥"}
-_DEFENSE_SQUARES = {0: "🟩", 1: "🟨", 2: "🟧", 3: "🟥"}
-_UNPLAYED = "⬛"
-
-
 def _today(page: Mapping[str, Any], now: datetime) -> str:
     """The Legend day so far: trophies gained (attacks) and lost (defenses),
-    then a square for each recorded battle and, only while the player is
-    tracked in Legend I and every battle so far is recorded, a dark one for
-    each still to play of the game's 8 a day."""
+    each with its count; the picture below shows each battle."""
     start = ranked_day_for(now).start
     day = next(
         (
@@ -548,39 +550,33 @@ def _today(page: Mapping[str, Any], now: datetime) -> str:
     )
     if day is None:
         return "Today's battles are not available yet"
-    attacks = day["offense_events"]
-    defenses = day["defense_events"]
-    complete = day["battles_complete"]
-    to_play = complete and page["state"] == "tracking"
-    if to_play and not (attacks or defenses):
+    if (
+        day["battles_complete"]
+        and page["state"] == "tracking"
+        and not (day["offense_events"] or day["defense_events"])
+    ):
         lines = ["No battles yet today"]
     else:
         loss = day["defense_loss"]
         gained = f"{_known(day['attack_gain'], signed)} ({_known(day['attack_count'], number)})"
         lost = _known(None if loss is None else -loss, lambda value: f"−{number(-value)}")
-        lines = [
-            f"## {gained}  {lost} ({_known(day['defense_count'], number)})",
-            "-# Today so far",
-        ]
-    for label, battles, squares, most in (
-        ("Attacks ", attacks, _ATTACK_SQUARES, MAX_DAILY_ATTACKS),
-        ("Defenses", defenses, _DEFENSE_SQUARES, MAX_DAILY_DEFENSES),
-    ):
-        shown = "".join(squares.get(battle["stars"], _UNPLAYED) for battle in battles)
-        if to_play:
-            left = max(0, most - len(battles))
-            shown += _UNPLAYED * left + f"  {left} left"
-        lines.append(f"`{label}` {shown or '–'}")
-    if not complete:
+        lines = [f"## {gained}  {lost} ({_known(day['defense_count'], number)})"]
+    if not day["battles_complete"]:
         lines.append("-# Some of today's battles may be missing. The day on Clash Lens says why.")
     return "\n".join(lines)
 
 
 def stats_reply(
-    site: Site, page: Mapping[str, Any], now: datetime, colour: int = GOLD
+    site: Site,
+    page: Mapping[str, Any],
+    now: datetime,
+    colour: int = GOLD,
+    picture: bytes | None = None,
 ) -> Reply:
     """Today and this Season for one player, from the player page read: one
-    compact message anyone in the conversation can forward."""
+    compact message anyone in the conversation can forward. Today's trophies
+    come first, then the picture of today's Legend day when there is one and
+    a link to that day on the website, then the Season."""
     days = season_days(page)
     if days is None:
         season = "This Season's days are not available yet."
@@ -597,74 +593,54 @@ def stats_reply(
             Card(
                 (
                     f"### {safe(page['name'])} {page['tag']}\n{_today(page, now)}",
+                    f"[View day]({site.day(page['tag'], ranked_day_for(now).start)})",
                     (
                         f"**Season Stats**\n{season}\n"
                         f"-# {updated_line(oldest([page['observed_at']]), now)}"
                     ),
                 ),
                 colour,
-                Link("View details", site.player(page["tag"])),
+                picture=picture,
             ),
         ),
     )
 
 
 def attack_alert(
-    site: Site,
-    alert: Mapping[str, Any],
-    attacker: Mapping[str, Any],
-    colour: int,
-    *,
-    full_notice: bool = False,
+    site: Site, alert: Mapping[str, Any], attacker: Mapping[str, Any], colour: int
 ) -> Reply:
-    """The DM sent when one of the person's players is attacked. Its first
-    line, all a phone's notification shows, is the defending player, named
-    since an account can have several, and the trophies lost. The box below
-    is headed by the attacker; the stars and destruction come first and
-    largest, then, under "Attacker stats", their trophies at the Reset, live
-    rank and hit rate in the battle's Season, each known one by its icon,
-    then their clan, then links to the battle and alert settings. With
-    `full_notice`, the account's switch for every detail in the notification,
-    the first line goes on with the attacker, stars and destruction, and a
-    second line has the attacker's stats and clan."""
+    """The DM sent when one of the person's players is attacked: one box with
+    nothing above it, whose two top lines a phone's notification shows,
+    without markup, which it would show as symbols. They are the defending
+    player, named since an account can have several, and the trophies lost,
+    in bold as the box's title, then the attacker, stars and destruction.
+    Below them, under "Attacker stats", the attacker's trophies at the Reset,
+    live rank and hit rate in the battle's Season, each known one by its
+    icon, then their clan and links to the battle and alert settings. The
+    picture of the defender's Legend day goes at the bottom (see `alerts`)."""
     lost = alert["trophies_lost"]
     stars = "★" * alert["stars"] + "☆" * (3 - alert["stars"])
-    result = f"{stars}  ·  {alert['destruction_percentage']}%"
-    lines = [f"# {result}", "-# Attacker stats"]
     if attacker["hit_rate"] == "not tracked yet":
-        stats = "Not tracked by Clash Lens yet"
-        lines.append(stats)
+        stats = ["Not tracked by Clash Lens yet"]
     else:
-        known = [
-            (icon, value)
+        stats = ["   ".join(
+            f"{icon} **{value}**"
             for icon, value in (
                 ("🏆", attacker["start_trophies"] and number(attacker["start_trophies"])),
                 ("🌍", attacker["rank"] and f"#{number(attacker['rank'])}"),
                 ("🎯", attacker["hit_rate"]),
             )
             if value
-        ]
-        stats = "   ".join(f"{icon} {value}" for icon, value in known)
-        lines.append("   ".join(f"{icon} **{value}**" for icon, value in known))
-    clan = attacker["clan"] and isolated(safe(attacker["clan"]))
-    if clan:
-        lines.append(f"-# Clan {clan}")
+        )]
+    if attacker["clan"]:
+        stats.append(f"-# Clan {isolated(safe(attacker['clan']))}")
     battle = site.battle(alert["defender_tag"], alert["ranked_day_start"], alert["battle_id"])
-    notice = (
-        f"🛡️ {isolated(safe(alert['defender_name']))}  "
-        f"{f'−{number(lost)}' if lost else '0'} 🏆"
-    )
-    if full_notice:
-        notice = "\n".join(filter(None, [
-            f"{notice}  ·  ⚔️ {isolated(safe(alert['attacker_name']))}  {result}",
-            "  ·  ".join(filter(None, [stats, clan and f"Clan {clan}"])),
-        ]))
+    stats.append(f"-# [Open battle]({battle})  ·  [Alert settings]({site.url(DISCORD_ALERTS)})")
+    attack = f"{isolated(safe(alert['attacker_name']))}  {stars}  {alert['destruction_percentage']}%"
     return Reply(
-        (Card(("\n".join(lines),), colour),),
-        # The box's top line shows no markup, so the name is not escaped.
-        title=isolated(" ".join((alert["attacker_name"] or "Unnamed").split())),
-        notice=notice,
-        footer=f"[Open battle]({battle})  ·  [Alert settings]({site.url(DISCORD_ALERTS)})",
+        (Card((attack, "\n".join(["Attacker stats", *filter(None, stats)])), colour),),
+        title=f"{isolated(safe(alert['defender_name']))}  {f'−{number(lost)}' if lost else '0'}",
+        boxed=True,
     )
 
 
