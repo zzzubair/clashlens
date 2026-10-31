@@ -523,7 +523,7 @@ these steps, all run by the worker:
    [army type](domain.md#army-types) and variant, 50,000 a run after a rules change, then
    saves one completed day's attack counts per attacker and distinct army in
    `army_package_day_counts`, with the trophies they won for the Armies
-   view's Avg. trophies, outside 04:30-07:00 UTC. Migration 0114 forgets
+   view's Trophies per attack, outside 04:30-07:00 UTC. Migration 0114 forgets
    which days were counted, so after that deploy the worker counts the
    current Season and the last 7 days again, one day each 10-second run,
    about 3 minutes. Until a day's attack counts are saved, `season=current`

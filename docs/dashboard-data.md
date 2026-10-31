@@ -20,7 +20,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | | Earlier Legend days | Exists | `/v1/players/{tag}/bases?day=N` returns the same opponents for Day N of this Season, any day before today. Each `legends_held` comes from every player's latest saved log of that day by Reset trophies, as a finished day has no Live Leaderboard: about 2.8 to 4.1 s for 11,700 players on 13 and 14 October 2026, as it reads the whole table, so the API keeps each day's counts in memory for an hour, at most 28 days, and reads one day at a time, so these reads hold one of its 8 database connections between them. A request that waits over 8 s for its turn gets 503 `busy`, unless its day was read meanwhile. The website reads a day only once clicking stops for 0.4 s, and waits up to 15 s for it. `opponents` is null when the player has no log that day. |
 | | Legends trophies lost a defense | Exists | `lost` in each opponent's `legends_held`, over the same players and defenses as the held %. About −32 across all Legends (see below), higher at higher trophies. |
 | | Add to watchlist | Exists | Watchlists hold up to 20 players. |
-| Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The shield row needs nothing new. |
+| Goal | Trophies at rank N on the last Reset board and 7 days earlier; your 7-day pace | Exists | Saved daily boards. The skip plan needs nothing new. |
 | Armies on defense | Your defenses grouped by the attacker's army type over the last 1–28 days | Exists | `/v1/players/{tag}/armies?lens=defense` returns it. Army types exist since #458. Both rows can only use days still kept: a finished Season's daily logs and army battle records are deleted 7 days after it ends, so early in a new Season a long Custom window covers fewer days. |
 | | Legends held % and trophies lost per army type | Exists | The same read returns every tracked player's defenses per type and in all, from the worker's saved daily defense counts per defender and army (`army_package_defense_day_counts`, the defense counterpart of the attack counts: about 88,000 rows and 10.6 MB a day, 300 MB a Season, kept across Seasons), made from defenders' own battle reports. A defense whose attacking army could not be read counts only in the overall average. The worker counts the current Season and the last 28 days at most one day a minute, so after a deploy the card has full numbers within about 30 minutes. |
 | Rivals watch | Live board around you; each shown player's today and Season summary | Exists | `/v1/leaderboards/live?focus_tag=`, then `/v1/players/{tag}` for the 7 players: today's battles (hit rate, offense, defense), their rank at the last Reset (for ▲▼) and this Season's finished days (for Season averages). 8 reads per refresh. Bundle them later only if it proves slow. |
@@ -40,7 +40,17 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Need | Status | Notes |
 |---|---|---|
 | Per-user settings: default or own layout and card order, first-visit choice, Goal rank, Cutoffs lines, the Watchlist card's watchlist and window, Bases mode | Exists | Saved under `dashboard` in the account preferences box (capped at 4,096 bytes); under 1 KB per account. The default layout itself is a list in the website code; users on the default follow it at each release. |
-| "updated N min ago" on live cards | Exists | Taken from the saved time of each reading the card shows. |
+| "Updated N min ago", once for the page | Exists | Taken from the saved time of each reading the Legend day card shows, or, without that card, the first live card's reading. |
+
+## Live leaderboard rows
+
+Not a card: what the Rankings page, the front page's Top 10 and the player page's live rank read from `/v1/leaderboards/live` to show the places a player moved, what they won today and their last 7 days. Each row of the Live board carries three more fields, read in one query for the rows being served only (a Rankings page asks for 50) from the newest Daily board at the last Reset and the player's saved Legend days. Daily board rows do not have them.
+
+| Field | Meaning |
+|---|---|
+| `reset_position` | The player's place on the newest Daily board published at the last Reset. Null when the player is not on it, and for every row on a Season's first Legend day, when the board at that Reset belongs to the Season before. |
+| `today_change` | Trophies won or lost today so far, from the Legend day's settled start, counted as the dashboard's Legend day card counts them: the day's attack gains less its defense losses once no battle is missing. An automatic defense loss the Reset reading was taken before is never today's. Null when today's day isn't saved yet or a battle is missing. The website shows it as Today, also on a Season's first Legend day. |
+| `recent_days` | Each of the 7 Legend days before today that belongs to this Season, oldest first, as `ranked_day_start` (the Reset that started it) and `net_trophy_change` (its result as the player page's Daily Legend log shows it, null when it has none, such as a day not saved yet). Empty on a Season's first Legend day. The website draws them as the bars of Last 7 days and names each bar by its own day, so a Reset whose board is late or never published moves no day. |
 
 ## Open owner decision
 

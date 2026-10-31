@@ -471,7 +471,7 @@ ranking lists and the Daily board's score against them (default `false`;
 
 The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
 `app.env` (`true` or `false`, default `false`). While it is off, `/` shows
-the front page to everyone, the navigation bar has no Dashboard
+the front page to everyone, the top bar has no Home
 tab, saving a dashboard layout is refused, and the private API refuses the
 dashboard's own player reads (`/v1/players/{tag}/today`,
 `/v1/players/{tag}/bases` and `/v1/players/{tag}/armies`) with `dashboard_disabled`. `./ops` passes the setting to the website and the private
