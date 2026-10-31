@@ -324,26 +324,12 @@ h3 {
   gap: 0.8rem;
 }
 
-/* An example Discord attack alert, with the bot's gold edge. */
+/* The picture each Discord attack alert ends with, as an example. */
 .attack-alert-example {
-  display: grid;
-  gap: 0.4rem;
-  margin: 0;
-}
-
-.attack-alert-message {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.7rem 0.85rem;
+  width: 100%;
+  height: auto;
   border: 1px solid var(--cl-border);
-  border-left: 4px solid #f2b33d;
   border-radius: var(--cl-radius);
-  background: var(--cl-paper);
-  overflow-wrap: anywhere;
-}
-
-.attack-alert-result {
-  font-size: 1.5rem;
 }
 
 .analytics-choices-button {

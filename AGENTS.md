@@ -41,6 +41,7 @@ Use these exactly.
 - **Default player**: the verified player, chosen on the website, that the Discord bot's /stats uses when no player is named.
 - **Projected place**: the one estimated rank the Legend day card shows for the next Reset. It is the middle result of 200 imagined finishes of the day, copied from the last 7 days, and always falls inside the Next Reset range.
 - **Variant**: a split of an army type by the hero equipment its attacks used, from a hand-kept list (for example Revenge Hydra), with an army matching none in its type's Other.
+- **Alert picture**: the picture of a player's Legend day so far, at the bottom of each Discord attack alert and in /stats, light unless the Clasher turns on Dark picture.
 
 ## Technical words
 

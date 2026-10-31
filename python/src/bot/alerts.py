@@ -21,12 +21,24 @@ not made; the DM is then logged as not delivered, never sent again. A crash
 can lose an alert but never send it twice. Discord refusing a DM (bot not
 added, DMs closed, unknown user) is logged with the reason, which the
 website shows with what the Clasher can do. That DM is not tried again.
+
+A delivered alert gets its picture of the defender's Legend day (see
+`picture`) once Clash Lens has saved its battle into that day, usually
+seconds after the alert, looked for in each round after the one that sent
+it, for 5 minutes. The
+picture is added by editing the DM, which sends no second notification, so
+the phone's notification shows the DM's text rather than "Sent an image". A
+picture that cannot be drawn or added is left out; the alert stays. Pictures
+are added for at most 10 seconds a round, reading, drawing and editing
+included, and stop before the next try of a DM waiting to be tried again,
+which the loop wakes for; a picture cut off then is tried again next round.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,7 +47,7 @@ from typing import Any, Protocol
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 
-from . import replies
+from . import picture, replies
 from .replies import Reply, Site
 from .store import Store, link_colours
 
@@ -55,6 +67,13 @@ RETRY_LONGEST_SECONDS = 120.0
 NONCE_SECONDS = 120.0
 # Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
+# How long a delivered alert's picture waits for its battle to be saved into
+# the defender's Legend day, and the longest an edit adding it may take.
+PICTURE_SECONDS = 300.0
+PICTURE_EDIT_SECONDS = 30.0
+# Pictures are added in a round for at most this long, so the next look for
+# new battles is not held up.
+PICTURE_ROUND_SECONDS = 10.0
 
 _DUE_COLUMNS = (
     "account_id",
@@ -129,10 +148,14 @@ class Unreachable(Exception):
 class Messenger(Protocol):
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
-    ) -> None:
+    ) -> Any:
         """Send the DM with `nonce`, which Discord checks for repeats, raising
         Unreachable at once rather than wait out a rate limit longer than
-        `time_left` seconds."""
+        `time_left` seconds; returns the message sent."""
+
+    async def add_picture(self, message: Any, picture: bytes) -> None:
+        """Put the PNG `picture` at the bottom of the box of `message`, a
+        message `send_dm` returned."""
 
 
 @dataclass
@@ -146,6 +169,8 @@ class Delivery:
     # When its `WINDOW` started: the battle saved, or the confirmation asked for.
     since: datetime
     reply: Reply
+    # The attack, for an attack alert, whose picture is added once delivered.
+    alert: dict[str, Any] | None = None
     # Its delivery log id once claimed, also the nonce of every try, and the
     # loop's clock time then, just before its first try.
     id: int = 0
@@ -180,14 +205,27 @@ class AlertStore:
     def due(self) -> list[dict[str, Any]]:
         """Alerts for battles saved within `WINDOW`, by the database's clock,
         the clock that stamps each battle as saved, each with the defending
-        player's colour."""
+        player's colour and whether its account chose a dark picture."""
         with self.database.pool.connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM clashlens_discord_attack_alerts_due(clock_timestamp() - %s)",
-                (WINDOW,),
-            ).fetchall()
+            rows = [
+                dict(zip(_DUE_COLUMNS, row, strict=True))
+                for row in connection.execute(
+                    "SELECT * FROM clashlens_discord_attack_alerts_due(clock_timestamp() - %s)",
+                    (WINDOW,),
+                ).fetchall()
+            ]
+            if not rows:
+                return []
+            dark = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT account_id FROM discord_alert_dark_picture WHERE account_id = ANY(%s)",
+                    (sorted({row["account_id"] for row in rows}),),
+                ).fetchall()
+            }
             return _coloured(
-                connection, [dict(zip(_DUE_COLUMNS, row, strict=True)) for row in rows],
+                connection,
+                [{**row, "dark_picture": row["account_id"] in dark} for row in rows],
                 "defender_tag",
             )
 
@@ -246,6 +284,16 @@ class AlertStore:
         )
         days = replies.season_days(page)
         return {**found, "hit_rate": "Unavailable" if days is None else replies.hit_rate(days)}
+
+    def legend_day(self, alert: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+        """The defender's Legend day of the alert's battle, read as the
+        player page reads it, for the alert's picture; None until Clash Lens
+        has saved that battle into the day."""
+        page = self.store.player_page(alert["defender_tag"], now) or {}
+        day = picture.legend_day(page, alert["ranked_day_start"], str(alert["battle_id"]))
+        if day is None or not any(defense["new"] for defense in day["defenses"]):
+            return None
+        return day
 
     def claim(self, delivery: Delivery) -> int | None:
         """Log a DM as being sent while it is still due; returns its log id,
@@ -307,28 +355,43 @@ class AlertLoop:
         self.alerts = alerts
         self.messenger = messenger
         self.site = site
-        # How far into the battle's Season the attacker's details go.
+        # How far into the battle's Season the attacker's details go, and
+        # when the defender's Legend day is read for the picture.
         self.now = now
         self._pruned_at: float | None = None
         # Claimed DMs Discord could not take yet, waiting for their next try.
         self._waiting: list[Delivery] = []
+        # Delivered alerts waiting for their picture: the message, the
+        # attack, and the loop's clock time to stop waiting.
+        self._pictures: list[tuple[Any, dict[str, Any], float]] = []
+        # Clear while a picture's read of its Legend day, cut off by the end
+        # of its round, still runs; no other picture is read until it ends.
+        self._read = threading.Event()
+        self._read.set()
 
     async def run(self) -> None:
-        """Look for new battles until cancelled; a failed round is logged and
-        the next round tries again."""
+        """Look for new battles until cancelled, every `INTERVAL_SECONDS` or
+        at the next try of a DM waiting to be tried again if sooner; a
+        failed round is logged and the next round tries again."""
         while True:
+            pause = INTERVAL_SECONDS
             try:
                 await self.tick()
+                now = asyncio.get_running_loop().time()
+                pause = max(0.0, min([pause, *(d.retry_at - now for d in self._waiting)]))
             except Exception:
                 log.exception("attack alert round failed")
-            await asyncio.sleep(INTERVAL_SECONDS)
+            await asyncio.sleep(pause)
 
     async def tick(self) -> int:
         """Log as not delivered each waiting DM past its last try, and try
         again each other one whose time has come, then send every
         confirmation, then every alert, due now, one at a time; returns how
-        many were sent."""
+        many were sent. Then add the picture to each alert delivered in an
+        earlier round whose battle is now saved into its Legend day, oldest
+        first, until the round's end (`_add_pictures`)."""
         clock = asyncio.get_running_loop().time()
+        pictures = list(self._pictures)
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
             await asyncio.to_thread(self.alerts.prune)
             self._pruned_at = clock
@@ -366,9 +429,66 @@ class AlertLoop:
                     alert["battle_id"],
                     alert["saved_at"],
                     replies.attack_alert(self.site, alert, attacker, alert["colour"]),
+                    alert,
                 )
             )
+        await self._add_pictures(pictures)
         return sent
+
+    async def _add_pictures(
+        self, pictures: list[tuple[Any, dict[str, Any], float]]
+    ) -> None:
+        """Add each of `pictures` whose battle is saved into its Legend day,
+        until the round's end: `PICTURE_ROUND_SECONDS` from now, or the next
+        try of a DM waiting to be tried again if sooner. The end cuts off the
+        read, the drawing and the edit alike; a picture cut off, not reached,
+        or waiting for its read or drawing to have room, is tried again next
+        round, until it stops waiting. One that fails is left out."""
+        time = asyncio.get_running_loop().time
+        end = min([time() + PICTURE_ROUND_SECONDS, *(d.retry_at for d in self._waiting)])
+        for waiting in pictures:
+            message, alert, give_up_at = waiting
+            if time() >= end or not self._read.is_set():
+                return
+            if time() < give_up_at:
+                try:
+                    async with asyncio.timeout_at(end) as cut:
+                        if not await self._add_picture(message, alert):
+                            continue
+                except picture.Busy:
+                    return
+                except TimeoutError:
+                    if cut.expired():
+                        log.info("attack alert picture for battle %s waits for next round",
+                                 alert["battle_id"])
+                        return
+                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
+                except Exception:
+                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
+            self._pictures.remove(waiting)
+
+    async def _add_picture(self, message: Any, alert: dict[str, Any]) -> bool:
+        """Read the alert's Legend day, draw it and edit it into `message`;
+        False while its battle is not saved into the day yet."""
+        # Cleared only once the read starts: one cut off still waiting for a
+        # thread never runs.
+        now, read = self.now(), threading.Event()
+        read.set()
+        self._read = read
+
+        def legend_day() -> dict[str, Any] | None:
+            read.clear()
+            try:
+                return self.alerts.legend_day(alert, now)
+            finally:
+                read.set()
+
+        day = await asyncio.to_thread(legend_day)
+        if day is None:
+            return False
+        drawn = await asyncio.wrap_future(picture.drawing(day, alert["dark_picture"]))
+        await asyncio.wait_for(self.messenger.add_picture(message, drawn), PICTURE_EDIT_SECONDS)
+        return True
 
     async def _claim(self, delivery: Delivery) -> int:
         claimed = await asyncio.to_thread(self.alerts.claim, delivery)
@@ -387,7 +507,7 @@ class AlertLoop:
             return 0
         state, reason = "sent", None
         try:
-            await asyncio.wait_for(
+            message = await asyncio.wait_for(
                 self.messenger.send_dm(
                     delivery.discord_user_id, delivery.reply, delivery.id, left
                 ),
@@ -410,6 +530,10 @@ class AlertLoop:
             log.exception("attack alert delivery %s failed", delivery.id)
             state = "failed"
         await self._finish(delivery, state, reason)
+        if state == "sent" and delivery.alert is not None:
+            self._pictures.append(
+                (message, delivery.alert, asyncio.get_running_loop().time() + PICTURE_SECONDS)
+            )
         return int(state == "sent")
 
     async def _finish(self, delivery: Delivery, state: str, reason: str | None) -> None:

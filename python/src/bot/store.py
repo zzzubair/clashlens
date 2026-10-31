@@ -125,6 +125,14 @@ class Store:
             "players"
         ]
 
+    def dark_picture(self, account: AccountContext) -> bool:
+        """Whether the account chose the Legend day picture dark."""
+        with self.database.pool.connection() as connection:
+            return connection.execute(
+                "SELECT EXISTS (SELECT 1 FROM discord_alert_dark_picture WHERE account_id = %s)",
+                (account.internal_id,),
+            ).fetchone()[0]
+
     def colours(self, account: AccountContext) -> dict[str, int]:
         with self.database.pool.connection() as connection:
             return link_colours(connection, account.internal_id)

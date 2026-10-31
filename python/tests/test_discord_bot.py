@@ -4,6 +4,7 @@ Discord interaction and a fake store: no Discord connection, no database."""
 from __future__ import annotations
 
 import asyncio
+import io
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,8 @@ import discord
 import psycopg
 import psycopg_pool
 import pytest
+from PIL import Image
+from test_discord_alerts import DARK, LIGHT, background
 
 from bot import discord_app, replies
 from bot.__main__ import ConfigError, command_payload, main, read_token
@@ -113,6 +116,8 @@ class FakeStore:
         # Accounts whose default read finds no player, as when their links
         # are removed between the player and default reads.
         self.no_default: set[int] = set()
+        # Accounts that chose the Legend day picture dark.
+        self.dark: set[int] = set()
         self.pages: dict[str, dict[str, Any]] = {}
         self.fail: Exception | None = None
         self.reads: list[str] = []
@@ -147,6 +152,10 @@ class FakeStore:
             {"tag": item["tag"], "name": item["name"], "on": index == 0, "summary_on": False}
             for index, item in enumerate(self.cards[account.internal_id])
         ]
+
+    def dark_picture(self, account):
+        self._read("dark_picture")
+        return account.internal_id in self.dark
 
     def default_tag(self, account):
         self._read("default_tag")
@@ -230,6 +239,27 @@ class FakeInteraction:
                 "colours": [
                     item.accent_colour for item in items if isinstance(item, discord.ui.Container)
                 ],
+                # Each text, picture and line in the cards, in order.
+                "shown": [
+                    "picture" if isinstance(item, discord.ui.MediaGallery)
+                    else "line" if isinstance(item, discord.ui.Separator)
+                    else item.content
+                    for item in items
+                    if isinstance(
+                        item, (discord.ui.TextDisplay, discord.ui.MediaGallery, discord.ui.Separator)
+                    )
+                ],
+                "pictures": [
+                    entry.media.url
+                    for item in items
+                    if isinstance(item, discord.ui.MediaGallery)
+                    for entry in item.items
+                ],
+                # The files uploaded with it; an edit's replace the old ones.
+                "files": {
+                    file.filename: file.fp.read()
+                    for file in message.get("files", message.get("attachments", []))
+                },
                 # An edit without a view keeps the old buttons, as on Discord.
                 "view": message.get("view", "old buttons kept"),
             }
@@ -310,7 +340,44 @@ def test_stats_works_for_anyone_and_never_asks_to_sign_up(store) -> None:
     assert named["text"].startswith("### Lens #8QQ")
     assert named["private"] is False
     assert named["colours"] == [GOLD]
-    assert set(links(named)) == {"View details"}
+    assert links(named) == {}
+
+
+def test_stats_shows_todays_picture_between_its_trophies_and_the_day_link(store) -> None:
+    """Today's trophies, then the picture of today's Legend day, uploaded
+    with the message, then a link opening that day on the website, then the
+    Season. The picture is dark only for someone whose own account chose
+    it."""
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#8QQ"] = page(
+        "#8QQ", "Lens", [battle("offense", 5, 3, 40, "A"), battle("defense", 9, 2, -24, "B")]
+    )
+    shown = {}
+    for who, user in (("stranger", OTHER), ("light", ME), ("dark", ME)):
+        if who == "dark":
+            store.dark.add(1)
+        shown[who] = run_command(store, "stats", FakeInteraction(user), player="#8QQ")
+    message = shown["stranger"]
+    day = TODAY.start.date().isoformat()
+    assert message["shown"] == [
+        "### Lens #8QQ\n## +40 (1)  −24 (1)",
+        "picture",
+        f"[View day](https://clashlens.test/players/%238QQ?day={day}#legend-day-{day})",
+        "line",
+        "**Season Stats**\nThis Season's days are not available yet.\n-# Updated 2 min ago",
+    ]
+    assert message["pictures"] == ["attachment://legend-day.png"]
+    assert {who: background(item["files"]["legend-day.png"]) for who, item in shown.items()} == {
+        "stranger": LIGHT, "light": LIGHT, "dark": DARK
+    }
+    assert Image.open(io.BytesIO(message["files"]["legend-day.png"])).size == (1200, 860)
+
+
+def test_a_day_not_saved_yet_has_no_picture(store) -> None:
+    store.pages["#8QQ"] = {**page("#8QQ", "Lens", []), "screen_ready": {"days": []}}
+    message = run_command(store, "stats", FakeInteraction(), player="#8QQ")
+    assert message["shown"][:2] == ["### Lens #8QQ\nToday's battles are not available yet", "line"]
+    assert message["pictures"] == [] and message["files"] == {}
 
 
 def test_own_linked_accounts_keep_their_colour_and_other_players_are_yellow(store) -> None:
@@ -504,6 +571,20 @@ def pick(message: dict[str, Any], interaction: FakeInteraction, value: str) -> N
     ]
     select._values = [value]
     asyncio.run(select.callback(interaction))
+
+
+def test_a_player_picked_from_the_dropdown_gets_their_picture(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.no_default.add(1)
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    message = run_command(store, "stats", FakeInteraction(), player=None)
+    assert message["files"] == {}
+    click = FakeInteraction()
+    pick(message, click, "#8QQ")
+    assert click.last["edited"] is True
+    assert click.last["shown"][:2] == ["### Lens #8QQ\nNo battles yet today", "picture"]
+    assert click.last["pictures"] == ["attachment://legend-day.png"]
+    assert background(click.last["files"]["legend-day.png"]) == LIGHT
 
 
 def test_a_public_reply_never_turns_into_a_connect_message(store) -> None:

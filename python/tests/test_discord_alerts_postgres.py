@@ -15,7 +15,15 @@ import psycopg
 import pytest
 from aiohttp import web
 from domain_test_support import as_api_role, domain_database, seed_battles
-from test_discord_alerts import _rate_limited, delivered, stand_in_discord
+from test_discord_alerts import (
+    DARK,
+    LIGHT,
+    _rate_limited,
+    a_day,
+    background,
+    delivered,
+    stand_in_discord,
+)
 from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 from test_reset_scenarios_postgres import (
     RESULTS,
@@ -29,6 +37,7 @@ from test_reset_scenarios_postgres import (
     multiplayer,
 )
 
+from bot import picture
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger
@@ -43,12 +52,14 @@ NAME = "Synthetic Legend I"
 
 
 class FakeDiscord:
-    """Records each try by its nonce and each DM delivered; refuses users in
-    `refusing` as Discord would, and cannot be reached for the next `outages`
-    tries, asking to wait `retry_after`."""
+    """Records each try by its nonce, each DM delivered, which is known by
+    its nonce, and each picture added to one; refuses users in `refusing` as
+    Discord would, and cannot be reached for the next `outages` tries, asking
+    to wait `retry_after`."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Reply]] = []
+        self.pictures: list[tuple[int, bytes]] = []
         self.tries: list[int] = []
         self.refusing: dict[str, str] = {}
         self.outages = 0
@@ -56,7 +67,7 @@ class FakeDiscord:
 
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int, _time_left: float
-    ) -> None:
+    ) -> int:
         self.tries.append(nonce)
         if discord_user_id in self.refusing:
             raise Refused(self.refusing[discord_user_id])
@@ -64,6 +75,10 @@ class FakeDiscord:
             self.outages -= 1
             raise Unreachable(self.retry_after)
         self.sent.append((discord_user_id, reply))
+        return nonce
+
+    async def add_picture(self, message: int, png: bytes) -> None:
+        self.pictures.append((message, png))
 
 
 def _switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
@@ -103,6 +118,26 @@ def _summary_switch(database: ApiDatabase, account_id: int, tag: str, on: bool) 
             identity={"day_summary": tag, "on": on},
         ),
         normalized_tag=tag,
+        on=on,
+    ).status_code
+
+
+def _dark_picture_switch(database: ApiDatabase, account_id: int, on: bool) -> int:
+    """Turn the account's dark attack alert picture on or off as the website
+    does, through the private API."""
+    return api_discord_alerts.set_dark_picture(
+        database,
+        RequestBinding(
+            request_id=str(uuid4()),
+            caller="typescript-website",
+            provider="discord",
+            provider_subject=DISCORD_ID,
+            account_id=account_id,
+            operation="account.update",
+            method="POST",
+            request_target="/v1/account/discord-alerts",
+            identity={"dark_picture": on},
+        ),
         on=on,
     ).status_code
 
@@ -153,7 +188,8 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     DM each, once however often the loop looks. The attacker's hit rate is
     the one /stats shows for them, with their live rank and clan; an
     attacker Clash Lens never read is named as DEFENDER's log names them,
-    and not tracked yet."""
+    and not tracked yet. The round after, each alert gets the picture of
+    DEFENDER's Day 3 with both defenses, its own marked new, drawn light."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
     # The fixture names each log row's opponent by its place in the log, so
     # DEFENDER's second defense is by the player tagged _tag(2), and the
@@ -193,6 +229,11 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             assert _switch(api, mine, DEFENDER, True) == 200
             store = Store(api)
             discord = FakeDiscord()
+            drawn: list[tuple[dict, bool]] = []
+            draw = picture.draw
+            monkeypatch.setattr(
+                "bot.picture.draw", lambda day, dark: drawn.append((day, dark)) or draw(day, dark)
+            )
             loop = AlertLoop(
                 AlertStore(api, store), discord, SITE,
                 now=lambda: day_3 - timedelta(minutes=1),
@@ -223,33 +264,56 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     ]
     alerts = [reply for _, reply in discord.sent[1:]]
     assert {user for user, _ in discord.sent} == {DISCORD_ID}
-    assert sorted(
-        [reply.notice, reply.title, *reply.cards[0].parts[0].splitlines()] for reply in alerts
-    ) == sorted([
+    assert sorted(reply.text.splitlines()[:-1] for reply in alerts) == sorted([
         [
-            f"🛡️ \u2068{NAME}\u2069  −30 🏆",
-            f"\u2068{NAME}\u2069",
-            f"# {'★' * stars}{'☆' * (3 - stars)}  ·  {destruction}%",
-            "-# Attacker stats",
+            f"\u2068{NAME}\u2069  −30",
+            "",
+            f"\u2068{NAME}\u2069  {'★' * stars}{'☆' * (3 - stars)}  {destruction}%",
+            "",
+            "Attacker stats",
             "🌍 **#1**   🎯 **75%**",
             "-# Clan \u2068Synthetic Clan\u2069",
         ],
         [
-            f"🛡️ \u2068{NAME}\u2069  −20 🏆",
-            "\u2068Opponent\u2069",
-            f"# {'★' * stranger_stars}{'☆' * (3 - stranger_stars)}  ·  {stranger_destruction}%",
-            "-# Attacker stats",
+            f"\u2068{NAME}\u2069  −20",
+            "",
+            (
+                f"\u2068Opponent\u2069  {'★' * stranger_stars}{'☆' * (3 - stranger_stars)}"
+                f"  {stranger_destruction}%"
+            ),
+            "",
+            "Attacker stats",
             "Not tracked by Clash Lens yet",
         ],
     ])
+    # The last picture is /stats's, of the attacker's day at its moment: Day 2.
+    *drawn, (stats_day, _) = drawn
+    assert (stats_day["day_number"], stats_day["date"]) == (2, day_3 - timedelta(days=1))
+    # Each picture is added to the alert it was drawn for: DEFENDER's Day 3
+    # from 4,980, both defenses named as the player page names them, from
+    # DEFENDER's log, the one that alert is about marked new.
+    assert sorted(message for message, _ in discord.pictures) == sorted(discord.tries[1:])
+    assert [background(png) for _, png in discord.pictures] == [LIGHT, LIGHT]
+    assert {
+        tuple((battle["name"], battle["trophies"], battle["new"]) for battle in day["defenses"])
+        for day, _dark in drawn
+    } == {
+        (("Opponent", -30, True), ("Opponent", -20, False)),
+        (("Opponent", -30, False), ("Opponent", -20, True)),
+    }
+    assert {
+        (day["name"], day["day_number"], day["date"], day["start_trophies"], day["trophies"],
+         len(day["attacks"]), dark)
+        for day, dark in drawn
+    } == {(NAME, 3, day_3, 4980, 4930, 0, False)}
     # Every message about the account's first linked player has its colour,
     # and each alert opens its battle on that Legend day.
     assert {card.colour for _, reply in discord.sent for card in reply.cards} == {
         PLAYER_COLOURS[0]
     }
     assert all(
-        reply.footer.startswith(
-            f"[Open battle](https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
+        reply.text.splitlines()[-1].startswith(
+            f"-# [Open battle](https://clashlens.test/players/%232PP?day={day_3.date().isoformat()}#battle-"
         )
         for reply in alerts
     )
@@ -338,8 +402,33 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     assert [(player["tag"], player["on"]) for player in shown["players"]] == [
         ("#2PP", True), ("#8QQ", False)]
     assert cleared["undelivered"] is None
-    assert discord.sent[0][1].notice == "🛡️ \u2068Unnamed\u2069  −16 🏆"
-    assert "# ★☆☆  ·  33%" in discord.sent[0][1].text.splitlines()
+    assert discord.sent[0][1].text.splitlines()[:3] == [
+        "\u2068Unnamed\u2069  −16", "", "\u2068Unnamed\u2069  ★☆☆  33%"]
+
+
+def test_the_dark_picture_switch_draws_each_next_picture_dark_until_turned_off(
+    database_url: str, monkeypatch
+) -> None:
+    """The picture is light until the Clasher turns the dark picture on; the
+    next alert's picture is then dark, and after turning it off, light again."""
+    with _alerts_on(database_url) as (connection_info, api, mine, player):
+        alerts = AlertStore(api, Store(api))
+        # The battles here are seeded without the worker, so the defender's
+        # day is the one already saved.
+        monkeypatch.setattr(alerts, "legend_day", lambda _alert, _now: a_day())
+        loop = AlertLoop(alerts, discord := FakeDiscord(), SITE,
+                         now=lambda: SEASON + timedelta(hours=3))
+        before = api_discord_alerts.get_attack_alerts(api, mine)["dark_picture"]
+        assert _dark_picture_switch(api, mine, True) == 200
+        after = api_discord_alerts.get_attack_alerts(api, mine)["dark_picture"]
+        _defend(connection_info, player)
+        [asyncio.run(loop.tick()) for _ in range(2)]
+        assert _dark_picture_switch(api, mine, False) == 200
+        _defend(connection_info, player)
+        [asyncio.run(loop.tick()) for _ in range(2)]
+
+    assert (before, after) == (False, True)
+    assert [background(png) for _, png in discord.pictures] == [DARK, LIGHT]
 
 
 def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
@@ -400,10 +489,10 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
     assert cleared is None
     assert [reply.text.splitlines()[0] for _, reply in discord.sent] == [
         "### Attack alerts are on",
-        "🛡️ \u2068Unnamed\u2069  −16 🏆",
+        "\u2068Unnamed\u2069  −16",
     ]
     assert "#2PP" in discord.sent[0][1].text
-    assert "%232PP" in discord.sent[1][1].footer
+    assert "%232PP" in discord.sent[1][1].text
 
 
 def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(

@@ -382,9 +382,17 @@ def test_attack_alerts_are_only_ever_for_the_accounts_own_verified_players(accou
         )
         assert refused.status_code == 404
         assert refused.json() == {"error": "player_not_verified"}
-    for account in owners:
+    turned_on = call(
+        client, owner, "POST", "/v1/account/discord-alerts",
+        {"alert": "dark_picture", "on": True},
+    )
+    assert turned_on.status_code == 200
+    no_tag = call(client, owner, "POST", "/v1/account/discord-alerts", {"on": True})
+    assert no_tag.status_code == 422
+    for account, dark_picture in zip(owners, (True, False), strict=True):
         alerts = call(client, account, "GET", "/v1/account/discord-alerts").json()
         assert alerts["players"] == [] and alerts["undelivered"] is None
+        assert alerts["dark_picture"] is dark_picture
 
 
 def test_an_overlay_only_ever_shows_the_accounts_own_verified_player(accounts):

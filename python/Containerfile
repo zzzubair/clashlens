@@ -6,10 +6,42 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
+# The Noto fonts the Discord bot's attack alert picture falls back to for
+# names in other scripts, symbols and emoji (src/bot/picture.py): about 34 MB
+# of the packages' few hundred.
+FROM python:3.12-slim AS fonts
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+
 FROM python:3.12-slim
 
+# FriBiDi lets Pillow lay out text with the website font's features and
+# right-to-left names.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libfribidi0 \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 10001 clashlens \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin clashlens
+COPY --from=fonts /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /usr/share/fonts/opentype/noto/
+COPY --from=fonts \
+    /usr/share/fonts/truetype/noto/NotoSans-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansKhmer-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansGeorgian-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansArmenian-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansJavanese-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansSymbols-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSerifTibetan-Bold.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf \
+    /usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf \
+    /usr/share/fonts/truetype/noto/NotoColorEmoji.ttf \
+    /usr/share/fonts/truetype/noto/
 COPY --from=dependencies /opt/clashlens/.venv /opt/venv
 COPY --chown=10001:10001 src /opt/clashlens/src
 RUN mkdir -p /opt/clashlens/testdata

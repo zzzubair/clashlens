@@ -444,8 +444,17 @@ def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
                 seed_profile(owner, tag, trophies)
             _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
-            assert store.account(DISCORD_ID) is not None
+            account = store.account(DISCORD_ID)
+            assert account is not None
             assert [item["tag"] for item in store.search("Player #8", NOW)] == ["#8QQ"]
+            # The Dark picture switch /stats draws by.
+            assert store.dark_picture(account) is False
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO discord_alert_dark_picture (account_id) VALUES (%s)",
+                    (account.internal_id,),
+                )
+            assert store.dark_picture(account) is True
         finally:
             bot.close()
             owner.close()

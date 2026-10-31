@@ -4,8 +4,11 @@ become, and the message itself."""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import threading
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -14,7 +17,9 @@ import aiohttp
 import discord
 import pytest
 from aiohttp import web
+from PIL import Image
 
+from bot import alerts, picture
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
@@ -22,6 +27,8 @@ from bot.replies import PLAYER_COLOURS, Reply, Site, attack_alert, say
 from clashlens.domain import ranked_day_for
 
 SITE = Site("https://clashlens.test")
+# The website's light and dark page backgrounds.
+LIGHT, DARK = (0xF4, 0xF4, 0xF5), (0x05, 0x05, 0x06)
 
 
 class FakeClient:
@@ -90,13 +97,14 @@ def test_discord_outages_and_rate_limits_are_tried_again_not_refused() -> None:
         assert outage.value.retry_after == wait
 
 
-def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification() -> None:
-    """The message's own text, all a phone's notification shows, is the
-    defender and the trophies lost, with a right-to-left name kept from
-    moving the number; the box below, in the defender's colour, is topped by
-    the attacker's name, then the stars and destruction, the attacker's
-    stats by icon and clan without pinging anyone, then links to the battle
-    and alert settings in place of buttons."""
+def test_an_alert_is_one_box_whose_top_the_phone_notification_shows() -> None:
+    """The message has no text of its own, so a phone's notification shows
+    the box's top, without markup: the defender and the trophies lost as the
+    box's bold title, with a right-to-left name kept from moving the number,
+    then the attacker, stars and destruction. Under "Attacker stats" come
+    their stats by icon and clan, without pings, then links to the battle
+    and alert settings in place of buttons; the box is in the defender's
+    colour."""
     client = FakeClient(None)
     reply = attack_alert(
         SITE,
@@ -117,12 +125,13 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
     )
     asyncio.run(DiscordMessenger(client).send_dm("1", reply, 1, 60.0))  # type: ignore[arg-type]
     message = client.sent[0]
-    assert message["content"] == "🛡️ \u2068صقر الشمال\u2069  −24 🏆"
+    assert "content" not in message and "view" not in message
     [box] = message["embeds"]
-    assert box.author.name == "\u2068@everyone *Drift*\u2069"
-    assert box.description.splitlines() == [
-        "# ★★☆  ·  88%",
-        "-# Attacker stats",
+    assert (box.title, box.description) == (
+        "\u2068صقر الشمال\u2069  −24", "\u2068@\u200beveryone \\*Drift\\*\u2069  ★★☆  88%")
+    [stats] = box.fields
+    assert stats.name == "Attacker stats"
+    assert stats.value.splitlines() == [
         "🏆 **5,312**   🌍 **#1,204**   🎯 **62%**",
         "-# Clan \u2068@\u200bhere \\_Night\\_\u2069",
         (
@@ -131,7 +140,6 @@ def test_an_alert_shows_the_defender_and_trophies_lost_in_the_phone_notification
         ),
     ]
     assert box.colour.value == PLAYER_COLOURS[1]
-    assert "view" not in message
 
 
 def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
@@ -144,15 +152,253 @@ def test_an_alert_leaves_out_what_is_not_known_about_the_attacker() -> None:
                  "trophies_lost": 0, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
                  "battle_id": 41, "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC)}
         reply = attack_alert(SITE, alert, attacker, PLAYER_COLOURS[0])
-        assert reply.notice == "🛡️ \u2068Wanderer\u2069  0 🏆"
-        return reply.cards[0].parts[0].splitlines()[1:]
+        assert (reply.title, reply.cards[0].parts[0]) == (
+            "\u2068Wanderer\u2069  0", "\u2068Drift\u2069  ☆☆☆  42%")
+        return reply.cards[0].parts[1].splitlines()[:-1]
 
     assert stats({"clan": None, "rank": None, "start_trophies": 5203,
                   "hit_rate": "Unavailable"}) == [
-        "-# Attacker stats", "🏆 **5,203**   🎯 **Unavailable**"]
+        "Attacker stats", "🏆 **5,203**   🎯 **Unavailable**"]
     assert stats({"clan": None, "rank": None, "start_trophies": None,
                   "hit_rate": "not tracked yet"}) == [
-        "-# Attacker stats", "Not tracked by Clash Lens yet"]
+        "Attacker stats", "Not tracked by Clash Lens yet"]
+
+
+def a_day(defenses: int = 1) -> dict:
+    """A Legend day as the alert's picture draws it, with 2 attacks and
+    `defenses` defenses, the last new; its start rank not known yet."""
+    battle = {"name": "Drift", "stars": 3, "destruction": 100, "trophies": 40, "new": False}
+    return {"name": "Wanderer", "day_number": 12, "date": datetime(2026, 10, 12, 5, tzinfo=UTC),
+            "complete": True, "start_trophies": 5312, "trophies": 80 - 40 * defenses + 5312, "start_rank": None,
+            "rank": 1187, "attacks": [battle, battle],
+            "defenses": [{**battle, "trophies": -40, "new": index == defenses - 1}
+                         for index in range(defenses)]}
+
+
+def background(png: bytes) -> tuple[int, ...]:
+    """The colour of a picture's bottom left corner."""
+    with Image.open(io.BytesIO(png)) as drawn:
+        assert (drawn.format, drawn.size) == ("PNG", (picture.WIDTH, picture.HEIGHT))
+        return drawn.convert("RGB").getpixel((4, picture.HEIGHT - 4))
+
+
+def test_the_picture_is_light_unless_the_clasher_chose_dark() -> None:
+    """The picture is a PNG on the website's light background, or its dark
+    one; a day of more than 8 defenses still fits, and a rank not known yet
+    is drawn as a dash rather than failing."""
+    for dark, paper in ((False, LIGHT), (True, DARK)):
+        for defenses in (1, 9):
+            assert background(picture.draw(a_day(defenses), dark)) == paper
+
+
+def test_a_day_that_may_be_missing_battles_does_not_total_its_trophies() -> None:
+    """A day with a +40 attack saved whose battles may not all be saved
+    shows its trophies now as not known, not the start plus that attack,
+    and still draws; once complete, they are the start plus every battle."""
+    start = datetime(2026, 10, 12, 5, tzinfo=UTC)
+
+    def event(battle_id: str, trophies: int) -> dict:
+        return {"opponent": {"name": "Drift", "tag": "#8QQ"}, "stars": 3,
+                "destruction_percentage": 100, "trophy_change": trophies,
+                "battle_id": battle_id}
+
+    def day(complete: bool, defenses: list[dict]) -> dict | None:
+        page = {"name": "Wanderer", "tag": "#2PP", "rank": 1187, "screen_ready": {"days": [{
+            "ranked_day_start": start.isoformat(), "season_day_number": 12,
+            "start_trophies": 5000, "battles_complete": complete,
+            "offense_events": [event("1", 40)], "defense_events": defenses}]}}
+        return picture.legend_day(page, start, "2")
+
+    partial = day(False, [])
+    assert partial is not None
+    assert (partial["start_trophies"], partial["trophies"], partial["complete"]) == (
+        5000, None, False)
+    assert background(picture.draw(partial, False)) == LIGHT
+    assert day(True, [event("2", -40)])["trophies"] == 5000  # type: ignore[index]
+
+
+def test_a_slow_picture_does_not_hold_up_the_next_alert(monkeypatch) -> None:
+    """Pictures are added only for a short time each round, oldest first, so
+    an alert saved while 3 slow pictures wait goes out in the next round,
+    before the last 2 pictures; a picture cut off by the round's end is
+    added in a later round."""
+    monkeypatch.setattr(alerts, "PICTURE_ROUND_SECONDS", 0.3)
+    took: list[float] = []
+    monkeypatch.setattr(picture, "draw", lambda *_: b"png")
+    happened: list[tuple[str, int]] = []
+    saved: list[dict] = []
+    alert = {"account_id": 1, "defender_player_id": 2, "discord_user_id": "1",
+             "defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
+             "attacker_name": "Drift", "stars": 3, "destruction_percentage": 100,
+             "trophies_lost": 40, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+             "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC),
+             "colour": PLAYER_COLOURS[0], "dark_picture": False}
+    attacker = {"clan": None, "rank": None, "start_trophies": None, "hit_rate": "not tracked yet"}
+    store = SimpleNamespace(
+        prune=lambda: None, still_due=lambda _delivery: True, confirmations_due=list,
+        due=lambda: [saved.pop() for _ in list(saved)],
+        attacker=lambda *_: attacker, claim=lambda delivery: delivery.battle_id,
+        finish=lambda *_: None, legend_day=lambda *_: a_day(),
+    )
+
+    class SlowDiscord:
+        async def send_dm(self, _user: str, _reply: Reply, nonce: int, _left: float) -> int:
+            happened.append(("sent", nonce))
+            return nonce
+
+        async def add_picture(self, message: int, _png: bytes) -> None:
+            await asyncio.sleep(0.2)
+            happened.append(("picture", message))
+
+    async def rounds() -> None:
+        loop = AlertLoop(store, SlowDiscord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+
+        async def tick() -> None:
+            started = clock()
+            await loop.tick()
+            took.append(clock() - started)
+
+        saved.extend({**alert, "battle_id": battle} for battle in (3, 2, 1))
+        await tick()
+        await tick()
+        saved.append({**alert, "battle_id": 4})
+        await tick()
+
+    asyncio.run(rounds())
+    assert happened == [("sent", 1), ("sent", 2), ("sent", 3),
+                            ("picture", 1), ("sent", 4), ("picture", 2)]
+    # The second picture of each round is cut off at its end.
+    assert max(took) < 0.3 + 0.15
+
+
+@pytest.mark.parametrize("slow", ["read", "draw", "edit"])
+def test_pictures_stop_in_time_for_a_dm_waiting_to_be_tried_again(monkeypatch, slow) -> None:
+    """A DM Discord could not take, to be tried again in 0.3 seconds and with
+    1 second left, is tried in time, and delivered, while an earlier alert's
+    picture is slow to be read, drawn or edited; the picture waits."""
+    happened: list[tuple] = []
+    # Ends the slow read or drawing, left running when cut off.
+    over = threading.Event()
+
+    def legend_day(*_: object) -> dict:
+        if slow == "read":
+            over.wait(5)
+        return a_day()
+
+    def draw(day: dict, dark: bool) -> bytes:
+        if slow == "draw":
+            over.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(picture, "draw", draw)
+    store = SimpleNamespace(
+        prune=lambda: None, still_due=lambda _delivery: True, confirmations_due=list,
+        due=list, legend_day=legend_day,
+        finish=lambda delivery_id, state, _reason: happened.append(
+            ("finished", delivery_id, state)),
+    )
+
+    class SlowDiscord:
+        async def send_dm(self, _user: str, _reply: Reply, nonce: int, _left: float) -> int:
+            happened.append(("sent", nonce))
+            return nonce
+
+        async def add_picture(self, _message: int, _png: bytes) -> None:
+            if slow == "edit":
+                await asyncio.sleep(31)
+            happened.append(("picture",))
+
+    async def rounds() -> tuple[float, int]:
+        loop = AlertLoop(store, SlowDiscord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+        started = clock()
+        waiting = alerts.Delivery(1, 2, "1", 2, datetime.now(UTC), Reply(()))
+        waiting.id, waiting.claimed_at, waiting.retry_at = 2, started - 119, started + 0.3
+        loop._waiting.append(waiting)
+        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, started + 300))
+        running = asyncio.create_task(loop.run())
+        try:
+            while ("sent", 2) not in happened and clock() - started < 3:
+                await asyncio.sleep(0.01)
+        finally:
+            running.cancel()
+            over.set()
+        return clock() - started, len(loop._pictures)
+
+    took, pictures_waiting = asyncio.run(rounds())
+    assert happened[:2] == [("sent", 2), ("finished", 2, "sent")] and took < 1.0
+    assert pictures_waiting == 1, "the cut off picture waits for a later round"
+
+
+def test_a_picture_read_cut_off_before_it_started_holds_up_no_later_one() -> None:
+    """With every thread busy, a picture's read cut off by the round's end
+    before it started never runs, and pictures are added again later."""
+    added: list[int] = []
+    store = SimpleNamespace(legend_day=lambda *_: a_day())
+
+    class Discord:
+        async def add_picture(self, message: int, _png: bytes) -> None:
+            added.append(message)
+
+    async def rounds() -> None:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(1))
+        busy = threading.Event()
+        loop = AlertLoop(store, Discord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, clock() + 300))
+        held = asyncio.create_task(asyncio.to_thread(busy.wait, 5))
+        await asyncio.sleep(0.05)  # the one thread is busy
+        loop._waiting.append(SimpleNamespace(retry_at=clock() + 0.1))  # type: ignore[arg-type]
+        await loop._add_pictures(list(loop._pictures))
+        busy.set()
+        await held
+        loop._waiting.clear()
+        await loop._add_pictures(list(loop._pictures))
+
+    picture._DRAWER.submit(lambda: None).result(5)
+    asyncio.run(rounds())
+    assert added == [1]
+
+
+def test_pictures_are_drawn_on_one_thread_with_only_a_few_waiting(monkeypatch) -> None:
+    """Pictures asked for from any thread are drawn one at a time on the same
+    thread, as memory freed on a thread stays kept for it; with 6 drawn or
+    waiting, another is not drawn."""
+    drawn_on, go = set(), threading.Event()
+    picture._DRAWER.submit(lambda: None).result(5)  # earlier tests' drawing has ended
+
+    def draw(day: dict, dark: bool) -> bytes:
+        drawn_on.add(threading.get_ident())
+        go.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(picture, "draw", draw)
+    with ThreadPoolExecutor(6) as askers:
+        waiting = list(askers.map(lambda _: picture.drawing(a_day(), False), range(6)))
+    with pytest.raises(picture.Busy):
+        picture.drawing(a_day(), False)
+    go.set()
+    assert [future.result(5) for future in waiting] == [b"png"] * 6
+    assert len(drawn_on) == 1 and threading.get_ident() not in drawn_on
+    assert picture.drawing(a_day(), False).result(5) == b"png"
+
+
+def test_the_picture_is_added_to_the_alert_by_editing_it() -> None:
+    """The picture goes into the bottom of the sent alert's box by an edit,
+    which sends no second notification."""
+    edits: list[dict] = []
+    box = discord.Embed(description="🛡️ Wanderer  −40 🏆")
+
+    async def edit(**change: object) -> None:
+        edits.append(change)
+
+    message = SimpleNamespace(embeds=[box], edit=edit)
+    asyncio.run(DiscordMessenger(FakeClient(None)).add_picture(message, b"png"))  # type: ignore[arg-type]
+    [change] = edits
+    assert change["embed"].image.url == "attachment://legend-day.png"
+    [file] = change["attachments"]  # type: ignore[misc]
+    assert (file.filename, file.fp.read()) == ("legend-day.png", b"png")
 
 
 def _json(payload: dict, status: int = 200, **headers: str) -> web.Response:

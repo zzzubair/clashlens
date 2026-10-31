@@ -52,18 +52,38 @@ Every message but an attack alert is laid out in Discord's cards ("components
 v2"): text in one or more blocks with a coloured edge, with link buttons. A
 message in that layout cannot carry the line a phone's notification shows, so
 the notification would be blank. An attack alert therefore uses Discord's
-older layout: one line, all the notification shows, with the defending player
-and the trophies lost ("🛡️ Wanderer −24 🏆"), then a box topped by the
-attacker's name in small bold, then the stars and destruction as a heading,
-then, under a small "Attacker stats" label, the attacker's trophies at the
-Reset (🏆), live rank (🌍) and hit rate in the battle's Season (🎯), each
-left out when unknown, or "Not tracked by Clash Lens yet", then their clan
-and Open battle and Alert settings as small links. The name sits in the
-box's top line because a heading after any other line leaves a gap above it,
-and the stats use icons rather than Discord's columns because phones stack
-columns one under another. Each name in it is wrapped in Unicode
-isolation marks, so a name written right to left cannot move the numbers
-beside it. Messages about one of the
+older layout: one box with nothing above it, so the notification shows the
+box's top. That is the defending player and the trophies lost as the box's
+bold title ("Wanderer  −24"), then the attacker, stars and destruction
+("Drift  ★★☆  87%"). Under "Attacker stats", which the notification leaves
+out, come the attacker's trophies at the Reset (🏆), live rank (🌍) and hit
+rate in the battle's Season (🎯), each left out when unknown, or "Not tracked
+by Clash Lens yet", then their clan and Open battle and Alert settings as
+small links. Each name in it is wrapped in Unicode isolation marks, so a name
+written right to left cannot move the numbers beside it.
+
+The box ends with a picture of the defending player's Legend day so far: its
+Season day, trophies and rank from the Reset to now, then each attack and
+defense with their totals, the new defense marked. A message with a picture
+shows only "Sent an image" in the notification, so the bot sends the box
+first, then adds the picture by editing the message, which sends no second
+notification, once Clash Lens has saved the battle into the player's day,
+usually seconds later. After 5 minutes it stops waiting, and the alert stays
+without a picture. `/stats` shows the same picture of today's Legend day. The
+picture uses the website's fonts and colours, light unless the Clasher turns
+on "Dark picture" on the Discord alerts page: one switch for the account, a
+row in `discord_alert_dark_picture` (migration 0136), which `/stats` follows
+for the person who ran it, light for anyone without an account. It is drawn
+in memory and sent to Discord with the message, and kept nowhere else. The
+bot draws one picture at a time, all on one thread kept for drawing: each
+takes about 50 MB while it is drawn, memory freed on a thread stays kept for
+that thread, and the bot may use 384 MiB. At most 6 pictures are drawn or
+waiting; past that `/stats` is sent without its picture. Pictures are added
+to alerts for at most 10 seconds a round and stop before an alert waiting to
+be tried again is due. The fonts the website does not use, for names in
+other scripts and emoji, are Noto's, in the container image.
+
+Messages about one of the
 Clasher's own linked accounts (attack alerts, the alerts-on message, that
 account's card in a Legend day summary, and `/stats` for it) use that
 account's colour, set by the order the accounts were linked, so an account
@@ -71,11 +91,12 @@ keeps its colour everywhere. Everything else uses Clash Lens yellow, except
 the grey card in a Legend day summary naming the players whose day is not
 finished yet. `/stats`
 ends with when the player's profile was last read ("Updated N min ago"); no
-other message has that line. `/stats` shows a square for each of today's
-recorded battles, and dark squares with how many are left only while the
-player is tracked in Legend I and every battle so far is recorded, as the
-player page checks it; with today not saved yet it says so, and with a battle
-that may be missing it points to the day on Clash Lens. A `/stats` reply that
+other message has that line. `/stats` shows today's trophies gained and lost
+with how many attacks and defenses, then the picture of today's Legend day,
+then a "View day" link that opens the player page at that day, then the
+Season; with today not saved yet it says so and has no picture, and with a
+battle that may be missing it points to the day on Clash Lens. A `/stats`
+reply that
 shows a status word
 instead of numbers also shows the next Reset as a Discord timestamp, which
 each viewer sees in their own local time.
