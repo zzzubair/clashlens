@@ -495,6 +495,7 @@ test("the error page header has the search and jumps to an exact tag", async ({
 test("arrow keys move through search suggestions and the Rankings box", async ({
   page,
 }) => {
+  test.setTimeout(90_000);
   await page.goto("/");
   const input = page.getByRole("searchbox", {
     name: "Search players and Clash Lens profiles",
@@ -514,8 +515,13 @@ test("arrow keys move through search suggestions and the Rankings box", async ({
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(new RegExp(`${href}$`));
 
-  await page.goto("/");
   const links = page.getByTestId("tracked-player-row").locator(".player-name");
+  // A fresh stack is ready once #2PP is saved, but its shared Live board copy
+  // can rank nobody for up to 30 seconds more; reload until the Top 10 shows.
+  await expect(async () => {
+    await page.goto("/");
+    await expect(links.nth(1)).toBeVisible({ timeout: 2_000 });
+  }).toPass({ intervals: [3_000] });
   // Retries until the page's scripts are running and handle the arrow keys.
   await expect(async () => {
     await links.first().focus();
