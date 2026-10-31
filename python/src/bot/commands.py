@@ -9,6 +9,7 @@ is offered sign-up instead of their own linked accounts.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ from clashlens.domain import ranked_day_for
 
 from . import picture, replies
 from .replies import Reply, Site
+
+log = logging.getLogger("clashlens.bot.commands")
 
 
 class StoreReads(Protocol):
@@ -152,11 +155,16 @@ class Commands:
             has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
             if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
                 return replies.player_status(self.site, page, status, now, colour)
-            # Today's picture, dark when the person's own account chose it.
+            # Today's picture, dark when the person's own account chose it,
+            # left out while too many pictures wait to be drawn.
             day = picture.legend_day(page, ranked_day_for(now).start)
-            drawn = None if day is None else picture.draw(
-                day, account is not None and self.store.dark_picture(account)
-            )
+            drawn = None
+            if day is not None:
+                dark = account is not None and self.store.dark_picture(account)
+                try:
+                    drawn = picture.drawing(day, dark).result()
+                except picture.Busy:
+                    log.warning("/stats picture left out: too many pictures waiting")
             return replies.stats_reply(self.site, page, now, colour, drawn)
 
     def _find(self, value: str, now: datetime) -> str | Reply:

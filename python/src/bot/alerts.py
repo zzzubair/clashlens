@@ -28,13 +28,17 @@ seconds after the alert, looked for in each round after the one that sent
 it, for 5 minutes. The
 picture is added by editing the DM, which sends no second notification, so
 the phone's notification shows the DM's text rather than "Sent an image". A
-picture that cannot be drawn or added is left out; the alert stays.
+picture that cannot be drawn or added is left out; the alert stays. Pictures
+are added for at most 10 seconds a round, reading, drawing and editing
+included, and stop before the next try of a DM waiting to be tried again,
+which the loop wakes for; a picture cut off then is tried again next round.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -67,8 +71,8 @@ KEEP = timedelta(days=7)
 # the defender's Legend day, and the longest an edit adding it may take.
 PICTURE_SECONDS = 300.0
 PICTURE_EDIT_SECONDS = 30.0
-# Pictures are started in a round only this long after its first, so the
-# next look for new battles and DMs to try again is not held up.
+# Pictures are added in a round for at most this long, so the next look for
+# new battles is not held up.
 PICTURE_ROUND_SECONDS = 10.0
 
 _DUE_COLUMNS = (
@@ -360,16 +364,24 @@ class AlertLoop:
         # Delivered alerts waiting for their picture: the message, the
         # attack, and the loop's clock time to stop waiting.
         self._pictures: list[tuple[Any, dict[str, Any], float]] = []
+        # Clear while a picture's read of its Legend day, cut off by the end
+        # of its round, still runs; no other picture is read until it ends.
+        self._read = threading.Event()
+        self._read.set()
 
     async def run(self) -> None:
-        """Look for new battles until cancelled; a failed round is logged and
-        the next round tries again."""
+        """Look for new battles until cancelled, every `INTERVAL_SECONDS` or
+        at the next try of a DM waiting to be tried again if sooner; a
+        failed round is logged and the next round tries again."""
         while True:
+            pause = INTERVAL_SECONDS
             try:
                 await self.tick()
+                now = asyncio.get_running_loop().time()
+                pause = max(0.0, min([pause, *(d.retry_at - now for d in self._waiting)]))
             except Exception:
                 log.exception("attack alert round failed")
-            await asyncio.sleep(INTERVAL_SECONDS)
+            await asyncio.sleep(pause)
 
     async def tick(self) -> int:
         """Log as not delivered each waiting DM past its last try, and try
@@ -377,7 +389,7 @@ class AlertLoop:
         confirmation, then every alert, due now, one at a time; returns how
         many were sent. Then add the picture to each alert delivered in an
         earlier round whose battle is now saved into its Legend day, oldest
-        first, leaving those not reached in time for the next round."""
+        first, until the round's end (`_add_pictures`)."""
         clock = asyncio.get_running_loop().time()
         pictures = list(self._pictures)
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
@@ -420,25 +432,59 @@ class AlertLoop:
                     alert,
                 )
             )
+        await self._add_pictures(pictures)
+        return sent
+
+    async def _add_pictures(
+        self, pictures: list[tuple[Any, dict[str, Any], float]]
+    ) -> None:
+        """Add each of `pictures` whose battle is saved into its Legend day,
+        until the round's end: `PICTURE_ROUND_SECONDS` from now, or the next
+        try of a DM waiting to be tried again if sooner. The end cuts off the
+        read, the drawing and the edit alike; a picture cut off, not reached,
+        or waiting for its read or drawing to have room, is tried again next
+        round, until it stops waiting. One that fails is left out."""
         time = asyncio.get_running_loop().time
-        started = time()
+        end = min([time() + PICTURE_ROUND_SECONDS, *(d.retry_at for d in self._waiting)])
         for waiting in pictures:
             message, alert, give_up_at = waiting
-            if time() - started >= PICTURE_ROUND_SECONDS:
-                break
-            try:
-                if time() < give_up_at:
-                    day = await asyncio.to_thread(self.alerts.legend_day, alert, self.now())
-                    if day is None:
-                        continue
-                    drawn = await asyncio.to_thread(picture.draw, day, alert["dark_picture"])
-                    await asyncio.wait_for(
-                        self.messenger.add_picture(message, drawn), PICTURE_EDIT_SECONDS
-                    )
-            except Exception:
-                log.exception("attack alert picture for battle %s failed", alert["battle_id"])
+            if time() >= end or not self._read.is_set():
+                return
+            if time() < give_up_at:
+                try:
+                    async with asyncio.timeout_at(end) as cut:
+                        if not await self._add_picture(message, alert):
+                            continue
+                except picture.Busy:
+                    return
+                except TimeoutError:
+                    if cut.expired():
+                        log.info("attack alert picture for battle %s waits for next round",
+                                 alert["battle_id"])
+                        return
+                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
+                except Exception:
+                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
             self._pictures.remove(waiting)
-        return sent
+
+    async def _add_picture(self, message: Any, alert: dict[str, Any]) -> bool:
+        """Read the alert's Legend day, draw it and edit it into `message`;
+        False while its battle is not saved into the day yet."""
+        now, read = self.now(), threading.Event()
+        self._read = read
+
+        def legend_day() -> dict[str, Any] | None:
+            try:
+                return self.alerts.legend_day(alert, now)
+            finally:
+                read.set()
+
+        day = await asyncio.to_thread(legend_day)
+        if day is None:
+            return False
+        drawn = await asyncio.wrap_future(picture.drawing(day, alert["dark_picture"]))
+        await asyncio.wait_for(self.messenger.add_picture(message, drawn), PICTURE_EDIT_SECONDS)
+        return True
 
     async def _claim(self, delivery: Delivery) -> int:
         claimed = await asyncio.to_thread(self.alerts.claim, delivery)

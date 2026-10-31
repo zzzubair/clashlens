@@ -15,6 +15,7 @@ import io
 import math
 import threading
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -327,20 +328,40 @@ def legend_day(
     }
 
 
-# One picture at a time: each takes about 50 MB while it is drawn (5 at once
-# peaked at 356 MB), and the bot may use 384 MiB.
-_ONE_AT_A_TIME = threading.Lock()
+# Every picture is drawn on one thread kept for drawing, one at a time: each
+# takes about 50 MB while it is drawn, and memory freed on a thread stays
+# kept for that thread, so drawing on the bot's other threads in turn took
+# the bot past the 384 MiB it may use. At most `_MOST_DRAWING` pictures are
+# being drawn or waiting at once: /stats from every read slot, an alert's,
+# and one an alert stopped waiting for; another is not drawn.
+_DRAWER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="picture")
+_MOST_DRAWING = 6
+_DRAWING = threading.BoundedSemaphore(_MOST_DRAWING)
+
+
+class Busy(Exception):
+    """`_MOST_DRAWING` pictures are being drawn or waiting already."""
+
+
+def drawing(day: Mapping[str, Any], dark: bool) -> Future[bytes]:
+    """`draw(day, dark)` on the drawing thread, raising Busy when too many
+    pictures wait for it. A picture cancelled before it starts is not drawn."""
+    if not _DRAWING.acquire(blocking=False):
+        raise Busy
+    try:
+        future = _DRAWER.submit(lambda: draw(day, dark))
+    except BaseException:
+        _DRAWING.release()
+        raise
+    future.add_done_callback(lambda _done: _DRAWING.release())
+    return future
 
 
 def draw(day: Mapping[str, Any], dark: bool) -> bytes:
     """The PNG picture of `day` (`legend_day`): its Season day, the player,
     trophies and rank from the Reset to now, then each attack and defense
-    with their totals, the new defense marked."""
-    with _ONE_AT_A_TIME:
-        return _draw(day, dark)
-
-
-def _draw(day: Mapping[str, Any], dark: bool) -> bytes:
+    with their totals, the new defense marked. The bot draws only through
+    `drawing`."""
     canvas = _Canvas(_DARK if dark else _LIGHT)
     colours = canvas.colours
     glow = Image.new("RGBA", canvas.image.size)

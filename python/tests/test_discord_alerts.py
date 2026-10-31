@@ -6,7 +6,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import threading
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -218,8 +220,11 @@ def test_a_day_that_may_be_missing_battles_does_not_total_its_trophies() -> None
 def test_a_slow_picture_does_not_hold_up_the_next_alert(monkeypatch) -> None:
     """Pictures are added only for a short time each round, oldest first, so
     an alert saved while 3 slow pictures wait goes out in the next round,
-    before the last 2 pictures."""
-    monkeypatch.setattr(alerts, "PICTURE_ROUND_SECONDS", 0.1)
+    before the last 2 pictures; a picture cut off by the round's end is
+    added in a later round."""
+    monkeypatch.setattr(alerts, "PICTURE_ROUND_SECONDS", 0.3)
+    took: list[float] = []
+    monkeypatch.setattr(picture, "draw", lambda *_: b"png")
     happened: list[tuple[str, int]] = []
     saved: list[dict] = []
     alert = {"account_id": 1, "defender_player_id": 2, "discord_user_id": "1",
@@ -247,15 +252,106 @@ def test_a_slow_picture_does_not_hold_up_the_next_alert(monkeypatch) -> None:
 
     async def rounds() -> None:
         loop = AlertLoop(store, SlowDiscord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+
+        async def tick() -> None:
+            started = clock()
+            await loop.tick()
+            took.append(clock() - started)
+
         saved.extend({**alert, "battle_id": battle} for battle in (3, 2, 1))
-        await loop.tick()
-        await loop.tick()
+        await tick()
+        await tick()
         saved.append({**alert, "battle_id": 4})
-        await loop.tick()
+        await tick()
 
     asyncio.run(rounds())
     assert happened == [("sent", 1), ("sent", 2), ("sent", 3),
                             ("picture", 1), ("sent", 4), ("picture", 2)]
+    # The second picture of each round is cut off at its end.
+    assert max(took) < 0.3 + 0.15
+
+
+@pytest.mark.parametrize("slow", ["read", "draw", "edit"])
+def test_pictures_stop_in_time_for_a_dm_waiting_to_be_tried_again(monkeypatch, slow) -> None:
+    """A DM Discord could not take, to be tried again in 0.3 seconds and with
+    1 second left, is tried in time, and delivered, while an earlier alert's
+    picture is slow to be read, drawn or edited; the picture waits."""
+    happened: list[tuple] = []
+    # Ends the slow read or drawing, left running when cut off.
+    over = threading.Event()
+
+    def legend_day(*_: object) -> dict:
+        if slow == "read":
+            over.wait(5)
+        return a_day()
+
+    def draw(day: dict, dark: bool) -> bytes:
+        if slow == "draw":
+            over.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(picture, "draw", draw)
+    store = SimpleNamespace(
+        prune=lambda: None, still_due=lambda _delivery: True, confirmations_due=list,
+        due=list, legend_day=legend_day,
+        finish=lambda delivery_id, state, _reason: happened.append(
+            ("finished", delivery_id, state)),
+    )
+
+    class SlowDiscord:
+        async def send_dm(self, _user: str, _reply: Reply, nonce: int, _left: float) -> int:
+            happened.append(("sent", nonce))
+            return nonce
+
+        async def add_picture(self, _message: int, _png: bytes) -> None:
+            if slow == "edit":
+                await asyncio.sleep(31)
+            happened.append(("picture",))
+
+    async def rounds() -> tuple[float, int]:
+        loop = AlertLoop(store, SlowDiscord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+        started = clock()
+        waiting = alerts.Delivery(1, 2, "1", 2, datetime.now(UTC), Reply(()))
+        waiting.id, waiting.claimed_at, waiting.retry_at = 2, started - 119, started + 0.3
+        loop._waiting.append(waiting)
+        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, started + 300))
+        running = asyncio.create_task(loop.run())
+        try:
+            while ("sent", 2) not in happened and clock() - started < 3:
+                await asyncio.sleep(0.01)
+        finally:
+            running.cancel()
+            over.set()
+        return clock() - started, len(loop._pictures)
+
+    took, pictures_waiting = asyncio.run(rounds())
+    assert happened[:2] == [("sent", 2), ("finished", 2, "sent")] and took < 1.0
+    assert pictures_waiting == 1, "the cut off picture waits for a later round"
+
+
+def test_pictures_are_drawn_on_one_thread_with_only_a_few_waiting(monkeypatch) -> None:
+    """Pictures asked for from any thread are drawn one at a time on the same
+    thread, as memory freed on a thread stays kept for it; with 6 drawn or
+    waiting, another is not drawn."""
+    drawn_on, go = set(), threading.Event()
+    picture._DRAWER.submit(lambda: None).result(5)  # earlier tests' drawing has ended
+
+    def draw(day: dict, dark: bool) -> bytes:
+        drawn_on.add(threading.get_ident())
+        go.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(picture, "draw", draw)
+    with ThreadPoolExecutor(6) as askers:
+        waiting = list(askers.map(lambda _: picture.drawing(a_day(), False), range(6)))
+    with pytest.raises(picture.Busy):
+        picture.drawing(a_day(), False)
+    go.set()
+    assert [future.result(5) for future in waiting] == [b"png"] * 6
+    assert len(drawn_on) == 1 and threading.get_ident() not in drawn_on
+    assert picture.drawing(a_day(), False).result(5) == b"png"
 
 
 def test_the_picture_is_added_to_the_alert_by_editing_it() -> None:
