@@ -75,8 +75,12 @@ on "Dark picture" on the Discord alerts page: one switch for the account, a
 row in `discord_alert_dark_picture` (migration 0136), which `/stats` follows
 for the person who ran it, light for anyone without an account. It is drawn
 in memory and sent to Discord with the message, and kept nowhere else. The
-bot draws one picture at a time: each takes about 50 MB while it is drawn,
-and the bot may use 384 MiB. The fonts the website does not use, for names in
+bot draws one picture at a time, all on one thread kept for drawing: each
+takes about 50 MB while it is drawn, memory freed on a thread stays kept for
+that thread, and the bot may use 384 MiB. At most 6 pictures are drawn or
+waiting; past that `/stats` is sent without its picture. Pictures are added
+to alerts for at most 10 seconds a round and stop before an alert waiting to
+be tried again is due. The fonts the website does not use, for names in
 other scripts and emoji, are Noto's, in the container image.
 
 Messages about one of the
