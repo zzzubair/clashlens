@@ -67,6 +67,9 @@ KEEP = timedelta(days=7)
 # the defender's Legend day, and the longest an edit adding it may take.
 PICTURE_SECONDS = 300.0
 PICTURE_EDIT_SECONDS = 30.0
+# Pictures are started in a round only this long after its first, so the
+# next look for new battles and DMs to try again is not held up.
+PICTURE_ROUND_SECONDS = 10.0
 
 _DUE_COLUMNS = (
     "account_id",
@@ -373,7 +376,8 @@ class AlertLoop:
         again each other one whose time has come, then send every
         confirmation, then every alert, due now, one at a time; returns how
         many were sent. Then add the picture to each alert delivered in an
-        earlier round whose battle is now saved into its Legend day."""
+        earlier round whose battle is now saved into its Legend day, oldest
+        first, leaving those not reached in time for the next round."""
         clock = asyncio.get_running_loop().time()
         pictures = list(self._pictures)
         if self._pruned_at is None or clock - self._pruned_at >= 3600:
@@ -416,13 +420,17 @@ class AlertLoop:
                     alert,
                 )
             )
+        time = asyncio.get_running_loop().time
+        started = time()
         for waiting in pictures:
             message, alert, give_up_at = waiting
+            if time() - started >= PICTURE_ROUND_SECONDS:
+                break
             try:
-                day = await asyncio.to_thread(self.alerts.legend_day, alert, self.now())
-                if day is None and clock < give_up_at:
-                    continue
-                if day is not None:
+                if time() < give_up_at:
+                    day = await asyncio.to_thread(self.alerts.legend_day, alert, self.now())
+                    if day is None:
+                        continue
                     drawn = await asyncio.to_thread(picture.draw, day, alert["dark_picture"])
                     await asyncio.wait_for(
                         self.messenger.add_picture(message, drawn), PICTURE_EDIT_SECONDS

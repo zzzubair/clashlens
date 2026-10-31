@@ -283,7 +283,8 @@ def legend_day(
     """The player's Legend day from the Reset `start`, from the player page
     read, as `draw` takes it, with `battle` marked new; None when the page
     does not have that day. Its trophies go from the start to the start plus
-    every battle listed, as the picture totals them, and its rank from the
+    every battle listed, as the picture totals them, or are not known when
+    the day may be missing battles, and its rank from the
     place on the board frozen at its Reset, the day before's closing place,
     to the live place now."""
     days = {
@@ -309,12 +310,14 @@ def legend_day(
         ]
 
     attacks, defenses = battles(day["offense_events"]), battles(day["defense_events"])
+    complete = day["battles_complete"]
     return {
         "name": page["name"] or page["tag"],
         "day_number": day["season_day_number"],
         "date": start,
+        "complete": complete,
         "start_trophies": trophies,
-        "trophies": None if trophies is None else trophies + sum(
+        "trophies": None if trophies is None or not complete else trophies + sum(
             battle["trophies"] for battle in (*attacks, *defenses)
         ),
         "start_rank": before.get("reset_rank"),
@@ -380,7 +383,8 @@ def _draw(day: Mapping[str, Any], dark: bool) -> bytes:
                 _battle(canvas, box, shown[index], attack)
             else:
                 canvas.block(box, colours["empty"], colours["empty_outline"])
-                canvas.text((x0 + x1) / 2, box[1] + 34, "not played", 20,
+                canvas.text((x0 + x1) / 2, box[1] + 34,
+                            "not played" if day["complete"] else "–", 20,
                             colours["empty_text"], "label", "middle")
 
     canvas.text(32, 832, "clashlens.net", 18, colours["faint"], "label")

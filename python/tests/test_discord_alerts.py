@@ -17,7 +17,7 @@ import pytest
 from aiohttp import web
 from PIL import Image
 
-from bot import picture
+from bot import alerts, picture
 from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger, build_client
@@ -167,7 +167,7 @@ def a_day(defenses: int = 1) -> dict:
     `defenses` defenses, the last new; its start rank not known yet."""
     battle = {"name": "Drift", "stars": 3, "destruction": 100, "trophies": 40, "new": False}
     return {"name": "Wanderer", "day_number": 12, "date": datetime(2026, 10, 12, 5, tzinfo=UTC),
-            "start_trophies": 5312, "trophies": 80 - 40 * defenses + 5312, "start_rank": None,
+            "complete": True, "start_trophies": 5312, "trophies": 80 - 40 * defenses + 5312, "start_rank": None,
             "rank": 1187, "attacks": [battle, battle],
             "defenses": [{**battle, "trophies": -40, "new": index == defenses - 1}
                          for index in range(defenses)]}
@@ -187,6 +187,75 @@ def test_the_picture_is_light_unless_the_clasher_chose_dark() -> None:
     for dark, paper in ((False, LIGHT), (True, DARK)):
         for defenses in (1, 9):
             assert background(picture.draw(a_day(defenses), dark)) == paper
+
+
+def test_a_day_that_may_be_missing_battles_does_not_total_its_trophies() -> None:
+    """A day with a +40 attack saved whose battles may not all be saved
+    shows its trophies now as not known, not the start plus that attack,
+    and still draws; once complete, they are the start plus every battle."""
+    start = datetime(2026, 10, 12, 5, tzinfo=UTC)
+
+    def event(battle_id: str, trophies: int) -> dict:
+        return {"opponent": {"name": "Drift", "tag": "#8QQ"}, "stars": 3,
+                "destruction_percentage": 100, "trophy_change": trophies,
+                "battle_id": battle_id}
+
+    def day(complete: bool, defenses: list[dict]) -> dict | None:
+        page = {"name": "Wanderer", "tag": "#2PP", "rank": 1187, "screen_ready": {"days": [{
+            "ranked_day_start": start.isoformat(), "season_day_number": 12,
+            "start_trophies": 5000, "battles_complete": complete,
+            "offense_events": [event("1", 40)], "defense_events": defenses}]}}
+        return picture.legend_day(page, start, "2")
+
+    partial = day(False, [])
+    assert partial is not None
+    assert (partial["start_trophies"], partial["trophies"], partial["complete"]) == (
+        5000, None, False)
+    assert background(picture.draw(partial, False)) == LIGHT
+    assert day(True, [event("2", -40)])["trophies"] == 5000  # type: ignore[index]
+
+
+def test_a_slow_picture_does_not_hold_up_the_next_alert(monkeypatch) -> None:
+    """Pictures are added only for a short time each round, oldest first, so
+    an alert saved while 3 slow pictures wait goes out in the next round,
+    before the last 2 pictures."""
+    monkeypatch.setattr(alerts, "PICTURE_ROUND_SECONDS", 0.1)
+    happened: list[tuple[str, int]] = []
+    saved: list[dict] = []
+    alert = {"account_id": 1, "defender_player_id": 2, "discord_user_id": "1",
+             "defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
+             "attacker_name": "Drift", "stars": 3, "destruction_percentage": 100,
+             "trophies_lost": 40, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+             "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC),
+             "colour": PLAYER_COLOURS[0], "dark_picture": False}
+    attacker = {"clan": None, "rank": None, "start_trophies": None, "hit_rate": "not tracked yet"}
+    store = SimpleNamespace(
+        prune=lambda: None, still_due=lambda _delivery: True, confirmations_due=list,
+        due=lambda: [saved.pop() for _ in list(saved)],
+        attacker=lambda *_: attacker, claim=lambda delivery: delivery.battle_id,
+        finish=lambda *_: None, legend_day=lambda *_: a_day(),
+    )
+
+    class SlowDiscord:
+        async def send_dm(self, _user: str, _reply: Reply, nonce: int, _left: float) -> int:
+            happened.append(("sent", nonce))
+            return nonce
+
+        async def add_picture(self, message: int, _png: bytes) -> None:
+            await asyncio.sleep(0.2)
+            happened.append(("picture", message))
+
+    async def rounds() -> None:
+        loop = AlertLoop(store, SlowDiscord(), SITE)  # type: ignore[arg-type]
+        saved.extend({**alert, "battle_id": battle} for battle in (3, 2, 1))
+        await loop.tick()
+        await loop.tick()
+        saved.append({**alert, "battle_id": 4})
+        await loop.tick()
+
+    asyncio.run(rounds())
+    assert happened == [("sent", 1), ("sent", 2), ("sent", 3),
+                            ("picture", 1), ("sent", 4), ("picture", 2)]
 
 
 def test_the_picture_is_added_to_the_alert_by_editing_it() -> None:
