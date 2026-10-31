@@ -3,63 +3,130 @@
 
 /* ---------- Daily Legend log ---------- */
 
-/* Days share one card, divided by lines; today has a card of its own. */
+/* The log sits open on the page (.open-board): its title and the bars' key
+   over its days, under a hairline and split by hairlines. Today stands out
+   as a faint band across it: no edge, no rounding. */
+.player-page .legend-log {
+  padding: 1rem 0 0.5rem;
+}
+.player-page .log-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.player-page .log-title > h2 {
+  margin: 0;
+}
+/* "▮ lost ▮ gained ◆ net", in the bars' own colours and mark. */
+.player-page .log-bars-key {
+  display: flex;
+  gap: 0.9rem;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.player-page .log-bars-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.player-page .log-bars-key > span::before {
+  width: 0.8rem;
+  height: 0.5rem;
+  border-radius: 1px;
+  content: "";
+}
+.player-page .log-bars-lost::before {
+  background: color-mix(in srgb, var(--cl-negative) 80%, transparent);
+}
+.player-page .log-bars-gained::before {
+  background: color-mix(in srgb, var(--cl-positive) 80%, transparent);
+}
+.player-page .log-bars-key > .log-bars-net::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-inline: 0.1rem;
+  background: var(--cl-action);
+  box-shadow: 0 0 0 1.5px var(--cl-on-action);
+  transform: rotate(45deg);
+}
 .player-page .log-card {
   overflow: clip;
-  background: var(--cl-card-fill);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
+  border-top: 1px solid var(--cl-card-line);
+}
+.player-page .log-today {
+  background: color-mix(in srgb, var(--cl-action) 6%, transparent);
 }
 .player-page .log-card:empty {
   display: none;
 }
 .player-page .log-today + .log-days {
-  margin-top: 0.75rem;
+  margin-top: 0;
 }
-.player-page .log-days > .log-day + .log-day {
-  border-top: 1px solid var(--cl-border);
+.player-page .log-days .log-day + .log-day,
+.player-page .log-days > * + .log-older,
+.player-page .log-older > summary + * {
+  border-top: 1px solid var(--cl-card-line);
+}
+/* A long log's older days, behind the site's one Show all row (brand.css). */
+.player-page .log-older:not([open]) .log-older-hide,
+.player-page .log-older[open] .log-older-show {
+  display: none;
 }
 
 /* One row per day, two short lines: the date over Day N on the left, attacks
    over defenses, the change over the EOD, then the Reset rank on its plate
    over its move. Wide screens put it all on one line. Labels are for screen
    readers; icons, plates and colours say which number is which. */
-/* A phone's rows stack two numbers a column, so one line says which is which. */
+/* A phone's stacked rows read on their own; a wide screen names its columns. */
+.player-page .legend-log {
+  --log-zero: color-mix(in srgb, var(--cl-ink) 35%, transparent);
+}
 .player-page .log-head {
-  padding: 0.6rem 1rem 0.5rem;
-  color: var(--cl-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  border-bottom: 1px solid var(--cl-border);
-}
-.player-page .log-head > :not(.log-head-phone) {
   display: none;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
-@media (max-width: 47.99rem) {
-  .player-page .log-head[data-show="columns"] {
-    display: none;
+/* A phone keeps the columns' widths fixed, so each row's numbers line up
+   with the rows above and below. */
+@media (min-width: 24rem) and (max-width: 47.99rem) {
+  .player-page .log-day:not(.log-day-live) > .log-row {
+    grid-template-columns: minmax(0, 1fr) 4rem 4.75rem 4.75rem 0.75rem;
   }
 }
 @media (min-width: 48rem) {
-  .player-page .log-head[data-show="phone"] {
-    display: none;
-  }
-  .player-page .log-head > :not(.log-head-phone) {
-    display: block;
-  }
-  .player-page .log-head > .log-head-phone {
-    display: none;
-  }
   .player-page .log-head {
     display: grid;
     grid-template-columns: var(--log-columns);
+    align-items: end;
     column-gap: 0.75rem;
-    padding: 0 1rem 0.4rem 1.25rem;
+    padding: 0 1rem 0.4rem var(--sheet-pad);
     border-bottom: 0;
   }
-  .player-page .log-head > :is(:nth-child(3), :nth-child(n + 5)) {
+  .player-page .log-head > :is(:nth-child(2), :nth-child(n + 4)) {
     text-align: right;
+  }
+  /* Over the bars, only their zero line, which runs on down through the
+     rows; the key beside the title names the sides. */
+  .player-page .log-head-scale {
+    position: relative;
+    align-self: stretch;
+    margin-inline: 1.5rem 2rem;
+  }
+  /* The zero line starts here and runs on down through the rows. */
+  .player-page .log-head-scale::after {
+    position: absolute;
+    bottom: -0.4rem;
+    left: calc(var(--zero) * 100%);
+    width: 1px;
+    height: calc(1.25em + 0.4rem);
+    background: var(--log-zero);
+    content: "";
   }
 }
 .player-page .log-row {
@@ -67,11 +134,12 @@
   grid-template-columns: minmax(0, 1fr) auto auto auto 0.75rem;
   grid-template-areas:
     "date att net rank chev"
-    "meta def eod rank chev";
+    "meta def eod rank chev"
+    "swing swing swing swing swing";
   align-items: center;
   gap: 0.1rem 0.7rem;
   min-height: 3.75rem;
-  padding: 0.6rem 0.85rem 0.6rem 1rem;
+  padding: 0.6rem 0.85rem 0.6rem var(--sheet-pad);
   font-variant-numeric: tabular-nums;
   list-style: none;
   cursor: pointer;
@@ -128,7 +196,7 @@
   align-items: center;
   gap: 0.35rem;
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -165,7 +233,22 @@
   content: "";
 }
 .player-page .log-end .stat-unavailable {
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
+}
+/* A phone stacks the EOD under the day's change, so it says what it is:
+   "End 6,289", the word in the trophy's place. */
+@media (max-width: 47.99rem) {
+  .player-page .log-end strong:not(.stat-unavailable)::before {
+    width: auto;
+    height: auto;
+    margin-right: 0.3em;
+    color: var(--cl-muted);
+    background: none;
+    -webkit-mask: none;
+    mask: none;
+    font: 600 0.8125rem var(--cl-font);
+    content: "End";
+  }
 }
 .player-page .log-net {
   grid-area: net;
@@ -185,7 +268,7 @@
 .player-page .log-net > span,
 .player-page .log-battles > span:not(.log-stat) {
   color: var(--cl-muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 .player-page .log-battles > span:not(.log-stat) {
@@ -213,9 +296,49 @@
   content: "#";
 }
 .player-page .log-rank-move {
-  font-size: 0.82rem;
+  font-family: var(--cl-font);
+  font-size: 0.875rem;
   font-weight: 700;
   line-height: 1;
+}
+/* The day split at a marked zero: attacks' gain to the right in green,
+   defenses' loss to the left in red, and an ember diamond where the net
+   lands. The track runs from the Season's biggest defense loss to its
+   biggest attack gain, so every row shares one scale and one zero line. A
+   phone draws it thin, across the foot of the row. */
+.player-page .log-swing {
+  --band: 0.375rem;
+  --mark-size: 0.6rem;
+  position: relative;
+  grid-area: swing;
+  height: 0.9rem;
+  margin-top: 0.35rem;
+  background:
+    linear-gradient(var(--log-zero), var(--log-zero)) calc(var(--zero) * 100%) 0 / 1px
+      100% no-repeat,
+    linear-gradient(
+        90deg,
+        transparent calc((var(--zero) - var(--loss)) * 100%),
+        color-mix(in srgb, var(--cl-negative) 80%, transparent) 0 calc(var(--zero) * 100%),
+        color-mix(in srgb, var(--cl-positive) 80%, transparent) 0
+          calc((var(--zero) + var(--gain)) * 100%),
+        transparent 0
+      )
+      center / 100% var(--band) no-repeat,
+    linear-gradient(var(--cl-border), var(--cl-border)) center / 100% 1px no-repeat;
+}
+.player-page .log-swing::after {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--net) * 100%);
+  display: var(--net-mark);
+  width: var(--mark-size);
+  height: var(--mark-size);
+  background: var(--cl-action);
+  border-radius: 1px;
+  box-shadow: 0 0 0 1.5px var(--cl-on-action);
+  transform: translate(-50%, -50%) rotate(45deg);
+  content: "";
 }
 /* Attacks over defenses, each after its icon. */
 .player-page .log-battles > .log-stat {
@@ -233,55 +356,60 @@
 .player-page .log-battles > .log-stat:nth-child(2) {
   grid-area: def;
 }
-.player-page .log-battles > .log-stat::before {
-  width: 0.8rem;
-  height: 0.8rem;
-  background: var(--cl-faint);
-  -webkit-mask: var(--icon) center / contain no-repeat;
-  mask: var(--icon) center / contain no-repeat;
-  content: "";
-}
-.player-page .log-battles > .log-stat:first-child::before,
-.player-page .battle-switch label:first-of-type::before {
-  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2'/%3E%3C/svg%3E");
-}
-.player-page .log-battles > .log-stat:nth-child(2)::before,
-.player-page .battle-switch label:last-of-type::before {
-  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
+.player-page .log-battles .game-mark {
+  color: var(--cl-faint);
+  font-size: 0.875rem;
 }
 @media (min-width: 48rem) {
+  /* The date and Day N share a column; the bar takes all the spare width,
+     so the Season's days compare at a glance. */
   .player-page {
-    --log-columns: [date] 4.25rem [meta] 4.5rem [eod] 4.75rem [swing] minmax(0, 1fr) [att]
-      4rem [def] 4rem [net] 4.5rem [rank] 5rem [chev] 0.75rem;
+    --log-columns: [date] 8.5rem [eod] 4.75rem [swing] minmax(0, 1fr) [att] 4rem [def]
+      4rem [net] 4.5rem [rank] 5rem [chev] 0.75rem;
   }
   .player-page .log-row {
     grid-template-columns: var(--log-columns);
-    grid-template-areas: "date meta eod swing att def net rank chev";
-    padding-inline: 1.25rem 1rem;
+    grid-template-areas: "date eod swing att def net rank chev";
+    padding-inline: var(--sheet-pad) 1rem;
   }
-  /* The day's swing: defenses lost to the left of the middle, attacks won to
-     the right, each as long as its share of 320. */
-  .player-page .log-row::before {
-    grid-area: swing;
-    height: 0.4rem;
-    margin-inline: 1rem;
-    background:
-      linear-gradient(
-          90deg,
-          transparent calc(50% - var(--def) * 50%),
-          var(--cl-negative) 0 50%,
-          var(--cl-positive) 0 calc(50% + var(--att) * 50%),
-          transparent 0
-        )
-        center / 100% 100% no-repeat,
-      linear-gradient(var(--cl-border), var(--cl-border)) center / 100% 1px no-repeat;
-    border-radius: 2px;
-    opacity: 0.85;
-    content: "";
+  .player-page .log-row > .log-when {
+    grid-area: date;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+  /* The bar fills its row from edge to edge, so its zero line meets the
+     next row's and runs down the whole log as one guide. */
+  .player-page .log-swing {
+    align-self: stretch;
+    height: auto;
+    margin: -0.6rem 2rem -0.6rem 1.5rem;
+    --band: 0.75rem;
+    --mark-size: 0.75rem;
   }
   .player-page .log-end {
     font-size: 1rem;
   }
+  /* "Net" wears the bars' own mark, so the one heading names both. */
+  .player-page .log-head-net::before {
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-right: 0.5em;
+    vertical-align: 0.05em;
+    background: var(--cl-action);
+    border-radius: 1px;
+    box-shadow: 0 0 0 1.5px var(--cl-on-action);
+    transform: rotate(45deg);
+    content: "";
+  }
+}
+
+/* Labels read at about 13px on every screen. */
+.player-page :is(.log-head, .log-day-meta, .log-rank-move, .log-live),
+.player-page .log-net > span {
+  font-size: 0.8125rem;
 }
 
 /* Today: a card of its own that says it is live. */
@@ -289,7 +417,8 @@
   grid-template-columns: minmax(0, 1fr) auto auto 0.75rem;
   grid-template-areas:
     "date att net chev"
-    "meta def net chev";
+    "meta def net chev"
+    "swing swing swing swing";
 }
 .player-page .log-day-live :is(.log-end, .log-rank) {
   display: none;
@@ -301,7 +430,7 @@
 @media (min-width: 48rem) {
   .player-page .log-day-live > .log-row {
     grid-template-columns: var(--log-columns);
-    grid-template-areas: "date meta meta swing att def net . chev";
+    grid-template-areas: "date date swing att def net . chev";
   }
 }
 .player-page .log-today .log-day[open] > .log-row {
@@ -316,7 +445,7 @@
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
   border-radius: 4px;
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   line-height: 1.2;
   white-space: nowrap;
@@ -347,13 +476,14 @@
 
 /* ---------- An open day ---------- */
 
+/* Open, a thin ember edge down a day's left ties its battles to its row. */
+.player-page .log-day[open] {
+  box-shadow: inset 2px 0 0 var(--cl-action-text);
+}
 .player-page .log-open {
   display: grid;
   gap: 0.5rem;
   padding: 0.6rem 0.75rem 0.75rem;
-}
-.player-page .log-day:not(.log-day-live)[open] > .log-open {
-  background: color-mix(in srgb, var(--cl-panel) 45%, var(--cl-surface));
 }
 /* Opening a day slides its battles in, so the tap visibly did something. */
 @media (prefers-reduced-motion: no-preference) {
@@ -367,62 +497,152 @@
     transform: translateY(-0.4rem);
   }
 }
-.player-page .log-open > :is(.section-note, .log-note) {
+.player-page .log-open > .section-note {
   margin: 0;
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   line-height: 1.4;
-}
-/* Its tap area reaches up into the open day's top padding. */
-.player-page .log-open > .log-note:first-child {
-  margin-top: -0.6rem;
-}
-.player-page .log-note > summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2.25rem;
-  font-weight: 700;
-  list-style: none;
-  cursor: pointer;
-}
-.player-page .log-note > summary::-webkit-details-marker {
-  display: none;
-}
-/* An "i" in a ring: there is more to read. */
-.player-page .log-note > summary::after {
-  display: inline-grid;
-  place-items: center;
-  width: 1rem;
-  height: 1rem;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  content: "i";
-  font-size: 0.65rem;
-  font-weight: 900;
-}
-.player-page .log-note[open] > summary {
-  color: var(--cl-ink);
-}
-.player-page .log-note > p {
-  margin: 0 0 0.25rem;
 }
 .player-page .log-open > .section-note strong {
   color: var(--cl-ink);
 }
+/* An open day's first line: where it started, then its status at the end. */
+.player-page .log-open-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  min-height: 2.25rem;
+}
+.player-page .log-open-head:not(:has(> *)) {
+  display: none;
+}
 .player-page .log-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  align-items: baseline;
+  gap: 0.2rem 0.9rem;
   margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
 }
-.player-page .log-facts > span {
-  padding: 0.15rem 0.5rem;
+.player-page .log-facts b {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-score);
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The status: a mark and its word, quiet until asked. A tap, a click or the
+   keyboard opens its explanation; a mouse over it shows it too. */
+.player-page .day-status {
+  position: relative;
+  margin-left: auto;
+}
+.player-page .day-status > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0 0.6rem 0 0.45rem;
+  color: var(--cl-muted);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  list-style: none;
+  cursor: help;
+  -webkit-tap-highlight-color: transparent;
+}
+.player-page .day-status > summary::-webkit-details-marker {
+  display: none;
+}
+.player-page .day-status > summary:focus-visible {
+  outline: 3px solid var(--cl-orange);
+  outline-offset: -3px;
+}
+.player-page .day-status[open] > summary {
   color: var(--cl-ink);
   background: var(--cl-raised);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
+}
+/* Verified: a green tick in a ring. */
+.player-page .day-status > summary::before {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  content: "";
+  background: var(--cl-positive);
+  -webkit-mask: var(--mark) center / contain no-repeat;
+  mask: var(--mark) center / contain no-repeat;
+  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.7'/%3E%3Cpath d='m5.2 8.2 1.9 1.9 3.7-4'/%3E%3C/svg%3E");
+}
+/* Calculated: the log's hollow ring. */
+.player-page .day-status[data-status="Calculated"] > summary::before {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0.15rem;
+  background: none;
+  border: 1.5px solid var(--cl-muted);
+  border-radius: 50%;
+  -webkit-mask: none;
+  mask: none;
+}
+/* Uncertain: the log's gold dot. */
+.player-page .day-status[data-status="Uncertain"] > summary::before {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0.15rem;
+  background: var(--cl-gold);
+  border-radius: 50%;
+  -webkit-mask: none;
+  mask: none;
+}
+/* Today: a clock, as its result waits for Reset. */
+.player-page .day-status[data-status="Live"] > summary::before {
+  background: var(--cl-action-text);
+  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.7'/%3E%3Cpath d='M8 4.6V8l2.3 1.5'/%3E%3C/svg%3E");
+}
+.player-page .day-status-tip {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 3;
+  display: grid;
+  gap: 0.4rem;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 2.5rem));
+  padding: 0.65rem 0.8rem;
+  color: var(--cl-muted);
+  background: var(--cl-glass-strong);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+/* Bridges the gap, so the mouse can move onto the explanation. */
+.player-page .day-status-tip::before {
+  position: absolute;
+  inset: -0.5rem 0 100%;
+  content: "";
+}
+.player-page .day-status-tip > p {
+  margin: 0;
+}
+.player-page .day-status-tip strong {
+  color: var(--cl-ink);
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .day-status > summary:hover {
+    color: var(--cl-ink);
+  }
+  .player-page .day-status:hover::details-content {
+    content-visibility: visible;
+  }
 }
 /* A saved Season day's other numbers. */
 .player-page .log-more {
@@ -432,13 +652,11 @@
   margin: 0;
 }
 .player-page .log-more > div {
-  padding: 0.45rem 0.6rem;
-  background: var(--cl-raised);
-  border-radius: var(--cl-radius);
+  padding: 0.3rem 0;
 }
 .player-page .log-more dt {
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
 .player-page .log-more dd {
@@ -463,24 +681,48 @@
 .player-page .battle-switch {
   display: none;
 }
+.player-page .battle-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.2rem;
+}
+/* A part of the open day: the page's third heading size. */
 .player-page .battle-side h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0 0.45rem;
-  margin: 0 0 0.15rem;
-  font-family: var(--cl-font);
-  font-size: 0.9rem;
-  font-weight: 650;
+  margin: 0;
+  font: 700 var(--head-3) var(--cl-font-heading);
 }
 .player-page .battle-side h3 strong {
   font-family: var(--cl-font-score);
-  font-size: 1.05rem;
 }
-.player-page .battle-side h3 small {
+.player-page .battle-side h3 > span {
+  margin-right: -0.2rem;
   color: var(--cl-muted);
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 550;
+}
+/* "8 of 8 recorded" in the body face, not the heading's condensed one. */
+.player-page .battle-side h3 small,
+.player-page .battle-zone {
+  color: var(--cl-muted);
+  font: 600 0.8125rem var(--cl-font);
+}
+.player-page .battle-zone {
+  white-space: nowrap;
+}
+.player-page .log-open-head > .battle-zone {
+  margin-left: auto;
+}
+.player-page .log-open-head > .battle-zone + .day-status {
+  margin-left: 0;
+}
+.player-page .day-battles > .battle-zone {
+  display: block;
+  margin: -0.3rem 0 0.6rem;
 }
 .player-page .battle-list {
   margin: 0;
@@ -488,9 +730,9 @@
   list-style: none;
 }
 
-/* One battle: stars and destruction, opponent and time, the trophy change
-   and a toggle that covers the whole line for the army, tag, their log and
-   Copy army. */
+/* One battle: stars and destruction, opponent and time, then the trophy
+   change. The whole line is one button for the army, tag, their log and Copy
+   army; the line's shade, not an arrow, says it opens. */
 .player-page .battle-row {
   border-top: 1px solid var(--cl-border);
   scroll-margin-block: 5rem;
@@ -501,34 +743,26 @@
 .player-page .battle-line {
   position: relative;
   display: grid;
-  grid-template-columns: 2.6rem minmax(0, 1fr) auto 1.75rem;
-  grid-template-areas: "score who change toggle";
+  grid-template-columns: 2.9rem minmax(0, 1fr) auto 0.45rem;
+  grid-template-areas: "score who change chev";
   align-items: center;
-  column-gap: 0.5rem;
-  min-height: 2.75rem;
-  padding-left: 0.1rem;
+  column-gap: 0.6rem;
+  min-height: 3.1rem;
+  padding: 0.3rem 0.6rem 0.3rem 0.1rem;
 }
 .player-page .battle-score {
   grid-area: score;
   display: grid;
   line-height: 1.15;
 }
-.player-page .battle-stars {
-  width: 2.4rem;
-  height: 0.8rem;
-  fill: var(--cl-outline);
-  stroke: var(--cl-outline);
-  stroke-width: 0.8;
-  stroke-linejoin: round;
-}
-.player-page .battle-stars .star-won {
-  fill: var(--cl-gold);
-  stroke: var(--cl-gold);
+.player-page .battle-score .game-stars {
+  font-size: 0.875rem;
 }
 .player-page .battle-score small {
   color: var(--cl-muted);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .player-page .battle-who {
   grid-area: who;
@@ -539,8 +773,8 @@
 }
 .player-page .battle-name {
   overflow: hidden;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: 1rem;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -549,8 +783,9 @@
   flex-wrap: wrap;
   gap: 0 0.5rem;
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .player-page .battle-who time {
   font: inherit;
@@ -562,84 +797,87 @@
 .player-page .battle-change {
   grid-area: change;
   font-family: var(--cl-font-score);
-  font-size: 1.15rem;
+  font-size: 1.3rem;
   font-weight: 700;
   text-align: right;
+}
+/* A small chevron says the line opens to the army and their log; a battle
+   with no army has nothing to open, so none. */
+.player-page .battle-line:has(> .battle-toggle)::after {
+  grid-area: chev;
+  justify-self: end;
+  width: 0.4rem;
+  height: 0.4rem;
+  content: "";
+  border-right: 2px solid var(--cl-faint);
+  border-bottom: 2px solid var(--cl-faint);
+  transform: translateY(-25%) rotate(45deg);
+  transition: transform 160ms var(--cl-ease-out);
+}
+.player-page .battle-line:has([aria-expanded="true"])::after {
+  border-color: var(--cl-action-text);
+  transform: translateY(25%) rotate(-135deg);
 }
 .player-page .battle-change.score-neutral {
   color: var(--cl-muted);
 }
+/* Without an army the name is the link to their log. */
+.player-page a.battle-name {
+  justify-self: start;
+  max-width: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.player-page a.battle-name:is(:hover, :focus-visible) {
+  text-decoration: underline;
+  text-decoration-color: var(--cl-faint);
+  text-underline-offset: 0.15em;
+}
+/* The button lies over the whole line; its words are for screen readers. */
 .player-page .battle-toggle {
-  grid-area: toggle;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
+  position: absolute;
+  inset: 0;
   width: 100%;
   min-height: 2.75rem;
   padding: 0;
-  color: var(--cl-muted);
   background: transparent;
   border: 0;
-  border-radius: var(--cl-radius);
+  border-radius: 8px;
   box-shadow: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.player-page .battle-toggle::after {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  content: "";
-}
-.player-page .battle-toggle svg {
-  width: 1rem;
-  height: 1rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 160ms var(--cl-ease-out);
-}
-.player-page .battle-toggle[aria-expanded="true"] {
-  color: var(--cl-action-text);
-}
-.player-page .battle-toggle[aria-expanded="true"] svg {
-  transform: rotate(180deg);
-}
-/* The chevron says there is more; the word is not needed. */
-.player-page .battle-toggle-word {
-  display: none;
-}
-.player-page .battle-toggle:active::after {
-  background: var(--cl-panel);
-}
-/* The press shades the line instead of shrinking the button, which would pull
-   the covering layer in with it; the focus ring circles the whole line too. */
 .player-page .battle-line .battle-toggle:active {
+  background: var(--cl-panel);
   transform: none;
 }
 .player-page .battle-line .battle-toggle:focus-visible {
-  outline: none;
-}
-.player-page .battle-line .battle-toggle:focus-visible::after {
   outline: 3px solid var(--cl-orange);
   outline-offset: -3px;
 }
+/* An open battle keeps its line shaded, with an ember edge. */
+.player-page .battle-row:has(> .battle-line [aria-expanded="true"]) {
+  background: color-mix(in srgb, var(--cl-panel) 55%, transparent);
+  box-shadow: inset 2px 0 0 var(--cl-action-text);
+}
 @media (hover: hover) and (pointer: fine) {
   .player-page .battle-line:hover .battle-toggle {
-    color: var(--cl-action-text);
-  }
-  .player-page .battle-line:hover .battle-toggle::after {
     background: color-mix(in srgb, var(--cl-panel) 60%, transparent);
+  }
+  .player-page .battle-line:hover .battle-name {
+    text-decoration: underline;
+    text-decoration-color: var(--cl-faint);
+    text-underline-offset: 0.15em;
+  }
+  .player-page .battle-line:hover::after {
+    border-color: var(--cl-action-text);
   }
 }
 .player-page .battle-more {
   display: grid;
   gap: 0.5rem;
   min-width: 0;
-  padding: 0.1rem 0 0.7rem 3.1rem;
+  padding: 0.1rem 0 0.7rem 3.6rem;
 }
 .player-page .battle-more[hidden] {
   display: none;
@@ -654,13 +892,13 @@
 }
 .player-page .battle-more .player-tag {
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
 .player-page .battle-link {
   margin-right: auto;
   color: var(--cl-action-text);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 .player-page .battle-copy {
@@ -670,9 +908,8 @@
   padding: 0 0.85rem;
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
-  border: 1px solid var(--cl-action-border);
   border-radius: 6px;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   text-decoration: none;
 }
@@ -681,10 +918,10 @@
   gap: 0.3rem;
 }
 .player-page .battle-missing {
-  padding: 0.6rem 0 0.6rem 3.1rem;
+  padding: 0.6rem 0 0.6rem 3.6rem;
   color: var(--cl-muted);
   border-top: 1px dashed var(--cl-outline);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
 /* The battle a link points to, for two seconds after it arrives. */
@@ -702,7 +939,7 @@
     gap: 1.5rem;
   }
   .player-page .battle-line {
-    grid-template-columns: 4.25rem minmax(0, 1fr) auto 1.75rem;
+    grid-template-columns: 5.6rem minmax(0, 1fr) auto 0.45rem;
   }
   .player-page .battle-score {
     display: flex;
@@ -711,7 +948,7 @@
   }
   .player-page .battle-more,
   .player-page .battle-missing {
-    padding-left: 4.75rem;
+    padding-left: 6.3rem;
   }
 }
 
@@ -728,8 +965,7 @@
     min-width: 0;
     margin: 0;
     padding: 3px;
-    background: var(--cl-panel);
-    border: 1px solid var(--cl-border);
+    background: var(--cl-raised);
     border-radius: var(--cl-radius);
   }
   .player-page .battle-switch label {
@@ -747,13 +983,8 @@
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  .player-page .battle-switch label::before {
-    width: 0.85rem;
-    height: 0.85rem;
-    background: currentColor;
-    -webkit-mask: var(--icon) center / contain no-repeat;
-    mask: var(--icon) center / contain no-repeat;
-    content: "";
+  .player-page .battle-switch .game-mark {
+    font-size: 0.875rem;
   }
   .player-page .battle-switch strong {
     font-family: var(--cl-font-score);
@@ -851,7 +1082,7 @@
     animation: none;
     opacity: 0.3;
   }
-  .player-page :is(.log-row, .log-row::after, .battle-row, .battle-toggle svg) {
+  .player-page :is(.log-row, .log-row::after, .battle-row, .battle-line::after) {
     transition: none;
   }
 }
@@ -860,9 +1091,8 @@
 
 .player-page .past-seasons > details {
   overflow: clip;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
+  border-top: 1px solid var(--cl-card-line);
+  border-bottom: 1px solid var(--cl-card-line);
 }
 .player-page .past-seasons summary {
   display: grid;
@@ -870,7 +1100,8 @@
   align-items: center;
   gap: 0.1rem 0.75rem;
   min-height: 3.5rem;
-  padding: 0.7rem 1rem;
+  /* Open on the page: the heading lines up with the log's above it. */
+  padding: 0.7rem 1rem 0.7rem 0;
   list-style: none;
   cursor: pointer;
 }
@@ -892,17 +1123,16 @@
 }
 .player-page .past-seasons summary h2 {
   margin: 0;
-  font-size: 1.2rem;
 }
 .player-page .past-seasons summary span {
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .player-page .past-seasons .section-note {
   margin: 0;
-  padding: 0 1rem 0.5rem;
-  font-size: 0.8rem;
+  padding: 0 0 0.5rem;
+  font-size: 0.8125rem;
 }
 .player-page .past-seasons .table-wrap {
   margin: 0;
@@ -927,15 +1157,15 @@
 
 /* A stretch with no Legend I battles: days outside Legend I, or days in it
    before the player signed up. One plain row stands for all of them. */
-.player-page .log-days > .log-gap {
+.player-page .log-days .log-gap {
   padding: 0.7rem 0.9rem;
   color: var(--cl-muted);
   font-size: 0.85rem;
   text-align: center;
   background: var(--cl-panel);
 }
-.player-page .log-days > * + .log-gap,
-.player-page .log-days > .log-gap + * {
+.player-page .log-days * + .log-gap,
+.player-page .log-days .log-gap + * {
   border-top: 1px dashed var(--cl-outline);
 }
 .player-page .log-gap-waiting {

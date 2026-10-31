@@ -27,8 +27,6 @@ import { CARDS, serializeSettings, type CardId } from "../../app/lib/dashboard";
 import {
   around,
   goalPlan,
-  heatCells,
-  isShieldDay,
   offenseConsistency,
   recentForm,
   sideAverages,
@@ -845,21 +843,9 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     for (const card of ALL_CARDS)
       expect(cards[card]).not.toContain("could not be loaded");
 
-    // Season heat map: ranked against your own days; a shield day is grey.
-    const heat = text(cards["heat-map"]!);
-    expect(heat).toContain(
-      "Up days 6 Best +86 · D8 Down days 0 Worst +2 · D6 No change 0",
-    );
-    expect(cards["heat-map"]).toContain('aria-label="Day 3: no battles"');
-    expect(cards["heat-map"]).toContain('aria-label="Day 7: no data"');
-    expect(cards["heat-map"]).toContain('aria-label="Day 9: today, not finished yet"');
-    expect(cards["heat-map"]).toContain('aria-label="Day 10: not played yet"');
-    expect(cards["heat-map"]).toMatch(
-      /background:var\(--cl-heat-4\)[^>]*><button[^>]*aria-label="Day 8: \+86"/,
-    );
-    expect(cards["heat-map"]).toMatch(
-      /background:var\(--cl-heat-0\)[^>]*><button[^>]*aria-label="Day 6: \+2"/,
-    );
+    // The heat map's own checks, on this Season, are in season-heat-grid.test.ts;
+    // its readout dates Day 9 from Python's Season start, 7 Sep.
+    expect(text(cards["heat-map"]!)).toContain("Day 9 · 15 Sep · in progress");
 
     // Recent form: Days 2–8, six of them saved; the total counts the shield
     // day as 0, and the 230 is averaged over the 5 days with battles.
@@ -890,13 +876,16 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Goal: 76 behind the Top 200 line with 20 days left, the line moving 40 a day.
     const goal = text(cards.goal!);
     expect(goal).toContain("Top 200");
-    expect(goal).toContain("+44 a day needed Behind pace by 4 a day");
-    expect(goal).toContain("Gap at last Reset 76 short");
-    expect(goal).toContain("Days left 20");
-    expect(goal).toContain("Top 200 line moving (7 days) +40 a day");
-    expect(goal).toContain("Your pace (7 days) +40 a day");
-    expect(goal).toContain("Behind pace by 4 a day Shield days None 1 2 3 Gap at");
-    expect(cards.goal).toContain('aria-label="Lens Main against the Top 200 line"');
+    expect(goal).toContain("Behind by 4 /day a day · 76 short of #200 at last Reset");
+    // The days to sit out under a shield wait in a small menu, explained in one line.
+    expect(goal).toContain("Plan: skip 0 days ▾ Days you'll sit out under a shield;");
+    expect(goal).toContain(
+      "Need +44 /day a day Doing +40 /day a day Doing is over 7 days",
+    );
+    expect(goal).toContain("Top 200 line +40 a day over 7 days");
+    // Both lines carried on 20 days at their paces, each end named: the line ends 76 above you.
+    expect(goal).toContain("#200 6,200 You 6,124 Last Reset Season end");
+    expect(cards.goal).toContain("Season&#x27;s end: you 6,124, #200 6,200");
 
     // Cutoffs: the account slotted between Top 200 and Top 500.
     const cutoffs = text(cards.cutoffs!);
@@ -909,19 +898,18 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Rivals watch: 3 above and 3 below live, moves since the Reset, each a player link.
     const rivals = text(cards["rivals-watch"]!);
-    expect(rivals).toContain("Today so far");
-    expect(rivals.match(/#3\d\d/g)).toEqual([
-      "#313",
-      "#314",
-      "#315",
-      "#316",
-      "#317",
-      "#318",
-      "#319",
-    ]);
-    expect(rivals).toContain("#315 ▼5 Tundra 5,375 50% +150 −60");
-    expect(rivals).toContain("#316 ▲2 Lens Main 5,370 50% +71 −16");
-    expect(rivals).toContain("#317 Player 317 5,365 – – –");
+    expect(rivals).toContain("since Reset Live Season Rank Player Trophies Today");
+    expect(rivals.match(/#3\d\d/g)?.join(" ")).toBe("#313 #314 #315 #316 #317 #318 #319");
+    // A phone shows you and 2 either side until Show all 7.
+    expect(
+      cards["rivals-watch"]!.split('class="rival-far"')
+        .slice(1)
+        .map((row) => /#3\d\d/.exec(text(row))?.[0]),
+    ).toEqual(["#313", "#319"]);
+    expect(rivals).toContain("Show all 7");
+    expect(rivals).toContain("#315 ▼5 Tundra 5,375 +90");
+    expect(rivals).toContain("#316 ▲2 Lens Main 5,370 +55");
+    expect(rivals).toContain("#317 Player 317 5,365 –");
     expect(cards["rivals-watch"]).toContain('href="/players/%238PYQ2LJ0"');
     expect(cards["rivals-watch"]!.match(/class="rival-link" href/g)).toHaveLength(7);
     // Tundra's battles were saved 20 minutes ago, before the board's 3.
@@ -942,7 +930,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cards["group-watch"]).toContain(`href="/account/watchlists/${CLAN_MATES}"`);
 
     // Legend clock: today's battles; the dial draws once the browser knows the time.
-    expect(text(cards["legend-clock"]!)).toContain("Times in your zone: UTC");
+    expect(text(cards["legend-clock"]!)).toContain("Legend clock UTC time");
     expect(data.cards["legend-clock"]).toEqual({
       battles: [
         expect.objectContaining({ kind: "attack", stars: 3, trophyChange: 40 }),
@@ -959,9 +947,10 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       }),
     );
     expect(clock).toContain('aria-label="Legend clock: 19h 30m to Reset at 05:00"');
-    expect(clock).toContain('aria-label="2 attacks"');
-    expect(clock).toContain('aria-label="1 defense"');
-    expect(clock).toContain("updated 5 min ago");
+    // Two attacks too close for two dots share one mark, named by both times.
+    expect(clock).toContain('aria-label="2 attacks, 07:10 to 07:25:');
+    expect(clock.match(/aria-label="Defense at \d\d:\d\d against/g)).toHaveLength(1);
+    expect(clock).not.toContain("updated");
   });
 
   it("reads each player page once and asks the boards for the right days", async () => {
@@ -1172,8 +1161,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(day).toContain("Legend day 9 , Lens Main Trophies 5,370 Net today –");
     expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
-    expect(day).toContain("Last Reset #318 Now #316 Projected #240 at Reset");
-    expect(day).toContain("Next Reset #95 – #760");
+    expect(day).toContain("Last Reset #318 Now #316 Projected place #240 at Reset");
+    expect(day).toContain("Next Reset range #95 #760");
     expect(day).toContain("Attacks 2/8");
     expect(day).toContain("Defenses 1/8");
     expect(day).not.toContain("defenses remain");
@@ -1181,23 +1170,24 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Bases you attacked: hardest first against 41% held at similar trophies.
     const bases = text(cards.bases!);
     expect(bases).toContain("Bases you attacked · today · 2 of 8");
-    expect(bases).toContain("Base strength today");
-    expect(bases).toContain("Ava 5,712 ★★★ 100% +40 · 07:10");
-    expect(bases).toContain("Hard held 5 of 6 · 83% vs Legend avg 41%");
-    expect(bases).toContain("Bo 5,688 ★★☆ 88% +31 · 07:25");
-    expect(bases).toContain("Easy held 1 of 4 · 25% vs Legend avg 41%");
+    expect(bases).toContain(
+      "Tripled Held Not yet You Player Your hit Their defenses Strength Ava",
+    );
+    expect(bases).toContain("Ava 5,712 100% +40 · 07:10");
+    expect(bases).toContain("Hard +42 pts held 83%, 42 pts above Legend avg");
+    expect(bases).toContain("Bo 5,688 88% +31 · 07:25");
+    expect(bases).toContain("Easy −16 pts held 25%, 16 pts below Legend avg");
     expect(bases.indexOf("Ava")).toBeLessThan(bases.indexOf("Bo"));
 
     // Armies on defense: the costliest armies first, each beside the Legends average.
     const armiesDefense = text(cards["armies-defense"]!);
-    expect(armiesDefense).toContain("Armies on defense 3 days 7 days Custom");
+    expect(armiesDefense).toContain("Legend average. vs Legend avg 3 days 7 days Custom");
     expect(armiesDefense).toContain("Last 7 days · 8 defenses");
     expect(armiesDefense).toContain(
-      "Army type Share Held / Legends avg Avg lost / Legends avg",
+      "Usage Not tripled Per defense Thrower 63% of defenses 60% +31 pts Not",
     );
-    expect(armiesDefense).toContain("Thrower 63% of defenses Held 60% / Legends 29%");
-    expect(armiesDefense).toContain("Held 0% / Legends 50% Avg lost −40 / Legends −33");
-    expect(armiesDefense).toContain("All defenses 100% of defenses Held 38% / Legends");
+    expect(armiesDefense).toContain("0% −50 pts Not tripled 0%, 50 points below the");
+    expect(armiesDefense).toContain("38% −14 pts Not tripled 38%, 14 points below");
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);
@@ -1226,9 +1216,12 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       dashboard: serializeSettings({ ...defaultsWith(["bases"]), basesMode: "trophies" }),
     };
     const bases = text(cardsIn(await render(await load())).bases!);
-    expect(bases).toContain("Base strength today");
-    expect(bases).toContain("Hard lost −90 in 6 defenses · Legend avg −216");
-    expect(bases).toContain("Easy lost −151 in 4 defenses · Legend avg −144");
+    expect(bases).toContain(
+      "Strength compares the trophies this base lost a defense with",
+    );
+    expect(bases).toContain("+ means harder than average: +8 lost 8 fewer a defense.");
+    expect(bases).toContain("Hard +21 lost 15 a defense, 21 below Legend avg");
+    expect(bases).toContain("Easy −2 lost 38 a defense, 2 above Legend avg");
   });
 
   it("keeps Legend day from the player page when today's read fails", async () => {
@@ -1286,7 +1279,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     );
     // A missing last-Season finish leaves the graph standing.
     expect(text(cards["season-graph"]!)).toContain("Last Season finish –");
-    expect(text(cards.goal!)).toContain("+44 a day needed");
+    expect(text(cards.goal!)).toContain("Need +44 /day a day");
   });
 
   it("shows a failed read as unavailable, not as nothing saved", async () => {
@@ -1317,8 +1310,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       history: [5044, 5114, 5114, 5122, 5186, 5188, null, 5444],
     });
     const goal = text(cardsIn(await render(data)).goal!);
-    expect(goal).toContain("Gap at last Reset 44 ahead");
-    expect(goal).toContain("Your pace (7 days) +40 a day");
+    expect(goal).toContain("On pace · 44 ahead of #200 at last Reset");
+    expect(goal).toContain("Doing +40 /day a day");
   });
 
   it("hides the day's numbers once the Legend day they were read for ends", async () => {
@@ -1363,7 +1356,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 });
 
 describe("dashboard card numbers", () => {
-  const season = (days: SeasonData["days"], today = 9): SeasonData => ({ today, days });
+  const season = (days: SeasonData["days"], today = 9): SeasonData => ({
+    today,
+    startMs: null,
+    days,
+  });
   const day = (number: number, net: number, changes = {}) => ({
     day: number,
     attacks: 8,
@@ -1390,40 +1387,6 @@ describe("dashboard card numbers", () => {
     // Day 3 of the Season: only 2 finished days and nothing before them.
     expect(recentForm(season([day(1, 10), day(2, 20)], 3), 3)?.before).toBeNull();
     expect(recentForm(season([], 1), 7)).toBeNull();
-  });
-
-  it("gives equal days one colour, a lone day its sign, and leaves shields out", () => {
-    const cells = heatCells(
-      season([
-        day(1, 10),
-        day(2, 10),
-        day(3, 30),
-        day(4, 0, { attacks: 0, defenses: 0 }),
-        day(5, -20),
-      ]),
-      "net",
-    );
-    expect(cells.slice(0, 5).map((cell) => [cell.kind, cell.shade])).toEqual([
-      ["played", 0.5],
-      ["played", 0.5],
-      ["played", 1],
-      ["shield", null],
-      ["played", 0],
-    ]);
-    expect(heatCells(season([day(1, 40)]), "net")[0]!.shade).toBe(1);
-  });
-
-  it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
-    const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
-    const lost = day(3, -304, quiet);
-    expect([lost, day(2, 0, quiet)].map((d) => isShieldDay(d))).toEqual([false, true]);
-    expect(isShieldDay({ ...day(4, 0, quiet), net: null })).toBe(false);
-    const cells = heatCells(season([day(1, 40), day(2, 0, quiet), lost]), "net");
-    expect(cells.slice(0, 3).map((cell) => [cell.kind, cell.shade])).toEqual([
-      ["played", 1],
-      ["shield", null],
-      ["played", 0],
-    ]);
   });
 
   it("averages each side over only the days with a battle on it", () => {

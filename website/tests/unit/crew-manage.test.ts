@@ -488,6 +488,16 @@ describe("members", () => {
     };
     const label = (row: string) => /aria-label="([^"]+)"/.exec(row)?.[1] ?? null;
 
+    // Counted as the crew page counts it: accounts, then the Clashers.
+    mocks.requestJson.mockResolvedValue(crewPayload("owner"));
+    const page = await render(`/crews/${CREW_ID}/members`, {
+      path: "/crews/:crewId/members",
+      Component: CrewMembersRoute,
+      loader: membersLoader as never,
+    });
+    expect(page).toContain('<p class="crew-meta">4 accounts · 2 Clashers</p>');
+    expect(page).not.toMatch(/clashers|of 10 places/);
+
     // The owner kicks every account of a member, but can't remove their own last one.
     const owner = await rows("owner");
     expect(owner.map(label)).toEqual([null, "Kick Kenji", "Kick #2RR", "Kick Alt"]);

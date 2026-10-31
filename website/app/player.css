@@ -25,7 +25,77 @@
 }
 .player-page > .data-section > h2 {
   margin: 0 0 0.6rem;
-  font-size: 1.4rem;
+}
+/* Three heading sizes and no more: the player's name; each section, such as
+   the Season summary and the Daily Legend log; and a part inside one, such
+   as today's battles and the Season trophies chart in the header. */
+.player-page {
+  --head-2: 1.5rem;
+  --head-3: 1.125rem;
+  /* The Season summary and the log sit open on the page (.open-board in
+     brand.css), their rows and tints the page's width, as on Rankings; a
+     row's words sit this far in from its edges. */
+  --sheet-pad: 0.75rem;
+}
+
+/* ---------- A phone's jump links ----------
+   One row of links to the page's parts, kept under the site header while
+   the page scrolls; a wider screen shows the parts side by side enough not
+   to need it. They are the site's switch (brand.css), the part on screen
+   lifted in it. */
+.player-page .player-jumps {
+  display: none;
+}
+@media (max-width: 47.99rem) {
+  :root:has(.player-jumps) {
+    --jump-h: 3.25rem;
+  }
+  .player-page .player-jumps {
+    position: sticky;
+    top: var(--cl-header-h);
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: var(--jump-h);
+    margin: -2rem -1rem 1rem;
+    padding: 0 1rem;
+    background: color-mix(in srgb, var(--cl-paper) 90%, transparent);
+    border-bottom: 1px solid var(--cl-card-line);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+  .player-page .player-jumps .leaderboard-view-switch {
+    width: 100%;
+    padding: 3px;
+  }
+  .player-page .player-jumps .button {
+    flex: 1;
+    min-width: 0;
+    min-height: 2.25rem;
+    padding: 0 0.5rem;
+    font-size: 0.875rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* The switch's lifted option (brand.css), which marks only
+     aria-current="page"; here the current part is a location. */
+  .player-page .player-jumps .button[aria-current="location"] {
+    color: var(--cl-ink);
+    background: var(--cl-solid);
+    box-shadow:
+      0 1px 2px rgb(90 50 20 / 0.16),
+      0 0 0 1px rgb(150 80 20 / 0.08);
+    font-weight: 650;
+  }
+  :root[data-theme="dark"] .player-page .player-jumps .button[aria-current="location"] {
+    background: rgb(255 236 218 / 0.13);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.07),
+      0 1px 2px rgb(0 0 0 / 0.5);
+  }
+}
+.player-page h2 {
+  font-size: var(--head-2);
 }
 .player-page > .data-section > .section-note {
   max-width: 68ch;
@@ -35,6 +105,9 @@
 
 /* ---------- Header: name, tag line, trophies, freshness, Refresh ---------- */
 
+/* A phone: Refresh beside the count it acts on and when it was saved beside
+   the rank, so no row holds controls alone; then today's battles and the
+   Season chart. */
 .player-page .player-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -42,34 +115,48 @@
     "name name"
     "who who"
     "count actions"
-    "line line"
-    "fresh fresh"
-    "jump jump"
-    "status status";
+    "rank fresh"
+    "status status"
+    "today today"
+    "line line";
   align-items: center;
   column-gap: 1rem;
   margin: 0 0 1.75rem;
 }
+/* Two buttons take their own row under the rank. */
+.player-page .player-hero:has(.player-actions > :nth-child(2)) {
+  grid-template-areas:
+    "name name"
+    "who who"
+    "count count"
+    "rank fresh"
+    "actions actions"
+    "status status"
+    "today today"
+    "line line";
+}
 .player-hero > h1 {
   grid-area: name;
   margin: 0;
-  font-size: clamp(2.6rem, 11vw, 4rem);
+  font-size: clamp(2.25rem, 9.5vw, 4rem);
   line-height: 0.98;
   overflow-wrap: anywhere;
 }
 .player-hero .game-link {
+  position: relative;
   color: inherit;
   text-decoration: none;
 }
+/* The small arrow after the tag that opens the game. */
 .player-hero .game-link svg {
   display: inline-block;
-  width: 0.55em;
-  height: 0.55em;
+  width: 0.85em;
+  height: 0.85em;
   margin-left: 0.2em;
-  vertical-align: 0.1em;
+  vertical-align: -0.05em;
   fill: none;
   stroke: var(--cl-muted);
-  stroke-width: 2.6;
+  stroke-width: 2.4;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -82,53 +169,40 @@
   grid-area: who;
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.2rem 1.1rem;
+  align-items: center;
+  gap: 0.35rem 0.3rem;
   margin: 0.5rem 0 0;
   color: var(--cl-muted);
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   font-weight: 550;
-  /* Each part's dot sits in the gap before it. A part that starts a new
-     line has its dot past the left edge, clipped, so no line starts with one. */
-  clip-path: inset(-2rem -2rem -2rem -0.2rem);
 }
 .player-page .player-identity:empty {
   display: none;
 }
-.player-page .player-identity > * {
-  position: relative;
-}
-.player-page .player-identity > * + *::before {
-  position: absolute;
-  right: 100%;
-  width: 1.1rem;
-  content: "·";
-  color: var(--cl-muted);
-  text-align: center;
-}
-/* "Clan" before the clan's name, put first by a flex order. */
-.player-page .player-identity > .player-clan {
+/* The clan and the Crews look apart, so a Crew named like the clan can't
+   pass for it: the clan is plain text after the Clan Castle, each Crew an
+   ember badge with its crest, each named by its word. */
+.player-page .player-identity > :is(.player-clan, .player-crews) {
   display: inline-flex;
-  align-items: baseline;
-}
-/* A small shield before the clan; each Crew has its crest instead. */
-.player-page .player-identity > .player-clan::after {
-  order: -1;
-  width: 0.95em;
-  height: 0.95em;
-  margin-right: 0.3em;
-  align-self: center;
-  background: currentColor;
-  -webkit-mask: var(--icon) center / contain no-repeat;
-  mask: var(--icon) center / contain no-repeat;
-  content: "";
-}
-.player-page .player-identity > .player-clan {
-  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linejoin='round'%3E%3Cpath d='M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z'/%3E%3C/svg%3E");
+  align-items: center;
+  color: var(--cl-ink);
 }
 .player-page .player-identity > .player-crews {
-  display: inline-flex;
-  align-items: baseline;
+  padding: 0.15rem clamp(0.4rem, 1.6vw, 0.6rem);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-edge);
+  border-radius: 999px;
+}
+.player-page .player-clan::before {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.3em;
+  background: var(--cl-muted);
+  -webkit-mask: var(--castle) center / contain no-repeat;
+  mask: var(--castle) center / contain no-repeat;
+  content: "";
+  --castle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 21V6h3.6v2.6h2.6V6h5.6v2.6h2.6V6H21v15h-6.2v-4.4a2.8 2.8 0 0 0-5.6 0V21Z'/%3E%3C/svg%3E");
 }
 .player-page .player-identity .player-tag {
   color: var(--cl-muted);
@@ -139,20 +213,17 @@
 .player-page .player-identity a {
   padding-block: 0.7rem;
   margin-block: -0.7rem;
+  color: inherit;
 }
-.player-page .player-identity .game-link svg {
-  width: 0.85em;
-  height: 0.85em;
-}
-.player-page .player-crews-label {
-  margin-right: 0.4em;
+.player-page :is(.player-crews-label, .player-clan-label) {
+  margin-right: 0.3em;
   color: var(--cl-muted);
-  font-size: 0.85em;
+  font-size: max(0.8125rem, 0.85em);
   font-weight: 600;
 }
 .player-page .player-crews a {
   display: inline-flex;
-  gap: 0.3em;
+  gap: 0.25em;
   align-items: center;
   color: var(--cl-action-text);
   text-decoration: none;
@@ -160,40 +231,21 @@
 .player-page .player-crews a:hover bdi {
   text-decoration: underline;
 }
-/* The Crew's crest in small: the Crew page's gold hexagon and first letter. */
-.player-page .player-crew-crest {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
+/* The Crew's crest in small, as on its page. */
+.player-page .player-crews .crest {
   width: 1.05em;
-  height: 1.15em;
-  padding-bottom: 0.05em;
-  color: var(--cl-brand-night);
-  background: linear-gradient(180deg, var(--cl-brand-yellow), var(--cl-brand-orange));
-  clip-path: polygon(50% 0, 100% 16%, 100% 68%, 50% 100%, 0 68%, 0 16%);
-  font-family: var(--cl-font-score);
-  font-size: 0.85em;
-  font-weight: 700;
-  line-height: 1;
+  height: 1.16em;
 }
-/* On a phone the trophies and their buttons share a line while both fit, and
-   the buttons wrap below the number when they don't, so neither covers the
-   other. From tablet width up each keeps its own column. */
+/* The count and its rank place themselves in the header's grid. */
 .player-page .player-score {
-  grid-row: count;
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1rem;
-  margin-top: 1.1rem;
+  display: contents;
 }
 .player-page .player-trophies {
   grid-area: count;
   display: grid;
   justify-items: start;
   min-width: 0;
+  margin-top: 0.85rem;
 }
 .player-page .player-trophy-count {
   display: flex;
@@ -201,7 +253,7 @@
   gap: 0.4rem;
   color: var(--cl-ink);
   font-family: var(--cl-font-score);
-  font-size: clamp(3rem, 13vw, 4.25rem);
+  font-size: clamp(2.6rem, 11vw, 4.25rem);
   font-weight: 700;
   line-height: 0.95;
   font-variant-numeric: tabular-nums;
@@ -216,33 +268,110 @@
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--cl-gold) 45%, transparent));
 }
-/* The Season so far, under the trophies, ending in a glowing dot for now. */
+/* About 2.6rem on a phone's 3rem count, 2.9rem on a desktop's 4.25rem. */
+.player-page .player-league-badge {
+  flex: none;
+  width: auto;
+  height: 0.8em;
+  max-height: 2.9rem;
+  margin-right: 0.15rem;
+}
+/* Today's battles under the trophies; the tiles are in season-tiles.css. */
+.player-page .player-today {
+  grid-area: today;
+  margin-top: 1rem;
+}
+/* The day the slots belong to and the chart's name, so today never passes
+   for the Season. */
+.player-page :is(.today-day, .trophy-line-title) {
+  grid-column: 1 / -1;
+  margin: 0;
+  font: 700 var(--head-3) var(--cl-font-heading);
+}
+.player-page .today-day span {
+  color: var(--cl-muted);
+}
+@media (min-width: 48rem) {
+  .player-page .player-today {
+    margin-top: 1.5rem;
+  }
+}
+
+/* The Season so far, under the trophies, read like a stock chart: a trophy
+   scale at round counts down the left, dated weeks along the bottom, and a
+   dot at each Reset ending in a glowing dot for now. */
 .player-page .trophy-line {
   position: relative;
   grid-area: line;
-  height: 3.5rem;
-  margin: 0.85rem 0 1.4rem;
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  row-gap: 0.6rem;
+  height: 7.75rem;
+  margin: 0.9rem 0.4rem 1.6rem 0;
+}
+.player-page .trophy-line-plot {
+  position: relative;
+  grid-column: 2;
+  cursor: crosshair;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+.player-page .trophy-line-axis {
+  position: relative;
+}
+.player-page .trophy-line-axis > span {
+  position: absolute;
+  right: 0.5rem;
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateY(-50%);
 }
 .player-page .trophy-line figcaption {
   position: absolute;
-  top: calc(100% + 0.3rem);
+  top: calc(100% + 0.45rem);
   right: 0;
-  left: 0;
+  left: 2.6rem;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
-.player-page .trophy-line figcaption b {
-  margin-left: 0.2rem;
-  color: var(--cl-ink);
-  font-family: var(--cl-font-score);
-  font-size: 0.9rem;
-  font-weight: 700;
+.player-page .trophy-line-date {
+  position: absolute;
+  transform: translateX(-50%);
+  color: var(--cl-muted);
+  white-space: nowrap;
+}
+/* "Now" centres under the dot. */
+.player-page .trophy-line-end {
+  transform: translateX(50%);
+}
+/* A narrow line has no room for a date just before "Now", so that week's
+   line goes with it, and its days sit close, so their dots shrink. */
+@media (max-width: 47.99rem) {
+  .player-page :is(.trophy-line-date, .trophy-line-week)[data-near-end] {
+    visibility: hidden;
+  }
+  .player-page .trophy-line-dot {
+    width: 0.3rem;
+    height: 0.3rem;
+    border-width: 1px;
+  }
+}
+.player-page :is(.trophy-line-level, .trophy-line-week) {
+  stroke: var(--cl-border);
+}
+.player-page .trophy-line-week {
+  stroke-dasharray: 2 3;
 }
 .player-page .trophy-line svg {
   display: block;
@@ -250,12 +379,12 @@
   height: 100%;
   overflow: visible;
 }
-/* The line draws once, left to right, when the page opens; its dot lands last. */
+/* The line draws once, left to right, when the page opens; its dots land last. */
 @media (prefers-reduced-motion: no-preference) {
   .player-page .trophy-line svg {
     animation: trophy-line-draw 700ms var(--cl-ease-out) backwards;
   }
-  .player-page .trophy-line-now {
+  .player-page :is(.trophy-line-dot, .trophy-line-now) {
     animation: trophy-line-now 220ms 560ms var(--cl-ease-out) backwards;
   }
 }
@@ -270,7 +399,7 @@
 @keyframes trophy-line-now {
   from {
     opacity: 0;
-    transform: translateY(-50%) scale(0.3);
+    transform: translate(-50%, -50%) scale(0.3);
   }
 }
 .player-page .trophy-line-path {
@@ -284,16 +413,81 @@
   stroke-dasharray: 2 5;
   opacity: 0.6;
 }
-.player-page .trophy-line-now {
+.player-page :is(.trophy-line-dot, .trophy-line-now) {
   position: absolute;
-  right: -0.3rem;
-  width: 0.6rem;
-  height: 0.6rem;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.player-page .trophy-line-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  background: var(--cl-solid);
+  border: 1.5px solid var(--cl-action-text);
+  transition: scale 120ms var(--cl-ease-out);
+}
+.player-page .trophy-line-dot[data-active] {
+  background: var(--cl-action-text);
+  scale: 1.6;
+}
+.player-page .trophy-line-now {
+  width: 0.65rem;
+  height: 0.65rem;
   background: var(--cl-action-text);
   border: 2px solid var(--cl-paper);
-  border-radius: 50%;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--cl-action-text) 25%, transparent);
-  transform: translateY(-50%);
+}
+/* The day under the pointer: a hairline down the chart and its numbers. */
+.player-page .trophy-line-cross {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--cl-action-text) 55%, transparent);
+  pointer-events: none;
+}
+.player-page .trophy-line-tip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 0 0.45rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--cl-glass-strong);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 0.5rem;
+  box-shadow: var(--cl-overlay-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 0.7rem));
+}
+.player-page .trophy-line-tip[data-below] {
+  transform: translate(-50%, 0.7rem);
+}
+.player-page .trophy-line-tip[data-side="left"] {
+  translate: calc(-50% + 0.5rem);
+}
+.player-page .trophy-line-tip[data-side="right"] {
+  translate: calc(50% - 0.5rem);
+}
+.player-page .trophy-line-tip small {
+  grid-column: 1 / -1;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.player-page .trophy-line-tip b {
+  font-family: var(--cl-font-score);
+  font-size: 1.05rem;
+}
+.player-page .trophy-line-tip > span {
+  font-family: var(--cl-font-score);
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 .player-page .player-trophy-count.player-reset-pending {
   font-family: var(--cl-font);
@@ -303,33 +497,144 @@
 }
 .player-page .player-reset-note {
   color: var(--cl-muted);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
 }
-/* Two parts on one line, or two lines on a phone. A part that starts a line
-   pushes its dot past the clipped left edge, so no line starts or ends with
-   a stray dot. */
+/* One short "Updated 15 min ago" beside Refresh; tapping it opens the exact
+   times in a small card under it. */
 .player-page .player-freshness {
+  position: relative;
   grid-area: fresh;
-  display: flex;
-  flex-wrap: wrap;
-  column-gap: 1rem;
-  overflow: hidden;
-  margin: 0.6rem 0 0;
-  color: var(--cl-faint);
-  font-size: 0.75rem;
+  justify-self: end;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
   font-weight: 500;
 }
-.player-page .player-freshness > span {
-  position: relative;
+.player-page .player-freshness > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-height: 2.75rem;
+  list-style: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.player-page .player-freshness-dot {
-  position: absolute;
-  right: 100%;
-  width: 1rem;
-  text-align: center;
+.player-page .player-freshness > summary::-webkit-details-marker {
+  display: none;
+}
+/* A small "i" says there is more to see. */
+.player-page .player-freshness > summary::after {
+  display: grid;
+  place-items: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-left: 0.2rem;
+  color: var(--cl-muted);
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font: 700 0.6875rem/1 var(--cl-font);
+  content: "i";
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .player-freshness > summary:hover {
+    color: var(--cl-ink);
+  }
 }
 .player-page .player-freshness time {
   font: inherit;
+}
+/* A phone's Refresh is its icon alone, beside the count it acts on; its
+   name stays for screen readers. */
+@media (max-width: 47.99rem) {
+  /* A compact identity: the name a size down, the tag line smaller and
+     closer, so the trophies come sooner. */
+  .player-hero > h1 {
+    font-size: clamp(2rem, 8.5vw, 2.5rem);
+  }
+  .player-page .player-identity {
+    gap: 0.25rem 0.3rem;
+    margin-top: 0.3rem;
+    font-size: 0.875rem;
+  }
+  /* The castle names the clan; the word stays for screen readers, so the
+     Crew badge, which keeps its word, fits on the same line. */
+  .player-page .player-clan-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .player-page .player-trophies {
+    margin-top: 0.6rem;
+  }
+  .player-page .player-refresh-form button {
+    padding: 0;
+  }
+  .player-page :is(.player-updated-word, .player-refresh-label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+/* Narrow phones: the count and the rank a row each, then the time beside
+   Refresh. */
+@media (max-width: 24rem) {
+  .player-page .player-hero,
+  .player-page .player-hero:has(.player-actions > :nth-child(2)) {
+    grid-template-areas:
+      "name name"
+      "who who"
+      "count count"
+      "rank rank"
+      "fresh actions"
+      "status status"
+      "today today"
+      "line line";
+  }
+  .player-page .player-hero:has(.player-actions > :nth-child(2)) {
+    grid-template-areas:
+      "name name"
+      "who who"
+      "count count"
+      "rank rank"
+      "fresh fresh"
+      "actions actions"
+      "status status"
+      "today today"
+      "line line";
+  }
+  .player-page .player-freshness {
+    justify-self: start;
+  }
+  .player-page .player-freshness > p {
+    right: auto;
+    left: 0;
+  }
+}
+.player-page .player-freshness > p {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% - 0.25rem);
+  right: 0;
+  display: grid;
+  gap: 0.2rem;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 3rem));
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-glass-strong);
+  border: 1px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-overlay-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  font-size: 0.875rem;
 }
 .player-page .player-actions {
   grid-area: actions;
@@ -338,26 +643,13 @@
   align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
+  margin-top: 0.85rem;
 }
-.player-page .player-actions {
-  align-self: end;
-  margin-bottom: 0.2rem;
-}
-/* A jump to the log, whose heading lands clear of the sticky top bar. */
-.player-page .player-log-jump {
-  grid-area: jump;
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2.75rem;
-  color: var(--cl-action-text);
-  font-size: 0.9rem;
-  font-weight: 700;
-  text-decoration: none;
-}
-#season-days-title {
-  scroll-margin-top: calc(var(--cl-header-h) + 1rem);
+/* A jump, or a day opened from a link, lands just clear of what sticks at
+   the top here: the site header and, on a phone, the jump links. This is
+   the site's allowance (appearance.css) plus the jump links' row. */
+:root:has(.player-page) {
+  scroll-padding-top: calc(var(--cl-header-h) + var(--jump-h, 0px) + 1rem);
 }
 .player-page .player-actions :is(button, .button) {
   display: inline-flex;
@@ -370,6 +662,18 @@
   padding: 0 0.9rem;
   border-radius: var(--cl-radius);
   font-size: 0.875rem;
+}
+/* Refresh is a quiet control in the foot, not a call to action: a tinted
+   fill with no edge, as the site's quiet buttons. */
+.player-page .player-refresh-form button {
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.player-page .player-refresh-form button:not(:disabled):hover {
+  color: var(--cl-ink);
+  background: var(--cl-fill-hover);
 }
 .player-page .player-refresh-form button:disabled svg {
   animation: refresh-spin 900ms linear infinite;
@@ -414,31 +718,43 @@
   min-width: max-content;
 }
 @media (min-width: 48rem) {
-  .player-page .player-hero {
+  /* When it was saved and Refresh, small in the top corner; the count under
+     them beside the name, and its rank on one line under the count. */
+  .player-page .player-hero,
+  .player-page .player-hero:has(.player-actions > :nth-child(2)) {
     grid-template-columns: minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "name count actions"
-      "who count actions"
-      "line line line"
-      "fresh fresh fresh"
-      "jump jump jump"
-      "status status status";
+      "name fresh actions"
+      "name count count"
+      "who rank rank"
+      "status status status"
+      "today today today"
+      "line line line";
     align-items: center;
-    column-gap: 1.5rem;
+    column-gap: 1rem;
   }
-  .player-page .player-score {
-    display: contents;
+  .player-hero > h1 {
+    align-self: end;
   }
   .player-page .player-trophies {
     justify-items: end;
+    justify-self: end;
+    margin-top: 0.35rem;
   }
-  .player-page .player-actions {
-    align-self: center;
-    margin: 0;
+  /* Times and Refresh a mouse's size rather than a thumb's. */
+  .player-page .player-hero > .player-actions {
+    margin-top: 0;
+  }
+  .player-page .player-hero .player-actions :is(button, .button) {
+    min-height: 2.25rem;
   }
   .player-page .trophy-line {
-    height: 4.5rem;
-    margin-top: 1.25rem;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    height: 14.5rem;
+    margin-top: 1.5rem;
+  }
+  .player-page .trophy-line figcaption {
+    left: 3rem;
   }
 }
 
@@ -485,358 +801,6 @@
   margin: 0 0.3rem 0 0;
 }
 
-/* ---------- Season summary ---------- */
-
-.player-page .season-summary {
-  padding: 1rem;
-}
-.player-page .season-summary-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem 1rem;
-}
-.player-page .season-summary-head h2 {
-  margin: 0;
-  font-size: 1.35rem;
-}
-.player-page .season-summary-meta {
-  margin: 0.2rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-.player-page .season-menu {
-  min-width: 0;
-  max-width: 100%;
-}
-.player-page .season-menu .filter-field {
-  display: block;
-}
-.player-page .season-menu select {
-  width: auto;
-  max-width: 100%;
-  min-height: 2.75rem;
-  padding: 0.4rem 2.25rem 0.4rem 0.9rem;
-  color: var(--cl-ink);
-  background: var(--cl-panel)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23927f70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
-    no-repeat right 0.75rem center / 1rem;
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-radius);
-  /* 16px keeps iPhones from zooming the page when the menu opens. */
-  font-size: 1rem;
-  font-weight: 600;
-  appearance: none;
-  cursor: pointer;
-}
-/* Headline numbers and averages sit in a row split by hairlines, not boxes. */
-.player-page .season-summary-headline,
-.player-page .season-summary-averages {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
-  gap: 0;
-  margin: 1rem 0 0;
-}
-.player-page .season-summary-headline > div,
-.player-page .season-summary-averages > div {
-  min-width: 0;
-  padding: 0.1rem 0.75rem;
-}
-.player-page .season-summary-headline > div:first-child,
-.player-page .season-summary-averages > div:nth-child(odd) {
-  padding-left: 0;
-}
-.player-page .season-summary-headline > div + div,
-.player-page .season-summary-averages > div:nth-child(even) {
-  border-left: 1px solid var(--cl-border);
-}
-.player-page .season-summary dt {
-  color: var(--cl-muted);
-  font-size: 0.75rem;
-  font-weight: 550;
-  line-height: 1.2;
-}
-.player-page .season-summary dd {
-  margin: 0.25rem 0 0;
-  font-family: var(--cl-font-score);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.player-page .season-summary-headline dd {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  font-size: clamp(1.65rem, 7.6vw, 2rem);
-  line-height: 1;
-}
-/* The rank comes first and reads as a rank, as in the log: #1,288. It never
-   breaks, and the size above keeps #13,183 in its column on a 360px phone. */
-.player-page .season-summary-headline > div:first-child dd:not(.summary-words) {
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-.player-page .season-summary-headline > div:first-child dd:not(.summary-words)::before {
-  content: "#";
-}
-.player-page .season-summary-headline dd.summary-words {
-  font-family: var(--cl-font);
-  font-size: 0.95rem;
-  font-weight: 650;
-}
-.player-page .season-summary dd small {
-  flex-basis: 100%;
-  margin-top: 0.15rem;
-  color: var(--cl-muted);
-  font-family: var(--cl-font);
-  font-size: 0.72rem;
-  font-weight: 500;
-}
-.player-page .season-summary dd .meter {
-  flex-basis: 100%;
-  margin-top: 0.4rem;
-}
-/* A final rank takes a row of its own; the two numbers under it share the next. */
-.player-page .season-summary-headline:has(> .season-summary-rank) {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  row-gap: 0.9rem;
-}
-.player-page .season-summary-headline > .season-summary-rank {
-  grid-column: 1 / -1;
-  padding-left: 0;
-  border-left: 0;
-}
-.player-page .season-summary-headline > .season-summary-rank + div {
-  padding-left: 0;
-  border-left: 0;
-}
-.player-page .season-summary-rank dd {
-  color: var(--cl-action-text);
-  font-size: 2.75rem;
-}
-/* On a 360px phone three columns squeeze "Unavailable", so Hit rate takes the
-   next row. */
-@media (max-width: 23.5rem) {
-  .player-page .season-summary-headline:not(:has(> .season-summary-rank)) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 0.9rem;
-  }
-  .player-page
-    .season-summary-headline:not(:has(> .season-summary-rank))
-    > div
-    + div
-    + div {
-    grid-column: 1 / -1;
-    padding-left: 0;
-    border-left: 0;
-  }
-}
-/* Battles by stars: each row is one bar, its 3-, 2-, 1- and 0-star parts as
-   wide as their share (the --s* tracks SeasonSummary sets), with a line under
-   it naming every count. Huge counts scroll inside instead of widening the
-   page. */
-.player-page .season-summary-table {
-  position: relative;
-  margin-top: 1.1rem;
-  padding-top: 1rem;
-  overflow-x: auto;
-  border-top: 1px solid var(--cl-border);
-}
-.player-page .season-summary-table table {
-  display: grid;
-  gap: 0.35rem;
-  width: 100%;
-  font-variant-numeric: tabular-nums;
-}
-.player-page .season-summary-table :is(thead, tbody) {
-  display: contents;
-}
-.player-page .season-summary-table thead tr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-.player-page .season-summary-table tbody tr {
-  display: grid;
-  grid-template-columns: 4.75rem 2.25rem var(--s3) var(--s2) var(--s1) var(--s0);
-  align-items: center;
-}
-.player-page .season-summary-table tbody th {
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-align: left;
-}
-.player-page .season-summary-table tbody td:nth-child(2) {
-  padding-right: 0.5rem;
-  color: var(--cl-muted);
-  font-family: var(--cl-font-score);
-  font-size: 1rem;
-  font-weight: 700;
-}
-/* The counts stay in the table for screen readers; the key shows them. */
-.player-page .season-summary-table td[data-stars] {
-  min-width: 0;
-  height: 0.7rem;
-  overflow: hidden;
-  background: var(--seg);
-  box-shadow: inset -2px 0 0 var(--cl-surface);
-  font-size: 0;
-}
-.player-page .season-summary-table td[data-empty] {
-  width: 0;
-  padding: 0;
-}
-/* The bar's rounded ends sit on its first and last parts with battles. */
-.player-page
-  .season-summary-table
-  td[data-stars]:not(td[data-stars]:not([data-empty]) ~ td) {
-  border-radius: 4px 0 0 4px;
-}
-.player-page .season-summary-table td[data-stars]:not(:has(~ td:not([data-empty]))) {
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
-  box-shadow: none;
-}
-.player-page .season-summary-table tr.season-summary-key {
-  grid-template-columns: 7rem minmax(0, 1fr);
-  margin-bottom: 0.45rem;
-}
-.player-page .season-summary-key td {
-  display: flex;
-  grid-column: 2;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.85rem;
-  justify-content: space-between;
-  max-width: 18rem;
-  color: var(--cl-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-.player-page .season-summary-key span[data-stars] {
-  display: inline-flex;
-  gap: 0.25rem;
-  align-items: baseline;
-  white-space: nowrap;
-}
-.player-page .season-summary-key span[data-stars]::before {
-  width: 0.55rem;
-  height: 0.55rem;
-  align-self: center;
-  border-radius: 2px;
-  background: var(--seg);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-ink) 14%, transparent);
-  content: "";
-}
-.player-page .season-summary-key .summary-star {
-  margin-left: -0.2rem;
-}
-.player-page .season-summary-key b {
-  color: var(--cl-ink);
-  font-family: var(--cl-font-score);
-  font-size: 0.98rem;
-  font-weight: 700;
-}
-/* Attacks: gold for three stars, then greys; defenses: red for three
-   stars given up, green for a clean hold. */
-.player-page .season-summary-table [data-side="Attacks"] [data-stars="3"] {
-  --seg: var(--cl-star);
-}
-.player-page .season-summary-table [data-side="Attacks"] [data-stars="2"] {
-  --seg: var(--cl-star-2);
-}
-.player-page .season-summary-table [data-side="Attacks"] [data-stars="1"] {
-  --seg: var(--cl-star-1);
-}
-.player-page .season-summary-table [data-side="Attacks"] [data-stars="0"] {
-  --seg: var(--cl-raised);
-}
-.player-page .season-summary-table [data-side="Defenses"] [data-stars="3"] {
-  --seg: color-mix(in srgb, var(--cl-negative) 80%, var(--cl-raised));
-}
-.player-page .season-summary-table [data-side="Defenses"] [data-stars="2"] {
-  --seg: color-mix(in srgb, var(--cl-negative) 45%, var(--cl-raised));
-}
-.player-page .season-summary-table [data-side="Defenses"] [data-stars="1"] {
-  --seg: color-mix(in srgb, var(--cl-negative) 22%, var(--cl-raised));
-}
-.player-page .season-summary-table [data-side="Defenses"] [data-stars="0"] {
-  --seg: color-mix(in srgb, var(--cl-positive) 70%, var(--cl-raised));
-}
-/* Averages: two by two on a phone, four across where there is room. */
-.player-page .season-summary-averages {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  row-gap: 0.75rem;
-  margin-top: 1.1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--cl-border);
-}
-.player-page .season-summary-averages dd {
-  font-size: 1.4rem;
-  line-height: 1;
-}
-.player-page .season-summary > .section-note {
-  margin: 0.6rem 0 0;
-  font-size: 0.8rem;
-}
-@media (max-width: 29.99rem) {
-  .player-page .season-summary-table tr.season-summary-key {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .player-page .season-summary-key td {
-    grid-column: 1;
-    max-width: none;
-  }
-}
-@media (min-width: 48rem) {
-  .player-page .season-summary {
-    padding: 1.25rem 1.5rem;
-  }
-  .player-page .season-summary-headline dd {
-    font-size: 2.5rem;
-  }
-  .player-page .season-summary-rank dd {
-    font-size: 3rem;
-  }
-  .player-page .season-summary-headline:has(> .season-summary-rank) {
-    grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
-  }
-  .player-page .season-summary-headline > .season-summary-rank {
-    grid-column: auto;
-  }
-  .player-page .season-summary-headline > .season-summary-rank + div {
-    padding-left: 0.75rem;
-    border-left: 1px solid var(--cl-border);
-  }
-  .player-page .season-summary-averages {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .player-page .season-summary-averages > div:nth-child(odd):not(:first-child) {
-    padding-left: 0.75rem;
-    border-left: 1px solid var(--cl-border);
-  }
-}
-@media (min-width: 60rem) {
-  .player-page .season-summary:has(.season-summary-table) {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    column-gap: 2rem;
-    align-items: start;
-  }
-  .player-page .season-summary > :not(.season-summary-table, .season-summary-averages) {
-    grid-column: 1 / -1;
-  }
-  .player-page .season-summary-averages {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .player-page .season-summary-averages > div:nth-child(odd):not(:first-child) {
-    padding-left: 0;
-    border-left: 0;
-  }
-}
-
 /* ---------- A partial Season: its Legend I stretches and a day strip ---------- */
 .player-page .season-story {
   margin-top: 1.25rem;
@@ -872,7 +836,9 @@
 .player-page .season-strip-legend {
   background: var(--cl-action);
 }
-.player-page .season-strip-waiting {
+/* Each kind of day paints its strip day and its swatch in the key. */
+.player-page .season-strip .season-strip-waiting,
+.player-page .season-strip-key .season-strip-waiting::before {
   background: repeating-linear-gradient(
     45deg,
     var(--cl-action) 0 2px,
@@ -880,13 +846,17 @@
   );
   box-shadow: inset 0 0 0 1px var(--cl-action);
 }
-.player-page .season-strip-outside {
+.player-page .season-strip .season-strip-outside,
+.player-page .season-strip-key .season-strip-outside::before {
   background: var(--cl-outline);
 }
-.player-page .season-strip-unrecorded {
+.player-page .season-strip .season-strip-unrecorded,
+.player-page .season-strip-key .season-strip-unrecorded::before {
   background: var(--cl-raised);
 }
-.player-page .season-strip-ahead {
+.player-page .season-strip .season-strip-ahead,
+.player-page .season-strip-key .season-strip-ahead::before {
+  background: none;
   box-shadow: inset 0 0 0 1px var(--cl-outline);
 }
 .player-page .season-strip-today {
@@ -898,7 +868,7 @@
   justify-content: space-between;
   margin: 0.2rem 0 0;
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
 }
 .player-page .season-strip-key {
   display: flex;
@@ -908,15 +878,13 @@
   padding: 0;
   list-style: none;
   color: var(--cl-muted);
-  font-size: 0.75rem;
-  background: none;
+  font-size: 0.8125rem;
 }
 .player-page .season-strip-key li {
   display: flex;
   align-items: center;
   gap: 0.3rem;
   background: none;
-  box-shadow: none;
 }
 .player-page .season-strip-key li::before {
   content: "";
@@ -924,22 +892,4 @@
   height: 0.7rem;
   border-radius: 2px;
   background: var(--cl-action);
-}
-.player-page .season-strip-key .season-strip-waiting::before {
-  background: repeating-linear-gradient(
-    45deg,
-    var(--cl-action) 0 2px,
-    transparent 2px 4px
-  );
-  box-shadow: inset 0 0 0 1px var(--cl-action);
-}
-.player-page .season-strip-key .season-strip-outside::before {
-  background: var(--cl-outline);
-}
-.player-page .season-strip-key .season-strip-unrecorded::before {
-  background: var(--cl-raised);
-}
-.player-page .season-strip-key .season-strip-ahead::before {
-  background: none;
-  box-shadow: inset 0 0 0 1px var(--cl-outline);
 }

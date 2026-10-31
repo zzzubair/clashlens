@@ -60,6 +60,7 @@ import {
   isResetTimestamp,
   isString,
   isUtcTimestamp,
+  mapRecentDays,
 } from "./python-response.server";
 
 export { PythonApiError } from "./python-response.server";
@@ -663,7 +664,10 @@ function mapLeaderboard(
         : !isOneOf(entry.confidence, ["exact", "confirmed", "uncertain"] as const)) ||
       !isOneOf(entry.public_confidence, ["high", "partial", "uncertain"] as const) ||
       !(entry.official_rank === null || isInteger(entry.official_rank)) ||
-      !(entry.tied === undefined || typeof entry.tied === "boolean")
+      !(entry.tied === undefined || typeof entry.tied === "boolean") ||
+      !(entry.reset_position == null || isInteger(entry.reset_position)) ||
+      !(entry.today_change == null || isInteger(entry.today_change)) ||
+      !(entry.recent_days === undefined || mapRecentDays(entry.recent_days))
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -685,6 +689,10 @@ function mapLeaderboard(
             : "available",
       confidence: entry.public_confidence,
       tied: entry.tied === true,
+      // Missing from an older API, or on a Daily board.
+      resetRank: isInteger(entry.reset_position) ? entry.reset_position : null,
+      todayChange: isInteger(entry.today_change) ? entry.today_change : null,
+      recentDays: mapRecentDays(entry.recent_days) ?? [],
     };
   });
   const mapSelector = (value: unknown) => {

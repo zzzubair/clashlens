@@ -639,7 +639,7 @@ function mapSeason(value: unknown): PlayerPage["season"] {
 
 // A week with a malformed entry is left out: the page then treats it as a
 // week the record has not decided.
-function mapSeasonWeeks(value: unknown): SeasonWeek[] {
+export function mapSeasonWeeks(value: unknown): SeasonWeek[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((week) =>
     isRecord(week) &&

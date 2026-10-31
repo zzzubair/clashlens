@@ -577,7 +577,7 @@ describe("automatic tag lookup", () => {
     const html = await renderRoute(
       await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
     );
-    expect(html).toMatch(/<h1><a [^>]*><bdi>Sloothy<\/bdi>/);
+    expect(html).toContain("<h1><bdi>Sloothy</bdi></h1>");
     expect(html).toContain(note);
     expect(html).not.toMatch(/Season summary|This Season|Current trophies|refresh-form/);
     expect(html).toContain(`<option value="${SEASON}"`);
@@ -747,7 +747,7 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
-  it("shows an old profile's age and when battle history was last published", async () => {
+  it("shows an old profile's age and, on a tap, when it and its battle history were saved", async () => {
     const stale = {
       ...PLAYER,
       profile: {
@@ -772,20 +772,21 @@ describe("automatic tag lookup", () => {
       const html = (await renderRoute(result)).split("<script>")[0];
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
+    // One short age; the exact times open on a tap, an old one with its date.
     expect(await render(stale)).toContain(
-      "Updated 7 Sep 2026, 12:00 UTC · 2 hours old · Battles 7 Sep 2026, 11:40 UTC · 2 hours old",
+      "Updated 2 hours agoProfile 7 Sep 2026, 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
-    expect(fresh).toContain("Updated 12:00 UTC · Battles not updated yet");
+    expect(fresh).toContain("Updated just nowProfile 12:00 UTCBattles not saved yet");
     const oldHistory = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 12:00 UTC · Battles 7 Sep 2026, 11:40 UTC · 20 minutes old",
+      "Updated just nowProfile 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
     );
   });
 
@@ -910,9 +911,8 @@ describe("automatic tag lookup", () => {
     [true, false],
     ["unknown", false],
   ])("validates tracking state %s in Refresh results", (trackingState, accepted) => {
-    expect(
-      isRefreshStatusPayload({ ...REFRESH_STATUS, player: { ...PLAYER, trackingState } }),
-    ).toBe(accepted);
+    const payload = { ...REFRESH_STATUS, player: { ...PLAYER, trackingState } };
+    expect(isRefreshStatusPayload(payload)).toBe(accepted);
   });
 
   it.each([
@@ -1037,9 +1037,8 @@ describe("automatic tag lookup", () => {
   );
 
   it("lets a final lookup outrank an older saved page after an explanation", () => {
-    expect(
-      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, true),
-    ).toMatchObject({
+    const view = playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, true);
+    expect(view).toMatchObject({
       trackedPlayer: null,
       lookup: { state: "not_in_legend" },
       minuteChecks: false,
@@ -1047,9 +1046,8 @@ describe("automatic tag lookup", () => {
   });
 
   it("lets a final lookup outrank an older tracked page on a fresh visit", () => {
-    expect(
-      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, false),
-    ).toMatchObject({
+    const view = playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, false);
+    expect(view).toMatchObject({
       trackedPlayer: null,
       lookup: { state: "not_in_legend" },
       minuteChecks: false,
@@ -1174,8 +1172,12 @@ describe("player day honesty", () => {
     ).then((html) => html.split("<script>")[0].replaceAll("<!-- -->", ""));
   }
 
+  // A day ends at its own closing tag, not its status note's, which the
+  // battle switch follows.
   function dayHtml(html: string, key: string) {
-    return html.split(`id="legend-day-${key}"`)[1].split("</div></details>")[0];
+    return html
+      .split(`id="legend-day-${key}"`)[1]
+      .split(/<\/div><\/details>(?!<\/div><fieldset)/)[0];
   }
 
   const net = (value: string) =>
@@ -1208,9 +1210,8 @@ describe("player day honesty", () => {
     expect(html).not.toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
-    expect(
-      dayHtml(await page([missingDefense], { currentDay: missingDefense }), "2026-10-03"),
-    ).not.toContain("from battles");
+    const later = await page([missingDefense], { currentDay: missingDefense });
+    expect(dayHtml(later, "2026-10-03")).not.toContain("from battles");
   });
 
   it("does not label an ended saved Live row as today's result", async () => {

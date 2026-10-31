@@ -104,7 +104,8 @@ async function withServerData(
   };
   const saved = data.loaderData["routes/player"];
   edit(saved);
-  saved.pastSeasons = await saved.pastSeasons;
+  for (const [key, value] of Object.entries(saved))
+    Object.assign(saved, { [key]: await value });
   const escaped = JSON.stringify(encodePageData(data)).replace(
     /[&<>\u2028\u2029]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
@@ -302,8 +303,7 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   let observedAt = "";
   let savedData = "";
   let dataType = "";
-  // On a fresh stack the worker may not have saved this player's current
-  // Legend day yet; it waits its turn behind other Reset and live work.
+  // A fresh stack's worker may not have saved this player's current Legend day yet.
   await expect(async () => {
     const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
     try {
@@ -436,6 +436,7 @@ test("battle stats fit at iPhone width", async ({ page }) => {
   await page.goto("/players/%232PP");
   const stats = page.getByRole("region", { name: "Season summary" });
   await expect(stats.getByText("Hit rate", { exact: true })).toBeVisible();
+  await stats.getByText("Stars and averages").click();
   await expect(stats.getByRole("rowheader", { name: "Defenses" })).toBeVisible();
   await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   expect(
@@ -518,14 +519,15 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await seasonMenu.selectOption({ index: 1 });
   const finish = page.locator(".season-summary");
   await expect(finish.getByText("6,498", { exact: true })).toBeVisible();
+  await finish.getByText("Stars and averages").click();
   await expect(page.getByText("Stars unknown for 1 attack.")).toBeVisible();
   await expectUsableLayout(page);
 
   await seasonMenu.selectOption("");
   await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
   await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("−1,288", { exact: true })).toBeVisible();
-  await expect(page.getByText(/1,284 days old/)).toBeVisible();
+  await expect(page.locator(".log-day strong", { hasText: "−1,288" })).toBeVisible();
+  await expect(page.getByText("1,284 days ago", { exact: true })).toBeVisible();
   // A nameless opponent shows its tag once, as the name.
   const nameless = page.locator(".battle-row-attack").nth(8);
   await expect(nameless.locator(".battle-name")).toHaveText("#P0Y");
@@ -773,7 +775,7 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
       })
       .first();
     const day = page.locator(`[id="${await folded.getAttribute("id")}"]`);
-    await day.locator("summary").click();
+    await day.locator(":scope > summary.log-row").click();
     await day.getByRole("button", { name: "Show army" }).first().click();
     await expect(day.getByRole("button", { name: "Hide army" })).toBeVisible();
     await expect(day.locator(".battle-row[id]")).not.toHaveCount(0);
@@ -868,8 +870,7 @@ for (const [device, size] of [
         await expect(waiting).toHaveCount(0);
         await expect(page).toHaveURL(new URL(link, page.url()).href);
 
-        // A card replaced as the highlight starts, as when Reset moves its day, is
-        // the one highlighted.
+        // A card replaced as the highlight starts (Reset moving its day) is highlighted.
         await expect(slot).not.toHaveClass(/battle-arrival/);
         await page.evaluate((id) => {
           window.dispatchEvent(new Event("pageshow"));
@@ -1036,6 +1037,7 @@ test("Back after switching Seasons returns to Your watchlists in one step", asyn
   }
   const members = group.getByRole("list", { name: "Players in War plan" });
   if ((await members.filter({ hasText: "#2PP" }).count()) === 0) {
+    await group.locator(".group-more > summary").click();
     await group.getByRole("link", { name: "Add player" }).click();
     await group.getByLabel("Player tag").fill("#2PP");
     await group.getByRole("button", { name: "Add", exact: true }).click();
@@ -1175,8 +1177,7 @@ test("first lookup works without JavaScript and exposes a temporary failure with
 test("a Legend I player without a Season is explained, not prepared forever", async ({
   page,
 }) => {
-  // Earlier tests spend all six lookup starts one address gets per minute, so
-  // this last one waits for the next minute's allowance.
+  // Earlier tests spend this address's six lookups a minute; wait for the next minute.
   test.setTimeout(150_000);
   const lookup = page.getByRole("region", { name: "Player lookup" });
   const headline =
@@ -1228,7 +1229,7 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   await expect(
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();
-  await expect(page.locator(".player-identity")).toHaveText("#LQQCSynthetic Clan");
+  await expect(page.locator(".player-identity")).toHaveText("#LQQCClanSynthetic Clan");
   await expect(page.locator(".player-trophy-count")).toHaveText("5,123");
   await expect(page.getByText("Current trophies", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Daily Legend log" })).toHaveCount(0);
@@ -1255,8 +1256,7 @@ function refreshWork() {
   };
 }
 
-// Serves the saved page with a chosen check age, so only an old one refreshes
-// automatically.
+// Serves the saved page with a chosen check age; only an old one refreshes itself.
 async function serveWithAge(page: Page, request: APIRequestContext, ageSeconds: number) {
   const html = await (await request.get("/players/%232PP")).text();
   await page.route("**/players/%232PP", async (route) =>

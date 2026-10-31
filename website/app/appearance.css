@@ -10,11 +10,15 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* A faint warm light from the top of every page, under the logo. */
+/* Warm light falls on every page from above the logo, with a fainter ember
+   glow to the right, so the glass panels have something to catch. */
 body {
   background:
-    radial-gradient(60rem 26rem at 50% -16rem, var(--cl-glow), transparent 70%) no-repeat,
+    radial-gradient(70rem 34rem at 18% -14rem, var(--cl-glow), transparent 70%),
+    radial-gradient(56rem 30rem at 100% -6rem, var(--cl-glow-2), transparent 70%),
     var(--cl-paper);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
@@ -29,54 +33,61 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Night: near-black neutrals, so the logo's yellow and orange are the only
-     colour on screen. Panels step up in lightness, never in hue. */
-  --cl-ink: #f4f4f5;
-  --cl-paper: #050506;
-  --cl-surface: #0e0e10;
-  --cl-panel: #141417;
-  --cl-raised: #1f1f23;
-  --cl-muted: #a1a1aa;
-  --cl-faint: #8d8d96;
-  --cl-border: #1d1d21;
-  --cl-outline: #2e2e33;
-  --cl-input-border: #6b6b75;
+  /* "Ember night": a warm near-black lit from above by the logo's orange,
+     under smoked-glass panels. Text is warm white, never pure white, so long
+     sessions stay easy on the eyes. Three clear steps of light: the darkest
+     page, cards a step up in a near-neutral warm grey (so they read as
+     charcoal, not brown boxes), and controls a step above the cards. */
+  --cl-ink: #f5eee7;
+  --cl-paper: #090706;
+  --cl-surface: rgb(255 242 230 / 0.055);
+  --cl-solid: #18120f;
+  --cl-panel: rgb(255 240 228 / 0.045);
+  --cl-raised: rgb(255 240 228 / 0.1);
+  --cl-fill-hover: rgb(255 236 218 / 0.15);
+  --cl-muted: #b3a79c;
+  --cl-faint: #9d9187;
+  --cl-border: rgb(255 226 200 / 0.085);
+  --cl-outline: rgb(255 226 200 / 0.16);
+  --cl-input-border: #77695f;
   --cl-accent: #ffa149;
   --cl-accent-contrast: #ffa149;
-  --cl-header-bg: rgb(6 6 7 / 0.72);
-  --cl-header-solid: #060607;
-  --cl-header-ink: #f4f4f5;
-  --cl-header-muted: #a1a1aa;
-  --cl-header-soft: rgb(255 255 255 / 0.07);
+  --cl-header-bg: rgb(14 10 8 / 0.74);
+  --cl-header-solid: #0f0b09;
+  --cl-header-ink: #f5eee7;
+  --cl-header-muted: #b3a79c;
+  --cl-header-soft: rgb(255 236 218 / 0.07);
   --cl-action-text: #ffa149;
-  --cl-action-soft: #23170c;
-  --cl-action-border: #6e4218;
+  --cl-action-soft: rgb(255 140 40 / 0.12);
+  --cl-action-border: rgb(255 150 60 / 0.42);
   --cl-gold: #ffc53d;
   --cl-star: #ffc53d;
+  /* The dark rim of a won star and the hollow of a missed one. */
+  --cl-star-edge: #6b3500;
+  --cl-star-empty: rgb(255 240 220 / 0.08);
+  --cl-star-empty-edge: rgb(255 240 220 / 0.4);
   /* Two and one star on a star split: greys, never a darkened gold. */
   --cl-star-2: #a1a1aa;
   --cl-star-1: #626269;
-  /* Deeper heat map steps, so no square glares against the black page. */
-  --cl-heat-0: #c92a2a;
-  --cl-heat-1: #7f2c38;
-  --cl-heat-2: #3a3a40;
-  --cl-heat-3: #2e5a37;
-  --cl-heat-4: #237a35;
-  --cl-heat-text: #fff;
+  /* The heat map's edge on a played day; its scale is in season-heat.css. */
+  --cl-heat-ring: inset 0 0 0 1px rgb(255 236 218 / 0.08);
   --cl-sky: #ffa149;
   --cl-sky-soft: #23170c;
-  --cl-positive: #4ade80;
-  --cl-positive-soft: #0d2416;
-  --cl-negative: #ff6b5b;
-  --cl-negative-soft: #2b1210;
-  --cl-card-line: rgb(255 255 255 / 0.075);
-  --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.6), 0 20px 44px -26px rgb(0 0 0 / 0.95);
-  --cl-glass: rgb(18 18 20 / 0.62);
-  --cl-glass-strong: rgb(14 14 16 / 0.86);
-  --cl-glass-edge: rgb(255 255 255 / 0.09);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.055);
-  --cl-glow: rgb(255 140 40 / 0.075);
-  --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.8), 0 0 0 1px var(--cl-outline);
+  --cl-positive: #77cf85;
+  --cl-positive-soft: #182f1c;
+  --cl-negative: #f07968;
+  --cl-negative-soft: #3a1d19;
+  --cl-card-line: rgb(255 226 200 / 0.09);
+  --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.5), 0 24px 48px -30px rgb(0 0 0 / 0.95);
+  --cl-glass: rgb(26 19 15 / 0.62);
+  --cl-glass-strong: rgb(24 18 14 / 0.94);
+  --cl-glass-edge: rgb(255 226 200 / 0.1);
+  --cl-glass-shine: inset 0 1px 0 rgb(255 240 225 / 0.07);
+  --cl-glow: rgb(255 128 24 / 0.13);
+  --cl-glow-2: rgb(200 50 30 / 0.09);
+  /* No ring: every pop-up draws its own 1px edge, and a ring outside it
+     made a double edge. */
+  --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.8);
   --cl-header-shadow: 0 1px 0 var(--cl-border);
   --cl-button-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.22);
 }
@@ -115,11 +126,11 @@ summary {
 .site-brand-logo {
   display: block;
   width: auto;
-  height: 2.6rem;
+  height: 3.9rem;
 }
 @media (max-width: 64rem), (hover: none) and (pointer: coarse) {
   .site-brand-logo {
-    height: 2.35rem;
+    height: 3.5rem;
   }
 }
 .search-result {
@@ -156,7 +167,7 @@ summary {
     gap: 0.25rem;
   }
   .site-brand-logo {
-    height: 2.2rem;
+    height: 3rem;
   }
   .site-nav {
     gap: 0.25rem;
@@ -171,21 +182,12 @@ summary {
   position: fixed;
   z-index: 100;
 }
-main {
-  scroll-margin-top: 6rem;
-}
-@media (max-width: 64rem) {
-  html {
-    scroll-padding-top: 8rem;
-  }
-  main {
-    scroll-margin-top: 0.5rem;
-  }
-}
-@media (max-width: 40rem) {
-  html {
-    scroll-padding-top: 11rem;
-  }
+/* A jump, a skip to the content or a linked part lands just clear of the
+   sticky header, on every screen. (Phones once allowed 11rem, for a header
+   whose tabs wrapped onto extra rows; it is one 4rem row now.) A page with
+   more that sticks under the header adds its height (player.css). */
+html {
+  scroll-padding-top: calc(var(--cl-header-h) + 1rem);
 }
 .lede,
 .day-range {

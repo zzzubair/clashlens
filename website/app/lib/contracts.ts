@@ -50,6 +50,25 @@ export interface TrackedPlayerEntry {
   confidence: ConfidenceState;
   /** Another player on the board has the same trophies. */
   tied?: boolean;
+  /** Place on the Daily board published at the last Reset, this Season; null
+   * off that board, on a Season's first Legend day and on Daily boards. */
+  resetRank: number | null;
+  /** Trophies won or lost today so far, from the Legend day's settled start,
+   * as the dashboard's Legend day card shows them; null until today's saved
+   * battles are complete, and on Daily boards. */
+  todayChange: number | null;
+  /** This Season's last 7 finished Legend days, oldest first. Empty on a
+   * Season's first Legend day and on Daily boards. */
+  recentDays: RecentDay[];
+}
+
+/** One finished Legend day of a Live row's chart. */
+export interface RecentDay {
+  /** The Reset that started the day. */
+  start: string;
+  /** The day's result as the player page's Daily Legend log shows it; null
+   * when it shows none, such as before the day's result is saved. */
+  trophyChange: number | null;
 }
 
 export interface SnapshotSelector {

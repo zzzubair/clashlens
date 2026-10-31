@@ -251,7 +251,7 @@ function periodStart(day: RankedDaySummary): number {
  */
 export function seasonData(page: PlayerPage): SeasonData {
   const season = page.season;
-  if (season === null) return { today: null, days: [] };
+  if (season === null) return { today: null, startMs: null, days: [] };
   const anchor = Date.parse(season.anchor);
   const saved = new Map<number, RankedDaySummary>();
   for (const day of [
@@ -304,7 +304,7 @@ export function seasonData(page: PlayerPage): SeasonData {
         : null,
     });
   }
-  return { today: season.currentDayNumber, days };
+  return { today: season.currentDayNumber, startMs: anchor, days };
 }
 
 /**

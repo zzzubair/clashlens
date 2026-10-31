@@ -2,9 +2,9 @@ import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-
 
 import { type BackHandle, useBackState } from "../components/BackLink";
 import { ConfirmForm, FormResult } from "../components/CrewForms";
-import { RoleChip } from "../components/CrewBoards";
+import { crewCount, RoleChip } from "../components/CrewBoards";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { TrophyMark } from "../components/LeaderboardShared";
+import { Crest, TrophyIcon } from "../components/GameIcons";
 import {
   canJoin,
   type Crew,
@@ -153,16 +153,12 @@ export default function CrewMembersRoute() {
     );
   }
   const key = result?.idempotencyKey ?? loadedKey;
-  const clashers = crew.members.length;
   // You first, then the owner, admins and members.
   const members = [...crew.members].sort((a, b) => Number(b.you) - Number(a.you));
   return (
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <h1>Members</h1>
-      <p className="crew-meta">
-        {clashers} {clashers === 1 ? "clasher" : "clashers"} · {crew.used} of {crew.size}{" "}
-        places
-      </p>
+      <p className="crew-meta">{crewCount(crew.used, crew.members.length)}</p>
       <FormResult result={result} />
       <ul className="crew-members">
         {members.map((member) => (
@@ -200,9 +196,7 @@ function MemberCard({
   return (
     <li className="crew-panel crew-member">
       <div className="crew-member-top">
-        <span className="crew-icon" aria-hidden="true">
-          {Array.from(member.displayName)[0]}
-        </span>
+        <Crest name={member.displayName} />
         <span className="crew-who">
           <b>
             <Link
@@ -212,7 +206,7 @@ function MemberCard({
             >
               {member.displayName}
             </Link>
-            {member.you ? <span className="crew-chip crew-chip-you">You</span> : null}
+            {member.you ? <span className="you-badge">You</span> : null}
           </b>
           <span>
             @{member.username} · {count} {count === 1 ? "account" : "accounts"}
@@ -237,12 +231,12 @@ function MemberCard({
             </span>
             {player.trophies !== null && player.status !== "not_in_legend" ? (
               <span className="crew-value">
-                <TrophyMark />
+                <TrophyIcon />
                 {player.trophies.toLocaleString("en-US")}
               </span>
             ) : player.leftLegendI?.trophies != null ? (
               <span className="crew-value" title="Last Legend I trophies">
-                <TrophyMark />
+                <TrophyIcon />
                 {player.leftLegendI.trophies.toLocaleString("en-US")}
               </span>
             ) : null}
@@ -375,7 +369,7 @@ function AddAccounts({
                   </span>
                   {account.trophies !== null ? (
                     <span className="crew-value">
-                      <TrophyMark />
+                      <TrophyIcon />
                       {account.trophies.toLocaleString("en-US")}
                     </span>
                   ) : null}

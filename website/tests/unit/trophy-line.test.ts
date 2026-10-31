@@ -50,6 +50,7 @@ function line(days: RankedDaySummary[]) {
   const path = (name: string) =>
     html.match(new RegExp(`class="${name}" d="([^"]*)"`))?.[1] ?? null;
   return {
+    html,
     solid: path("trophy-line-path"),
     dashed: path("trophy-line-path trophy-line-gap"),
   };
@@ -73,5 +74,26 @@ describe("Season trophy line", () => {
     ]);
     expect(solid?.match(/M/g)).toHaveLength(4);
     expect(dashed).toBe("");
+  });
+
+  it("labels a round trophy scale down one side and lists each Reset for screen readers", () => {
+    const { html } = line([day(0, 5_000), day(1, 5_040), day(2, 5_020), day(3, 5_080)]);
+    const axis = html.match(/class="trophy-line-axis"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
+    expect([...axis.matchAll(/>([\d,]+)</g)].map(([, tick]) => tick)).toEqual([
+      "5,000",
+      "5,025",
+      "5,050",
+      "5,075",
+      "5,100",
+    ]);
+    const resets =
+      html.match(/aria-label="Trophies at each Reset">(.*?)<\/ol>/)?.[1] ?? "";
+    expect([...resets.matchAll(/<li>(.*?)<\/li>/g)].map(([, item]) => item)).toEqual([
+      "1 Oct start: 5,000",
+      "1 Oct EOD: 5,040, +40",
+      "2 Oct EOD: 5,020, −20",
+      "3 Oct EOD: 5,080, +60",
+      "Now: 5,100, +20",
+    ]);
   });
 });

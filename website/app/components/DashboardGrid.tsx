@@ -6,7 +6,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Await, useFetcher, type FetcherWithComponents } from "react-router";
+import { Await, Link, useFetcher, type FetcherWithComponents } from "react-router";
 
 import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
@@ -22,6 +22,7 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
+import { canonicalPlayerPath } from "../lib/player-tag";
 import type { DashboardActionData, DashboardLoaderData } from "../routes/dashboard";
 import {
   ClockCard,
@@ -32,8 +33,8 @@ import {
 } from "./BoardCards";
 import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "./ArmyCards";
 import { DashboardIcon } from "./DashboardIcon";
-import { CardHead, CardNote } from "./DashboardParts";
-import { LegendDayCard } from "./LegendDayCard";
+import { CardHead, CardNote, cardIcon, updatedAgo } from "./DashboardParts";
+import { LegendDayCard, dayReadAt } from "./LegendDayCard";
 import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
 import {
   HeatMapCard,
@@ -70,8 +71,6 @@ const CARD_VIEWS: {
       rows={data.rows}
       mode={context.basesMode}
       timeZone={context.timeZone}
-      nowMs={context.nowMs}
-      comparedAtMs={data.comparedAtMs}
     />
   ),
   "armies-defense": (data) => <ArmiesOnDefenseCard data={data} />,
@@ -80,9 +79,9 @@ const CARD_VIEWS: {
     <ClockCard data={data} nowMs={context.nowMs} timeZone={context.timeZone} />
   ),
   goal: (data) => <GoalCard data={data} />,
-  "rivals-watch": (data, context) => <RivalsCard data={data} nowMs={context.nowMs} />,
+  "rivals-watch": (data) => <RivalsCard data={data} />,
   "heat-map": (data) => <HeatMapCard data={data} />,
-  cutoffs: (data, context) => <CutoffsCard data={data} nowMs={context.nowMs} />,
+  cutoffs: (data) => <CutoffsCard data={data} />,
   "season-graph": (data) => <SeasonGraphCard data={data} />,
   "recent-form": (data) => <RecentFormCard data={data} />,
   "offense-consistency": (data) => <OffenseConsistencyCard data={data} />,
@@ -181,6 +180,114 @@ function cardBody(
         {(loaded: Awaited<typeof read>) => (loaded === null ? failed : show(loaded))}
       </Await>
     </Suspense>
+  );
+}
+
+/** The cards whose read says how fresh the page is, in the order asked. */
+const FRESH_CARDS = ["legend-day", "legend-clock", "rivals-watch", "cutoffs"] as const;
+
+/** When the read behind a card was taken; the older one when it has two. */
+export function readAt(card: (typeof FRESH_CARDS)[number], data: unknown): number | null {
+  if (data === null || typeof data !== "object") return null;
+  if (card === "legend-day") {
+    const { day, rangeAtMs } = data as CardDataMap["legend-day"];
+    return dayReadAt(day, rangeAtMs);
+  }
+  if (card === "legend-clock") return (data as CardDataMap["legend-clock"]).observedAtMs;
+  return (data as CardDataMap["rivals-watch" | "cutoffs"]).live?.observedAtMs ?? null;
+}
+
+/**
+ * "Updated 9 min ago" in the toolbar when the Legend day card, which
+ * otherwise says it, is not shown: the first other live card's read.
+ */
+function Freshness({ reads, nowMs }: { reads: CardReads | null; nowMs: number | null }) {
+  const card = FRESH_CARDS.find((name) => reads?.[name] !== undefined);
+  const read = card ? reads?.[card] : undefined;
+  if (!card || !read) return null;
+  const line = (data: unknown) => {
+    const text = updatedAgo(readAt(card, data), nowMs);
+    return text ? <span className="dash-fresh">{text.replace(/^u/, "U")}</span> : null;
+  };
+  if (!(read instanceof Promise)) return line(read);
+  return (
+    <Suspense fallback={null}>
+      <Await resolve={read} errorElement={null}>
+        {line}
+      </Await>
+    </Suspense>
+  );
+}
+
+/**
+ * Beside the player tabs: the chosen player's page and Customise, each named.
+ * A phone folds both into one ⋯ menu so the tabs keep the row; tapping
+ * outside it, Escape or choosing either closes it.
+ */
+function DashboardTools({
+  tag,
+  saving,
+  fresh,
+  customise,
+}: {
+  tag: string;
+  saving: boolean;
+  fresh: ReactNode;
+  customise: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key !== "Escape") return;
+        toggle.current?.focus();
+      } else if (box.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  return (
+    <div className={`dash-divider${open ? " is-open" : ""}`} ref={box}>
+      <button
+        ref={toggle}
+        type="button"
+        className="dash-more"
+        aria-label="Dashboard options"
+        aria-expanded={open}
+        aria-controls="dash-tools"
+        onClick={() => setOpen(!open)}
+      >
+        {/* The sliders, so it never reads as the tab bar's More. */}
+        <DashboardIcon name="gear" />
+        <span className="dash-more-label">Options</span>
+      </button>
+      <div className="dash-tools" id="dash-tools">
+        {fresh}
+        <Link className="dash-tool" to={canonicalPlayerPath(tag)}>
+          <DashboardIcon name="open" /> Player page
+        </Link>
+        <button
+          type="button"
+          className="dash-tool dash-customise"
+          aria-label="Customise dashboard"
+          disabled={saving}
+          onClick={() => {
+            setOpen(false);
+            customise();
+          }}
+        >
+          <DashboardIcon name="gear" /> Customise
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -735,22 +842,22 @@ export function Dashboard({
 
   return (
     <>
-      <div className="dash-divider">
-        {!editing ? (
-          <button
-            type="button"
-            className="button button-secondary dash-customise"
-            disabled={saving}
-            onClick={() => {
-              setDraft(settings.layout ?? "default");
-              setStatus("");
-            }}
-          >
-            <DashboardIcon name="gear" />{" "}
-            <span className="dash-customise-text">Customise dashboard</span>
-          </button>
-        ) : null}
-      </div>
+      {!editing ? (
+        <DashboardTools
+          tag={tag}
+          saving={saving}
+          // The Legend day card says how old the numbers are; without it, the toolbar does.
+          fresh={
+            dayOver || cards.includes("legend-day") ? null : (
+              <Freshness reads={reads} nowMs={nowMs} />
+            )
+          }
+          customise={() => {
+            setDraft(settings.layout ?? "default");
+            setStatus("");
+          }}
+        />
+      ) : null}
       {editing ? (
         <div className="dash-editbar" role="region" aria-label="Customise dashboard">
           <b className="dash-editbar-title">Customise dashboard</b>
@@ -769,6 +876,7 @@ export function Dashboard({
             <DashboardIcon name="plus" /> Add
             <span className="dash-editbar-long"> a card</span>
           </button>
+          {/* Greyed out while the layout is already the default. */}
           <button
             type="button"
             className="button button-secondary"
@@ -841,10 +949,25 @@ export function Dashboard({
                 >
                   ⠿
                 </button>
-                <span className="dash-edit-name">{CARDS[card].title}</span>
-                <span className="dash-size-chip">
-                  {CARD_SIZE_LABELS[CARDS[card].size]}
+                {/* The card's own title and mark, as outside Customise. */}
+                <span className="dash-edit-name">
+                  {cardIcon(CARDS[card].title) ? (
+                    <DashboardIcon name={cardIcon(CARDS[card].title)!} />
+                  ) : null}
+                  {CARDS[card].title}
                 </span>
+                {CARDS[card].settings ? (
+                  <button
+                    type="button"
+                    className="button button-secondary dash-card-settings"
+                    aria-label={`${CARDS[card].title} settings`}
+                    disabled={saving}
+                    onClick={() => setEditingSettings(card)}
+                  >
+                    <DashboardIcon name="gear" />
+                    <span className="dash-card-settings-label">Settings</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="dash-icon-button"
@@ -869,8 +992,9 @@ export function Dashboard({
                 </button>
                 <button
                   type="button"
-                  className="dash-icon-button"
+                  className="dash-icon-button dash-remove"
                   aria-label={`Remove ${CARDS[card].title}`}
+                  title="Remove card"
                   disabled={saving}
                   onClick={() =>
                     change(
@@ -879,21 +1003,9 @@ export function Dashboard({
                     )
                   }
                 >
-                  <DashboardIcon name="x" />
+                  <DashboardIcon name="trash" />
                 </button>
               </div>
-            ) : null}
-            {editing && CARDS[card].settings ? (
-              <button
-                type="button"
-                className="button button-secondary dash-card-settings"
-                aria-label={`${CARDS[card].title} settings`}
-                disabled={saving}
-                onClick={() => setEditingSettings(card)}
-              >
-                <DashboardIcon name="gear" />
-                <span className="dash-card-settings-label">Settings</span>
-              </button>
             ) : null}
             {cardBody(card, reads, editing, context)}
           </section>

@@ -87,7 +87,7 @@ input:focus-visible {
 .eyebrow {
   margin: 0 0 0.4rem;
   color: #53657c;
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 800;
 }
 
@@ -251,7 +251,7 @@ h3 {
 .data-table thead th {
   color: #34465d;
   background: #eef3f8;
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
 }
 
 .data-table tbody tr:last-child th,
@@ -357,7 +357,7 @@ body {
   width: min(24rem, calc(100% - 2rem));
   padding: 0.85rem 0.9rem;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-outline);
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-overlay-shadow);
@@ -558,7 +558,7 @@ body {
 
 .metric-label {
   color: #53657c;
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 750;
 }
 

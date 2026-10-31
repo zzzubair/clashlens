@@ -37,6 +37,7 @@ import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
 import { FrontPage, type FrontPageData } from "../../app/components/FrontPage";
 import { SearchSuggestions } from "../../app/components/PlayerSearch";
 import { TagSearchAgain } from "../../app/components/TagSearchAgain";
+import { TeaserBoard } from "../../app/components/DashboardTeaser";
 
 const search = {
   kind: "player-search",
@@ -176,6 +177,7 @@ it("shows the search heading and explains a logout the server could not record",
     search: null,
   };
   expect(await renderHome(data, "")).not.toContain("could not record it");
+  expect(await renderHome(data, "?saved=logout")).toContain("You&#x27;re signed out.");
   const html = await renderHome(data, "?logout=unrecorded");
   expect(html).toContain("Find any Legend League player");
   expect(html).not.toContain("13,263 tracked players.");
@@ -183,9 +185,10 @@ it("shows the search heading and explains a logout the server could not record",
   expect(html).toContain("<h3>No standings available yet</h3>");
   expect(html).not.toContain("<table");
   expect(html).toContain(
-    "You are logged out on this browser, but Clash Lens could not record it.",
+    "You are signed out on this browser, but Clash Lens could not record it.",
   );
   expect(html).not.toContain("log out again");
+  expect(html).not.toContain("sign out again");
 });
 
 it("keeps worst-case names readable: one player, right-to-left text and no clan", async () => {
@@ -207,6 +210,9 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
               ageSeconds: 60,
             },
             state: "available",
+            resetRank: null,
+            todayChange: null,
+            recentDays: [],
           },
         ],
       },
@@ -220,6 +226,13 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
   // Isolated so right-to-left names and clans do not reorder the text around them.
   expect(html).toContain("<bdi>محمد الأسطورة 👑</bdi>");
   expect(html).toContain("<bdi>العائلة الملكية</bdi>");
+  // The clan has its own column on wide screens, and a line under the name on
+  // a phone.
+  expect(html).toContain('<th scope="col" class="clan-cell">Clan</th>');
+  expect(html).toContain('<td class="clan-cell"><bdi>العائلة الملكية</bdi></td>');
+  expect(html).toContain(
+    '<span class="player-sub"><span class="player-clan"><bdi>العائلة الملكية</bdi></span></span>',
+  );
 
   const dropdown = renderToString(
     createElement(
@@ -302,6 +315,9 @@ it("shows ranked players without the waiting note once the board has entries", a
               observedAt: "2026-10-05T05:10:00Z",
               ageSeconds: 0,
             },
+            resetRank: null,
+            todayChange: null,
+            recentDays: [],
           },
         ],
         totalTracked: 13263,
@@ -335,7 +351,52 @@ it("keeps the empty-board message when no players are waiting for the Season res
   expect(html).not.toContain("could not be loaded");
 });
 
-it("counts the shown rankings that are more than 10 minutes old", async () => {
+it("shows the Top 10's Today from the Legend day's start and names each bar by its own day", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: {
+        totalTracked: 1,
+        // Minutes after the Reset of Mon 5 Oct, before Sunday's result saved.
+        generatedAt: "2026-10-05T05:10:00Z",
+        entries: [
+          {
+            rank: 1,
+            tag: "#2PP",
+            name: "Player 1",
+            clan: "",
+            // 70 below its Reset board total: the automatic defense loss the
+            // Reset reading was taken before, not today's.
+            trophies: 5230,
+            freshness: {
+              state: "fresh",
+              observedAt: "2026-10-05T05:04:00Z",
+              ageSeconds: 360,
+            },
+            state: "available",
+            resetRank: 1,
+            todayChange: 0,
+            recentDays: [
+              { start: "2026-10-02T05:00:00Z", trophyChange: 40 },
+              { start: "2026-10-03T05:00:00Z", trophyChange: null },
+              { start: "2026-10-04T05:00:00Z", trophyChange: null },
+            ],
+          },
+        ],
+      },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).toContain(
+    '<td class="today-cell"><span class="today-change">0</span></td>',
+  );
+  expect(html).toContain('aria-label="Daily trophies: Fri 2 Oct +40"');
+  expect(html).toMatch(/<th scope="col" class="recent-cell" title="2–4 Oct, /);
+});
+
+it("says once, under the search, how many players are ranked and how fresh, and counts old rows", async () => {
   const entry = (rank: number, state: string, observedAt: string) => ({
     rank,
     tag: ["#2PP", "#2PY", "#8PY"][rank - 1],
@@ -344,11 +405,15 @@ it("counts the shown rankings that are more than 10 minutes old", async () => {
     trophies: 5000,
     freshness: { state, observedAt, ageSeconds: 0 },
     state: "available",
+    resetRank: null,
+    todayChange: null,
+    recentDays: [],
   });
   const html = await renderHome(
     {
       leaderboard: {
         totalTracked: 13263,
+        totalEntries: 9000,
         generatedAt: "2026-10-04T04:00:00Z",
         entries: [
           entry(1, "fresh", "2026-10-04T03:54:00Z"),
@@ -362,8 +427,13 @@ it("counts the shown rankings that are more than 10 minutes old", async () => {
     },
     "",
   );
-  expect(html).toContain("Updated <");
-  expect(html).not.toContain("Last updated <");
+  // The newest row's time, 6 minutes before the board was read, with the
+  // live pulse as it is under 10 minutes old; "updated … ago" wraps as one.
+  expect(html).toMatch(
+    /<p class="front-proof"><span class="live-pip" aria-hidden="true"><\/span>9,000 <span class="front-proof-wide">Legend <\/span>players ranked · <span class="front-proof-age">updated <time dateTime="2026-10-04T03:54:00Z" title="4 Oct 2026, 03:54 UTC">6 min ago<\/time><\/span><\/p>/,
+  );
+  // The Top 10 doesn't repeat it.
+  expect(html).not.toMatch(/Updated <|Last updated </);
   expect(html).toContain("2 of 3 more than 10 minutes old");
 });
 
@@ -385,6 +455,9 @@ it("counts a ranking as old once it passes 10 minutes while the page is open", a
               // The server's flag stays fresh; only the clock decides.
               freshness: { state: "fresh", observedAt, ageSeconds: 0 },
               state: "available",
+              resetRank: null,
+              todayChange: null,
+              recentDays: [],
             },
           ],
         },
@@ -556,4 +629,87 @@ it.each([
   }
   expect((response as Response).status).toBe(301);
   expect((response as Response).headers.get("Location")).toBe(to);
+});
+
+it("ends with three more things the site does, each one link with its art and a line", async () => {
+  const front = { loginAvailable: false, dashboardEnabled: false, error: null };
+  const render = async (crewsEnabled: boolean) => {
+    const handler = createStaticHandler([
+      {
+        id: "root",
+        path: "/",
+        loader: () => ({ crewsEnabled }),
+        children: [{ index: true, Component: Front, loader: () => front }],
+      },
+    ]);
+    const context = await handler.query(new Request("https://clashlens.example/"));
+    if (context instanceof Response) throw new Error("unexpected response");
+    return renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+    );
+  };
+  const links = (html: string) =>
+    [
+      ...html.matchAll(
+        /<a href="([^"]+)"[^>]*><span class="unit-art"[^]*?<strong>([^<]+)<\/strong>/g,
+      ),
+    ].map(([, href, title]) => `${title} ${href}`);
+  const all = await render(true);
+  expect(links(all)).toEqual([
+    "Watchlists /account/watchlists",
+    "Crews /crews",
+    "Armies /analytics/armies",
+  ]);
+  // Each led by three close-up portraits, the same kind of art for all three.
+  expect(
+    [...all.matchAll(/src="[^"]*\/((?:hero|troop)-\d+)\.webp/g)].map(([, art]) => art),
+  ).toEqual(
+    ["hero-0", "hero-1", "hero-2", "troop-0", "troop-1", "troop-3"].concat([
+      "troop-110",
+      "troop-12",
+      "troop-11",
+    ]),
+  );
+  // Crews switched off: no link to a page that isn't there.
+  expect(links(await render(false))).toEqual([
+    "Watchlists /account/watchlists",
+    "Armies /analytics/armies",
+  ]);
+});
+
+it("draws the example Legend day as the dashboard does: chip, places, range and heat map", () => {
+  const html = renderToString(
+    createElement(MemoryRouter, null, createElement(TeaserBoard, { link: false })),
+  );
+  expect(html).toContain(
+    '<span class="teaser-net score">+104<small> today</small></span>',
+  );
+  // Three places side by side, the projected one with its diamond, over the
+  // Next Reset range with the diamond 41% along it.
+  expect(html).toMatch(
+    /<small>Last Reset<\/small>#1,288<\/span><span class="teaser-now"><small>Now<\/small><b class="rank-mark">#1,188<\/b><\/span><span class="teaser-next"><small><i class="teaser-diamond"><\/i>Projected place<\/small>#1,140/,
+  );
+  expect(html).toMatch(
+    /Next Reset range<\/span>#1,105<i style="--at:41\.17[\d]*%"><\/i>#1,190/,
+  );
+  // The Season in the shared heat map: 22 played days with their results,
+  // the losing ones marked, Today on day 23 and 5 empty days to come.
+  expect(html.match(/class="season-heat-played/g)).toHaveLength(22);
+  // Every red day lost trophies, so each carries the mark and no gain does.
+  expect(html.match(/class="season-heat-played is-loss"/g)).toHaveLength(8);
+  for (const cell of html.match(/<li class="season-heat-played[^"]*"[^>]*>.*?<\/li>/g) ??
+    []) {
+    const red = /--heat:var\(--cl-heat-[01]\)/.test(cell);
+    expect(cell.includes("is-loss")).toBe(red);
+    expect(cell.includes("is-loss")).toBe(/>−\d/.test(cell));
+  }
+  expect(html).toMatch(
+    /class="season-heat-today"[^>]*>(?:<[^>]+>[^<]*<\/span>)*<span aria-hidden="true">Today<\/span>/,
+  );
+  expect(html.match(/class="season-heat-future"/g)).toHaveLength(5);
+  expect(html).toContain('class="season-heat-key"');
 });

@@ -15,11 +15,21 @@ import {
   heldPercent,
   hitPercent,
 } from "../lib/dashboard-armies";
-import { CardHead, CardNote, Name, Switch } from "./DashboardParts";
+import { UnitArt } from "./ArmyPortraits";
+import { CardHead, CardNote, InfoTip, Name, Switch } from "./DashboardParts";
+import { TrophyIcon } from "./GameIcons";
 import { signed } from "./LegendClock";
 
 /** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;
+/** A phone shows this many army types before Show all. */
+const PHONE_DEFENSE_ROWS = 3;
+/** Not tripled is coloured only when this many points or more from the Legends... */
+const HELD_MARGIN = 5;
+/** ...and Avg lost only when this many trophies or more. */
+const LOST_MARGIN = 3;
+/** The colouring rule in words, the same as Analytics'. */
+const RULE = `Green or red when ${HELD_MARGIN}+ pts or ${LOST_MARGIN}+ trophies from the Legend average.`;
 /** Armies on offense lists this many before "Other armies". */
 const OFFENSE_ROWS = 3;
 const DAY_OPTIONS = [
@@ -89,34 +99,105 @@ function legendsHit(army: ArmyRow): number | null {
   return army.legends ? hitPercent(army.legends) : null;
 }
 
+/**
+ * " is-better" when a is at least `margin` above b, " is-worse" when at least
+ * `margin` below, and "" when closer or unknown, so a gap of a point or two
+ * stays uncoloured. Both are whole numbers, as shown.
+ */
+function beyond(a: number | null, b: number | null, margin: number): string {
+  if (a === null || b === null || Math.abs(a - b) < margin) return "";
+  return a > b ? " is-better" : " is-worse";
+}
+
+/** a − b, rounded; null when either is unknown. */
+function difference(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : Math.round(a - b);
+}
+
 function lost(outcome: ArmyOutcome | null): string {
   const average = outcome ? averageTrophies(outcome) : null;
   return average === null ? "–" : signed(-average);
 }
 
+/** An army's share as an ember bar on a fixed scale, 0–100. */
+function Bar({ own }: { own: number | null }) {
+  return (
+    <span className="army-bar" aria-hidden="true">
+      <i style={{ width: `${Math.min(100, own ?? 0)}%` }} />
+    </span>
+  );
+}
+
+/** Not tripled's difference: "+10 pts", said "10 points above". */
+function pointsDiff(diff: number | null): [string, string] {
+  if (diff === null) return ["–", "no Legends average yet"];
+  if (diff === 0) return ["0 pts", "same as the Legends average"];
+  const points = `${Math.abs(diff)} point${Math.abs(diff) === 1 ? "" : "s"}`;
+  return [
+    `${signed(diff)} pts`,
+    `${points} ${diff > 0 ? "above" : "below"} the Legends average`,
+  ];
+}
+
 /**
- * The user's number, then every tracked player's in grey: "29% / 50%". On a
- * phone the column headers go, so each number carries its own label.
+ * Trophies per defense's difference in the value's own sign, the value less the
+ * Legends': −27 against −32 is "+5", 5 fewer lost; −33 against −32 is "−1".
+ */
+function lostDiff(fewer: number | null): [string, string] {
+  if (fewer === null) return ["–", "no Legends average yet"];
+  if (fewer === 0) return ["0", "same as the Legends average"];
+  const word = fewer > 0 ? "fewer" : "more";
+  return [signed(fewer), `${Math.abs(fewer)} ${word} lost than the Legends average`];
+}
+
+/**
+ * One comparison: the user's number with its unit, then one signed
+ * difference from the Legends with its own, which the column heading names.
+ * Only the difference is coloured, by the rule the header's ⓘ states.
+ * Screen readers hear it as a sentence.
  */
 function WithLegends({
   label,
   own,
-  legends,
+  unit,
+  diff,
+  tone,
 }: {
   label: string;
   own: string;
-  legends: string;
+  /** A unit drawn after the number, such as the trophy for trophies. */
+  unit?: React.ReactNode;
+  diff: [string, string];
+  tone: string;
 }) {
   return (
     <span className="army-stat">
-      <small className="army-stat-label">{label} </small>
-      {own}{" "}
-      <span className="dash-muted army-legends">
-        <span className="army-slash">/ </span>
-        <span className="army-stat-label">Legends </span>
-        {legends}
+      <span className="army-own" aria-hidden="true">
+        {own}
+        {unit}
       </span>
+      <span className={`army-diff${tone}`} aria-hidden="true">
+        {diff[0]}
+      </span>
+      <span className="sr-only">{`${label} ${own}, ${diff[1]}`}</span>
     </span>
+  );
+}
+
+/**
+ * The days and battles the numbers cover: said aloud always, and shown only
+ * when the switch doesn't already say it, such as Custom days or days
+ * without army data.
+ */
+function WindowLine({ armies, noun }: { armies: PlayerArmies; noun: string }) {
+  const plain =
+    !armies.season &&
+    (armies.days === 3 || armies.days === 7) &&
+    armies.coveredDays.length === armies.days;
+  return (
+    <p className={plain ? "sr-only" : "dash-muted dash-card-sub"}>
+      {`${armyWindowLabel(armies)} · ${count(armies.total.battles, noun)}`}
+    </p>
   );
 }
 
@@ -198,60 +279,150 @@ function DaySwitch({
  */
 export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("defense", data);
+  // A phone shows the first few armies until asked for every one.
+  const [allShown, setAllShown] = useState(false);
+  const listed = armies?.rows.slice(0, DEFENSE_ROWS) ?? [];
   const empty = emptyText(armies, "defense");
+  const mostBattles = Math.max(0, ...listed.map((army) => army.battles));
   const row = (
     name: string,
     outcome: ArmyOutcome,
     legends: ArmyOutcome | null,
     all = false,
-  ) => (
-    <div className={`army-defense-row${all ? " is-all" : ""}`} key={name}>
-      {all ? <span>{name}</span> : <Name>{name}</Name>}
-      <span className="army-share">
-        {percent(
-          armies?.total.battles
-            ? Math.round((100 * outcome.battles) / armies.total.battles)
-            : null,
+    typeId: number | null = null,
+    extra = false,
+  ) => {
+    const share = armies?.total.battles
+      ? Math.round((100 * outcome.battles) / armies.total.battles)
+      : null;
+    return (
+      <div
+        className={`army-defense-row${all ? " is-all" : ""}${extra ? " is-extra" : ""}`}
+        key={name}
+      >
+        {all ? (
+          <span>{name}</span>
+        ) : (
+          <span className="army-type">
+            {typeId === null ? null : <UnitArt unitKey={`army-type:${typeId}`} />}
+            <Name>{name}</Name>
+          </span>
         )}
-        <small className="army-stat-label"> of defenses</small>
-      </span>
-      <WithLegends
-        label="Held"
-        own={percent(heldPercent(outcome))}
-        legends={percent(legends ? heldPercent(legends) : null)}
-      />
-      <span className="negative">
-        <WithLegends label="Avg lost" own={lost(outcome)} legends={lost(legends)} />
-      </span>
-    </div>
-  );
+        {/* Bars against the most common army, so the gaps between armies show. */}
+        <span className="army-share">
+          {all ? null : (
+            <>
+              <Bar own={(100 * outcome.battles) / Math.max(1, mostBattles)} />
+              <span>
+                {percent(share)}
+                {/* Said aloud. */}
+                <span className="army-share-of"> of defenses</span>
+              </span>
+            </>
+          )}
+        </span>
+        <WithLegends
+          label="Not tripled"
+          own={percent(heldPercent(outcome))}
+          diff={pointsDiff(
+            difference(heldPercent(outcome), legends && heldPercent(legends)),
+          )}
+          tone={beyond(
+            heldPercent(outcome),
+            legends && heldPercent(legends),
+            HELD_MARGIN,
+          )}
+        />
+        {/* Trophies lost read as negatives, so fewer lost is above the Legends. */}
+        <WithLegends
+          label="Trophies per defense"
+          own={lost(outcome)}
+          unit={<TrophyIcon />}
+          diff={lostDiff(
+            difference(legends && averageTrophies(legends), averageTrophies(outcome)),
+          )}
+          tone={beyond(
+            legends && averageTrophies(legends),
+            averageTrophies(outcome),
+            LOST_MARGIN,
+          )}
+        />
+      </div>
+    );
+  };
   return (
-    <div className={`army-card${loading ? " is-loading" : ""}`} aria-busy={loading}>
+    <div
+      className={`army-card${loading ? " is-loading" : ""}${allShown ? " army-all" : ""}`}
+      aria-busy={loading}
+    >
       <CardHead
         title="Armies on defense"
-        meta={<DaySwitch days={days} choose={choose} custom />}
+        // The short headings in full, and the one colouring rule.
+        info={
+          empty || !armies ? null : (
+            <InfoTip label="What the columns mean">
+              <p>Usage: your share of defenses against each army.</p>
+              <p>
+                Not tripled: kept the attacker under 3 stars. Per defense: trophies lost a
+                defense.
+              </p>
+              <p>
+                Differences are against all tracked Legend players&apos; defenses against
+                that army; + is better. {RULE}
+              </p>
+            </InfoTip>
+          )
+        }
+        meta={
+          <>
+            {/* The one reference every difference is against, said once. */}
+            {empty || !armies ? null : (
+              <span className="dash-card-ref">vs Legend avg</span>
+            )}
+            <DaySwitch days={days} choose={choose} custom />
+          </>
+        }
       />
       {empty || !armies ? (
         <CardNote>{empty}</CardNote>
       ) : (
         <>
-          <p className="dash-muted dash-card-sub">
-            {`${armyWindowLabel(armies)} · ${count(armies.total.battles, "defense")}`}
-          </p>
+          <WindowLine armies={armies} noun="defense" />
+          {/* One word or two a column; a narrow card puts Usage with Army. */}
           <div className="army-defense-row army-head" aria-hidden="true">
-            <span>Army type</span>
-            <span>Share</span>
             <span>
-              Held <span className="army-legends-head">/ Legends avg</span>
+              Army<span className="army-head-usage"> · usage</span>
             </span>
-            <span>
-              Avg lost <span className="army-legends-head">/ Legends avg</span>
-            </span>
+            <span>Usage</span>
+            <span>Not tripled</span>
+            <span>Per defense</span>
           </div>
-          {armies.rows
-            .slice(0, DEFENSE_ROWS)
-            .map((army) => row(army.name, army, army.legends as ArmyOutcome | null))}
-          {row("All defenses", armies.total, armies.legendsTotal, true)}
+          {listed.map((army, index) =>
+            row(
+              army.name,
+              army,
+              army.legends as ArmyOutcome | null,
+              false,
+              army.typeId,
+              index >= PHONE_DEFENSE_ROWS,
+            ),
+          )}
+          {row(
+            `All ${count(armies.total.battles, "defense")}`,
+            armies.total,
+            armies.legendsTotal,
+            true,
+          )}
+          {listed.length > PHONE_DEFENSE_ROWS ? (
+            <button
+              type="button"
+              className="show-all opponents-more"
+              aria-expanded={allShown}
+              onClick={() => setAllShown(!allShown)}
+            >
+              {allShown ? "Show fewer" : `Show all ${listed.length}`}
+            </button>
+          ) : null}
         </>
       )}
     </div>
@@ -295,9 +466,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
         <CardNote>{empty}</CardNote>
       ) : (
         <>
-          <p className="dash-muted dash-card-sub">
-            {`${armyWindowLabel(armies)} · ${count(total.battles, "attack")}`}
-          </p>
+          <WindowLine armies={armies} noun="attack" />
           {only ? (
             <OneArmy army={only} />
           ) : (
@@ -309,7 +478,10 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
               </div>
               {shown.map((army) => (
                 <div className="army-offense-row" key={army.typeId}>
-                  <Name>{army.name}</Name>
+                  <span className="army-type">
+                    <UnitArt unitKey={`army-type:${army.typeId}`} />
+                    <Name>{army.name}</Name>
+                  </span>
                   <b>{percent(hitPercent(army))}</b>
                   <span className="dash-muted">{percent(legendsHit(army))}</span>
                 </div>

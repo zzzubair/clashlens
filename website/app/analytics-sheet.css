@@ -1,0 +1,387 @@
+/* An opened army on the Analytics page: the sheet with its variants and
+   their most-used armies. Kept apart from analytics.css, the list. */
+
+:root:has(.analytics-sheet[open]) {
+  overflow: hidden;
+}
+.analytics-sheet {
+  inset: auto 0 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(100dvh - 2.5rem);
+  margin: 0;
+  padding: 0;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  /* A drawn edge, so the sheet stands off the dimmed page in the dark theme. */
+  border: 1px solid var(--cl-card-line);
+  border-radius: 20px 20px 0 0;
+  box-shadow: var(--cl-overlay-shadow);
+}
+.analytics-sheet[open] {
+  display: flex;
+  flex-direction: column;
+  animation: analytics-sheet-up 280ms var(--cl-ease-out);
+}
+.analytics-sheet::backdrop {
+  background: rgb(10 6 4 / 0.6);
+}
+.analytics-sheet[open]::backdrop {
+  animation: analytics-fade 200ms ease-out;
+}
+@keyframes analytics-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes analytics-sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes analytics-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (min-width: 48rem) {
+  .analytics-sheet {
+    inset: 0 0 0 auto;
+    width: min(34rem, 100%);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 20px 0 0 20px;
+  }
+  .analytics-sheet[open] {
+    animation-name: analytics-sheet-in;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .analytics-sheet[open],
+  .analytics-sheet[open]::backdrop {
+    animation: none;
+  }
+}
+.analytics-sheet-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 1rem calc(1.5rem + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Armies loading under the open variant must not move it. */
+  overflow-anchor: none;
+}
+@media (min-width: 48rem) {
+  .analytics-sheet-body {
+    padding-inline: 1.5rem;
+  }
+}
+.analytics-sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 0 0.6rem;
+  background: var(--cl-solid);
+}
+/* The phone sheet's grab bar. */
+.analytics-sheet-head::before {
+  content: "";
+  position: absolute;
+  top: 0.45rem;
+  left: 50%;
+  width: 2.5rem;
+  height: 0.3rem;
+  background: var(--cl-outline);
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+@media (min-width: 48rem) {
+  .analytics-sheet-head {
+    padding-top: 1.25rem;
+  }
+  .analytics-sheet-head::before {
+    content: none;
+  }
+}
+.analytics-sheet-head h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.analytics-sheet-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  color: var(--cl-ink);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.analytics-sheet-note {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+/* A scoreboard row: each number over its label, split by hairlines. */
+.analytics-sheet-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0.9rem 0 0.6rem;
+  padding-block: 0.7rem;
+  border-block: 1px solid var(--cl-card-line);
+}
+.analytics-sheet-stats > div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  min-width: 0;
+  padding: 0 0.6rem;
+  border-left: 1px solid var(--cl-card-line);
+}
+.analytics-sheet-stats > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.analytics-sheet-stats dt {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.analytics-sheet-stats dd {
+  margin: 0 0 0.2rem;
+  font-family: var(--cl-font-score);
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+.analytics-sheet-section {
+  margin: 1.25rem 0 0.15rem;
+}
+.analytics-sheet-section + .analytics-sheet-note {
+  margin-bottom: 0.6rem;
+}
+
+/* Variants: a row each; the open one shows its most-used armies. */
+.analytics-variants {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--cl-card-line);
+  list-style: none;
+}
+.analytics-variant {
+  overflow: hidden;
+  border-bottom: 1px solid var(--cl-card-line);
+}
+.analytics-variant-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "name share chevron"
+    "meter meter chevron"
+    "stats stats chevron";
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.75rem 0.5rem;
+  color: inherit;
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  scroll-margin-top: 4.75rem;
+  -webkit-tap-highlight-color: transparent;
+}
+.analytics-variant[data-open="true"] .analytics-variant-toggle {
+  background: var(--cl-action-soft);
+}
+.analytics-variant-toggle:focus-visible {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+  border-radius: var(--cl-radius);
+}
+.analytics-variant-name {
+  grid-area: name;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.analytics-variant-share {
+  grid-area: share;
+  font-family: var(--cl-font-heading);
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.analytics-variant-toggle .meter {
+  grid-area: meter;
+}
+.analytics-variant-stats {
+  grid-area: stats;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.analytics-variant-toggle .analytics-chevron {
+  grid-area: chevron;
+  transform: rotate(45deg);
+  transition: transform 160ms var(--cl-ease-out);
+}
+.analytics-variant[data-open="true"] .analytics-chevron {
+  transform: rotate(-135deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .analytics-variant-toggle .analytics-chevron {
+    transition: none;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .analytics-variant:not([data-open="true"]) .analytics-variant-toggle:hover {
+    background: var(--cl-panel);
+  }
+  .analytics-sheet-close:hover {
+    background: var(--cl-fill-hover);
+  }
+}
+
+/* A variant's most-used armies. */
+.analytics-examples {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem 0.9rem;
+  border-top: 1px solid var(--cl-border);
+}
+.analytics-examples-rule {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+}
+.analytics-examples-more {
+  justify-self: start;
+}
+.analytics-examples-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.analytics-examples-list > li {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+}
+.analytics-examples-list > li[hidden] {
+  display: none;
+}
+.analytics-examples-list > li + li {
+  border-top: 1px solid var(--cl-border);
+}
+.analytics-example-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.analytics-examples-share {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+.analytics-examples-share strong {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-heading);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+.analytics-example-head .battle-army {
+  flex: none;
+  margin: 0;
+  font-weight: 800;
+}
+
+/* Army portraits, sized to read on a phone. */
+.analytics-page .army-portraits {
+  display: grid;
+  gap: 0.4rem;
+}
+.analytics-page :is(.army-row, .army-castle, .army-hero) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.analytics-page .army-unit {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  background: var(--cl-panel);
+  border-radius: 0.45rem;
+}
+.analytics-page .army-unit img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+.analytics-page .army-unit-small {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+.analytics-page .army-unit-name {
+  width: auto;
+  max-width: 7rem;
+  padding: 0 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  line-height: 1.1;
+}
+.analytics-page .army-unit-name > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-page .army-count {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 1rem;
+  padding: 0 0.2rem;
+  color: #fff;
+  background: rgb(0 0 0 / 78%);
+  border-radius: 0.4rem 0 0.4rem 0;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  line-height: 1rem;
+  text-align: center;
+}
+.analytics-page .army-castle {
+  padding-left: 0.4rem;
+  border-left: 1px solid var(--cl-border);
+}
+.analytics-page .army-castle-label {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+.analytics-page .army-hero {
+  gap: 0.15rem;
+  padding: 0.15rem 0.3rem 0.15rem 0.15rem;
+  background: color-mix(in srgb, var(--cl-panel) 70%, transparent);
+  border-radius: 0.6rem;
+}

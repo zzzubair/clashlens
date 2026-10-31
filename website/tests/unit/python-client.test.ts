@@ -140,6 +140,78 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
+  it("rejects a 7-day list that is not dated Legend days with whole numbers or nulls", async () => {
+    const payload = (recent: unknown) => ({
+      ...emptyLivePayload(),
+      tracked_population: 1,
+      total_entries: 1,
+      page_count: 1,
+      source_observations: {
+        oldest_observed_at: "2026-08-06T12:00:00Z",
+        newest_observed_at: "2026-08-06T12:00:00Z",
+        stale_count: 0,
+      },
+      entries: [
+        {
+          position: 1,
+          tag: "#2PP",
+          name: "Nova",
+          clan: null,
+          trophies: 5100,
+          observed_at: "2026-08-06T12:00:00Z",
+          age_seconds: 0,
+          freshness: "fresh",
+          confidence: "eligible",
+          public_confidence: "high",
+          official_rank: null,
+          recent_days: recent,
+        },
+      ],
+    });
+    const day = (start: string, change: unknown) => ({
+      ranked_day_start: start,
+      net_trophy_change: change,
+    });
+    let recent: unknown = [
+      day("2026-08-04T05:00:00+00:00", 40),
+      day("2026-08-05T05:00:00Z", null),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(
+          async () => new Response(JSON.stringify(payload(recent)), { status: 200 }),
+        ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
+      entries: [
+        {
+          recentDays: [
+            { start: "2026-08-04T05:00:00+00:00", trophyChange: 40 },
+            { start: "2026-08-05T05:00:00Z", trophyChange: null },
+          ],
+        },
+      ],
+    });
+    // A bare number, a fraction, a day with no start or one not at a Reset,
+    // and more than 7 days.
+    for (recent of [
+      [40],
+      [day("2026-08-04T05:00:00Z", 40.5)],
+      [{ net_trophy_change: 40 }],
+      [day("2026-08-04T06:00:00Z", 40)],
+      Array(8).fill(day("2026-08-04T05:00:00Z", 40)),
+    ])
+      await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+        status: 502,
+        payload: { error: "malformed" },
+      });
+  });
+
   it.each([
     ["out-of-range Daily selector", { season_day_number: 29 }],
     ["invalid Daily reset timestamp", { reset_at: "not-a-timestamp" }],
@@ -379,7 +451,7 @@ describe("server-only Python client response boundary", () => {
               stale_count: 0,
             },
             tracked_population: 2,
-            total_entries: 1,
+            total_entries: 2,
             page: 1,
             page_size: 25,
             page_count: 1,
@@ -388,7 +460,7 @@ describe("server-only Python client response boundary", () => {
             coverage: {
               state: "partial",
               tracked_players: 2,
-              measured_percent: 50,
+              measured_percent: 100,
               note: "Tracked cohort.",
             },
             provenance: {
@@ -413,6 +485,32 @@ describe("server-only Python client response boundary", () => {
                 confidence: "eligible",
                 public_confidence: "high",
                 official_rank: null,
+                reset_position: 2,
+                today_change: 61,
+                recent_days: [
+                  {
+                    ranked_day_start: "2026-08-04T05:00:00+00:00",
+                    net_trophy_change: 130,
+                  },
+                  {
+                    ranked_day_start: "2026-08-05T05:00:00+00:00",
+                    net_trophy_change: null,
+                  },
+                ],
+              },
+              {
+                // An older API sends no place at the last Reset.
+                position: 2,
+                tag: "#8PP",
+                name: "Ember",
+                clan: null,
+                trophies: 7100,
+                observed_at: "2026-08-06T11:59:00+00:00",
+                age_seconds: 60,
+                freshness: "fresh",
+                confidence: "eligible",
+                public_confidence: "high",
+                official_rank: null,
               },
             ],
           }),
@@ -425,8 +523,29 @@ describe("server-only Python client response boundary", () => {
     const { createPythonClient } = await import("../../app/services/python.server");
     await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
       view: "live",
+      entries: [
+        {
+          tag: "#2PP",
+          rank: 1,
+          resetRank: 2,
+          trophies: 7211,
+          todayChange: 61,
+          recentDays: [
+            { start: "2026-08-04T05:00:00+00:00", trophyChange: 130 },
+            { start: "2026-08-05T05:00:00+00:00", trophyChange: null },
+          ],
+        },
+        {
+          tag: "#8PP",
+          rank: 2,
+          resetRank: null,
+          trophies: 7100,
+          todayChange: null,
+          recentDays: [],
+        },
+      ],
       generatedAt: "2026-08-06T12:00:00+00:00",
-      coverage: { measuredPercent: 50 },
+      coverage: { measuredPercent: 100 },
       provenance: {
         version: "tracked-trophies-md5-v1",
         observedAt: "2026-08-06T12:00:00+00:00",
@@ -510,7 +629,16 @@ describe("server-only Python client response boundary", () => {
     });
     expect(leaderboard).toMatchObject({
       view: "daily",
-      entries: [{ name: "Unknown", clan: "Unknown", tied: true }],
+      entries: [
+        {
+          name: "Unknown",
+          clan: "Unknown",
+          tied: true,
+          resetRank: null,
+          todayChange: null,
+          recentDays: [],
+        },
+      ],
       page: 1,
       pageSize: 25,
       daily: {

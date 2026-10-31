@@ -17,17 +17,28 @@ from .analytics import (
 from .api_db import (
     ApiDatabase,
     SharedCopy,
+    _json_array,
+    _net_so_far,
     _public_confidence,
     _public_snapshot_confidence,
     _season_reset_waiting_sql,
+    _shown_total,
     _start_thread,
     _text,
 )
-from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_DURATION,
+    SEASON_START_TROPHIES,
+    ranked_day_for,
+    season_opening_reset,
+)
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
 _FOCUS_NEIGHBORS = 5
+# Finished Legend days each Live row's chart shows; today has its own column.
+RECENT_DAYS = 7
 
 
 # Shared membership and confirmation rule for the page and operator measurements.
@@ -549,6 +560,14 @@ def get_live_leaderboard(
                 "tied": board.tied(position - 1),
             }
         )
+    with database.pool.connection() as connection:
+        at_reset = _reset_entries(connection, [entry["tag"] for entry in entries], now)
+    for entry in entries:
+        (
+            entry["reset_position"],
+            entry["today_change"],
+            entry["recent_days"],
+        ) = at_reset[entry["tag"]]
     page_count = (total_entries + limit - 1) // limit
     page = offset // limit + 1
     return {
@@ -604,6 +623,284 @@ def get_live_leaderboard(
     }
 
 
+def _frozen_publications(connection: Any) -> tuple[str, bool, bool]:
+    """Every published Daily board, legacy and v2, as SQL giving (source, id,
+    boundary_at, version, generation, official_season_id, season_day_number);
+    whether boundary publication generations and v2 snapshots exist."""
+    coordinator_exists, snapshots_exist = connection.execute(
+        """
+        SELECT to_regclass('boundary_publication_generations') IS NOT NULL
+                   AND to_regclass('boundary_publication_manifest_rows') IS NOT NULL,
+               to_regclass('leaderboard_snapshots') IS NOT NULL
+        """
+    ).fetchone()
+    legacy_publications = """
+        SELECT 'legacy'::text AS source, leaderboard.id,
+               leaderboard.boundary_at, leaderboard.version, 0 AS generation,
+               selector.official_season_id, selector.season_day_number
+        FROM api_frozen_leaderboards AS leaderboard
+        JOIN LATERAL (
+            SELECT day.official_season_id, day.season_day_number
+            FROM ranked_day_versions AS day
+            WHERE day.ranked_day_end = leaderboard.boundary_at
+            ORDER BY day.id DESC LIMIT 1
+        ) AS selector ON true
+    """
+    if coordinator_exists:
+        v2_publications = """
+            SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
+                   snapshot.version, COALESCE(generation.generation, 0) AS generation,
+                   COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
+                   COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
+            FROM leaderboard_snapshots AS snapshot
+            LEFT JOIN ranked_day_versions AS source_day
+              ON source_day.id = snapshot.source_ranked_day_version_id
+            LEFT JOIN boundary_publication_generations AS generation
+              ON generation.snapshot_id = snapshot.id
+            LEFT JOIN LATERAL (
+                -- A proof frozen since 0081 records its newest ranked day;
+                -- an older one stores all its rows, so they give it.
+                SELECT ranked.official_season_id, ranked.season_day_number
+                FROM boundary_publication_manifests AS manifest
+                JOIN ranked_day_versions AS ranked
+                  ON ranked.id = COALESCE(
+                      manifest.newest_ranked_day_version_id,
+                      (SELECT member.ranked_day_version_id
+                       FROM boundary_publication_manifest_rows AS member
+                       WHERE member.manifest_id = manifest.id
+                         AND member.ranked_day_version_id IS NOT NULL
+                       ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                WHERE manifest.id = generation.snapshot_manifest_id
+            ) AS generation_day ON true
+            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+              AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
+        """
+    elif snapshots_exist:
+        v2_publications = """
+            SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
+                   snapshot.version, 0 AS generation, source_day.official_season_id,
+                   source_day.season_day_number
+            FROM leaderboard_snapshots AS snapshot
+            LEFT JOIN ranked_day_versions AS source_day
+              ON source_day.id = snapshot.source_ranked_day_version_id
+            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+        """
+    else:
+        return legacy_publications, False, False
+    return (
+        v2_publications + " UNION ALL " + legacy_publications,
+        coordinator_exists,
+        True,
+    )
+
+
+def _reset_place_sql(connection: Any) -> tuple[str, str]:
+    """The newest Daily board published at ``%(reset)s`` for Season
+    ``%(season_id)s``, as a ``WITH`` clause, and the joins that give each
+    ``player`` row its ``place.position`` there, or none off it. A Season's
+    first Legend day has no such board: the one at its Reset is the Season
+    before's."""
+    publications, _, snapshots_exist = _frozen_publications(connection)
+    v2_entry = (
+        """
+        SELECT position FROM leaderboard_snapshot_entries
+        WHERE board.source = 'v2' AND snapshot_id = board.id
+          AND player_id = player.id
+        UNION ALL
+        """
+        if snapshots_exist
+        else ""
+    )
+    return (
+        f"""
+        WITH board AS (
+            SELECT source, id
+            FROM ({publications}) AS publication
+            WHERE boundary_at = %(reset)s AND official_season_id = %(season_id)s
+            ORDER BY (source = 'v2') DESC, version DESC, generation DESC, id DESC
+            LIMIT 1
+        )
+        """,
+        f"""
+        LEFT JOIN board ON true
+        LEFT JOIN LATERAL (
+            {v2_entry}
+            SELECT position FROM api_frozen_leaderboard_entries
+            WHERE board.source = 'legacy' AND leaderboard_id = board.id
+              AND player_id = player.id
+        ) AS place ON true
+        """,
+    )
+
+
+def linked_season_days(
+    connection: Any, tags: list[str], now: datetime
+) -> list[dict[str, Any]]:
+    """What a public profile's player cards add to their numbers, for every
+    tag at once in a fixed number of reads: each player's place on the newest
+    Daily board published at the last Reset (none on a Season's first Legend
+    day, as on the Live board), this Season's weekly league records, and each
+    Legend day saved so far this Season, today's included, oldest first.
+
+    Each day is its newest saved log, read as the player page's Daily Legend
+    log shows it, and is only what its Season heat map draws, as ``[Season
+    day, attacks, defenses, result, unplayed, listed]``, so 500 players' full
+    Seasons stay well under the website's 2 MiB response limit. ``unplayed``
+    is a day known to be 5,000 to 5,000 with no battles; ``listed`` is false
+    for a day outside Legend I that the player page's log leaves out. Its
+    battles are never read."""
+    if not tags:
+        return []
+    board, place = _reset_place_sql(connection)
+    day = ranked_day_for(now)
+    rows = connection.execute(
+        f"""
+        {board}
+        SELECT player.id, player.normalized_tag, place.position,
+               daily.ranked_day_start, daily.attack_count, daily.defense_count,
+               daily.net_trophy_change, daily.coverage, daily.partial_reasons,
+               ranked_day.start_trophies
+        FROM players AS player
+        {place}
+        LEFT JOIN LATERAL (
+            SELECT DISTINCT ON (saved.ranked_day_start)
+                   saved.ranked_day_start, saved.attack_count, saved.defense_count,
+                   saved.net_trophy_change, saved.coverage, saved.partial_reasons,
+                   saved.ranked_day_version_id
+            FROM api_player_daily_logs AS saved
+            WHERE saved.player_id = player.id
+              AND saved.ranked_day_start BETWEEN %(first)s AND %(reset)s
+            ORDER BY saved.ranked_day_start DESC, saved.version DESC
+        ) AS daily ON true
+        LEFT JOIN ranked_day_versions AS ranked_day
+            ON ranked_day.id = daily.ranked_day_version_id
+        WHERE player.normalized_tag = ANY(%(tags)s)
+        ORDER BY player.normalized_tag, daily.ranked_day_start
+        """,
+        {
+            "first": day.season_start,
+            "reset": day.start,
+            "season_id": day.official_season_id,
+            "tags": tags,
+        },
+    ).fetchall()
+    players: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        player = players.setdefault(int(row[0]), {
+            "tag": _text(row[1]),
+            "reset_position": None if row[2] is None else int(row[2]),
+            "season_weeks": [],
+            "days": [],
+        })
+        if row[3] is None:
+            continue
+        attacks = None if row[4] is None else int(row[4])
+        defenses = None if row[5] is None else int(row[5])
+        reasons = _json_array(row[8])
+        result = _shown_total(row[6], _text(row[7]), attacks, defenses, reasons)
+        player["days"].append([
+            (row[3] - day.season_start) // RANKED_DAY_DURATION + 1,
+            attacks,
+            defenses,
+            result,
+            attacks == 0 and defenses == 0 and result == 0
+            and row[9] == SEASON_START_TROPHIES,
+            "player_not_eligible" not in reasons or "not_enrolled" in reasons
+            or bool(attacks) or bool(defenses),
+        ])
+    for player_id, week_start, league, entry in connection.execute(
+        """
+        SELECT player_id, week_start, league, entry FROM player_league_weeks
+        WHERE player_id = ANY(%s) AND week_start >= %s AND week_start < %s
+        ORDER BY player_id, week_start
+        """,
+        (list(players), day.season_start, day.season_start + SEASON_DURATION),
+    ).fetchall():
+        players[int(player_id)]["season_weeks"].append({
+            "week_start": week_start.astimezone(UTC).isoformat(),
+            "league": _text(league),
+            "entry": None if entry is None else _text(entry),
+        })
+    return list(players.values())
+
+
+def _reset_entries(
+    connection: Any, tags: list[str], now: datetime
+) -> dict[str, tuple[int | None, int | None, list[dict[str, Any]]]]:
+    """Each tag's place on the newest Daily board published at the last
+    Reset, its net so far today, and each of the last 7 finished Legend days
+    by its start, oldest first, with that day's result or None.
+
+    Today's net and each day's result come from the day's newest saved log,
+    as the dashboard's Legend day card and the player page's Daily Legend
+    log show them, so neither counts the automatic defense loss a Reset
+    reading was taken before: today starts from the day's settled start.
+    Only the current Season counts: on its first Legend day there is no
+    place to compare with and no finished day. One read, of only these
+    tags' rows."""
+    if not tags:
+        return {}
+    board, place = _reset_place_sql(connection)
+    day = ranked_day_for(now)
+    window = [
+        start
+        for back in range(RECENT_DAYS, 0, -1)
+        if (start := day.start - back * RANKED_DAY_DURATION) >= day.season_start
+    ]
+    rows = connection.execute(
+        f"""
+        {board}
+        SELECT player.normalized_tag, place.position, daily.ranked_day_start,
+               daily.attack_count, daily.attack_gain, daily.defense_count,
+               daily.defense_loss, daily.net_trophy_change, daily.coverage,
+               daily.partial_reasons
+        FROM players AS player
+        {place}
+        LEFT JOIN LATERAL (
+            SELECT DISTINCT ON (saved.ranked_day_start)
+                   saved.ranked_day_start, saved.attack_count, saved.attack_gain,
+                   saved.defense_count, saved.defense_loss,
+                   saved.net_trophy_change, saved.coverage, saved.partial_reasons
+            FROM api_player_daily_logs AS saved
+            WHERE saved.player_id = player.id
+              AND saved.ranked_day_start BETWEEN %(first)s AND %(reset)s
+            ORDER BY saved.ranked_day_start DESC, saved.version DESC
+        ) AS daily ON true
+        WHERE player.normalized_tag = ANY(%(tags)s)
+        """,
+        {
+            "first": window[0] if window else day.start,
+            "reset": day.start,
+            "season_id": day.official_season_id,
+            "tags": tags,
+        },
+    ).fetchall()
+    places: dict[str, int] = {}
+    logs: dict[tuple[str, datetime], Any] = {}
+    for row in rows:
+        if row[1] is not None:
+            places[_text(row[0])] = int(row[1])
+        if row[2] is not None:
+            logs[_text(row[0]), row[2]] = row
+    result: dict[str, tuple[int | None, int | None, list[dict[str, Any]]]] = {}
+    for tag in tags:
+        today = logs.get((tag, day.start))
+        days = []
+        for start in window:
+            log = logs.get((tag, start))
+            days.append({
+                "ranked_day_start": start.isoformat(),
+                "net_trophy_change": None if log is None else _shown_total(
+                    log[7], _text(log[8]), log[3], log[5], _json_array(log[9])),
+            })
+        result[tag] = (
+            places.get(tag),
+            None if today is None else _net_so_far(*today[3:7], _json_array(today[9])),
+            days,
+        )
+    return result
+
+
 def get_frozen_leaderboard(
     database: ApiDatabase,
     *,
@@ -620,71 +917,7 @@ def get_frozen_leaderboard(
         raise ValueError("season and day must be supplied together")
     now = datetime.now(UTC) if now is None else now
     with database.pool.connection() as connection:
-        coordinator_exists, snapshots_exist = connection.execute(
-            """
-            SELECT to_regclass('boundary_publication_generations') IS NOT NULL
-                       AND to_regclass('boundary_publication_manifest_rows') IS NOT NULL,
-                   to_regclass('leaderboard_snapshots') IS NOT NULL
-            """
-        ).fetchone()
-        legacy_publications = """
-            SELECT 'legacy'::text AS source, leaderboard.id,
-                   leaderboard.boundary_at, leaderboard.version, 0 AS generation,
-                   selector.official_season_id, selector.season_day_number
-            FROM api_frozen_leaderboards AS leaderboard
-            JOIN LATERAL (
-                SELECT day.official_season_id, day.season_day_number
-                FROM ranked_day_versions AS day
-                WHERE day.ranked_day_end = leaderboard.boundary_at
-                ORDER BY day.id DESC LIMIT 1
-            ) AS selector ON true
-        """
-        if coordinator_exists:
-            v2_publications = """
-                SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
-                       snapshot.version, COALESCE(generation.generation, 0) AS generation,
-                       COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
-                       COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
-                FROM leaderboard_snapshots AS snapshot
-                LEFT JOIN ranked_day_versions AS source_day
-                  ON source_day.id = snapshot.source_ranked_day_version_id
-                LEFT JOIN boundary_publication_generations AS generation
-                  ON generation.snapshot_id = snapshot.id
-                LEFT JOIN LATERAL (
-                    -- A proof frozen since 0081 records its newest ranked day;
-                    -- an older one stores all its rows, so they give it.
-                    SELECT ranked.official_season_id, ranked.season_day_number
-                    FROM boundary_publication_manifests AS manifest
-                    JOIN ranked_day_versions AS ranked
-                      ON ranked.id = COALESCE(
-                          manifest.newest_ranked_day_version_id,
-                          (SELECT member.ranked_day_version_id
-                           FROM boundary_publication_manifest_rows AS member
-                           WHERE member.manifest_id = manifest.id
-                             AND member.ranked_day_version_id IS NOT NULL
-                           ORDER BY member.ranked_day_version_id DESC LIMIT 1))
-                    WHERE manifest.id = generation.snapshot_manifest_id
-                ) AS generation_day ON true
-                WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-                  AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
-            """
-        elif snapshots_exist:
-            v2_publications = """
-                SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
-                       snapshot.version, 0 AS generation, source_day.official_season_id,
-                       source_day.season_day_number
-                FROM leaderboard_snapshots AS snapshot
-                LEFT JOIN ranked_day_versions AS source_day
-                  ON source_day.id = snapshot.source_ranked_day_version_id
-                WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-            """
-        else:
-            v2_publications = ""
-        publications = (
-            v2_publications + " UNION ALL " + legacy_publications
-            if v2_publications
-            else legacy_publications
-        )
+        publications, coordinator_exists, _ = _frozen_publications(connection)
         locator = connection.execute(
             f"""
             WITH publications AS ({publications}), selected AS (

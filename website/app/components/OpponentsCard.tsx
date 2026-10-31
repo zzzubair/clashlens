@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, BasesMode, OpponentRow } from "../lib/dashboard";
@@ -9,15 +9,16 @@ import {
 } from "../lib/dashboard";
 import type { PastBases } from "../lib/dashboard-cards";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
-import { CardHead, CardNote, updatedAgo } from "./DashboardParts";
+import { CardHead, CardNote, InfoTip } from "./DashboardParts";
 import { DashboardIcon } from "./DashboardIcon";
-import { signed, starText, timeFormatter } from "./LegendClock";
+import { ShieldIcon, Star, Stars, TrophyIcon } from "./GameIcons";
+import { signed, timeFormatter } from "./LegendClock";
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",
   average: "Average",
   easy: "Easy",
-  unavailable: "–",
+  unavailable: "No rating",
   early: "Too early",
 };
 const STRENGTH_ORDER: BaseStrength[] = [
@@ -29,6 +30,8 @@ const STRENGTH_ORDER: BaseStrength[] = [
 ];
 /** A Legend day has 8 attacks. */
 const ATTACKS = 8;
+/** Bases a phone shows before Show all. */
+const PHONE_ROWS = 3;
 /** An earlier day is read once clicking stops this long, not each day passed. */
 const BASES_PAUSE_MS = 400;
 
@@ -126,35 +129,138 @@ function heldShare(defenses: OpponentRow["defenses"]): number {
   return defenses.filter((defense) => defense.stars < 3).length / defenses.length;
 }
 
+/** What Legends at similar trophies lost over as many defenses as the base's. */
+function legendsLost({ defenses, legends }: OpponentRow): number | null {
+  return legends?.defenses && legends.lost !== null
+    ? Math.round((legends.lost * defenses.length) / legends.defenses)
+    : null;
+}
+
 /**
- * Trophies mode's line: the trophies the base lost today, what Legends at
- * similar trophies lost over as many defenses, then the defense count both
- * cover, such as "lost −185 · avg −194 · in 6 defenses".
+ * Trophies mode's line: the trophies the base lost today in its defenses,
+ * then what Legends at similar trophies lost over as many, such as
+ * "lost −185 in 6 defenses · Legend avg −194".
  */
 function trophiesLine(row: OpponentRow): string {
   const count = row.defenses.length;
-  const { legends } = row;
-  const average =
-    legends?.defenses && legends.lost !== null
-      ? (legends.lost * count) / legends.defenses
-      : null;
+  const average = legendsLost(row);
   const early = count < BASE_STRENGTH_MIN_DEFENSES;
   return [
     `lost ${signed(-trophiesGivenUp(row.defenses))} in ${count} defense${count === 1 ? "" : "s"}`,
-    ...(average !== null ? [`Legend avg ${signed(-Math.round(average))}`] : []),
+    ...(average !== null ? [`Legend avg ${signed(-average)}`] : []),
     ...(!early && average === null ? ["no comparison yet"] : []),
   ].join(" · ");
 }
+
+/** "7 below Legend avg", "+3 pts" style differences in words, with their unit. */
+function versus(diff: number, unit: string): string {
+  if (diff === 0) return "same as Legend avg";
+  return `${Math.abs(diff)}${unit} ${diff > 0 ? "above" : "below"} Legend avg`;
+}
+
+/**
+ * The base's own number and the Legend average's, as the verdict compares
+ * them: held % in Held mode, trophies lost a defense in Trophies mode; the
+ * average is null until there is one.
+ */
+function compared(row: OpponentRow, mode: BasesMode): [number, number | null] {
+  const { defenses, legends } = row;
+  if (mode === "held")
+    return [
+      Math.round(heldShare(defenses) * 100),
+      legends?.defenses ? Math.round((100 * legends.held) / legends.defenses) : null,
+    ];
+  return [
+    defenses.length ? trophiesGivenUp(defenses) / defenses.length : 0,
+    legends?.defenses && legends.lost !== null ? legends.lost / legends.defenses : null,
+  ];
+}
+
+/**
+ * What a base's verdict rests on, in full, for its tooltip and screen
+ * readers: "lost 24 a defense, 7 below Legend avg", or "held 75%, 42 pts
+ * above Legend avg".
+ */
+function strengthLine(
+  row: OpponentRow,
+  mode: BasesMode,
+  strength: BaseStrength,
+  earlier: boolean,
+): string {
+  const count = row.defenses.length;
+  if (strength === "early")
+    return earlier
+      ? `only ${count} defense${count === 1 ? "" : "s"}`
+      : `rated after ${BASE_STRENGTH_MIN_DEFENSES} defenses`;
+  const [own, average] = compared(row, mode);
+  const said = mode === "held" ? `held ${own}%` : `lost ${Math.round(own)} a defense`;
+  if (strength === "unavailable" || average === null) return `${said}, no Legend avg yet`;
+  return `${said}, ${versus(Math.round(own - average), mode === "held" ? " pts" : "")}`;
+}
+
+/**
+ * The one result shown beside the verdict: its signed difference from the
+ * Legend average in the measure the heading names, positive the better
+ * side for the base as everywhere on the dashboard: "+8" for 8 trophies
+ * fewer lost a defense, or "+42 pts" held; null for a base with no rating.
+ */
+function shortResult(row: OpponentRow, mode: BasesMode, strength: BaseStrength) {
+  const [own, average] = compared(row, mode);
+  if (strength === "early" || strength === "unavailable" || average === null) return null;
+  const diff = Math.round(own - average);
+  return mode === "held" ? `${signed(diff)} pts` : signed(-diff);
+}
+
+/**
+ * The defense slots' marks named once, on one line over the rows: a star for
+ * a base its attacker tripled, a shield for one it held, an empty slot still
+ * to come, and the ember ring on your own hit.
+ */
+function SlotsKey() {
+  return (
+    <p className="opponents-key" aria-hidden="true">
+      <span>
+        <i className="opponents-block is-tripled">
+          <Star won />
+        </i>
+        Tripled
+      </span>
+      <span>
+        <i className="opponents-block is-held">
+          <ShieldIcon />
+        </i>
+        Held
+      </span>
+      <span>
+        <i className="opponents-block" />
+        Not yet
+      </span>
+      <span>
+        <i className="opponents-block is-yours" />
+        You
+      </span>
+    </p>
+  );
+}
+
+/** How many of the strength meter's three bars a verdict fills. */
+const METER: Record<BaseStrength, number> = {
+  hard: 3,
+  average: 2,
+  easy: 1,
+  unavailable: 0,
+  early: 0,
+};
 
 /**
  * Card 3: one row per attack today, hardest bases first, and with the day
  * button the same for an earlier Legend day of this Season. Held % mode compares
  * the base's held share today with today's among tracked Legend players at
- * similar trophies, and shows "–" when there are too few of them. Trophies
- * mode compares the trophies it gave up a defense with what those players
- * lost a defense, and shows the total it lost today beside what they lost
- * on average over as many defenses.
- * Colours follow the attacker: green is good for you, red is bad.
+ * similar trophies; Trophies mode compares the trophies it gave up a defense
+ * with what those players lost a defense. Each verdict is a three-bar meter
+ * and its word, then one short result against the Legend average ("+8"),
+ * all in neutral colours, as they describe the base, not how you did; the
+ * full sentence is its tooltip and is read aloud.
  */
 export function OpponentsCard({
   dayNumber,
@@ -162,8 +268,6 @@ export function OpponentsCard({
   rows: todayRows,
   timeZone,
   mode = "held",
-  nowMs = null,
-  comparedAtMs = null,
 }: {
   /** Today's Legend day; null hides the day button. */
   dayNumber: number | null;
@@ -171,11 +275,10 @@ export function OpponentsCard({
   rows: OpponentRow[] | null;
   timeZone: string;
   mode?: BasesMode;
-  nowMs?: number | null;
-  /** When the comparisons with Legends at similar trophies were read. */
-  comparedAtMs?: number | null;
 }) {
   const navigate = useNavigate();
+  // A phone shows the first few bases until asked for every one.
+  const [allShown, setAllShown] = useState(false);
   const format = timeFormatter(timeZone);
   const { chosen, read } = days;
   const earlier = chosen !== null && dayNumber !== null && chosen < dayNumber;
@@ -184,11 +287,7 @@ export function OpponentsCard({
   const past = earlier ? read.get(chosen) : undefined;
   const loading = earlier && !read.has(chosen);
   const rows = earlier ? (past?.rows ?? null) : todayRows;
-  const when = earlier ? "that day" : "today";
-  // The oldest opponent or comparison read, so the card never looks newer than it is.
-  const observed = earlier ? [] : (rows ?? []).flatMap((row) => row.observedAtMs ?? []);
-  if (!earlier && rows?.length && comparedAtMs !== null) observed.push(comparedAtMs);
-  const updated = observed.length ? updatedAgo(Math.min(...observed), nowMs) : null;
+  const shown = !loading && rows !== null && rows.length > 0;
   const head = (
     <CardHead
       title={
@@ -205,19 +304,40 @@ export function OpponentsCard({
           </small>
         </>
       }
+      // Strength's short heading, in full, over a table of bases.
+      info={
+        shown ? (
+          <InfoTip label="What Strength means">
+            <p>
+              Strength compares{" "}
+              {mode === "held"
+                ? "the share of defenses this base held (not tripled)"
+                : "the trophies this base lost a defense"}{" "}
+              with Legends at similar trophies.
+            </p>
+            <p>
+              + means harder than average:{" "}
+              {mode === "held"
+                ? "+42 pts held 42 points more often."
+                : "+8 lost 8 fewer a defense."}
+            </p>
+            {/* A phone keeps the slots' key here. */}
+            <SlotsKey />
+          </InfoTip>
+        ) : null
+      }
       meta={
-        day !== null && dayNumber !== null ? (
-          <span className="bases-day-meta">
-            {updated ? <span>{updated}</span> : null}
+        <>
+          {/* The one reference every Strength is against, said once. */}
+          {shown ? <span className="dash-card-ref">vs Legend avg</span> : null}
+          {day !== null && dayNumber !== null ? (
             <DayStepper
               day={day}
               today={dayNumber}
               choose={(next) => days.choose(next === dayNumber ? null : next)}
             />
-          </span>
-        ) : (
-          updated
-        )
+          ) : null}
+        </>
       }
     />
   );
@@ -256,115 +376,160 @@ export function OpponentsCard({
   return (
     <>
       {head}
-      <div className="opponents">
+      <SlotsKey />
+      <div className={allShown ? "opponents opponents-all" : "opponents"}>
+        {/* The headings name each column once, short, the header's ⓘ in
+            full; a phone keeps the last two. Each row says all of it aloud. */}
         <div className="opponents-head" aria-hidden="true">
-          <span>Player · trophies at Reset</span>
+          <span>Player</span>
           <span>Your hit</span>
-          <span>Their defenses {when}</span>
-          <span title={`Against Legends at similar trophies ${when}`}>
-            Base strength {when}
-          </span>
-          <span />
+          <span>Their defenses</span>
+          <span>Strength</span>
         </div>
         {sorted.map(({ row, strength }, index) => {
           const held = row.defenses.filter((defense) => defense.stars < 3).length;
+          const verdict = !["early", "unavailable"].includes(strength);
+          // The exact numbers the verdict rests on, shown on a tap or hover.
+          const exact =
+            mode === "held"
+              ? `held ${held} of ${row.defenses.length}${
+                  row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
+                    ? ""
+                    : row.legends?.defenses
+                      ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
+                      : " · no comparison yet"
+                }`
+              : trophiesLine(row);
+          const line = strengthLine(row, mode, strength, earlier);
+          const result = shortResult(row, mode, strength);
           const open = () => void navigate(canonicalPlayerPath(row.tag));
+          const name = row.name ?? row.tag;
           return (
             <div
               key={`${row.tag}-${index}`}
               className="opponents-row"
               role="link"
               tabIndex={0}
-              aria-label={`${row.name ?? row.tag}: open player page`}
+              aria-label={`${name}: open player page`}
               onClick={open}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && event.target === event.currentTarget) open();
               }}
             >
               <div className="opponents-name">
-                <bdi className="dash-name" title={row.name ?? row.tag}>
-                  {row.name ?? row.tag}
+                <bdi className="dash-name" title={name}>
+                  {name}
                 </bdi>
-                <span className="dash-muted">
+                <span className="opponents-trophies" title="Trophies at Reset">
+                  <TrophyIcon />
                   {row.resetTrophies === null
                     ? "–"
                     : row.resetTrophies.toLocaleString("en-US")}
                 </span>
               </div>
+              {/* Two halves that each stay whole: where the column is narrow
+                  the trophies and time go under the stars, on every row. */}
               <div className="opponents-hit">
-                <span className="dash-stars">{starText(row.hit.stars)}</span>{" "}
-                {row.hit.destruction}%{" "}
-                <b className={row.hit.trophyChange > 0 ? "positive" : ""}>
-                  {signed(row.hit.trophyChange)}
-                </b>
-                <span className="dash-muted"> · {format.format(row.hit.at)}</span>
+                <span>
+                  <Stars count={row.hit.stars} /> {row.hit.destruction}%
+                </span>{" "}
+                <span>
+                  <b className={row.hit.trophyChange > 0 ? "positive" : ""}>
+                    {signed(row.hit.trophyChange)}
+                  </b>
+                  <span className="opponents-time"> · {format.format(row.hit.at)}</span>
+                </span>
               </div>
+              {/* The day's 8 defenses in order: a gold star where the base was
+                  tripled, a shield where it held, your own hit ringed in
+                  ember, a dot for one still to come. The exact stars are in each
+                  slot's title and read aloud. */}
               <ol
                 className="opponents-blocks"
                 aria-label={`held ${held} of ${row.defenses.length}`}
               >
-                {row.defenses.map((defense, at) => (
-                  <li
-                    key={at}
-                    className={`opponents-block ${defense.stars === 3 ? "is-tripled" : "is-held"}${defense.yours ? " is-yours" : ""}`}
-                    title={`${defense.stars === 3 ? "tripled" : "held"}${defense.yours ? " · your attack" : ""}`}
-                  />
-                ))}
+                {Array.from(
+                  { length: Math.max(ATTACKS, row.defenses.length) },
+                  (_, at) => {
+                    const defense = row.defenses[at];
+                    if (!defense) return <li key={at} className="opponents-block" />;
+                    const tripled = defense.stars === 3;
+                    const said = `${defense.stars} star${defense.stars === 1 ? "" : "s"} ${tripled ? "tripled" : "held"}${defense.yours ? ", your attack" : ""}`;
+                    return (
+                      <li
+                        key={at}
+                        className={`opponents-block ${tripled ? "is-tripled" : "is-held"}${defense.yours ? " is-yours" : ""}`}
+                        title={said}
+                      >
+                        {tripled ? <Star won /> : <ShieldIcon />}
+                        <span className="sr-only">{said}</span>
+                      </li>
+                    );
+                  },
+                )}
               </ol>
-              <div className="opponents-strength">
-                <span
-                  className={`dash-strength dash-strength-${strength}`}
-                  title={
-                    strength === "early"
-                      ? `Needs ${BASE_STRENGTH_MIN_DEFENSES}+ defenses for a rating`
-                      : undefined
-                  }
-                >
-                  {earlier && strength === "early"
-                    ? "Too few"
-                    : STRENGTH_LABELS[strength]}
-                </span>
-                <span className="dash-muted">
-                  {(mode === "held"
-                    ? `held ${held} of ${row.defenses.length}${
-                        row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
-                          ? ""
-                          : row.legends?.defenses
-                            ? ` · ${Math.round(heldShare(row.defenses) * 100)}% vs Legend avg ${Math.round((100 * row.legends.held) / row.legends.defenses)}%`
-                            : " · no comparison yet"
-                      }`
-                    : trophiesLine(row)
-                  )
-                    .split(" · ")
-                    // Each part stays whole, so a label never wraps away from its number.
-                    .map((part, index) => (
-                      <Fragment key={index}>
-                        {index ? " · " : null}
-                        <span className="opponents-part">{part}</span>
-                      </Fragment>
-                    ))}
-                </span>
-              </div>
+              {/* A tap opens the base's own number beside the Legend
+                  average, one base at a time, without opening the player. */}
+              <details
+                className="opponents-strength"
+                name="opponents-exact"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <summary title={`${line} · ${exact}`}>
+                  {/* Three bars for a hard base, two average, one easy. */}
+                  <span
+                    className="opponents-meter"
+                    data-bars={METER[strength]}
+                    aria-hidden="true"
+                  >
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <b className={`opponents-verdict${verdict ? "" : " is-unrated"}`}>
+                    {earlier && strength === "early"
+                      ? "Too few"
+                      : STRENGTH_LABELS[strength]}
+                  </b>
+                  {result ? (
+                    <span className="opponents-result" aria-hidden="true">
+                      {result}
+                    </span>
+                  ) : null}
+                  <span className="sr-only">{line}</span>
+                </summary>
+                <p className="opponents-exact">{exact}</p>
+              </details>
               <div className="opponents-action">
+                {/* The Watchlists tab's eye with a plus: no words on any row,
+                    the tab bar's eye says what it is. */}
                 <Link
                   className="opponents-watch"
                   to={addToGroupPath(row.tag)}
-                  aria-label={`Add ${row.name ?? row.tag} to a watchlist`}
+                  aria-label={`Add ${name} to watchlist`}
+                  title="Add to watchlist"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <DashboardIcon name="plus" />
-                  Watchlist
+                  <DashboardIcon name="eye" />
+                  <i className="opponents-watch-plus" aria-hidden="true">
+                    <DashboardIcon name="plus" />
+                  </i>
                 </Link>
               </div>
             </div>
           );
         })}
       </div>
-      <p className="dash-card-foot opponents-key" aria-hidden="true">
-        Their defenses: <span className="opponents-block is-tripled" /> tripled
-        <span className="opponents-block is-held" /> held
-        <span className="opponents-block is-held is-yours" /> your attack
-      </p>
+      {sorted.length > PHONE_ROWS ? (
+        <button
+          type="button"
+          className="show-all opponents-more"
+          aria-expanded={allShown}
+          onClick={() => setAllShown(!allShown)}
+        >
+          {allShown ? "Show fewer" : `Show all ${sorted.length}`}
+        </button>
+      ) : null}
     </>
   );
 }

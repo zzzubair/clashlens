@@ -1,0 +1,42 @@
+/* The player header's live rank on one line under the trophies: the place
+   on the live Leaderboard on the boards' rank plate, its move, and what the
+   move is against. */
+.player-page .player-live-rank {
+  grid-area: rank;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.player-page .player-live-rank .rank-mark {
+  height: 1.9rem;
+  padding-inline: 0.55rem;
+  font-size: 1.2rem;
+}
+.player-page .player-live-rank :is(.score-positive, .score-negative) {
+  font: 700 1.2rem var(--cl-font-score);
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-page .player-live-rank:hover .player-live-rank-since {
+    color: var(--cl-action-text);
+    text-decoration: underline;
+  }
+}
+@media (min-width: 48rem) {
+  .player-page .player-live-rank {
+    justify-self: end;
+    min-height: 2.25rem;
+  }
+}
+/* A phone's card keeps a narrower edge, so the clan and the Crew share a line. */
+@media (max-width: 47.99rem) {
+  :root .player-page .player-hero {
+    padding-inline: 1.1rem;
+  }
+}

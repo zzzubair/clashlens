@@ -1,0 +1,464 @@
+/* The Legend day card (components/LegendDayCard.tsx), the dashboard's one
+   hero card: trophies and today's change, the ranks, and the day's 16
+   battle slots. */
+
+/* The card it sits in is measured, so a wide card can rearrange this grid. */
+.dash-card:has(> .legend-day-card) {
+  container-type: inline-size;
+}
+
+.legend-day-card {
+  display: grid;
+  flex-grow: 1;
+  grid-template-rows: auto auto auto 1fr;
+  gap: 1rem;
+}
+
+/* Trophies with today's change, and the time left in the Legend day. */
+.legend-day-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.legend-day-score {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.legend-day-score .trophy-mark {
+  width: 1.8rem;
+  height: 1.8rem;
+  margin: 0;
+  fill: color-mix(in srgb, var(--cl-gold) 22%, transparent);
+  stroke-width: 1.5;
+}
+
+.legend-day-score .legend-day-badge {
+  width: auto;
+  height: clamp(2.5rem, 9cqi, 3.4rem);
+}
+
+.legend-day-score .dash-big {
+  font-size: clamp(2.5rem, 9cqi, 3.4rem);
+}
+
+.legend-day-net {
+  align-self: center;
+  padding: 0.3rem 0.55rem 0.25rem;
+  background: var(--cl-panel);
+  border-radius: 999px;
+  font: 700 1.2rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.legend-day-net.positive {
+  background: var(--cl-positive-soft);
+}
+
+.legend-day-net.negative {
+  background: var(--cl-negative-soft);
+}
+
+.legend-day-net-label {
+  color: var(--cl-muted);
+  font: 600 0.8125rem var(--cl-font);
+}
+
+.legend-day-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+}
+
+.legend-day-countdown svg {
+  width: 1.6rem;
+  height: 1.6rem;
+  transform: rotate(-90deg);
+}
+
+.legend-day-countdown circle {
+  fill: none;
+  stroke: var(--cl-border);
+  stroke-width: 4;
+}
+
+.legend-day-countdown .legend-day-countdown-left {
+  stroke: var(--cl-action);
+  stroke-linecap: round;
+}
+
+.legend-day-countdown b {
+  color: var(--cl-ink);
+  font: 700 1.1rem var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The time to Reset already shows on a Legend clock card right beside it. */
+.dash-card:has(> .legend-day-card):has(+ [data-card="legend-clock"])
+  .legend-day-countdown,
+[data-card="legend-clock"] + .dash-card .legend-day-countdown {
+  display: none;
+}
+
+/* ---------- Ranks ---------- */
+
+/* Three columns split by hairlines, no panel of their own, over the Next
+   Reset range. Now is the rank the card is about: ember label and the
+   biggest plate. The projected place is a forecast: lighter, its ember
+   diamond repeated on the range line under the three. */
+.legend-day-places {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.legend-day-ranks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
+  margin: 0;
+}
+
+.legend-day-ranks > div {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0 1rem;
+}
+
+.legend-day-ranks > div:first-child {
+  padding-left: 0;
+}
+
+.legend-day-ranks > div + div {
+  border-left: 1px solid var(--cl-card-line);
+}
+
+.legend-day-ranks dt {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.legend-day-ranks dd {
+  margin: 0;
+  font: 700 1.45rem/1.15 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.legend-day-now dt {
+  color: var(--cl-action-text);
+}
+
+.legend-day-ranks .legend-day-now .rank-mark {
+  font-size: 1.6rem;
+}
+
+.legend-day-next > dd {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.legend-day-projected {
+  color: var(--cl-muted);
+  font-weight: 600;
+}
+
+.legend-day-diamond,
+.legend-day-range-bar::after {
+  width: 0.55rem;
+  height: 0.55rem;
+  background: var(--cl-action);
+  transform: rotate(45deg);
+}
+
+/* "Next Reset range", best place, the line with the projected place's
+   diamond, worst place. */
+.legend-day-range {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0;
+  color: var(--cl-muted);
+  font: 600 0.8125rem/1.2 var(--cl-font);
+}
+
+.legend-day-range-name {
+  margin-right: 0.2rem;
+  white-space: nowrap;
+}
+
+.legend-day-range-line .legend-day-range-bar {
+  max-width: 16rem;
+}
+
+/* Its two ends are quieter than the three places over them. */
+.legend-day-range-line > span:not([class]) {
+  color: var(--cl-faint);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Before any projection the range is Next Reset's own number. */
+.legend-day-next > dd > .legend-day-range:only-child {
+  gap: 0.3rem;
+  color: var(--cl-ink);
+  font: 700 1.25rem/1.15 var(--cl-font-score);
+}
+
+.legend-day-range-bar {
+  position: relative;
+  flex: 1;
+  min-width: 2.5rem;
+  height: 10px;
+  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+    no-repeat;
+  border-inline: 2px solid var(--cl-outline);
+}
+
+.legend-day-range-bar::after {
+  position: absolute;
+  top: 50%;
+  left: var(--at);
+  border: 2px solid var(--cl-solid);
+  content: "";
+  translate: -50% -50%;
+}
+
+.legend-day-range-dash {
+  color: var(--cl-faint);
+}
+
+/* A narrow card (a phone) keeps three columns, packed tighter. */
+@container (max-width: 30rem) {
+  .legend-day-ranks > div {
+    gap: 0.15rem;
+    padding: 0 0.6rem;
+  }
+
+  /* 13px here, so "Projected place" keeps one line on a 390px phone. */
+  .legend-day-ranks dt {
+    font-size: 0.8125rem;
+  }
+
+  .legend-day-ranks dd {
+    font-size: 1.25rem;
+  }
+
+  .legend-day-ranks .legend-day-now .rank-mark {
+    font-size: 1.35rem;
+  }
+
+  .legend-day-range {
+    gap: 0.3rem;
+  }
+}
+
+/* The narrowest card (a 320px phone): a label too long for its column
+   wraps, and every column's number sits on one line at the foot. */
+@container (max-width: 17rem) {
+  .legend-day-ranks > div {
+    align-content: end;
+  }
+
+  .legend-day-ranks dt {
+    align-items: start;
+    white-space: normal;
+  }
+}
+
+/* ---------- The day's battles ---------- */
+
+.legend-day-slots {
+  display: grid;
+  gap: 0.85rem;
+}
+
+/* Each battle row: its mark, name and count of 8 with the total, over its 8 slots. */
+.legend-day-battles {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0.4rem;
+}
+
+.legend-day-battles-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.legend-day-battles-head .game-mark {
+  font-size: 1rem;
+}
+
+.legend-day-battles-name {
+  color: var(--cl-ink);
+}
+
+.legend-day-battles-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-battles-head b {
+  margin-left: auto;
+  font: 700 1.2rem var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A wide card puts the ranks beside the numbers. */
+@container (min-width: 40rem) {
+  .legend-day-card {
+    grid-template: "head head" "numbers ranks" "slots slots" 1fr / auto minmax(0, 1fr);
+    column-gap: 2.5rem;
+  }
+
+  .legend-day-card > .dash-card-head {
+    grid-area: head;
+  }
+
+  .legend-day-numbers {
+    grid-area: numbers;
+  }
+
+  .legend-day-places {
+    grid-area: ranks;
+    align-self: center;
+  }
+
+  .legend-day-slots {
+    grid-area: slots;
+  }
+}
+
+/* Eight slots share one line, as wide as the card allows; the stars and the
+   trophies fill each. */
+.dash-star-boxes {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-star-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+  min-height: 3.6rem;
+  padding: 0.35rem 0;
+  background: var(--cl-raised);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font: 700 1.55rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-star-box .game-stars {
+  font-size: 1.05rem;
+}
+
+.dash-star-box-attack {
+  color: var(--cl-positive);
+}
+
+.dash-star-box-defense {
+  color: var(--cl-negative);
+  background: var(--cl-panel);
+}
+
+/* A three-star attack is the one to aim for: a faint gold edge. */
+.dash-star-box-attack[aria-label^="3 stars"] {
+  border-color: color-mix(in srgb, var(--cl-gold) 45%, transparent);
+}
+
+/* On white, a pale yellow tile with an orange edge, not tan. */
+:root:not([data-theme="dark"]) .dash-star-box-attack[aria-label^="3 stars"] {
+  background: #fff6d8;
+  border-color: #f2b45a;
+}
+
+/* A slot still to play is an empty dashed box. */
+.dash-star-box-empty {
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
+}
+
+/* A narrow card (a phone) packs its rows tighter. Under 18rem (a 320px
+   phone) each row's 8 battles take two rows of 4, so three full-size stars
+   sit inside every slot; wider, the rule below keeps them on one line. */
+@container (max-width: 30rem) {
+  .legend-day-card {
+    gap: 0.45rem;
+  }
+
+  .legend-day-slots {
+    gap: 0.4rem;
+  }
+
+  .legend-day-battles {
+    gap: 0.25rem;
+  }
+
+  .dash-star-boxes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+  }
+
+  .dash-star-box {
+    gap: 0.1rem;
+    min-height: 2.2rem;
+    padding: 0.1rem 0.25rem;
+    border-radius: 7px;
+    font-size: 1.2rem;
+  }
+
+  .dash-star-box .game-stars {
+    font-size: 0.875rem;
+  }
+}
+
+/* A phone of 360px or more fits each row's 8 battles on one line in
+   slimmer slots: the three stars as big as the slot allows, at least 10px,
+   over a 14px count. */
+@container (min-width: 18rem) and (max-width: 30rem) {
+  .dash-star-boxes {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .dash-star-box {
+    gap: 0.15rem;
+    min-height: 2.25rem;
+    padding: 0.15rem 0;
+    border-radius: 6px;
+    font-size: 0.875rem;
+  }
+
+  /* A slot is (card − 7 gaps) / 8 wide; three stars and their two small
+     gaps are 3.12 of their size, inside the slot's 1px edges. */
+  .dash-star-box .game-stars {
+    font-size: min(0.75rem, (100cqi - 37px) / 25);
+  }
+}
+
+/* How old the numbers are, said once for the page, at the header's end. */
+.legend-day-fresh {
+  white-space: nowrap;
+}

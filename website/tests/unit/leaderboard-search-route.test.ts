@@ -37,7 +37,7 @@ it("opens the correct page directly for an exact tag", async () => {
   const response = await load("&q=%232pp").catch((cause: unknown) => cause);
   expect(response).toBeInstanceOf(Response);
   expect((response as Response).headers.get("Location")).toBe(
-    "/leaderboards/tracked?view=live&page=2&player=%232PP",
+    "/leaderboards/tracked?view=live&page=3&player=%232PP",
   );
   expect(mocks.getTrackedLeaderboard).not.toHaveBeenCalled();
 });
@@ -56,7 +56,7 @@ it("asks the backend to locate the player again when opening their row", async (
   mocks.getTrackedLeaderboard.mockResolvedValue({ page: 3 });
   const result = await load("&player=%232PP");
   expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
-    100,
+    50,
     "live",
     0,
     undefined,

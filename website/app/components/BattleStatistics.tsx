@@ -16,10 +16,12 @@ export function BattleStatistics({
   player,
   now,
   menu,
+  heatMap,
 }: {
   player: PlayerPage;
   now: number;
   menu?: React.ReactNode;
+  heatMap?: React.ReactNode;
 }) {
   const stats = battleStatistics(player, "season", now);
   const shape = seasonShape(player, now);
@@ -67,18 +69,20 @@ export function BattleStatistics({
     incomplete || saved < expected ? "Some battles may be missing" : "",
     stats.attack.disputed || stats.defense.disputed ? "Conflicting reports" : "",
   ].filter(Boolean);
-  const count = !shape.partial
-    ? `${saved} of ${expected} days saved`
-    : saved < expected
-      ? `${saved} of ${expected} Legend I days saved`
-      : `${expected} Legend I ${expected === 1 ? "day" : "days"}${flags.length ? "" : " · all saved"}`;
+  // Only what the Clasher needs to weigh the numbers: days with no saved
+  // result, and how many days a partial Season had in Legend I.
+  const missing = expected - saved;
+  const count = [
+    shape.partial ? `${expected} Legend I ${expected === 1 ? "day" : "days"}` : "",
+    missing > 0 ? `${missing} ${missing === 1 ? "day" : "days"} missing` : "",
+  ];
   return (
     <SeasonSummary
       title="Season summary"
       meta={
         expected === 0
           ? "No finished Legend days yet this Season"
-          : [count, ...flags].join(" · ")
+          : [...count, ...flags].filter(Boolean).join(" · ") || undefined
       }
       controls={menu}
       rank={[
@@ -98,6 +102,7 @@ export function BattleStatistics({
       ]}
       attack={side(stats.attack)}
       defense={side(stats.defense)}
+      heatMap={heatMap}
     />
   );
 }

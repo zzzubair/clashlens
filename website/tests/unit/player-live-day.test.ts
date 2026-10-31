@@ -137,7 +137,7 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
-    expect(summary).toContain("of 3 days saved");
+    expect(summary).toContain("3 days missing");
     expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
@@ -292,7 +292,7 @@ describe("today's Legend day wording", () => {
     );
     // An open day says where it started, at every width.
     expect(cell(html, "2026-10-07", "Defenses")).toContain(
-      '<span class="log-fact-start">Started on 5,992</span>',
+      '<span class="log-fact-start">Started at <b>5,992</b></span>',
     );
     const gap = "Battles add up to 5,050; next day started at 5,992.";
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,992<\/strong>/);
@@ -359,6 +359,60 @@ describe("today's Legend day wording", () => {
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,200<\/strong>/);
     expect(mark(html, "2026-10-06")).toContain(
       '<span class="day-mark day-mark-verified"',
+    );
+  });
+
+  it("says a verified day's result was checked, and counts its battles out of 8", async () => {
+    const html = await page(WAITING, undefined, [
+      ended(7, {
+        startTrophies: 5960,
+        trophyChange: 40,
+        offense: { attacks: 8, threeStars: 2, trophyGain: 100 },
+        defense: { defenses: 6, threeStarsAgainst: 1, trophyLoss: 60 },
+      }),
+    ]);
+    const day = html.split('id="legend-day-2026-10-07"')[1];
+    // The profile confirms the day's total, so the battles with no record of
+    // their own are already counted in it.
+    expect(day).toContain("<summary>Total confirmed from the profile</summary>");
+    expect(day).toContain("8 defenses not listed, already in the total");
+    expect(day).toContain("<small>8 of 8 recorded</small>");
+    expect(day).toContain("<small>6 of 8 recorded</small>");
+  });
+
+  it("colours each finished day in the Season summary against the player's own days", async () => {
+    const html = await page(WAITING, undefined, [
+      ended(7, { startTrophies: 5960, trophyChange: 40 }),
+      ended(6, { startTrophies: 5980, trophyChange: -20 }),
+      ended(5, { startTrophies: 5970, trophyChange: 10 }),
+    ]);
+    const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
+    const cell = (day: number) =>
+      summary.split(`aria-label="Day ${day}: `)[0].split("<li").at(-1) ?? "";
+    // Best day green, worst red and marked as a loss; today and later days unshaded.
+    expect(cell(3)).toContain("--heat:var(--cl-heat-4)");
+    expect(cell(2)).toContain('class="season-heat-played is-loss"');
+    // Only a day that lost trophies is named a loss, never a gain; its signed
+    // value is what shows it.
+    expect(cell(1)).not.toContain("is-loss");
+    expect(cell(3)).not.toContain("is-loss");
+    expect(cell(2)).toContain("--heat:var(--cl-heat-0)");
+    expect(cell(1)).toContain("--heat:var(--cl-heat-2)");
+    // Each day is a button named for screen readers, showing its result as
+    // the dashboard's do; today says so, and the days to come are empty.
+    expect(summary).toContain('aria-label="Day 2: −20">−20</button>');
+    expect(summary).toContain('aria-label="Day 1: +10">+10</button>');
+    expect(summary).toContain(
+      'aria-label="Day 4: today, not finished yet">Today</button>',
+    );
+    expect(summary).toContain('aria-label="Day 28: not played yet"></button></li>');
+    // The key reads the scale, as on the dashboard, with no separate loss mark.
+    expect(summary).toContain("Season: worst");
+    expect(summary).not.toContain("lost trophies");
+    // A phone, with no pointer, reads out today under the grid until a day
+    // is tapped.
+    expect(summary).toMatch(
+      /<span class="season-heat-readout is-fallback">Day 4 · \d{1,2} [A-Z][a-z]{2} · in progress<\/span>/,
     );
   });
 });

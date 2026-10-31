@@ -11,13 +11,14 @@ import {
   DAILY_BATTLES,
   SEASON_DAYS,
   heatCells,
-  heatStep,
   heatValue,
   isShieldDay,
   offenseConsistency,
   recentForm,
   sideAverages,
 } from "../lib/dashboard-cards";
+import { Stars } from "./GameIcons";
+import { HeatFoot, HeatKey, SeasonHeatGrid } from "./SeasonHeatGrid";
 import {
   CardHead,
   CardNote,
@@ -43,6 +44,8 @@ const FIRST_DAY_NOTE = "Results start after the Season's first Reset.";
 export function HeatMapCard({ data }: { data: SeasonData }) {
   const [mode, setMode] = useState<HeatMode>("net");
   const [picked, setPicked] = useState<number | null>(null);
+  // The day under the pointer or keyboard focus, read out under the grid.
+  const [pointed, setPointed] = useState<number | null>(null);
   const cells = heatCells(data, mode);
   const byDay = new Map(data.days.map((day) => [day.day, day]));
   const pickedCell = cells.find((cell) => cell.day === picked) ?? null;
@@ -50,6 +53,10 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
     pickedCell === null || pickedCell.kind in NO_RESULT
       ? null
       : (byDay.get(pickedCell.day) ?? null);
+  const shownCell = cells.find((cell) => cell.day === (pointed ?? picked)) ?? null;
+  const todayCell = cells.find((cell) => cell.kind === "today") ?? null;
+  const say = (cell: HeatCell) =>
+    dayReadout(cell, byDay.get(cell.day), mode, dayDate(cell.day, data.startMs));
   return (
     <>
       <CardHead
@@ -67,25 +74,20 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
           />
         }
       />
-      <ol className="heat-grid" aria-label={`Season days, ${mode}`}>
-        {cells.map((cell) => (
-          <HeatSquare
-            key={cell.day}
-            cell={cell}
-            picked={picked === cell.day}
-            onPick={() => setPicked(picked === cell.day ? null : cell.day)}
-          />
-        ))}
-      </ol>
-      <p className="dash-muted heat-tip" aria-live="polite">
-        {pickedDay
-          ? `Day ${pickedDay.day} · ended on ${count(pickedDay.endTrophies)}${isShieldDay(pickedDay) ? " · no battles" : ""}`
-          : pickedCell && pickedCell.kind in NO_RESULT
-            ? `Day ${pickedCell.day}: ${NO_RESULT[pickedCell.kind as keyof typeof NO_RESULT]}`
-            : data.today !== null && data.today > 1
-              ? "Coloured against your own Season: best days green, worst red."
-              : FIRST_DAY_NOTE}
-      </p>
+      <SeasonHeatGrid
+        cells={cells}
+        label={`Season days, ${mode}`}
+        loss={mode === "net"}
+        picked={picked}
+        onPick={(day) => setPicked(picked === day ? null : day)}
+        onPoint={setPointed}
+      />
+      <HeatFoot
+        readout={shownCell ? say(shownCell) : null}
+        fallback={todayCell ? say(todayCell) : null}
+      >
+        {data.today !== null && data.today > 1 ? <HeatKey /> : FIRST_DAY_NOTE}
+      </HeatFoot>
       <dl className="heat-summary">
         {pickedDay ? (
           <DayNumbers day={pickedDay} />
@@ -104,54 +106,31 @@ const NO_RESULT = {
   missing: "no saved result",
 } as const;
 
-function HeatSquare({
-  cell,
-  picked,
-  onPick,
-}: {
-  cell: HeatCell;
-  picked: boolean;
-  onPick: () => void;
-}) {
-  const label =
-    cell.kind === "today"
-      ? "today, not finished yet"
-      : cell.kind === "future"
-        ? "not played yet"
-        : cell.kind === "missing"
-          ? "no data"
-          : cell.kind === "shield"
-            ? "no battles"
-            : signedOr(cell.value);
-  const step =
-    cell.kind in NO_RESULT || cell.shade === null ? null : heatStep(cell.shade);
-  const style =
-    step === null
-      ? undefined
-      : {
-          background: `var(--cl-heat-${step})`,
-          color: `var(--cl-heat-${step}-text, var(--cl-heat-text))`,
-        };
-  return (
-    <li className={`heat-day heat-${cell.kind}`} style={style}>
-      <button
-        type="button"
-        aria-pressed={picked}
-        aria-label={`Day ${cell.day}: ${label}`}
-        title={`Day ${cell.day}: ${label}`}
-        onClick={onPick}
-      >
-        <small>{cell.day}</small>
-        {cell.kind === "today"
-          ? "today"
-          : cell.kind === "missing"
-            ? "–"
-            : cell.kind in NO_RESULT
-              ? ""
-              : signedOr(cell.value)}
-      </button>
-    </li>
-  );
+/** One line on a pointed or picked day: its number, date, result and finish. */
+function dayReadout(
+  cell: HeatCell,
+  day: SeasonDay | undefined,
+  mode: HeatMode,
+  date: string | null,
+): string {
+  const name = date ? `Day ${cell.day} · ${date}` : `Day ${cell.day}`;
+  if (cell.kind in NO_RESULT || day === undefined)
+    return `${name} · ${NO_RESULT[cell.kind as keyof typeof NO_RESULT] ?? NO_RESULT.missing}`;
+  const result = isShieldDay(day) ? "no battles" : `${signedOr(cell.value)} ${mode}`;
+  return `${name} · ${result} · ended on ${count(day.endTrophies)}`;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Season day `day`'s date, counted on from the Season's start that Python
+ * sent, so a device clock that is off cannot move it.
+ */
+function dayDate(day: number, startMs: number | null): string | null {
+  if (startMs === null) return null;
+  return new Date(startMs + (day - 1) * DAY_MS)
+    .toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })
+    .replace("Sept", "Sep");
 }
 
 function Pair({
@@ -191,7 +170,7 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
   const value = (day: SeasonDay) => heatValue(day, mode) as number;
   const best = played.reduce((top, day) => (value(day) > value(top) ? day : top));
   const worst = played.reduce((low, day) => (value(day) < value(low) ? day : low));
-  const at = (day: SeasonDay) => `${signedOr(value(day))} · D${day.day}`;
+  const at = (day: SeasonDay) => `${signedOr(value(day))} · Day ${day.day}`;
   if (mode === "net") {
     const nets = played.map(value);
     return (
@@ -570,7 +549,7 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
           <ul className="consistency-split">
             {stats.stars.map((amount, index) => (
               <li key={index} className={STAR_CLASSES[index]}>
-                {3 - index}★ <b>{amount}</b>
+                <Stars count={3 - index} /> <b>{amount}</b>
               </li>
             ))}
           </ul>

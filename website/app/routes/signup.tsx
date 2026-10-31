@@ -3,6 +3,9 @@ import { Link, useLoaderData } from "react-router";
 import type { SignInPageData } from "../server/sign-in-page.server";
 import type { Route } from "./+types/signup";
 import { ProviderMark } from "../components/ProviderMark";
+import { SignInReason } from "../components/SignInReason";
+import { TeaserBoard } from "../components/DashboardTeaser";
+import "../front-page.css";
 
 export function meta() {
   return [{ title: "Create account · Clash Lens" }];
@@ -26,47 +29,67 @@ export default function SignupRoute() {
   const data = useLoaderData<typeof loader>();
   const back = encodeURIComponent(data.returnPath);
   return (
-    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      <h1>Create your Clash Lens account</h1>
-      <p className="lede">
-        {data.crewName
-          ? `To join ${data.crewName}.`
-          : "Free. Player pages stay public without one."}
-      </p>
-      {data.loginAvailable ? (
-        <section className="form-panel sign-in-panel" aria-label="Create account">
-          <p className="button-row">
-            <Link
-              className="button button-primary"
-              to={`/auth/google?returnPath=${back}&signup=1`}
-            >
-              <ProviderMark provider="google" />
-              Sign up with Google
-            </Link>
-            <Link
-              className="button button-secondary"
-              to={`/auth/discord?returnPath=${back}&signup=1`}
-            >
-              <ProviderMark provider="discord" />
-              Sign up with Discord
-            </Link>
-          </p>
-          <p className="account-buttons">
-            <span>Already have an account?</span>
-            <Link className="button button-secondary" to={`/login?returnPath=${back}`}>
-              Sign in
-            </Link>
-          </p>
-          <p className="section-note">Clash Lens never asks for your email address.</p>
-        </section>
-      ) : (
-        <div className="empty-state" role="alert">
-          <h2>Sign-up is not available</h2>
-          <p>
-            Sign-in is not configured right now. Public player data remains available.
-          </p>
-        </div>
-      )}
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="page-shell narrow-shell sign-in-page"
+    >
+      <div className="sign-in-main">
+        {/* The brand's small mark, so the page reads as Clash Lens's own. */}
+        <img
+          className="sign-in-mark"
+          src="/images/mark-cl-block.svg"
+          alt=""
+          width="56"
+          height="56"
+        />
+        <h1>
+          Create your <span className="brand-name">Clash Lens</span> account
+        </h1>
+        <SignInReason returnPath={data.returnPath} />
+        <p className="lede">
+          {data.crewName
+            ? `To join ${data.crewName}.`
+            : "Free. Player pages stay public without one."}
+        </p>
+        {data.loginAvailable ? (
+          <>
+            <section className="sign-in-panel" aria-label="Create account">
+              <p className="button-row">
+                <Link
+                  className="button button-secondary sign-in-google"
+                  to={`/auth/google?returnPath=${back}&signup=1`}
+                >
+                  <ProviderMark provider="google" />
+                  Sign up with Google
+                </Link>
+                <Link
+                  className="button button-secondary"
+                  to={`/auth/discord?returnPath=${back}&signup=1`}
+                >
+                  <ProviderMark provider="discord" />
+                  Sign up with Discord
+                </Link>
+              </p>
+              <p className="sign-in-new">
+                Have an account? <Link to={`/login?returnPath=${back}`}>Sign in</Link>
+              </p>
+            </section>
+            <p className="sign-in-privacy">
+              Clash Lens never asks for your email. <Link to="/privacy">Privacy</Link>
+            </p>
+          </>
+        ) : (
+          <div className="empty-state" role="alert">
+            <h2>Sign-up is not available</h2>
+            <p>
+              Sign-in is not configured right now. Public player data remains available.
+            </p>
+          </div>
+        )}
+      </div>
+      {/* A quiet picture of what an account opens, where there is room. */}
+      {data.loginAvailable ? <TeaserBoard link={false} /> : null}
     </main>
   );
 }

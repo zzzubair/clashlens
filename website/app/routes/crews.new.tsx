@@ -10,7 +10,7 @@ import {
 } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
-import { TrophyMark } from "../components/LeaderboardShared";
+import { TrophyIcon } from "../components/GameIcons";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -329,7 +329,7 @@ export default function NewCrewRoute() {
                       </span>
                       {joinable && account.trophies !== null ? (
                         <span className="crew-value">
-                          <TrophyMark />
+                          <TrophyIcon />
                           {account.trophies.toLocaleString("en-US")}
                         </span>
                       ) : null}

@@ -7,6 +7,10 @@
  * load later with the route.
  */
 
+/* All three files are preloaded from root.tsx, so they arrive with the
+   page. The body face swaps in, so words show at once; the scoreboard face
+   holds its text back for the moment it takes instead, so a title or a
+   trophy count never draws in a stand-in face first. */
 @font-face {
   font-family: Inter;
   font-weight: 400 900;
@@ -17,14 +21,14 @@
 @font-face {
   font-family: "Barlow Condensed";
   font-weight: 600;
-  font-display: swap;
+  font-display: block;
   src: url("/fonts/barlow-condensed-600-latin.woff2") format("woff2");
 }
 
 @font-face {
   font-family: "Barlow Condensed";
   font-weight: 700;
-  font-display: swap;
+  font-display: block;
   src: url("/fonts/barlow-condensed-700-latin.woff2") format("woff2");
 }
 
@@ -45,11 +49,18 @@
   letter-spacing: 0;
   text-shadow: none;
 }
+/* Section and card titles too, a size up, since the face runs small; any
+   small note inside a title stays in the body face. */
 :root h2 {
-  font-size: clamp(1.15rem, 1.05rem + 0.45vw, 1.35rem);
+  font-family: var(--cl-font-heading);
+  font-size: clamp(1.35rem, 1.2rem + 0.5vw, 1.55rem);
   font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+  line-height: 1.15;
+  letter-spacing: 0.005em;
+}
+:root h2 small {
+  font-family: var(--cl-font);
+  letter-spacing: 0;
 }
 :root h3 {
   font-size: 1rem;
@@ -89,7 +100,8 @@
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);
 }
-/* The current tab: bright text and a short gold bar under it. */
+/* The current tab: bright text and a gold bar as wide as its name, resting
+   on the bar's bottom edge. */
 :root .primary-nav a[aria-current="page"] {
   color: var(--cl-header-ink);
   background: transparent;
@@ -97,13 +109,12 @@
 }
 :root .primary-nav a[aria-current="page"]::after {
   position: absolute;
-  right: 0.9rem;
-  bottom: -0.55rem;
-  left: 0.9rem;
+  right: 0.6rem;
+  bottom: calc((var(--cl-header-h) - 2.5rem) / -2);
+  left: 0.6rem;
   height: 2px;
-  background: var(--cl-brand-fill);
   background: linear-gradient(90deg, var(--cl-brand-yellow), var(--cl-brand-orange));
-  border-radius: 2px;
+  border-radius: 2px 2px 0 0;
   content: "";
 }
 :root :is(.site-nav, .site-menu-extras) .nav-link:not(.nav-link-primary),
@@ -136,8 +147,7 @@
   border-radius: var(--cl-radius);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.45),
-    inset 0 -1px 0 rgb(120 40 0 / 0.25),
-    0 6px 18px -8px rgb(255 120 20 / 0.55);
+    inset 0 -1px 0 rgb(120 40 0 / 0.25);
   font-weight: 650;
   letter-spacing: -0.005em;
   text-shadow: none;
@@ -154,33 +164,63 @@
    filled button (Enter searches too). */
 :root .search-controls button {
   color: var(--cl-ink);
-  background: var(--cl-card-fill, var(--cl-surface));
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
   border-radius: var(--cl-radius);
-  box-shadow: var(--cl-glass-shine);
+  box-shadow: none;
   font-weight: 600;
 }
 :root .search-controls button:is(:hover, :focus-visible) {
   color: var(--cl-ink);
-  background: var(--cl-panel);
-  border-color: var(--cl-outline);
+  background: var(--cl-fill-hover);
+  border-color: transparent;
 }
-/* The top bar's Sign in: an outline, so the page's own main action stays the
-   only filled one on screen. */
+/* Join Discord is a way out of the site, so it sits back with the tabs. */
+:root .site-nav-wide .nav-link.nav-discord:not(.nav-link-primary) {
+  color: var(--cl-header-muted);
+}
+:root
+  .site-nav-wide
+  .nav-link.nav-discord:not(.nav-link-primary):is(:hover, :focus-visible) {
+  color: var(--cl-header-ink);
+}
+/* The top bar's Sign in: a soft ember tint, so the page's own main action
+   stays the only solid one on screen, inside an ember edge that keeps 3:1
+   against the bar (--cl-action-edge, for any ember pill that must read as
+   a control). */
+:root {
+  --cl-action-edge: #c46a2a;
+}
+:root[data-theme="dark"] {
+  --cl-action-edge: #a8582a;
+}
 :root .site-header .nav-link-primary {
   color: var(--cl-action-text);
-  background: transparent;
-  border: 1px solid var(--cl-action-border);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-edge);
   border-radius: var(--cl-radius);
   box-shadow: none;
   font-weight: 650;
 }
 :root .site-header .nav-link-primary:is(:hover, :focus-visible) {
   color: var(--cl-action-text);
-  background: var(--cl-action-soft);
+  background: color-mix(in srgb, var(--cl-action) 22%, transparent);
+  border-color: var(--cl-action-edge);
 }
 
-/* Secondary: a quiet glass button with a hairline edge. */
+/* Secondary: a light fill inside a crisp warm edge that keeps 3:1 against
+   the page, a card and the hero, so a button is easy to find. Sections and
+   rows have no edges, so an edge means "you can press this". */
+:root {
+  --cl-control-fill: rgb(255 253 250 / 0.65);
+  --cl-control-fill-hover: #fffcf9;
+  --cl-control-edge: #8b735c;
+}
+:root[data-theme="dark"] {
+  --cl-control-fill: rgb(255 240 228 / 0.06);
+  --cl-control-fill-hover: rgb(255 240 228 / 0.13);
+  --cl-control-edge: #756b63;
+}
 :root
   :is(
     .button.secondary,
@@ -190,10 +230,10 @@
     .snapshot-pagination a
   ) {
   color: var(--cl-ink);
-  background: var(--cl-card-fill, var(--cl-surface));
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-control-fill);
+  border: 1px solid var(--cl-control-edge);
   border-radius: var(--cl-radius);
-  box-shadow: var(--cl-glass-shine);
+  box-shadow: none;
   font-weight: 600;
 }
 :root
@@ -205,8 +245,8 @@
     .snapshot-pagination a
   ):is(:hover, :focus-visible) {
   color: var(--cl-ink);
-  background: var(--cl-panel);
-  border-color: var(--cl-outline);
+  background: var(--cl-control-fill-hover);
+  border-color: var(--cl-control-edge);
 }
 :root .danger-button {
   color: #ffffff;
@@ -217,16 +257,81 @@
   font-weight: 650;
 }
 
-/* ---------- Switches: a sunken track, the chosen option lifted out ---------- */
-
-:root .leaderboard-view-switch {
-  padding: 3px;
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-border);
-  border-radius: calc(var(--cl-radius) + 3px);
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.06);
+/* Show all: the one style for opening the rest of a list. A quiet ember row
+   across the list's foot, its chevron pointing down while it opens the rest
+   in place (up once open), or right on a link to the list's own page. It
+   fits a button (with aria-expanded), a link or a <details> summary; the
+   list draws the hairline above it. */
+:root .show-all {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  color: var(--cl-action-text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font: 650 0.875rem var(--cl-font);
+  text-decoration: none;
+  list-style: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-:root .leaderboard-view-switch .button {
+:root .show-all::-webkit-details-marker {
+  display: none;
+}
+:root .show-all::after {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 2px solid currentcolor;
+  border-bottom: 2px solid currentcolor;
+  transform: translateY(-25%) rotate(45deg);
+  content: "";
+}
+:root :is(.show-all[aria-expanded="true"], [open] > .show-all)::after {
+  transform: translateY(25%) rotate(-135deg);
+}
+:root a.show-all::after {
+  transform: rotate(-45deg);
+}
+:root .show-all:active {
+  color: var(--cl-action-text);
+  background: var(--cl-header-soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  :root .show-all:hover {
+    color: var(--cl-action-text);
+    background: var(--cl-header-soft);
+  }
+}
+/* Inset, as a sheet clips anything outside it. */
+:root .show-all:focus-visible {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+}
+
+/* ---------- Switches: the one style for in-page tabs ----------
+   A flat tinted track with no edge, and the chosen option the one thing
+   lifted out of it. Every set of tabs or choices on a page uses it:
+   .leaderboard-view-switch on a nav of .button links marked aria-current, or
+   on a group of buttons marked aria-pressed (its layout is in explore.css,
+   which every page loads); dashboard cards use .dash-switch. Each page keeps
+   its own sizes. .tab-row's ember chips (below) are the old second style,
+   left only until the crew's board tabs and Analytics' unit types move. */
+:root :is(.leaderboard-view-switch, .dash-switch) {
+  background: var(--cl-raised);
+  border: 0;
+  border-radius: calc(var(--cl-radius) + 3px);
+  box-shadow: none;
+}
+:root[data-theme="dark"] :is(.leaderboard-view-switch, .dash-switch) {
+  background: var(--cl-panel);
+}
+:root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button) {
   color: var(--cl-muted);
   background: transparent;
   border: 0;
@@ -235,64 +340,156 @@
   text-shadow: none;
   font-weight: 600;
 }
-:root .leaderboard-view-switch .button:hover {
+:root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button):hover {
   color: var(--cl-ink);
   background: transparent;
 }
-:root .leaderboard-view-switch .button[aria-current="page"] {
+:root
+  :is(.leaderboard-view-switch, .dash-switch)
+  :is(.button, button):is([aria-current="page"], [aria-pressed="true"]) {
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border-color: transparent;
   box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.12),
-    0 0 0 1px var(--cl-card-line);
+    0 1px 2px rgb(90 50 20 / 0.16),
+    0 0 0 1px rgb(150 80 20 / 0.08);
   font-weight: 650;
 }
-:root[data-theme="dark"] .leaderboard-view-switch .button[aria-current="page"] {
-  background: var(--cl-raised);
+:root[data-theme="dark"]
+  :is(.leaderboard-view-switch, .dash-switch)
+  :is(.button, button):is([aria-current="page"], [aria-pressed="true"]) {
+  background: rgb(255 236 218 / 0.13);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
     0 1px 2px rgb(0 0 0 / 0.5);
 }
 
-/* ---------- Panels: one hairline edge, a lit top, one corner size ---------- */
-
+/* ---------- Surfaces: depth in three levels ----------
+   1. Each page's one hero (below): the ember glass with a small, soft
+      glow, the only glow on the page.
+   2. A sheet, the panel for the rest of a page's blocks: one flat fill,
+      never a gradient, with tighter corners than the hero's. Dark: a faint
+      warm see-through fill with a light inner top edge, no drawn edge and
+      no shadow. Light: an ivory fill on the sand page, finished like glass
+      by a warm 1px hairline, a faint ember line along its top and a soft
+      warm shadow. Module cards (dashboard cards, crew boards and watchlist
+      cards) swap that top line for a warm highlight
+      that fades out toward both sides (--cl-card-top), a faint inner ring
+      lighter at the top and fading down (--cl-card-rim) and a faint ember
+      tint behind their header (--cl-card-head). No other glow.
+   3. A page's main table or list (.open-board, under Tables): no box at
+      all, on the page itself, with a clear header row and a hairline
+      (--cl-sheet-line) under each row.
+   Tables and lists inside a sheet stay open, split by hairlines; a sheet
+   never holds another box. --cl-card-fill is the sheet's fill for page
+   rules that still name it, and --cl-sheet-solid the same colour made
+   opaque, for a sticky row that must hide what scrolls under it. There is
+   no backdrop blur: it would pin the fixed pop-ups inside a card (the
+   Legend clock's) to that card, and over the plain page it changes
+   nothing. */
 :root {
-  --cl-card-fill: var(--cl-surface);
+  --cl-sheet-fill: rgb(255 253 249 / 0.94);
+  --cl-sheet-solid: #fffdf9;
+  --cl-sheet-line: rgb(170 100 40 / 0.17);
+  --cl-sheet-border: var(--cl-sheet-line);
+  --cl-sheet-edge: inset 0 1px 0 rgb(255 160 80 / 0.3);
+  --cl-sheet-shadow:
+    0 1px 2px rgb(170 100 40 / 0.07), 0 12px 32px -16px rgb(190 110 40 / 0.24);
+  --cl-card-top: linear-gradient(
+    90deg,
+    transparent 6%,
+    rgb(255 150 60 / 0.6),
+    transparent 94%
+  );
+  --cl-card-head: linear-gradient(180deg, rgb(255 138 31 / 0.05), transparent 4.5rem);
+  --cl-card-rim: linear-gradient(180deg, rgb(225 140 60 / 0.24), transparent 60%);
+  --cl-card-fill: var(--cl-sheet-fill);
+  --cl-card-quiet: 0 0 transparent;
+  /* The Clasher's own row, and a row a jump opened: one ember wash on every
+     board, strong enough to find at a glance. */
+  --cl-you-wash: rgb(255 138 31 / 0.15);
 }
 :root[data-theme="dark"] {
-  /* Dark panels lift off the black: a shade lighter at the top, lit along the edge. */
-  --cl-card-fill: linear-gradient(180deg, #121215 0%, #0c0c0e 100%);
+  --cl-sheet-fill: rgb(255 238 222 / 0.045);
+  --cl-sheet-solid: #141110;
+  --cl-sheet-line: rgb(255 226 200 / 0.09);
+  --cl-sheet-border: transparent;
+  --cl-sheet-edge: inset 0 1px 0 rgb(255 232 210 / 0.08);
+  --cl-sheet-shadow: 0 0 transparent;
+  --cl-card-top: linear-gradient(
+    90deg,
+    transparent 6%,
+    rgb(255 196 140 / 0.26),
+    transparent 94%
+  );
+  --cl-card-head: linear-gradient(180deg, rgb(255 140 40 / 0.045), transparent 4.5rem);
+  --cl-card-rim: linear-gradient(180deg, rgb(255 226 200 / 0.13), transparent 60%);
+  --cl-you-wash: rgb(255 140 40 / 0.12);
 }
 :root
   :is(
+    .dash-card,
     .home-leaderboard,
     .standings-board,
     .season-summary,
+    .legend-log,
+    .group-card,
+    .compare-board,
+    .linked-player-card,
+    .crew-board,
+    .crew-panel,
+    .analytics-results,
+    .search-results,
+    .table-wrap,
     .metric-card,
     .notice,
     .empty-state,
     .form-panel,
-    .group-card,
-    .compare-board,
-    .linked-player-card,
-    .dash-card,
-    .blog-list article,
     .analytics-empty,
-    .search-results,
-    .table-wrap,
-    .search-dropdown,
-    .header-search-panel,
-    .home-page .search-controls
-  ) {
-  background: var(--cl-card-fill);
+    .dash-message,
+    .settings-group
+  ),
+/* Apart from the list, so their heavier selectors don't weigh down every
+   sheet's rule. */
+:root .blog-list article,
+:root .settings-list:not(.settings-group .settings-list) {
+  background: var(--cl-sheet-fill);
+  border: 1px solid var(--cl-sheet-border);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-sheet-edge), var(--cl-sheet-shadow);
+}
+/* Level 2: the top highlight sits on the card's top edge, over its border,
+   and a 1px ring just inside the edge (--cl-card-rim) is lighter at the top
+   and fades out down the sides. */
+:root :is(.dash-card, .crew-board, .group-card) {
+  position: relative;
+  background:
+    var(--cl-card-top) top / 100% 1px no-repeat border-box,
+    var(--cl-card-head),
+    var(--cl-sheet-fill);
+  box-shadow: var(--cl-sheet-shadow);
+}
+:root :is(.dash-card, .crew-board, .group-card)::after {
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  background: var(--cl-card-rim);
+  border-radius: max(0px, calc(var(--cl-card-radius) - 1px));
+  content: "";
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+/* Pop-ups are real frosted glass over the page, including a form that opens
+   from a button (New watchlist): a sheet's fill would let the rows under it
+   show through. */
+:root :is(.search-dropdown, .header-search-panel, details > .form-panel) {
+  background: var(--cl-glass-strong);
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
-}
-/* Pop-ups are real frosted glass over the page. */
-:root :is(.search-dropdown, .header-search-panel) {
-  background: var(--cl-glass-strong);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: var(--cl-overlay-shadow);
@@ -300,23 +497,112 @@
 :root :is(.home-leaderboard, .standings-board, .season-summary) {
   overflow: hidden;
 }
-/* A panel inside a panel is just a section of it. */
+/* ---------- Each page's one hero panel ----------
+   The panel a page is about is the one raised thing on it. Dark: smoked
+   glass that blurs the page behind, a warm sheen in the corner the light
+   comes from, an edge lit from the top left in the logo's orange, a bright
+   inner top edge and an ember glow round it. Light: a clean near-white card
+   with the same lit edge, a soft ember glow and a crisp, soft shadow. */
+:root {
+  --cl-hero-fill:
+    radial-gradient(120% 95% at 0% 0%, rgb(255 176 90 / 0.12), transparent 60%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.97), rgb(255 252 248 / 0.92));
+  --cl-hero-edge: linear-gradient(
+    135deg,
+    rgb(240 130 30 / 0.75),
+    rgb(240 130 30 / 0.18) 34%,
+    rgb(240 130 30 / 0.08) 68%,
+    rgb(250 180 80 / 0.5)
+  );
+  --cl-hero-shine: inset 0 1px 0 rgb(255 255 255);
+  /* Rounder than a sheet's, so the one hero reads apart from the sheets. */
+  --cl-hero-radius: 22px;
+  --cl-hero-halo:
+    0 0 20px -6px rgb(255 130 30 / 0.28), 0 1px 2px rgb(170 100 40 / 0.12),
+    0 8px 18px -10px rgb(180 100 40 / 0.22);
+}
+:root[data-theme="dark"] {
+  --cl-hero-fill:
+    radial-gradient(120% 100% at 0% 0%, rgb(255 150 60 / 0.17), transparent 60%),
+    linear-gradient(180deg, rgb(255 236 218 / 0.085), rgb(255 236 218 / 0.035));
+  --cl-hero-edge: linear-gradient(
+    135deg,
+    rgb(255 170 70 / 0.7),
+    rgb(255 150 60 / 0.16) 34%,
+    rgb(255 150 60 / 0.05) 68%,
+    rgb(255 196 100 / 0.36)
+  );
+  --cl-hero-shine: inset 0 1px 0 rgb(255 226 192 / 0.24);
+  --cl-hero-halo: 0 0 24px -6px rgb(255 120 30 / 0.24);
+}
 :root
   :is(
+    .dash-card[data-card="legend-day"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  ) {
+  position: relative;
+  background: var(--cl-hero-fill);
+  border: 1px solid transparent;
+  border-radius: var(--cl-hero-radius);
+  box-shadow: var(--cl-hero-shine), var(--cl-hero-halo);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
+}
+/* The lit edge: a gradient ring, masked to the 1px border. */
+:root
+  :is(
+    .dash-card[data-card="legend-day"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  )::after {
+  position: absolute;
+  inset: -1px;
+  padding: 1px;
+  background: var(--cl-hero-edge);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.player-page .player-hero {
+  padding: 1.25rem 1.5rem 0.9rem;
+}
+/* Inside a sheet, never another box: a sheet within a sheet is just a
+   section of it. */
+:root
+  :is(
+    .dash-card,
     .home-leaderboard,
     .standings-board,
     .season-summary,
-    .form-panel,
+    .legend-log,
     .group-card,
     .compare-board,
-    .search-results
+    .linked-player-card,
+    .crew-board,
+    .analytics-results,
+    .search-results,
+    .form-panel
   )
   :is(
+    .home-leaderboard,
+    .season-summary,
+    .group-card,
+    .compare-board,
+    .search-results,
+    .table-wrap,
     .metric-card,
     .notice,
     .empty-state,
-    .table-wrap,
-    .search-results,
+    .analytics-empty,
+    .form-panel,
     .search-controls
   ) {
   background: transparent;
@@ -324,9 +610,10 @@
   border-radius: 0;
   box-shadow: none;
 }
-/* Small items in a list share the panel edge. */
+/* Small items in a list are soft tinted tiles, not boxes in a box. */
 :root :is(.search-result, .player-action-list li) {
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-panel);
+  border: 0;
   border-radius: var(--cl-radius);
   box-shadow: none;
 }
@@ -337,7 +624,7 @@
   color: var(--cl-faint);
   background: transparent;
   border-bottom: 1px solid var(--cl-border);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -352,8 +639,50 @@
   font-weight: 650;
 }
 
-/* Rank plates: a slanted scoreboard tab, gold, silver and bronze on the podium. */
-:root :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
+/* Level 3, a page's main table or list: no box, on the page itself. Put
+   .open-board on the table, or on the block round it (it wins over the
+   sheet). A table's header row is clear, over a stronger line; each body
+   row ends in a hairline. */
+:root .open-board {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+:root :is(table.open-board, .open-board table) {
+  border-collapse: collapse;
+}
+:root .open-board thead th {
+  color: var(--cl-muted);
+  background: transparent;
+  border-bottom: 1px solid var(--cl-outline);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+:root .open-board tbody > tr > :is(td, th) {
+  border-bottom: 1px solid var(--cl-sheet-line);
+}
+
+/* Rank plates: a slanted scoreboard tab, gold, pewter and bronze on the
+   podium. Second place is a warm pewter, never a cold blue-grey, in both
+   themes; --cl-podium-N tints a podium row to match its plate. */
+:root {
+  --cl-podium-1: #f2b51d;
+  --cl-podium-2: #a39486;
+  --cl-podium-3: #c9814f;
+}
+:root[data-theme="dark"] {
+  --cl-podium-2: #c2b5a8;
+}
+/* A board's second-place row takes the pewter too, in both themes (the
+   rows' other podium tints are in explore.css, which loads first). */
+:root .leaderboard-row[data-podium-rank="2"],
+:root:not([data-theme="dark"]) .leaderboard-row[data-podium-rank="2"] {
+  --podium: var(--cl-podium-2);
+}
+:root :is(.rank-mark, .crew-rank) {
   display: inline-grid;
   flex: none;
   place-items: center;
@@ -372,18 +701,16 @@
   font-variant-numeric: tabular-nums;
   box-shadow: none;
 }
-/* On white, a plate below the podium needs a darker grey to show. */
-:root:not([data-theme="dark"])
-  :is(.rank-mark, .crew-rank, [data-ranked] .analytics-rank) {
-  background: #e1e1e6;
+/* In light, a plate below the podium is a deeper sand, so it shows on an
+   ivory sheet and on the sand page alike. */
+:root:not([data-theme="dark"]) :is(.rank-mark, .crew-rank) {
+  background: #e2ceb2;
 }
 :root
   :is(
     .leaderboard-row[data-podium-rank] .rank-mark,
     .log-rank[data-podium-rank] .rank-mark,
-    .rank-mark[data-podium-rank],
-    .crew-rank[data-podium-rank],
-    [data-ranked] .analytics-row:nth-child(-n + 3) .analytics-rank
+    .rank-mark[data-podium-rank]
   ) {
   color: var(--cl-brand-night);
   border: 0;
@@ -393,9 +720,7 @@
   :is(
     .leaderboard-row[data-podium-rank="1"] .rank-mark,
     .log-rank[data-podium-rank="1"] .rank-mark,
-    .rank-mark[data-podium-rank="1"],
-    .crew-rank[data-podium-rank="1"],
-    [data-ranked] .analytics-row:nth-child(1) .analytics-rank
+    .rank-mark[data-podium-rank="1"]
   ) {
   background: linear-gradient(180deg, #ffe38a, #f2b51d);
 }
@@ -403,19 +728,15 @@
   :is(
     .leaderboard-row[data-podium-rank="2"] .rank-mark,
     .log-rank[data-podium-rank="2"] .rank-mark,
-    .rank-mark[data-podium-rank="2"],
-    .crew-rank[data-podium-rank="2"],
-    [data-ranked] .analytics-row:nth-child(2) .analytics-rank
+    .rank-mark[data-podium-rank="2"]
   ) {
-  background: linear-gradient(180deg, #eef0f4, #b9bec8);
+  background: linear-gradient(180deg, #f1ebe4, #bcafa2);
 }
 :root
   :is(
     .leaderboard-row[data-podium-rank="3"] .rank-mark,
     .log-rank[data-podium-rank="3"] .rank-mark,
-    .rank-mark[data-podium-rank="3"],
-    .crew-rank[data-podium-rank="3"],
-    [data-ranked] .analytics-row:nth-child(3) .analytics-rank
+    .rank-mark[data-podium-rank="3"]
   ) {
   background: linear-gradient(180deg, #f4c19c, #c9814f);
 }
@@ -425,8 +746,8 @@
 /* A quiet label, so the orange stays on the main action. */
 :root :is(.profile-badge) {
   color: var(--cl-muted);
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-raised);
+  border: 0;
   border-radius: 4px;
   font-weight: 650;
 }
@@ -483,10 +804,72 @@
   color: var(--cl-muted);
 }
 
+/* A top-level page's heading (Rankings, Analytics, Watchlists, Crews), the
+   same on each: the big display title, at most one short line under it, and
+   a page control, if any, on the right. It sits in a soft round glow of
+   ember light like the home page's, so a page opens with the brand, not
+   bare text; a long flat band read as a smudge on the light sand. The glow
+   is a border image reaching out to the screen's edges: drawn past the
+   page's sides, it never makes the page scroll sideways. It starts a
+   screen's width left of the heading, so it centres 8rem into the title
+   however wide the heading is, and its height follows the heading's, so it
+   fades out before its top and bottom on any screen. */
+:root {
+  --cl-page-hero-glow: rgb(255 170 70 / 0.2);
+}
+:root[data-theme="dark"] {
+  --cl-page-hero-glow: rgb(255 120 30 / 0.14);
+}
+:root .page-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.4rem 1.5rem;
+  align-items: end;
+  margin: 0 0 1.75rem;
+  padding: 1rem 0 0.25rem;
+  border-image: radial-gradient(
+      18rem 60% at calc(100vw + 8rem) 44%,
+      var(--cl-page-hero-glow),
+      transparent 80%
+    )
+    fill 0 / 0 / 2.5rem 100vw 4rem;
+}
+:root .page-hero > :is(h1, p) {
+  grid-column: 1;
+  margin: 0;
+}
+:root .page-hero h1 {
+  font-family: var(--cl-font-score);
+  font-size: clamp(2.5rem, 1.9rem + 2.4vw, 3.5rem);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+:root .page-hero p {
+  max-width: 60ch;
+  color: var(--cl-muted);
+  font-size: 0.9375rem;
+}
+:root .page-hero > :not(h1, p) {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+@media (max-width: 40rem) {
+  :root .page-hero {
+    grid-template-columns: minmax(0, 1fr);
+    margin-bottom: 1.25rem;
+    padding-top: 0.5rem;
+  }
+  :root .page-hero > :not(h1, p) {
+    grid-row: auto;
+    grid-column: 1;
+    margin-top: 0.6rem;
+  }
+}
+
 /* Tabs and filter chips: one row that scrolls sideways on a phone instead of
-   wrapping. Links or buttons; the current one has aria-current or
-   aria-pressed/aria-selected, and takes the ember tint of the current bottom
-   tab. */
+   wrapping. Links or buttons on a faint tint with no edge; the current one
+   has aria-current or aria-pressed/aria-selected, and takes the ember tint
+   and edge of the current bottom tab. */
 :root .tab-row {
   display: flex;
   gap: 0.375rem;
@@ -508,8 +891,8 @@
   min-height: 2.25rem;
   padding: 0.35rem 0.85rem;
   color: var(--cl-muted);
-  background: transparent;
-  border: 1px solid var(--cl-card-line);
+  background: var(--cl-panel);
+  border: 1px solid transparent;
   border-radius: var(--cl-radius);
   font: inherit;
   font-size: 0.875rem;
@@ -526,7 +909,7 @@
 }
 :root .tab-row :is(a, button):is(:hover, :focus-visible) {
   color: var(--cl-ink);
-  border-color: var(--cl-outline);
+  background: var(--cl-raised);
 }
 :root
   .tab-row
@@ -538,7 +921,7 @@
   ) {
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
+  border-color: var(--cl-action-edge);
 }
 
 /* Stat tiles: a small label over a big scoreboard number, split by hairlines
@@ -565,7 +948,7 @@
 }
 :root .stat :is(dt, .stat-label) {
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 550;
 }
 :root .stat :is(dd, .stat-value) {
@@ -580,7 +963,7 @@
 :root .stat .stat-note {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.76rem;
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 
@@ -616,4 +999,103 @@
 }
 :root .score-negative {
   color: var(--cl-negative);
+}
+
+/* Game symbols (GameIcons.tsx): sized by the text around them. */
+.game-stars {
+  display: inline-flex;
+  gap: 0.06em;
+  vertical-align: -0.12em;
+}
+.game-star,
+.game-trophy,
+.game-mark {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+.game-trophy,
+.game-mark {
+  vertical-align: -0.14em;
+}
+.game-star-body {
+  fill: var(--cl-star-empty);
+  stroke: var(--cl-star-empty-edge);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+.game-star.won .game-star-body,
+.game-trophy-body {
+  fill: var(--cl-star);
+  stroke: var(--cl-star-edge);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+.game-trophy-handles {
+  fill: none;
+  stroke: var(--cl-star-edge);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+/* Each part sets its own paint, so a `.trophy-mark`'s outline styles from
+   older page rules never reach the drawing. */
+.game-star-light,
+.game-trophy-light {
+  fill: #fff;
+  stroke: none;
+  opacity: 0.38;
+}
+.game-trophy-shade {
+  fill: var(--cl-star-edge);
+  stroke: none;
+  opacity: 0.2;
+}
+.game-mark {
+  fill: currentColor;
+}
+.game-mark-light {
+  fill: #fff;
+  opacity: 0.26;
+}
+.crest {
+  width: 2.5em;
+  height: 2.75em;
+  flex: none;
+}
+.crest-body {
+  stroke: rgb(40 16 4 / 0.55);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+.crest-light {
+  fill: #fff;
+  opacity: 0.12;
+}
+.crest-rim {
+  fill: none;
+  stroke: rgb(255 214 150 / 0.55);
+  stroke-width: 1.2;
+}
+.crest-letter {
+  fill: #fff6e8;
+  font-family: var(--cl-font-score);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+/* The one "You" tag every board uses beside the Clasher's own player. Its
+   fill is solid, so its ember text keeps 4.5:1 on the ember-tinted row of
+   the Clasher's own player as well as on a plain card. */
+.you-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0.0625rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cl-action) 15%, var(--cl-solid));
+  box-shadow: inset 0 0 0 1px var(--cl-action-border);
+  color: var(--cl-action-text);
+  font: 700 0.8125rem/1.3 var(--cl-font);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }

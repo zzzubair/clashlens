@@ -1,0 +1,132 @@
+/* Today's battles as tiles, on the player page's header. Phone first. The
+   Season heat map is in season-heat.css. */
+
+/* ---------- Today's battles ----------
+   Today's 8 attacks and 8 defenses, drawn like the dashboard's Legend day
+   card: stars over the trophies each one moved, a gold tint on a three-star
+   attack, dashed slots still to play. Tiles are fills, not boxes. */
+.player-today {
+  display: grid;
+  gap: 0.55rem 2rem;
+}
+/* The stars are sized from the side's own width, so they sit inside the
+   tile on any phone, an iPad's two narrow sides and a profile card alike. */
+.today-side {
+  container-type: inline-size;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.today-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.today-head .game-mark {
+  font-size: 0.9375rem;
+}
+.today-title {
+  color: var(--cl-ink);
+}
+.today-head b {
+  margin-left: auto;
+  font: 700 1.1rem var(--cl-font-score);
+}
+.today-slots {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.today-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding-block: 0.3rem;
+  color: var(--cl-positive);
+  background: var(--cl-raised);
+  border-radius: 6px;
+  font: 700 0.95rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
+}
+/* Three stars, touching as on the game's own result screen, fill a slot
+   less 4px a side on a wide screen: a slot is an eighth of the side less its
+   gaps, and the stars are 2.8 of their own size wide. */
+.today-stars {
+  display: flex;
+  font-size: clamp(0.625rem, ((100cqi - 21px) / 8 - 8px) / 2.8, 1rem);
+  line-height: 1;
+}
+.today-stars .game-stars {
+  gap: 0;
+}
+.today-stars .game-star + .game-star {
+  margin-left: -0.1em;
+}
+.today-side-defense .today-slot {
+  color: var(--cl-negative);
+  background: var(--cl-panel);
+}
+/* A three-star attack is the one to aim for: a gold tint and ring. */
+.today-side-attack .today-slot[data-stars="3"] {
+  background: color-mix(in srgb, var(--cl-star) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-star) 45%, transparent);
+}
+:root:not([data-theme="dark"]) .today-side-attack .today-slot[data-stars="3"] {
+  background: color-mix(in srgb, var(--cl-star) 16%, var(--cl-solid));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-star) 60%, transparent);
+}
+.today-slots .today-slot-empty {
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
+}
+@media (min-width: 48rem) {
+  .player-today {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .today-slots {
+    gap: 0.3rem;
+  }
+  .today-slot {
+    border-radius: 8px;
+    font-size: 1.05rem;
+  }
+}
+/* A phone keeps each side's 8 battles on one line, as the dashboard's
+   Legend day card and the front page do, in slimmer tiles whose stars stay at
+   least 10px (the rule on .today-stars). A side under 18rem (a 320px phone)
+   takes two rows of four, so full-size stars fit every tile. */
+@media (max-width: 47.99rem) {
+  .today-slot {
+    gap: 0.15rem;
+    min-height: 2.25rem;
+    padding-block: 0.15rem;
+    font-size: 0.875rem;
+  }
+}
+@container (max-width: 17.99rem) {
+  .today-slots {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .today-slot {
+    gap: 0.1rem;
+    min-height: 2.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 7px;
+    font-size: 1.2rem;
+  }
+  .today-stars {
+    font-size: 0.875rem;
+  }
+}

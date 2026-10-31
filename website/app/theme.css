@@ -10,64 +10,74 @@
     var(--cl-brand-orange) 100%
   );
   --cl-brand-fill-hover: linear-gradient(180deg, #ffe27a 0%, #ffa040 100%);
-  /* Light theme: clean neutral white with the logo's orange and yellow as the
-     only colour. Dark is in appearance.css. */
-  --cl-ink: #0b0b0d;
-  --cl-paper: #f4f4f5;
-  --cl-surface: #ffffff;
-  --cl-panel: #f7f7f8;
-  --cl-raised: #ececef;
-  --cl-muted: #5b5b65;
-  --cl-faint: #66666f;
-  --cl-border: #e6e6e9;
-  --cl-outline: #d4d4d8;
-  --cl-accent: #b93c0a;
-  --cl-accent-contrast: #b93c0a;
+  /* Light theme, "ember day": ivory sheets lifted off a warm sand page by
+     a soft warm shadow, with the logo's orange and yellow as the only
+     colour. Dark is in appearance.css. */
+  --cl-ink: #1c1510;
+  --cl-paper: #ece2d4;
+  /* Surfaces are a little see-through, so a panel takes the page's warm
+     light. --cl-solid is for anything that floats over other content (menus,
+     sheets, dialogs). */
+  --cl-surface: rgb(255 253 250 / 0.86);
+  --cl-solid: #fffcf9;
+  --cl-panel: rgb(110 60 20 / 0.045);
+  --cl-raised: rgb(110 60 20 / 0.085);
+  /* A tinted control under the pointer. */
+  --cl-fill-hover: rgb(110 60 20 / 0.14);
+  --cl-muted: #5c5047;
+  --cl-faint: #655950;
+  --cl-border: rgb(90 50 20 / 0.11);
+  --cl-outline: rgb(90 50 20 / 0.2);
+  /* Ember text keeps 4.5:1 on the sand page as well as on white. */
+  --cl-accent: #a63c08;
+  --cl-accent-contrast: #a63c08;
   --cl-action: #ff8a1f;
   --cl-action-hover: #ffa040;
   --cl-action-shade: #b3261e;
   --cl-on-action: #1a1206;
-  --cl-action-text: #b93c0a;
-  --cl-action-soft: #fff4e8;
-  --cl-action-border: #fbc189;
-  --cl-header-bg: rgb(255 255 255 / 0.74);
-  --cl-header-solid: #ffffff;
-  --cl-header-ink: #0b0b0d;
-  --cl-header-muted: #5b5b65;
-  --cl-header-soft: rgb(0 0 0 / 0.05);
-  --cl-silver: #c9ccd2;
-  --cl-bronze: #dca27a;
-  --cl-medal-gold: #f2c641;
+  --cl-action-text: #a63c08;
+  --cl-action-soft: rgb(255 138 31 / 0.11);
+  --cl-action-border: rgb(220 110 30 / 0.45);
+  --cl-header-bg: rgb(238 229 216 / 0.8);
+  --cl-header-solid: #eee5d8;
+  --cl-header-ink: #1c1510;
+  --cl-header-muted: #665a50;
+  --cl-header-soft: rgb(110 60 20 / 0.06);
   --cl-orange: #ff8a1f;
   --cl-gold: #855700;
   --cl-star: #e8a200;
+  /* The dark rim of a won star and the hollow of a missed one. */
+  --cl-star-edge: #7a4200;
+  --cl-star-empty: rgb(90 60 30 / 0.12);
+  --cl-star-empty-edge: rgb(90 60 30 / 0.34);
   /* Two and one star on a star split: greys, never a darkened gold. */
   --cl-star-2: #7a7a82;
   --cl-star-1: #b0b0b8;
-  /* Season heat map steps, worst (0) to best (4), and the text on them. */
-  --cl-heat-0: #e03131;
-  --cl-heat-1: #e29286;
-  --cl-heat-2: #a8a8ae;
-  --cl-heat-3: #8cc08c;
-  --cl-heat-4: #2fb344;
-  --cl-heat-text: #000;
-  --cl-heat-0-text: #fff;
+  /* Gains and losses are one green and one red everywhere: the + and −
+     numbers and the bars are the same two hues (OKLCH 148 and 29), so they
+     read as one family. The heat map's own scale is in season-heat.css;
+     --cl-heat-ring is the 1px warm edge it puts on every played day to part
+     the steps from the page. */
+  --cl-heat-ring: inset 0 0 0 1px rgb(110 60 20 / 0.3);
   --cl-sky: #b93c0a;
   --cl-sky-soft: #fff4e8;
-  --cl-positive: #13773a;
-  --cl-positive-soft: #e7f6ec;
-  --cl-negative: #c81e1e;
-  --cl-negative-soft: #fdebeb;
-  --cl-radius: 8px;
-  /* Panels: white cards with a hairline edge, a lit top and a soft drop. */
-  --cl-card-line: rgb(0 0 0 / 0.075);
+  --cl-positive: #1f6d33;
+  --cl-positive-soft: #e2f4e3;
+  --cl-negative: #b22d22;
+  --cl-negative-soft: #ffe9e5;
+  --cl-radius: 10px;
+  /* Panel edges and the small lift of a tip or menu over the page; cards
+     themselves are flat (see Surfaces in brand.css). */
+  --cl-card-line: rgb(150 80 20 / 0.13);
   --cl-card-radius: 14px;
-  --cl-card-drop: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 20px -16px rgb(0 0 0 / 0.14);
-  --cl-glass: rgb(255 255 255 / 0.74);
-  --cl-glass-strong: rgb(255 255 255 / 0.9);
-  --cl-glass-edge: rgb(0 0 0 / 0.08);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.9);
-  --cl-glow: rgb(255 138 31 / 0.1);
+  --cl-card-drop:
+    0 1px 2px rgb(170 100 40 / 0.08), 0 10px 24px -14px rgb(190 110 40 / 0.26);
+  --cl-glass: rgb(255 252 248 / 0.72);
+  --cl-glass-strong: rgb(255 252 248 / 0.94);
+  --cl-glass-edge: rgb(90 50 20 / 0.1);
+  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  --cl-glow: rgb(255 150 50 / 0.2);
+  --cl-glow-2: rgb(255 196 90 / 0.18);
   --cl-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   /* Scoreboard numbers: trophies, ranks and results. --cl-font-heading is
      the older name for the same face. */
@@ -75,7 +85,8 @@
   --cl-font-heading: var(--cl-font-score);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --cl-shadow: var(--cl-card-drop);
-  --cl-overlay-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.28), 0 2px 6px rgb(0 0 0 / 0.06);
+  --cl-overlay-shadow:
+    0 24px 48px -16px rgb(120 60 20 / 0.26), 0 2px 6px rgb(120 60 20 / 0.08);
   --cl-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   color: var(--cl-ink);
   background: var(--cl-paper);
@@ -328,7 +339,7 @@ h3 {
   right: 0;
   left: 0;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   max-height: min(28rem, 60dvh);
   overflow-y: auto;
   border: 1px solid var(--cl-border);
@@ -378,7 +389,7 @@ h3 {
   background: var(--cl-panel);
   border-bottom: 1px solid var(--cl-border);
   font-family: var(--cl-font);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
@@ -418,7 +429,7 @@ h3 {
 .tag {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 400;
 }
 
@@ -444,7 +455,7 @@ h3 {
 .metric-row dt {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.76rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   text-transform: none;
 }
@@ -471,24 +482,59 @@ h3 {
   border: 1px solid var(--cl-action-border);
   border-radius: var(--cl-radius);
   background: var(--cl-action-soft);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   margin-top: 0.4rem;
   color: var(--cl-action-text);
 }
 
+/* The footer stays out of the way: the site's links on the right, the fan
+   content notice in faint type on the left, under one hairline. */
 .page-footer {
+  align-items: baseline;
+  gap: 0.75rem 2.5rem;
   width: min(100% - 3rem, 72rem);
   margin: 0 auto;
-  padding: 1.25rem 0 2rem;
-  color: var(--cl-muted);
+  padding: 1.5rem 0 2.5rem;
+  color: var(--cl-faint);
   border-top: 1px solid var(--cl-border);
   font-family: var(--cl-font);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
 }
 
-.page-footer a {
+.page-footer p {
+  max-width: 64ch;
+}
+
+/* The policy address moves to its own line rather than breaking, and
+   breaks only on a screen too narrow for it. */
+.page-footer p a {
+  display: inline-block;
+  max-width: 100%;
+  color: inherit;
   font-family: inherit;
+  font-weight: 500;
   text-decoration: underline;
+  text-decoration-color: var(--cl-outline);
+  text-decoration-thickness: 1px;
+  overflow-wrap: anywhere;
+}
+
+.page-footer nav {
+  gap: 0.25rem 1.5rem;
+}
+
+.page-footer nav > :is(a, button) {
+  color: var(--cl-muted);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.page-footer :is(p a, nav > a, nav > button):hover {
+  color: var(--cl-ink);
+  text-decoration-color: currentColor;
 }
 
 /* On a touch screen each footer link is a thumb tall. */
@@ -510,6 +556,17 @@ h3 {
   .page-shell,
   .page-footer {
     width: calc(100% - 2rem);
+  }
+
+  /* Phones: the links first, the notice under them. */
+  .page-footer {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-top: 1rem;
+  }
+
+  .page-footer nav {
+    order: -1;
   }
 
   .section-heading {
@@ -648,7 +705,7 @@ h3 {
   margin: 0;
   color: #b3261e;
   font-family: var(--cl-font);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 
@@ -745,6 +802,6 @@ h3 {
   .button-primary,
   .button-secondary {
     padding: 0.55rem 0.65rem;
-    font-size: 0.72rem;
+    font-size: 0.8125rem;
   }
 }

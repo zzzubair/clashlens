@@ -248,7 +248,7 @@ describe("recorded battle period statistics", () => {
 
   it("renders one summary with dates and unavailable rates and averages", () => {
     const html = render(player());
-    expect(html).toContain("0 of 27 days saved · Some battles may be missing");
+    expect(html).toContain("27 days missing · Some battles may be missing");
     expect(html).toContain(
       '<dt>Reset rank</dt><dd class="summary-words">Not ranked yet</dd>',
     );

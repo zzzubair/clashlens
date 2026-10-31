@@ -5,12 +5,10 @@
   overflow-wrap: anywhere;
 }
 
+/* Every panel but the crew's header is one of the site's sheets (brand.css),
+   so only the header reads as raised. */
 .crew-panel {
   display: block;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-card-drop);
 }
 
 .crew-lede {
@@ -29,6 +27,11 @@
   font-weight: 700;
 }
 
+/* A role chip alone under a crew's name. */
+.crew-meta > .crew-chip:only-child {
+  margin-left: 0;
+}
+
 /* ---------- Chips ---------- */
 
 .crew-chip {
@@ -39,7 +42,7 @@
   border: 1px solid transparent;
   border-radius: 999px;
   font-family: var(--cl-font);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 800;
   line-height: 1.3;
   white-space: nowrap;
@@ -57,9 +60,10 @@
   border-color: var(--cl-action-border);
 }
 
-.crew-chip-you {
-  color: var(--cl-surface);
-  background: var(--cl-sky);
+/* The site's You tag (brand.css), a little apart from the name before it. */
+:is(.crew-who, .crew-member) b .you-badge {
+  margin-left: 0.4rem;
+  vertical-align: 0.1rem;
 }
 
 .crew-chip-quiet {
@@ -68,21 +72,9 @@
   border-color: var(--cl-border);
 }
 
-/* The first letter of a crew or a clasher's name, on the logo's colours. */
-.crew-icon {
-  display: inline-grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 2.75rem;
-  height: 2.75rem;
-  padding-bottom: 0.15em;
-  color: var(--cl-brand-night);
-  background: linear-gradient(180deg, var(--cl-brand-yellow), var(--cl-brand-orange));
-  clip-path: polygon(50% 0, 100% 16%, 100% 68%, 50% 100%, 0 68%, 0 16%);
-  font-family: var(--cl-font-score);
-  font-size: 1.3rem;
-  font-weight: 700;
-  line-height: 1;
+/* A crew's or a clasher's crest (GameIcons.tsx), sized by its font size. */
+.crew-page .crest {
+  font-size: 1.05rem;
 }
 
 /* ---------- Crew list ---------- */
@@ -142,7 +134,7 @@
 @media (hover: hover) {
   .crew-list-item:hover {
     color: var(--cl-ink);
-    border-color: var(--cl-outline);
+    background: var(--cl-raised);
   }
 }
 
@@ -225,7 +217,8 @@
   min-height: 3.5rem;
   padding: 0.6rem 0.85rem;
   background: var(--cl-panel);
-  border: 1px solid var(--cl-border);
+  /* An edge only once picked; one that can't be picked keeps a dashed one. */
+  border: 1px solid transparent;
   border-radius: var(--cl-radius);
   cursor: pointer;
 }
@@ -243,6 +236,7 @@
 
 .crew-pick .crew-pick-off {
   background: transparent;
+  border-color: var(--cl-border);
   border-style: dashed;
   cursor: not-allowed;
 }
@@ -269,10 +263,8 @@
   padding: 1rem;
 }
 
-.crew-head .crew-icon {
-  width: 3.25rem;
-  height: 3.25rem;
-  font-size: 1.65rem;
+.crew-head > .crest {
+  font-size: 1.35rem;
 }
 
 .crew-title {
@@ -283,29 +275,36 @@
   font-size: clamp(2rem, 1.6rem + 1.75vw, 2.75rem);
 }
 
+/* "14 accounts · 9 Clashers", then the crew's room: its meter and "14/30". */
 .crew-places {
-  display: grid;
-  grid-column: 1 / -1;
-  gap: 0.4rem;
-}
-
-.crew-places p {
   display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin: 0;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-  font-weight: 700;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 0.4rem 0.75rem;
+  align-items: center;
   font-variant-numeric: tabular-nums;
 }
 
-.crew-places p > :first-child {
-  color: var(--cl-ink);
+.crew-places p {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
-.crew-full {
-  color: var(--cl-negative);
+.crew-room {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 0.6rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.crew-room .meter {
+  flex: 1;
+  min-width: 3rem;
 }
 
 .crew-actions {
@@ -328,9 +327,66 @@
   padding: 0.45rem 0.9rem;
 }
 
+/* A phone keeps the header tight so the first board's rows show on the
+   first screen: the counts and the room's meter sit beside the crest, under
+   the name, on one line where they fit. */
+@media (max-width: 47.99rem) {
+  .crew-head {
+    gap: 0.15rem 0.75rem;
+    padding: 0.75rem 0.9rem 0.8rem;
+  }
+
+  .crew-head > .crest {
+    grid-row: 1 / span 2;
+    font-size: 1.1rem;
+  }
+
+  .crew-head > .crew-title {
+    align-self: end;
+  }
+
+  .crew-head > .crew-places {
+    grid-column: 2;
+    align-self: start;
+  }
+
+  .crew-places {
+    gap: 0.15rem 0.75rem;
+  }
+
+  .crew-places p {
+    flex: 0 1 auto;
+  }
+
+  .crew-room {
+    flex: 1 1 6rem;
+  }
+
+  .crew-head > :is(.crew-actions, .crew-day) {
+    margin-top: 0.6rem;
+  }
+
+  .crew-page .crew-title h1 {
+    font-size: 1.85rem;
+    line-height: 1;
+  }
+
+  /* The role chip sits beside the name rather than under it. */
+  .crew-title:has(.crew-chip) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.6rem;
+    align-items: center;
+  }
+
+  .crew-title .crew-meta {
+    margin: 0;
+  }
+}
+
 @media (min-width: 48rem) {
   .crew-head {
-    grid-template-columns: auto minmax(0, 1fr) minmax(11rem, 15rem);
+    grid-template-columns: auto minmax(0, 1fr) minmax(15rem, 21rem);
     padding: 1.25rem;
   }
 
@@ -346,7 +402,7 @@
 
 @media (min-width: 64rem) {
   .crew-head {
-    grid-template-columns: auto minmax(0, 1fr) minmax(11rem, 15rem) auto;
+    grid-template-columns: auto minmax(0, 1fr) minmax(15rem, 21rem) auto;
     gap: 1.25rem;
   }
 
@@ -362,31 +418,62 @@
 
 /* ---------- Boards ---------- */
 
-/* A phone picks one board from these; wider screens show every board. They
-   stick under the top bar (--cl-header-h, site-header.css). */
-.crew-page .crew-tabs {
+/* A phone picks one board from these, in the site's one switch (brand.css);
+   wider screens show every board. They stick under the top bar
+   (--cl-header-h, site-header.css). Each tab is as wide as its word, the
+   spare room shared out, so all five fit down to a 320px screen; anything
+   narrower scrolls instead of cutting a word. */
+.crew-page .crew-tabs-dock {
   position: sticky;
   z-index: 5;
   top: var(--cl-header-h);
   margin: 0.5rem -1rem 0;
-  padding: 0.5rem 1rem;
+}
+
+.crew-page .crew-tabs-bar {
+  padding: 0.35rem 1rem;
   background: var(--cl-paper);
 }
 
-.crew-page .crew-tabs a {
-  flex: 1 0 auto;
-  justify-content: center;
-  padding-inline: 0.6rem;
+.crew-page .crew-tabs {
+  display: flex;
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-/* All five boards fit across a 360px phone, Streaks included. */
-@media (max-width: 24rem) {
+.crew-page .crew-tabs .button {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding-inline: 0.5rem;
+  font-size: 0.875rem;
+}
+
+@media (max-width: 22.5rem) {
   .crew-page .crew-tabs {
-    gap: 0.25rem;
+    gap: 0;
   }
 
-  .crew-page .crew-tabs a {
-    padding-inline: 0.4rem;
+  .crew-page .crew-tabs .button {
+    padding-inline: 0.35rem;
+  }
+}
+
+/* Where the browser can tell, the bar fills in only once stuck, so the
+   header's glow fades out behind it instead of ending on its edge. */
+@supports (container-type: scroll-state) {
+  .crew-page .crew-tabs-dock {
+    container-type: scroll-state;
+  }
+
+  .crew-page .crew-tabs-bar {
+    background: transparent;
+  }
+
+  @container scroll-state(stuck: top) {
+    .crew-page .crew-tabs-bar {
+      background: var(--cl-paper);
+    }
   }
 }
 
@@ -436,6 +523,19 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
   }
+
+  /* Under the tabs a board needs less air, so more of its rows show. */
+  .crew-boards {
+    margin-top: 0;
+  }
+
+  .crew-boards > .crew-board .crew-board-head {
+    padding-block: 0.35rem 0.45rem;
+  }
+
+  .crew-page .crew-boards .crew-board-head :is(h2, h3) {
+    font-size: 1.2rem;
+  }
 }
 
 /*
@@ -443,11 +543,11 @@
  * rows and footer start on the same lines however long a description is,
  * however few rows a board has: each card spans three rows of the outer
  * grid and lays its parts on them. Two across on an iPad; on a desktop
- * Live and Top players take half each and the period's three boards a
+ * Live and At last Reset take half each and the period's three boards a
  * third each.
  */
 @media (min-width: 48rem) {
-  .crew-page .crew-tabs {
+  .crew-page .crew-tabs-dock {
     display: none;
   }
 
@@ -580,12 +680,45 @@
   grid-column: 1 / -1;
 }
 
+/* Card titles in the condensed heading face, as on the dashboard. */
 .crew-page .crew-board-head :is(h2, h3) {
   margin: 0;
-  font-family: var(--cl-font);
-  font-size: 1.1rem;
-  font-weight: 800;
-  letter-spacing: 0;
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+/* A board's title opens its own page: every account, and who is missing. A
+   chevron after it says so, and turns ember with the title on hover. */
+.crew-board-open {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+.crew-board-open::after {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0.1rem 0 0 0.55rem;
+  border-top: 2px solid var(--cl-muted);
+  border-right: 2px solid var(--cl-muted);
+  transform: rotate(45deg);
+  transition: transform 160ms ease;
+  content: "";
+}
+.crew-board-open:hover {
+  color: var(--cl-action-text);
+}
+.crew-board-open:hover::after {
+  border-color: currentcolor;
+  transform: translateX(3px) rotate(45deg);
+}
+.crew-board-open:focus-visible {
+  border-radius: 4px;
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: 2px;
 }
 
 .crew-board-head p {
@@ -602,18 +735,51 @@
   grid-column: 2;
   gap: 0.15rem;
   width: auto;
-  /* Taller than the title: overhang it, so this title sits on the same line
-     as its neighbours'. */
-  margin-block: -0.45rem;
   padding: 0.2rem;
 }
 
 .crew-page .crew-order .button {
   flex: 0 0 auto;
   min-width: 0;
-  min-height: 2.25rem;
+  min-height: 2.75rem;
   padding: 0.3rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
+}
+
+/* A phone has room beside the description: the switch takes both lines.
+   With no switch, the description sits beside the title instead, so the
+   first rows come sooner. */
+@media (max-width: 47.99rem) {
+  .crew-board-head .crew-order {
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  .crew-board-head:has(.crew-order) p {
+    grid-column: 1;
+  }
+
+  .crew-board-head:not(:has(.crew-order)) p {
+    grid-row: 1;
+    grid-column: 2;
+    max-width: 10.5rem;
+    margin: 0;
+    text-align: right;
+  }
+}
+
+/* Side by side, a smaller switch overhangs the card's top padding, so this
+   title and description sit on the same lines as its neighbours'. */
+@media (min-width: 48rem) {
+  .crew-board-head .crew-order {
+    margin-block: -0.55rem -0.4rem;
+    padding: 0.15rem;
+  }
+
+  .crew-page .crew-board-head .crew-order .button {
+    min-height: 1.9rem;
+    padding-block: 0.2rem;
+  }
 }
 
 .crew-board-foot {
@@ -634,18 +800,11 @@
   padding-block: 0 0.35rem;
 }
 
-.crew-board-foot a:not(.button) {
+.crew-board-foot a:not(.button, .show-all) {
   color: var(--cl-action-text);
   font-weight: 800;
   text-decoration: underline;
   text-underline-offset: 0.18em;
-}
-
-.crew-board-foot .button {
-  flex: 0 0 auto;
-  min-height: 2.5rem;
-  padding: 0.4rem 0.85rem;
-  font-size: 0.85rem;
 }
 
 /* One centred message, and why when accounts are missing; it fills its share
@@ -682,8 +841,8 @@
    Rankings. */
 .crew-row {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr) auto 0.45rem;
-  gap: 0.75rem;
+  grid-template-columns: 2.35rem minmax(0, 1fr) auto 0.45rem;
+  gap: 0.85rem;
   align-items: center;
   min-height: 3.5rem;
   padding: 0.5rem 1rem;
@@ -717,12 +876,15 @@
 
 /* The signed-in clasher's own accounts. */
 .crew-row-you .crew-row {
-  background: var(--cl-raised);
+  background: var(--cl-you-wash);
   box-shadow: inset 3px 0 0 var(--cl-action);
 }
 
+/* A name with its line under it fits the row's height, so a row with that
+   line is no taller than one without and boards side by side line up. */
 .crew-who {
   min-width: 0;
+  line-height: 1.3;
 }
 
 .crew-who b {
@@ -737,15 +899,23 @@
   display: block;
   overflow: hidden;
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* How far an account trails first: a quiet note under its name. */
+.crew-who > .crew-behind {
+  color: var(--cl-faint);
+  font-weight: 500;
+}
+
+/* Numbers stay in the ink colour on every board; the sign says gain or loss. */
 .crew-value {
-  font-family: var(--cl-font-heading);
-  font-size: 1.15rem;
+  font-family: var(--cl-font-score);
+  font-size: 1.25rem;
+  font-weight: 700;
   line-height: 1.1;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -753,18 +923,48 @@
   white-space: nowrap;
 }
 
+/* The trophy a little under the numbers' height, as on Rankings. */
+.crew-value .game-trophy {
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.3rem;
+  vertical-align: -0.04em;
+}
+
 .crew-value small {
   display: block;
   margin-top: 0.15rem;
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0;
 }
 
 .crew-value .crew-going {
   color: var(--cl-positive);
+}
+
+/* Below the top three, a board ranks in plain numbers, not the shared plate
+   (brand.css); a worst-first board's top three keep the plain plate. */
+:root .crew-rows li .crew-rank:not([data-podium-rank], .rank-mark) {
+  color: var(--cl-muted);
+  background: none;
+}
+
+/* ---------- Live and At last Reset: now against a held reading ---------- */
+
+/* Live wears a green dot before its title, so it never reads as At last
+   Reset, a still copy of the last Reset, in the same row style. */
+.crew-board-live .crew-board-open::before {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0 0.6rem 0 0.2rem;
+  background: var(--cl-positive);
+  border-radius: 50%;
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--cl-positive) 22%, transparent);
+  content: "";
 }
 
 /* ---------- Who is not on a board ---------- */
@@ -812,7 +1012,7 @@
 
 .crew-missing li span {
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -825,10 +1025,9 @@
 .crew-missing h2 {
   margin: 0;
   padding: 0.9rem 1rem 0.65rem;
-  font-family: var(--cl-font);
-  font-size: 1.1rem;
-  font-weight: 800;
-  letter-spacing: 0;
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+  font-weight: 700;
 }
 
 /* ---------- Crew actions and forms ---------- */
@@ -855,7 +1054,7 @@
   margin: auto auto 0;
   padding: 0;
   color: var(--cl-ink);
-  background: var(--cl-surface);
+  background: var(--cl-solid);
   border: 1px solid var(--cl-outline);
   border-bottom: 0;
   border-radius: 20px 20px 0 0;
@@ -899,8 +1098,8 @@
   color: var(--cl-ink);
   font-size: 1.1rem;
   font-weight: 800;
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-border);
+  background: var(--cl-raised);
+  border: 1px solid transparent;
   border-radius: 999px;
   cursor: pointer;
 }
@@ -911,8 +1110,7 @@
   gap: 0.5rem;
   align-items: center;
   padding: 0.4rem 0.4rem 0.4rem 0.85rem;
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-border);
+  background: var(--cl-raised);
   border-radius: var(--cl-radius);
 }
 
@@ -1071,7 +1269,7 @@
   height: 2.15rem;
   padding: 0 0.6rem;
   color: var(--cl-faint);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   list-style: none;
   border-radius: var(--cl-radius);
@@ -1168,8 +1366,9 @@
   width: 100%;
 }
 
+/* Deleting keeps a red side bar, the one edge that warns. */
 .crew-danger {
-  border-color: color-mix(in srgb, var(--cl-negative) 55%, var(--cl-card-line));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--cl-negative) 70%, transparent);
 }
 
 .crew-tick {

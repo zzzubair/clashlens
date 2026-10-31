@@ -1,11 +1,24 @@
-import { Link, useSearchParams } from "react-router";
+import { Link, useRouteLoaderData, useSearchParams } from "react-router";
+
+import type { RootLoaderData } from "../root";
+import { UnitArt } from "./ArmyPortraits";
 
 import { DashboardTeaser } from "./DashboardTeaser";
 import { ErrorNotice } from "./ErrorNotice";
 import { TrophyMark, latestObservation } from "./LeaderboardShared";
 import { PageSearch } from "./PageSearch";
+import {
+  comparesWithReset,
+  hasRecentDays,
+  hasToday,
+  RankMove,
+  RecentDays,
+  RecentDaysHead,
+  shortAge,
+  TodayChange,
+} from "./ResetChange";
 import { SavedLine } from "./SavedLine";
-import { LocalTimestamp, OLD_UPDATE_SECONDS, useServerTime } from "./Provenance";
+import { formatTimestamp, OLD_UPDATE_SECONDS, useServerTime } from "./Provenance";
 import { useBackState } from "./BackLink";
 import { useSeasonReread } from "./SeasonReread";
 import { moveFocusWithArrows } from "./ArrowKeys";
@@ -29,46 +42,114 @@ export interface FrontPageData {
 
 /**
  * What `/` shows anyone not signed in, and search engines: search first,
- * then a peek at the dashboard an account unlocks, then the top players.
+ * then what an account adds with an example dashboard, then the top players.
  */
 export function FrontPage({ data }: { data: FrontPageData }) {
-  // Set by /logout: logged out, or logged out here but not recorded.
+  // Set by /logout: signed out, or signed out here but not recorded.
   const [searchParams] = useSearchParams();
   const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
   const loggedOut = searchParams.get("saved") === "logout";
+  const seasonExpired = useSeasonReread(
+    data.leaderboard?.generatedAt,
+    !!data.leaderboard?.seasonResetPending,
+  );
+  const leaderboard = seasonExpired ? null : data.leaderboard;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page front-page">
       {logoutUnrecorded ? (
         <SavedLine failed>
-          You are logged out on this browser, but Clash Lens could not record it.
+          You are signed out on this browser, but Clash Lens could not record it.
         </SavedLine>
       ) : loggedOut ? (
-        <SavedLine>You&apos;re logged out.</SavedLine>
+        <SavedLine>You&apos;re signed out.</SavedLine>
       ) : null}
       <div
         className={data.dashboardEnabled ? "front-grid front-grid-pitch" : "front-grid"}
       >
         <section className="front-hero" aria-labelledby="front-title">
           <h1 id="front-title">Find any Legend League player</h1>
+          <p className="front-lede">
+            Every Legend day&apos;s battles and Reset ranks, for any tracked player.
+          </p>
           <PageSearch />
+          <LiveProof leaderboard={leaderboard} />
         </section>
         {data.dashboardEnabled ? (
           <DashboardTeaser loginAvailable={data.loginAvailable} />
         ) : null}
         {data.error ? <ErrorNotice error={data.error} /> : null}
-        <TopPlayers leaderboard={data.leaderboard} />
+        <TopPlayers leaderboard={leaderboard} seasonExpired={seasonExpired} />
+        <MoreFeatures />
       </div>
     </main>
   );
 }
 
-function TopPlayers({ leaderboard: loaded }: { leaderboard: TrackedLeaderboard | null }) {
-  const seasonExpired = useSeasonReread(
-    loaded?.generatedAt,
-    !!loaded?.seasonResetPending,
+/** Three more things Clash Lens does, each led by three game portraits in
+ *  the same tiles, a line apiece. Watchlists and Crews ask a visitor to sign
+ *  in, and say why. */
+function MoreFeatures() {
+  const crews = useRouteLoaderData<RootLoaderData>("root")?.crewsEnabled === true;
+  return (
+    <nav className="front-more" aria-label="More on Clash Lens">
+      <div className="front-more-links">
+        <Link to="/account/watchlists">
+          <UnitArt unitKey="hero:0|hero:1|hero:2" />
+          <strong>Watchlists</strong>
+          <span>Any players you pick, side by side, day by day.</span>
+        </Link>
+        {crews ? (
+          <Link to="/crews">
+            <UnitArt unitKey="troop:0|troop:1|troop:3" />
+            <strong>Crews</strong>
+            <span>Invite-only boards for your Legend group.</span>
+          </Link>
+        ) : null}
+        <Link to="/analytics/armies">
+          <UnitArt unitKey="troop:110|troop:12|troop:11" />
+          <strong>Armies</strong>
+          <span>What Legend players attack with, and how it scores.</span>
+        </Link>
+      </div>
+    </nav>
   );
-  const leaderboard = seasonExpired ? null : loaded;
-  const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
+}
+
+/** Proof the board is live, under the search: how many players it ranks
+ *  and how long ago it last changed, the page's one update time. */
+function LiveProof({ leaderboard }: { leaderboard: TrackedLeaderboard | null }) {
+  const now = useServerTime(leaderboard?.generatedAt);
+  const observedAt = leaderboard
+    ? (leaderboard.sourceObservations?.newestObservedAt ??
+      latestObservation(leaderboard.entries))
+    : null;
+  if (!leaderboard?.totalEntries || !observedAt) return null;
+  const age = Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
+  return (
+    <p className="front-proof">
+      {age <= OLD_UPDATE_SECONDS ? (
+        <span className="live-pip" aria-hidden="true" />
+      ) : null}
+      {leaderboard.totalEntries.toLocaleString("en-GB")}{" "}
+      <span className="front-proof-wide">Legend </span>players ranked ·{" "}
+      {/* Wraps as one piece, never leaving "ago" alone on a line. */}
+      <span className="front-proof-age">
+        updated{" "}
+        <time dateTime={observedAt} title={formatTimestamp(observedAt)}>
+          {shortAge(age)} ago
+        </time>
+      </span>
+    </p>
+  );
+}
+
+function TopPlayers({
+  leaderboard,
+  seasonExpired,
+}: {
+  leaderboard: TrackedLeaderboard | null;
+  seasonExpired: boolean;
+}) {
   const now = useServerTime(leaderboard?.generatedAt);
   const staleEntries =
     leaderboard?.entries.filter(
@@ -84,18 +165,10 @@ function TopPlayers({ leaderboard: loaded }: { leaderboard: TrackedLeaderboard |
       <div className="section-heading">
         <div>
           <h2 id="live-leaderboard-title">Top {FRONT_PAGE_PLAYERS} now</h2>
-          {leaderboard ? (
+          {/* The update time is the hero's; a note only when rows lag. */}
+          {leaderboard && staleEntries > 0 ? (
             <p className="standings-context">
-              {latestObservedAt ? (
-                <span>
-                  Updated <LocalTimestamp value={latestObservedAt} />
-                </span>
-              ) : null}
-              {staleEntries > 0 ? (
-                <span>
-                  {staleEntries} of {leaderboard.entries.length} more than 10 minutes old
-                </span>
-              ) : null}
+              {staleEntries} of {leaderboard.entries.length} more than 10 minutes old
             </p>
           ) : null}
         </div>
@@ -134,8 +207,24 @@ function TopPlayers({ leaderboard: loaded }: { leaderboard: TrackedLeaderboard |
   );
 }
 
+/** The website reads a profile without a clan as "Unknown"; it shows as no
+ *  clan. */
+function clanName(clan: string) {
+  return clan === "Unknown" ? (
+    <span className="no-clan">No clan</span>
+  ) : (
+    <bdi>{clan}</bdi>
+  );
+}
+
+// The Top 10 as one list in Rankings' row style, under the same headings:
+// plate, places moved since Reset, name, clan (under the name on a phone),
+// the last 7 days, trophies since Reset and trophies.
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   const backState = useBackState("Clash Lens");
+  const compared = comparesWithReset(entries);
+  const showsDays = hasRecentDays(entries);
+  const showsToday = hasToday(entries);
   return (
     <div
       className="table-wrap"
@@ -145,11 +234,33 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
         <caption className="sr-only">Tracked players in rank order</caption>
         <thead>
           <tr>
-            <th scope="col">Rank</th>
-            <th scope="col">Player</th>
-            <th scope="col">Clan</th>
-            <th scope="col">Trophies</th>
-            <th scope="col">Last updated</th>
+            <th scope="col" className="rank-cell">
+              Rank
+            </th>
+            {compared ? (
+              <th scope="col" className="move-cell">
+                <span className="move-head">Since Reset</span>
+              </th>
+            ) : null}
+            <th scope="col" className="player-cell">
+              Player
+            </th>
+            <th scope="col" className="clan-cell">
+              Clan
+            </th>
+            {showsDays ? <RecentDaysHead entries={entries} /> : null}
+            {showsToday ? (
+              <th
+                scope="col"
+                className="today-cell"
+                title="Trophies won or lost since the last Reset"
+              >
+                Today
+              </th>
+            ) : null}
+            <th scope="col" className="trophy-cell">
+              Trophies
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -163,25 +274,43 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
               <td className="rank-cell" data-label="Rank">
                 <span className="rank-mark">{entry.rank}</span>
               </td>
-              <th scope="row" data-label="Player">
-                <Link
-                  className="player-name"
-                  to={canonicalPlayerPath(entry.tag)}
-                  state={backState}
-                >
-                  <bdi>{entry.name}</bdi>
-                </Link>
-                <span className="player-tag">{entry.tag}</span>
+              {compared ? (
+                <td className="move-cell">
+                  <RankMove entry={entry} />
+                </td>
+              ) : null}
+              <th scope="row" className="player-cell" data-label="Player">
+                <span className="player-id">
+                  <Link
+                    className="player-name"
+                    to={canonicalPlayerPath(entry.tag)}
+                    state={backState}
+                  >
+                    <bdi>{entry.name}</bdi>
+                  </Link>
+                </span>
+                {/* A phone puts the clan on a smaller line under the name, as
+                    on Rankings; wider screens give it the Clan column. */}
+                <span className="player-sub">
+                  <span className="player-clan">{clanName(entry.clan)}</span>
+                </span>
+                {/* Left to screen readers, to tell two players of one name apart. */}
+                <span className="sr-only"> {entry.tag}</span>
               </th>
-              <td data-label="Clan">
-                <bdi>{entry.clan}</bdi>
-              </td>
+              <td className="clan-cell">{clanName(entry.clan)}</td>
+              {showsDays ? (
+                <td className="recent-cell">
+                  <RecentDays entry={entry} />
+                </td>
+              ) : null}
+              {showsToday ? (
+                <td className="today-cell">
+                  <TodayChange entry={entry} />
+                </td>
+              ) : null}
               <td className="trophy-cell" data-label="Trophies">
                 <TrophyMark />
                 <strong>{entry.trophies.toLocaleString()}</strong>
-              </td>
-              <td data-label="Last updated">
-                <LocalTimestamp value={entry.freshness.observedAt} />
               </td>
             </tr>
           ))}

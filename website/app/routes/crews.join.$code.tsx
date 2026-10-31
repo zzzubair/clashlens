@@ -12,7 +12,7 @@ import {
 import { type BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { AccountButtons } from "../components/NeedsAccount";
-import { TrophyMark } from "../components/LeaderboardShared";
+import { TrophyIcon } from "../components/GameIcons";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   crewRefusal,
@@ -361,7 +361,7 @@ function JoinForm({
                   </span>
                   {why === null && account.trophies !== null ? (
                     <span className="crew-value">
-                      <TrophyMark />
+                      <TrophyIcon />
                       {account.trophies.toLocaleString("en-US")}
                     </span>
                   ) : null}

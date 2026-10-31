@@ -1,0 +1,58 @@
+/* "Last 7 days" over a table's daily bars, its ⓘ right after the words. The
+   ⓘ's finger-sized target overlaps the lines above and below; its note
+   opens under it. */
+.last-days {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  white-space: nowrap;
+}
+.last-days-info > summary {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-block: -0.5rem;
+  color: var(--cl-muted);
+  font-size: 0.95em;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+}
+.last-days-info > summary::-webkit-details-marker {
+  display: none;
+}
+.last-days-info[open] > summary {
+  color: var(--cl-action-text);
+}
+.last-days-body {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(18rem, 80vw);
+  padding: 0.5rem 0.7rem;
+  color: var(--cl-ink);
+  background: var(--cl-solid);
+  border: 1px solid var(--cl-card-line);
+  border-radius: 8px;
+  box-shadow: var(--cl-overlay-shadow);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+}
+/* A finger-sized target, the ⓘ still right after the words. */
+@media (pointer: coarse) {
+  .last-days-info > summary {
+    place-items: center start;
+    width: 2.5rem;
+    height: 2.75rem;
+    margin-block: -0.9rem;
+    margin-right: -1.5rem;
+    padding-left: 0.2rem;
+  }
+}

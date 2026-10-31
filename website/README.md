@@ -3,11 +3,15 @@
 This directory contains the self-hosted TypeScript SSR website. It talks to
 the private Python API through one server-only client boundary.
 
-The Live Leaderboard's Find your rank search accepts player names and tags.
-A tag typed with `#` opens its row directly when that tag is on the board, or
+The Live Leaderboard's Find your rank search accepts player names, tags and
+ranks. A plain number such as 130 or 1,250 is a rank and opens the page holding
+it with that row picked; `#130` stays a tag. A tag typed with `#` opens its row
+directly when that tag is on the board, or
 links to that player's page when it is not; other searches show up to 20
 tracked players whose name matches, or whose tag matches without the `#`, with
 their whole-board ranks and trophies, noting when only the first 20 are shown.
+The At Reset view has a Go to rank box instead, shown when the board holds more
+than one page.
 Selecting a player loads their current page, highlights the row and scrolls it
 into view, adding up to 5 players from the next or previous page when the row
 sits at a page edge. The page is located again when
@@ -15,6 +19,22 @@ opened, so movement since the search cannot strand the player on an old page.
 Search uses the same ordering and not-found exclusions as the board. It never
 starts tracking an unknown player. [Validation and screenshots](../docs/find-my-rank-validation.md)
 include measurements at 13,000 players.
+
+The Rankings board shows 50 players a page. A signed-in Clasher also gets a
+Jump to me button, which opens the page holding their lead linked player: the
+first one being tracked, else the first. Its columns are Rank, Since Reset
+(▲ or ▼ with the places moved since the last Reset, "–" for no change and
+"new" when the player was not on that board), Player, Clan (its own column,
+under the name on a phone), Last 7 days (thin bars up for trophies won and down
+for trophies lost on each finished Legend day, each row on its own scale),
+Today (trophies won or lost since the last Reset, from the day's settled start
+as the dashboard counts it) and Trophies. They come from the `reset_position`,
+`today_change` and `recent_days` fields on each Live row, described in
+[dashboard data](../docs/dashboard-data.md#live-leaderboard-rows). Since
+Reset, Last 7 days and Today are left out when no row has anything to show
+for them, as on the At Reset view; on a Season's first Legend day only Today
+shows. The front
+page's Top 10 uses the same columns.
 
 Exact-tag search opens the player page and starts an unknown tag's first check
 without a button or sign-in. The existing interactive collector retains the
@@ -67,13 +87,17 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
-On a tracked player's current page only two things are live: the current
-trophies next to the name and the Daily Legend log. Everything else uses
+On a tracked player's current page only three things are live: the current
+trophies next to the name, the live rank beside them with its ▲ or ▼ places
+moved since the last Reset (it loads after the rest of the page and opens that
+player's row on Rankings), and the Daily Legend log. Everything else uses
 finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
 no Trophy trend section; for the unused
 [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx) see open item 6 in the
 [dashboard design](../docs/dashboard.md). The player page explains
-itself with titles, labels and short counts rather than help paragraphs.
+itself with titles, labels and short counts rather than help paragraphs. On a
+phone, Today, Season and Log links under the heading jump to those parts, the
+one on screen lit.
 The player's name in its heading opens their profile in Clash of Clans. The
 heading first shows the saved clan name as plain text, then the clan the game
 reports right now, linked to its profile, streams in to replace it; when the
@@ -96,9 +120,11 @@ automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80
 weekly reset.
-Today's end of day and Reset rank read After Reset, and the battles it has
-not saved yet are counted in one line, such as 7 attacks not recorded yet,
-where a finished day's say 7 attacks not recorded. Today's day sits first in
+Today's end of day and Reset rank read After Reset. A side with fewer than 8
+saved battles adds one line for the rest: today's say 7 attacks not recorded
+yet; a finished day whose total came from the profile says 7 attacks not
+listed, already in the total, since only their details are gone; any other
+finished day says 7 attack records unavailable. Today's day sits first in
 the log on every screen and starts folded. On a phone an opened day shows its
 attacks or its defenses, picked with an Attacks | Defenses switch that carries
 each side's total; wider screens show both side by side.
@@ -119,7 +145,12 @@ The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
 The current Season's box counts only finished Legend days, never the day in
-progress; its one short line gives the dates and finished days saved. The box's
+progress. Its one short line, left out when there is nothing to weigh, says how
+many Legend I days a Season the player joined or left partway had, how many
+days have no saved result (such as 2 days missing), and flags such as Some
+battles may be missing and Conflicting reports; before the first finished day it
+reads No finished Legend days yet this Season. The box also holds the Season
+heat map, one square for each of the 28 days. The box's
 Season menu, in the same bold style as the Analytics filters, lists the current
 Season and each past Season with Clash Lens days and opens the chosen one. Counts,
 stars, hit rate and averages all use every recorded battle of those days.
@@ -132,7 +163,7 @@ Unavailable for rates and averages. Partial history and conflicting reports
 are flagged; retained past-Season totals cannot fill missing battle details. A
 past Season's box uses its saved summary, with per-day averages over the
 recorded days with a battle on that side, and when coverage is partial it says how many of the 28 days are
-recorded. A Season known only from in-game history shows just the rank, which
+missing (such as 3 of 28 days missing). A Season known only from in-game history shows just the rank, which
 reads Not published yet until the game publishes it, and trophies.
 
 The box adds no stored data; the
@@ -192,27 +223,37 @@ that the page stops checking, says so, and ignores any later answer.
 The Dashboard is `/` for signed-in users while
 `CLASHLENS_DASHBOARD_ENABLED=true`; the old `/dashboard` address redirects
 there. Everyone else, and everyone while the switch is off, gets the front
-page at `/`: the big search, then, only while the switch is on, a locked
-example dashboard with Create account and Sign in
-([`DashboardTeaser.tsx`](app/components/DashboardTeaser.tsx)), then the top 10
-now with a link to all rankings ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
-[deployment](../docs/deployment.md)). The top bar's tabs are Dashboard,
-Rankings, Analytics, Crews, Watchlists and Blog. Below 64rem, and on touch
-screens, they move to a bar at the bottom of the screen: Home (Dashboard when
-signed in with the Dashboard on), Rankings, Analytics, Crews and More, which
-holds Watchlists, Blog and Join Discord; the top bar keeps the logo, search,
-the theme switch and Sign in or the account menu. A signed-out visitor who
+page at `/`: the big search with how many players are ranked and how long ago
+the board changed, then, only while the switch is on, an example dashboard
+(a Legend day card and a Season heat map) headed "Your Legend day, live" with
+Create account ([`DashboardTeaser.tsx`](app/components/DashboardTeaser.tsx);
+Sign in stays in the top bar), then the top 10 now, in Rankings' columns, with
+an All rankings link, and links to Watchlists, Crews (while they are on) and
+Armies ([`FrontPage.tsx`](app/components/FrontPage.tsx), see
+[deployment](../docs/deployment.md)). The top bar's tabs are Home (while the
+Dashboard is on), Rankings, Analytics, Crews (while they are on), Watchlists
+and Blog. Below 64rem, and on touch screens, they move to a bar at the bottom
+of the screen, the same for everyone: Home (the front page, or the Dashboard
+once signed in), Rankings, Watchlists, Crews (while they are on) and More, which
+holds Analytics, Blog, Join Discord and the account rows: Your profile,
+Settings and Sign out, or Sign in; the top bar keeps the logo, search, the
+theme switch and Sign in or the account menu. A signed-out visitor who
 opens a page that needs an account sees, in its place, what the page is for and
 separate Create account and Sign in buttons that both come back to it
-([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)). A sign-in with Google
+([`NeedsAccount.tsx`](app/components/NeedsAccount.tsx)); the Sign in and Create
+account pages it leads to repeat the page's name and reason in one line
+([`SignInReason.tsx`](app/components/SignInReason.tsx)). A sign-in with Google
 or Discord that has no account yet says "No account found" and asks before
 making one; a new account chooses a username, links a player, then goes on to
 where the Clasher was heading. "Not you? Use a different sign-in" on Choose your
 username logs that sign-in out and starts the sign-up again. The card designs
 are in the [dashboard design](../docs/dashboard.md).
 
-Signed-in users get one page: account tabs for their linked players, then a
-divider with "⚙ Customise dashboard" and a
+Signed-in users get one page: account tabs for their linked players, with a
+"+ Link player" button after them and, beside them, a toolbar of Player page
+and ⚙ Customise (plus "Updated N min ago" when the Legend day card, which says
+it itself, is not on the page; a phone folds the toolbar into one icon button),
+then a
 3-column grid of Small (1 column), Medium (2) and Large (full row) cards; empty
 grid slots stay empty. The cards follow the selected tab, and one layout serves
 every account. An account outside Legend I gets the Legend I only message
@@ -230,18 +271,21 @@ shown and reads again only those it changes or adds
 ([`dashboard.tsx`](app/routes/dashboard.tsx)). A page left open past the
 Reset hides the day's numbers behind a new-day notice until it reloads.
 
-Bases you attacked rates each base Hard / Average / Easy in the mode its
-settings choose. Held % compares the base's held share today with today's held
+Bases you attacked rates each base in its Strength column, Hard / Average /
+Easy with a three-bar meter and one signed result against the Legend average
+(said once in the header), in the mode its settings choose. Strength is neutral
+in colour and a + means the base was harder than the average. Held % compares the base's held share today with today's held
 share among tracked Legend players at similar trophies, whose day started
 within 20 trophies of the base's Reset trophies, widened until that holds 200
 defenses but never past 300 either side, and at least 50 defenses (Average is
-within 15 points). Without that comparison a base with 3+ defenses shows "–"
-and "no comparison yet". Trophies, the default, compares the trophies it gave
-up a defense today with what the same Legends at similar trophies lost a
-defense (Average is within `BASE_TROPHY_BAND` trophies a defense) and shows the
-total it lost today beside theirs over as many defenses, such as "lost −185 ·
-avg −201 · in 6 defenses". Under 3 defenses the rating is too early, but
-Trophies still shows the total so far beside theirs. Its ‹ Day 9 · today ›
+within 15 points). Without that comparison a base with 3+ defenses reads
+"No rating" and its hover text says "no comparison yet". Trophies, the default,
+compares the trophies it gave up a defense today with what the same Legends at
+similar trophies lost a defense (Average is within `BASE_TROPHY_BAND` trophies
+a defense); the hover text puts the total it lost today beside theirs over as
+many defenses, such as "lost −185 in 6 defenses · Legend avg −201". Under 3
+defenses the verdict reads Too early, but the hover text still gives the total
+so far. Its ‹ Day 9 · today ›
 button reads an earlier Legend day of this Season through
 `/resources/players/{tag}/bases?day=N`
 (`GET /v1/players/{tag}/bases?day=N` on the private API, signed-in users only,
@@ -250,9 +294,12 @@ and keeps each day it read until the page closes or another account tab is
 chosen. It reads only the day where clicking stops for 0.4 s, and waits up to
 15 s, as the private API reads one earlier day at a time.
 
-The first visit offers "Use our layout" or "Build my own". Customise moves
-(drag, or ↑ ↓), removes and adds cards, has Reset to default, and Done saves;
-card settings and the watchlist picked on the Watchlist card save at once. A user is on
+The first visit offers "Use our layout" or "Build my own". Customise opens a
+bar that names the layout and offers + Add a card, Use default layout, Cancel
+(or Escape, which discards the changes) and Done, which saves; each card gets
+a strip to drag, move (↑ ↓), remove or open its settings. On a phone the bar
+sits at the bottom of the screen in place of the tab bar until Done. Card
+settings and the watchlist picked on the Watchlist card save at once. A user is on
 the default layout (`DEFAULT_LAYOUT` in
 [`dashboard.ts`](app/lib/dashboard.ts)), which follows each release, or on
 their own. Settings are saved in the account's existing 4,096-byte preferences
@@ -287,20 +334,29 @@ Other armies, for 3 days, 7 days or this Season's finished days (`days=season`),
 with that army in grey, from the worker's saved attack counts for each day
 (about 35,000 rows a day), kept in the API's memory until the day is counted
 again, so only a day not yet seen is read. Armies on defense also takes a
-Custom 1–28 days and shows your held % and average trophies lost against
-each army, each followed in grey by every tracked Legend player's against
-that army over the same days, from the worker's saved defense counts for
-each day (defenders' own reports, about 88,000 rows a day), kept in the
-API's memory the same way. A defense whose attacking army could not be read
-counts only in All defenses. Until the worker has counted every one of the
-days the grey numbers show –.
+Custom 1–28 days and shows, for each army, its Usage, Not tripled (your held %)
+and Per defense (average trophies lost). The last two each sit beside a
+signed difference from every tracked Legend player's number against that army
+over the same days, under one "vs Legend avg" heading, where + is better for
+you; the figures come from the worker's saved defense counts for each day
+(defenders' own reports, about 88,000 rows a day), kept in the API's memory the
+same way. A defense whose attacking army could not be read counts only in All
+defenses. Until the worker has counted every one of the days the differences
+show –.
 
 Crews at `/crews` stay hidden unless `CLASHLENS_CREWS_ENABLED=true`. Signed-in users
 see their crews (at most 5) and can create one at `/crews/new` with a name, a
 number of places and which linked accounts join. A crew's page at
-`/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,
+`/crews/<id>` shows six boards: Live leaderboard, At last Reset (the
+standings held at the last Reset, at `/crews/<id>/boards/top`), Top attackers,
 Best defenders, Worst defenders and Highest streaks, the last four switched
-between Today, Last 7 days and Season (the default). Best and Worst defenders
+between Today, Last 7 days and Season (the default). Live rows add what each
+account has won or lost today so far, counted as on the Rankings page ("+25
+today"), and a Since the last Reset line under the crew's header totals those
+moves and counts the accounts up, level and down; it is left out until any
+account's day is known. While some Legend League account's day is unknown, on
+Live or missing from it, the line says whose total it is ("Total of 3 of 8
+accounts") and counts those unknown beside the others; never as level. Best and Worst defenders
 share one card with a Best | Worst switch. On a phone a row of tabs (Live,
 Reset, Attack, Defense, Streaks) shows one board at a time. Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
@@ -553,9 +609,15 @@ Only the owner sees edit, sign-in connection and account-linking controls.
 The linking form includes the in-game API token instructions.
 Each linked account on a profile is one card that opens its player page: name,
 tag, clan, current trophies, Live Leaderboard rank (when off the board, the
-league its newest saved profile names, or "Unranked" when none is known) and
-today's net so far with attacks and defenses done. The one profile
-read returns every card. An account without current results also shows its
+league its newest saved profile names, or "Unranked" when none is known) with
+its ▲ or ▼ places moved since the last Reset, and today's net so far; the
+attacks and defenses done are only read aloud. Below the card sits that
+player's Season heat map as a small grid. The one profile read returns every
+card at once; one more read, `/v1/users/:username/days`, then streams in every
+linked player's place at the last Reset and this Season's saved days, for the
+moves and heat maps, leaving those out when it cannot be read. On a Season's
+first Legend day there is no move: the Daily board at its Reset is the Season
+before's, as on Rankings. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
 last accepted profile, its rank whenever it is on the board, and "Unknown" or
 "Not available yet" where nothing valid is saved. An account outside Legend I,

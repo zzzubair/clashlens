@@ -147,7 +147,8 @@ describe("Bases you attacked on earlier Legend days", () => {
     expect(shown).toMatch(/Day <!-- -->3<\/span>/);
     expect(shown).toMatch(/aria-label="Later Legend day"(?![^>]*disabled)/);
     expect(shown).toContain("Typical");
-    expect(shown).toContain("Their defenses <!-- -->that day");
+    // Two defenses that day: too few to rate, and it says how many.
+    expect(shown).toContain("only 2 defenses");
     expect(await card(new Map())).toContain("Loading Day 3…");
     expect(await card(new Map([[3, null]]))).toContain(
       "Day 3&#x27;s bases couldn&#x27;t be read.",

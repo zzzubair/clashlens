@@ -4,8 +4,9 @@
    row: logo, search, theme and account. */
 
 :root {
-  /* The sticky top bar's height, for things that stick just under it. */
-  --cl-header-h: 4rem;
+  /* The sticky top bar's height, for things that stick just under it. Tall
+     enough for a wordmark you can read at a glance. */
+  --cl-header-h: 4.5rem;
 }
 
 .site-header {
@@ -19,7 +20,7 @@
   width: 100%;
   min-height: var(--cl-header-h);
   margin: 0;
-  padding: 0.4rem max(1.5rem, calc((100% - 72rem) / 2));
+  padding: 0.3rem max(1.5rem, calc((100% - 72rem) / 2));
   color: var(--cl-header-ink);
   background: transparent;
   border-bottom: 0;
@@ -33,8 +34,8 @@
   z-index: -1;
   inset: 0;
   background: var(--cl-header-bg);
-  -webkit-backdrop-filter: saturate(1.6) blur(14px);
-  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(20px);
+  backdrop-filter: saturate(1.6) blur(20px);
   content: "";
 }
 
@@ -220,25 +221,30 @@
 }
 
 /* More rises from the bottom bar as a sheet, in the bar's own dark colours,
-   over a dimmed page that closes it when tapped. Open, it covers everything
-   else, the analytics question included. */
+   resting just on the bar, over a dimmed page that closes it when tapped.
+   The dimming covers the whole screen, round the bar too, but sits under
+   the bar (below its fill in the bar's own layer), so the other tabs stay
+   bright and tappable. Its colour is repeated in the fade under the bar
+   (below). Open, it covers everything else, the analytics question
+   included. */
 .site-header:has(.site-menu[open]) {
   z-index: 60;
 }
 
 .site-menu[open]::before {
   position: fixed;
-  inset: 0 0 var(--cl-bottom-tabs);
+  z-index: -3;
+  inset: 0;
   background: rgb(10 6 4 / 0.5);
   content: "";
 }
 
 .site-menu-panel {
   position: fixed;
-  right: 0.625rem;
-  bottom: calc(var(--cl-bottom-tabs) + 0.25rem);
-  left: 0.625rem;
-  max-width: 34rem;
+  right: 0.5rem;
+  bottom: calc(var(--cl-bottom-bar-top) + 0.25rem);
+  left: 0.5rem;
+  max-width: 30rem;
   margin-inline: auto;
   display: grid;
   gap: 0.5rem;
@@ -246,12 +252,11 @@
   overflow-y: auto;
   padding: 0.5rem 0.75rem 0.75rem;
   color: var(--cl-ink);
-  background: var(--cl-glass-strong);
+  background: var(--cl-solid);
+  /* One edge: no inner shine or outer ring beside it. */
   border: 1px solid var(--cl-glass-edge);
   border-radius: 1.25rem;
   box-shadow: var(--cl-overlay-shadow);
-  -webkit-backdrop-filter: saturate(1.8) blur(24px);
-  backdrop-filter: saturate(1.8) blur(24px);
 }
 
 /* The grab handle says it is a sheet. */
@@ -270,30 +275,51 @@
   gap: 0.15rem;
 }
 
-.site-menu-tabs a {
+.site-menu-tabs :is(a, button) {
   display: flex;
+  gap: 0.85rem;
   align-items: center;
+  width: 100%;
   min-height: 3.25rem;
   padding: 0.5rem 1rem;
   color: var(--cl-ink);
+  background: transparent;
+  border: 0;
   border-radius: var(--cl-radius);
+  box-shadow: none;
+  font: inherit;
   font-weight: 600;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
 }
 
-.site-menu-tabs a:focus-visible {
+.site-menu-tabs form {
+  margin: 0;
+}
+
+:is(.site-menu-tabs, .site-menu-extras) svg {
+  color: var(--cl-muted);
+}
+
+.site-menu-tabs a[aria-current="page"] svg {
+  color: inherit;
+}
+
+.site-menu-tabs :is(a, button):focus-visible {
   background: var(--cl-panel);
 }
 
 /* Touch screens keep a tapped link's hover look until the next tap, so the
    bar and its sheet hover only for a mouse and show a press instead. */
 @media (hover: hover) {
-  .site-menu-tabs a:hover {
+  .site-menu-tabs :is(a, button):hover {
+    color: var(--cl-ink);
     background: var(--cl-panel);
   }
 }
 
-.site-menu-tabs a:active {
+.site-menu-tabs :is(a, button):active {
   background: var(--cl-panel);
 }
 
@@ -302,15 +328,37 @@
   background: var(--cl-action-soft);
 }
 
+/* The site's own pages, then Join Discord with them, then the account
+   under a hairline, named, so More reads as the site's whole menu. */
 .site-menu-extras {
   display: grid;
+  margin-top: -0.35rem;
+}
+
+.site-menu-account {
   padding-top: 0.5rem;
   border-top: 1px solid var(--cl-border);
 }
 
-/* Join Discord lines up with the links above it. */
+.site-menu-who {
+  margin: 0;
+  padding: 0.15rem 1rem 0.25rem;
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-menu-who bdi {
+  color: var(--cl-ink);
+}
+
+/* Join Discord lines up with the links above it, icon and all. */
 :root .site-menu-extras .nav-link {
   justify-content: flex-start;
+  gap: 0.85rem;
   min-height: 3.25rem;
   padding: 0.5rem 1rem;
   font-size: 1rem;
@@ -338,82 +386,128 @@
     display: none;
   }
 
-  /* Room at the bottom of every page, so nothing hides behind the bar. */
+  /* Room at the bottom of every page, so nothing hides behind the bar:
+     the bar's top edge, then 1rem where the page fades out above it. */
   :root {
-    --cl-header-h: 3.5rem;
-    --cl-bottom-tabs: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+    --cl-header-h: 4rem;
+    --cl-bottom-bar-top: calc(4rem + env(safe-area-inset-bottom, 0px));
+    --cl-bottom-tabs: calc(var(--cl-bottom-bar-top) + 1rem);
     scroll-padding-bottom: var(--cl-bottom-tabs);
   }
+  /* That room (app.css) is the page's end; the footer's own bottom space
+     would only leave a blank strip over the bar. */
+  .page-footer {
+    padding-bottom: 0.25rem;
+  }
 
-  /* A frosted bar floating just above the bottom edge, in thumb reach. */
+  /* A slim capsule floating just above the bottom edge, in thumb reach. Each
+     tab takes the room its name needs and shares the rest, so every name
+     fits at 13px even on a 320px phone. */
   .bottom-tabs {
     position: fixed;
-    right: 0.625rem;
+    right: 0.5rem;
     bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
-    left: 0.625rem;
-    display: grid;
-    grid-auto-columns: minmax(0, 1fr);
-    grid-auto-flow: column;
-    height: 3.75rem;
-    max-width: 34rem;
+    left: 0.5rem;
+    display: flex;
+    height: 3.5rem;
+    max-width: 30rem;
     margin-inline: auto;
-    padding: 0.3rem;
+    padding: 0.2rem 0.4rem;
     border: 1px solid var(--cl-glass-edge);
-    border-radius: 1.25rem;
+    border-radius: 999px;
     box-shadow:
       var(--cl-glass-shine),
-      0 16px 36px -12px rgb(0 0 0 / 0.45);
+      0 10px 28px -14px rgb(0 0 0 / 0.75);
     isolation: isolate;
   }
 
-  /* On white pages a lighter shadow; the edge already parts it from the page. */
+  /* Sized by their names, not shared out equally: equal fifths left
+     "Rankings" and "Watchlists" touching on a 320px phone, while sharing
+     out only the spare room keeps the same gap between every pair of names
+     at any width. */
+  .bottom-tabs > * {
+    flex: 1 1 auto;
+  }
+
+  /* On light pages a lighter shadow; the edge already parts it from the page. */
   :root:not([data-theme="dark"]) .bottom-tabs {
     box-shadow:
       var(--cl-glass-shine),
-      0 8px 20px -10px rgb(0 0 0 / 0.18);
+      0 6px 18px -10px rgb(80 40 10 / 0.28);
   }
 
-  /* Blurred on its own layer, so the More sheet is not pinned inside the bar. */
+  /* Its own layer, so the More sheet is not pinned inside the bar. Solid:
+     inside the sticky top bar a backdrop blur has no page to blur, so any
+     see-through fill would show page text under the tab names. */
   .bottom-tabs::before {
     position: absolute;
     z-index: -1;
     inset: 0;
-    background: var(--cl-glass-strong);
+    background: var(--cl-solid);
     border-radius: inherit;
-    -webkit-backdrop-filter: saturate(1.8) blur(20px);
-    backdrop-filter: saturate(1.8) blur(20px);
     content: "";
   }
 
-  /* Each tab: an icon over its name; the chosen one is orange on a soft grey pill. */
+  /* Under the floating bar, the page fades into its own colour from 1rem
+     above the bar to the screen's bottom and side edges, so no half-cut line
+     of text shows round the bar. Taps pass through it. */
+  .bottom-tabs::after {
+    position: absolute;
+    z-index: -2;
+    top: -1rem;
+    right: calc(50% - 50vw);
+    bottom: calc(-1rem - env(safe-area-inset-bottom, 0px));
+    left: calc(50% - 50vw);
+    background: linear-gradient(transparent, var(--cl-paper) 1rem);
+    pointer-events: none;
+    content: "";
+  }
+
+  /* With More open the page is dimmed (see .site-menu[open]::before) and
+     the sheet covers it down to just above the bar, so the strip is solid
+     dimmed page colour: no line of page text shows between the two. */
+  .bottom-tabs:has(.site-menu[open])::after {
+    background: color-mix(in srgb, rgb(10 6 4) 50%, var(--cl-paper));
+  }
+
+  /* Each tab: an icon over its name. The chosen one turns ember, with a
+     small ember pill behind its icon instead of a filled tile. */
   .bottom-tab {
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 0.1rem;
     align-items: center;
     justify-content: center;
     height: 100%;
     min-height: 2.75rem;
     padding: 0;
     color: var(--cl-header-muted);
-    border-radius: 0.95rem;
-    font-size: 0.68rem;
+    border-radius: 999px;
+    font-size: 0.8125rem;
     font-weight: 600;
     line-height: 1.1;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
     text-decoration: none;
     text-align: center;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    transition:
-      background-color 160ms ease,
-      color 160ms ease;
+    transition: color 160ms ease;
   }
 
+  /* The chosen pill reaches past the icon's sides without widening the tab,
+     so only the name sets a tab's width. */
   .bottom-tab svg {
-    width: 1.375rem;
-    height: 1.375rem;
-    transition: transform 160ms var(--cl-ease-out);
+    box-sizing: content-box;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-inline: -0.85rem;
+    padding: 0.2rem 0.85rem;
+    border-radius: 999px;
+    transition:
+      background-color 160ms ease,
+      transform 160ms var(--cl-ease-out);
   }
 
   .bottom-tab:focus-visible {
@@ -426,7 +520,7 @@
     }
   }
 
-  .bottom-tab:active {
+  .bottom-tab:active svg {
     background: var(--cl-header-soft);
   }
 
@@ -443,7 +537,16 @@
   .site-menu[open] > .bottom-tab,
   .site-menu:has(.pending) > .bottom-tab {
     color: var(--cl-action-text);
-    background: var(--cl-header-soft);
+  }
+
+  :is(
+      .bottom-tab[aria-current="page"],
+      .bottom-tab.pending,
+      .site-menu[open] > .bottom-tab,
+      .site-menu:has(.pending) > .bottom-tab
+    )
+    svg {
+    background: var(--cl-action-soft);
   }
 
   /* The tab being left, and the current tab while the More sheet is open,
@@ -455,8 +558,17 @@
     .site-menu:not([open])
     > .bottom-tab[aria-current] {
     color: var(--cl-header-muted);
+  }
+
+  .bottom-tabs:has(.pending:not([aria-current]))
+    > .bottom-tab[aria-current]:not(.pending)
+    svg,
+  .bottom-tabs:has(.site-menu[open]) > .bottom-tab[aria-current]:not(.pending) svg,
+  .bottom-tabs:has(> .pending:not([aria-current]))
+    .site-menu:not([open])
+    > .bottom-tab[aria-current]
+    svg {
     background: transparent;
-    box-shadow: none;
   }
 
   /* The loading line under the label, until the page shows. */
@@ -508,6 +620,6 @@
 
   .nav-link {
     padding: 0.45rem 0.75rem;
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
   }
 }

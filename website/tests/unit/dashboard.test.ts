@@ -41,6 +41,8 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
+import { updatedAgo } from "../../app/components/DashboardParts";
+import { readAt } from "../../app/components/DashboardGrid";
 import { LegendClock, clockMarks } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
@@ -383,7 +385,8 @@ describe("dashboard grid", () => {
       "1@5",
       "2@6",
     ]);
-    // On 2 columns the clock widens (Bases is Large) and Goal pairs with the heat map.
+    // On 2 columns Medium takes the row, so the clock widens under the Legend
+    // day and the heat map pairs with Goal.
     expect(places(DEFAULT_LAYOUT, 2)).toEqual([
       "2@0",
       "2@1",
@@ -396,41 +399,68 @@ describe("dashboard grid", () => {
   });
 
   it("fills a row's hole with a later Small card, never from past a Large card", () => {
-    expect(places(["goal", "armies-defense", "heat-map"], 2)).toEqual([
-      "1@0",
-      "2@2",
+    expect(places(["armies-defense", "rivals-watch", "heat-map"], 3)).toEqual([
+      "2@0",
+      "3@2",
       "1@1",
     ]);
-    // Customising shows the saved order, so Goal widens instead.
-    expect(places(["goal", "armies-defense", "heat-map"], 2, false)).toEqual([
-      "2@0",
+    // Customising shows the saved order, so Armies on defense widens instead.
+    expect(places(["armies-defense", "rivals-watch", "heat-map"], 3, false)).toEqual([
+      "3@0",
       "2@1",
-      "2@2",
+      "1@2",
     ]);
-    expect(places(["goal", "bases", "heat-map"], 2)).toEqual(["2@0", "2@1", "2@2"]);
+    expect(places(["goal", "bases", "heat-map"], 3)).toEqual(["3@0", "3@1", "3@2"]);
   });
 });
 
 describe("Legend clock", () => {
   const dayStart = Date.UTC(2026, 9, 7, 5);
 
-  it("merges battles within 20 minutes of each other into one mark", () => {
+  it("puts each battle on its track at its own time, grouping those too close for two dots", () => {
     const marks = clockMarks(
       [
         fight("attack", 7, 10, 3, 40),
         fight("attack", 7, 25, 3, 40),
         fight("attack", 7, 44, 2, 31),
         fight("attack", 12, 6, 2, 29),
+        fight("attack", 12, 50, 3, 40),
+        fight("attack", 14, 0, 3, 40),
         fight("defense", 7, 30, 3, -40),
+        fight("defense", 8, 20, 2, -24),
+        fight("defense", 11, 0, 3, -40),
         fight("defense", 4, 0, 1, -16),
       ],
       dayStart,
     );
-    expect(marks.map((mark) => [mark.kind, mark.battles.length])).toEqual([
-      ["attack", 3],
-      ["attack", 1],
-      ["defense", 1],
-    ]);
+    // Minutes after the Reset, and how many battles each mark holds: the
+    // three attacks round 07:25 share one mark at their middle time, as do
+    // the 12:06 and 12:50 attacks and the 07:30 and 08:20 defenses; 14:00
+    // and 11:00 keep their own time; the 04:00 defense is before this
+    // Legend day began.
+    const at = (kind: string) =>
+      marks
+        .filter((mark) => mark.kind === kind)
+        .map((mark) => `${Math.round(mark.minutes)}×${mark.battles.length}`);
+    expect(at("attack")).toEqual(["146×3", "448×2", "540×1"]);
+    expect(at("defense")).toEqual(["175×2", "360×1"]);
+  });
+
+  it("names each mark's battles on it, and the Reset's time under the countdown", () => {
+    const battles = [fight("attack", 7, 10, 3, 40), fight("attack", 7, 25, 2, 28)];
+    const html = renderToStaticMarkup(
+      createElement(LegendClock, {
+        battles: [...battles, fight("defense", 11, 0, 1, -16)],
+        nowMs: Date.UTC(2026, 9, 7, 9),
+        timeZone: "UTC",
+      }),
+    );
+    // Each mark names its battles: when, who, stars, % and trophies; two
+    // attacks too close for two marks share one mark, drawn as two ticks.
+    expect(html).toContain('title="Defense at 11:00 against Opponent: 1 star, 80%, −16');
+    expect(html).toContain(":\n07:10 on Opponent: 3 stars, 100%, +40 trophies\n07:25");
+    expect(html.match(/class="clock-tick clock-tick-attack"/g)).toHaveLength(2);
+    expect(text(html)).toContain("Reset Now 20h 00m to Reset at 05:00");
   });
 
   it("names the upcoming Reset in local time across a clock change", () => {
@@ -441,37 +471,31 @@ describe("Legend clock", () => {
         timeZone: "Europe/London",
       }),
     );
-    expect(html).toContain("to Reset at 05:00");
-    expect(text(html)).toContain("Reset 05:00");
-    expect(text(html)).toContain("3h 00m");
-    expect(text(html)).not.toContain("now ");
+    // The day began at 06:00 summer time; its Reset falls at 05:00 winter time.
+    expect(html).toContain('aria-label="Legend clock: 3h 00m to Reset at 05:00"');
+    expect(text(html)).toContain("3h 00m to Reset at 05:00");
   });
 });
 
 describe("Legend day card", () => {
-  it("says how old its range is, even without the player page", () => {
+  it("says once, in its header, how old the older of its two reads is", () => {
     const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
+    const range = { best: 95, worst: 760 };
+    const data = (day: PlayerDay | null) =>
+      ({ player: linked(MAIN), day, range, rangeAtMs: at(9), nowMs: at(0) }) as const;
     const updated = (day: PlayerDay | null) =>
-      text(
-        renderToStaticMarkup(
-          createElement(LegendDayCard, {
-            player: linked(MAIN),
-            day,
-            range: { best: 95, worst: 760 },
-            rangeAtMs: at(9),
-            nowMs: at(0),
-          }),
-        ),
-      );
-    expect(updated(null)).toContain("updated 9 min ago");
-    // The older of the day's reads and the range's shows.
-    expect(updated(emptyDay({ observedAtMs: at(2) }))).toContain("updated 9 min ago");
-    expect(updated(emptyDay({ observedAtMs: at(12) }))).toContain("updated 12 min ago");
+      updatedAgo(readAt("legend-day", { ...data(day), projected: null }), at(0));
+    expect(updated(null)).toBe("updated 9 min ago");
+    expect(updated(emptyDay({ observedAtMs: at(2) }))).toBe("updated 9 min ago");
+    expect(updated(emptyDay({ observedAtMs: at(12) }))).toBe("updated 12 min ago");
     // 09:00 UTC is 20 hours before the 05:00 Reset; the title's name is for screen readers.
-    expect(updated(emptyDay({ dayNumber: 9 }))).toContain(
-      "Legend day 9 , Lens Main updated",
+    const card = text(
+      renderToStaticMarkup(
+        createElement(LegendDayCard, data(emptyDay({ dayNumber: 9 }))),
+      ),
     );
-    expect(updated(emptyDay({}))).toContain("20h 00m to Reset");
+    expect(card).toContain("Legend day 9 , Lens Main Updated 9 min ago Trophies");
+    expect(card).toContain("20h 00m to Reset");
   });
 
   const render = (
@@ -485,10 +509,12 @@ describe("Legend day card", () => {
       ),
     );
 
-  it("shows the projected place beside the outer range, labelled an estimate", () => {
+  it("shows the projected place beside the outer range, labelled its range", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain("Projected #3,000 at Reset. ");
-    expect(html).toContain("Next Reset #1 – #12,270 estimate");
+    expect(html).toContain("Projected place #3,000 at Reset. ");
+    expect(html).toContain(
+      "left, and gets closer through the day. Next Reset range #1 #12,270",
+    );
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
     );
@@ -586,7 +612,7 @@ describe("Bases you attacked", () => {
   // No earlier Legend day chosen.
   const TODAY = { chosen: null, read: new Map(), choose: () => {} };
 
-  it("lists hard bases first and colours them for the attacker", async () => {
+  it("lists hard bases first, their strength in neutral ink", async () => {
     const html = await renderInRouter(
       createElement(OpponentsCard, {
         days: TODAY,
@@ -600,18 +626,28 @@ describe("Bases you attacked", () => {
       }),
     );
     const plain = text(html);
-    expect(plain).toContain("Base strength today");
+    // The slots' key is one line over the headings, each mark with its word.
+    expect(plain).toContain(
+      "Tripled Held Not yet You Player Your hit Their defenses Strength Hard one",
+    );
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
-    expect(plain).toContain("Hard held 5 of 6 · 83% vs Legend avg 41%");
-    expect(plain).toContain("Easy held 1 of 4 · 25% vs Legend avg 41%");
-    expect(plain).toContain("Too early held 0 of 2");
-    expect(html).toContain('title="Needs 3+ defenses for a rating">Too early<');
-    expect(plain).not.toContain("not yet");
+    // Each verdict has one short result against the 41% held, never green or red.
+    expect(plain).toContain("Hard +42 pts held 83%, 42 pts above Legend avg");
+    expect(html).toContain('opponents-result" aria-hidden="true">−16 pts<');
+    expect(html).toContain('"Add Early to watchlist" title="Add to watchlist"');
+    // A tap on the verdict, not only a hover, shows what it is measured against.
+    expect(html).toContain(
+      '<p class="opponents-exact">held 5 of 6 · 83% vs Legend avg 41%</p>',
+    );
     // Each opponent can be saved into one of the account's groups.
     expect(html).toContain('href="/account/watchlists/add/8PP"');
-    // One square per attack, and one in the key under the rows.
-    expect(html.match(/is-yours/g)).toHaveLength(4);
+    // One underlined slot per attack; a star for each triple, a shield for each
+    // hold. The key above the rows draws one of each, as <i>, not <li>.
+    expect(html.match(/<li class="opponents-block[^"]*is-yours/g)).toHaveLength(3);
+    expect(
+      html.match(/<li class="opponents-block is-held[^>]*><svg class="game-mark"/g),
+    ).toHaveLength(6);
   });
 
   it("shows a base with 3+ defenses but no comparison as unavailable, not too early", async () => {
@@ -629,9 +665,9 @@ describe("Bases you attacked", () => {
         }),
       ),
     );
-    expect(plain).toContain("– held 3 of 4 · no comparison yet");
-    expect(plain).not.toContain("Too early held 3 of 4");
-    expect(plain).toContain("Too early held 0 of 2");
+    expect(plain).toContain("No rating held 75%, no Legend avg yet");
+    expect(plain).not.toContain("Too early held 75%");
+    expect(plain).toContain("Too early rated after 3 defenses");
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("No comparison"));
     expect(plain.indexOf("No comparison")).toBeLessThan(plain.indexOf("Early"));
   });
@@ -655,27 +691,6 @@ describe("Bases you attacked", () => {
     expect(unsaved).not.toContain("of 8");
     expect(unsaved).not.toContain("No attacks yet today");
     expect(await render([])).toContain("· today · 0 of 8 No attacks yet today.");
-  });
-
-  it("shows the older of the opponents' reads and Held % mode's comparison", async () => {
-    const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
-    const updated = async (mode: "held" | "trophies") =>
-      text(
-        await renderInRouter(
-          createElement(OpponentsCard, {
-            days: TODAY,
-            dayNumber: null,
-            rows: [{ ...row("Easy one", held(1, 4)), observedAtMs: at(2) }],
-            timeZone: "UTC",
-            mode,
-            nowMs: at(0),
-            comparedAtMs: at(9),
-          }),
-        ),
-      );
-    // Both modes compare with the same read of Legends at similar trophies.
-    expect(await updated("held")).toContain("updated 9 min ago");
-    expect(await updated("trophies")).toContain("updated 9 min ago");
   });
 
   it("rates bases by trophies given up a defense and shows the day's total in Trophies mode", async () => {
@@ -703,21 +718,21 @@ describe("Bases you attacked", () => {
         }),
       ),
     );
-    expect(plain).toContain("Base strength today");
-    // 5 held at −25 and one tripled at −40: 165 over 6 is −28 a defense,
-    // against 32 a defense, 192 over 6, at similar trophies.
-    expect(plain).toContain("Hard lost −165 in 6 defenses · Legend avg −192");
-    // One held and three tripled: 145 over 4 is −36 a defense.
-    expect(plain).toContain("Easy lost −145 in 4 defenses · Legend avg −128");
+    // 5 held at −25 and one tripled at −40: 165 over 6 is 27.5 a defense,
+    // 4.5 under the 32 a defense lost at similar trophies.
+    expect(plain).toContain("Hard +4 lost 28 a defense, 4 below Legend avg");
+    // One held and three tripled: 145 over 4 is 36.25 a defense.
+    expect(plain).toContain("Easy −4 lost 36 a defense, 4 above Legend avg");
     // The same base near players losing 36 a defense is Average.
     expect(plain).toContain(
-      "Near 36 5,712 ★★★ 100 % +40 · 07:20 Average lost −145 in 4 defenses · Legend avg −144",
+      "Near 36 5,712 100 % +40 · 07:20 2 stars held 3 stars tripled 3 stars tripled 3 stars tripled, your attack Average 0 lost 36 a defense, same as Legend avg",
     );
-    expect(plain).toContain("– lost −145 in 4 defenses · no comparison yet");
-    // Under 3 defenses the rating waits, but the day's total so far shows
-    // beside the average.
-    expect(plain).toContain("Too early lost −65 in 2 defenses · Legend avg −64");
-    expect(plain).toContain("Too early lost −40 in 1 defense · Legend avg −32");
+    expect(plain).toContain("No rating lost 36 a defense, no Legend avg yet");
+    // Under 3 defenses the rating waits, and says when it comes; the day's
+    // totals open on a tap.
+    expect(plain).toContain(
+      "Too early rated after 3 defenses lost −40 in 1 defense · Legend avg −32",
+    );
     expect(plain).not.toContain("held 1 of 2");
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
   });
@@ -1212,6 +1227,7 @@ describe("dashboard switch", () => {
     vi.unstubAllEnvs();
   });
 
+  /** The desktop tabs, where Home (the dashboard once signed in) follows the switch. */
   async function renderNavigation() {
     const handler = createStaticHandler([
       {
@@ -1224,13 +1240,14 @@ describe("dashboard switch", () => {
     ]);
     const context = await handler.query(new Request(`${ORIGIN}/`));
     if (context instanceof Response) throw new Error("unexpected response");
-    return renderToString(
+    const html = renderToString(
       createElement(StaticRouterProvider, {
         router: createStaticRouter(handler.dataRoutes, context),
         context,
         hydrate: false,
       }),
     );
+    return html.split('class="primary-nav"')[1]!.split("</nav>")[0];
   }
 
   it("shows the front page, refuses saves and hides the tab while it is off", async () => {
@@ -1242,12 +1259,12 @@ describe("dashboard switch", () => {
       (error: unknown) => error,
     );
     expect(unwrap(thrown).status).toBe(404);
-    expect(await renderNavigation()).not.toContain(">Dashboard</a>");
+    expect(await renderNavigation()).not.toContain(">Home</a>");
   });
 
   it("shows the tab while it is on", async () => {
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
-    expect(await renderNavigation()).toContain(">Dashboard</a>");
+    expect(await renderNavigation()).toContain(">Home</a>");
   });
 });
 
@@ -1338,7 +1355,7 @@ describe("dashboard page", () => {
     expect(html.match(/title="Lens Main"/g)).toHaveLength(1);
   });
 
-  it("puts a Page button on each tab that opens that player's own page", async () => {
+  it("puts one named Player page link, the chosen player's, beside Customise", async () => {
     const html = await renderDashboard({
       players: [
         linked(MAIN),
@@ -1346,15 +1363,12 @@ describe("dashboard page", () => {
         linked(CHECKING, { name: "Lens New", state: "checking", rank: null }),
       ],
     });
-    const pages = [...html.matchAll(/<a [^>]*class="dash-account-page"[^>]*>/g)].map(
-      ([tag]) =>
-        `${/aria-label="([^"]+)"/.exec(tag)![1]} → ${/href="([^"]+)"/.exec(tag)![1]}`,
+    const pages = [...html.matchAll(/<a [^>]*class="dash-tool"[^>]*>/g)].map(
+      ([tag]) => /href="([^"]+)"/.exec(tag)![1],
     );
-    expect(pages).toEqual([
-      "Lens Main player page → /players/%23LQ2V8PJ0",
-      "Lens Alt player page → /players/%232PP8QLY0",
-      "Lens New player page → /players/%239YJ2C0QL",
-    ]);
+    expect(pages).toEqual(["/players/%23LQ2V8PJ0"]);
+    expect(text(html)).toContain("Player page Customise");
+    expect(html).toContain('aria-label="Customise dashboard"');
   });
 
   it("puts Customise on the divider above the cards, in the saved order and sizes", async () => {
@@ -1478,7 +1492,7 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    expect(plain).toContain("Rank, rivals, Reset clock and goal. Free.");
-    expect(plain).toContain("Create account Already have one? Sign in");
+    // One way in; Sign in stays in the header.
+    expect(plain).toContain("Your Legend day, live Create account");
   });
 });

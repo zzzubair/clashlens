@@ -1,9 +1,17 @@
 /* Armies on defense and Armies on offense (components/ArmyCards.tsx). */
 
+/* Beside a taller card, the rows share the spare height, so the table
+   reaches the card's foot. */
 .army-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
   gap: 0.25rem;
   transition: opacity 150ms ease;
+}
+
+.army-card > :is(.army-defense-row, .army-offense-row):not(.army-head) {
+  flex-grow: 1;
 }
 
 .army-card.is-loading {
@@ -28,7 +36,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: var(--cl-radius);
   background: var(--cl-surface);
-  box-shadow: var(--cl-card-drop);
+  box-shadow: var(--cl-overlay-shadow);
 }
 
 .army-custom label {
@@ -52,8 +60,8 @@
 
 .army-head {
   color: var(--cl-muted);
-  font-size: 0.7rem;
-  font-weight: 900;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .army-defense-row,
@@ -66,8 +74,129 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The card is measured, so a wide card keeps its columns on any screen. */
+.dash-card:has(> .army-card) {
+  container-type: inline-size;
+}
+
 .army-defense-row {
-  grid-template-columns: minmax(0, 1fr) 3rem 5.75rem 6rem;
+  grid-template-columns: minmax(0, 1fr) 8rem 9rem 9rem;
+  column-gap: 1rem;
+}
+
+.army-head.army-defense-row > :nth-child(n + 2) {
+  text-align: left;
+}
+
+/* Each army's troop art before its name, as on Analytics: a fixed slot that
+   fits a second troop small on the first one's corner, so every name starts
+   in one column, with or without art. */
+.army-type {
+  --army-art: 2.2rem;
+  display: grid;
+  grid-template-columns: var(--army-art) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.army-type > :last-child {
+  grid-column: 2;
+}
+
+.army-type .unit-art {
+  display: inline-flex;
+}
+
+.army-type .unit-art img {
+  width: 1.9rem;
+  height: 1.9rem;
+  background: var(--cl-panel);
+  border-radius: 0.45rem;
+}
+
+.army-type .unit-art img + img {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0 0 -0.15rem -0.8rem;
+  align-self: flex-end;
+  border-radius: 0.35rem;
+  box-shadow: 0 0 0 2px var(--cl-solid);
+}
+
+/* Each number after its bar, the bars in one fixed column, so every row's
+   bar starts at the same place; Legends' average follows, muted. */
+.army-share {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.75rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.army-share > :last-child {
+  grid-column: 2;
+}
+
+/* Each comparison: the number, right-aligned in its own width, then its
+   one signed difference. */
+.army-stat {
+  display: grid;
+  grid-template-columns: 3.4rem auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: start;
+}
+
+/* Avg lost carries the trophy as its unit. */
+.army-own .game-trophy {
+  margin-left: 0.15rem;
+  font-size: 0.875rem;
+}
+
+/* "of defenses" after a share is said aloud; a narrow card shows it. */
+.army-share-of {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The one difference from the Legends: muted unless well clear of them. */
+.army-diff {
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.army-diff.is-better {
+  color: var(--cl-positive);
+}
+
+.army-diff.is-worse {
+  color: var(--cl-negative);
+}
+
+.army-bar {
+  position: relative;
+  height: 6px;
+  background: var(--cl-raised);
+  border-radius: 3px;
+}
+
+.army-bar i {
+  display: block;
+  height: 100%;
+  background: var(--cl-action);
+  border-radius: 3px;
+}
+
+.army-own {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .army-offense-row {
@@ -85,19 +214,6 @@
 
 :is(.army-defense-row, .army-offense-row) > :nth-child(n + 2) {
   text-align: right;
-}
-
-/* Every tracked player's number after the user's, and its header. */
-.army-legends {
-  font-weight: 600;
-}
-
-.army-legends-head {
-  display: block;
-  color: var(--cl-muted);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .army-defense-row.is-all {
@@ -146,88 +262,127 @@
   line-height: 1.05;
 }
 
-/* Each number's own label, read aloud everywhere and shown on a phone. */
-.army-stat-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+/* A narrow card names Usage with Army, over the art and name. */
+.army-head-usage {
+  display: none;
 }
 
-/* A phone drops the column headers: the army and its share on one line,
-   Held and Avg lost under it, each labelled, with the Legends number beside. */
-@media (max-width: 40rem) {
-  .army-defense-row.army-head {
-    display: none;
-  }
-
+/* A narrow card (a phone, or a Small card): one heading line shared by
+   every army, then two short lines an army: its art beside its name over
+   its Usage bar, then Not tripled and Per defense, each value over its
+   signed difference. */
+@container (max-width: 36rem) {
   .army-defense-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 2.1rem minmax(0, 1fr) 4.5rem 4.9rem;
     grid-template-areas:
-      "name share"
-      "held lost";
-    gap: 0.4rem 1rem;
-    padding: 0.65rem 0;
+      "art name held lost"
+      "art share held lost";
+    gap: 0.1rem 0.6rem;
+    padding: 0.4rem 0;
   }
 
-  .army-defense-row > :first-child {
+  .army-defense-row > :nth-child(1) {
     grid-area: name;
   }
 
-  /* A long army name wraps rather than losing its end. */
-  .army-defense-row .dash-name {
-    overflow: visible;
-    white-space: normal;
-  }
-
-  .army-defense-row > .army-share {
+  .army-defense-row > :nth-child(2) {
     grid-area: share;
-    color: var(--cl-muted);
-    font-size: 0.85rem;
   }
 
-  .army-defense-row > :nth-child(3),
+  .army-defense-row > :nth-child(3) {
+    grid-area: held;
+  }
+
   .army-defense-row > :nth-child(4) {
+    grid-area: lost;
+  }
+
+  /* The art and the name take their own cells. */
+  .army-defense-row .army-type {
+    display: contents;
+  }
+
+  .army-defense-row .army-type .unit-art {
+    grid-area: art;
+  }
+
+  .army-defense-row .army-type > :last-child {
+    grid-area: name;
+  }
+
+  /* All defenses and the headings start at the art's edge. */
+  .army-defense-row.is-all > :first-child,
+  .army-head.army-defense-row > :first-child {
+    grid-area: auto;
+    grid-row: 1;
+    grid-column: 1 / 3;
+  }
+
+  .army-head.army-defense-row {
+    grid-template-areas: "art name held lost";
+    padding-bottom: 0.3rem;
+    white-space: nowrap;
+  }
+
+  .army-head.army-defense-row > :nth-child(2),
+  .army-defense-row.is-all > .army-share {
+    display: none;
+  }
+
+  .army-head-usage {
+    display: inline;
+  }
+
+  :is(.army-defense-row, .army-offense-row) > :nth-child(n + 2) {
     text-align: left;
+  }
+
+  .army-share {
+    grid-template-columns: minmax(0, 1fr) 2.4rem;
+    gap: 0.4rem;
+    font-size: 0.8125rem;
   }
 
   .army-stat {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 0.5rem;
-    align-items: baseline;
-    font-family: var(--cl-font-score);
-    font-size: 1.15rem;
-    font-weight: 700;
-    line-height: 1.15;
+    grid-template-columns: auto;
+    gap: 0;
+    justify-items: start;
+    white-space: nowrap;
   }
 
-  .army-stat .army-stat-label,
-  .army-share .army-stat-label {
-    position: static;
-    width: auto;
-    height: auto;
-    overflow: visible;
-    clip-path: none;
+  .army-stat .army-own {
+    line-height: 1.25;
   }
 
-  .army-stat > .army-stat-label {
-    grid-column: 1 / -1;
-    color: var(--cl-muted);
-    font-family: var(--cl-font);
-    font-size: 0.7rem;
-    font-weight: 650;
+  .army-stat .army-diff {
+    font-size: 0.8125rem;
+    line-height: 1.2;
   }
 
-  .army-slash {
+  .army-defense-row .army-type .unit-art img {
+    width: 1.9rem;
+    height: 1.9rem;
+  }
+
+  .army-defense-row .army-type .unit-art img + img {
+    width: 1.1rem;
+    height: 1.1rem;
+    margin-left: -0.75rem;
+  }
+
+  .army-defense-row .dash-name,
+  .army-defense-row.is-all > :first-child {
+    overflow: hidden;
+    font-size: 0.875rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* A phone shows the top 3 armies and All defenses, then Show all. */
+@media (max-width: 40rem) {
+  .army-card:not(.army-all) > .army-defense-row.is-extra {
     display: none;
-  }
-
-  .army-legends {
-    font-family: var(--cl-font);
-    font-size: 0.78rem;
-    font-weight: 600;
   }
 }

@@ -42,6 +42,8 @@ export interface SeasonDay {
 export interface SeasonData {
   /** Today's Season day, 1-28; null when the Season is not known yet. */
   today: number | null;
+  /** When Day 1 began, from Python's Season start; null when the Season is not known yet. */
+  startMs: number | null;
   /** Finished days of this Season, oldest first; a day missing here has no saved result. */
   days: SeasonDay[];
 }
@@ -334,7 +336,10 @@ export interface HeatCell {
 }
 
 /** Each Season day as a square; played days are ranked against each other. */
-export function heatCells(season: SeasonData, mode: HeatMode): HeatCell[] {
+export function heatCells(
+  season: Pick<SeasonData, "today" | "days">,
+  mode: HeatMode,
+): HeatCell[] {
   const today = season.today ?? 1;
   const byDay = new Map(season.days.map((day) => [day.day, day]));
   const ranked = season.days

@@ -51,22 +51,29 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 }
 
 // Paints a text box's border onto its own fill and its ring onto what sits behind it.
+// Behind is every fill under the box down to the first solid one, so a see-through
+// card counts as the colour it shows over the page.
 async function boxColours(box: Locator) {
   return box.evaluate((element) => {
     const style = getComputedStyle(element);
-    let backdrop = element.parentElement!;
-    while (getComputedStyle(backdrop).backgroundColor === "rgba(0, 0, 0, 0)") {
-      backdrop = backdrop.parentElement!;
+    const layers: string[] = [];
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      const colour = getComputedStyle(node).backgroundColor;
+      if (colour !== "rgba(0, 0, 0, 0)") layers.unshift(colour);
+      if (/^rgb\(|^color\([^/]*\)$/.test(colour)) break;
     }
     const paint = (under: string, colour: string) => {
       const context = document.createElement("canvas").getContext("2d")!;
-      context.fillStyle = under;
-      context.fillRect(0, 0, 1, 1);
-      context.fillStyle = colour;
-      context.fillRect(0, 0, 1, 1);
+      for (const each of [under, colour]) {
+        context.fillStyle = each;
+        context.fillRect(0, 0, 1, 1);
+      }
       return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
     };
-    const behind = getComputedStyle(backdrop).backgroundColor;
+    // The solid fill, then each see-through one over it.
+    let behind = layers[0]!;
+    for (const colour of layers.slice(1))
+      behind = `rgb(${paint(behind, colour).join(" ")})`;
     const fill = paint(behind, style.backgroundColor);
     return {
       ringStyle: style.outlineStyle,
@@ -144,6 +151,8 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
     }
     await useTheme(page, theme);
+    // Add player waits in the first card's ⋯ menu.
+    await page.locator(".group-more > summary").first().click();
     await page.getByRole("link", { name: "Add player" }).first().click();
     const input = page.getByLabel("Player tag").first();
     await expectVisibleBorder(input);

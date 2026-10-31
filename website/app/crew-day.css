@@ -1,0 +1,78 @@
+/* The crew's Legend day so far, at the foot of its header (CrewDay.tsx): a
+   heading and the crew's total on one line, then one bar split into the
+   accounts up, level and down, with its counts at its ends. */
+.crew-day {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  gap: 0.3rem 1rem;
+  align-items: baseline;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--cl-card-line);
+}
+
+.crew-day h2 {
+  margin: 0;
+  white-space: nowrap;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.crew-day p {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A total of only some accounts says so, so it takes its own line. */
+.crew-day-total[data-partial] {
+  grid-column: 1 / -1;
+}
+
+.crew-day-total b {
+  font-family: var(--cl-font-score);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.crew-day-bar {
+  display: flex;
+  flex: 1;
+  gap: 3px;
+  height: 0.6rem;
+}
+
+.crew-day-bar > span {
+  min-width: 0.6rem;
+  background: color-mix(in srgb, var(--cl-ink) 22%, transparent);
+  border-radius: 3px;
+}
+
+.crew-day-bar > [data-move="up"] {
+  background: color-mix(in srgb, var(--cl-positive) 60%, var(--cl-solid));
+}
+
+.crew-day-bar > [data-move="down"] {
+  background: color-mix(in srgb, var(--cl-negative) 70%, var(--cl-solid));
+}
+
+/* Up before the bar, level and down after it, in the bar's own order. */
+.crew-day-counts {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 0.6rem;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.crew-day-up {
+  color: var(--cl-positive);
+}
+
+.crew-day-down {
+  color: var(--cl-negative);
+}

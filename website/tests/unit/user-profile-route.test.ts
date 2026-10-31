@@ -1,5 +1,6 @@
+import { PassThrough } from "node:stream";
 import { createElement } from "react";
-import { renderToString } from "react-dom/server";
+import { renderToPipeableStream } from "react-dom/server";
 import {
   createStaticHandler,
   createStaticRouter,
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   getAttackAlerts: vi.fn(),
   getOverlay: vi.fn(),
+  getPublicUserDays: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -48,6 +50,10 @@ vi.mock("../../app/services/discord-alerts.server", () => ({
 
 vi.mock("../../app/services/obs-overlay.server", () => ({
   getOverlay: mocks.getOverlay,
+}));
+
+vi.mock("../../app/services/public-user-days.server", () => ({
+  getPublicUserDays: mocks.getPublicUserDays,
 }));
 
 import UserRoute, { loader } from "../../app/routes/users.$username";
@@ -119,6 +125,7 @@ const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" }
 const client = {
   getPublicUser: vi.fn(),
   getAccount: vi.fn(),
+  getPlayer: vi.fn(),
 };
 
 const alertsFor = (...switches: Array<[boolean, boolean]>) => ({
@@ -148,6 +155,7 @@ beforeEach(() => {
     players: [{ tag: "#2PP", name: "Nova", league: null }],
   });
   mocks.createPythonClient.mockReturnValue(client);
+  mocks.getPublicUserDays.mockRejectedValue(new PythonApiError(503, { error: "x" }));
 });
 
 /** The profile page; `signedInAs` is who the top bar says is signed in. */
@@ -170,13 +178,30 @@ async function renderProfile(
     new Request(`https://clashlens.example/users/nova88${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  )
+  // The page once everything streaming in has arrived.
+  const html = await new Promise<string>((resolve, reject) => {
+    const sink = new PassThrough();
+    let text = "";
+    sink.on("data", (chunk) => (text += chunk));
+    sink.on("end", () => resolve(text));
+    const { pipe } = renderToPipeableStream(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+      { onAllReady: () => pipe(sink), onShellError: reject },
+    );
+  });
+  // A part that streamed in after the page follows it hidden, with a script
+  // that swaps it in for its stand-in: read it in that place.
+  const streamed = html.indexOf('<div hidden id="S:0">');
+  const page =
+    streamed === -1
+      ? html
+      : html.slice(0, html.indexOf("<!--$?-->")) + html.slice(streamed);
+  return page
+    .replace(/<!--\/?\$-->/g, "")
     .replaceAll("<!-- -->", "")
     .replaceAll(' data-discover="true"', "");
 }
@@ -192,7 +217,8 @@ it("confirms a just-linked player by name in one line at the top", async () => {
 
 it("shows each linked account as one card linking to its player page", async () => {
   const html = await renderProfile("");
-  const cards = html.match(/<a class="linked-player-card"[\s\S]*?<\/a>/g) ?? [];
+  const cards =
+    html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/g) ?? [];
   expect(cards).toHaveLength(4);
   const [tracked, unknownNet, season0, demoted] = cards;
   expect(tracked).toContain('href="/players/%232PP"');
@@ -251,7 +277,7 @@ it("shows worst-case linked players with separators and every missing value name
   const html = (
     await renderProfile("", { user: worstPublicUser(), notFound: false, error: null })
   ).replaceAll("&#x27;", "'");
-  expect(html.match(/<a class="linked-player-card"/g)).toHaveLength(6);
+  expect(html.match(/<article class="linked-player-card"/g)).toHaveLength(6);
   for (const text of [
     "#13,204",
     "6,499",
@@ -273,6 +299,131 @@ async function loadProfile() {
   } as never)) as unknown as { data: { owner: unknown; user: unknown } };
   return result.data;
 }
+
+/** One saved Legend day of the profile's read, Season day `day`. */
+const savedDay = (day: number, trophyChange: number | null, attacks = 8) => ({
+  day,
+  attacks,
+  defenses: 8,
+  trophyChange,
+  unplayed: false,
+  listed: true,
+});
+
+it("shows each linked player's Season heat map and their rank's move since the Reset", async () => {
+  const hour = 3_600_000;
+  // Today is the Season's third Legend day, 5 hours old.
+  const start = Date.now() - 5 * hour;
+  const seasonStart = start - 48 * hour;
+  mocks.getPublicUserDays.mockResolvedValue({
+    seasonStart: new Date(seasonStart).toISOString(),
+    // The read has nothing for the others yet.
+    players: [
+      {
+        tag: "#2PP",
+        resetRank: 1300,
+        seasonWeeks: [],
+        days: [savedDay(1, -20), savedDay(2, 40), savedDay(3, null, 2)],
+      },
+    ],
+  });
+  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  expect(Object.keys((await loaded.days) ?? {})).toEqual(["#2PP"]);
+  // One read for every linked player, never a player page each.
+  expect(mocks.getPublicUserDays).toHaveBeenCalledTimes(1);
+  expect(mocks.getPublicUserDays).toHaveBeenCalledWith("nova88");
+  expect(client.getPlayer).not.toHaveBeenCalled();
+
+  const html = await renderProfile("", { ...data, days: loaded.days });
+  const [card = "", other = ""] =
+    html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/g) ?? [];
+  // 1,300 at the Reset, 1,234 now: up 66.
+  expect(card).toContain("▲66");
+  expect(card).toContain(", up 66 since the last Reset");
+  // The card stays compact: today's battles are on the player page.
+  expect(card).not.toContain("today-slot");
+  // The Season so far in the dashboard's grid, each day against the player's
+  // own: best green, worst red, and a lost day marked. One key for every card
+  // sits beside the section's heading.
+  expect(html).toMatch(
+    /id="user-players-title">Clash players<\/h2><span class="season-heat-key">/,
+  );
+  expect(card).not.toContain("Season: worst");
+  expect(card).toContain('<div class="linked-player-heat"><div class="season-heat">');
+  expect(card).toContain('class="season-heat-played is-loss"');
+  expect(card).toContain("Day 1: −20</span>");
+  expect(card).toContain("Day 2: +40</span>");
+  expect(card).toContain("Day 3: today, not finished yet</span>");
+  expect(card).toContain("--heat:var(--cl-heat-4)");
+  // Only the card's link takes focus: no toggle, no buttons in the grid.
+  expect(card).not.toContain("tabindex");
+  expect(card).not.toContain("<button");
+  // A player the read has no days for keeps the counts, and no heat map.
+  expect(other).toContain("linked-player-stats");
+  expect(other).not.toContain("season-heat");
+
+  // When the read fails, every card still shows its numbers.
+  mocks.getPublicUserDays.mockRejectedValue(new PythonApiError(503, { error: "x" }));
+  const failed = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  expect(await failed.days).toEqual({});
+  const plain = await renderProfile("", { ...data, days: failed.days });
+  expect(plain.match(/<article class="linked-player-card"/g)).toHaveLength(4);
+  expect(plain).toContain("#1,234");
+  expect(plain).not.toContain("since Reset");
+  expect(plain).not.toContain("season-heat");
+});
+
+it("shows no move, heat map or key on a Season's Day 1, before its first Reset", async () => {
+  const hour = 3_600_000;
+  const start = Date.now() - 5 * hour;
+  // The previous Season's Day 28 ended at this Reset, ranked 1,300 on its
+  // Daily board; the board at a Season's first Reset is the Season before's,
+  // so the read has no place for this Season, and only today's Day 1.
+  mocks.getPublicUserDays.mockResolvedValue({
+    seasonStart: new Date(start).toISOString(),
+    players: [
+      {
+        tag: "#2PP",
+        resetRank: null,
+        seasonWeeks: [],
+        days: [savedDay(1, null, 0)],
+      },
+    ],
+  });
+  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  const html = await renderProfile("", { ...data, days: loaded.days });
+  const card =
+    html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/)?.[0] ?? "";
+  expect(card).toContain("#1,234");
+  expect(card).not.toContain("▲");
+  expect(card).not.toContain("since Reset");
+  expect(html).not.toContain("season-heat-key");
+  expect(html).not.toContain("linked-player-heat");
+});
+
+it("shows up to 500 linked players' cards at once, with one read for all their days", async () => {
+  // 500 is the most a public profile shows.
+  const tags = Array.from(
+    { length: 500 },
+    (_, index) =>
+      `#2${[...index.toString(12).padStart(3, "0")].map((digit) => "089PYLQGRJCU"[parseInt(digit, 12)]).join("")}`,
+  );
+  expect(new Set(tags).size).toBe(500);
+  client.getPublicUser.mockResolvedValue({
+    ...data.user,
+    verifiedPlayers: tags.map((tag) => ({ ...data.user.verifiedPlayers[0], tag })),
+  });
+  // The read never answers: the cards don't wait for it.
+  mocks.getPublicUserDays.mockReturnValue(new Promise(() => {}));
+  const loaded = (await loadProfile()) as {
+    user: { verifiedPlayers: unknown[] };
+    days?: Promise<unknown>;
+  };
+  expect(loaded.user.verifiedPlayers).toHaveLength(500);
+  expect(loaded.days).toBeInstanceOf(Promise);
+  await vi.waitFor(() => expect(mocks.getPublicUserDays).toHaveBeenCalledTimes(1));
+  expect(client.getPlayer).not.toHaveBeenCalled();
+});
 
 it("reads the owner's tool statuses only for the profile's signed-in owner", async () => {
   const own = await loadProfile();
@@ -334,11 +485,15 @@ it("gives the owner one small Edit button and their two tools, and no settings",
   expect(tools[0]).toContain("On for 1 of 2 players");
   expect(tools[1]).toContain('href="/account/obs-overlay"');
   expect(tools[1]).toContain("Stream overlay");
-  expect(tools[1]).toContain("Not set up");
+  // A tool that is not set up shows the step that starts it.
+  expect(tools[1]).toContain(
+    '<span class="profile-tool-start button-secondary">Set up</span>',
+  );
+  expect(tools[1]).not.toContain("Not set up");
   for (const text of ["Make default", "Sign-in", "OBS overlay", "Default"])
     expect(html).not.toContain(text);
   // The cards are the same ones every visitor sees.
-  expect(html.match(/<a class="linked-player-card"/g)).toHaveLength(4);
+  expect(html.match(/<article class="linked-player-card"/g)).toHaveLength(4);
 });
 
 it("shows other visitors no Edit button and no tools", async () => {

@@ -42,6 +42,8 @@ import type { Route } from "./+types/dashboard";
 
 import "../dashboard.css";
 import "../dashboard-cards.css";
+import "../dashboard-day.css";
+import "../dashboard-bases.css";
 import "../dashboard-clock.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
@@ -353,16 +355,18 @@ function AccountTabs({
   const [searchParams] = useSearchParams();
   return (
     <nav className="dash-accounts" aria-label="Your Clash players">
-      {players.map((player) => {
-        const next = new URLSearchParams(searchParams);
-        next.set("player", player.tag);
-        const net =
-          !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
-        const name = player.name ?? player.tag;
-        // The tab switches the dashboard; Page beside it opens the player page.
-        return (
-          <span key={player.tag} className="dash-account-tab">
+      <span className="dash-account-track">
+        {players.map((player) => {
+          const next = new URLSearchParams(searchParams);
+          next.set("player", player.tag);
+          const net =
+            !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
+          const name = player.name ?? player.tag;
+          // The tab only switches the dashboard; the player page is its own
+          // labelled link in the toolbar beside Customise.
+          return (
             <Link
+              key={player.tag}
               className="dash-account"
               to={`?${next.toString()}`}
               aria-current={player.tag === selectedTag ? "page" : undefined}
@@ -373,31 +377,30 @@ function AccountTabs({
                 {name}
               </bdi>
               <span className="dash-account-line">
-                {accountLine(player)}
+                {/* A phone keeps only the net today under the name. */}
+                <span className="dash-account-stats">
+                  {accountLine(player)}
+                  {net !== null ? " · " : null}
+                </span>
                 {net !== null ? (
                   <>
-                    {" · "}
                     <b
                       className={net > 0 ? "positive" : net < 0 ? "negative" : undefined}
                     >
                       {net > 0 ? `+${net}` : net < 0 ? `−${Math.abs(net)}` : "0"}
-                    </b>{" "}
-                    today
+                    </b>
+                    {/* A phone's chip keeps the number; the word stays for screen readers. */}
+                    <span className="dash-account-today"> today</span>
                   </>
                 ) : null}
               </span>
             </Link>
-            <Link
-              className="dash-account-page"
-              to={canonicalPlayerPath(player.tag)}
-              aria-label={`${name} player page`}
-            >
-              <DashboardIcon name="open" />
-            </Link>
-          </span>
-        );
-      })}
-      <Link className="dash-account dash-account-add" to="/account/verify-player">
+          );
+        })}
+      </span>
+      {/* Apart from the tabs, so it never reads as part of the last one; a
+          phone shows the plus alone, still named for screen readers. */}
+      <Link className="dash-account-add" to="/account/verify-player" title="Link player">
         <DashboardIcon name="plus" />{" "}
         <span className="dash-account-add-text">Link player</span>
       </Link>

@@ -11,7 +11,9 @@ recorded battle counted once, trophies divided by the days in the window with
 a battle on that side. "Last 7 days" is the last seven finished days of this
 Season, so it is shorter in the first week and empty on Day 1. Streaks count
 only attacks Clash Lens saw, and today's too except over the last seven days.
-Top players is the saved Reset board for today's Reset, in its order.
+Top players is the saved Reset board for today's Reset, in its order. Each
+Live row also says what the account has won or lost today so far, as the
+dashboard's Legend day card does (``api_db._net_so_far``).
 """
 
 from __future__ import annotations
@@ -21,7 +23,14 @@ from typing import Any
 
 from . import api_crews
 from .api_accounts import _MEMBER_JOINS
-from .api_db import ApiDatabase, _battle_id_sort_key, _screen_events, _text
+from .api_db import (
+    ApiDatabase,
+    _battle_id_sort_key,
+    _json_array,
+    _net_so_far,
+    _screen_events,
+    _text,
+)
 from .api_leaderboard import _LIVE_ORDER_SQL, _LIVE_PLAYERS_SQL, _season_params
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 
@@ -31,7 +40,9 @@ _WEEK_DAYS = 7
 # Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
-       player.normalized_tag, daily.ranked_day_start, daily.battles
+       player.normalized_tag, daily.ranked_day_start, daily.battles,
+       daily.attack_count, daily.attack_gain, daily.defense_count,
+       daily.defense_loss, daily.partial_reasons
 FROM crew_players AS place
 JOIN players AS player ON player.id = place.player_id
 JOIN api_player_daily_logs AS daily ON daily.player_id = place.player_id
@@ -66,6 +77,7 @@ ORDER BY entry.position
 class _Day:
     def __init__(self, row: Any) -> None:
         self.offense, self.defense = _screen_events(row[2])
+        self.net_so_far = _net_so_far(*row[3:7], _json_array(row[7]))
 
 
 def _events(
@@ -190,8 +202,17 @@ def get_crew_boards(
     def name_key(row: dict[str, Any]) -> tuple[str, str]:
         return (row["name"] or "").casefold(), row["tag"]
 
+    def today_change(tag: str) -> int | None:
+        day = saved.get(tag, {}).get(today)
+        return None if day is None else day.net_so_far
+
     live_rows = [
-        entry(_text(tag), trophies=int(trophies), observed_at=observed_at.astimezone(UTC))
+        entry(
+            _text(tag),
+            trophies=int(trophies),
+            observed_at=observed_at.astimezone(UTC),
+            today_change=today_change(_text(tag)),
+        )
         for tag, trophies, observed_at in live
     ]
     top_rows = [entry(_text(tag), trophies=int(trophies)) for tag, trophies in reset_board]

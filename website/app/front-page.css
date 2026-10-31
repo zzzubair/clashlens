@@ -1,5 +1,7 @@
-/* The signed-out front page: search first, then a peek at the dashboard an
-   account unlocks, then the Top 10. Wide screens put the peek beside them. */
+/* The signed-out front page: search first, then the example dashboard
+   under its caption and the way in, the Top 10, and three more things the
+   site does. Wide screens set the title, its line, the search and the live
+   line beside the example, level with its top. */
 
 .front-grid {
   display: grid;
@@ -13,45 +15,54 @@
 }
 
 @media (min-width: 64rem) {
+  /* The three links follow the search, beside the example, and end level
+     with its foot, so the two columns start and end together. */
   .front-grid-pitch {
     grid-template-areas:
-      "hero teaser"
-      "top teaser";
-    grid-template-columns: minmax(0, 1fr) 30rem;
-    grid-template-rows: auto 1fr;
-    gap: 1.75rem 2.5rem;
+      "hero board"
+      "more board"
+      "top top";
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 31rem);
+    gap: 0 3.5rem;
   }
 
   .front-grid-pitch .front-hero {
     grid-area: hero;
+    align-self: start;
+    gap: 1.25rem;
+    padding: 0;
   }
 
-  .front-grid-pitch .front-teaser {
-    position: sticky;
-    top: 5.5rem;
-    grid-area: teaser;
+  .front-grid-pitch .front-hero h1 {
+    font-size: 4.25rem;
+    line-height: 0.98;
+  }
+
+  .front-grid-pitch .teaser-cta {
+    grid-area: board;
   }
 
   .front-grid-pitch .home-leaderboard {
     grid-area: top;
+    margin-top: 2.5rem;
   }
 
-  /* The wider column lets the example's small labels read at a normal size. */
-  .front-grid-pitch :is(.teaser-label, .teaser-rivals > span) {
-    font-size: 0.8rem;
-  }
-
-  .front-grid-pitch :is(.teaser-ranks small, .teaser-clock small) {
-    font-size: 0.76rem;
+  .front-grid-pitch .front-more {
+    grid-area: more;
+    align-self: end;
+    max-width: 34rem;
+    margin-top: 2rem;
   }
 }
 
 /* Between a phone and a laptop the example keeps about the shape it has on
-   them, centred, instead of stretching across the page. */
+   them, centred, instead of stretching across the page. (Auto margins, as
+   the later stretch rule wins over justify-self.) */
 @media (min-width: 40rem) and (max-width: 63.99rem) {
-  .front-grid-pitch .front-teaser {
-    justify-self: center;
+  .teaser-cta {
     width: min(100%, 34rem);
+    margin-inline: auto;
   }
 }
 
@@ -63,76 +74,86 @@
   padding-top: 0.5rem;
 }
 
+/* Balanced, so the title breaks the same way in both themes. */
 .front-hero h1 {
   max-width: 16ch;
   margin: 0;
+  font-family: var(--cl-font-score);
   font-size: clamp(2.6rem, 1.75rem + 3.75vw, 4rem);
+  text-wrap: balance;
+}
+
+/* What the site shows, in one line under the title. */
+.front-lede {
+  max-width: 34ch;
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 1.125rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+/* "9,000 Legend players ranked · updated 6 min ago": the board is live. */
+.front-proof {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.front-proof-age {
+  white-space: nowrap;
 }
 
 /* ---------- The dashboard, as an example ---------- */
 
-.front-teaser {
-  position: relative;
-  display: grid;
-  gap: 1rem;
-  overflow: hidden;
-  padding: 0.75rem;
-  background: var(--cl-card-fill);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-glass-shine), var(--cl-card-drop);
-}
-
-/* An example dashboard, readable in full. */
+/* An example Legend day and Season, readable in full, on the page's one
+   glass panel. */
 .teaser-board {
   position: relative;
   display: grid;
-  padding-top: 0.7rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
-  gap: 0.5rem;
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0.75rem 1rem 0.5rem;
   color: inherit;
   text-decoration: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Sits on the first card's top edge, like a tab. */
+/* Its own line over the example, so it never crowds the day's title. */
 .teaser-example {
-  position: absolute;
-  z-index: 1;
-  top: 0.05rem;
-  left: 0.75rem;
-  padding: 0.1rem 0.45rem;
   color: var(--cl-muted);
-  background: var(--cl-glass-strong);
-  border: 1px solid var(--cl-glass-edge);
-  border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 
+/* The example's two parts sit open on the glass, a hairline between them,
+   as the hero's sections. */
 .teaser-card {
   display: grid;
   gap: 0.4rem;
   align-content: start;
   min-width: 0;
-  padding: 0.65rem 0.7rem;
-  background: var(--cl-panel);
-  border: 1px solid var(--cl-card-line);
-  border-radius: 10px;
+  padding: 0.75rem 0;
 }
 
-/* The day across the top: score on the left, the 8 attacks and 8 defenses
-   on the right, the rank strip under both. */
+.teaser-card + .teaser-card {
+  border-top: 1px solid var(--cl-card-line);
+}
+
+/* The day across the top: the score, today's chip under it, beside the
+   places, then a row of attacks and a row of defenses, as the real Legend
+   day card sets them. */
 .teaser-day {
-  grid-column: 1 / -1;
   grid-template-areas:
-    "label slots"
-    "score slots"
-    "ranks ranks";
+    "label ranks"
+    "score ranks"
+    "attacks attacks"
+    "defenses defenses";
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.35rem 1.25rem;
-  padding: 0.8rem 0.9rem;
+  gap: 0.35rem 1.5rem;
 }
 
 .teaser-day .teaser-label {
@@ -143,32 +164,31 @@
   grid-area: score;
 }
 
-.teaser-day .teaser-ranks {
+.teaser-day .teaser-places {
   grid-area: ranks;
-  margin-top: 0.25rem;
+  align-self: center;
 }
 
-.teaser-day .teaser-attack {
-  grid-area: slots;
-  align-self: start;
-  margin-top: 0.2rem;
+.teaser-day .teaser-attacks {
+  grid-area: attacks;
+  margin-top: 0.4rem;
 }
 
-.teaser-day .teaser-defense {
-  grid-area: slots;
-  align-self: end;
+.teaser-day .teaser-defenses {
+  grid-area: defenses;
 }
 
 .teaser-label {
   color: var(--cl-muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
 .teaser-score {
   display: flex;
+  flex-direction: column;
   gap: 0.4rem;
-  align-items: baseline;
+  align-items: flex-start;
 }
 
 .teaser-score strong {
@@ -176,236 +196,307 @@
   line-height: 0.95;
 }
 
+/* "+104 today": the dashboard's chip, its word in the body face. */
 .teaser-net {
-  padding: 0.1rem 0.3rem;
+  align-self: center;
+  padding: 0.2rem 0.45rem 0.15rem;
   color: var(--cl-positive);
   background: var(--cl-positive-soft);
-  border-radius: 4px;
+  border-radius: 999px;
   font-size: 1rem;
+  white-space: nowrap;
 }
 
-.teaser-slots {
-  display: flex;
-  gap: 3px;
-  align-items: center;
-}
-
-.teaser-slots .dash-icon {
-  width: 0.8rem;
-  height: 0.8rem;
-  margin-right: 0.2rem;
+.teaser-net small {
   color: var(--cl-muted);
+  font: 600 0.8125rem var(--cl-font);
 }
 
-.teaser-slots {
-  justify-content: flex-end;
+/* "Attacks 6/8 · +208" over its 8 tiles. */
+.teaser-battles {
+  display: grid;
+  gap: 0.25rem;
 }
 
-.teaser-slots i {
-  flex: 1;
-  max-width: 1rem;
-  aspect-ratio: 1;
+.teaser-battles-head {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.teaser-battles-head .game-mark {
+  font-size: 0.875rem;
+}
+
+.teaser-battles-name {
+  color: var(--cl-ink);
+}
+
+.teaser-battles-head b {
+  margin-left: auto;
+  font-size: 0.95rem;
+}
+
+/* Attacks in green, defenses in red, as on the dashboard. */
+.teaser-attacks :is(.teaser-battles-head b, .teaser-tiles > span) {
+  color: var(--cl-positive);
+}
+
+.teaser-defenses :is(.teaser-battles-head b, .teaser-tiles > span) {
+  color: var(--cl-negative);
+}
+
+.teaser-tiles {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+}
+
+/* Stars over trophies, the dashboard's tile in miniature. Each tile is a
+   size container, so its stars can shrink to fit it. */
+.teaser-tiles > span {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 0;
+  min-height: 2.3rem;
   background: var(--cl-raised);
-  border-radius: 3px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: 700 0.875rem/1 var(--cl-font-score);
+  font-variant-numeric: tabular-nums;
 }
 
-.teaser-attack i[data-stars="3"] {
-  background: var(--cl-star);
+/* The stars nudged together, three to a tile's width at most, so they stay
+   inside it on the narrowest phone. */
+.teaser-tiles .game-stars {
+  gap: 0;
+  font-size: min(0.8125rem, calc((100cqi - 2px) / 3));
 }
 
-.teaser-attack i[data-stars="2"] {
-  background: color-mix(in srgb, var(--cl-star) 65%, var(--cl-raised));
+.teaser-tiles .game-star + .game-star {
+  margin-left: -1px;
 }
 
-.teaser-attack i[data-stars="1"] {
-  background: color-mix(in srgb, var(--cl-star) 35%, var(--cl-raised));
+.teaser-defenses .teaser-tiles > span {
+  background: var(--cl-panel);
 }
 
-.teaser-defense i[data-stars="0"] {
-  background: var(--cl-positive);
+/* A three-star attack is the one to aim for: a faint gold edge. */
+.teaser-attacks [data-stars="3"] {
+  border-color: color-mix(in srgb, var(--cl-gold) 45%, transparent);
 }
 
-.teaser-defense i:is([data-stars="1"], [data-stars="2"]) {
-  background: color-mix(in srgb, var(--cl-negative) 45%, var(--cl-raised));
+/* On white, a pale yellow tile with an orange edge, not tan. */
+:root:not([data-theme="dark"]) .teaser-attacks [data-stars="3"] {
+  background: #fff6d8;
+  border-color: #f2b45a;
 }
 
-.teaser-defense i[data-stars="3"] {
-  background: var(--cl-negative);
+/* A slot still to play is an empty dashed box. */
+.teaser-tiles > .teaser-tile-empty {
+  background: transparent;
+  border: 1px dashed var(--cl-outline);
+  box-shadow: none;
 }
 
-/* Last Reset, Now and Next Reset, read as the real Legend day card does. */
+/* Last Reset, Now and the projected place, read as the real Legend day card
+   does: three columns split by hairlines, Now in ember, the projected place
+   lighter with its diamond, over the Next Reset range line. */
+.teaser-places {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .teaser-ranks {
   display: grid;
-  grid-template-columns: auto minmax(0.5rem, 1fr) auto minmax(0.5rem, 1fr) auto;
-  gap: 0 0.4rem;
-  align-items: start;
-  color: var(--cl-muted);
+  grid-template-columns: auto auto auto;
+  justify-content: start;
   font-family: var(--cl-font-score);
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .teaser-ranks > span {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.2rem;
+  align-content: start;
+  padding: 0 0.75rem;
+}
+
+.teaser-ranks > span:first-child {
+  padding-left: 0;
+}
+
+.teaser-ranks > span + span {
+  border-left: 1px solid var(--cl-card-line);
 }
 
 .teaser-ranks small {
-  font-family: var(--cl-font);
-  font-size: 0.62rem;
-  font-weight: 600;
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font: 600 0.8125rem var(--cl-font);
 }
 
-.teaser-ranks i {
-  height: 1px;
-  margin-top: 1.45rem;
-  background: var(--cl-outline);
-}
-
-.teaser-now {
-  justify-items: center;
+.teaser-now small {
+  color: var(--cl-action-text);
 }
 
 .teaser-ranks .rank-mark {
   height: 1.45rem;
   padding: 0 0.45rem 0 0.5rem;
-  font-size: 0.95rem;
+  font-size: 1.05rem;
 }
 
 .teaser-next {
-  justify-items: end;
-  text-align: right;
-}
-
-.teaser-clock {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-}
-
-.teaser-clock svg {
-  width: 2.6rem;
-  height: 2.6rem;
-  fill: none;
-  stroke: var(--cl-raised);
-  stroke-width: 7;
-  transform: rotate(-90deg);
-}
-
-.teaser-clock .teaser-clock-left {
-  stroke: var(--cl-brand-orange);
-  stroke-dasharray: 62 100;
-  stroke-linecap: round;
-}
-
-.teaser-clock span {
-  display: grid;
-}
-
-.teaser-clock strong {
-  font-size: 1.15rem;
-  line-height: 1;
-}
-
-.teaser-clock small {
   color: var(--cl-muted);
-  font-size: 0.68rem;
 }
 
-.teaser-rivals {
-  gap: 0;
-  padding-block: 0.3rem;
+.teaser-diamond,
+.teaser-range i::after {
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--cl-action);
+  transform: rotate(45deg);
 }
 
-.teaser-rivals > span {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.35rem;
+/* "Next Reset range #1,105 ——◆—— #1,190" */
+.teaser-range {
+  display: flex;
+  gap: 0.4rem;
   align-items: center;
-  padding: 0.15rem 0.25rem;
-  font-size: 0.72rem;
-}
-
-.teaser-rivals > span > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--cl-muted);
+  font: 600 0.8125rem/1.2 var(--cl-font);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.teaser-rivals b {
-  color: var(--cl-muted);
+.teaser-range-name {
+  margin-right: 0.15rem;
 }
 
-.teaser-rivals .teaser-you {
-  color: var(--cl-action-text);
-  background: var(--cl-raised);
-  box-shadow: inset 2px 0 0 var(--cl-action);
-  border-radius: 4px;
-  font-weight: 650;
+.teaser-range i {
+  position: relative;
+  flex: 1;
+  min-width: 2.5rem;
+  max-width: 9rem;
+  height: 10px;
+  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+    no-repeat;
+  border-inline: 2px solid var(--cl-outline);
 }
 
-.teaser-heat {
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(14, minmax(0, 1fr));
-  gap: 3px;
+.teaser-range i::after {
+  position: absolute;
+  top: 50%;
+  left: var(--at);
+  border: 2px solid var(--cl-solid);
+  content: "";
+  translate: -50% -50%;
 }
 
-.teaser-heat i {
-  aspect-ratio: 1;
-  background: var(--cl-raised);
-  border-radius: 3px;
-}
-
-.teaser-heat i[data-net="up"] {
-  background: var(--cl-positive);
-}
-
-.teaser-heat i[data-net="down"] {
-  background: var(--cl-negative);
-}
-
-/* The way in, under the example. */
+/* The example under its caption: the title at the board's left edge and
+   Create account at its right, so the two read as one. */
 .teaser-cta {
   display: grid;
-  gap: 0.4rem;
-  justify-items: center;
-  padding: 0 0.5rem 0.5rem;
-  text-align: center;
+  gap: 0.75rem;
+}
+
+.teaser-caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 0.25rem;
 }
 
 .teaser-cta h2 {
   margin: 0;
+  font-size: clamp(1.5rem, 1.3rem + 0.6vw, 1.75rem);
+  line-height: 1.05;
 }
 
-.teaser-cta p {
-  max-width: 24rem;
+.teaser-caption > p[role="status"] {
   margin: 0;
   color: var(--cl-muted);
   font-size: 0.9rem;
 }
 
-.teaser-cta .account-buttons {
-  justify-content: center;
-  margin-top: 0.2rem;
-}
-
-.teaser-cta .account-buttons .button {
+.teaser-cta .button-primary {
   min-height: 2.75rem;
+  padding-inline: 1.35rem;
+  font-size: 1rem;
 }
 
-/* A phone shows the example's Legend day alone, so the Top 10 starts near
-   the first screen. */
+/* A phone shows the example's Legend day as one flat card with the Season
+   a week to a row under it, under the same caption line as on a desktop:
+   the title, and a compact Create account at its right, never a gate. */
 @media (max-width: 40rem) {
-  .teaser-board > :is(.teaser-clock, .teaser-rivals, .teaser-heat) {
-    display: none;
+  .teaser-board {
+    padding-inline: 0.85rem;
   }
-}
 
-/* A small phone keeps Create account above the tab bar and a one-line title. */
-@media (max-width: 23.5rem) {
+  .teaser-caption {
+    column-gap: 0.75rem;
+  }
+
+  .teaser-cta .button-primary {
+    padding-inline: 1rem;
+    font-size: 0.9375rem;
+  }
+
   .front-grid {
     gap: 1rem;
   }
 
+  /* "9,000 players ranked · updated 5 min ago" fits one phone line; the
+     word Legend is still read out. */
+  .front-proof-wide {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* A narrow card puts the places under the score, today's chip beside it. */
+@media (max-width: 30rem) {
+  .teaser-score {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .teaser-day {
+    grid-template-areas:
+      "label"
+      "score"
+      "ranks"
+      "attacks"
+      "defenses";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teaser-day .teaser-places {
+    margin-top: 0.35rem;
+  }
+}
+
+/* A small phone keeps a one-line title. */
+@media (max-width: 23.5rem) {
   .front-hero {
     gap: 0.75rem;
     padding-top: 0;
@@ -416,8 +507,23 @@
   }
 
   .teaser-cta h2 {
-    font-size: 1.2rem;
+    font-size: 1.4rem;
     white-space: nowrap;
+  }
+
+  /* The places pack tighter, and a label too long for its column wraps,
+     every number level at the foot, as the dashboard's narrowest card. */
+  .teaser-ranks {
+    white-space: normal;
+  }
+
+  .teaser-ranks > span {
+    grid-template-rows: 1fr auto;
+    padding-inline: 0.5rem;
+  }
+
+  .teaser-ranks small {
+    align-self: start;
   }
 }
 
@@ -450,7 +556,7 @@
   grid-column: 1 / -1;
   margin: 0;
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   line-height: 1.45;
 }
@@ -468,7 +574,128 @@
   padding: 1.25rem 1rem;
 }
 
-/* The update time sits under the title; stale rows are counted there too. */
-.home-leaderboard .leaderboard-table :is(thead th:last-child, td:last-child) {
-  display: none;
+/* Wider screens keep the phone's arrow, after the trophies. It sits on the
+   row, the last cell's right edge, so the cell stays unpositioned and never
+   paints over the row's link: a tap on the trophies opens the player. */
+@media (min-width: 40.01rem) {
+  .home-leaderboard .leaderboard-table .trophy-cell {
+    padding-right: 2.25rem;
+  }
+
+  .home-leaderboard .leaderboard-row > .trophy-cell::after {
+    position: absolute;
+    top: 50%;
+    right: 1rem;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-top: -0.25rem;
+    border-top: 2px solid var(--cl-muted);
+    border-right: 2px solid var(--cl-muted);
+    transform: rotate(45deg);
+    content: "";
+    pointer-events: none;
+  }
+}
+
+/* ---------- More on Clash Lens ---------- */
+
+/* Three links, each led by game art, on the page itself: a title and one
+   line, no box. Its own width sets the shape: three in a row across the
+   page, or a list, art at the left, in a phone or beside the example. */
+.front-more {
+  container-type: inline-size;
+  margin-top: 1.5rem;
+}
+
+.front-more-links {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 0.5rem 2rem;
+}
+
+.front-more a {
+  display: grid;
+  grid-template-areas:
+    "art art"
+    "title title"
+    "line line";
+  gap: 0.2rem;
+  align-content: start;
+  padding: 0.75rem 0;
+  color: inherit;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.front-more .unit-art {
+  display: flex;
+  grid-area: art;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Every portrait in the same tile, so a hero's cut-out and a troop's
+   close-up read as one set. */
+.front-more .unit-art img {
+  width: 3.25rem;
+  height: 3.25rem;
+  background: var(--cl-panel);
+  border-radius: 0.65rem;
+}
+
+.front-more strong {
+  grid-area: title;
+  font-family: var(--cl-font-score);
+  font-size: 1.35rem;
+  line-height: 1.1;
+}
+
+.front-more strong::after {
+  margin-left: 0.3rem;
+  color: var(--cl-action-text);
+  content: "›";
+}
+
+.front-more span:not(.unit-art) {
+  grid-area: line;
+  color: var(--cl-muted);
+  font-size: 0.9375rem;
+}
+
+.front-more a:hover strong,
+.front-more a:focus-visible strong {
+  color: var(--cl-action-text);
+}
+
+@container (max-width: 40rem) {
+  .front-more-links {
+    grid-auto-flow: row;
+    gap: 0;
+  }
+
+  .front-more a {
+    grid-template-areas:
+      "art title"
+      "art line";
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.1rem 0.85rem;
+    align-items: center;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--cl-card-line);
+  }
+
+  .front-more .unit-art {
+    margin: 0;
+  }
+
+  /* One portrait leads each line. */
+  .front-more .unit-art img {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .front-more .unit-art img + img {
+    display: none;
+  }
 }

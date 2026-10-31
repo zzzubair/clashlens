@@ -1,17 +1,13 @@
-/* Rankings: the heading with Live and At Reset, Find your rank, then the board
-   with page arrows in its header and page buttons at its end. */
+/* Rankings: the heading, one row of controls (the search, which also takes
+   a rank, and Jump to me; At Reset's other days and Go to rank), then the
+   board: Live and At Reset, its range and a small pager over 50 rows, and
+   the same pager with the range at its foot. */
 
+/* The title block is the shared .page-hero; this keeps its one line close. */
 .rankings-header {
   display: grid;
   gap: 0.5rem;
-}
-
-.rankings-heading {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.5rem;
-  align-items: flex-end;
-  justify-content: space-between;
+  justify-items: start;
 }
 
 .rankings-header h1 {
@@ -20,22 +16,24 @@
 
 /* The line under the title: At Reset's day and time, or Live's last update. */
 .rankings-date {
-  margin: 0.3rem 0 0;
+  margin: 0;
   color: var(--cl-muted);
   font-size: 0.95rem;
   font-weight: 600;
 }
 
+/* A note the board needs, under the title: the Season's end, players
+   waiting for their Season reset, or an incomplete Reset. */
 .rankings-context {
   max-width: 74ch;
-  margin: 0;
+  margin: 0.75rem 0 0;
   color: var(--cl-muted);
   font-size: 0.85rem;
   line-height: 1.5;
 }
 
-.rankings-header .daily-incomplete {
-  margin: 0.25rem 0 0;
+.rankings-page > .daily-incomplete {
+  margin: 0.75rem 0 0;
   font-size: 0.85rem;
   font-weight: 400;
 }
@@ -44,20 +42,106 @@
   margin: 0;
 }
 
+/* ---------- The controls ---------- */
+
+.rankings-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-block: 1.5rem 1.25rem;
+}
+
+.rankings-controls .leaderboard-view-switch {
+  flex: none;
+}
+
+/* The search fills the row up to a readable width. */
+.rankings-controls .leaderboard-search {
+  flex: 1 1 14rem;
+  min-width: 0;
+  max-width: 36rem;
+  margin: 0;
+}
+
+/* Every control in the row as tall as the switch, 2.75rem; a touch screen
+   gives the search's own button that much too. */
+:root .rankings-controls .search-controls {
+  min-height: 2.75rem;
+  padding-block: 0.125rem;
+}
+
+:root .rankings-controls .search-controls :is(input, button) {
+  min-height: 2.5rem;
+}
+
+@media (pointer: coarse) {
+  :root .rankings-controls .search-controls {
+    min-height: 3rem;
+  }
+
+  :root .rankings-controls .search-controls :is(input, button) {
+    min-height: 2.75rem;
+  }
+}
+
+.rankings-controls .rank-jump {
+  height: 2.75rem;
+}
+
+/* Jump to me: the Clasher's own place, in ember, at the row's end. */
+:root .rankings-controls .button.jump-to-me {
+  flex: none;
+  gap: 0.45rem;
+  min-height: 2.75rem;
+  margin-left: auto;
+  padding-inline: 1rem;
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border: 1px solid var(--cl-action-border);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+:root .rankings-controls .button.jump-to-me:is(:hover, :focus-visible) {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action);
+}
+
+.jump-to-me .dash-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.jump-you {
+  display: none;
+}
+
+.jump-rank {
+  font-family: var(--cl-font-score);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Other days of a Daily board, either side of this one. */
+.snapshot-pagination {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Colours and edge are the shared secondary button's (brand.css). */
+.snapshot-pagination a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.95rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
 /* ---------- Find your rank ---------- */
-
-.leaderboard-search {
-  max-width: 40rem;
-  margin-block: 1.25rem;
-}
-
-.leaderboard-search label {
-  display: block;
-  margin: 0 0 0.4rem;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-  font-weight: 800;
-}
 
 .leaderboard-search [aria-live] > p {
   margin: 0.75rem 0 0;
@@ -65,13 +149,11 @@
   font-size: 0.9rem;
 }
 
+/* Matches sit open under the search, a hairline over each. */
 .rank-search-results {
   margin: 0.5rem 0 0;
   padding: 0;
-  overflow: hidden;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-card-radius);
+  border-block: 1px solid var(--cl-card-line);
   list-style: none;
 }
 
@@ -134,7 +216,7 @@
 
 .rank-search-results small {
   color: var(--cl-muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -146,198 +228,176 @@
 
 /* ---------- The board ---------- */
 
-.standings-board {
-  margin-top: 1.25rem;
-}
-
 /* Clip rather than hide, so nothing in the card makes it scroll. */
 :root .rankings-page .standings-board {
   overflow: clip;
 }
 
+/* Live or At Reset, "Ranks 1–50 of 9,000", then ‹ › for the pages either
+   side. Its figures stay proportional, so the dash sits tight. */
 .standings-toolbar {
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--cl-border);
-}
-
-.standings-toolbar > div {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1rem;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
+  min-height: 3.75rem;
+  padding: 0.6rem 0.75rem 0.6rem 1rem;
+  border-bottom: 1px solid var(--cl-border);
 }
 
 .standings-toolbar h2 {
-  margin: 0;
-  font-size: 1.2rem;
+  margin: 0 auto 0 0;
+  font-size: 1.35rem;
 }
 
-.standings-toolbar p {
-  margin: 0;
+.standings-total {
   color: var(--cl-muted);
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-
-.standings-toolbar .standings-key {
-  margin-top: 0.3rem;
-  font-size: 0.78rem;
   font-weight: 600;
 }
 
-.standings-key span {
-  color: var(--cl-action-text);
-  font-size: 0.7em;
-  vertical-align: 0.1em;
+.standings-toolbar .leaderboard-view-switch .button {
+  min-width: 0;
+  padding-inline: 0.9rem;
 }
 
-.standings-range {
-  display: inline-flex;
-  gap: 0.4rem;
-  align-items: center;
-}
-
-.standings-range a {
-  display: inline-grid;
-  place-items: center;
-  width: 2.5rem;
-  height: 2.25rem;
-  color: var(--cl-ink);
+/* Go to rank: a number box and its Go button. */
+.rank-jump {
+  display: flex;
+  height: 2.5rem;
+  overflow: hidden;
   background: var(--cl-surface);
   border: 1px solid var(--cl-border);
   border-radius: var(--cl-radius);
-  font-size: 1.35rem;
-  line-height: 1;
-  text-decoration: none;
+}
+
+.rank-jump:focus-within {
+  border-color: var(--cl-action-border);
+  outline: 2px solid var(--cl-action-text);
+  outline-offset: 1px;
+}
+
+.rank-jump input {
+  width: 7.25rem;
+  min-width: 0;
+  padding: 0 0.75rem;
+  color: var(--cl-ink);
+  background: none;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+}
+
+.rank-jump input::-webkit-inner-spin-button,
+.rank-jump input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.rank-jump button {
+  padding: 0 0.85rem;
+  color: var(--cl-action-text);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--cl-border);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
   touch-action: manipulation;
 }
 
+.rank-jump button:hover {
+  background: var(--cl-action-soft);
+}
+
 @media (pointer: coarse) {
-  .standings-range a {
-    width: 2.75rem;
+  .rank-jump {
     height: 2.75rem;
   }
 }
 
-.standings-range a:hover {
-  border-color: var(--cl-outline);
-}
-
-/* Other days of a Daily board, either side of this one. */
-.snapshot-pagination {
+/* At the row's end, and still at the right when a narrow phone wraps it. */
+.standings-steps {
   display: flex;
-  flex-basis: 100%;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  margin-left: auto;
 }
 
-.snapshot-pagination a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.5rem;
-  padding: 0.3rem 0.8rem;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  text-decoration: none;
+/* ‹ and ›, at the board's head and its foot alike. */
+:is(.standings-steps, .standings-pagination) .button {
+  justify-content: center;
+  width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  font-size: 1.35rem;
+  line-height: 1;
+  touch-action: manipulation;
 }
 
-.rankings-page .tracked-leaderboard-viewport {
-  overflow-x: auto;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
+/* The first or last page's missing step keeps its place, faded. */
+:is(.standings-steps, .standings-pagination) span.button {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
-.rankings-page .tracked-leaderboard-viewport:focus-visible {
-  outline: 3px solid var(--cl-action-text);
-  outline-offset: -3px;
-}
-
-.rankings-page .tracked-leaderboard-viewport thead th {
-  position: static;
-}
-
-/* Previous, where this page sits, Next. */
+/* The pager at the foot: ‹ 1–50 of 9,000 ›, in the middle. */
 .standings-pagination {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 0.5rem;
+  display: flex;
+  gap: 0.75rem;
   align-items: center;
+  justify-content: center;
   min-height: 3.75rem;
   padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--cl-border);
 }
 
-.standings-pagination .button {
-  gap: 0.3rem;
-  min-height: 2.75rem;
-  padding: 0.45rem 0.9rem;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  touch-action: manipulation;
-}
-
-.standings-pagination > a:first-child {
-  justify-self: start;
-}
-
-.standings-pagination > a:first-child::before {
-  font-size: 1.25em;
-  line-height: 1;
-  content: "‹";
-}
-
-.standings-pagination > a:last-child {
-  grid-column: 3;
-  justify-self: end;
-}
-
-.standings-pagination > a:last-child::after {
-  font-size: 1.25em;
-  line-height: 1;
-  content: "›";
-}
-
-.pagination-status {
-  grid-column: 2;
-  color: var(--cl-muted);
-  font-size: 0.8rem;
+.standings-range {
+  font-family: var(--cl-font-score);
+  font-size: 1.15rem;
   font-weight: 700;
-  text-align: center;
 }
 
-@media (max-width: 34rem) {
+/* Phones: one row of controls, the search (with Jump to me where signed in),
+   and the board's head row holding Live or At Reset, its range and pager,
+   each as short as a touch allows, so the board starts on the first screen. */
+@media (max-width: 40rem) {
   .rankings-header h1 {
     font-size: 2.35rem;
   }
 
-  .rankings-heading {
-    gap: 0.6rem;
+  .rankings-controls {
+    gap: 0.5rem 0.4rem;
+    margin-block: 0.85rem;
   }
 
-  .rankings-heading .leaderboard-view-switch {
+  .rankings-controls .leaderboard-search {
+    flex-basis: 10rem;
+    max-width: none;
+  }
+
+  .rankings-controls .rank-jump {
+    height: 2.75rem;
+    margin-left: auto;
+  }
+
+  /* Live and At Reset, small, beside the board's range. */
+  .standings-toolbar .leaderboard-view-switch {
     width: auto;
   }
 
-  /* A day step fits beside the switch, at the thumb's end of the row. */
-  .rankings-heading .snapshot-pagination {
-    flex-basis: auto;
-  }
-
-  .rankings-heading .leaderboard-view-switch .button {
-    min-width: 5.5rem;
-    min-height: 2.5rem;
-    padding-block: 0.35rem;
+  .standings-toolbar .leaderboard-view-switch .button {
+    flex: none;
+    min-height: 2.75rem;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.8125rem;
     white-space: nowrap;
   }
 
-  .leaderboard-search {
-    margin-block: 1rem;
-  }
-
-  /* With both page arrows, the total waits for the pager at the end, so the
-     header stays on one line. */
-  .standings-range:has(> a ~ a) .standings-total {
+  /* "1 – 50 of 9,000": the word Ranks is read out, not shown. */
+  .standings-word {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -346,17 +406,84 @@
     white-space: nowrap;
   }
 
-  .standings-pagination {
-    padding-inline: 0.5rem;
+  :root .rankings-controls .button.jump-to-me {
+    gap: 0.35rem;
+    min-height: 2.75rem;
+    margin-left: auto;
+    padding-inline: 0.6rem;
   }
 
-  .standings-pagination .button {
+  .jump-to-me :is(.dash-icon, .jump-words) {
+    display: none;
+  }
+
+  .jump-you {
+    display: inline;
+  }
+
+  /* Beside "You #130", the search gives its hint the icon's room and a
+     smaller face (typed text stays 16px, so the phone doesn't zoom in). */
+  .rankings-controls:has(.jump-to-me) .search-field-icon {
+    display: none;
+  }
+
+  .rankings-controls:has(.jump-to-me) .search-controls {
+    padding-left: 0.7rem;
+  }
+
+  .rankings-controls:has(.jump-to-me) input::placeholder {
+    font-size: 0.875rem;
+  }
+
+  :root .rankings-controls:has(.jump-to-me) .search-controls input + button {
+    min-width: 0;
+    padding-inline: 0.65rem;
+  }
+
+  .snapshot-pagination {
+    margin-left: auto;
+  }
+
+  .snapshot-pagination a {
+    min-height: 2.75rem;
     padding-inline: 0.7rem;
-    font-size: 0.8rem;
   }
 
-  .pagination-status {
-    font-size: 0.75rem;
+  /* The page's title sits close over the controls, and the board's
+     range row is no taller than its buttons. */
+  :root .rankings-header.page-hero {
+    margin-bottom: 0;
+  }
+
+  /* "Updated 5 min ago" on one line; the exact time is read out. */
+  .rankings-stamp {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .standings-toolbar {
+    column-gap: 0.4rem;
+    min-height: 0;
+    padding: 0.25rem 0.4rem;
+  }
+
+  .standings-toolbar h2 {
+    font-size: 1.05rem;
+    white-space: nowrap;
+  }
+
+  .standings-steps {
+    gap: 0.25rem;
+  }
+
+  /* 16px text stops the phone zooming in on Go to rank. */
+  .rank-jump input {
+    width: 6.5rem;
+    font-size: 1rem;
   }
 }
 

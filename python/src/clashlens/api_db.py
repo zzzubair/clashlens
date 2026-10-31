@@ -729,19 +729,48 @@ _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
 )
 
 
+def _battle_sums_complete(
+    attack_count: Any, defense_count: Any, reasons: Iterable[Any]
+) -> bool:
+    """Whether a day's saved reasons leave no battle of it so far missing. The
+    game allows 8 attacks and 8 defenses a day, so 8 of each leave none."""
+    reasons = {reason for reason in reasons if isinstance(reason, str)}
+    return (
+        all_battles_recorded(attack_count, defense_count, reasons)
+        or reasons <= _BATTLE_SUM_NEUTRAL_REASONS
+    )
+
+
+def _net_so_far(
+    attack_count: Any,
+    attack_gain: Any,
+    defense_count: Any,
+    defense_loss: Any,
+    reasons: Iterable[Any],
+) -> int | None:
+    """Trophies a day's saved battles have won or lost so far, from the day's
+    settled start: today's net as the dashboard's Legend day card and a
+    watchlist (``api_groups._today``) show it, None while a battle may be
+    missing. It reads a saved log's totals and reasons, not its battles, so a
+    board of 200 rows stays small; ``_battles_so_far_complete`` also checks
+    those battles add up to the totals."""
+    if (
+        attack_gain is None
+        or defense_loss is None
+        or not _battle_sums_complete(attack_count, defense_count, reasons)
+    ):
+        return None
+    return int(attack_gain) - int(defense_loss)
+
+
 def _battles_so_far_complete(
     screen_day: dict[str, Any],
     offense: list[dict[str, Any]],
     defense: list[dict[str, Any]],
 ) -> bool:
-    """Whether the listed battles are every battle of the day so far. The game
-    allows 8 attacks and 8 defenses a day, so 8 of each leave none missing."""
-    reasons = set(screen_day["uncertainty_reasons"])
+    """Whether the listed battles are every battle of the day so far."""
     return (
-        (
-            all_battles_recorded(len(offense), len(defense), reasons)
-            or reasons <= _BATTLE_SUM_NEUTRAL_REASONS
-        )
+        _battle_sums_complete(len(offense), len(defense), screen_day["uncertainty_reasons"])
         and screen_day["attack_count"] == len(offense) <= MAX_DAILY_ATTACKS
         and screen_day["defense_count"] == len(defense) <= MAX_DAILY_DEFENSES
         and screen_day["attack_gain"] == sum(item["trophy_change"] for item in offense)

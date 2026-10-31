@@ -123,7 +123,7 @@ describe("a partial Season", () => {
     // Days 1-7 and 17-23 are finished Legend I days; 15 and 16 are before
     // the sign-up and 8-14 outside Legend I, so none of them is missing.
     expect(shape.legendDays).toEqual({ expected: 14, saved: 14 });
-    expect(summary(saved)).toContain("14 Legend I days · all saved");
+    expect(summary(saved)).toContain('aria-live="polite">14 Legend I days</p>');
     expect(summary(saved)).not.toContain("Some battles may be missing");
     // The 2-attack sign-up day itself may have lost battles, as any short day can.
     const short = {
@@ -154,7 +154,7 @@ describe("a partial Season", () => {
     // day ends on its start plus its change, however long ago it was.
     expect(dayEnd(shape.lastLegendDay!, saved, NOW).trophies).toBe(4684);
     const html = summary(saved);
-    expect(html).toContain("7 Legend I days · all saved");
+    expect(html).toContain('aria-live="polite">7 Legend I days</p>');
     expect(html).toContain("Rank when they left");
     expect(html).toContain("12,411");
     expect(html).toContain("Trophies when they left");
@@ -170,7 +170,7 @@ describe("a partial Season", () => {
 
     expect(runLines(shape)).toEqual(["From Day 8 · promoted at the Mon 12 Oct Reset"]);
     expect(shape.legendDays).toEqual({ expected: 16, saved: 16 });
-    expect(summary(saved)).toContain("16 Legend I days · all saved");
+    expect(summary(saved)).toContain('aria-live="polite">16 Legend I days</p>');
   });
 
   it("keeps a day with unknown numbers as a Legend I day that may be missing", () => {
@@ -199,7 +199,7 @@ describe("a partial Season", () => {
     const saved = player(days, weeks("BLLL", [null, "promoted", "stayed", "stayed"]));
 
     expect(summary(saved)).toContain(
-      "15 of 16 Legend I days saved · Some battles may be missing",
+      "16 Legend I days · 1 day missing · Some battles may be missing",
     );
   });
 
@@ -212,7 +212,7 @@ describe("a partial Season", () => {
 
     expect(shape.partial).toBe(false);
     expect(logGaps(shape)).toEqual([]);
-    expect(summary(saved)).toContain("23 of 23 days saved");
+    expect(summary(saved)).not.toContain("season-summary-meta");
   });
 
   it("reads nothing into a Season the record has not decided", () => {

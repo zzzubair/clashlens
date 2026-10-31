@@ -18,8 +18,10 @@ from .api_db import (
     _opening_day_battles_sql,
     _text,
 )
-from .domain import awaits_season_reset, season_opening_reset
+from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
 
+# A public profile shows at most this many verified players.
+PUBLIC_PLAYER_LIMIT = 500
 # Saving a group starts at most this many new player checks, the most a
 # comparison shows, so one save cannot flood the collector's visitor lane.
 GROUP_LOOKUP_LIMIT = 20
@@ -1125,6 +1127,42 @@ def get_public_user(
     }
 
 
+def get_public_user_days(
+    database: ApiDatabase, normalized_username: str, *, now: datetime
+) -> dict[str, Any] | None:
+    """What the public profile's player cards add to their numbers, for the
+    same verified players as ``get_public_user``, at most as many: each one's
+    place at the last Reset and this Season's days, read for every player at
+    once (``api_leaderboard.linked_season_days``)."""
+    with database.pool.connection() as connection:
+        account = connection.execute(
+            "SELECT id FROM clash_lens_accounts WHERE normalized_username = %s",
+            (normalized_username,),
+        ).fetchone()
+        if account is None:
+            return None
+        tags = [
+            _text(row[0])
+            for row in connection.execute(
+                """
+                SELECT player.normalized_tag
+                FROM verified_player_links AS link
+                JOIN players AS player ON player.id = link.player_id
+                WHERE link.account_id = %s
+                ORDER BY player.normalized_tag
+                LIMIT %s
+                """,
+                (int(account[0]), PUBLIC_PLAYER_LIMIT),
+            ).fetchall()
+        ]
+        players = api_leaderboard.linked_season_days(connection, tags, now)
+    return {
+        "kind": "public-user-days",
+        "season_start": ranked_day_for(now).season_start.isoformat(),
+        "players": players,
+    }
+
+
 def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         account = connection.execute(
@@ -1417,7 +1455,7 @@ def _verified_players(
 
 
 def _linked_players(
-    connection: Any, account_id: int, limit: int | None = 500
+    connection: Any, account_id: int, limit: int | None = PUBLIC_PLAYER_LIMIT
 ) -> list[tuple[int, str, str | None, str | None, str | None]]:
     """Each verified player's id, tag, and newest saved name, clan and league,
     the first `limit` by tag, or all of them when it is None."""

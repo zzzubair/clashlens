@@ -231,7 +231,13 @@ export type BoardRow = {
   name: string | null;
   you: boolean;
 } & (
-  | { kind: "trophies"; trophies: number }
+  | {
+      kind: "trophies";
+      trophies: number;
+      /** On Live, trophies won or lost today so far, as the dashboard's Legend
+       *  day card counts them; null when not known, and on At last Reset. */
+      todayChange: number | null;
+    }
   | { kind: "average"; total: number; days: number; battles: number }
   | { kind: "streak"; best: number; going: boolean; attacks: number }
 );
@@ -277,21 +283,21 @@ function signed(value: number, negative: boolean, digits: number): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
-  return value === 0 ? text : `${negative ? "-" : "+"}${text}`;
+  return value === 0 ? text : `${negative ? "−" : "+"}${text}`;
 }
 
 /**
- * An average board's number: trophies a Legend day with one decimal over a
- * longer period, whole trophies so far today. Defense is shown as a loss.
+ * An average board's number in whole trophies (a tenth of a trophy is noise
+ * here): trophies a Legend day over a longer period, the day's total today.
+ * Defense is shown as a loss.
  */
 export function formatAverage(
   row: { total: number; days: number },
   board: BoardKey,
   period: CrewPeriod,
 ): string {
-  const negative = board !== "attackers";
-  if (period === "today") return signed(row.total, negative, 0);
-  return signed(row.total / row.days, negative, 1);
+  const value = Math.round(period === "today" ? row.total : row.total / row.days);
+  return signed(value, board !== "attackers", 0);
 }
 
 export function mapCrewList(value: unknown): CrewList | null {
@@ -548,8 +554,19 @@ function mapBoard(value: unknown, key: BoardKey, period: CrewPeriod): Board | nu
     }
     const base = { tag: item.tag, name: item.name, you: item.you };
     if (key === "live" || key === "top") {
-      if (!isCount(item.trophies)) return null;
-      rows.push({ ...base, kind: "trophies", trophies: item.trophies });
+      if (
+        !isCount(item.trophies) ||
+        !(item.today_change == null || Number.isSafeInteger(item.today_change))
+      )
+        return null;
+      rows.push({
+        ...base,
+        kind: "trophies",
+        trophies: item.trophies,
+        todayChange: Number.isSafeInteger(item.today_change)
+          ? (item.today_change as number)
+          : null,
+      });
     } else if (key === "streaks") {
       if (
         !isCount(item.best) ||
