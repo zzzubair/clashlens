@@ -470,10 +470,14 @@ class AlertLoop:
     async def _add_picture(self, message: Any, alert: dict[str, Any]) -> bool:
         """Read the alert's Legend day, draw it and edit it into `message`;
         False while its battle is not saved into the day yet."""
+        # Cleared only once the read starts: one cut off still waiting for a
+        # thread never runs.
         now, read = self.now(), threading.Event()
+        read.set()
         self._read = read
 
         def legend_day() -> dict[str, Any] | None:
+            read.clear()
             try:
                 return self.alerts.legend_day(alert, now)
             finally:

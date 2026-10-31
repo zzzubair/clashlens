@@ -331,6 +331,36 @@ def test_pictures_stop_in_time_for_a_dm_waiting_to_be_tried_again(monkeypatch, s
     assert pictures_waiting == 1, "the cut off picture waits for a later round"
 
 
+def test_a_picture_read_cut_off_before_it_started_holds_up_no_later_one() -> None:
+    """With every thread busy, a picture's read cut off by the round's end
+    before it started never runs, and pictures are added again later."""
+    added: list[int] = []
+    store = SimpleNamespace(legend_day=lambda *_: a_day())
+
+    class Discord:
+        async def add_picture(self, message: int, _png: bytes) -> None:
+            added.append(message)
+
+    async def rounds() -> None:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(1))
+        busy = threading.Event()
+        loop = AlertLoop(store, Discord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, clock() + 300))
+        held = asyncio.create_task(asyncio.to_thread(busy.wait, 5))
+        await asyncio.sleep(0.05)  # the one thread is busy
+        loop._waiting.append(SimpleNamespace(retry_at=clock() + 0.1))  # type: ignore[arg-type]
+        await loop._add_pictures(list(loop._pictures))
+        busy.set()
+        await held
+        loop._waiting.clear()
+        await loop._add_pictures(list(loop._pictures))
+
+    picture._DRAWER.submit(lambda: None).result(5)
+    asyncio.run(rounds())
+    assert added == [1]
+
+
 def test_pictures_are_drawn_on_one_thread_with_only_a_few_waiting(monkeypatch) -> None:
     """Pictures asked for from any thread are drawn one at a time on the same
     thread, as memory freed on a thread stays kept for it; with 6 drawn or
