@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 
 /**
  * More, the last tab of the bottom bar on narrow screens: a sheet with the
- * rest of the site (Analytics, Blog, Join Discord) and the account (your
+ * rest of the site (Watchlists, Blog, Join Discord) and the account (your
  * profile, Settings and Sign out, or Sign in); the theme switch stays in the
  * top bar. Tapping a link in it (at once, so the bar shows the
  * page loading), opening a page, tapping outside it, Escape and tabbing away

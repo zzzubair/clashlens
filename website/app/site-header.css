@@ -400,15 +400,16 @@
     padding-bottom: 0.25rem;
   }
 
-  /* A slim capsule floating just above the bottom edge, in thumb reach. Each
-     tab takes the room its name needs and shares the rest, so every name
-     fits at 13px even on a 320px phone. */
+  /* A slim capsule floating just above the bottom edge, in thumb reach, with
+     five equal slots, so Home, the middle one, sits at the screen's exact
+     centre at every width. With Crews switched off the last slot stays empty. */
   .bottom-tabs {
     position: fixed;
     right: 0.5rem;
     bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
     left: 0.5rem;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     height: 3.5rem;
     max-width: 30rem;
     margin-inline: auto;
@@ -419,14 +420,6 @@
       var(--cl-glass-shine),
       0 10px 28px -14px rgb(0 0 0 / 0.75);
     isolation: isolate;
-  }
-
-  /* Sized by their names, not shared out equally: equal fifths left
-     "Rankings" and "Watchlists" touching on a 320px phone, while sharing
-     out only the spare room keeps the same gap between every pair of names
-     at any width. */
-  .bottom-tabs > * {
-    flex: 1 1 auto;
   }
 
   /* On light pages a lighter shadow; the edge already parts it from the page. */

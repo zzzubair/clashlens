@@ -359,10 +359,11 @@ interface SheetAccount {
   logoutIdempotencyKey: string;
 }
 
-// Below 64rem, the same tabs for everyone: Home (the front page, or the
-// dashboard once signed in), Rankings, Watchlists and Crews, then More with
-// Analytics, Blog, Join Discord and the account: your profile, Settings and
-// Sign out, or Sign in. Watchlists and Crews explain why they need an account
+// Below 64rem, the same tabs for everyone: Rankings, Analytics, Home (the
+// front page, or the dashboard once signed in) in the middle, and Crews, then
+// More with Watchlists, Blog, Join Discord and the account: your profile,
+// Settings and Sign out, or Sign in. Home keeps the middle slot even with
+// Crews switched off. Watchlists and Crews explain why they need an account
 // when opened signed out (NeedsAccount). A tapped tab looks chosen, with a
 // loading line, from the tap until its page shows (the `pending` class
 // NavLink adds); see site-header.css.
@@ -378,11 +379,11 @@ function BottomTabs({
   const location = useLocation();
   const navigation = useNavigation();
   // The profile matches only itself: while the name is unread its path is
-  // /account, and every /account/... page (Watchlists among them) would light
-  // More beside its own tab.
+  // /account, and every /account/... page (Discord alerts among them) would
+  // light More though no link in it is open.
   const inMore =
     location.pathname === account?.path ||
-    ["/analytics", "/blog", "/account/settings"].some(
+    ["/account/watchlists", "/blog", "/account/settings"].some(
       (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
     );
   // Tapping a tab again while its page loads would start the load over.
@@ -403,10 +404,6 @@ function BottomTabs({
   }
   return (
     <nav className="bottom-tabs" aria-label="Main navigation">
-      <NavLink className="bottom-tab" to="/" end onClick={ignoreRepeatTap}>
-        <TabIcon name="home" />
-        Home
-      </NavLink>
       <NavLink
         className="bottom-tab"
         to="/leaderboards/tracked?view=live&page=1"
@@ -415,9 +412,13 @@ function BottomTabs({
         <TabIcon name="rankings" />
         Rankings
       </NavLink>
-      <NavLink className="bottom-tab" to="/account/watchlists" onClick={ignoreRepeatTap}>
-        <TabIcon name="watchlists" />
-        Watchlists
+      <NavLink className="bottom-tab" to="/analytics/armies" onClick={ignoreRepeatTap}>
+        <TabIcon name="analytics" />
+        Analytics
+      </NavLink>
+      <NavLink className="bottom-tab" to="/" end onClick={ignoreRepeatTap}>
+        <TabIcon name="home" />
+        Home
       </NavLink>
       {data?.crewsEnabled && (
         <NavLink className="bottom-tab" to="/crews" onClick={ignoreRepeatTap}>
@@ -427,9 +428,9 @@ function BottomTabs({
       )}
       <SiteMenu current={inMore}>
         <div className="site-menu-tabs">
-          <NavLink to="/analytics/armies" onClick={ignoreRepeatTap}>
-            <TabIcon name="analytics" />
-            Analytics
+          <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
+            <TabIcon name="watchlists" />
+            Watchlists
           </NavLink>
           <NavLink to="/blog" onClick={ignoreRepeatTap}>
             <TabIcon name="blog" />

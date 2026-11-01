@@ -97,8 +97,8 @@ it("on a sign-in page, Sign in passes on where the Clasher was going", async () 
 
 it("on phones shows everyone the same four tabs, and the rest and the account in More", async () => {
   const features = { dashboardEnabled: true, crewsEnabled: true };
-  const tabs = ["Home", "Rankings", "Watchlists", "Crews"];
-  const pages = ["More", "Analytics", "Blog", "Join Discord, opens in a new tab"];
+  const tabs = ["Rankings", "Analytics", "Home", "Crews"];
+  const pages = ["More", "Watchlists", "Blog", "Join Discord, opens in a new tab"];
   const signedOut = await renderHeader({ ...SIGNED_OUT, ...features }, "/blog");
   const more = moreOf(signedOut);
   expect(labelsOf(bottomOf(signedOut).replace(more, ""))).toEqual(tabs);
@@ -132,7 +132,7 @@ it("on phones shows everyone the same four tabs, and the rest and the account in
   // everyone and the bar keeps its other tabs.
   expect(
     labelsOf(bottomOf(await renderHeader({ ...SIGNED_OUT, loggedIn: true }))),
-  ).toEqual(["Home", "Rankings", "Watchlists", ...pages, "Your profile", "Settings"]);
+  ).toEqual(["Rankings", "Analytics", "Home", ...pages, "Your profile", "Settings"]);
 });
 
 it("keeps one theme switch, in the top bar, on every screen size", async () => {
@@ -143,24 +143,27 @@ it("keeps one theme switch, in the top bar, on every screen size", async () => {
 
 it("marks More while one of its pages is open, and no tab on a player's page", async () => {
   const toggleOf = (header: string) => /<summary [^>]*>/.exec(moreOf(header))![0];
-  for (const path of ["/blog", "/analytics/armies"])
+  for (const path of ["/blog", "/account/watchlists"])
     expect(toggleOf(await renderHeader(SIGNED_OUT, path))).toContain(
       'aria-current="page"',
     );
-  expect(toggleOf(await renderHeader(SIGNED_OUT, "/account/watchlists"))).not.toContain(
+  expect(toggleOf(await renderHeader(SIGNED_OUT, "/analytics/armies"))).not.toContain(
     "aria-current",
   );
   const signedIn = { ...SIGNED_OUT, loggedIn: true, accountUsername: "lens_scout" };
   for (const path of ["/account/settings", "/users/lens_scout"])
     expect(toggleOf(await renderHeader(signedIn, path))).toContain('aria-current="page"');
-  // While a busy moment leaves the name unread, the profile is /account, and
-  // a watchlist lights only Watchlists.
+  // While a busy moment leaves the name unread, the profile is /account: a
+  // watchlist lights More and its Watchlists link, not Your profile, and
+  // another /account/... page outside More lights nothing.
   const unread = { ...signedIn, accountUsername: null };
   const watchlist = await renderHeader(unread, "/account/watchlists/g1");
-  expect(toggleOf(watchlist)).not.toContain("aria-current");
+  expect(toggleOf(watchlist)).toContain('aria-current="page"');
   expect(bottomOf(watchlist).match(/<a [^>]*aria-current="page"[^>]*>/g)).toEqual([
     expect.stringContaining('href="/account/watchlists"'),
   ]);
+  const alerts = await renderHeader(unread, "/account/discord-alerts");
+  expect(bottomOf(alerts)).not.toContain("aria-current");
   expect(toggleOf(await renderHeader(unread, "/account"))).toContain(
     'aria-current="page"',
   );
