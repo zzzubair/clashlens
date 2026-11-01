@@ -1,7 +1,6 @@
 import { useContext, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { preload, preloadModule } from "react-dom";
 import {
-  Form,
   Link,
   NavLink,
   isRouteErrorResponse,
@@ -325,11 +324,6 @@ const TAB_ICONS = {
     "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   blog: "M5 4h14v16H5zM9 8h6M9 12h6M9 16h3",
   chat: "M21 12a8 8 0 0 1-11.7 7.1L4 20.5l1.3-4.8A8 8 0 1 1 21 12zM9 12h.01M15 12h.01",
-  profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21v-1a8 8 0 0 1 16 0v1",
-  settings: "M4 7h9M17 7h3M15 5v4M4 17h3M11 17h9M9 15v4",
-  // An arrow going in through a door on the right; Sign out leaves by the left.
-  signIn: "M14 4h5v16h-5M10 8l4 4-4 4M14 12H4",
-  signOut: "M10 4H5v16h5M15 8l4 4-4 4M19 12h-9",
 } as const;
 
 function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
@@ -351,41 +345,20 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
   );
 }
 
-/** The signed-in account, for the More sheet's account rows. */
-interface SheetAccount {
-  /** Null while a busy moment leaves the name unread (see SiteHeader). */
-  label: string | null;
-  path: string;
-  logoutIdempotencyKey: string;
-}
-
 // Below 64rem, the same tabs for everyone: Rankings, Analytics, Home (the
 // front page, or the dashboard once signed in) in the middle, and Crews, then
-// More with Watchlists, Blog, Join Discord and the account: your profile,
-// Settings and Sign out, or Sign in. Home keeps the middle slot even with
-// Crews switched off. Watchlists and Crews explain why they need an account
-// when opened signed out (NeedsAccount). A tapped tab looks chosen, with a
+// More with Watchlists, Blog and Join Discord. The account (your profile,
+// Settings and Sign out, or Sign in) is only in the top bar. Home keeps the
+// middle slot even with Crews switched off. Watchlists and Crews explain why
+// they need an account when opened signed out (NeedsAccount). A tapped tab looks chosen, with a
 // loading line, from the tap until its page shows (the `pending` class
 // NavLink adds); see site-header.css.
-function BottomTabs({
-  data,
-  account,
-  signIn,
-}: {
-  data: RootLoaderData | undefined;
-  account: SheetAccount | null;
-  signIn: string | null;
-}) {
+function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const navigation = useNavigation();
-  // The profile matches only itself: while the name is unread its path is
-  // /account, and every /account/... page (Discord alerts among them) would
-  // light More though no link in it is open.
-  const inMore =
-    location.pathname === account?.path ||
-    ["/account/watchlists", "/blog", "/account/settings"].some(
-      (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
-    );
+  const inMore = ["/account/watchlists", "/blog"].some(
+    (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+  );
   // Tapping a tab again while its page loads would start the load over.
   function ignoreRepeatTap(event: MouseEvent<HTMLAnchorElement>) {
     const next = navigation.location;
@@ -440,45 +413,6 @@ function BottomTabs({
         <div className="site-menu-extras">
           <DiscordLink icon />
         </div>
-        {account ? (
-          <div className="site-menu-tabs site-menu-account">
-            <p className="site-menu-who">
-              {account.label === null ? (
-                "Signed in"
-              ) : (
-                <>
-                  Signed in as <bdi>{account.label}</bdi>
-                </>
-              )}
-            </p>
-            <NavLink to={account.path} end onClick={ignoreRepeatTap}>
-              <TabIcon name="profile" />
-              Your profile
-            </NavLink>
-            <NavLink to="/account/settings" onClick={ignoreRepeatTap}>
-              <TabIcon name="settings" />
-              Settings
-            </NavLink>
-            <Form method="post" action="/logout">
-              <input
-                type="hidden"
-                name="idempotencyKey"
-                value={account.logoutIdempotencyKey}
-              />
-              <button type="submit">
-                <TabIcon name="signOut" />
-                Sign out
-              </button>
-            </Form>
-          </div>
-        ) : signIn ? (
-          <div className="site-menu-tabs site-menu-account">
-            <Link to={signIn}>
-              <TabIcon name="signIn" />
-              Sign in
-            </Link>
-          </div>
-        ) : null}
       </SiteMenu>
     </nav>
   );
@@ -567,19 +501,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
           <DiscordLink />
         </span>
       </div>
-      <BottomTabs
-        data={data}
-        account={
-          data?.loggedIn
-            ? {
-                label: account?.accountLabel ?? null,
-                path: accountPath,
-                logoutIdempotencyKey: data.logoutIdempotencyKey ?? "",
-              }
-            : null
-        }
-        signIn={location.pathname === "/login" ? null : signIn}
-      />
+      <BottomTabs data={data} />
     </header>
   );
 }

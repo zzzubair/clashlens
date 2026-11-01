@@ -43,6 +43,12 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   const sheet = more.locator(".site-menu-panel");
   const watchlists = sheet.getByRole("link", { name: "Watchlists" });
   await expect(watchlists).toBeVisible();
+  // Only those: Sign in stays in the top bar.
+  await expect(sheet.getByRole("link")).toHaveText([
+    "Watchlists",
+    "Blog",
+    /^Join Discord/,
+  ]);
   // Join Discord is a full row in the sheet's own colours, like Watchlists.
   const discord = sheet.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toBeVisible();
@@ -219,9 +225,9 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
       0,
     );
     await expect(name).toHaveText(shown);
-    // Home, in the middle, opens the dashboard; More names the account.
+    // Home, in the middle, opens the dashboard; the account is only on top.
     await expect(bar.locator(":scope > a").nth(2)).toHaveText("Home");
-    await expect(more.locator(".site-menu-who")).toHaveText(`Signed in as ${shown}`);
+    await expect(more.getByText(shown)).toHaveCount(0);
   };
   for (const [tab, path] of [
     ["Rankings", /\/leaderboards\/tracked\?view=live/],

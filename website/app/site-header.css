@@ -294,10 +294,6 @@
   cursor: pointer;
 }
 
-.site-menu-tabs form {
-  margin: 0;
-}
-
 :is(.site-menu-tabs, .site-menu-extras) svg {
   color: var(--cl-muted);
 }
@@ -328,31 +324,10 @@
   background: var(--cl-action-soft);
 }
 
-/* The site's own pages, then Join Discord with them, then the account
-   under a hairline, named, so More reads as the site's whole menu. */
+/* The site's own pages, then Join Discord with them. */
 .site-menu-extras {
   display: grid;
   margin-top: -0.35rem;
-}
-
-.site-menu-account {
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--cl-border);
-}
-
-.site-menu-who {
-  margin: 0;
-  padding: 0.15rem 1rem 0.25rem;
-  overflow: hidden;
-  color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.site-menu-who bdi {
-  color: var(--cl-ink);
 }
 
 /* Join Discord lines up with the links above it, icon and all. */
