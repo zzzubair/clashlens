@@ -535,13 +535,7 @@
   --cl-hero-shine: inset 0 1px 0 rgb(255 226 192 / 0.24);
   --cl-hero-halo: 0 0 24px -6px rgb(255 120 30 / 0.24);
 }
-:root
-  :is(
-    .dash-card[data-card="legend-day"],
-    .player-page .player-hero,
-    .crew-head,
-    .front-teaser
-  ) {
+:root :is(.dash-card[data-card="legend-day"], .crew-head, .front-teaser) {
   position: relative;
   background: var(--cl-hero-fill);
   border: 1px solid transparent;
@@ -551,13 +545,7 @@
   backdrop-filter: blur(22px) saturate(1.5);
 }
 /* The lit edge: a gradient ring, masked to the 1px border. */
-:root
-  :is(
-    .dash-card[data-card="legend-day"],
-    .player-page .player-hero,
-    .crew-head,
-    .front-teaser
-  )::after {
+:root :is(.dash-card[data-card="legend-day"], .crew-head, .front-teaser)::after {
   position: absolute;
   inset: -1px;
   padding: 1px;
@@ -571,7 +559,12 @@
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-.player-page .player-hero {
+:root .player-page .player-hero {
+  position: relative;
+  background: var(--cl-sheet-fill);
+  border: 1px solid var(--cl-sheet-border);
+  border-radius: var(--cl-hero-radius);
+  box-shadow: var(--cl-sheet-edge), var(--cl-sheet-shadow);
   padding: 1.25rem 1.5rem 0.9rem;
 }
 /* Inside a sheet, never another box: a sheet within a sheet is just a
