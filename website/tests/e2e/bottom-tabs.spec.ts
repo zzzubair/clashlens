@@ -16,11 +16,11 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   await expect(header.getByRole("button", { name: "Dark mode" })).toBeVisible();
   await expect(header.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.locator("details.site-menu > summary")).toHaveText("More");
-  // The same tabs for everyone: Home, Rankings, Watchlists and Crews, then More.
+  // The same tabs for everyone: Rankings, Analytics, Home and Crews, then More.
   await expect(bar.locator(":scope > a")).toHaveText([
-    "Home",
     "Rankings",
-    "Watchlists",
+    "Analytics",
+    "Home",
     "Crews",
   ]);
   for (const item of await bar.locator(":scope > a, summary").all()) {
@@ -36,22 +36,28 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
     "page",
   );
 
-  // More holds Analytics, Blog and Join Discord; the dimmed page closes it.
+  // More holds Watchlists, Blog and Join Discord; the dimmed page closes it.
   const more = page.locator("details.site-menu");
   await more.locator("summary").click();
   await expect(more).toHaveAttribute("open", "");
   const sheet = more.locator(".site-menu-panel");
-  const analytics = sheet.getByRole("link", { name: "Analytics" });
-  await expect(analytics).toBeVisible();
-  // Join Discord is a full row in the sheet's own colours, like Analytics.
+  const watchlists = sheet.getByRole("link", { name: "Watchlists" });
+  await expect(watchlists).toBeVisible();
+  // Only those: Sign in stays in the top bar.
+  await expect(sheet.getByRole("link")).toHaveText([
+    "Watchlists",
+    "Blog",
+    /^Join Discord/,
+  ]);
+  // Join Discord is a full row in the sheet's own colours, like Watchlists.
   const discord = sheet.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toBeVisible();
   await expect(discord).toContainText("Join Discord");
   const row = (await discord.boundingBox())!;
   expect(row.height).toBeGreaterThanOrEqual(44);
-  expect(row.width).toBe((await analytics.boundingBox())!.width);
+  expect(row.width).toBe((await watchlists.boundingBox())!.width);
   const colour = (link: Locator) => link.evaluate((el) => getComputedStyle(el).color);
-  expect(await colour(discord)).toBe(await colour(analytics));
+  expect(await colour(discord)).toBe(await colour(watchlists));
   await page.mouse.click(195, 200);
   await expect(more).not.toHaveAttribute("open");
   await more.locator("summary").click();
@@ -65,6 +71,18 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   const last = (await page.getByRole("link", { name: "Privacy" }).boundingBox())!;
   const top = (await bar.boundingBox())!.y;
   expect(last.y + last.height).toBeLessThanOrEqual(top);
+});
+
+test("Home's icon sits at the exact centre of the screen on every phone width", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const home = tabs(page).getByRole("link", { name: "Home" }).locator("svg");
+  for (const width of [320, 360, 375, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 });
+    const box = (await home.boundingBox())!;
+    expect(Math.abs(box.x + box.width / 2 - width / 2)).toBeLessThanOrEqual(1);
+  }
 });
 
 test("a tablet held sideways keeps the bottom bar; a mouse keeps the top bar", async ({
@@ -207,21 +225,21 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
       0,
     );
     await expect(name).toHaveText(shown);
-    // Home opens the dashboard; More names the account.
-    await expect(bar.locator(":scope > a").first()).toHaveText("Home");
-    await expect(more.locator(".site-menu-who")).toHaveText(`Signed in as ${shown}`);
+    // Home, in the middle, opens the dashboard; the account is only on top.
+    await expect(bar.locator(":scope > a").nth(2)).toHaveText("Home");
+    await expect(more.getByText(shown)).toHaveCount(0);
   };
   for (const [tab, path] of [
     ["Rankings", /\/leaderboards\/tracked\?view=live/],
+    ["Analytics", /\/analytics\/armies$/],
     ["Home", /\/$/],
-    ["Watchlists", /\/account\/watchlists$/],
     ["Crews", /\/crews$/],
   ] as const) {
     await bar.getByRole("link", { name: tab }).click();
     await stillSignedIn(path);
   }
   for (const [item, path] of [
-    ["Analytics", /\/analytics\/armies$/],
+    ["Watchlists", /\/account\/watchlists$/],
     ["Blog", /\/blog$/],
   ] as const) {
     await more.locator("summary").click();
