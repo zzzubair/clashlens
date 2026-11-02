@@ -1171,7 +1171,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const bases = text(cards.bases!);
     expect(bases).toContain("Bases you attacked · today · 2 of 8");
     expect(bases).toContain(
-      "Tripled Held Not yet You Player Your hit Their defenses Strength Ava",
+      "Tripled Held Not yet You Player Your hit Their defenses Strength held, pts vs avg Ava",
     );
     expect(bases).toContain("Ava 5,712 100% +40 · 07:10");
     expect(bases).toContain("Hard +42 pts held 83%, 42 pts above Legend avg");
@@ -1184,10 +1184,10 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(armiesDefense).toContain("Legend average. vs Legend avg 3 days 7 days Custom");
     expect(armiesDefense).toContain("Last 7 days · 8 defenses");
     expect(armiesDefense).toContain(
-      "Usage Not tripled Per defense Thrower 63% of defenses 60% +31 pts Not",
+      "Usage Held Per defense Thrower 63% of defenses 60% +31 pts Held",
     );
-    expect(armiesDefense).toContain("0% −50 pts Not tripled 0%, 50 points below the");
-    expect(armiesDefense).toContain("38% −14 pts Not tripled 38%, 14 points below");
+    expect(armiesDefense).toContain("0% −50 pts Held 0%, 50 points below the");
+    expect(armiesDefense).toContain("38% −14 pts Held 38%, 14 points below");
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);

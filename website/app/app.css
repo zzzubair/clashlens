@@ -407,10 +407,6 @@ body {
 }
 
 @media (max-width: 48rem) {
-  .page-shell {
-    padding-top: 1.5rem;
-  }
-
   .section-heading {
     align-items: flex-start;
     flex-direction: column;

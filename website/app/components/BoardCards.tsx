@@ -316,11 +316,12 @@ function GoalChart({
   const firstDay = data.finished - steps + 1;
   // Along the foot: "Last Reset" (about 67 wide) centred on its line and
   // "Season end" (about 74) under the ends, a word space apart at least;
-  // when they'd come closer, the dashed line alone marks the last Reset
-  // and Season end sits under the ends. The first day shows when it clears
-  // Last Reset.
+  // when they'd come closer (the Season's last days), Last Reset ends just
+  // left of its line, or, with no room there either, the dashed line alone
+  // marks it. The first day shows when it clears Last Reset.
   const apart = right - now >= 84;
-  const resetLeft = apart ? now - 34 : now;
+  const resetFits = apart || now - left >= 125;
+  const resetLeft = apart ? now - 34 : resetFits ? now - 71 : now;
   const ends = [
     { name: "You", value: youEnd, you: true },
     { name: rank, value: lineEnd, you: false },
@@ -436,12 +437,12 @@ function GoalChart({
           Day {firstDay}
         </text>
       ) : null}
-      {apart ? (
+      {resetFits ? (
         <text
           className="goal-axis goal-axis-today"
-          x={now}
+          x={apart ? now : now - 4}
           y={height - 6}
-          textAnchor="middle"
+          textAnchor={apart ? "middle" : "end"}
         >
           Last Reset
         </text>

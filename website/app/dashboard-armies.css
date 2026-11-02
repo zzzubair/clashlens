@@ -182,16 +182,16 @@
 
 .army-bar {
   position: relative;
-  height: 6px;
+  height: 4px;
   background: var(--cl-raised);
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .army-bar i {
   display: block;
   height: 100%;
-  background: var(--cl-action);
-  border-radius: 3px;
+  background: var(--cl-meter);
+  border-radius: 2px;
 }
 
 .army-own {
@@ -222,7 +222,7 @@
 }
 
 :is(.army-defense-row, .army-offense-row) .dash-name {
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .army-offense-row b {
@@ -269,7 +269,7 @@
 
 /* A narrow card (a phone, or a Small card): one heading line shared by
    every army, then two short lines an army: its art beside its name over
-   its Usage bar, then Not tripled and Per defense, each value over its
+   its Usage bar, then Held and Per defense, each value over its
    signed difference. */
 @container (max-width: 36rem) {
   .army-defense-row {

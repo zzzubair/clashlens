@@ -117,7 +117,7 @@ describe("Armies on defense", () => {
     // One of the 3 days has no army records, so the window line shows. The
     // headings are one word each; the header says once what they compare with.
     expect(plain).toContain(
-      "vs Legend avg 3 days 7 days Custom Last 3 days · 2 with army data · 3 defenses Army · usage Usage Not tripled Per defense Thrower",
+      "vs Legend avg 3 days 7 days Custom Last 3 days · 2 with army data · 3 defenses Army · usage Usage Held Per defense Thrower",
     );
     expect(plain.match(/vs Legend avg/g)).toHaveLength(1);
     // Thrower: 2 of 3 defenses, 1 of 2 held, 69 lost; every tracked player
@@ -125,11 +125,11 @@ describe("Armies on defense", () => {
     // difference from the Legends with its unit; screen readers hear it as a
     // sentence.
     expect(plain).toContain(
-      "Thrower 67% of defenses 50% 0 pts Not tripled 50%, same as the Legends average −35 −5 Trophies per defense −35, 5 more lost than the Legends average",
+      "Thrower 67% of defenses 50% 0 pts Held 50%, same as the Legends average −35 −5 Trophies per defense −35, 5 more lost than the Legends average",
     );
-    expect(plain).toContain("Hydra 33% of defenses 100% 0 pts Not tripled 100%,");
+    expect(plain).toContain("Hydra 33% of defenses 100% 0 pts Held 100%,");
     expect(plain).toContain(
-      "All 3 defenses 67% +7 pts Not tripled 67%, 7 points above the Legends average −32 −3",
+      "All 3 defenses 67% +7 pts Held 67%, 7 points above the Legends average −32 −3",
     );
     // The one colouring rule, said once.
     expect(plain).toContain(
@@ -152,11 +152,9 @@ describe("Armies on defense", () => {
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies } }),
     );
     expect(plain).toContain(
-      "Thrower 67% of defenses 50% – Not tripled 50%, no Legends average yet −35 –",
+      "Thrower 67% of defenses 50% – Held 50%, no Legends average yet −35 –",
     );
-    expect(plain).toContain(
-      "All 3 defenses 67% – Not tripled 67%, no Legends average yet",
-    );
+    expect(plain).toContain("All 3 defenses 67% – Held 67%, no Legends average yet");
   });
 
   it("lists at most 5 armies, and says when there is nothing to show", async () => {

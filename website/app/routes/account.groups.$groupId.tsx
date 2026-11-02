@@ -386,7 +386,7 @@ export default function GroupCompareRoute() {
               {keySort("trophies", "Trophies")}
               {keySort(
                 MEASURE_SORT[metric],
-                metric === "change" ? "Gain" : metric === "attack" ? "Triples" : "Held",
+                metric === "change" ? change : metric === "attack" ? "Triples" : "Held",
                 metric === "change" ? undefined : (
                   <small className="compare-key-range">and avg ★</small>
                 ),
@@ -421,10 +421,15 @@ export default function GroupCompareRoute() {
                     Today
                   </th>
                   {/* The gain and its daily bars share one short heading. */}
-                  {heading("net", "Gain")}
+                  {heading("net", change)}
                   {showVsGroup ? (
                     <th scope="col" data-col="vs" className="compare-extra">
-                      Gain vs others
+                      <span className="trend-head">
+                        Average lead
+                        <small className="compare-head-sub">
+                          trophies vs each other player
+                        </small>
+                      </span>
                     </th>
                   ) : null}
                   {/* What each cell's two numbers are, said once here. */}
@@ -653,14 +658,15 @@ function PlayerRow({
               ) : (
                 <Signed value={player.net} lead={lead.net} />
               )}
+              {/* Missed days first, under the gain they make smaller. */}
+              {player.countedDays < days ? (
+                <span className="compare-sub compare-sub-count">
+                  {player.countedDays} of {days} days recorded
+                </span>
+              ) : null}
               {player.netPerDay !== null ? (
                 <span className="compare-sub compare-sub-day">
                   {signed(player.netPerDay, 1)} a day
-                </span>
-              ) : null}
-              {player.countedDays < days ? (
-                <span className="compare-sub compare-sub-count">
-                  {player.countedDays} of {days} days
                 </span>
               ) : null}
             </span>
@@ -668,7 +674,7 @@ function PlayerRow({
           </span>
         </td>
         {showVsGroup ? (
-          <td data-label="Gain vs others" className="compare-extra">
+          <td data-label="Average lead" className="compare-extra">
             {player.vsGroup === null ? (
               <Empty />
             ) : (

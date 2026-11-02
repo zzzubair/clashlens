@@ -27,7 +27,6 @@
 .compare-head h1 {
   margin: 0 0 0.35rem;
 }
-
 .compare-span {
   margin: 0;
   color: var(--cl-muted);
@@ -151,10 +150,6 @@
 .compare-table tr > :first-child {
   padding-left: 0.6rem;
 }
-.compare-table tbody td.compare-sorted {
-  background: color-mix(in srgb, var(--cl-action) 5%, transparent);
-}
-
 .compare-row {
   cursor: pointer;
 }
@@ -221,7 +216,7 @@
   position: absolute;
   color: var(--cl-faint);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   white-space: nowrap;
 }
@@ -332,7 +327,7 @@
   padding: 0 0.3rem 0 0;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1.1rem;
   white-space: nowrap;
@@ -477,18 +472,19 @@
   vertical-align: -0.12em;
 }
 
+/* One big number a row, the sorted column's; the rest read as values. */
 .compare-number {
   display: block;
   font-family: var(--cl-font);
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+}
+.compare-sorted .compare-number {
   font-size: 1.3rem;
   font-weight: 700;
-  line-height: 1.05;
-  letter-spacing: 0;
 }
-.compare-trophies {
-  font-size: 1.5rem;
-}
-
 .compare-up {
   color: var(--cl-positive);
 }
@@ -582,7 +578,7 @@
   margin-top: 0.1rem;
   color: var(--cl-muted);
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 .compare-battles svg {
   opacity: 0.8;
@@ -1442,7 +1438,7 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 0.3rem;
   }
-  .compare-table tbody td .compare-rate-head .compare-number {
+  .compare-table tbody td.compare-sorted .compare-rate-head .compare-number {
     font-family: var(--cl-font);
     font-size: 1.3rem;
   }

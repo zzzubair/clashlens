@@ -99,8 +99,8 @@
 }
 .player-page > .data-section > .section-note {
   max-width: 68ch;
-  margin: 0 0 0.75rem;
-  font-size: 0.875rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
 }
 
 /* ---------- Header: name, tag line, trophies, freshness, Refresh ---------- */
@@ -797,9 +797,9 @@
    shows one. */
 .log-key {
   display: none;
-  margin: -0.35rem 0 0.75rem;
+  margin: -0.25rem 0 0.5rem;
   color: var(--cl-muted);
-  font-size: 0.82rem;
+  font-size: 0.8125rem;
 }
 .legend-log:has(.day-mark:not(.day-mark-verified, .day-mark-gap, .log-key-dot))
   .log-key:not(.log-key-gap),

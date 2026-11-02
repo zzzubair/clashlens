@@ -107,10 +107,10 @@
 
 /* ---------- Ranks ---------- */
 
-/* Three columns split by hairlines, no panel of their own, over the Next
-   Reset range. Now is the rank the card is about: ember label and the
-   biggest plate. The projected place is a forecast: lighter, its ember
-   diamond repeated on the range line under the three. */
+/* Three columns, no panel of their own, over the Next Reset range. The
+   projected place is what a Clasher opens the card for, so it is the
+   biggest rank with the ember label; Last Reset and Now are its smaller,
+   equal context. Its diamond repeats on the range line under the three. */
 .legend-day-places {
   display: grid;
   gap: 0.55rem;
@@ -150,18 +150,14 @@
 
 .legend-day-ranks dd {
   margin: 0;
-  font: 650 1.25rem/1.2 var(--cl-font);
+  font: 600 1.125rem/1.2 var(--cl-font);
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.legend-day-now dt {
+.legend-day-next dt {
   color: var(--cl-action-text);
-}
-
-.legend-day-ranks .legend-day-now .rank-mark {
-  font-size: 1.6rem;
 }
 
 .legend-day-next > dd {
@@ -171,13 +167,15 @@
 
 .legend-day-projected {
   color: var(--cl-ink);
-  font-weight: 600;
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .legend-day-diamond,
 .legend-day-range-bar::after {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.7rem;
+  height: 0.7rem;
   background: var(--cl-action);
   transform: rotate(45deg);
 }
@@ -224,9 +222,10 @@
   flex: 1;
   min-width: 2.5rem;
   height: 10px;
-  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+  background: linear-gradient(var(--range-line), var(--range-line)) center / 100% 2px
     no-repeat;
-  border-inline: 2px solid var(--cl-outline);
+  border-inline: 2px solid var(--range-line);
+  --range-line: color-mix(in srgb, var(--cl-ink) 28%, transparent);
 }
 
 .legend-day-range-bar::after {
@@ -255,11 +254,11 @@
   }
 
   .legend-day-ranks dd {
-    font-size: 1.25rem;
+    font-size: 1.0625rem;
   }
 
-  .legend-day-ranks .legend-day-now .rank-mark {
-    font-size: 1.35rem;
+  .legend-day-projected {
+    font-size: 1.625rem;
   }
 
   .legend-day-range {
@@ -401,9 +400,12 @@
   min-width: 0;
   min-height: 3.75rem;
   padding: 0.35rem 0;
-  background: var(--cl-panel);
+  /* No tile: each battle stands on a short rule, and the eight rules read
+     as one track whose filled part is the day so far. */
+  background: none;
   border: 0;
-  border-radius: 8px;
+  border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
+  border-radius: 0;
   font: 650 1rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
@@ -424,10 +426,9 @@
   color: var(--cl-negative);
 }
 
-/* A slot still to play is a faint well. */
+/* A slot still to play is only its faint rule. */
 .dash-star-box-empty {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--cl-border);
+  border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
 }
 
 /* A narrow card (a phone) packs its rows tighter. Under 18rem (a 320px
@@ -455,7 +456,6 @@
     gap: 0.1rem;
     min-height: 2.2rem;
     padding: 0.1rem 0.25rem;
-    border-radius: 7px;
     font-size: 0.9375rem;
   }
 
@@ -470,20 +470,25 @@
 @container (min-width: 18rem) and (max-width: 30rem) {
   .dash-star-boxes {
     grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .dash-star-box {
     gap: 0.15rem;
     min-height: 2.25rem;
     padding: 0.15rem 0;
-    border-radius: 6px;
     font-size: 0.875rem;
   }
 
-  /* A slot is (card − 7 gaps) / 8 wide; three stars and their two small
-     gaps are 3.12 of their size, inside the slot's 1px edges. */
+  /* A slot is (card − 7 gaps of 6px) / 8 wide; three touching stars, as
+     on the game's own result screen, are 2.8 of their size, 1px in a side. */
   .dash-star-box .game-stars {
-    font-size: min(0.75rem, (100cqi - 37px) / 25);
+    gap: 0;
+    font-size: min(0.8125rem, ((100cqi - 42px) / 8 - 2px) / 2.8);
+  }
+
+  .dash-star-box .game-star + .game-star {
+    margin-left: -0.1em;
   }
 }
 
@@ -492,15 +497,13 @@
   white-space: nowrap;
 }
 
-/* Now is the same size as its neighbours, so all three sit on one line;
-   its ember label and bolder figure mark it. */
+/* Now is the same size and weight as Last Reset beside it. */
 .legend-day-ranks .legend-day-now .rank-mark {
   min-width: 0;
   height: auto;
   padding: 0;
   color: var(--cl-ink);
   font: inherit;
-  font-weight: 650;
 }
 
 /* A narrow card (a phone) puts each row's name and total over its slots. */

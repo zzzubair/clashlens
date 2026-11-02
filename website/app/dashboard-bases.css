@@ -77,6 +77,13 @@
   font-weight: 500;
 }
 
+/* Strength's unit, under its name: what each row's + or − counts. */
+.opponents-head small {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
 /* The slots' key, one line over the rows: each mark with its word. */
 .opponents-key {
   display: flex;

@@ -243,7 +243,7 @@ describe("group comparison", () => {
     expect(html).toContain('style="height:max(4px, 50%)"');
     expect(html).toContain('style="height:max(4px, 12.5%)"');
     expect(html).not.toMatch(/trend-title|trend-range|a day<\/small>/);
-    expect(html).toContain('sort=net" data-discover="true">Gain</a></th>');
+    expect(html).toContain('sort=net" data-discover="true">3-day gain</a></th>');
     // The chart over the table climbs from 0 by the same counted days as the
     // gain: the incomplete +10 adds nothing, so the line ends on +40.
     expect(html).toContain(

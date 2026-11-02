@@ -58,6 +58,7 @@ body {
   --cl-header-muted: #b3a79c;
   --cl-header-soft: rgb(255 236 218 / 0.07);
   --cl-action-text: #ffa149;
+  --cl-meter: #b8793d;
   --cl-action-soft: rgb(255 140 40 / 0.12);
   --cl-action-border: rgb(255 150 60 / 0.42);
   --cl-gold: #ffc53d;
@@ -65,12 +66,11 @@ body {
   /* The dark rim of a won star and the hollow of a missed one. */
   --cl-star-edge: #6b3500;
   --cl-star-empty: rgb(255 240 220 / 0.08);
-  --cl-star-empty-edge: rgb(255 240 220 / 0.4);
+  --cl-star-empty-edge: rgb(255 240 220 / 0.5);
   /* Two and one star on a star split: greys, never a darkened gold. */
   --cl-star-2: #a1a1aa;
   --cl-star-1: #626269;
   /* The heat map's edge on a played day; its scale is in season-heat.css. */
-  --cl-heat-ring: inset 0 0 0 1px rgb(255 236 218 / 0.08);
   --cl-sky: #ffa149;
   --cl-sky-soft: #23170c;
   --cl-positive: #77cf85;

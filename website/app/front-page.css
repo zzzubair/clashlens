@@ -257,7 +257,7 @@
 .teaser-tiles {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 3px;
+  gap: 6px;
 }
 
 /* Stars over trophies, the dashboard's tile in miniature. Each tile is a
@@ -271,9 +271,7 @@
   gap: 0.1rem;
   min-width: 0;
   min-height: 2.3rem;
-  background: var(--cl-panel);
-  border: 0;
-  border-radius: 8px;
+  border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
   font: 650 0.8125rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
@@ -289,19 +287,14 @@
   margin-left: -1px;
 }
 
-.teaser-defenses .teaser-tiles > span {
-  background: var(--cl-panel);
-}
-
-/* A slot still to play is a faint well. */
+/* A slot still to play is only its faint rule. */
 .teaser-tiles > .teaser-tile-empty {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--cl-border);
+  border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
 }
 
 /* Last Reset, Now and the projected place, read as the real Legend day card
-   does: three columns split by hairlines, Now in ember, the projected place
-   lighter with its diamond, over the Next Reset range line. */
+   does: the projected place leads, biggest with the ember label and its
+   diamond, over the Next Reset range line. */
 .teaser-places {
   display: grid;
   gap: 0.45rem;
@@ -341,7 +334,7 @@
   font: 600 0.8125rem var(--cl-font);
 }
 
-.teaser-now small {
+.teaser-next small {
   color: var(--cl-action-text);
 }
 
@@ -352,13 +345,16 @@
 }
 
 .teaser-next {
-  color: var(--cl-muted);
+  color: var(--cl-ink);
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1.1;
 }
 
 .teaser-diamond,
 .teaser-range i::after {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.7rem;
+  height: 0.7rem;
   background: var(--cl-action);
   transform: rotate(45deg);
 }
@@ -384,9 +380,10 @@
   min-width: 2.5rem;
   max-width: 9rem;
   height: 10px;
-  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+  background: linear-gradient(var(--range-line), var(--range-line)) center / 100% 2px
     no-repeat;
-  border-inline: 2px solid var(--cl-outline);
+  border-inline: 2px solid var(--range-line);
+  --range-line: color-mix(in srgb, var(--cl-ink) 28%, transparent);
 }
 
 .teaser-range i::after {

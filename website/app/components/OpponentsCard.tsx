@@ -382,7 +382,13 @@ export function OpponentsCard({
           <span>Player</span>
           <span>Your hit</span>
           <span>Their defenses</span>
-          <span>Strength</span>
+          {/* The unit every row's signed number is in, said once. */}
+          <span>
+            Strength
+            <small>
+              {mode === "held" ? "held, pts vs avg" : "trophies a defense vs avg"}
+            </small>
+          </span>
         </div>
         {sorted.map(({ row, strength }, index) => {
           const held = row.defenses.filter((defense) => defense.stars < 3).length;

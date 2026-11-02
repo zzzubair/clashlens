@@ -877,13 +877,15 @@
   cursor: help;
 }
 
-/* Above the row's link, so pointing at a bar reads its day out. */
+/* Above the row's link, so pointing at a bar reads its day out: a strip
+   tall enough to read each bar against a clear zero line, gains above and
+   losses below. */
 .recent-days {
   position: relative;
   z-index: 1;
   display: flex;
-  width: 15rem;
-  height: 1.5rem;
+  width: 11rem;
+  height: 2.25rem;
   cursor: default;
   touch-action: manipulation;
 }
@@ -893,7 +895,7 @@
   inset-inline: 0;
   top: 50%;
   height: 1px;
-  background: var(--cl-muted);
+  background: color-mix(in srgb, var(--cl-muted) 55%, transparent);
   content: "";
 }
 
@@ -903,26 +905,29 @@
   flex: 1 1 0;
 }
 
-/* A thin bar in the middle of its day, under half its slot; even a small
-   day stays visible. */
+/* A thin bar in the middle of its day; even a small day stays visible. */
 .recent-day::before {
   position: absolute;
   left: 50%;
-  width: min(45%, 0.5rem);
+  width: 8px;
   height: max(2px, var(--h, 0px));
   translate: -50% 0;
   content: "";
 }
 
+/* Fifty rows of bars stay quiet beside the trophies: a gain is muted
+   bronze, a loss a red bar under the line at least 4px deep, so a small
+   loss reads as a bar, not a stray dot. */
 .recent-day[data-sign="up"]::before {
   bottom: 50%;
-  background: var(--cl-positive);
+  background: color-mix(in srgb, var(--cl-action) 45%, var(--cl-muted));
   border-radius: 2px 2px 0 0;
 }
 
 .recent-day[data-sign="down"]::before {
   top: calc(50% + 1px);
-  background: var(--cl-negative);
+  height: max(4px, var(--h, 0px));
+  background: color-mix(in srgb, var(--cl-negative) 75%, transparent);
   border-radius: 0 0 2px 2px;
 }
 
@@ -955,12 +960,6 @@
 
 .leaderboard-row:has(.recent-tip) {
   z-index: 3;
-}
-
-@media (max-width: 64rem) {
-  .recent-days {
-    width: 10rem;
-  }
 }
 
 /* A phone keeps the numbers; the player page has the days. */

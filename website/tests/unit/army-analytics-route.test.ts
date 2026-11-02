@@ -515,17 +515,13 @@ describe("army analytics route historical reads", () => {
     // it is read against named beside the chart.
     expect(text).toContain("Usage vs 3-star rate Averages: 62.5% 3-star, 50.0% use");
     expect(html.match(/class="army-map-point"/g)).toHaveLength(2);
-    // Both are used alike, so both sit at the right end of the use scale;
-    // each is named beside its own icon, and carries its number in the
-    // table, which a phone draws in place of the icon; the table numbers
-    // its armies whatever the sort.
-    for (const [number, name] of [
-      ["1", "Thrower"],
-      ["2", "Hydra"],
-    ]) {
+    // Both are used alike, so both sit at the right end of the use scale,
+    // each named beside its own icon; the table numbers its armies whatever
+    // the sort.
+    for (const name of ["Thrower", "Hydra"]) {
       expect(html).toMatch(
         new RegExp(
-          `<span class="army-map-point"[^>]* style="--wx:97[.0-9]*%;[^"]*">(?:(?!army-map-point).)*?<span class="army-map-number">${number}</span><span class="army-map-label" data-mode="wide" data-side="[a-z-]+"[^>]*>${name}</span>`,
+          `<span class="army-map-point"[^>]* style="--wx:97[.0-9]*%;[^"]*">(?:(?!army-map-point).)*?<span class="army-map-label" data-mode="wide" data-side="[a-z-]+"[^>]*>${name}</span>`,
         ),
       );
     }

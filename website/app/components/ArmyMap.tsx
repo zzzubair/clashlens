@@ -19,8 +19,8 @@ function rateBand(rates: number[], average: number) {
   return { low, high, step };
 }
 
-/** Round usage steps; the axis starts at the biggest one under every army. */
-const STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5];
+/** Round usage steps; the axis takes the smallest that gives at most six. */
+const STEPS = [0.01, 0.02, 0.05, 0.1, 0.2];
 
 interface Box {
   left: number;
@@ -59,7 +59,6 @@ type Corner = (typeof QUARTERS)[number][0];
 type Point = {
   key: string;
   name: string;
-  number: string;
   usage: number;
   x: number;
   y: number;
@@ -79,7 +78,6 @@ function layout(
   points: Point[],
   guides: { x: number; y: number },
   plot: { width: number; height: number; icon: number; char: number },
-  named: boolean,
 ) {
   const half = plot.icon / 2;
   const at = (point: { x: number; y: number }) => ({
@@ -170,7 +168,7 @@ function layout(
       leader: { x1: number; y1: number; x2: number; y2: number } | null;
     }
   >();
-  for (const point of named ? [...points].sort((a, b) => b.usage - a.usage) : []) {
+  for (const point of [...points].sort((a, b) => b.usage - a.usage)) {
     const { cx, cy } = moved[points.indexOf(point)]!;
     const text = point.name;
     const width = text.length * plot.char + 4;
@@ -235,20 +233,21 @@ function layout(
 }
 
 /**
- * The armies at a glance: how much each is used (across, each step a
- * multiple, so the many little-used armies spread out) against how often it
+ * The armies at a glance: how much each is used (across, from 0 in equal
+ * steps, so distance reads as usage) against how often it
  * three-stars (up), over faint lines every ten points and a dashed cross at
  * the Legend average 3-star rate and the average army's use, its four
- * quarters named. A wide screen draws each army as its troops, named beside
- * them where the name fits; a phone tags each with its number in the table
- * under the chart. Pointing at or tapping an army names it with its numbers.
+ * quarters named. Each army is drawn as its troops, named beside them where
+ * the name fits; pointing at or tapping one names it with its numbers.
+ * Phones don't show it: each row of the table under it carries the same two
+ * numbers as bars, which a 390px scatter could only repeat.
  */
 export function ArmyMap({
   rows,
   usageEnd,
   threeStar,
 }: {
-  /** Named armies only, in the table's order, numbered as the table numbers them. */
+  /** Named armies only, in the table's order. */
   rows: ArmyRow[];
   /** The usage bars' scale end, so the chart and the table end alike. */
   usageEnd: number;
@@ -279,20 +278,17 @@ export function ArmyMap({
     used.map((row) => starRate(row, 3)),
     threeStar,
   );
-  const least = Math.min(...used.map((row) => row.usageRate));
-  // Below the scale's end too, so armies all used alike still spread out.
-  const start =
-    [...STEPS].reverse().find((step) => step <= least && step < usageEnd) ?? least / 2;
-  const span = Math.log(usageEnd / start) || 1;
   // A little room at both ends so no icon sits on the edge.
-  const x = (usage: number) =>
-    3 + Math.min(1, Math.max(0, Math.log(usage / start) / span)) * 94;
+  const x = (usage: number) => 3 + Math.min(1, Math.max(0, usage / usageEnd)) * 94;
   const y = (rate: number) => ((high - rate) / (high - low)) * 100;
   const averageUse = used.reduce((sum, row) => sum + row.usageRate, 0) / used.length;
   const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
   const tick = (value: number) => `${Number((value * 100).toPrecision(2))}%`;
-  // The round steps between the ends, kept clear of the end's own label.
-  const steps = STEPS.filter((step) => step > start && step < usageEnd / 1.6);
+  // 0, the round steps between, kept clear of the end's own label, and the end.
+  const useStep = STEPS.find((step) => usageEnd / step <= 6) ?? 0.5;
+  const steps: number[] = [];
+  for (let value = useStep; value < usageEnd - useStep / 2; value += useStep)
+    steps.push(value);
   // At most five labels up the side.
   const rateStep = (high - low) / bandStep > 4 ? bandStep * 2 : bandStep;
   const rates: number[] = [];
@@ -301,27 +297,18 @@ export function ArmyMap({
   const points = used.map((row) => ({
     key: row.key,
     name: row.label,
-    number: String(rows.indexOf(row) + 1),
     usage: row.usageRate,
     x: x(row.usageRate),
     y: y(starRate(row, 3) * 100),
   }));
   const guides = { x: x(averageUse), y: y(threeStar * 100) };
-  // Until it is measured, a wide screen's plot is about 1,060 by 288
-  // pixels and a phone's 290 by 240, where each army is its picture tagged
-  // with its number, so needs no name beside it.
-  const wide = layout(
-    points,
-    guides,
-    { width: size?.width ?? 1060, height: size?.height ?? 288, icon: 26, char: 6.7 },
-    true,
-  );
-  const narrow = layout(
-    points,
-    guides,
-    { width: size?.width ?? 290, height: size?.height ?? 240, icon: 26, char: 0 },
-    false,
-  );
+  // Until it is measured, the plot is about 1,060 by 288 pixels.
+  const wide = layout(points, guides, {
+    width: size?.width ?? 1060,
+    height: size?.height ?? 288,
+    icon: 26,
+    char: 6.7,
+  });
   return (
     <figure className="army-map">
       <figcaption>
@@ -357,7 +344,7 @@ export function ArmyMap({
           data-axis="use"
           style={{ left: place(guides.x) }}
         />
-        {[start, ...steps, usageEnd].map((value) => (
+        {[0, ...steps, usageEnd].map((value) => (
           <span
             key={value}
             className="army-map-tick"
@@ -379,7 +366,6 @@ export function ArmyMap({
             className="army-map-quarter"
             data-corner={corner}
             data-wide={wide.quarters.has(corner) || undefined}
-            data-narrow={narrow.quarters.has(corner) || undefined}
           >
             {words}
           </span>
@@ -399,12 +385,12 @@ export function ArmyMap({
         </svg>
         {used.map((row, index) => {
           const point = points[index]!;
-          const label = (mode: "wide" | "narrow") => {
-            const placed = (mode === "wide" ? wide : narrow).labels.get(row.key);
-            return placed === undefined ? null : (
+          const placed = wide.labels.get(row.key);
+          const label =
+            placed === undefined ? null : (
               <span
                 className="army-map-label"
-                data-mode={mode}
+                data-mode="wide"
                 data-side={placed.side}
                 style={{
                   transform: `translate(${placed.shift.x}px, ${placed.shift.y}px)`,
@@ -413,44 +399,34 @@ export function ArmyMap({
                 {placed.text}
               </span>
             );
-          };
-          const shift = (mode: typeof wide) => {
-            const spot = mode.spots.get(row.key)!;
-            return spot.away ? spot : null;
-          };
-          const shifted = { wide: shift(wide), narrow: shift(narrow) };
-          const spot = (mode: typeof wide) => mode.spots.get(row.key)!;
+          const spot = wide.spots.get(row.key)!;
+          const moved = spot.away ? spot : null;
           return (
             <Fragment key={row.key}>
-              {(["wide", "narrow"] as const).map((mode) => {
-                const to = shifted[mode];
-                return to === null ? null : (
-                  <svg
-                    key={mode}
-                    className="army-map-leader"
-                    data-mode={mode}
-                    viewBox="0 0 100 100"
-                    preserveAspectRatio="none"
-                  >
-                    <line
-                      x1={point.x.toFixed(3)}
-                      y1={point.y.toFixed(3)}
-                      x2={to.x.toFixed(3)}
-                      y2={to.y.toFixed(3)}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </svg>
-                );
-              })}
-              {/* The army's exact spot: on a wide screen only when its icon
-                  was nudged off it; on a phone always, its picture beside it. */}
-              <span
-                className="army-map-dot"
-                data-named={named === row.key || undefined}
-                data-wide={shifted.wide ? true : undefined}
-                data-narrow
-                style={{ left: place(point.x), top: place(point.y) }}
-              />
+              {moved === null ? null : (
+                <svg
+                  className="army-map-leader"
+                  data-mode="wide"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                >
+                  <line
+                    x1={point.x.toFixed(3)}
+                    y1={point.y.toFixed(3)}
+                    x2={moved.x.toFixed(3)}
+                    y2={moved.y.toFixed(3)}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+              )}
+              {/* The army's exact spot, when its icon was nudged off it. */}
+              {moved === null ? null : (
+                <span
+                  className="army-map-dot"
+                  data-wide
+                  style={{ left: place(point.x), top: place(point.y) }}
+                />
+              )}
               <span
                 className="army-map-point"
                 data-named={named === row.key || undefined}
@@ -458,12 +434,8 @@ export function ArmyMap({
                 data-edge={point.x > 70 ? "end" : point.x < 30 ? "start" : undefined}
                 style={
                   {
-                    "--wx": place(spot(wide).x),
-                    "--wy": place(spot(wide).y),
-                    "--nx": place(spot(narrow).x),
-                    "--ny": place(spot(narrow).y),
-                    "--px": place(point.x),
-                    "--py": place(point.y),
+                    "--wx": place(spot.x),
+                    "--wy": place(spot.y),
                   } as CSSProperties
                 }
                 onClick={() => setNamed(named === row.key ? null : row.key)}
@@ -473,8 +445,7 @@ export function ArmyMap({
                 }}
               >
                 <UnitArt unitKey={row.key} />
-                <span className="army-map-number">{point.number}</span>
-                {label("wide")}
+                {label}
                 <span className="army-map-name">
                   {row.label} · {percent(row.usageRate)} · {percent(starRate(row, 3))}
                 </span>
@@ -483,22 +454,6 @@ export function ArmyMap({
           );
         })}
       </div>
-      {/* A phone's tapped army, read out under the plot: its number, name
-          and both values, so nothing needs looking up in the list below. */}
-      <p className="army-map-readout" aria-hidden="true">
-        {(() => {
-          const row = used.find((each) => each.key === named);
-          if (row === undefined) return "Tap a dot for its army and numbers.";
-          return (
-            <>
-              <b>
-                {rows.indexOf(row) + 1}. {row.label}
-              </b>{" "}
-              · {percent(row.usageRate)} use · {percent(starRate(row, 3))} 3-star
-            </>
-          );
-        })()}
-      </p>
     </figure>
   );
 }

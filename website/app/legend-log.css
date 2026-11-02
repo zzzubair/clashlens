@@ -19,7 +19,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.25rem 1rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 .player-page .log-title > h2 {
   margin: 0;

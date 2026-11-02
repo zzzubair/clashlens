@@ -40,7 +40,7 @@
 .today-slots {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 3px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -55,8 +55,7 @@
   min-height: 2.75rem;
   padding-block: 0.3rem;
   color: var(--cl-positive);
-  background: var(--cl-panel);
-  border-radius: 8px;
+  border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
   font: 700 0.95rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
@@ -65,7 +64,7 @@
    gaps, and the stars are 2.8 of their own size wide. */
 .today-stars {
   display: flex;
-  font-size: clamp(0.625rem, ((100cqi - 21px) / 8 - 8px) / 2.8, 0.8125rem);
+  font-size: clamp(0.625rem, ((100cqi - 42px) / 8 - 8px) / 2.8, 0.8125rem);
   line-height: 1;
 }
 .today-stars .game-stars {
@@ -76,11 +75,9 @@
 }
 .today-side-defense .today-slot {
   color: var(--cl-negative);
-  background: var(--cl-panel);
 }
 .today-slots .today-slot-empty {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--cl-border);
+  border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
 }
 @media (min-width: 48rem) {
   .player-today {
@@ -91,7 +88,6 @@
   }
   .today-slot {
     min-height: 3.1rem;
-    border-radius: 10px;
     font-size: 1rem;
   }
 }
@@ -115,7 +111,6 @@
     gap: 0.1rem;
     min-height: 2.4rem;
     padding: 0.15rem 0.25rem;
-    border-radius: 7px;
     font-size: 1.2rem;
   }
   .today-stars {

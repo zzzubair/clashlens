@@ -359,19 +359,6 @@
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
 }
 
-/* A battle still to play is a faint flat tile, no outline, so the played
-   slots lead and "5 of 8" reads at a glance. */
-:root
-  :is(
-    .dash-star-box-empty,
-    .teaser-tiles > .teaser-tile-empty,
-    .today-slots .today-slot-empty
-  ) {
-  background: color-mix(in srgb, var(--cl-ink) 3.5%, transparent);
-  border-color: transparent;
-  box-shadow: none;
-}
-
 /* One card-title size everywhere: the player page's sections match the
    dashboard's cards. */
 :root .player-page h2 {
@@ -387,28 +374,6 @@
   background: color-mix(in srgb, var(--cl-muted) 45%, transparent);
 }
 
-/* Rankings' last 7 days: a wider, taller strip, so each day's bar can be
-   read against a clear zero line, gains above and losses below. */
-:root .recent-days {
-  width: 11rem;
-  height: 2.25rem;
-}
-:root .recent-days::after {
-  background: color-mix(in srgb, var(--cl-muted) 55%, transparent);
-}
-:root .recent-day::before {
-  width: 8px;
-}
-/* Rankings' days: a gain a dim ember bar, a loss a red bar under the line
-   at least 4px deep, so a small loss reads as a bar, not a stray dot. */
-:root .recent-day[data-sign="up"]::before {
-  background: color-mix(in srgb, var(--cl-action) 75%, transparent);
-}
-:root .recent-day[data-sign="down"]::before {
-  height: max(4px, var(--h, 0px));
-  background: color-mix(in srgb, var(--cl-negative) 75%, transparent);
-}
-
 /* On boards where most rows can be yours (a crew, a watchlist), a wash on
    every row marks nothing: a crew's rows keep the ember edge, a watchlist's
    its "You" label alone, never both. */
@@ -422,13 +387,8 @@
   box-shadow: none;
 }
 
-/* The front page's example reads exactly as the real Legend day card: Now
-   the strongest place, today's change as plain text, no hairlines. */
-:root .teaser-now .rank-mark {
-  color: var(--cl-ink);
-  font-size: 1.25rem;
-  font-weight: 700;
-}
+/* The front page's example reads exactly as the real Legend day card:
+   today's change as plain text, no hairlines. */
 :root .teaser-net {
   padding: 0;
   background: none;
@@ -467,15 +427,9 @@
   padding-block: 0.25rem;
 }
 
-/* Watchlist: one reading order. Names semibold, each column's main number
-   a step lighter than before, the lines under it regular. */
+/* Watchlist: names medium, the lines under each number regular. */
 :root .compare-name {
-  font-weight: 600;
-}
-:root .compare-number {
-  font-size: 1.1875rem;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 :root .compare-lead {
   font-weight: 700;
@@ -519,11 +473,10 @@
   background: var(--v4-page);
 }
 
-/* A watchlist's "vs the watchlist" is a side comparison: plain ink, a size
-   under the gain it explains; its sign says above or below. */
-:root .compare-table td[data-label="Gain vs others"] .compare-number {
+/* A watchlist's "vs the watchlist" is a side comparison: plain ink; its
+   sign says above or below. */
+:root .compare-table td[data-label="Average lead"] .compare-number {
   color: var(--cl-ink);
-  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -561,9 +514,6 @@
   :root .analytics-results-table th > .analytics-scale > :first-child {
     display: none;
   }
-}
-:root .analytics-difference {
-  font-weight: 500;
 }
 /* A phone's log row: the day's net leads; the attacks and defenses behind
    it are a size down and plain. */
@@ -877,12 +827,8 @@
   white-space: nowrap;
 }
 
-/* A watchlist's Now columns step back so the period's gain leads: trophies
-   a size down and today's result in ink (its sign says which way). */
+/* A watchlist's today's result in ink: its sign says which way. */
 @media (min-width: 48rem) {
-  :root .compare-table .compare-trophies {
-    font-size: 1rem;
-  }
   :root .compare-table td.compare-extra > .compare-number {
     color: var(--cl-ink);
   }
@@ -957,19 +903,13 @@
   font-weight: 500;
 }
 
-/* A narrow watchlist row reads the same for every player: the gain, then
-   one line with its per-day average and, when days were missed, "5 of 7
-   days", then the chart. */
+/* A narrow watchlist row reads the same for every player, one line each:
+   the gain, its per-day average, "5 of 7 days" when days were missed, then
+   the chart. */
 @media (max-width: 52rem) {
   :root .compare-table tbody td .compare-net {
     display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 0.5rem;
     row-gap: 0.1rem;
-    align-items: baseline;
-  }
-  :root .compare-table .compare-net > :not(.compare-sub) {
-    grid-column: 1 / -1;
   }
   :root .compare-table .compare-sorted .compare-net .compare-sub-count {
     display: block;
@@ -1014,8 +954,7 @@
 :root body {
   background: var(--v4-page);
 }
-:root .primary-nav a[aria-current="page"]::after,
-:root .meter > span {
+:root .primary-nav a[aria-current="page"]::after {
   background: var(--cl-action);
 }
 :root
@@ -1173,45 +1112,11 @@
   --log-gained: color-mix(in srgb, #8e9f68 75%, transparent);
 }
 
-/* The tapped army's readout is for phones; a pointer names each army in
-   place. */
-@media (min-width: 48rem) {
-  :root .army-map-readout {
-    display: none;
-  }
-}
-
 /* A phone's army list: the picture beside the name over its battle count,
    each number with its difference beside it on the line under them. */
 @media (max-width: 47.99rem) {
   :root .analytics-name-cell {
     align-items: center;
-  }
-  :root .army-map-point .army-map-name {
-    display: none;
-  }
-  /* A finger-sized target round each small dot and number. */
-  :root .army-map-point::before {
-    position: absolute;
-    inset: 50% auto auto 50%;
-    width: 2.75rem;
-    height: 2.75rem;
-    translate: -70% -50%;
-    content: "";
-  }
-  :root .army-map-dot[data-named] {
-    outline: 2px solid var(--cl-ink);
-    outline-offset: 2px;
-  }
-  :root .army-map-readout {
-    min-height: 1.4rem;
-    margin: 0.6rem 0 0;
-    color: var(--cl-muted);
-    font-size: 0.875rem;
-  }
-  :root .army-map-readout b {
-    color: var(--cl-ink);
-    font-weight: 650;
   }
   :root .analytics-results-table tbody .unit-art img,
   :root .analytics-results-table tbody .analytics-leftover-art::before {
@@ -1228,7 +1133,7 @@
     display: inline;
     margin-left: 0.4rem;
     font-size: 0.8125rem;
-    font-weight: 450;
+    font-weight: 400;
   }
   :root .analytics-name-battles {
     font-weight: 450;
@@ -1258,19 +1163,13 @@
    (trophies, or the sorted measure) keeps the weight, and the numbers
    beside it step down. */
 :root :is(.dash-name, .analytics-name, .rival-table td:nth-child(2), .crew-who b) {
-  font-weight: 600;
+  font-weight: 500;
 }
 :root .rival-table .rival-you td:nth-child(2) {
-  font-weight: 700;
+  font-weight: 650;
 }
 :root .rival-table td:nth-child(4) {
   font-weight: 500;
-}
-:root .analytics-results-table td .analytics-value {
-  font-weight: 550;
-}
-:root .analytics-results-table td[data-sorted] .analytics-value {
-  font-weight: 650;
 }
 
 /* A crew's header on a phone: Invite stays the one button; Members and Edit
@@ -1348,42 +1247,6 @@
   }
   :root .player-page .log-day-live .log-swing {
     margin-left: -0.75rem;
-  }
-}
-
-/* A phone's army chart: every army is one ember dot at its exact spot
-   with its list number beside it; the pictures are in the list under it,
-   and a tap names the army. */
-@media (max-width: 47.99rem) {
-  /* Above its number, but taps pass through to the army's target. */
-  :root .army-map-dot[data-narrow] {
-    z-index: 1;
-    pointer-events: none;
-    width: 10px;
-    height: 10px;
-    background: var(--cl-action);
-    box-shadow: 0 0 0 1.5px var(--cl-paper);
-  }
-  :root .army-map-leader[data-mode="narrow"] {
-    display: none;
-  }
-  :root .army-map-point {
-    top: var(--py);
-    left: var(--px);
-    translate: 9px -50%;
-  }
-  :root .army-map-point .unit-art {
-    display: none;
-  }
-  :root .army-map-number {
-    position: static;
-    min-width: 0;
-    height: auto;
-    padding: 0;
-    color: var(--cl-ink);
-    background: none;
-    font-size: 0.8125rem;
-    font-weight: 650;
   }
 }
 

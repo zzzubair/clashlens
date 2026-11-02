@@ -86,7 +86,7 @@
   position: absolute;
   color: var(--cl-faint);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
 }
 .army-map-tick[data-axis="rate"] {
@@ -179,10 +179,6 @@
   width: 0.875rem;
   height: 0.875rem;
 }
-/* A phone's stand-in for the troops: the army's number in the table. */
-.army-map-number {
-  display: none;
-}
 /* Its name beside it, on the side worked out to fit this screen: clear of
    the other icons, names and the average lines; its number where the name
    has no room. Faint lines pass behind it. */
@@ -195,7 +191,7 @@
   background: var(--cl-paper);
   border-radius: 3px;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1rem;
   white-space: nowrap;
   translate: 0 -50%;
@@ -863,24 +859,21 @@
   transform: rotate(-45deg);
 }
 
-/* Numbers: the value, then a small note under it. */
+/* Numbers: the value, then a small regular note under it. */
 .analytics-value {
   display: block;
-  font-size: 0.98rem;
-  font-weight: 650;
+  font-size: 1rem;
+  font-weight: 550;
 }
 .analytics-note-value {
   display: block;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
 }
-/* Usage and the 3-star rate are the two numbers to scan: big, Usage over
-   its ember bar and 3-star beside its difference from the average. */
-.analytics-results-table
-  :is([data-column="usage-rate"], [data-column="three-star-rate"])
-  .analytics-value {
+/* One big number a row: the column the table is sorted by. */
+.analytics-results-table td[data-sorted] .analytics-value {
   font-family: var(--cl-font);
   font-size: 1.2rem;
   font-weight: 700;
@@ -889,7 +882,6 @@
 }
 .analytics-results-table td .meter {
   position: relative;
-  height: 0.4rem;
   overflow: visible;
 }
 .analytics-results-table td[data-column="three-star-rate"] .meter > span {
@@ -901,8 +893,8 @@
 .analytics-difference {
   margin-left: 0.45rem;
   color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-size: 0.8125rem;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -930,11 +922,6 @@
    headings. */
 .analytics-phone-key {
   display: none;
-}
-.analytics-results-table
-  td[data-sorted]:not([data-column="usage-rate"], [data-column="three-star-rate"])
-  .analytics-value {
-  color: var(--cl-action-text);
 }
 
 /* ---------- Phones: each row is a small card ---------- */
@@ -1025,65 +1012,10 @@
   .analytics-results.open-board .analytics-results-table tbody > tr > :is(td, th) {
     border-bottom: 0;
   }
-  /* The same chart across the phone, taller for its height, each army its
-     number in the table under it; a tap names it. */
+  /* No chart: each army's row below shows its use and 3-star rate as bars,
+     which a phone-sized scatter could only repeat. */
   .army-map {
-    --map-h: 15rem;
-    margin: 0.25rem 0 1rem;
-  }
-  .army-map-plot {
-    margin: 0 0.75rem 2.75rem 3.5rem;
-  }
-  .army-map-axis[data-axis="rate"] {
-    left: -2.85rem;
-  }
-  .army-map-quarter[data-wide] {
     display: none;
-  }
-  .army-map-quarter[data-narrow] {
-    display: block;
-  }
-  .army-map-point {
-    top: var(--ny);
-    left: var(--nx);
-  }
-  .army-map-label[data-mode="wide"],
-  .army-map-leader[data-mode="wide"],
-  .army-map-dot[data-wide]:not([data-narrow]) {
-    display: none;
-  }
-  .army-map-leader[data-mode="narrow"],
-  .army-map-dot[data-narrow] {
-    display: block;
-  }
-  /* The army's own picture, its number in the table a small tag on its
-     corner. */
-  .army-map-point .unit-art img {
-    width: 1.5rem;
-    height: 1.5rem;
-  }
-  .army-map-number {
-    position: absolute;
-    top: -0.4rem;
-    right: -0.5rem;
-    display: grid;
-    place-items: center;
-    min-width: 0.875rem;
-    height: 0.875rem;
-    padding-inline: 0.15rem;
-    color: var(--cl-ink);
-    background: var(--cl-paper);
-    border-radius: 0.5rem;
-    font-size: 0.5625rem;
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-  }
-  .army-map-point[data-named] .army-map-number {
-    color: var(--cl-action-text);
-  }
-  .army-map-name {
-    font-size: 0.8125rem;
   }
 
   .analytics-results-table,

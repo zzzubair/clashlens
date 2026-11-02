@@ -628,7 +628,7 @@ describe("Bases you attacked", () => {
     const plain = text(html);
     // The slots' key is one line over the headings, each mark with its word.
     expect(plain).toContain(
-      "Tripled Held Not yet You Player Your hit Their defenses Strength Hard one",
+      "Tripled Held Not yet You Player Your hit Their defenses Strength held, pts vs avg Hard one",
     );
     expect(plain.indexOf("Hard one")).toBeLessThan(plain.indexOf("Easy one"));
     expect(plain.indexOf("Easy one")).toBeLessThan(plain.indexOf("Early"));
