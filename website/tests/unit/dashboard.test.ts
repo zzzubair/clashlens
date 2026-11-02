@@ -460,7 +460,7 @@ describe("Legend clock", () => {
     expect(html).toContain('title="Defense at 11:00 against Opponent: 1 star, 80%, −16');
     expect(html).toContain(":\n07:10 on Opponent: 3 stars, 100%, +40 trophies\n07:25");
     expect(html.match(/class="clock-tick clock-tick-attack"/g)).toHaveLength(2);
-    expect(text(html)).toContain("Reset Now 20h 00m to Reset at 05:00");
+    expect(text(html)).toContain("05:00 11:00 17:00 23:00 Now 20h 00m to Reset at 05:00");
   });
 
   it("names the upcoming Reset in local time across a clock change", () => {
@@ -513,7 +513,7 @@ describe("Legend day card", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
     expect(html).toContain("Projected place #3,000 at Reset. ");
     expect(html).toContain(
-      "left, and gets closer through the day. Next Reset range #1 #12,270",
+      "left, and gets closer through the day. Next Reset range best #1 worst #12,270",
     );
     expect(html).toContain(
       "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
@@ -545,7 +545,7 @@ describe("Legend day card", () => {
     expect(html).toContain("Net today +66 today");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
-    expect(html).toContain("Next Reset #95 – #760 estimate");
+    expect(html).toContain("Next Reset best #95 – worst #760 estimate");
     expect(html).toContain("Attacks 2/8 +71");
     expect(html).toContain("Defenses 1/8 −5");
     // The defenses still to come and their automatic loss stay off the card.
@@ -582,7 +582,7 @@ describe("Legend day card", () => {
       expect(html).not.toContain("0/8");
       expect(html).toContain("Trophies 5,696");
       expect(html).toContain("Now #318");
-      expect(html).toContain("Next Reset #95 – #760");
+      expect(html).toContain("Next Reset best #95 – worst #760");
     }
   });
 });

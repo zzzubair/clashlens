@@ -321,8 +321,6 @@ export function OpponentsCard({
                 ? "+42 pts held 42 points more often."
                 : "+8 lost 8 fewer a defense."}
             </p>
-            {/* A phone keeps the slots' key here. */}
-            <SlotsKey />
           </InfoTip>
         ) : null
       }

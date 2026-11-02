@@ -1,7 +1,7 @@
 /* Standings and search: the front page, Rankings and /search, phones first.
    Standings tables keep rank, player and trophies on a phone and add clan and
    last update when there is room. */
-/* Tables and numbers set their own even figures; prose keeps Inter's own
+/* Tables and numbers set their own even figures; prose keeps Archivo's own
    hyphens and dashes, which even figures would widen. */
 .home-page,
 .rankings-page {
@@ -179,7 +179,7 @@
   display: inline;
   color: var(--cl-ink);
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 650;
   text-decoration: none;
 }
 
@@ -204,7 +204,7 @@
 .home-page .search-context span {
   order: -1;
   color: var(--cl-ink);
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .home-page .search-result-profile > span {
@@ -223,7 +223,7 @@
   background: var(--cl-sky-soft);
   font-family: var(--cl-font);
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.5;
   vertical-align: 0.1em;
   white-space: nowrap;
@@ -343,14 +343,16 @@
 /* Trophies, the number a Clasher came for, in the game's own face. */
 .trophy-cell strong {
   color: var(--cl-ink);
-  font-family: var(--cl-font-score);
-  font-size: 1.3rem;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
 }
 
-/* The game's trophy, about as tall as the numbers' capitals. */
+/* The column's header names trophies, so rows carry no trophy mark. */
 .leaderboard-table .trophy-mark {
+  display: none;
   width: 1.2rem;
   height: 1.2rem;
   margin-right: 0.25rem;
@@ -476,30 +478,8 @@
   border-bottom-color: var(--cl-outline);
 }
 
-/* Gold, pewter and bronze plates, and their colours, are in brand.css. The
-   podium's rows also catch a wash of their metal from the left, at the same
-   height and type as every other row. */
-.leaderboard-row[data-podium-rank] {
-  --podium: var(--cl-podium-1);
-  --podium-wash: 16%;
-}
-
-.leaderboard-row[data-podium-rank="3"] {
-  --podium: var(--cl-podium-3);
-}
-
-:root
-  :is(.tracked-leaderboard-viewport, .home-leaderboard)
-  tbody
-  .leaderboard-row[data-podium-rank] {
-  /* Once across the row: a repeat showed as a thin edge at its right end. */
-  background: linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--podium) var(--podium-wash), transparent),
-      transparent 60%
-    )
-    no-repeat;
-}
+/* Gold, pewter and bronze plates, and their colours, are in brand.css; the
+   podium's rows are otherwise like every other row. */
 
 /* The Clasher's own row and the player a jump opened, as watchlists and
    crews mark theirs: an ember edge at the start of the row and a light
@@ -616,12 +596,12 @@
    them off, so the chart, Today and Trophies sit together at the right; each
    row is one line. A phone puts the clan under the name instead. */
 .leaderboard-table .player-cell {
-  width: 55%;
+  width: 50%;
   max-width: 0;
 }
 
 .leaderboard-table .clan-cell {
-  width: 45%;
+  width: 50%;
   max-width: 0;
   overflow: hidden;
   color: var(--cl-muted);
@@ -700,8 +680,9 @@
     width: 0.45rem;
     height: 0.45rem;
     margin-top: -0.25rem;
-    border-top: 2px solid var(--cl-muted);
-    border-right: 2px solid var(--cl-muted);
+    border-top: 1.5px solid var(--cl-faint);
+    border-right: 1.5px solid var(--cl-faint);
+    opacity: 0.6;
     transform: rotate(45deg);
     content: "";
     pointer-events: none;

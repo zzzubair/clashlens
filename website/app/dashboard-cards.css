@@ -23,7 +23,7 @@
 }
 
 .cutoff-rows b {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.05rem;
   font-weight: 700;
   text-align: right;
@@ -31,7 +31,7 @@
 
 .cutoff-rows li > span:last-child {
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   text-align: right;
 }
 
@@ -41,7 +41,7 @@
 .rival-you {
   background: var(--cl-you-wash);
   box-shadow: inset 3px 0 0 var(--cl-action);
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* ---------- Rivals watch and Group watch ---------- */
@@ -59,7 +59,7 @@
   padding: 0.2rem 0.35rem;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   text-align: right;
 }
 
@@ -87,14 +87,14 @@
 
 /* The numbers in the scoreboard font, trophies largest. */
 .rival-table td:nth-child(n + 3) {
-  font-family: var(--cl-font-score);
-  font-size: 1.05rem;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .rival-table td:nth-child(3) {
-  font-size: 1.15rem;
+  font-size: 0.9375rem;
   font-weight: 700;
 }
 
@@ -109,7 +109,7 @@
 }
 
 .rival-table .rival-you td:nth-child(2) {
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .group-table :is(th, td):first-child {
@@ -119,7 +119,7 @@
 .rival-moved {
   margin-left: 0.2rem;
   font-size: 0.875rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* Beside a taller card (the heat map), the rows share the extra height
@@ -190,7 +190,7 @@
   border: 0;
   border-radius: 8px;
   font: inherit;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* ---------- Season heat map ---------- */
@@ -215,7 +215,7 @@
 
 .heat-summary dd {
   margin: 0;
-  font-weight: 800;
+  font-weight: 650;
   white-space: nowrap;
 }
 
@@ -295,7 +295,7 @@
 }
 
 .graph-foot b {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   font-weight: 700;
 }
@@ -325,7 +325,7 @@
   flex: 0 1 auto;
   justify-items: end;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   text-align: right;
 }
 
@@ -366,7 +366,7 @@
 
 .consistency-split b {
   margin-left: 0.1rem;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1rem;
   font-weight: 700;
 }
@@ -465,7 +465,7 @@
   display: grid;
   place-items: center;
   color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 0.875rem;
   font-weight: 700;
 }
@@ -540,7 +540,8 @@
   }
 
   .rival-table :is(th, td):nth-child(4) {
-    width: 3.8rem;
+    width: 4.5rem;
+    padding-left: 0.75rem;
   }
 
   .group-table :is(th, td):first-child {

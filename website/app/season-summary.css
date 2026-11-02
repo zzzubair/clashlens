@@ -84,8 +84,8 @@
 }
 .player-page .season-summary dd {
   margin: 0.3rem 0 0;
-  font-family: var(--cl-font-score);
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 .player-page .season-summary-headline dd {
@@ -135,7 +135,7 @@
 }
 .player-page .season-summary-rank dd {
   color: var(--cl-action-text);
-  font-size: 2.1rem;
+  font-size: 1.75rem;
 }
 /* Each column as wide as its label, so "Reset trophies" keeps one line. */
 .player-page .season-summary-headline:not(:has(> .season-summary-rank)) {
@@ -197,9 +197,9 @@
 }
 .player-page .season-summary-table tbody td:nth-child(2) {
   color: var(--cl-muted);
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.2rem;
-  font-weight: 700;
+  font-weight: 650;
 }
 /* The counts stay in the table for screen readers; the row under shows them. */
 .player-page .season-summary-table td[data-stars] {
@@ -240,9 +240,9 @@
 .player-page .season-summary-key b {
   grid-column: 1 / -1;
   color: var(--cl-ink);
-  font-family: var(--cl-font-score);
-  font-size: 1.5rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1.3rem;
+  font-weight: 650;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -302,7 +302,7 @@
   border-top: 1px solid var(--cl-border);
 }
 .player-page .season-summary-averages dd {
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   line-height: 1;
 }
 .player-page .season-summary-sides > .section-note {
@@ -341,10 +341,10 @@
     padding: 1.25rem 0 1.4rem;
   }
   .player-page .season-summary-headline dd {
-    font-size: 1.85rem;
+    font-size: 1.3rem;
   }
   .player-page .season-summary-rank dd {
-    font-size: 2.4rem;
+    font-size: 2rem;
   }
   .player-page .season-summary-headline:has(> .season-summary-rank) {
     grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
@@ -369,7 +369,7 @@
     font-size: 0.9375rem;
   }
   .player-page .season-summary-key b {
-    font-size: 1.85rem;
+    font-size: 1.3rem;
   }
   /* Two columns for each side's pair, and a gap as wide as the sides' between
      them, so each pair starts under its own side. */
@@ -383,7 +383,7 @@
     border-left: 0;
   }
   .player-page .season-summary-averages dd {
-    font-size: 1.6rem;
+    font-size: 1.375rem;
   }
 }
 /* A wide screen gives the headline a column of its own, its numbers stacked
@@ -437,14 +437,14 @@
     .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
     .season-summary-headline
     dd:not(.summary-words) {
-    font-size: 1.9rem;
+    font-size: 1.375rem;
   }
   .player-page
     .season-summary:has(.season-summary-sides):not(:has(.season-heat-map))
     .season-summary-headline
     > div:first-child
     dd:not(.summary-words) {
-    font-size: 2.75rem;
+    font-size: 2.25rem;
   }
   .player-page .season-summary > .season-summary-sides {
     display: flex;

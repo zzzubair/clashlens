@@ -14,7 +14,7 @@
 .legend-clock-dial {
   position: relative;
   width: 100%;
-  max-width: 20rem;
+  max-width: 14rem;
   container-type: inline-size;
 }
 
@@ -59,15 +59,15 @@
    ending at now's dot. */
 .clock-dial {
   fill: none;
-  stroke: color-mix(in srgb, var(--cl-outline) 50%, transparent);
-  stroke-width: 3;
+  stroke: color-mix(in srgb, var(--cl-outline) 45%, transparent);
+  stroke-width: 2;
 }
 
 .clock-gone {
   fill: none;
-  stroke: var(--cl-brand-orange);
+  stroke: color-mix(in srgb, var(--cl-brand-orange) 80%, transparent);
   stroke-linecap: round;
-  stroke-width: 5;
+  stroke-width: 2.5;
 }
 
 /* Now: a clear dot, ringed in the card's own colour; no glow, so the
@@ -80,7 +80,7 @@
 
 .clock-now-label {
   fill: var(--cl-ink);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -89,7 +89,7 @@
    an attack in ember outside it, a defense in ink inside it. */
 .clock-tick {
   stroke-linecap: round;
-  stroke-width: 3.5;
+  stroke-width: 3;
 }
 
 .clock-tick-attack {
@@ -104,12 +104,12 @@
   pointer-events: none;
 }
 
-/* The Reset named over the dial's top, in ember. */
-.clock-reset-label {
-  fill: var(--cl-action-text);
-  font-size: 12px;
-  font-weight: 800;
-  text-anchor: middle;
+/* The Reset and every six hours after it, faint outside the dial. */
+.clock-hour {
+  fill: var(--cl-muted);
+  font-size: 17px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .clock-countdown,
@@ -119,15 +119,16 @@
 
 .clock-countdown {
   fill: var(--cl-ink);
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 34px;
+  letter-spacing: -0.02em;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
 .clock-caption {
   fill: var(--cl-muted);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -195,7 +196,7 @@
   .legend-clock:not([data-full]) .legend-clock-key,
   .legend-clock:not([data-full]) .clock-mark,
   .legend-clock:not([data-full])
-    :is(.clock-tick, .clock-reset-label, .clock-countdown, .clock-caption) {
+    :is(.clock-tick, .clock-hour, .clock-countdown, .clock-caption) {
     display: none;
   }
 
@@ -208,8 +209,8 @@
   /* The box leaves room for the battle tracks; the margin takes it back,
      and the ring's lines thicken to read at this size. */
   .legend-clock:not([data-full]) .legend-clock-dial {
-    width: 3.2rem;
-    margin: -0.35rem;
+    width: 4rem;
+    margin: -0.45rem -0.75rem;
   }
 
   .legend-clock:not([data-full]) .clock-dial {
@@ -241,7 +242,8 @@
   .legend-clock-summary b {
     display: block;
     color: var(--cl-ink);
-    font: 700 1.6rem/1 var(--cl-font-score);
+    font: 700 1.5rem/1 var(--cl-font);
+    letter-spacing: -0.02em;
     white-space: nowrap;
   }
 
@@ -313,7 +315,8 @@
     .legend-clock-key b {
       display: block;
       margin-bottom: 0.15rem;
-      font: 700 2.25rem/1 var(--cl-font-score);
+      font: 700 2rem/1 var(--cl-font);
+      letter-spacing: -0.02em;
     }
 
     .legend-clock-key .clock-key-tick {
@@ -409,7 +412,7 @@
 }
 
 .clock-detail-row b {
-  font-family: var(--cl-font-score);
-  font-size: 1.1rem;
+  font-family: var(--cl-font);
+  font-size: 1rem;
   text-align: right;
 }

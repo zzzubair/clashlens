@@ -51,7 +51,7 @@
   font-size: 1.4rem;
   font-weight: 700;
   line-height: 1.1;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.02em;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -416,17 +416,18 @@
     content: "";
   }
 
-  /* Under the floating bar, the page fades into its own colour from 1rem
-     above the bar to the screen's bottom and side edges, so no half-cut line
-     of text shows round the bar. Taps pass through it. */
+  /* Under the floating bar, the page fades into its own colour from the
+     bar's top edge to its lower half and on to the screen's bottom and side
+     edges, so no half-cut line of text shows below the bar while the page
+     stays in view above it. Taps pass through it. */
   .bottom-tabs::after {
     position: absolute;
     z-index: -2;
-    top: -1rem;
+    top: 0;
     right: calc(50% - 50vw);
     bottom: calc(-1rem - env(safe-area-inset-bottom, 0px));
     left: calc(50% - 50vw);
-    background: linear-gradient(transparent, var(--cl-paper) 1rem);
+    background: linear-gradient(transparent, var(--cl-paper) 2.25rem);
     pointer-events: none;
     content: "";
   }

@@ -156,25 +156,6 @@ export function TrophyLine({
           aria-hidden="true"
           focusable="false"
         >
-          <defs>
-            <linearGradient id="trophy-line-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--cl-brand-orange)" stopOpacity="0.22" />
-              <stop offset="1" stopColor="var(--cl-brand-orange)" stopOpacity="0" />
-            </linearGradient>
-            {/* Drawn across the whole width, so the solid and dashed parts share it. */}
-            <linearGradient
-              id="trophy-line-stroke"
-              gradientUnits="userSpaceOnUse"
-              x1="0"
-              y1="0"
-              x2={WIDTH}
-              y2="0"
-            >
-              {/* Text colours, so the line reads on light paper as on dark. */}
-              <stop offset="0" stopColor="var(--cl-star)" />
-              <stop offset="1" stopColor="var(--cl-brand-orange)" />
-            </linearGradient>
-          </defs>
           {ticks.map((tick) => (
             <line
               key={tick}
@@ -201,18 +182,19 @@ export function TrophyLine({
           <path
             className="trophy-line-area"
             d={`${line} L${WIDTH} ${HEIGHT} L0 ${HEIGHT} Z`}
-            fill="url(#trophy-line-fill)"
+            fill="var(--cl-brand-orange)"
+            fillOpacity={0.06}
           />
           <path
             className="trophy-line-path"
             d={steps(false)}
-            stroke="url(#trophy-line-stroke)"
+            stroke="var(--cl-action)"
             vectorEffect="non-scaling-stroke"
           />
           <path
             className="trophy-line-path trophy-line-gap"
             d={steps(true)}
-            stroke="url(#trophy-line-stroke)"
+            stroke="var(--cl-action)"
             vectorEffect="non-scaling-stroke"
           />
         </svg>
@@ -223,7 +205,7 @@ export function TrophyLine({
             aria-hidden="true"
           />
         )}
-        {/* A dot at each Reset; the last, now, glows. */}
+        {/* A dot at each Reset; the last, now, is filled. */}
         {marks.map(([slot, value], i) => (
           <span
             key={slot}

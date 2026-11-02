@@ -409,11 +409,11 @@ describe("group comparison", () => {
     expect(html.match(/compare-number[^"]* compare-lead"/g)).toHaveLength(2);
     // The crown is keyed once, in the line under the title.
     expect(html).toContain(
-      '<span class="compare-lead-key" aria-hidden="true"> · <span class="compare-crown"></span>best in this watchlist</span>',
+      '<span class="compare-lead-key" aria-hidden="true"><span class="compare-crown"></span>best in this watchlist</span>',
     );
     // The title says who the list holds and the Clasher's own beside it.
     expect(html).toContain(
-      '2 watched + 1 yours<span class="compare-span-days"> · 3 finished days</span>',
+      '<span>2 watched + 1 yours</span><span class="compare-span-days">3 finished days</span>',
     );
     // A phone's two headings sort; the measure on screen is the sorted one.
     expect(html).toContain(
@@ -498,24 +498,30 @@ describe("trophies gained chart labels", () => {
     expect(labels.find((label) => label.name === "Ember")!.shade).toBe("1");
     expect(labels.find((label) => label.name === "Ember Mini")!.shade).toBe("2");
     expect(labels.find((label) => label.name === "Lou")!.shade).toBeUndefined();
-    expect(html).toContain("data-two-yours");
   });
 
-  it("lists the names under a phone's chart when they can't all fit beside it", () => {
-    // Eight names are too many for a phone's short chart, not a wide one's.
-    expect(html).toMatch(/<figure class="gain-lines" data-list="narrow"/);
+  it("lists the names under the chart, which a phone always shows there", () => {
+    // Eight names still fit beside a wide screen's chart.
+    expect(html).toMatch(/<figure class="gain-lines"(?! data-list)/);
+    // Each keyed by its line's colour: yours ember then gold, the others in
+    // three hues of their own in turn.
     const listed = [
-      ...html.matchAll(/<li( data-shade="\d")?><span class="gain-lines-name">([^<]+)</g),
-    ].map(([, shade, name]) => `${name}${shade ? " (yours)" : ""}`);
+      ...html.matchAll(
+        /<li( data-shade="(\d)")?(?: data-hue="(\d)")?><span class="gain-lines-name">([^<]+)</g,
+      ),
+    ].map(
+      ([, , shade, hue, name]) =>
+        `${name}${shade ? ` you${shade}` : ""}${hue ? ` hue${hue}` : ""}`,
+    );
     expect(listed).toEqual([
-      "Ember (yours)",
-      "Echo jr",
-      "Juno FR",
-      "Vera JP",
-      "Arjun IN",
-      "Kai",
-      "Ember Mini (yours)",
-      "Lou",
+      "Ember you1",
+      "Echo jr hue0",
+      "Juno FR hue1",
+      "Vera JP hue2",
+      "Arjun IN hue0",
+      "Kai hue1",
+      "Ember Mini you2",
+      "Lou hue2",
     ]);
   });
 

@@ -1,0 +1,1423 @@
+/* ======================================================================
+   "Quiet glass", over brand.css (loaded right after it): the data is
+   loud, the frame is quiet.
+   - Two surfaces: the live cards (Legend day, Legend clock, a player's or
+     crew's head) are lit glass with a soft ember corner; every other card
+     is flat, a faint tint with a hairline edge and no shadow.
+   - Words in Archivo; the scoreboard face only for a page's big numbers.
+   - Card titles are short labels, not banners, and carry no icon.
+   - Ember only marks what you can press, where you are, and you.
+   ====================================================================== */
+:root {
+  --v4-page: #efe6db;
+  --v4-ink: #1d1712;
+  --v4-muted: #67594d;
+  --v4-faint: #6f6256;
+  --v4-line: rgb(60 35 15 / 0.08);
+  --v4-line-strong: rgb(60 35 15 / 0.14);
+  --v4-glass: rgb(255 252 248 / 0.72);
+  --v4-glass-hi: rgb(255 252 248 / 0.94);
+  --v4-glass-edge: rgb(110 70 30 / 0.1);
+  --v4-glass-lit: inset 0 1px 0 rgb(255 255 255 / 0.9);
+  --v4-glass-drop: 0 1px 2px rgb(60 35 15 / 0.04);
+  --v4-hero-drop: 0 1px 2px rgb(60 35 15 / 0.04), 0 6px 18px -8px rgb(80 45 15 / 0.12);
+  --v4-fill: rgb(60 35 15 / 0.045);
+  --v4-fill-2: rgb(60 35 15 / 0.08);
+  --v4-ember: #e8720c;
+  --v4-ember-text: #a84a06;
+  --v4-ember-wash: rgb(255 138 31 / 0.08);
+  --v4-up: #1f7a44;
+  --v4-down: #b8382b;
+  --v4-radius: 12px;
+  --v4-radius-sm: 10px;
+  --v4-ambient: none;
+  --cl-paper: var(--v4-page);
+  --cl-ink: var(--v4-ink);
+  --cl-muted: var(--v4-muted);
+  --cl-faint: var(--v4-faint);
+  --cl-border: var(--v4-line);
+  --cl-positive: var(--v4-up);
+  --cl-negative: var(--v4-down);
+  --cl-panel: var(--v4-fill);
+  --cl-raised: var(--v4-fill-2);
+  --cl-header-bg: rgb(239 230 219);
+  --cl-header-soft: var(--v4-fill);
+  --cl-header-muted: var(--v4-muted);
+  --cl-sheet-fill: var(--v4-glass);
+  --cl-sheet-solid: #fbf8f5;
+  --cl-sheet-line: var(--v4-line);
+  --cl-sheet-border: var(--v4-glass-edge);
+  --cl-sheet-edge: var(--v4-glass-lit);
+  --cl-sheet-shadow: var(--v4-glass-drop);
+  --cl-card-radius: var(--v4-radius);
+  --cl-radius: var(--v4-radius-sm);
+  --cl-hero-radius: 20px;
+  --cl-you-wash: var(--v4-ember-wash);
+  --cl-action-text: var(--v4-ember-text);
+  --cl-control-fill: rgb(255 255 255 / 0.7);
+  --cl-control-fill-hover: #fff;
+  --cl-control-edge: var(--v4-line-strong);
+  --cl-page-hero-glow: transparent;
+}
+:root[data-theme="dark"] {
+  --v4-page: #0c0a09;
+  --v4-ink: #f3ece6;
+  --v4-muted: #bdb0a3;
+  --v4-faint: #aa9d91;
+  --v4-line: rgb(255 235 215 / 0.07);
+  --v4-line-strong: rgb(255 235 215 / 0.13);
+  --v4-glass: rgb(255 240 228 / 0.03);
+  --v4-glass-hi: rgb(255 240 228 / 0.065);
+  --v4-glass-edge: rgb(255 235 215 / 0.075);
+  --v4-glass-lit: inset 0 1px 0 rgb(255 245 235 / 0.06);
+  --v4-glass-drop: 0 1px 0 rgb(0 0 0 / 0.25);
+  --v4-hero-drop: 0 24px 48px -24px rgb(0 0 0 / 0.7);
+  --v4-fill: rgb(255 240 228 / 0.05);
+  --v4-fill-2: rgb(255 240 228 / 0.09);
+  --v4-ember: #ff8f2e;
+  --v4-ember-text: #ffa45a;
+  --v4-ember-wash: rgb(255 140 40 / 0.07);
+  --v4-up: #8bbf84;
+  --v4-down: #f2836f;
+  --v4-ambient: none;
+  --cl-header-bg: rgb(12 10 9);
+  --cl-sheet-solid: #151210;
+  --cl-control-fill: rgb(255 240 228 / 0.06);
+  --cl-control-fill-hover: rgb(255 240 228 / 0.11);
+}
+:root body {
+  background: var(--v4-ambient), var(--v4-page);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* Surfaces: the flat card, the default. */
+:root
+  :is(
+    .dash-card,
+    .home-leaderboard,
+    .standings-board,
+    .season-summary,
+    .legend-log,
+    .group-card,
+    .compare-board,
+    .linked-player-card,
+    .crew-board,
+    .crew-panel,
+    .analytics-results,
+    .search-results,
+    .table-wrap,
+    .metric-card,
+    .notice,
+    .empty-state,
+    .form-panel,
+    .analytics-empty,
+    .dash-message,
+    .settings-group
+  ) {
+  background: var(--v4-glass);
+  border: 1px solid var(--v4-glass-edge);
+  border-radius: var(--v4-radius);
+  box-shadow: none;
+}
+:root :is(.dash-card, .crew-board, .group-card) {
+  background: var(--v4-glass);
+  box-shadow: none;
+}
+:root :is(.dash-card, .crew-board, .group-card)::after {
+  content: none;
+}
+/* Open sections: a board or chart that isn't live sits on the page under
+   a hairline, with no box, so only the live cards read as objects. */
+:root
+  :is(
+    .dash-card:not([data-card="legend-day"], [data-card="legend-clock"]),
+    .home-leaderboard,
+    .standings-board,
+    .season-summary,
+    .legend-log,
+    .group-card,
+    .compare-board,
+    .crew-board,
+    .crew-panel:not(.crew-head),
+    .analytics-results
+  ) {
+  padding-inline: 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--v4-line-strong);
+  border-radius: 0;
+}
+/* The live cards: a surface a step brighter than the page with a hairline
+   edge; no glow, no lit edge, no drop shadow. */
+:root
+  :is(
+    .dash-card[data-card="legend-day"],
+    .dash-card[data-card="legend-clock"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  ) {
+  background: var(--v4-glass-hi);
+  border: 1px solid var(--v4-glass-edge);
+  border-radius: 18px;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root
+  :is(
+    .dash-card[data-card="legend-day"],
+    .dash-card[data-card="legend-clock"],
+    .player-page .player-hero,
+    .crew-head,
+    .front-teaser
+  )::after {
+  content: none;
+}
+
+/* Type: Archivo for words, tight and calm; page titles take the condensed
+   scoreboard face of the trophy counts, the site's one display voice. */
+:root h1,
+:root .page-hero h1 {
+  font-family: var(--cl-font-score);
+  font-size: clamp(2.125rem, 1.7rem + 1.4vw, 2.75rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+:root h2 {
+  font-family: var(--cl-font);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+:root .dash-card h2 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+:root .dash-card h2 > .dash-icon {
+  display: none;
+}
+:root .dash-card h2 small,
+:root .dash-card h2 .dash-card-sub {
+  color: var(--cl-muted);
+  font-weight: 500;
+}
+:root .dash-card {
+  gap: 0.875rem;
+  padding: 1.125rem 1.25rem 1.25rem;
+}
+:root .page-hero {
+  margin-bottom: 1.25rem;
+  padding-top: 0.5rem;
+  border-image: none;
+}
+:root .page-hero p {
+  font-size: 0.875rem;
+}
+
+/* Tables: quiet headers, hairline rows, numbers in tabular Archivo. */
+:root :is(.leaderboard-table, .data-table) thead th,
+:root .open-board thead th {
+  color: var(--cl-faint);
+  border-bottom: 1px solid var(--v4-line);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+:root .open-board tbody > tr > :is(td, th) {
+  border-bottom: 1px solid var(--v4-line);
+}
+:root :is(.leaderboard-table, .data-table) tbody tr:hover {
+  background: var(--v4-fill);
+}
+:root .leaderboard-table .player-name {
+  font-weight: 600;
+}
+
+/* Rank: a plain number; the podium gets a small medal disc. */
+:root :is(.rank-mark, .crew-rank) {
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.35rem;
+  color: var(--cl-muted);
+  background: transparent;
+  border-radius: 999px;
+  clip-path: none;
+  font-family: var(--cl-font);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+:root:not([data-theme="dark"]) :is(.rank-mark, .crew-rank) {
+  background: transparent;
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank] .rank-mark,
+    .log-rank[data-podium-rank] .rank-mark,
+    .rank-mark[data-podium-rank]
+  ) {
+  min-width: 1.75rem;
+  padding: 0;
+  color: #2a1a06;
+}
+
+/* Buttons: one solid ember action; everything else is quiet glass. */
+:root
+  :is(
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
+    .button-primary
+  ) {
+  background: var(--cl-action);
+  box-shadow: none;
+}
+:root
+  :is(
+    .button.secondary,
+    .button-secondary,
+    .section-link,
+    .player-refresh-form button,
+    .snapshot-pagination a
+  ) {
+  background: var(--cl-control-fill);
+  border: 1px solid var(--v4-line-strong);
+}
+:root .site-header .nav-link-primary {
+  color: var(--cl-ink);
+  background: var(--cl-control-fill);
+  border: 1px solid var(--v4-line-strong);
+}
+
+/* Switches: a quiet track; the chosen option is a lifted chip. */
+:root :is(.leaderboard-view-switch, .dash-switch) {
+  padding: 2px;
+  background: var(--v4-fill);
+  border-radius: 10px;
+}
+:root[data-theme="dark"] :is(.leaderboard-view-switch, .dash-switch) {
+  background: var(--v4-fill);
+}
+:root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button) {
+  border-radius: 8px;
+  font-weight: 550;
+}
+
+/* Top bar: solid page colour, so no line of the page shows through it, a hairline under it, no gold bar. */
+:root .site-header {
+  box-shadow: 0 1px 0 var(--v4-line);
+}
+:root .primary-nav a {
+  font-weight: 500;
+}
+:root .primary-nav a[aria-current="page"] {
+  color: var(--cl-ink);
+  background: var(--v4-fill);
+}
+:root .primary-nav a[aria-current="page"]::after {
+  content: none;
+}
+/* The footer's links, Join Discord among them, are plain words. */
+:root .page-footer nav > .nav-link {
+  min-height: 0;
+  padding: 0;
+  color: var(--cl-muted);
+  background: none;
+  border: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+/* Options in a switch are never filled buttons, whatever else they are. */
+:root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button) {
+  color: var(--cl-muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+:root
+  :is(.leaderboard-view-switch, .dash-switch)
+  :is(.button, button):is(
+    [aria-current="page"],
+    [aria-current="location"],
+    [aria-current="true"],
+    [aria-pressed="true"]
+  ) {
+  color: var(--cl-ink);
+  background: var(--cl-control-fill-hover);
+  box-shadow: 0 1px 2px rgb(60 35 15 / 0.12);
+}
+:root[data-theme="dark"]
+  :is(.leaderboard-view-switch, .dash-switch)
+  :is(.button, button):is(
+    [aria-current="page"],
+    [aria-current="location"],
+    [aria-current="true"],
+    [aria-pressed="true"]
+  ) {
+  background: rgb(255 240 228 / 0.12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* A battle still to play is a faint flat tile, no outline, so the played
+   slots lead and "5 of 8" reads at a glance. */
+:root
+  :is(
+    .dash-star-box-empty,
+    .teaser-tiles > .teaser-tile-empty,
+    .today-slots .today-slot-empty
+  ) {
+  background: color-mix(in srgb, var(--cl-ink) 3.5%, transparent);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* One card-title size everywhere: the player page's sections match the
+   dashboard's cards. */
+:root .player-page h2 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Small day-by-day bars in watchlists: a gain is a quiet ink bar and a
+   loss a red one under the line, so a row isn't a field of colour. */
+:root .group-day-bars > [data-net="up"]::before,
+:root .trend-up .day-bar:is(.day-complete, .day-correcting) {
+  background: color-mix(in srgb, var(--cl-muted) 45%, transparent);
+}
+
+/* Rankings' last 7 days: a wider, taller strip, so each day's bar can be
+   read against a clear zero line, gains above and losses below. */
+:root .recent-days {
+  width: 11rem;
+  height: 2.25rem;
+}
+:root .recent-days::after {
+  background: color-mix(in srgb, var(--cl-muted) 55%, transparent);
+}
+:root .recent-day::before {
+  width: 8px;
+}
+/* Rankings' days: a gain a dim ember bar, a loss a red bar under the line
+   at least 4px deep, so a small loss reads as a bar, not a stray dot. */
+:root .recent-day[data-sign="up"]::before {
+  background: color-mix(in srgb, var(--cl-action) 75%, transparent);
+}
+:root .recent-day[data-sign="down"]::before {
+  height: max(4px, var(--h, 0px));
+  background: color-mix(in srgb, var(--cl-negative) 75%, transparent);
+}
+
+/* On boards where most rows can be yours (a crew, a watchlist), a wash on
+   every row marks nothing: a crew's rows keep the ember edge, a watchlist's
+   its "You" label alone, never both. */
+:root .crew-row-you .crew-row,
+:root .compare-table tbody tr.compare-you,
+:root .compare-table tbody tr.compare-you + tr.compare-detail {
+  background: transparent;
+}
+:root .compare-table tbody tr.compare-you,
+:root .compare-table tbody tr.compare-you th {
+  box-shadow: none;
+}
+
+/* The front page's example reads exactly as the real Legend day card: Now
+   the strongest place, today's change as plain text, no hairlines. */
+:root .teaser-now .rank-mark {
+  color: var(--cl-ink);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+:root .teaser-net {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  font-weight: 650;
+}
+:root .teaser-ranks > span + span {
+  border-left: 0;
+}
+
+/* A phone's top bar gives the screen back to the page: a smaller wordmark
+   in a 56px bar. */
+@media (max-width: 64rem), (hover: none) and (pointer: coarse) {
+  :root {
+    --cl-header-h: 3.5rem;
+  }
+  :root .site-brand-logo {
+    height: 2.75rem;
+  }
+}
+
+/* On a phone a card's note and control wrap under its title as one full
+   row: the note at the left edge, the control at the right. */
+@media (max-width: 40rem) {
+  :root .dash-card-meta:has(> .dash-card-ref) {
+    flex: 1 0 100%;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+}
+
+/* A card's Show all is one quiet action row, close under the last row. */
+:root .dash-card .show-all {
+  min-height: 2.75rem;
+  margin: -0.5rem 0 -0.5rem;
+  padding-block: 0.25rem;
+}
+
+/* Watchlist: one reading order. Names semibold, each column's main number
+   a step lighter than before, the lines under it regular. */
+:root .compare-name {
+  font-weight: 600;
+}
+:root .compare-number {
+  font-size: 1.1875rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+:root .compare-lead {
+  font-weight: 700;
+}
+:root .compare-sorted .compare-sub-day {
+  font-weight: 500;
+}
+
+/* Crew boards: the name and its "You" on one line, a weight lighter; the
+   value's note under it smaller and regular, so the name keeps its room.
+   Your rows carry the "You" tag alone, without the ember edge. */
+:root .crew-who b {
+  font-weight: 650;
+}
+:root .crew-value {
+  font-size: 1.125rem;
+  font-weight: 650;
+}
+:root .crew-value small {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+:root .crew-row-you .crew-row {
+  box-shadow: none;
+}
+/* A phone's log rows carry their own inner space, so the log card gives
+   its full width to them and pads only its title. */
+@media (max-width: 47.99rem) {
+  :root .data-section.legend-log.open-board {
+    padding-inline: 0;
+  }
+  :root .legend-log > :is(.log-title, .log-key, .section-note) {
+    padding-inline: var(--sheet-pad);
+  }
+}
+
+/* Headings that stick over an open table wear the page's own colour,
+   solid, so rows pass cleanly under them. */
+:root .rankings-page .tracked-leaderboard-viewport thead th,
+:root .analytics-phone-key {
+  background: var(--v4-page);
+}
+
+/* A watchlist's "vs the watchlist" is a side comparison: plain ink, a size
+   under the gain it explains; its sign says above or below. */
+:root .compare-table td[data-label="Gain vs others"] .compare-number {
+  color: var(--cl-ink);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+/* In an open section a row's wash and hairline end where the section's
+   own hairline does. */
+:root .opponents-row {
+  margin-inline: 0;
+  padding-inline: 0;
+}
+/* The crew's move since Reset: a short scale beside its counts, not a
+   stripe the width of the page. */
+:root .crew-day-bar {
+  flex: 0 1 16rem;
+}
+/* An open crew board's title, rows and foot line up with the page. */
+:root :is(.crew-board-head, .crew-board-foot, .crew-row, .crew-missing li) {
+  padding-inline: 0;
+}
+
+/* Analytics on a wide screen: a bar's scale is its end alone, faint on the
+   heading's own line over the track's end, not a second heading row. The
+   difference beside a number is a plain note to it, not a second number. */
+@media (min-width: 48rem) {
+  :root .analytics-results-table thead th:has(> .analytics-scale) {
+    position: relative;
+  }
+  :root .analytics-results-table th > .analytics-scale {
+    position: absolute;
+    top: 50%;
+    right: 0.75rem;
+    translate: 0 -50%;
+    justify-content: flex-end;
+    margin: 0;
+  }
+  :root .analytics-results-table th > .analytics-scale > :first-child {
+    display: none;
+  }
+}
+:root .analytics-difference {
+  font-weight: 500;
+}
+/* A phone's log row: the day's net leads; the attacks and defenses behind
+   it are a size down and plain. */
+@media (max-width: 47.99rem) {
+  :root .player-page .log-battles > .log-stat {
+    font-size: 0.8125rem;
+    font-weight: 500;
+  }
+  :root .player-page .log-battles > .log-stat strong {
+    font-weight: 500;
+  }
+  :root .player-page .log-net strong {
+    font-size: 1.25rem;
+    font-weight: 700;
+  }
+  /* The bars' key on its own line under the log's title. */
+  :root .player-page .log-title .log-bars-key {
+    flex-basis: 100%;
+    margin-top: 0.25rem;
+    font-size: 0.8125rem;
+  }
+}
+
+/* The log's rows: a wide screen's headings name attacks and defenses, so
+   its numbers need no sword and shield; a phone has no headings and keeps
+   them. A wide row's rank and its move share one line. */
+@media (min-width: 48rem) {
+  :root .player-page .log-row .log-battles .game-mark {
+    display: none;
+  }
+  :root .player-page .log-rank {
+    grid-auto-flow: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  :root .player-page .log-rank-move {
+    min-width: 2.25rem;
+    text-align: left;
+  }
+  /* "End of day" heads the column, so its numbers need no trophy. */
+  :root .player-page .log-row .log-end strong::before {
+    display: none;
+  }
+}
+/* Notes over the log are quiet labels, not paragraphs. */
+:root .player-page .legend-log > .section-note {
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+}
+/* Home's open Top 10: its title and first column start at the page's edge,
+   like every other heading. */
+:root .home-leaderboard > .section-heading {
+  padding-inline: 0;
+}
+:root .home-leaderboard :is(th, td):first-child {
+  padding-left: 0;
+}
+/* A crew board's podium plates are the round ones Rankings uses. */
+:root .crew-rows .crew-rank.rank-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0.875rem;
+}
+/* The notes over the log share one line where there's room (a key shows
+   only while the log has its mark, in player.css). */
+@media (min-width: 48rem) {
+  :root .player-page .legend-log > .section-note {
+    display: inline-block;
+  }
+  :root .player-page .legend-log > :is(.log-key, .section-note) {
+    margin: -0.35rem 1.25rem 0.75rem 0;
+  }
+  :root .legend-log:has(.day-mark-gap:not(.log-key-dot)) .log-key-gap {
+    display: inline-block;
+  }
+}
+/* A crew's header on a wide screen: the crest, then the name with its role
+   beside it over the crew's size, then the buttons. The Owner tag is an
+   outline, so the one filled orange is Invite. */
+@media (min-width: 48rem) {
+  :root .crew-head {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.2rem 1.25rem;
+  }
+  :root .crew-head > .crest {
+    grid-row: 1 / span 2;
+  }
+  :root .crew-head > .crew-title {
+    display: flex;
+    flex-wrap: wrap;
+    grid-column: 2;
+    gap: 0.25rem 0.75rem;
+    align-items: center;
+    align-self: end;
+  }
+  :root .crew-head > .crew-title .crew-meta {
+    margin: 0;
+  }
+  :root .crew-head > .crew-places {
+    grid-row: 2;
+    grid-column: 2;
+    align-self: start;
+  }
+  :root .crew-head > .crew-actions {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+    align-self: center;
+  }
+}
+:root .crew-chip-owner {
+  color: var(--cl-action-text);
+  background: transparent;
+  border-color: var(--cl-action-border);
+}
+/* Home's example: its caption starts at the page's edge, and on a phone
+   the title and Create account share one line, as the caption means; its
+   three places are plain numbers of one size. */
+:root .teaser-caption {
+  padding-inline: 0;
+}
+@media (max-width: 40rem) {
+  :root .teaser-cta h2 {
+    font-size: 1.1875rem;
+  }
+  :root .teaser-cta .button-primary {
+    min-height: 2.5rem;
+    padding-inline: 0.85rem;
+    font-size: 0.875rem;
+  }
+}
+:root .teaser-ranks .rank-mark {
+  height: auto;
+  padding: 0;
+  background: none;
+  font: inherit;
+}
+
+/* A log row colours only its net: the attacks' and defenses' totals are
+   plain, their signs and columns say which is which. */
+:root .player-page .log-row .log-battles .log-stat strong {
+  color: var(--cl-ink);
+}
+
+/* Colour marks only a result: a day's or the board's net, and the arrow of
+   a rank move. Each battle and each side's subtotal reads in ink; its sign
+   and stars already say which way it went. */
+:root :is(.today-slot, .today-side-defense .today-slot),
+:root .dash-star-box b,
+:root .today-head > b,
+:root .legend-day-battles-head > b {
+  color: var(--cl-ink);
+}
+:root
+  :is(.rank-move, .rival-moved, .player-page .log-rank-move):not(
+    [data-new],
+    [data-held]
+  ) {
+  color: var(--cl-muted);
+}
+:root .rank-move-arrow {
+  color: var(--cl-negative);
+  font-size: 0.85em;
+}
+:root
+  :is(.rank-move[data-up], .rival-moved.positive, .log-rank-move.score-positive)
+  .rank-move-arrow {
+  color: var(--cl-positive);
+}
+:root .opponents-hit b.positive {
+  color: var(--cl-ink);
+}
+
+/* Goal: the solid lines turning dashed mark today, and the gap bracket
+   stands there; a third dotted line is one too many. */
+:root .goal-today {
+  display: none;
+}
+
+/* Crew boards mark your own rows with Rivals watch's ember edge, so ten
+   boards don't carry ten "You" pills; the word stays for screen readers. Only the Live leaderboard keeps podium medals;
+   the smaller boards rank in plain numbers. */
+:root .crew-rows .crew-row-you > .crew-row {
+  box-shadow: inset 2px 0 0 var(--cl-action);
+}
+:root .crew-rows .crew-row-you > .crew-row .crew-rank {
+  margin-left: 0.6rem;
+}
+:root .crew-rows .you-badge {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+:root .crew-board:not(.crew-board-live) .crew-rows .crew-rank.rank-mark {
+  width: auto;
+  background: none;
+  box-shadow: none;
+  color: var(--cl-muted);
+  font-weight: 600;
+}
+
+/* A phone keeps the space after a "show more" link to one step: no extra
+   room under a closed Season summary, and less before the footer. */
+@media (max-width: 47.99rem) {
+  :root .page-shell {
+    padding-bottom: 2rem;
+  }
+  :root .season-summary.open-board {
+    padding-bottom: 0;
+  }
+  :root .season-summary-sides > summary.show-all {
+    padding-bottom: 0;
+  }
+}
+
+/* The phone's tab bar sits lighter: a little shorter, smaller icons, a
+   short soft shadow, so it reads as a quiet dock over the page. */
+@media (max-width: 64rem), (hover: none) and (pointer: coarse) {
+  :root .bottom-tabs {
+    height: 3.25rem;
+    box-shadow:
+      var(--cl-glass-shine),
+      0 6px 16px -10px rgb(0 0 0 / 0.6);
+  }
+  :root:not([data-theme="dark"]) .bottom-tabs {
+    box-shadow:
+      var(--cl-glass-shine),
+      0 4px 12px -8px rgb(80 40 10 / 0.22);
+  }
+  :root .bottom-tab svg {
+    width: 1.125rem;
+    height: 1.125rem;
+    padding-block: 0.15rem;
+  }
+}
+
+/* Analytics' two pickers fit what they show, so Players and Season sit as
+   a matched pair instead of a short box beside a long one. */
+@media (min-width: 40rem) {
+  :root :is(.analytics-field, .analytics-season-field) {
+    flex: 0 0 auto;
+  }
+  :root .analytics-field select {
+    width: auto;
+    min-width: 10rem;
+    field-sizing: content;
+  }
+}
+
+/* On a wide screen the Season picker is a small control beside the
+   section's title, the size of the site's other segmented controls; a
+   phone keeps 16px so the page doesn't zoom. */
+@media (min-width: 48rem) {
+  :root .player-page .season-menu select {
+    min-height: 2.25rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* The slots' key sits over the rows, where the eye needs it: on a wide
+   card at the right, above their defenses; on a phone under the controls. */
+:root .opponents-key {
+  order: 0;
+  margin: 0;
+}
+@media (min-width: 48rem) {
+  :root .opponents-key {
+    justify-content: flex-end;
+    margin: -0.25rem 0 -0.5rem;
+  }
+}
+
+/* When every row on a crew board is yours, the edge marks nothing: none. */
+:root .crew-rows:not(:has(> li:not(.crew-row-you))) .crew-row-you > .crew-row {
+  box-shadow: none;
+}
+
+/* With a mouse, a row's arrow shows only on the row pointed at or
+   focused (Rankings, Top 10, Rivals watch, crew boards, Analytics), so a
+   list doesn't end in a column of arrows; touch keeps them. */
+@media (hover: hover) and (pointer: fine) {
+  :root .leaderboard-row > :is(.update-cell, .trophy-cell)::after,
+  :root :is(.rival-table, .group-table) tbody td:last-child::after,
+  :root .crew-row::after,
+  :root .analytics-chevron {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  :root
+    .leaderboard-row:is(:hover, :focus-within)
+    > :is(.update-cell, .trophy-cell)::after,
+  :root
+    :is(.rival-table, .group-table)
+    tbody
+    tr:is(:hover, :focus-within)
+    td:last-child::after,
+  :root .crew-row:is(:hover, :focus-visible)::after,
+  :root tr:is(:hover, :focus-within) .analytics-chevron {
+    opacity: 0.7;
+  }
+}
+
+/* "2/10 places used" wraps as one piece, never leaving "used" alone. */
+:root .crew-places-used {
+  white-space: nowrap;
+}
+
+/* A watchlist's Now columns step back so the period's gain leads: trophies
+   a size down and today's result in ink (its sign says which way). */
+@media (min-width: 48rem) {
+  :root .compare-table .compare-trophies {
+    font-size: 1rem;
+  }
+  :root .compare-table td.compare-extra > .compare-number {
+    color: var(--cl-ink);
+  }
+}
+
+/* On a wide dashboard the open sections sit one even step apart, each
+   under the same hairline the player page uses. */
+@media (min-width: 48rem) {
+  :root .dash-grid {
+    row-gap: 2rem;
+  }
+}
+
+/* Season trophies: one line, not a string of beads. A Reset's dot shows
+   only while it's the day pointed at or picked; now keeps its own. */
+:root .player-page .trophy-line-dot:not([data-active]) {
+  opacity: 0;
+}
+
+/* Home's search is the page's main job: its button is the page's one
+   filled ember button, and Create account beside the example takes the
+   ember outline. */
+:root .front-hero .search-controls button {
+  color: var(--cl-on-action);
+  background: var(--cl-action);
+  border-color: var(--cl-action);
+}
+:root .front-hero .search-controls button:is(:hover, :focus-visible) {
+  color: var(--cl-on-action);
+  background: color-mix(in srgb, var(--cl-action) 88%, var(--cl-ink));
+  border-color: transparent;
+}
+:root .teaser-cta .button-primary {
+  color: var(--cl-action-text);
+  background: transparent;
+  border: 1px solid var(--cl-action-border);
+  box-shadow: none;
+}
+:root .teaser-cta .button-primary:is(:hover, :focus-visible) {
+  color: var(--cl-action-text);
+  background: color-mix(in srgb, var(--cl-action) 10%, transparent);
+  border-color: var(--cl-action);
+}
+
+/* A wide table's usage bars all start at one place: the number before each
+   takes a fixed, right-aligned width. */
+@media (min-width: 48rem) {
+  :root .analytics-results-table td:has(> .meter) > .analytics-value {
+    display: inline-block;
+    min-width: 4.25rem;
+    text-align: right;
+  }
+}
+
+/* Home's headline takes the same condensed face as every page title, a
+   step larger since the face runs narrow. */
+:root .front-hero h1 {
+  font-family: var(--cl-font-score);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 0.98;
+}
+@media (min-width: 64rem) {
+  :root .front-grid-pitch .front-hero h1 {
+    font-size: 4.75rem;
+  }
+}
+
+/* A rival's places moved is a small note beside the rank, not part of it. */
+:root .rival-table .rival-moved {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* A narrow watchlist row reads the same for every player: the gain, then
+   one line with its per-day average and, when days were missed, "5 of 7
+   days", then the chart. */
+@media (max-width: 52rem) {
+  :root .compare-table tbody td .compare-net {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.5rem;
+    row-gap: 0.1rem;
+    align-items: baseline;
+  }
+  :root .compare-table .compare-net > :not(.compare-sub) {
+    grid-column: 1 / -1;
+  }
+  :root .compare-table .compare-sorted .compare-net .compare-sub-count {
+    display: block;
+  }
+  :root .compare-table .compare-net .compare-sub {
+    color: var(--cl-muted);
+    font-size: 0.8125rem;
+    font-weight: 500;
+  }
+}
+
+/* A phone picks the days above the chart, as a wide screen does, so it's
+   clear the chart and the list both cover them; the measure tabs stay
+   over the list. */
+@media (max-width: 34rem) {
+  :root .compare-controls {
+    display: flex;
+    margin-top: 0.85rem;
+  }
+  :root .compare-key > .compare-days {
+    display: none;
+  }
+}
+
+/* No glow anywhere: no warm light on the page, no lit rims or sheens on
+   cards and sheets, no halos, no glossy gradients on buttons, medals or
+   bars. Every surface is a flat colour with at most a hairline edge. */
+:root,
+:root[data-theme="dark"] {
+  --cl-glow: transparent;
+  --cl-glow-2: transparent;
+  --cl-card-top: linear-gradient(transparent, transparent);
+  --cl-card-head: linear-gradient(transparent, transparent);
+  --cl-card-rim: linear-gradient(transparent, transparent);
+  --cl-hero-edge: linear-gradient(transparent, transparent);
+  --cl-sheet-edge: 0 0 transparent;
+  --cl-sheet-shadow: 0 0 transparent;
+  --cl-glass-shine: 0 0 transparent;
+  --v4-glass-lit: 0 0 transparent;
+  --v4-hero-drop: 0 0 transparent;
+}
+:root body {
+  background: var(--v4-page);
+}
+:root .primary-nav a[aria-current="page"]::after,
+:root .meter > span {
+  background: var(--cl-action);
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="1"] .rank-mark,
+    .log-rank[data-podium-rank="1"] .rank-mark,
+    .rank-mark[data-podium-rank="1"]
+  ) {
+  background: #f2c33a;
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="2"] .rank-mark,
+    .log-rank[data-podium-rank="2"] .rank-mark,
+    .rank-mark[data-podium-rank="2"]
+  ) {
+  background: #d6ccc1;
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank="3"] .rank-mark,
+    .log-rank[data-podium-rank="3"] .rank-mark,
+    .rank-mark[data-podium-rank="3"]
+  ) {
+  background: #dc9d6c;
+}
+:root .player-page .trophy-line-now {
+  box-shadow: none;
+}
+:root .live-pip {
+  animation: none;
+  box-shadow: none;
+}
+:root .profile-avatar {
+  filter: none;
+}
+
+/* A player's Crew reads like their Clan beside it, a plain link with its
+   crest, not an ember pill louder than the name. */
+:root .player-page .player-identity > .player-crews {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+:root .player-page .player-crews a {
+  color: var(--cl-ink);
+}
+/* Without a pill, the clan keeps its word on a phone too, so "Clan Ember
+   Reign" and "Crew Night Owls" never read as one name. */
+@media (max-width: 47.99rem) {
+  :root .player-page .player-clan-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+}
+
+/* Home's example day reads like the real card: each battle and each
+   side's subtotal in ink, only the day's net in colour. */
+:root .teaser-tiles > span:not(.teaser-tile-empty),
+:root :is(.teaser-attacks, .teaser-defenses) .teaser-battles-head b {
+  color: var(--cl-ink);
+}
+
+/* A narrow card gives the Next Reset range its own name line, so the line
+   between best and worst has the card's width, and its ends read at 13px. */
+@container (max-width: 30rem) {
+  :root .legend-day-range-line {
+    flex-wrap: wrap;
+    row-gap: 0.3rem;
+  }
+  :root .legend-day-range-line .legend-day-range-name {
+    flex-basis: 100%;
+  }
+  :root .legend-day-range-line .legend-day-range-bar {
+    max-width: none;
+  }
+  :root .legend-day-range-line > span:not([class]) {
+    font-size: 0.8125rem;
+  }
+}
+
+/* Stars are stars on either side: a defense's bars take the attack's star
+   ramp, so 3-star reads the same colour in both rows. */
+:root .player-page .season-summary-table [data-side="Defenses"] [data-stars="3"] {
+  --seg: var(--cl-star);
+}
+:root .player-page .season-summary-table [data-side="Defenses"] [data-stars="2"] {
+  --seg: var(--cl-star-2);
+}
+:root .player-page .season-summary-table [data-side="Defenses"] [data-stars="1"] {
+  --seg: var(--cl-star-1);
+}
+:root .player-page .season-summary-table [data-side="Defenses"] [data-stars="0"] {
+  --seg: var(--cl-outline);
+}
+
+/* A crew bar of one kind of move says nothing its words don't; it shows
+   only once the crew's moves are split. */
+:root .crew-day-bar:not(:has(> span + span)) {
+  display: none;
+}
+
+/* A phone's log: today's row takes the same fixed columns as the days
+   under it, so their numbers line up, and its "In progress" takes its own
+   line under its day, so it never runs into the battle totals. */
+@media (min-width: 24rem) and (max-width: 47.99rem) {
+  :root .player-page .log-day-live > .log-row {
+    grid-template-columns: minmax(0, 1fr) 4rem 4.75rem 4.75rem 0.75rem;
+  }
+}
+@media (max-width: 47.99rem) {
+  :root .player-page .log-day-live > .log-row {
+    grid-template-areas:
+      "date att net . chev"
+      "meta def net . chev"
+      "live live live live chev"
+      "swing swing swing swing swing";
+  }
+  :root .player-page .log-day-live .log-day-meta {
+    display: contents;
+  }
+  :root .player-page .log-day-live .log-day-meta > small {
+    grid-area: meta;
+  }
+  :root .player-page .log-day-live .log-live {
+    grid-area: live;
+    justify-self: start;
+    margin-top: 0.35rem;
+  }
+}
+
+/* The More sheet: rows a thumb's height, and the sheet meets the bottom
+   bar, so no line of the page shows between them. */
+:root .site-menu-panel {
+  bottom: var(--cl-bottom-bar-top);
+  gap: 0.25rem;
+  border-bottom-right-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+}
+:root .site-menu-tabs :is(a, button),
+:root .site-menu-extras .nav-link {
+  min-height: 3rem;
+}
+
+/* The light log's lost and gained: a warm brick and olive from the paper's
+   own family, not a stock chart's pink and sage; dark keeps its own. */
+:root:not([data-theme="dark"]) .player-page .legend-log {
+  --log-lost: color-mix(in srgb, #c47a5e 75%, transparent);
+  --log-gained: color-mix(in srgb, #8e9f68 75%, transparent);
+}
+
+/* The tapped army's readout is for phones; a pointer names each army in
+   place. */
+@media (min-width: 48rem) {
+  :root .army-map-readout {
+    display: none;
+  }
+}
+
+/* A phone's army list: the picture beside the name over its battle count,
+   each number with its difference beside it on the line under them. */
+@media (max-width: 47.99rem) {
+  :root .analytics-name-cell {
+    align-items: center;
+  }
+  :root .army-map-point .army-map-name {
+    display: none;
+  }
+  /* A finger-sized target round each small dot and number. */
+  :root .army-map-point::before {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 2.75rem;
+    height: 2.75rem;
+    translate: -70% -50%;
+    content: "";
+  }
+  :root .army-map-dot[data-named] {
+    outline: 2px solid var(--cl-ink);
+    outline-offset: 2px;
+  }
+  :root .army-map-readout {
+    min-height: 1.4rem;
+    margin: 0.6rem 0 0;
+    color: var(--cl-muted);
+    font-size: 0.875rem;
+  }
+  :root .army-map-readout b {
+    color: var(--cl-ink);
+    font-weight: 650;
+  }
+  :root .analytics-results-table tbody .unit-art img,
+  :root .analytics-results-table tbody .analytics-leftover-art::before {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+  :root .analytics-results-table[data-view="armies"] tbody .unit-art {
+    min-width: 2.1rem;
+  }
+  :root .analytics-results-table td .analytics-value {
+    display: inline;
+  }
+  :root .analytics-results-table td .analytics-difference {
+    display: inline;
+    margin-left: 0.4rem;
+    font-size: 0.8125rem;
+    font-weight: 450;
+  }
+  :root .analytics-name-battles {
+    font-weight: 450;
+  }
+}
+
+/* Rivals watch on a wide card: the table keeps a reading width, so each
+   name sits near its trophies instead of across an empty middle. */
+@media (min-width: 64rem) {
+  :root .rival-table {
+    max-width: 35rem;
+  }
+}
+
+/* The player page's heat map is the dashboard's: the same cell height,
+   not stretched to the summary beside it. */
+@media (min-width: 60rem) {
+  :root .player-page .season-heat-map .season-heat-days {
+    grid-auto-rows: 2.25rem;
+  }
+  :root .player-page .season-heat-map > .season-heat {
+    flex: none;
+  }
+}
+
+/* One bold thing a row: names in a list are medium, the row's key number
+   (trophies, or the sorted measure) keeps the weight, and the numbers
+   beside it step down. */
+:root :is(.dash-name, .analytics-name, .rival-table td:nth-child(2), .crew-who b) {
+  font-weight: 600;
+}
+:root .rival-table .rival-you td:nth-child(2) {
+  font-weight: 700;
+}
+:root .rival-table td:nth-child(4) {
+  font-weight: 500;
+}
+:root .analytics-results-table td .analytics-value {
+  font-weight: 550;
+}
+:root .analytics-results-table td[data-sorted] .analytics-value {
+  font-weight: 650;
+}
+
+/* A crew's header on a phone: Invite stays the one button; Members and Edit
+   are quiet text actions beside it, a thumb's height, so the board comes
+   up the first screen. */
+@media (max-width: 47.99rem) {
+  :root .crew-actions {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    align-items: center;
+  }
+  :root .crew-actions > form > .button {
+    flex: 0 0 auto;
+    min-height: 2.75rem;
+    padding-inline: 1.25rem;
+  }
+  :root .crew-actions > .button.secondary {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 2.75rem;
+    padding-inline: 0.85rem;
+    color: var(--cl-ink);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+}
+
+/* A phone's log lines up with the page: its title, key and each day's
+   words start at the page's own margin; today's tinted band keeps its words
+   a little in from its edge, its numbers still in the days' columns. */
+@media (max-width: 47.99rem) {
+  :root .player-page .legend-log {
+    --sheet-pad: 0rem;
+  }
+  :root .player-page .log-day-live > .log-row {
+    padding-left: 0.75rem;
+  }
+}
+
+/* A phone's log names its bars' scale once over the rows: the lowest,
+   zero and the highest, each over its place on every row's bar. Today's
+   row keeps its words in from the tint, but its bar keeps the shared
+   scale. */
+@media (max-width: 47.99rem) {
+  :root .player-page .log-head {
+    display: block;
+    padding: 0 0.85rem 0.3rem 0;
+  }
+  :root .player-page .log-head > :not(.log-head-scale) {
+    display: none;
+  }
+  :root .player-page .log-head-scale {
+    position: relative;
+    display: block;
+    height: 1.1rem;
+    color: var(--cl-faint);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  :root .player-page .log-head-scale > span {
+    position: absolute;
+    top: 0;
+  }
+  :root .player-page .log-head-scale > [data-at="low"] {
+    left: 0;
+  }
+  :root .player-page .log-head-scale > [data-at="zero"] {
+    left: calc(var(--zero) * 100%);
+    translate: -50% 0;
+  }
+  :root .player-page .log-head-scale > [data-at="high"] {
+    right: 0;
+  }
+  :root .player-page .log-day-live .log-swing {
+    margin-left: -0.75rem;
+  }
+}
+
+/* A phone's army chart: every army is one ember dot at its exact spot
+   with its list number beside it; the pictures are in the list under it,
+   and a tap names the army. */
+@media (max-width: 47.99rem) {
+  :root .army-map-dot[data-narrow] {
+    z-index: 1;
+    width: 10px;
+    height: 10px;
+    background: var(--cl-action);
+    box-shadow: 0 0 0 1.5px var(--cl-paper);
+  }
+  :root .army-map-leader[data-mode="narrow"] {
+    display: none;
+  }
+  :root .army-map-point {
+    top: var(--py);
+    left: var(--px);
+    translate: 9px -50%;
+  }
+  :root .army-map-point .unit-art {
+    display: none;
+  }
+  :root .army-map-number {
+    position: static;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    color: var(--cl-ink);
+    background: none;
+    font-size: 0.8125rem;
+    font-weight: 650;
+  }
+}
+
+/* A player's header on a wide screen: when the count was saved and Refresh
+   sit on the rank's line under the count, not on a row of their own over
+   the name, so the Season chart starts higher. */
+@media (min-width: 64rem) {
+  :root .player-page .player-hero,
+  :root .player-page .player-hero:has(.player-actions > :nth-child(2)) {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "name count count count"
+      "who fresh actions rank"
+      "status status status status"
+      "today today today today"
+      "line line line line";
+  }
+}
+
+/* Home's example on a phone: the Next Reset range takes its own name line,
+   as the real card does, so the line between best and worst has the
+   card's width. */
+@media (max-width: 40rem) {
+  :root .teaser-range {
+    flex-wrap: wrap;
+    row-gap: 0.3rem;
+  }
+  :root .teaser-range-name {
+    flex-basis: 100%;
+  }
+  :root .teaser-range i {
+    max-width: none;
+  }
+}
+
+/* A phone's dashboard card that ends in Show all: the button's own tap
+   height is the card's foot, so no band of empty space follows it. */
+@media (max-width: 47.99rem) {
+  :root .dash-card:has(> .show-all:last-child, > :last-child > .show-all:last-child) {
+    padding-bottom: 0.5rem;
+  }
+}

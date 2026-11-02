@@ -69,12 +69,12 @@
   padding: 0;
   color: var(--cl-action-text);
   background: none;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .search-suggestion-meta {
   color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.05rem;
   letter-spacing: 0;
   white-space: nowrap;
@@ -215,15 +215,13 @@
   }
 }
 
-/* Open, it dims and softens the page under the bar so a big headline
-   behind never competes with the results; a tap there closes it. */
+/* Open, it dims the page under the bar, without blurring it, so a big
+   headline behind never competes with the results; a tap there closes it. */
 .header-search:has(.header-search-panel)::before {
   position: fixed;
   z-index: 39;
   inset: var(--cl-header-h) 0 0;
-  background: rgb(10 6 4 / 0.7);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+  background: rgb(10 6 4 / 0.6);
   content: "";
 }
 
@@ -395,7 +393,7 @@
     padding: 0 0.25rem;
     color: var(--cl-action-text);
     font-size: 0.9rem;
-    font-weight: 800;
+    font-weight: 650;
   }
 
   .header-search-close kbd {

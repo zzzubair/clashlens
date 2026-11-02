@@ -35,7 +35,7 @@
 }
 .today-head b {
   margin-left: auto;
-  font: 700 1.1rem var(--cl-font-score);
+  font: 700 1.1rem var(--cl-font);
 }
 .today-slots {
   display: grid;
@@ -55,9 +55,9 @@
   min-height: 2.75rem;
   padding-block: 0.3rem;
   color: var(--cl-positive);
-  background: var(--cl-raised);
-  border-radius: 6px;
-  font: 700 0.95rem/1 var(--cl-font-score);
+  background: var(--cl-panel);
+  border-radius: 8px;
+  font: 700 0.95rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 /* Three stars, touching as on the game's own result screen, fill a slot
@@ -65,7 +65,7 @@
    gaps, and the stars are 2.8 of their own size wide. */
 .today-stars {
   display: flex;
-  font-size: clamp(0.625rem, ((100cqi - 21px) / 8 - 8px) / 2.8, 1rem);
+  font-size: clamp(0.625rem, ((100cqi - 21px) / 8 - 8px) / 2.8, 0.8125rem);
   line-height: 1;
 }
 .today-stars .game-stars {
@@ -78,18 +78,9 @@
   color: var(--cl-negative);
   background: var(--cl-panel);
 }
-/* A three-star attack is the one to aim for: a gold tint and ring. */
-.today-side-attack .today-slot[data-stars="3"] {
-  background: color-mix(in srgb, var(--cl-star) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-star) 45%, transparent);
-}
-:root:not([data-theme="dark"]) .today-side-attack .today-slot[data-stars="3"] {
-  background: color-mix(in srgb, var(--cl-star) 16%, var(--cl-solid));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cl-star) 60%, transparent);
-}
 .today-slots .today-slot-empty {
   background: transparent;
-  border: 1px dashed var(--cl-outline);
+  box-shadow: inset 0 0 0 1px var(--cl-border);
 }
 @media (min-width: 48rem) {
   .player-today {
@@ -99,8 +90,9 @@
     gap: 0.3rem;
   }
   .today-slot {
-    border-radius: 8px;
-    font-size: 1.05rem;
+    min-height: 3.1rem;
+    border-radius: 10px;
+    font-size: 1rem;
   }
 }
 /* A phone keeps each side's 8 battles on one line, as the dashboard's

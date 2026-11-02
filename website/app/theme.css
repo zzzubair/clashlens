@@ -78,11 +78,11 @@
   --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.95);
   --cl-glow: rgb(255 150 50 / 0.2);
   --cl-glow-2: rgb(255 196 90 / 0.18);
-  --cl-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Scoreboard numbers: trophies, ranks and results. --cl-font-heading is
-     the older name for the same face. */
-  --cl-font-score: "Barlow Condensed", var(--cl-font);
-  --cl-font-heading: var(--cl-font-score);
+  --cl-font: Archivo, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The big scoreboard numbers and page titles only; it runs too narrow
+     for anything small. Section titles use the body face. */
+  --cl-font-score: "Big Shoulders Display", var(--cl-font);
+  --cl-font-heading: var(--cl-font);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --cl-shadow: var(--cl-card-drop);
   --cl-overlay-shadow:

@@ -15,8 +15,8 @@
 }
 
 @media (min-width: 64rem) {
-  /* The three links follow the search, beside the example, and end level
-     with its foot, so the two columns start and end together. */
+  /* The three links follow the search, beside the example, a short step
+     under the live line rather than pushed down to the example's foot. */
   .front-grid-pitch {
     grid-template-areas:
       "hero board"
@@ -50,9 +50,9 @@
 
   .front-grid-pitch .front-more {
     grid-area: more;
-    align-self: end;
+    align-self: start;
     max-width: 34rem;
-    margin-top: 2rem;
+    margin-top: 2.5rem;
   }
 }
 
@@ -78,8 +78,10 @@
 .front-hero h1 {
   max-width: 16ch;
   margin: 0;
-  font-family: var(--cl-font-score);
-  font-size: clamp(2.6rem, 1.75rem + 3.75vw, 4rem);
+  font-family: var(--cl-font);
+  font-size: clamp(2.25rem, 1.6rem + 2.6vw, 3.25rem);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
   text-wrap: balance;
 }
 
@@ -192,7 +194,9 @@
 }
 
 .teaser-score strong {
+  font-family: var(--cl-font-score);
   font-size: 2.4rem;
+  font-weight: 800;
   line-height: 0.95;
 }
 
@@ -267,10 +271,10 @@
   gap: 0.1rem;
   min-width: 0;
   min-height: 2.3rem;
-  background: var(--cl-raised);
-  border: 1px solid transparent;
-  border-radius: 6px;
-  font: 700 0.875rem/1 var(--cl-font-score);
+  background: var(--cl-panel);
+  border: 0;
+  border-radius: 8px;
+  font: 650 0.8125rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -289,22 +293,10 @@
   background: var(--cl-panel);
 }
 
-/* A three-star attack is the one to aim for: a faint gold edge. */
-.teaser-attacks [data-stars="3"] {
-  border-color: color-mix(in srgb, var(--cl-gold) 45%, transparent);
-}
-
-/* On white, a pale yellow tile with an orange edge, not tan. */
-:root:not([data-theme="dark"]) .teaser-attacks [data-stars="3"] {
-  background: #fff6d8;
-  border-color: #f2b45a;
-}
-
-/* A slot still to play is an empty dashed box. */
+/* A slot still to play is a faint well. */
 .teaser-tiles > .teaser-tile-empty {
   background: transparent;
-  border: 1px dashed var(--cl-outline);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px var(--cl-border);
 }
 
 /* Last Reset, Now and the projected place, read as the real Legend day card
@@ -319,9 +311,9 @@
   display: grid;
   grid-template-columns: auto auto auto;
   justify-content: start;
-  font-family: var(--cl-font-score);
-  font-size: 1.05rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1rem;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -646,9 +638,10 @@
 
 .front-more strong {
   grid-area: title;
-  font-family: var(--cl-font-score);
-  font-size: 1.35rem;
-  line-height: 1.1;
+  font-family: var(--cl-font);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .front-more strong::after {

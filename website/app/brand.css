@@ -7,35 +7,29 @@
  * load later with the route.
  */
 
-/* All three files are preloaded from root.tsx, so they arrive with the
-   page. The body face swaps in, so words show at once; the scoreboard face
-   holds its text back for the moment it takes instead, so a title or a
-   trophy count never draws in a stand-in face first. */
+/* Both files are preloaded from root.tsx, so they arrive with the page.
+   The body face swaps in, so words show at once; the scoreboard face holds
+   its text back for the moment it takes instead, so a title or a trophy
+   count never draws in a stand-in face first. */
 @font-face {
-  font-family: Inter;
-  font-weight: 400 900;
+  font-family: Archivo;
+  font-weight: 400 800;
   font-display: swap;
-  src: url("/fonts/inter-latin.woff2") format("woff2");
+  src: url("/fonts/archivo-latin.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "Barlow Condensed";
-  font-weight: 600;
+  font-family: "Big Shoulders Display";
+  font-weight: 600 800;
   font-display: block;
-  src: url("/fonts/barlow-condensed-600-latin.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  font-weight: 700;
-  font-display: block;
-  src: url("/fonts/barlow-condensed-700-latin.woff2") format("woff2");
+  src: url("/fonts/big-shoulders-display-latin.woff2") format("woff2");
 }
 
 /* ---------- Type ---------- */
 
-/* Inter for words, tight and dark; Barlow Condensed for the scoreboard
-   numbers (trophies, ranks, results), like a broadcast's score line. */
+/* Archivo for words and every small number, a sturdy grotesque with even
+   figures; Big Shoulders Display only for page titles and the big trophy
+   counts, like an arena's score board. */
 :root :is(h1, h2, h3) {
   font-family: var(--cl-font);
   text-wrap: balance;
@@ -49,17 +43,15 @@
   letter-spacing: 0;
   text-shadow: none;
 }
-/* Section and card titles too, a size up, since the face runs small; any
-   small note inside a title stays in the body face. */
+/* Section and card titles in the body face, set firm and close. */
 :root h2 {
   font-family: var(--cl-font-heading);
-  font-size: clamp(1.35rem, 1.2rem + 0.5vw, 1.55rem);
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: 0.005em;
+  font-size: clamp(1.15rem, 1.05rem + 0.35vw, 1.3rem);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 :root h2 small {
-  font-family: var(--cl-font);
   letter-spacing: 0;
 }
 :root h3 {
@@ -76,11 +68,14 @@
 :root :is(table, .metric-card, .season-summary, .stat, .score) {
   font-variant-numeric: tabular-nums;
 }
-/* Big numbers read like a scoreboard. */
-:root :is(.metric-card strong, .season-summary-headline strong, .score) {
+/* Big numbers read like a scoreboard; small ones stay in the body face. */
+:root :is(.metric-card strong, .season-summary-headline strong) {
   font-family: var(--cl-font-score);
   font-weight: 700;
   letter-spacing: 0;
+}
+:root .score {
+  font-weight: 650;
 }
 
 /* ---------- Top bar ---------- */
@@ -669,12 +664,6 @@
 :root[data-theme="dark"] {
   --cl-podium-2: #c2b5a8;
 }
-/* A board's second-place row takes the pewter too, in both themes (the
-   rows' other podium tints are in explore.css, which loads first). */
-:root .leaderboard-row[data-podium-rank="2"],
-:root:not([data-theme="dark"]) .leaderboard-row[data-podium-rank="2"] {
-  --podium: var(--cl-podium-2);
-}
 :root :is(.rank-mark, .crew-rank) {
   display: inline-grid;
   flex: none;
@@ -687,9 +676,8 @@
   border: 0;
   border-radius: 3px;
   clip-path: polygon(0.4rem 0, 100% 0, calc(100% - 0.4rem) 100%, 0 100%);
-  font-family: var(--cl-font-score);
-  font-size: 1.05rem;
-  font-weight: 700;
+  font-size: 0.9375rem;
+  font-weight: 650;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   box-shadow: none;
@@ -1024,6 +1012,14 @@
   stroke-width: 1.2;
   stroke-linejoin: round;
 }
+/* Stars are flat: one colour, a hairline edge, no shine; the trophy keeps
+   its shine. */
+.game-star.won .game-star-body {
+  stroke-width: 0.6;
+}
+.game-star-light {
+  display: none;
+}
 .game-trophy-handles {
   fill: none;
   stroke: var(--cl-star-edge);
@@ -1071,7 +1067,7 @@
 }
 .crest-letter {
   fill: #fff6e8;
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 19px;
   font-weight: 700;
 }

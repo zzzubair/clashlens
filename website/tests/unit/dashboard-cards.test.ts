@@ -884,7 +884,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     );
     expect(goal).toContain("Top 200 line +40 a day over 7 days");
     // Both lines carried on 20 days at their paces, each end named: the line ends 76 above you.
-    expect(goal).toContain("#200 6,200 You 6,124 Last Reset Season end");
+    expect(goal).toContain("#200 ≈6,200 You ≈6,124 Last Reset Season end");
     expect(cards.goal).toContain("Season&#x27;s end: you 6,124, #200 6,200");
 
     // Cutoffs: the account slotted between Top 200 and Top 500.
@@ -907,8 +907,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
         .map((row) => /#3\d\d/.exec(text(row))?.[0]),
     ).toEqual(["#313", "#319"]);
     expect(rivals).toContain("Show all 7");
-    expect(rivals).toContain("#315 ▼5 Tundra 5,375 +90");
-    expect(rivals).toContain("#316 ▲2 Lens Main 5,370 +55");
+    expect(rivals).toContain("#315 ▼ 5 Tundra 5,375 +90");
+    expect(rivals).toContain("#316 ▲ 2 Lens Main 5,370 +55");
     expect(rivals).toContain("#317 Player 317 5,365 –");
     expect(cards["rivals-watch"]).toContain('href="/players/%238PYQ2LJ0"');
     expect(cards["rivals-watch"]!.match(/class="rival-link" href/g)).toHaveLength(7);
@@ -1162,7 +1162,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Projected place #240 at Reset");
-    expect(day).toContain("Next Reset range #95 #760");
+    expect(day).toContain("Next Reset range best #95 worst #760");
     expect(day).toContain("Attacks 2/8");
     expect(day).toContain("Defenses 1/8");
     expect(day).not.toContain("defenses remain");

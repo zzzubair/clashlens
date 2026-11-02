@@ -51,7 +51,7 @@
   display: block;
   font-family: var(--cl-font-score);
   font-size: 2.6rem;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -109,7 +109,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 999px;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* A choice flipped while looking at the card. */
@@ -133,7 +133,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   cursor: pointer;
 }
 
@@ -476,7 +476,7 @@
   }
 
   .dash-card-ref {
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
   }
 }
 
@@ -500,7 +500,7 @@
   align-self: flex-start;
   margin-top: auto;
   color: var(--cl-accent);
-  font-weight: 800;
+  font-weight: 650;
   text-decoration: none;
 }
 
@@ -646,7 +646,7 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  font: 700 1.3rem/1.2 var(--cl-font-heading);
+  font: 600 1rem/1.3 var(--cl-font);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -765,7 +765,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 1.2rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .dash-chips {
@@ -782,7 +782,7 @@
   border-radius: 999px;
   font: inherit;
   font-size: 0.875rem;
-  font-weight: 800;
+  font-weight: 650;
   cursor: pointer;
 }
 
@@ -870,7 +870,7 @@
   background: var(--cl-positive);
   border-radius: 6px;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* ---------- Phone ---------- */
@@ -1143,7 +1143,7 @@
 /* ---------- Goal ---------- */
 
 .form-big {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font-score);
   font-size: 1.9rem;
   font-weight: 700;
   line-height: 1;
@@ -1153,7 +1153,8 @@
 /* One headline: the verdict in its colour, then the gap in ink. */
 .goal-headline {
   margin: 0;
-  font: 700 1.35rem/1.15 var(--cl-font-score);
+  font: 650 1.125rem/1.3 var(--cl-font);
+  letter-spacing: -0.01em;
 }
 
 .goal-headline > span {
@@ -1207,6 +1208,19 @@
   color: var(--cl-action-text);
 }
 
+/* Already ahead: the pace you're keeping, in words. */
+.goal-pace-line {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.goal-pace-line b {
+  color: var(--cl-action-text);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
 .goal-pace-track {
   position: relative;
   height: 0.6rem;
@@ -1241,7 +1255,7 @@
 
 .consistency-rows dd {
   margin: 0;
-  font-weight: 800;
+  font-weight: 650;
   white-space: nowrap;
 }
 
@@ -1307,9 +1321,21 @@
   overflow: visible;
 }
 
-/* The days still to play: a faint wash, so the projection reads as a guess. */
+/* The days still to play: the dashed lines alone say they're a guess. */
 .goal-future {
-  fill: color-mix(in srgb, var(--cl-ink) 3%, transparent);
+  fill: none;
+}
+
+/* The gap at the last Reset: a hairline bracket and its number. */
+.goal-gap path {
+  fill: none;
+  stroke: var(--cl-positive);
+  stroke-width: 1.25;
+}
+.goal-gap text {
+  fill: var(--cl-positive);
+  font: 650 12px var(--cl-font);
+  font-variant-numeric: tabular-nums;
 }
 
 .goal-grid {

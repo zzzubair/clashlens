@@ -121,7 +121,7 @@
 .compare-table thead .compare-groups > th > span {
   display: block;
   padding-bottom: 0.35rem;
-  border-bottom: 2px solid var(--cl-card-line);
+  border-bottom: 1px solid var(--cl-card-line);
 }
 .compare-table thead .compare-groups + tr > th {
   padding-top: 0.45rem;
@@ -173,9 +173,10 @@
   --label-w: 10rem;
   --you-1: var(--cl-action);
   --you-1-text: var(--cl-action-text);
-  /* A second account: the same ember, lighter on dark, deeper on light. */
-  --you-2: color-mix(in srgb, var(--cl-action) 50%, var(--cl-ink));
-  --you-2-text: color-mix(in srgb, var(--cl-action-text) 50%, var(--cl-ink));
+  /* A second account: amber beside the first one's ember, its line dashed
+     so the two part where they cross. */
+  --you-2: #c8901f;
+  --you-2-text: #8a5f0a;
   margin: 1.5rem 0 0;
 }
 .gain-lines figcaption {
@@ -192,27 +193,6 @@
 .gain-lines-title {
   color: var(--cl-ink);
   font-weight: 700;
-}
-.gain-lines-key {
-  display: flex;
-  gap: 0.9rem;
-}
-.gain-lines-key > span::before {
-  display: inline-block;
-  width: 0.9rem;
-  height: 2px;
-  margin-right: 0.35rem;
-  vertical-align: middle;
-  background: var(--cl-muted);
-  content: "";
-}
-.gain-lines-key > [data-you]::before {
-  height: 3px;
-  background: var(--you-1);
-}
-.gain-lines[data-two-yours] .gain-lines-key > [data-you]::before {
-  width: 1.2rem;
-  background: linear-gradient(90deg, var(--you-1) 50%, var(--you-2) 50%);
 }
 .gain-lines-plot {
   position: relative;
@@ -241,7 +221,7 @@
 .gain-lines-day {
   position: absolute;
   color: var(--cl-faint);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -259,8 +239,8 @@
   stroke: var(--cl-muted);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.5px;
-  opacity: 0.55;
+  stroke-width: 2px;
+  opacity: 0.85;
   transition:
     opacity 120ms ease,
     stroke-width 120ms ease;
@@ -280,6 +260,45 @@
 }
 .gain-line[data-shade="2"] path:not(.gain-line-hit) {
   stroke: var(--you-2);
+  stroke-dasharray: 7 4;
+}
+/* The others' hues: stone, teal and plum, quiet beside your ember, yours
+   the thicker; a second account of yours is dashed. */
+.gain-lines {
+  --hue-0: #857669;
+  --hue-1: #3f857d;
+  --hue-2: #8d6688;
+}
+:root[data-theme="dark"] .gain-lines {
+  --you-2: #f4b54a;
+  --you-2-text: #f4c068;
+  --hue-0: #9d9085;
+  --hue-1: #5fa8a0;
+  --hue-2: #b591ae;
+}
+.gain-line[data-hue="1"] path:not(.gain-line-hit) {
+  stroke: var(--hue-1);
+}
+.gain-line[data-hue="2"] path:not(.gain-line-hit) {
+  stroke: var(--hue-2);
+}
+.gain-line[data-hue="0"] path:not(.gain-line-hit) {
+  stroke: var(--hue-0);
+}
+:is(.gain-lines-end, .gain-lines-list > li)[data-hue="1"] {
+  color: var(--hue-1);
+}
+:is(.gain-lines-end, .gain-lines-list > li)[data-hue]::before {
+  border-top-color: var(--hue-0);
+}
+:is(.gain-lines-end, .gain-lines-list > li)[data-hue="1"]::before {
+  border-top-color: var(--hue-1);
+}
+:is(.gain-lines-end, .gain-lines-list > li)[data-hue="2"]::before {
+  border-top-color: var(--hue-2);
+}
+:is(.gain-lines-end, .gain-lines-list > li)[data-hue="2"] {
+  color: var(--hue-2);
 }
 .gain-lines[data-lit] .gain-line:not([data-lit]) path:not(.gain-line-hit) {
   opacity: 0.18;
@@ -365,19 +384,20 @@
   max-width: 100%;
   cursor: pointer;
 }
-.gain-lines-list > li::before {
+/* Each name keyed by a short sample of its line: colour and pattern. */
+:is(.gain-lines-end, .gain-lines-list > li)::before {
   flex: none;
-  width: 0.5rem;
-  height: 0.5rem;
-  background: var(--cl-muted);
-  border-radius: 50%;
+  align-self: center;
+  width: 0.9rem;
+  border-top: 2px solid var(--cl-muted);
   content: "";
 }
-.gain-lines-list > li[data-shade]::before {
-  background: var(--you-1);
+:is(.gain-lines-end, .gain-lines-list > li)[data-shade]::before {
+  border-top: 3px solid var(--you-1);
 }
-.gain-lines-list > li[data-shade="2"]::before {
-  background: var(--you-2);
+:is(.gain-lines-end, .gain-lines-list > li)[data-shade="2"]::before {
+  border-top-color: var(--you-2);
+  border-top-style: dashed;
 }
 .gain-lines[data-list~="wide"] .gain-lines-plot {
   margin-right: 0.5rem;
@@ -420,18 +440,19 @@
 /* Each measure's leader, the player first when sorted by it: its number in
    full ink weight with a small gold crown after it, the one mark for "best"
    on the page, gold so it never reads as the ember You highlight. The key
-   under the title carries the same crown. */
+   under the table carries the same crown. */
 .compare-head,
-.compare-board {
+.compare-board,
+.compare-keys {
   --crown-ink: #a87400;
   --crown: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.3 4.6 4.7 7.7 8 2.2l3.3 5.5 3.4-3.1-1.3 7.2H2.6Z'/%3E%3Cpath d='M2.7 12.9h10.6v1.6H2.7Z'/%3E%3C/svg%3E");
 }
-:root[data-theme="dark"] :is(.compare-head, .compare-board) {
+:root[data-theme="dark"] :is(.compare-head, .compare-board, .compare-keys) {
   --crown-ink: var(--cl-podium-1);
 }
 .compare-lead {
   width: fit-content;
-  font-weight: 800;
+  font-weight: 650;
 }
 /* Every number that can lead keeps the crown's slot, on its own line, so a
    column's values and the words after them line up with or without it. */
@@ -455,7 +476,7 @@
   -webkit-mask: var(--crown) center / contain no-repeat;
   mask: var(--crown) center / contain no-repeat;
 }
-/* Its key, in the line under the title. */
+/* Its key, under the table. */
 .compare-crown {
   width: 0.95em;
   height: 0.95em;
@@ -465,7 +486,7 @@
 
 .compare-number {
   display: block;
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.3rem;
   font-weight: 700;
   line-height: 1.05;
@@ -486,8 +507,9 @@
 .compare-sub {
   display: block;
   color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 550;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* Change sorts by trophies a day, so that line stands out when it leads. */
@@ -496,9 +518,55 @@
   font-weight: 700;
 }
 
+/* Trophies read a while ago: their age, quiet, after a small amber dot. */
 .compare-stale {
-  color: var(--cl-action-text);
-  font-weight: 600;
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-weight: 500;
+}
+.compare-stale::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--cl-action);
+  border-radius: 50%;
+  content: "";
+}
+
+/* Each part of the line under the title wraps whole. */
+.compare-span {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.4rem;
+}
+.compare-span > span {
+  white-space: nowrap;
+}
+/* The age's own amber dot stands in for the dot between parts. */
+.compare-span > span + span:not(.compare-stale)::before {
+  margin-right: 0.4rem;
+  color: var(--cl-faint);
+  content: "·";
+}
+/* The table's marks, keyed under it. */
+.compare-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  margin: 0.75rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+/* "▨ day not fully recorded", the striped bar's key. */
+.compare-part-key .day-bar {
+  display: inline-block;
+  width: 6px;
+  height: 0.75rem;
+  margin-right: 0.3rem;
+  vertical-align: -1px;
 }
 
 .compare-empty {
@@ -718,7 +786,7 @@
 }
 .trend-readout strong {
   color: var(--cl-ink);
-  font-weight: 750;
+  font-weight: 650;
 }
 .trend-readout strong.compare-up {
   color: var(--cl-positive);
@@ -1084,15 +1152,24 @@
     font-weight: 600;
   }
   .compare-today-short > span {
-    font-weight: 750;
+    font-weight: 650;
   }
 
   .compare-number,
   .compare-trophies {
     font-size: 1.3rem;
   }
-  .compare-trophies-stale {
-    color: var(--cl-action-text);
+  /* Trophies read a while ago: the same small amber dot as a wide screen's
+     age, after the number. */
+  .compare-trophies-stale::after {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    background: var(--cl-action);
+    border-radius: 50%;
+    content: "";
   }
 
   .compare-empty-dash {
@@ -1201,52 +1278,27 @@
     --bars-h: 1.25rem;
     margin-top: 0.5rem;
   }
-  /* The same chart, shorter, its names in a narrower gutter, or under it
-     when they can't all fit there; only the first, middle and last days. */
+  /* The same chart, shorter and full width, its names listed under it;
+     only the first, middle and last days. */
   .gain-lines {
-    --plot-h: 8rem;
-    --label-w: 8.5rem;
+    --plot-h: 9rem;
     margin-top: 1rem;
   }
   .gain-lines figcaption {
     margin-bottom: 0.5rem;
   }
-  .gain-lines-plot {
+  .gain-lines .gain-lines-plot {
+    margin-right: 0.5rem;
     margin-left: 2.5rem;
-  }
-  .gain-lines-end {
-    top: var(--narrow-at);
-  }
-  .gain-lines-leaders line[data-mode="wide"] {
-    display: none;
-  }
-  .gain-lines-leaders line[data-mode="narrow"] {
-    display: inline;
   }
   .gain-lines-day:not([data-key]) {
     display: none;
   }
-  .gain-lines[data-list~="narrow"] .gain-lines-plot {
-    margin-right: 0.5rem;
-  }
-  .gain-lines[data-list~="narrow"] :is(.gain-lines-end, .gain-lines-leaders) {
+  .gain-lines :is(.gain-lines-end, .gain-lines-leaders) {
     display: none;
   }
-  .gain-lines[data-list~="narrow"] .gain-lines-list {
+  .gain-lines .gain-lines-list {
     display: flex;
-  }
-  /* Names that fit beside a phone's lines though not a wide screen's. */
-  .gain-lines:not([data-list~="narrow"]) .gain-lines-plot {
-    margin-right: var(--label-w);
-  }
-  .gain-lines:not([data-list~="narrow"]) .gain-lines-end {
-    display: flex;
-  }
-  .gain-lines:not([data-list~="narrow"]) .gain-lines-leaders {
-    display: block;
-  }
-  .gain-lines:not([data-list~="narrow"]) .gain-lines-list {
-    display: none;
   }
   /* Each player is two short lines: the name over trophies with today's
      change beside them, and the days' gain, the number that stands out,
@@ -1279,7 +1331,7 @@
   }
   .compare-table .compare-net .compare-sub-day {
     color: var(--cl-muted);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
   }
   .compare-table .compare-trophies {
@@ -1403,7 +1455,7 @@
     gap: 0.3rem;
   }
   .compare-table tbody td .compare-rate-head .compare-number {
-    font-family: var(--cl-font-score);
+    font-family: var(--cl-font);
     font-size: 1.3rem;
   }
   .compare-table tbody td .compare-rate .meter {

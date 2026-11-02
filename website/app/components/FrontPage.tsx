@@ -157,6 +157,12 @@ function TopPlayers({
         Math.floor((now - Date.parse(entry.freshness.observedAt)) / 1000) >
         OLD_UPDATE_SECONDS,
     ).length ?? 0;
+  // The freshest row's age, for when every row is old.
+  const newestAge = Math.min(
+    ...(leaderboard?.entries ?? []).map((entry) =>
+      Math.floor((now - Date.parse(entry.freshness.observedAt)) / 1000),
+    ),
+  );
   return (
     <section
       className="data-section home-leaderboard"
@@ -168,7 +174,9 @@ function TopPlayers({
           {/* The update time is the hero's; a note only when rows lag. */}
           {leaderboard && staleEntries > 0 ? (
             <p className="standings-context">
-              {staleEntries} of {leaderboard.entries.length} more than 10 minutes old
+              {staleEntries === leaderboard.entries.length
+                ? `Updated ${shortAge(newestAge)} ago`
+                : `${staleEntries} of ${leaderboard.entries.length} more than 10 minutes old`}
             </p>
           ) : null}
         </div>

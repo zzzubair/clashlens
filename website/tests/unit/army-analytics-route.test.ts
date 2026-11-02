@@ -525,20 +525,20 @@ describe("army analytics route historical reads", () => {
     ]) {
       expect(html).toMatch(
         new RegExp(
-          `<span class="army-map-point"[^>]* style="left:97%;[^"]*">(?:(?!army-map-point).)*?<span class="army-map-number">${number}</span><span class="army-map-label" data-mode="wide" data-side="[a-z-]+">${name}</span>`,
+          `<span class="army-map-point"[^>]* style="--wx:97[.0-9]*%;[^"]*">(?:(?!army-map-point).)*?<span class="army-map-number">${number}</span><span class="army-map-label" data-mode="wide" data-side="[a-z-]+"[^>]*>${name}</span>`,
         ),
       );
     }
     expect(html).toMatch(/<table[^>]*data-view="armies"[^>]*data-ranked="true"/);
     // Both axes are named, the 3-star rate has faint lines every ten points
     // between its ends, and the quarters the averages make are named.
-    expect(text).toContain("Usage (log scale) 3-star rate");
+    expect(text).toContain("Usage 3-star rate");
     expect(html.match(/class="army-map-grid"/g)).toHaveLength(3);
     for (const words of [
-      "Popular and strong",
-      "Niche but strong",
-      "Popular, weaker",
-      "Niche, weaker",
+      "More used, more 3-stars",
+      "Less used, more 3-stars",
+      "More used, fewer 3-stars",
+      "Less used, fewer 3-stars",
     ])
       expect(text).toContain(words);
     expect(html).toContain('aria-pressed="false"');

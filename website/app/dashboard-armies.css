@@ -166,8 +166,8 @@
 /* The one difference from the Legends: muted unless well clear of them. */
 .army-diff {
   color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
 }
@@ -218,15 +218,15 @@
 
 .army-defense-row.is-all {
   border-top: 1px solid var(--cl-card-line);
-  font-weight: 900;
+  font-weight: 650;
 }
 
 :is(.army-defense-row, .army-offense-row) .dash-name {
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .army-offense-row b {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   font-weight: 700;
 }
@@ -256,7 +256,7 @@
 
 .army-one-big b {
   display: block;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 2.6rem;
   font-weight: 700;
   line-height: 1.05;

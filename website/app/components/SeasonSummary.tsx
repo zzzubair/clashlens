@@ -299,7 +299,7 @@ export function SeasonHeatMap({
   if (!heatMapShown(today)) return null;
   const cells = heatCells({ today, days }, "net");
   const label =
-    "Each day's trophy change this Season, coloured against the player's own days: best green, worst red";
+    "Each day's trophy change this Season, coloured against the player's own days: best deep ember, worst plain";
   if (still) return <SeasonHeatGrid cells={cells} label={label} loss />;
   const cell = cells.find((each) => each.day === (pointed ?? picked)) ?? null;
   const current = cells.find((each) => each.kind === "today") ?? null;

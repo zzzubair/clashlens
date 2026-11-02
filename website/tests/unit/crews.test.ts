@@ -275,10 +275,12 @@ describe("crew page", () => {
     answerCrew();
     const html = await render(`/crews/${CREW_ID}`, crewRoute);
     expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
-    // Counts in words a Clasher uses, and the room as a meter with its count.
+    // Counts in words a Clasher uses, and the room in words with its count.
     expect(html).toContain("9 accounts · 3 Clashers");
-    expect(html).toContain('<span aria-hidden="true">9/50</span>');
-    expect(html).not.toMatch(/\d places|open</);
+    expect(html.replace(/<[^>]*>/g, "")).toContain(
+      "9 accounts · 3 Clashers · 9/50 places used",
+    );
+    expect(html).not.toMatch(/places open|open</);
     // Seven attackers: five on the card, and the card's title opens all seven.
     const attackers = html.slice(html.indexOf('id="board-attackers"'));
     const card = attackers.slice(0, attackers.indexOf("</section>"));
@@ -357,7 +359,7 @@ describe("crew page", () => {
     expect(card("live")).toContain("<small>0 today</small>");
     expect(card("top")).not.toContain(" today</small>");
     // A defense's loss takes the minus sign, not a hyphen.
-    expect(card("best_defenders")).toContain('<span class="crew-value">−228<small>');
+    expect(card("best_defenders")).toContain('<span class="crew-value">−228</span>');
     expect(card("best_defenders")).not.toMatch(/>-\d/);
     expect(card("top")).toMatch(/>At last Reset<span class="sr-only">/);
     expect(card("top")).toContain("Trophies when this Legend day began");

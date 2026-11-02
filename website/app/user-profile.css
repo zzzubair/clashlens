@@ -151,7 +151,7 @@
   padding-right: 1.5rem;
 }
 .linked-player-name {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.45rem;
   font-weight: 700;
   line-height: 1.1;
@@ -188,7 +188,7 @@
   align-items: center;
   gap: 0.25rem;
   justify-self: start;
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.6rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -231,7 +231,7 @@
   display: grid;
   justify-items: start;
   gap: 0.15rem;
-  font: 700 0.95rem var(--cl-font-score);
+  font: 700 0.95rem var(--cl-font);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

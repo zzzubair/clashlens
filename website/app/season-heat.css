@@ -10,31 +10,46 @@
   max-width: 30rem;
   container-type: inline-size;
 }
-/* The scale: worst (0) to best (4) of the player's own Season, its
-   brightness rising step by step (OKLCH lightness 0.44, 0.555, 0.665, 0.74,
-   0.83): a deep red, a lighter red, a sand-grey middle, a clear green and a
-   bright green. The same steps in both themes, so neither reads duller; each
-   step's text is 4.5:1 or more on it (the lowest 4.83:1), checked with the
-   chart-colour checker. These replace the shared --cl-heat tokens, which
-   nothing else uses. */
+/* The scale: worst (0) to best (4) of the player's own Season, one warm
+   hue growing steadily richer, stone to sand to amber to ember, so each
+   better day is plainly heavier than the one below it and a weaker day
+   never reads as a loss; a day that lost trophies shows its figure in red
+   instead. These replace the shared --cl-heat tokens, which nothing else
+   uses. */
 :is(.season-heat, .season-heat-key) {
-  --cl-heat-0: #971922;
-  --cl-heat-1: #b94a44;
-  --cl-heat-2: #9e9184;
-  --cl-heat-3: #67c377;
-  --cl-heat-4: #79e47a;
-  --cl-heat-0-text: #fff8f0;
-  --cl-heat-1-text: #fff8f0;
-  --cl-heat-2-text: #1c1510;
-  --cl-heat-3-text: #1c1510;
-  --cl-heat-4-text: #1c1510;
+  --cl-heat-0: #e6c8a6;
+  --cl-heat-1: #ecbd8c;
+  --cl-heat-2: #ebb077;
+  --cl-heat-3: #e5914b;
+  --cl-heat-4: #dc7420;
+  --cl-heat-0-text: #4a3a2c;
+  --cl-heat-1-text: #3d2a18;
+  --cl-heat-2-text: #3a240e;
+  --cl-heat-3-text: #2e1906;
+  --cl-heat-4-text: #1f0e02;
+  --cl-heat-loss-text: #b3261e;
+}
+/* Dark: the same five steps, rising from the card's own dark to ember,
+   evenly spread; every number at least 4.5:1 on its tile. */
+:root[data-theme="dark"] :is(.season-heat, .season-heat-key) {
+  --cl-heat-0: #2a2320;
+  --cl-heat-1: #4e2e17;
+  --cl-heat-2: #83430f;
+  --cl-heat-3: #c2641a;
+  --cl-heat-4: #f39a2e;
+  --cl-heat-0-text: #cdbdae;
+  --cl-heat-1-text: #ecd9c6;
+  --cl-heat-2-text: #fff1e4;
+  --cl-heat-3-text: #1a0d03;
+  --cl-heat-4-text: #1a0d03;
+  --cl-heat-loss-text: #ff8f7a;
 }
 .season-heat-days {
   /* A result's size; a three-digit one takes a size down, never under 13px. */
   --heat-font: 0.9375rem;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 3px;
+  gap: 4px;
   margin: 0;
   padding: 0 0 0 3.25rem;
   list-style: none;
@@ -43,25 +58,27 @@
   position: relative;
   display: grid;
   place-items: center;
-  height: 2.5rem;
+  height: 2.25rem;
   color: var(--heat-text, var(--cl-ink));
   background: var(--heat, transparent);
-  border-radius: 6px;
+  border-radius: 8px;
   /* The font's own narrow figures, a touch closer: each cell is centred on
      its own, so no column needs tabular ones. */
-  font: 700 var(--heat-font) / 1 var(--cl-font-score);
-  letter-spacing: -0.01em;
+  font: 600 calc(var(--heat-font) - 0.125rem) / 1 var(--cl-font);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
   text-align: center;
 }
-.season-heat-days > .is-long {
-  font-size: max(0.8125rem, var(--heat-font) - 0.0625rem);
+/* A day that lost trophies: its figure in red, whatever its step. */
+.season-heat-days > .is-loss {
+  color: var(--cl-heat-loss-text);
 }
 /* The row's name, in the gutter level with its first day. */
 .season-heat-week {
   position: absolute;
   right: calc(100% + 0.5rem);
-  color: var(--cl-muted);
-  font: 600 0.8125rem/1 var(--cl-font);
+  color: var(--cl-faint);
+  font: 500 0.8125rem/1 var(--cl-font);
   white-space: nowrap;
 }
 .season-heat-days button {
@@ -81,14 +98,28 @@
   outline: 2px solid var(--cl-ink);
   outline-offset: 2px;
 }
+/* The picked day: an ink ring inside the tile, apart from today's ember
+   one, with a small notch under it pointing to the readout below. */
 .season-heat-days button[aria-pressed="true"] {
-  outline: 3px solid var(--cl-action);
-  outline-offset: 2px;
+  outline: 2px solid var(--cl-ink);
+  outline-offset: -2px;
 }
-/* A faint edge parts each result from the page, and an average day's tan
-   from the light theme's sand. */
+.season-heat-days button[aria-pressed="true"]::after {
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  translate: -50% 0;
+  border: 4px solid transparent;
+  border-top-color: var(--cl-ink);
+  border-bottom: 0;
+  content: "";
+}
+/* A faint edge parts the palest results from the light theme's paper. */
 .season-heat-days .season-heat-played {
-  box-shadow: var(--cl-heat-ring);
+  box-shadow: inset 0 0 0 1px rgb(110 70 30 / 0.14);
+}
+:root[data-theme="dark"] .season-heat-days .season-heat-played {
+  box-shadow: none;
 }
 /* A shield day played no battles; its result is 0. */
 .season-heat-days .season-heat-shield {
@@ -107,18 +138,25 @@
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
   box-shadow: inset 0 0 0 2px var(--cl-action);
-  /* A word, not a result: a weight lighter and closer, to clear its ring. */
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  /* The word stays for screen readers; the cell shows an ember dot, which
+     fits the narrowest cell. */
+  font-size: 0;
 }
-/* Days to come are a dotted outline, never a result: plain to see on ivory
-   or sand, and still quieter than any played day's fill. */
+.season-heat-days .season-heat-today::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: 6px;
+  height: 6px;
+  background: var(--cl-action);
+  border-radius: 50%;
+  content: "";
+}
+/* Days to come are a faint outline, never a result, quieter than any
+   played day's fill. */
 .season-heat-days .season-heat-future {
-  border: 2px dotted color-mix(in srgb, var(--cl-ink) 42%, transparent);
-}
-:root[data-theme="dark"] .season-heat-days .season-heat-future {
-  border-color: color-mix(in srgb, var(--cl-ink) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cl-ink) 16%, transparent);
 }
 
 /* A narrow grid: "D8" in a smaller gutter, closer cells, a size down. */
@@ -171,6 +209,10 @@
   color: var(--cl-ink);
   font-weight: 650;
 }
+.season-heat-readout-day {
+  color: var(--cl-muted);
+  font-weight: 500;
+}
 /* A phone has no pointer: the picked day, or else today, always reads out on
    its own line, with the key under it. */
 @media (max-width: 47.99rem) {
@@ -185,6 +227,13 @@
   }
   .season-heat-foot > .is-fallback {
     display: block;
+  }
+  .season-heat-readout-gap {
+    display: none;
+  }
+  .season-heat-readout-result {
+    display: block;
+    margin-top: 0.15rem;
   }
 }
 

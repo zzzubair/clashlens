@@ -24,7 +24,7 @@
   color: var(--cl-ink);
   border-inline: 1px solid var(--cl-card-line);
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.8rem;
   text-align: center;
   white-space: nowrap;
@@ -72,18 +72,19 @@
 .opponents-head {
   align-items: end;
   padding-bottom: 0.4rem;
-  color: var(--cl-muted);
+  color: var(--cl-faint);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* The slots' key, one line over the rows: each mark with its word. */
 .opponents-key {
   display: flex;
   flex-wrap: wrap;
+  order: 99;
   gap: 0.2rem 0.9rem;
-  margin: 0 0 0.75rem;
-  color: var(--cl-muted);
+  margin: 0.25rem 0 0;
+  color: var(--cl-faint);
   font-size: 0.8125rem;
   font-weight: 500;
 }
@@ -106,17 +107,11 @@
   background: var(--cl-raised);
 }
 
-/* The key's copy in the header's ⓘ is for phones, which drop the line. */
-.dash-info-body .opponents-key {
-  display: none;
-  margin: 0;
-}
-
+/* Rows part with a plain hairline: square ends, so the line runs straight. */
 .opponents-row {
   margin: 0 -0.5rem;
   padding: 0.5rem;
-  border-top: 1px solid var(--cl-card-line);
-  border-radius: var(--cl-radius);
+  border-top: 1px solid var(--cl-border);
   cursor: pointer;
 }
 
@@ -157,7 +152,7 @@
 }
 
 .opponents-name .dash-name {
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .opponents-trophies {
@@ -174,7 +169,7 @@
   font-size: 0.95rem;
 }
 
-/* Row numbers keep Inter's own digits, as the Armies card does: its
+/* Row numbers keep Archivo's own digits, as the Armies card does: its
    same-width digits draw a 1 with a foot that reads as another font. */
 .opponents-hit {
   font-size: 0.9375rem;
@@ -219,8 +214,8 @@
 }
 
 .opponents-block.is-held {
-  color: var(--cl-muted);
-  background: var(--cl-raised);
+  color: var(--cl-faint);
+  background: var(--cl-panel);
 }
 
 .opponents-block.is-yours {
@@ -314,7 +309,7 @@
 
 .opponents-verdict {
   font-size: 0.875rem;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .opponents-verdict.is-unrated {
@@ -419,28 +414,19 @@
   }
 }
 
-/* A phone: the slots' key moves into the header's ⓘ, leaving two short
-   headings on one line, "Their defenses" over the slots and "Strength" over
-   the verdicts. Each base reads in three lines: the player, never cut
+/* A phone: four short headings on two lines, as each base's lines run,
+   "Player" and "Your hit" over its first, "Their defenses" and "Strength"
+   over its slots and verdict; the slots' key stays under the bases. Each
+   base reads in three lines: the player, never cut
    short, with your hit's stars, % and gain on the right when they fit
    beside it (under it when not) and Add to watchlist pinned at the row's
    right edge; their trophies and the time, quieter; then their defenses
    with the verdict and its result on the right. The name and hit boxes
    step aside so their parts flow in that order. */
 @media (max-width: 40rem) {
+  /* The rows and the key under them say what each part is. */
   .opponents-head {
-    display: flex;
-    justify-content: space-between;
-    padding-bottom: 0.3rem;
-  }
-
-  .opponents-head > span:nth-child(-n + 2),
-  .dash-card > .opponents-key {
     display: none;
-  }
-
-  .dash-info-body .opponents-key {
-    display: flex;
   }
 
   .opponents-row {
@@ -482,7 +468,7 @@
   /* Room at the first line's end for Add to watchlist. */
   .opponents-hit b {
     order: 4;
-    margin-right: 1.9rem;
+    margin-right: 2.6rem;
   }
 
   /* The second and third lines start here, whatever fits on the one before. */
@@ -513,7 +499,7 @@
   .opponents-action {
     position: absolute;
     top: 0.05rem;
-    right: -0.25rem;
+    right: -0.6rem;
   }
 
   .opponents-blocks {

@@ -6,7 +6,7 @@
   color: #162033;
   background: #f5f7fb;
   font-family:
-    Inter,
+    Archivo,
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -88,7 +88,7 @@ input:focus-visible {
   margin: 0 0 0.4rem;
   color: #53657c;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 h1,
@@ -154,7 +154,7 @@ h3 {
   border: 1px solid transparent;
   border-radius: 0.55rem;
   cursor: pointer;
-  font-weight: 750;
+  font-weight: 650;
   text-decoration: none;
 }
 
@@ -189,7 +189,7 @@ h3 {
 .search-form label {
   display: block;
   margin: 1rem 0 0.4rem;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .search-controls input {
@@ -474,7 +474,7 @@ body {
   border: 1px solid #0b3b61;
   border-radius: 0.55rem;
   cursor: pointer;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .search-controls button:hover {
@@ -559,7 +559,7 @@ body {
 .metric-label {
   color: #53657c;
   font-size: 0.8125rem;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 .metric-grid {
@@ -589,7 +589,7 @@ body {
 
 .metric-row dd {
   margin: 0;
-  font-weight: 750;
+  font-weight: 650;
   text-align: right;
 }
 

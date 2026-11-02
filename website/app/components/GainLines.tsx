@@ -93,9 +93,9 @@ function signed(value: number): string {
 
 /**
  * Every player's trophies gained over the days compared, one line each from
- * 0, on one scale: Your lines in two ember shades, the rest quiet. Every line
- * is named at its end, the names stacked with short leaders where ends
- * crowd, or listed under the chart when they can't all fit beside it.
+ * 0, on one scale: your lines in ember, a second one dashed, the rest quiet.
+ * Every line is named at its end, the names stacked with short leaders where
+ * ends crowd, or listed under the chart when they can't all fit beside it.
  * Pointing at a line, its name or its row in the table lights that player up.
  */
 export function GainLines({
@@ -111,11 +111,14 @@ export function GainLines({
   light: Light;
 }) {
   const yours = lines.filter((line) => line.you).map((line) => line.tag);
+  const others = lines.filter((line) => !line.you).map((line) => line.tag);
   const series = lines.map((line) => ({
     ...line,
     points: climb(line.days),
     // Your first player in ember, a second in a lighter or deeper ember.
     shade: line.you ? (yours.indexOf(line.tag) === 0 ? "1" : "2") : undefined,
+    // The others in three quiet hues of their own, ember kept for yours.
+    hue: line.you ? undefined : String(others.indexOf(line.tag) % 3),
   }));
   // No one has a counted day yet: nothing to draw, so no chart at all.
   if (!lines.some((line) => line.days.some(counted))) return null;
@@ -133,14 +136,11 @@ export function GainLines({
   for (let tick = Math.ceil(bottom / step) * step; tick <= top; tick += step)
     if (tick !== 0) ticks.push(tick);
   const ends = series.map((line) => ({ tag: line.tag, at: y(line.points.at(-1)!) }));
-  // A label is about 1.1rem tall: 11rem of chart on wide screens, 8rem on a
-  // phone, where the names go under the chart sooner so the lines keep
-  // the width.
+  // A label is about 1.1rem tall in 11rem of chart on a wide screen; a phone
+  // always lists the names under its chart, so its lines keep the width.
   const wide = stacked(ends, 10.5);
-  const narrow = stacked(ends, 14);
-  const list = [wide ? null : "wide", narrow ? null : "narrow"].filter(Boolean).join(" ");
   // A short leader joins a nudged label to its line's end.
-  const leaders = (at: Map<string, number> | null, mode: "wide" | "narrow") =>
+  const leaders = (at: Map<string, number> | null, mode: "wide") =>
     ends.flatMap((end) => {
       const label = at?.get(end.tag);
       return label === undefined || Math.abs(label - end.at) < 1.5
@@ -177,16 +177,11 @@ export function GainLines({
     <figure
       className="gain-lines"
       data-lit={lit === null ? undefined : ""}
-      data-list={list || undefined}
-      data-two-yours={yours.length > 1 || undefined}
+      data-list={wide ? undefined : "wide"}
     >
       <figcaption>
         <span className="gain-lines-title">
           {`Trophies gained${range ? `, ${range}` : ""}`}
-        </span>
-        <span className="gain-lines-key" aria-hidden="true">
-          <span data-you="">You</span>
-          <span>Others</span>
         </span>
       </figcaption>
       <p className="sr-only">
@@ -217,6 +212,7 @@ export function GainLines({
                 key={line.tag}
                 className="gain-line"
                 data-shade={line.shade}
+                data-hue={line.hue}
                 data-lit={line.tag === lit || undefined}
                 {...lighting(line.tag)}
               >
@@ -247,18 +243,17 @@ export function GainLines({
           preserveAspectRatio="none"
         >
           {leaders(wide, "wide")}
-          {leaders(narrow, "narrow")}
         </svg>
         {series.map((line) => (
           <span
             key={line.tag}
             className="gain-lines-end"
             data-shade={line.shade}
+            data-hue={line.hue}
             data-lit={line.tag === lit || undefined}
             style={
               {
                 "--wide-at": wide ? `${wide.get(line.tag)}%` : undefined,
-                "--narrow-at": narrow ? `${narrow.get(line.tag)}%` : undefined,
               } as React.CSSProperties
             }
             {...lighting(line.tag)}
@@ -268,23 +263,24 @@ export function GainLines({
           </span>
         ))}
       </div>
-      {list ? (
-        <ul className="gain-lines-list" aria-hidden="true">
-          {[...series]
-            .sort((a, b) => b.points.at(-1)! - a.points.at(-1)!)
-            .map((line) => (
-              <li
-                key={line.tag}
-                data-shade={line.shade}
-                data-lit={line.tag === lit || undefined}
-                {...lighting(line.tag)}
-              >
-                <span className="gain-lines-name">{line.name}</span>{" "}
-                {signed(line.points.at(-1)!)}
-              </li>
-            ))}
-        </ul>
-      ) : null}
+      {/* Shown under the chart on a phone, and on a wide screen when the
+          names can't all fit beside its lines. */}
+      <ul className="gain-lines-list" aria-hidden="true">
+        {[...series]
+          .sort((a, b) => b.points.at(-1)! - a.points.at(-1)!)
+          .map((line) => (
+            <li
+              key={line.tag}
+              data-shade={line.shade}
+              data-hue={line.hue}
+              data-lit={line.tag === lit || undefined}
+              {...lighting(line.tag)}
+            >
+              <span className="gain-lines-name">{line.name}</span>{" "}
+              {signed(line.points.at(-1)!)}
+            </li>
+          ))}
+      </ul>
     </figure>
   );
 }
