@@ -45,7 +45,9 @@ export function SeasonHeatGrid({
   /** The list's name for screen readers. */
   label: string;
   /** The values are each day's net change, so a negative one is a day that
-   *  lost trophies, named by the class is-loss, which shows its figure in red. */
+   *  lost trophies, named by the class is-loss, which shows its figure in red
+   *  on the two palest steps; on a richer step red can't be read, so the
+   *  minus sign alone marks it. */
   loss: boolean;
   picked?: number | null;
   onPick?: (day: number) => void;
@@ -56,7 +58,11 @@ export function SeasonHeatGrid({
       <ol className="season-heat-days" aria-label={label}>
         {cells.map((cell) => {
           const step = cell.shade === null ? null : heatStep(cell.shade);
-          const lost = loss && cell.kind === "played" && (cell.value ?? 0) < 0;
+          const lost =
+            loss &&
+            cell.kind === "played" &&
+            (cell.value ?? 0) < 0 &&
+            (step === null || step <= 1);
           const text =
             cell.kind === "today"
               ? "Today"

@@ -24,10 +24,10 @@
   --v4-fill: rgb(60 35 15 / 0.045);
   --v4-fill-2: rgb(60 35 15 / 0.08);
   --v4-ember: #e8720c;
-  --v4-ember-text: #a84a06;
+  --v4-ember-text: #984306;
   --v4-ember-wash: rgb(255 138 31 / 0.08);
-  --v4-up: #1f7a44;
-  --v4-down: #b8382b;
+  --v4-up: #1b6e3d;
+  --v4-down: #9a2a22;
   --v4-radius: 12px;
   --v4-radius-sm: 10px;
   --v4-ambient: none;
@@ -1162,6 +1162,9 @@
 :root .site-menu-extras .nav-link {
   min-height: 3rem;
 }
+:root .site-menu-extras .nav-link:not(.nav-link-primary) {
+  color: var(--cl-ink);
+}
 
 /* The light log's lost and gained: a warm brick and olive from the paper's
    own family, not a stock chart's pink and sage; dark keeps its own. */
@@ -1352,8 +1355,10 @@
    with its list number beside it; the pictures are in the list under it,
    and a tap names the army. */
 @media (max-width: 47.99rem) {
+  /* Above its number, but taps pass through to the army's target. */
   :root .army-map-dot[data-narrow] {
     z-index: 1;
+    pointer-events: none;
     width: 10px;
     height: 10px;
     background: var(--cl-action);

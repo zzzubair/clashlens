@@ -27,7 +27,8 @@
   --cl-heat-2-text: #3a240e;
   --cl-heat-3-text: #2e1906;
   --cl-heat-4-text: #1f0e02;
-  --cl-heat-loss-text: #b3261e;
+  /* At least 4.5:1 on the two palest steps, the only ones it is used on. */
+  --cl-heat-loss-text: #9a1f17;
 }
 /* Dark: the same five steps, rising from the card's own dark to ember,
    evenly spread; every number at least 4.5:1 on its tile. */
@@ -144,6 +145,7 @@
 }
 .season-heat-days .season-heat-today::after {
   position: absolute;
+  pointer-events: none;
   top: 50%;
   left: 50%;
   translate: -50% -50%;

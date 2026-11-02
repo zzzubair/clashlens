@@ -245,7 +245,7 @@
 .header-search-panel .search-controls {
   padding: 0.3rem 0.3rem 0.3rem 0.85rem;
   background: var(--cl-raised);
-  border-color: color-mix(in srgb, var(--cl-muted) 72%, var(--cl-surface));
+  border-color: color-mix(in srgb, var(--cl-muted) 88%, var(--cl-surface));
   border-radius: var(--cl-radius);
 }
 

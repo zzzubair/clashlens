@@ -173,8 +173,7 @@
   --label-w: 10rem;
   --you-1: var(--cl-action);
   --you-1-text: var(--cl-action-text);
-  /* A second account: amber beside the first one's ember, its line dashed
-     so the two part where they cross. */
+  /* A second account: amber beside your ember, its line dashed. */
   --you-2: #c8901f;
   --you-2-text: #8a5f0a;
   margin: 1.5rem 0 0;
@@ -262,8 +261,7 @@
   stroke: var(--you-2);
   stroke-dasharray: 7 4;
 }
-/* The others' hues: stone, teal and plum, quiet beside your ember, yours
-   the thicker; a second account of yours is dashed. */
+/* The others' hues: stone, teal and plum, quiet beside your ember. */
 .gain-lines {
   --hue-0: #857669;
   --hue-1: #3f857d;
@@ -276,29 +274,24 @@
   --hue-1: #5fa8a0;
   --hue-2: #b591ae;
 }
-.gain-line[data-hue="1"] path:not(.gain-line-hit) {
-  stroke: var(--hue-1);
+.gain-lines [data-hue="0"] {
+  --line: var(--hue-0);
 }
-.gain-line[data-hue="2"] path:not(.gain-line-hit) {
-  stroke: var(--hue-2);
+.gain-lines [data-hue="1"] {
+  --line: var(--hue-1);
 }
-.gain-line[data-hue="0"] path:not(.gain-line-hit) {
-  stroke: var(--hue-0);
+.gain-lines [data-hue="2"] {
+  --line: var(--hue-2);
 }
-:is(.gain-lines-end, .gain-lines-list > li)[data-hue="1"] {
-  color: var(--hue-1);
+.gain-line[data-hue] path:not(.gain-line-hit) {
+  stroke: var(--line);
+}
+/* Teal and plum names take their line's colour; stone's stays plain. */
+:is(.gain-lines-end, .gain-lines-list > li):is([data-hue="1"], [data-hue="2"]) {
+  color: var(--line);
 }
 :is(.gain-lines-end, .gain-lines-list > li)[data-hue]::before {
-  border-top-color: var(--hue-0);
-}
-:is(.gain-lines-end, .gain-lines-list > li)[data-hue="1"]::before {
-  border-top-color: var(--hue-1);
-}
-:is(.gain-lines-end, .gain-lines-list > li)[data-hue="2"]::before {
-  border-top-color: var(--hue-2);
-}
-:is(.gain-lines-end, .gain-lines-list > li)[data-hue="2"] {
-  color: var(--hue-2);
+  border-top-color: var(--line);
 }
 .gain-lines[data-lit] .gain-line:not([data-lit]) path:not(.gain-line-hit) {
   opacity: 0.18;
@@ -526,15 +519,18 @@
   color: var(--cl-muted);
   font-weight: 500;
 }
-.compare-stale::before {
+/* The age's amber dot; a phone puts the same dot after the trophies. */
+.compare-stale::before,
+.compare-trophies-stale::after {
   width: 6px;
   height: 6px;
   flex: none;
   background: var(--cl-action);
   border-radius: 50%;
+}
+.compare-stale::before {
   content: "";
 }
-
 /* Each part of the line under the title wraps whole. */
 .compare-span {
   display: flex;
@@ -1159,19 +1155,12 @@
   .compare-trophies {
     font-size: 1.3rem;
   }
-  /* Trophies read a while ago: the same small amber dot as a wide screen's
-     age, after the number. */
   .compare-trophies-stale::after {
     display: inline-block;
-    width: 6px;
-    height: 6px;
     margin-left: 0.35rem;
     vertical-align: middle;
-    background: var(--cl-action);
-    border-radius: 50%;
     content: "";
   }
-
   .compare-empty-dash {
     display: inline;
   }
@@ -1278,8 +1267,7 @@
     --bars-h: 1.25rem;
     margin-top: 0.5rem;
   }
-  /* The same chart, shorter and full width, its names listed under it;
-     only the first, middle and last days. */
+  /* Shorter and full width, names listed under it; three days marked. */
   .gain-lines {
     --plot-h: 9rem;
     margin-top: 1rem;
