@@ -257,6 +257,10 @@
   cursor: pointer;
 }
 
+:is(.dash-account-add, .dash-tool, .dash-more, .dash-card-link):is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+}
+
 :is(.dash-account-add, .dash-tool, .dash-more):is(:hover, :focus-visible) {
   background: var(--cl-raised);
 }
@@ -499,7 +503,7 @@
   align-self: flex-start;
   margin-top: auto;
   color: var(--cl-ink);
-  font-weight: 600;
+  font-weight: 500;
   text-decoration: none;
 }
 

@@ -240,9 +240,10 @@
   color: var(--cl-ink);
 }
 
-.teaser-battles-head b {
+:root .teaser-battles-head b {
   margin-left: auto;
   font-size: 0.95rem;
+  font-weight: 600;
 }
 
 /* Attacks in green, defenses in red, as on the dashboard. */
