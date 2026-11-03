@@ -438,11 +438,11 @@ Discord fixtures. They never call Google, Discord, Supercell, production data,
 or cloud storage.
 
 When the browser tests start their own stack, Playwright waits for `dev` to print
-`Clash Lens is ready at`, after the first player page and both login fixtures are
-ready. The website health page alone does not prove those are ready. Playwright
-sends SIGTERM on shutdown so `dev` can remove that stack and its disposable
-database, archive, and spool volumes. With `CLASHLENS_E2E_EXTERNAL_STACK=1`, the
-caller owns stack startup and cleanup instead.
+`Clash Lens is ready at`, after the Live board lists every synthetic player and the
+first player page and both login fixtures are ready. The website health page alone does
+not prove those are ready. Playwright sends SIGTERM on shutdown so `dev` can remove
+that stack and its disposable database, archive, and spool volumes. With
+`CLASHLENS_E2E_EXTERNAL_STACK=1`, the caller owns stack startup and cleanup instead.
 
 ## Runtime interface
 
