@@ -93,7 +93,6 @@
   font-family: var(--cl-font);
   font-weight: 450;
   line-height: 1.45;
-  font-feature-settings: "cv11", "ss03";
 }
 
 *,
