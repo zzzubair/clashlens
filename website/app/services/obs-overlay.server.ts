@@ -100,6 +100,8 @@ export function getOverlayPlayer(tag: string): Promise<OverlayPlayer> {
 async function readPlayer(tag: string): Promise<OverlayPlayer> {
   const { createPythonClient } = await import("./python.server");
   const client = createPythonClient();
+  // The Rank read starts with the page read; only a Legend I player uses it.
+  const searchRead = client.searchLeaderboard(tag).catch(() => null);
   let page;
   try {
     page = await client.getPlayer(tag);
@@ -136,7 +138,7 @@ async function readPlayer(tag: string): Promise<OverlayPlayer> {
   }
   if (out.state === "legend") {
     // Rank is the Live Leaderboard's place among the players Clash Lens tracks.
-    const search = await client.searchLeaderboard(tag).catch(() => null);
+    const search = await searchRead;
     const entry = search?.results.find((result) => result.tag === tag);
     if (entry) out.rank = entry.rank;
   }
