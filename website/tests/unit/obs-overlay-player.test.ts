@@ -17,6 +17,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, createPythonClient: () => mocks };
 });
 import { loader } from "../../app/routes/obs-overlay.player";
+import { PythonApiError } from "../../app/services/python.server";
 
 const event = (id: string, trophyChange: number): RankedBattleEvent => ({
   battleId: id,
@@ -83,4 +84,20 @@ it("gives the day's totals once every battle so far is recorded", async () => {
     lost: 80,
     net: 40,
   });
+});
+
+it("reads the Rank alongside the player page", async () => {
+  let answer!: (page: PlayerPage) => void;
+  mocks.getPlayer.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+  mocks.searchLeaderboard.mockResolvedValue({ results: [{ tag: "#2PQ", rank: 12 }] });
+  const overlay = overlayFor("#2PQ");
+  await vi.waitFor(() => expect(mocks.searchLeaderboard).toHaveBeenCalledWith("#2PQ"));
+  answer(playerWith("#2PQ", true));
+  expect((await overlay).rank).toBe(12);
+});
+
+it("ignores a failed Rank read for a player Clash Lens has not seen", async () => {
+  mocks.getPlayer.mockRejectedValue(new PythonApiError(404, { error: "not_found" }));
+  mocks.searchLeaderboard.mockRejectedValue(new PythonApiError(503, { error: "down" }));
+  expect(await overlayFor("#2PR")).toEqual({ tag: "#2PR", state: "missing" });
 });

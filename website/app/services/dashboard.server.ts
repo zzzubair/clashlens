@@ -2,6 +2,7 @@ import type { LinkedPlayerCard, ListedGroup } from "../lib/account-contracts";
 import type {
   PlayerPage,
   RankedDaySummary,
+  SummarizedSeasonRef,
   TrackedLeaderboard,
   TrackedPlayerEntry,
 } from "../lib/contracts";
@@ -537,9 +538,12 @@ async function cutoffsData(
   ctx: CardContext,
   pages: PageReader,
 ): Promise<CutoffsData | null> {
-  const reset = await lastReset(ctx, pages);
   const lines = ctx.settings.cutoffs;
-  const live = await Promise.all(lines.map((top) => trophiesAt(ctx, top)));
+  // The live lines need nothing from the player page, so both reads start at once.
+  const [reset, live] = await Promise.all([
+    lastReset(ctx, pages),
+    Promise.all(lines.map((top) => trophiesAt(ctx, top))),
+  ]);
   const selector =
     reset && reset.finished > 0 && reset.seasonId
       ? { officialSeasonId: reset.seasonId, dayNumber: reset.finished }
@@ -607,7 +611,8 @@ async function rivalsData(
   pages: PageReader,
 ): Promise<RivalsData | null> {
   const tag = ctx.selected.tag;
-  const reset = await lastReset(ctx, pages);
+  // Only the Season rows need the last Reset; the live rows start without it.
+  const resetRead = lastReset(ctx, pages);
   const lastRank = (page: PlayerPage | null) => {
     if (page === null) return null;
     const season = seasonData(page);
@@ -658,6 +663,7 @@ async function rivalsData(
     return { rows, observedAtMs: observedMs(times) };
   };
   const seasonRows = async () => {
+    const reset = await resetRead;
     const rank = reset?.you?.rank ?? null;
     if (reset === null || rank === null || reset.seasonId === null) return null;
     const selector = { officialSeasonId: reset.seasonId, dayNumber: reset.finished };
@@ -777,11 +783,16 @@ function byGain(rows: GroupRow[]): GroupRow[] {
   );
 }
 
-async function lastSeasonFinish(ctx: CardContext, page: PlayerPage) {
+async function lastSeasonFinish(
+  page: PlayerPage,
+  seasonsRead: Promise<SummarizedSeasonRef[] | null>,
+) {
   if (page.season === null) return null;
   const previous = String(Date.parse(page.season.anchor) / 1000 - SEASON_SECONDS);
-  const seasons = await ctx.client.getPlayerSeasons(ctx.selected.tag);
-  const history = seasons.find((season) => season.seasonId === previous)?.officialHistory;
+  const seasons = await seasonsRead;
+  const history = seasons?.find(
+    (season) => season.seasonId === previous,
+  )?.officialHistory;
   return history ? { rank: history.finalPlacement, trophies: history.eodTrophies } : null;
 }
 
@@ -856,9 +867,11 @@ export function readCards(
     "heat-map": season,
     cutoffs: () => cutoffsData(ctx, pages),
     "season-graph": async () => {
+      // Read the Season list alongside the page instead of after it.
+      const seasonsRead = ctx.client.getPlayerSeasons(ctx.selected.tag).catch(() => null);
       const page = await pages(ctx.selected.tag);
       if (page === null) return null;
-      const lastSeason = await lastSeasonFinish(ctx, page).catch(() => null);
+      const lastSeason = await lastSeasonFinish(page, seasonsRead);
       return { ...seasonData(page), lastSeason };
     },
     "recent-form": season,

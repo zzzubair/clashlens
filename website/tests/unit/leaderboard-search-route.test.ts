@@ -29,6 +29,10 @@ beforeEach(() => {
 });
 
 it("opens the correct page directly for an exact tag", async () => {
+  // The board read starts alongside the search; failing, it never stops the jump.
+  mocks.getTrackedLeaderboard.mockRejectedValue(
+    new PythonApiError(503, { error: "unavailable" }),
+  );
   mocks.searchLeaderboard.mockResolvedValue({
     exactTag: "#2PP",
     hasMore: false,
@@ -39,7 +43,15 @@ it("opens the correct page directly for an exact tag", async () => {
   expect((response as Response).headers.get("Location")).toBe(
     "/leaderboards/tracked?view=live&page=3&player=%232PP",
   );
-  expect(mocks.getTrackedLeaderboard).not.toHaveBeenCalled();
+});
+
+it("reads the board without waiting for the search", async () => {
+  let answer!: (search: unknown) => void;
+  mocks.searchLeaderboard.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+  const result = load("&q=Nova");
+  await vi.waitFor(() => expect(mocks.getTrackedLeaderboard).toHaveBeenCalled());
+  answer({ exactTag: null, hasMore: false, results: [] });
+  expect((await result).leaderboard?.page).toBe(1);
 });
 
 it("returns name matches with their ranks for selection", async () => {

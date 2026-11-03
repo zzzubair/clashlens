@@ -176,16 +176,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient();
-    const search = query ? await client.searchLeaderboard(query) : null;
-    if (search?.exactTag)
-      throw redirect(playerRankUrl(search.exactTag, search.results[0].rank));
-    const leaderboard = await client.getTrackedLeaderboard(
+    // The board and the search start together. An exact tag still redirects
+    // first, leaving the board unread, and a failed search is still the error.
+    const boardRead = client.getTrackedLeaderboard(
       PAGE_SIZE,
       viewValue,
       (page - 1) * PAGE_SIZE,
       selector,
       focusTag ?? undefined,
     );
+    boardRead.catch(() => undefined);
+    const search = query ? await client.searchLeaderboard(query) : null;
+    if (search?.exactTag)
+      throw redirect(playerRankUrl(search.exactTag, search.results[0].rank));
+    const leaderboard = await boardRead;
     return {
       leaderboard,
       error: null,
