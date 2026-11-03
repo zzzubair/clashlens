@@ -1048,6 +1048,7 @@ class Collector:
                         now=now,
                         interactive=is_interactive,
                         held=self.held_work(),
+                        reset_limit=slots["reset"],
                     )
                     # A stop can arrive during any wait above; start nothing after it.
                     if stop_requested.is_set():

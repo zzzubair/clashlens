@@ -186,7 +186,7 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
             self.completed: list[int] = []
 
         def pending_intents(
-            self, limit: int, now: datetime, *, interactive: bool, held: list[int]
+            self, limit: int, now: datetime, *, interactive: bool, held: list[int], **_kwargs: object
         ) -> list[CollectorIntent]:
             # As the database query does, held work is never picked.
             due = interactive and 7 not in self.completed and 7 not in held
@@ -382,7 +382,7 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
             return 0
 
         def pending_intents(
-            self, limit: int, now: datetime, *, interactive: bool, held: list[int]
+            self, limit: int, now: datetime, *, interactive: bool, held: list[int], **_kwargs: object
         ) -> list[CollectorIntent]:
             due = not interactive and self.sweeps and 7 not in self.completed
             return [reset_pair] if due else []
