@@ -281,9 +281,10 @@
 .gain-line[data-hue] path:not(.gain-line-hit) {
   stroke: var(--line);
 }
-/* Teal and plum names take their line's colour; stone's stays plain. */
+/* Teal and plum names take their line's colour, deepened to read as text;
+   stone's stays plain. */
 :is(.gain-lines-end, .gain-lines-list > li):is([data-hue="1"], [data-hue="2"]) {
-  color: var(--line);
+  color: color-mix(in srgb, var(--line) 70%, var(--cl-ink));
 }
 :is(.gain-lines-end, .gain-lines-list > li)[data-hue]::before {
   border-top-color: var(--line);

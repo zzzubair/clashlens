@@ -275,6 +275,13 @@
 }
 :root
   :is(
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
+    .button-primary
+  ):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--cl-action) 88%, var(--cl-ink));
+}
+:root
+  :is(
     .button.secondary,
     .button-secondary,
     .section-link,
@@ -327,6 +334,12 @@
   border: 0;
   font-size: 0.875rem;
   font-weight: 600;
+}
+/* On a touch screen it stays a thumb tall, like the footer's other links. */
+@media (pointer: coarse) {
+  :root .page-footer nav > .nav-link {
+    min-height: 2.75rem;
+  }
 }
 /* Options in a switch are never filled buttons, whatever else they are. */
 :root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button) {
@@ -643,7 +656,7 @@
     font-size: 1.1875rem;
   }
   :root .teaser-cta .button-primary {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
     padding-inline: 0.85rem;
     font-size: 0.875rem;
   }

@@ -554,6 +554,7 @@ function LegendDay({
 /** What today's slots need of a Legend day. */
 export interface TodayBattles {
   dayNumber: number | null;
+  battlesComplete?: boolean;
   offense: Pick<RankedDaySummary["offense"], "attacks" | "trophyGain">;
   defense: Pick<RankedDaySummary["defense"], "defenses" | "trophyLoss">;
   offenseEvents: TodayBattle[];
@@ -581,8 +582,9 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
         <span> · today</span>
-        {/* The day's net so far, the first thing a Clasher asks of it. */}
-        {day.offense.trophyGain !== null && defense !== null ? (
+        {/* The day's net so far, the first thing a Clasher asks of it; a day
+            with battles missing has no net to show. */}
+        {day.battlesComplete && day.offense.trophyGain !== null && defense !== null ? (
           <b className={`today-net ${valueTone(day.offense.trophyGain + defense)}`}>
             {formatSigned(day.offense.trophyGain + defense)}
           </b>

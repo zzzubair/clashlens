@@ -8,6 +8,7 @@ import {
 } from "react-router";
 
 import type { PlayerPage, RankedDaySummary } from "../../app/lib/contracts";
+import { TodaySlots } from "../../app/components/LegendLog";
 import PlayerRoute from "../../app/routes/player";
 
 const TAG = "#2PP";
@@ -414,5 +415,22 @@ describe("today's Legend day wording", () => {
     expect(summary).toMatch(
       /<span class="season-heat-readout is-fallback">Day 4 · \d{1,2} [A-Z][a-z]{2} · in progress<\/span>/,
     );
+  });
+
+  it("heads today's slots with the day's net only while every battle is recorded", () => {
+    const slots = (battlesComplete: boolean) =>
+      renderToString(
+        createElement(TodaySlots, {
+          day: {
+            ...TODAY,
+            battlesComplete,
+            offense: { attacks: 6, trophyGain: 196 },
+            defense: { defenses: 2, trophyLoss: 40 },
+          },
+        }),
+      ).replaceAll("<!-- -->", "");
+    expect(slots(true)).toContain('<b class="today-net score-positive">+156</b>');
+    // With battles missing the sum is not the day's net, so none shows.
+    expect(slots(false)).not.toContain("today-net");
   });
 });
