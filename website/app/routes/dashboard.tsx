@@ -505,8 +505,8 @@ function SignedInDashboard({
         />
       ) : selected.state === "not_in_legend" ? (
         <section className="dash-message" aria-live="polite">
-          <h2>Unfortunately, the dashboard is Legend I only.</h2>
-          <p>Support for lower leagues is coming in the future!</p>
+          <h2>The dashboard covers Legend I only</h2>
+          <p>Support for lower leagues is coming.</p>
         </section>
       ) : selected.state !== "tracking" ? (
         <section className="dash-message" aria-live="polite">

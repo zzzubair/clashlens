@@ -1426,7 +1426,7 @@ describe("dashboard page", () => {
       selectedTag: ALT,
     });
     expect(text(html)).toContain(
-      "Unfortunately, the dashboard is Legend I only. Support for lower leagues is coming in the future!",
+      "The dashboard covers Legend I only Support for lower leagues is coming.",
     );
     expect(html).not.toContain("Customise dashboard");
     expect(html).not.toContain("data-card=");

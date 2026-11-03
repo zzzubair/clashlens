@@ -49,7 +49,7 @@
 .legend-day-net {
   align-self: center;
   padding: 0;
-  font: 650 1.0625rem/1 var(--cl-font);
+  font: 600 1.0625rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -94,7 +94,7 @@
 
 .legend-day-countdown b {
   color: var(--cl-ink);
-  font: 650 1rem var(--cl-font);
+  font: 600 1rem var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -168,7 +168,7 @@
 .legend-day-projected {
   color: var(--cl-ink);
   font-size: 2rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -214,7 +214,7 @@
   flex-wrap: wrap;
   gap: 0.3rem;
   color: var(--cl-ink);
-  font: 650 1.125rem/1.2 var(--cl-font);
+  font: 600 1.125rem/1.2 var(--cl-font);
 }
 
 .legend-day-range-bar {
@@ -323,7 +323,7 @@
 
 .legend-day-battles-head b {
   flex-basis: 100%;
-  font: 650 1rem var(--cl-font);
+  font: 600 1rem var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -406,7 +406,7 @@
   border: 0;
   border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
   border-radius: 0;
-  font: 650 1rem/1 var(--cl-font);
+  font: 600 1rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 

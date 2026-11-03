@@ -861,16 +861,16 @@
   background: color-mix(in srgb, var(--cl-action) 88%, var(--cl-ink));
   border-color: transparent;
 }
+/* Search is the page's one ember button; Create account is the quiet one. */
 :root .teaser-cta .button-primary {
-  color: var(--cl-action-text);
-  background: transparent;
-  border: 1px solid var(--cl-action-border);
+  color: var(--cl-ink);
+  background: var(--cl-control-fill);
+  border: 1px solid var(--v4-line-strong);
   box-shadow: none;
 }
 :root .teaser-cta .button-primary:is(:hover, :focus-visible) {
-  color: var(--cl-action-text);
-  background: color-mix(in srgb, var(--cl-action) 10%, transparent);
-  border-color: var(--cl-action);
+  color: var(--cl-ink);
+  background: var(--cl-raised);
 }
 
 /* A wide table's usage bars all start at one place: the number before each

@@ -24,7 +24,7 @@
   color: var(--cl-ink);
   border-inline: 1px solid var(--cl-card-line);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.8rem;
   text-align: center;
   white-space: nowrap;
@@ -229,7 +229,7 @@
   box-shadow: inset 0 0 0 2px var(--cl-action);
 }
 
-/* The verdict: a three-bar meter in ember (three for a hard base), its word,
+/* The verdict: a three-bar meter in muted copper (three for a hard base), its word,
    then the one result against the Legend average, all in neutral ink; it
    wraps under the word where the column is narrow. A tap opens the base's
    own number beside the average under it. */
@@ -282,7 +282,7 @@
 .opponents-result {
   color: var(--cl-muted);
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -311,12 +311,12 @@
 .opponents-meter[data-bars="1"] i:nth-child(-n + 1),
 .opponents-meter[data-bars="2"] i:nth-child(-n + 2),
 .opponents-meter[data-bars="3"] i {
-  background: var(--cl-action);
+  background: var(--cl-meter);
 }
 
 .opponents-verdict {
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .opponents-verdict.is-unrated {
@@ -364,7 +364,7 @@
 }
 
 .opponents-watch:is(:hover, :focus-visible) {
-  color: var(--cl-action-text);
+  color: var(--cl-ink);
   background: var(--cl-raised);
 }
 

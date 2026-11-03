@@ -128,7 +128,7 @@
 .teaser-example {
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 /* The example's two parts sit open on the glass, a hairline between them,
@@ -272,7 +272,7 @@
   min-width: 0;
   min-height: 2.3rem;
   border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
-  font: 650 0.8125rem/1 var(--cl-font);
+  font: 600 0.8125rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -306,7 +306,7 @@
   justify-content: start;
   font-family: var(--cl-font);
   font-size: 1rem;
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -347,7 +347,7 @@
 .teaser-next {
   color: var(--cl-ink);
   font-size: 1.4rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.1;
 }
 
@@ -643,7 +643,7 @@
 
 .front-more strong::after {
   margin-left: 0.3rem;
-  color: var(--cl-action-text);
+  color: var(--cl-muted);
   content: "›";
 }
 

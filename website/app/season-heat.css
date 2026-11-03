@@ -202,7 +202,7 @@
 }
 .season-heat-readout {
   color: var(--cl-ink);
-  font-weight: 650;
+  font-weight: 500;
 }
 .season-heat-readout-day {
   color: var(--cl-muted);

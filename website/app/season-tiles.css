@@ -35,7 +35,7 @@
 }
 .today-head b {
   margin-left: auto;
-  font: 700 1.1rem var(--cl-font);
+  font: 600 1.1rem var(--cl-font);
 }
 .today-slots {
   display: grid;
@@ -56,7 +56,7 @@
   padding-block: 0.3rem;
   color: var(--cl-positive);
   border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
-  font: 700 0.95rem/1 var(--cl-font);
+  font: 600 0.95rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 /* Three stars, touching as on the game's own result screen, fill a slot

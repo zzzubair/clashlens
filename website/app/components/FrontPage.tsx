@@ -69,7 +69,7 @@ export function FrontPage({ data }: { data: FrontPageData }) {
         <section className="front-hero" aria-labelledby="front-title">
           <h1 id="front-title">Find any Legend League player</h1>
           <p className="front-lede">
-            Every Legend day&apos;s battles and Reset ranks, for any tracked player.
+            Every Legend day&apos;s battles and Reset ranks, for any tracked player
           </p>
           <PageSearch />
           <LiveProof leaderboard={leaderboard} />
@@ -96,19 +96,19 @@ function MoreFeatures() {
         <Link to="/account/watchlists">
           <UnitArt unitKey="hero:0|hero:1|hero:2" />
           <strong>Watchlists</strong>
-          <span>Any players you pick, side by side, day by day.</span>
+          <span>Any players you pick, side by side, day by day</span>
         </Link>
         {crews ? (
           <Link to="/crews">
             <UnitArt unitKey="troop:0|troop:1|troop:3" />
             <strong>Crews</strong>
-            <span>Invite-only boards for your Legend group.</span>
+            <span>Invite-only boards for your Legend group</span>
           </Link>
         ) : null}
         <Link to="/analytics/armies">
           <UnitArt unitKey="troop:110|troop:12|troop:11" />
           <strong>Armies</strong>
-          <span>What Legend players attack with, and how it scores.</span>
+          <span>What Legend players attack with, and how it scores</span>
         </Link>
       </div>
     </nav>

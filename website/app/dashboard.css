@@ -44,7 +44,7 @@
   display: block;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .dash-big {
@@ -79,7 +79,7 @@
   display: block;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-chip {
@@ -92,7 +92,7 @@
   border: 1px solid var(--cl-action-border);
   border-radius: 999px;
   font-size: 0.8125rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-small-button {
@@ -109,7 +109,7 @@
   border: 1px solid var(--cl-card-line);
   border-radius: 999px;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 /* A choice flipped while looking at the card. */
@@ -133,7 +133,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -208,7 +208,7 @@
   color: inherit;
   font-family: var(--cl-font);
   font-size: 0.98rem;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -251,15 +251,14 @@
   background: transparent;
   border: 0;
   border-radius: 12px;
-  font: 650 0.875rem var(--cl-font);
+  font: 500 0.875rem var(--cl-font);
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
 }
 
 :is(.dash-account-add, .dash-tool, .dash-more):is(:hover, :focus-visible) {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
+  background: var(--cl-raised);
 }
 
 .dash-tool:disabled {
@@ -270,7 +269,7 @@
 :is(.dash-account-add, .dash-tool) .dash-icon {
   width: 1rem;
   height: 1rem;
-  color: var(--cl-action-text);
+  color: var(--cl-muted);
 }
 
 /* The toolbar: Player page and Customise; the ⋯ that holds them on a phone. */
@@ -367,10 +366,10 @@
   font-size: 1.4rem;
 }
 
-/* The card's own small ember mark; supporting cards stay flat otherwise. */
+/* The card's own small mark, in the muted text colour. */
 .dash-card h2 > .dash-icon {
   margin-right: 0.4rem;
-  color: var(--cl-action-text);
+  color: var(--cl-muted);
 }
 
 .dash-card-head {
@@ -433,7 +432,7 @@
 }
 
 .dash-info[open] > summary {
-  color: var(--cl-action-text);
+  color: var(--cl-ink);
 }
 
 .dash-info-body {
@@ -499,8 +498,8 @@
 .dash-card-link {
   align-self: flex-start;
   margin-top: auto;
-  color: var(--cl-accent);
-  font-weight: 650;
+  color: var(--cl-ink);
+  font-weight: 600;
   text-decoration: none;
 }
 
@@ -543,7 +542,7 @@
   border-radius: var(--cl-card-radius);
   font-family: var(--cl-font);
   font-size: 1.25rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-new-day {
@@ -586,21 +585,21 @@
 .dash-editbar-title {
   font-family: var(--cl-font);
   font-size: 1.1rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-editbar-state {
   flex: 1 1 auto;
   color: var(--cl-muted);
   font-size: 0.875rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-editbar-error {
   flex-basis: 100%;
   margin: 0;
   color: var(--cl-negative);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* While editing, every card wears the same quiet boundary, a dashed
@@ -653,7 +652,7 @@
 
 .dash-edit-name > .dash-icon {
   margin-right: 0.4rem;
-  color: var(--cl-action-text);
+  color: var(--cl-muted);
 }
 
 .dash-grip {
@@ -701,7 +700,7 @@
   padding: 0.2rem 0.7rem;
   font: inherit;
   font-size: 0.875rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-dialog {
@@ -745,7 +744,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-field legend {
@@ -765,7 +764,7 @@
   border-radius: 8px;
   font: inherit;
   font-size: 1.2rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .dash-chips {
@@ -782,7 +781,7 @@
   border-radius: 999px;
   font: inherit;
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -861,7 +860,7 @@
 .dash-welcome-option b {
   font-family: var(--cl-font);
   font-size: 1.15rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dash-welcome-badge {
@@ -870,7 +869,7 @@
   background: var(--cl-positive);
   border-radius: 6px;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 /* ---------- Phone ---------- */
@@ -1153,7 +1152,7 @@
 /* One headline: the verdict in its colour, then the gap in ink. */
 .goal-headline {
   margin: 0;
-  font: 650 1.125rem/1.3 var(--cl-font);
+  font: 600 1.125rem/1.3 var(--cl-font);
   letter-spacing: -0.01em;
 }
 
@@ -1198,7 +1197,7 @@
 .goal-pace b {
   color: var(--cl-ink);
   font-size: 0.9375rem;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -1217,7 +1216,7 @@
 }
 .goal-pace-line b {
   color: var(--cl-action-text);
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1255,7 +1254,7 @@
 
 .consistency-rows dd {
   margin: 0;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1334,7 +1333,7 @@
 }
 .goal-gap text {
   fill: var(--cl-positive);
-  font: 650 12px var(--cl-font);
+  font: 600 12px var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1410,7 +1409,7 @@
 
 .goal-name tspan {
   fill: var(--cl-ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .goal-name-you tspan {

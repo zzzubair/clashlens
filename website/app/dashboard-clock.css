@@ -50,13 +50,13 @@
 
 .legend-clock-key b {
   color: var(--cl-ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* ---------- The face ---------- */
 
-/* The day still to come, faded; the part gone since the Reset in ember,
-   ending at now's dot. */
+/* The day still to come, faded; the part gone since the Reset in ink,
+   ending at now's dot, so the ember attack ticks are what stands out. */
 .clock-dial {
   fill: none;
   stroke: color-mix(in srgb, var(--cl-outline) 45%, transparent);
@@ -65,7 +65,7 @@
 
 .clock-gone {
   fill: none;
-  stroke: color-mix(in srgb, var(--cl-brand-orange) 80%, transparent);
+  stroke: color-mix(in srgb, var(--cl-ink) 30%, transparent);
   stroke-linecap: round;
   stroke-width: 2.5;
 }
@@ -81,7 +81,7 @@
 .clock-now-label {
   fill: var(--cl-ink);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 
@@ -122,7 +122,7 @@
   font-family: var(--cl-font);
   font-size: 34px;
   letter-spacing: -0.02em;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -242,7 +242,7 @@
   .legend-clock-summary b {
     display: block;
     color: var(--cl-ink);
-    font: 700 1.5rem/1 var(--cl-font);
+    font: 600 1.5rem/1 var(--cl-font);
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
@@ -315,7 +315,7 @@
     .legend-clock-key b {
       display: block;
       margin-bottom: 0.15rem;
-      font: 700 2rem/1 var(--cl-font);
+      font: 600 2rem/1 var(--cl-font);
       letter-spacing: -0.02em;
     }
 
@@ -403,7 +403,7 @@
 
 .clock-detail-row .dash-name {
   justify-self: start;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .clock-detail-hit {
