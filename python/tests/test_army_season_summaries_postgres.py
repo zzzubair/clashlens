@@ -15,7 +15,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database
+from domain_test_support import as_api_role, domain_database
 from fastapi.testclient import TestClient
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
@@ -294,6 +294,50 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
                 )
                 is None
             )
+        finally:
+            database.close()
+
+
+def test_historical_read_needs_only_displayed_summary_columns(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            _seed(connection, offense=_offense_specs())
+            materialize_army_season(connection, SEASON, "offense")
+        database = ApiDatabase(connection_info)
+        try:
+            expected = api_analytics.get_army_season_summary(
+                database, SEASON, "offense", "troops", "usage-rate"
+            )
+            assert expected is not None
+        finally:
+            database.close()
+        # The data service can read the displayed values and lookup keys.
+        # Old result lists and unused bookkeeping remain worker-only here.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "REVOKE SELECT ON army_season_summaries FROM clashlens_python_api"
+            )
+            connection.execute(
+                """
+                GRANT SELECT (
+                    official_season_id, lens, category, days_observed,
+                    coverage_state, total_attacks, usable_army_sample,
+                    army_states, unknown_affected_attacks,
+                    unknown_component_occurrences, perspective_disagreement_count,
+                    missing_trophy_membership_evidence, projection_version,
+                    content_digest, unit_usage
+                ) ON army_season_summaries TO clashlens_python_api
+                """
+            )
+        database = ApiDatabase(as_api_role(connection_info))
+        try:
+            actual = api_analytics.get_army_season_summary(
+                database, SEASON, "offense", "troops", "usage-rate"
+            )
+            assert actual == expected
+            assert actual["total_attacks"] == 5
+            assert actual["usable_army_sample"] == 4
+            assert sum(row["usage_count"] for row in actual["rows"]) == 4
         finally:
             database.close()
 

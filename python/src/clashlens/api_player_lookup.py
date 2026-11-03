@@ -230,7 +230,7 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
             api_db._execute_without_waiting(
                 connection,
                 normalized_tag,
-                "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
+                "SELECT 1 FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
                 (normalized_tag,),
             ).fetchone()
             lookup = _lookup(connection, normalized_tag)

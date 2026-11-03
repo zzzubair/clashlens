@@ -121,7 +121,9 @@ def first_readings(
               ON ranked.id = member.version_id AND ranked.state = 'Complete'
             JOIN players AS player ON player.id = member.player_id
             CROSS JOIN LATERAL (
-                SELECT * FROM player_profile_versions AS version
+                SELECT id, observation_id, observed_at, profile_json, normalized_tag,
+                       name, trophies, eligibility_state, current_league_season_id
+                FROM player_profile_versions AS version
                 WHERE version.normalized_tag = player.normalized_tag
                   AND version.observed_at > %(reset)s
                   AND version.eligibility_state = 'eligible'

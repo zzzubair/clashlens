@@ -632,7 +632,7 @@ def submit_refresh(
                 connection,
                 normalized_tag,
                 """
-                SELECT *
+                SELECT work_id, outcome
                 FROM clashlens_enqueue_interactive('live_refresh', %s, %s)
                 """,
                 (normalized_tag, cooldown_seconds),
