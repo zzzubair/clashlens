@@ -60,7 +60,7 @@
     height: var(--jump-h);
     margin: -2rem -1rem 1rem;
     padding: 0 1rem;
-    background: color-mix(in srgb, var(--cl-paper) 90%, transparent);
+    background: color-mix(in srgb, var(--cl-paper) 97%, transparent);
     border-bottom: 1px solid var(--cl-card-line);
     -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
@@ -99,8 +99,8 @@
 }
 .player-page > .data-section > .section-note {
   max-width: 68ch;
-  margin: 0 0 0.75rem;
-  font-size: 0.875rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
 }
 
 /* ---------- Header: name, tag line, trophies, freshness, Refresh ---------- */
@@ -254,7 +254,7 @@
   color: var(--cl-ink);
   font-family: var(--cl-font-score);
   font-size: clamp(2.6rem, 11vw, 4.25rem);
-  font-weight: 700;
+  font-weight: 800;
   line-height: 0.95;
   font-variant-numeric: tabular-nums;
 }
@@ -287,10 +287,17 @@
 .player-page :is(.today-day, .trophy-line-title) {
   grid-column: 1 / -1;
   margin: 0;
-  font: 700 var(--head-3) var(--cl-font-heading);
+  font: 600 0.9375rem/1.3 var(--cl-font);
+  letter-spacing: -0.01em;
 }
 .player-page .today-day span {
   color: var(--cl-muted);
+}
+.player-page .today-day .today-net {
+  margin-left: 0.6rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 @media (min-width: 48rem) {
   .player-page .player-today {
@@ -481,18 +488,17 @@
   font-weight: 600;
 }
 .player-page .trophy-line-tip b {
-  font-family: var(--cl-font-score);
-  font-size: 1.05rem;
+  font-size: 0.9375rem;
+  font-weight: 650;
 }
 .player-page .trophy-line-tip > span {
-  font-family: var(--cl-font-score);
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: 0.8125rem;
+  font-weight: 650;
 }
 .player-page .player-trophy-count.player-reset-pending {
   font-family: var(--cl-font);
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.3;
 }
 .player-page .player-reset-note {
@@ -787,15 +793,21 @@
   border-color: var(--cl-gold);
 }
 
-/* The hollow dot's key, under the log's title while the log shows one. */
+/* The hollow and gold dots' keys, under the log's title while the log
+   shows one. */
 .log-key {
   display: none;
-  margin: -0.35rem 0 0.75rem;
+  margin: -0.25rem 0 0.5rem;
   color: var(--cl-muted);
-  font-size: 0.82rem;
+  font-size: 0.8125rem;
 }
-.legend-log:has(.day-mark:not(.day-mark-verified, .day-mark-gap, .log-key-dot)) .log-key {
+.legend-log:has(.day-mark:not(.day-mark-verified, .day-mark-gap, .log-key-dot))
+  .log-key:not(.log-key-gap),
+.legend-log:has(.day-mark-gap:not(.log-key-dot)) .log-key-gap {
   display: block;
+}
+.log-key + .log-key-gap {
+  margin-top: -0.5rem;
 }
 .log-key .log-key-dot {
   margin: 0 0.3rem 0 0;

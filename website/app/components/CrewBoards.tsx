@@ -204,6 +204,11 @@ export function BoardRows({
                   <span className="sr-only"> first</span>
                 </span>
               ) : null}
+              {/* What an average is over, under the name, so the number's
+                  column stays narrow and the name keeps its room. */}
+              {row.kind === "trophies" || row.kind === "streak" ? null : (
+                <span className="crew-behind">{averageOver(row, board, period)}</span>
+              )}
             </span>
             <RowValue
               row={row}
@@ -255,15 +260,17 @@ function RowValue({
       </span>
     );
   }
+  return <span className="crew-value">{formatAverage(row, board, period)}</span>;
+}
+
+/** The days and battles an average is over: "27 days · 215 attacks". */
+function averageOver(
+  row: Exclude<BoardRow, { kind: "trophies" | "streak" }>,
+  board: BoardKey,
+  period: CrewPeriod,
+) {
   const battles = `${row.battles} ${board === "attackers" ? "attack" : "defense"}${row.battles === 1 ? "" : "s"}`;
-  return (
-    <span className="crew-value">
-      {formatAverage(row, board, period)}
-      <small>
-        {period === "today"
-          ? battles
-          : `${row.days} ${row.days === 1 ? "day" : "days"} · ${battles}`}
-      </small>
-    </span>
-  );
+  return period === "today"
+    ? battles
+    : `${row.days} ${row.days === 1 ? "day" : "days"} · ${battles}`;
 }

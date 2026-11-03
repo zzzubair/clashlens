@@ -87,7 +87,7 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
 export function TeaserBoard({ link }: { link: boolean }) {
   return (
     <Board link={link}>
-      <span className="teaser-example">Example</span>
+      <span className="teaser-example">Example dashboard</span>
       <div className="teaser-card teaser-day">
         <span className="teaser-label">Legend day {NETS.length + 1}</span>
         <span className="teaser-score">
@@ -118,6 +118,7 @@ export function TeaserBoard({ link }: { link: boolean }) {
           </span>
           <span className="teaser-range">
             <span className="teaser-range-name">Next Reset range</span>
+            <small>best </small>
             {place(PLACES.best)}
             <i
               style={
@@ -126,6 +127,7 @@ export function TeaserBoard({ link }: { link: boolean }) {
                 } as CSSProperties
               }
             />
+            <small>worst </small>
             {place(PLACES.worst)}
           </span>
         </span>

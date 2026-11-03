@@ -210,9 +210,15 @@ export function LegendDayCard({
                 </span>
               ) : range ? (
                 <span className="legend-day-range">
-                  <span>{rankText(range.best)}</span>
+                  <span>
+                    <small>best </small>
+                    {rankText(range.best)}
+                  </span>
                   <span className="legend-day-range-dash">–</span>
-                  <span>{rankText(range.worst)}</span>
+                  <span>
+                    <small>worst </small>
+                    {rankText(range.worst)}
+                  </span>
                   <span className="sr-only"> estimate</span>
                 </span>
               ) : (
@@ -224,7 +230,10 @@ export function LegendDayCard({
         {projected && range ? (
           <p className="legend-day-range legend-day-range-line">
             <span className="legend-day-range-name">Next Reset range</span>
-            <span>{rankText(range.best)}</span>
+            <span>
+              <small>best </small>
+              {rankText(range.best)}
+            </span>
             <span
               className="legend-day-range-bar"
               style={
@@ -234,7 +243,10 @@ export function LegendDayCard({
               }
               aria-hidden="true"
             />
-            <span>{rankText(range.worst)}</span>
+            <span>
+              <small>worst </small>
+              {rankText(range.worst)}
+            </span>
           </p>
         ) : null}
       </div>

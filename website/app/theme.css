@@ -32,6 +32,9 @@
   --cl-accent: #a63c08;
   --cl-accent-contrast: #a63c08;
   --cl-action: #ff8a1f;
+  /* Usage and share bars: a muted copper, so the bright ember stays for what
+     is picked, what to press and the projected place. */
+  --cl-meter: #b56d2b;
   --cl-action-hover: #ffa040;
   --cl-action-shade: #b3261e;
   --cl-on-action: #1a1206;
@@ -49,16 +52,13 @@
   /* The dark rim of a won star and the hollow of a missed one. */
   --cl-star-edge: #7a4200;
   --cl-star-empty: rgb(90 60 30 / 0.12);
-  --cl-star-empty-edge: rgb(90 60 30 / 0.34);
+  --cl-star-empty-edge: rgb(90 60 30 / 0.55);
   /* Two and one star on a star split: greys, never a darkened gold. */
   --cl-star-2: #7a7a82;
   --cl-star-1: #b0b0b8;
   /* Gains and losses are one green and one red everywhere: the + and −
      numbers and the bars are the same two hues (OKLCH 148 and 29), so they
-     read as one family. The heat map's own scale is in season-heat.css;
-     --cl-heat-ring is the 1px warm edge it puts on every played day to part
-     the steps from the page. */
-  --cl-heat-ring: inset 0 0 0 1px rgb(110 60 20 / 0.3);
+     read as one family. The heat map's own scale is in season-heat.css. */
   --cl-sky: #b93c0a;
   --cl-sky-soft: #fff4e8;
   --cl-positive: #1f6d33;
@@ -78,11 +78,11 @@
   --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.95);
   --cl-glow: rgb(255 150 50 / 0.2);
   --cl-glow-2: rgb(255 196 90 / 0.18);
-  --cl-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Scoreboard numbers: trophies, ranks and results. --cl-font-heading is
-     the older name for the same face. */
-  --cl-font-score: "Barlow Condensed", var(--cl-font);
-  --cl-font-heading: var(--cl-font-score);
+  --cl-font: Archivo, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The big scoreboard numbers and page titles only; it runs too narrow
+     for anything small. Section titles use the body face. */
+  --cl-font-score: "Big Shoulders Display", var(--cl-font);
+  --cl-font-heading: var(--cl-font);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --cl-shadow: var(--cl-card-drop);
   --cl-overlay-shadow:
@@ -93,7 +93,6 @@
   font-family: var(--cl-font);
   font-weight: 450;
   line-height: 1.45;
-  font-feature-settings: "cv11", "ss03";
 }
 
 *,
@@ -171,6 +170,12 @@ button,
 .page-shell {
   width: min(100% - 3rem, 72rem);
   padding: 2rem 0 4rem;
+}
+/* A phone starts the page a step under the header. */
+@media (max-width: 47.99rem) {
+  .page-shell {
+    padding-top: 1rem;
+  }
 }
 
 .narrow-shell,

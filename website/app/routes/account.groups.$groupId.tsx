@@ -197,6 +197,19 @@ export default function GroupCompareRoute() {
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
   const showVsGroup = comparison.players.some((player) => player.vsGroup !== null);
+  // When every player's trophies are equally old, the age is said once
+  // under the title instead of on every row.
+  const ages = new Set(
+    comparison.players.map((player) =>
+      player.freshness === "stale" && player.ageSeconds !== null
+        ? formatAge(player.ageSeconds)
+        : null,
+    ),
+  );
+  const sharedAge = ages.size === 1 ? [...ages][0] : null;
+  const hasPartDays = comparison.players.some((player) =>
+    player.days.some((day) => day.state === "partial" || day.state === "uncertain"),
+  );
   const change = `${days}-day gain`;
   // A heading sorts by its column; the arrow sits outside the link's name.
   // An aside shares the link's line: what a cell's two numbers are.
@@ -246,17 +259,14 @@ export default function GroupCompareRoute() {
           <div>
             <h1 id="compare-title">{comparison.name}</h1>
             <p className="compare-span">
-              {watched} watched{yours > 0 ? ` + ${yours} yours` : ""}
+              {/* Each part wraps whole, a dot between parts (group-compare.css). */}
+              <span>
+                {watched} watched{yours > 0 ? ` + ${yours} yours` : ""}
+              </span>
               {/* A phone's days menu already says how many. */}
-              <span className="compare-span-days"> · {days} finished days</span>
-              {/* The crown on each measure's best number, keyed once up here;
-                  screen readers hear it on the number itself. */}
-              {leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
-                <span className="compare-lead-key" aria-hidden="true">
-                  {" · "}
-                  <span className="compare-crown" />
-                  best in this watchlist
-                </span>
+              <span className="compare-span-days">{days} finished days</span>
+              {sharedAge ? (
+                <span className="compare-stale">Trophies read {sharedAge} ago</span>
               ) : null}
             </p>
           </div>
@@ -376,7 +386,7 @@ export default function GroupCompareRoute() {
               {keySort("trophies", "Trophies")}
               {keySort(
                 MEASURE_SORT[metric],
-                metric === "change" ? "Gain" : metric === "attack" ? "Triples" : "Held",
+                metric === "change" ? change : metric === "attack" ? "Triples" : "Held",
                 metric === "change" ? undefined : (
                   <small className="compare-key-range">and avg ★</small>
                 ),
@@ -411,10 +421,15 @@ export default function GroupCompareRoute() {
                     Today
                   </th>
                   {/* The gain and its daily bars share one short heading. */}
-                  {heading("net", "Gain")}
+                  {heading("net", change)}
                   {showVsGroup ? (
                     <th scope="col" data-col="vs" className="compare-extra">
-                      Vs the watchlist
+                      <span className="trend-head">
+                        Average lead
+                        <small className="compare-head-sub">
+                          trophies vs each other player
+                        </small>
+                      </span>
                     </th>
                   ) : null}
                   {/* What each cell's two numbers are, said once here. */}
@@ -448,6 +463,7 @@ export default function GroupCompareRoute() {
                       defense: leads.defense.has(player.tag),
                     }}
                     showVsGroup={showVsGroup}
+                    sharedAge={sharedAge !== null}
                     lit={player.tag === lit}
                     light={light}
                   />
@@ -455,6 +471,24 @@ export default function GroupCompareRoute() {
               </tbody>
             </table>
           </div>
+          {/* The table's marks, keyed once under it. */}
+          {hasPartDays || leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
+            <p className="compare-keys">
+              {hasPartDays ? (
+                <span className="compare-part-key" aria-hidden="true">
+                  <span className="day-bar day-partial" />
+                  day not fully recorded
+                </span>
+              ) : null}
+              {/* Screen readers hear the crown on the number itself. */}
+              {leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
+                <span className="compare-lead-key" aria-hidden="true">
+                  <span className="compare-crown" />
+                  best in this watchlist
+                </span>
+              ) : null}
+            </p>
+          ) : null}
         </>
       ) : (
         <div className="empty-state compare-empty-group">
@@ -477,6 +511,7 @@ function PlayerRow({
   sort,
   lead,
   showVsGroup,
+  sharedAge,
   lit,
   light,
 }: {
@@ -488,6 +523,8 @@ function PlayerRow({
   /** Whether this player leads each measure, marked on its number. */
   lead: Record<"net" | "attack" | "defense", boolean>;
   showVsGroup: boolean;
+  /** Whether the title already says how old every player's trophies are. */
+  sharedAge: boolean;
   /** Lit up here and on the chart, from either. */
   lit: boolean;
   light: Light;
@@ -566,13 +603,16 @@ function PlayerRow({
           ) : (
             <>
               <strong
-                className={`compare-number compare-trophies${player.freshness === "stale" ? " compare-trophies-stale" : ""}`}
+                className={`compare-number compare-trophies${player.freshness === "stale" && !sharedAge ? " compare-trophies-stale" : ""}`}
               >
                 {player.trophies.toLocaleString("en")}
               </strong>
-              {player.ageSeconds !== null && player.freshness === "stale" ? (
+              {player.ageSeconds !== null &&
+              player.freshness === "stale" &&
+              !sharedAge ? (
                 <span className="compare-sub compare-stale">
-                  Out of date: {formatAge(player.ageSeconds)} ago
+                  <span className="sr-only">Out of date: </span>
+                  {formatAge(player.ageSeconds)} ago
                 </span>
               ) : null}
             </>
@@ -618,14 +658,15 @@ function PlayerRow({
               ) : (
                 <Signed value={player.net} lead={lead.net} />
               )}
+              {/* Missed days first, under the gain they make smaller. */}
+              {player.countedDays < days ? (
+                <span className="compare-sub compare-sub-count">
+                  {player.countedDays} of {days} days recorded
+                </span>
+              ) : null}
               {player.netPerDay !== null ? (
                 <span className="compare-sub compare-sub-day">
                   {signed(player.netPerDay, 1)} a day
-                </span>
-              ) : null}
-              {player.countedDays < days ? (
-                <span className="compare-sub">
-                  {player.countedDays} of {days} days counted
                 </span>
               ) : null}
             </span>
@@ -633,7 +674,7 @@ function PlayerRow({
           </span>
         </td>
         {showVsGroup ? (
-          <td data-label="Vs the watchlist" className="compare-extra">
+          <td data-label="Average lead" className="compare-extra">
             {player.vsGroup === null ? (
               <Empty />
             ) : (
@@ -733,7 +774,7 @@ function PlayerRow({
                   </dd>
                 ) : null}
                 <dd>
-                  {player.countedDays} of {days} days counted
+                  {player.countedDays} of {days} days
                 </dd>
                 {player.vsGroup !== null ? (
                   <dd>{signed(player.vsGroup, 1)} vs the watchlist</dd>

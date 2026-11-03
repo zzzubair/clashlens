@@ -6,16 +6,17 @@ import { heatStep } from "../lib/dashboard-cards";
 // The Season heat map in its one form, for the dashboard, the player page
 // and a profile alike: a week to a row, each row named by its first day,
 // each day's result in its cell, coloured against the player's own Season
-// from worst (red) to best (green). Today says so and the days to come are
-// dotted outlines. A day's signed value says whether it lost trophies, as
-// relative colours can paint a small gain red.
+// from worst (plain stone) to best (ember). Today says so and the days to come are
+// dotted outlines. A day that lost trophies shows its figure in red, as
+// relative colours can't say so.
 
 const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
 
-/** A day's result as a cell shows it: a rare four-digit one in thousands. */
+/** A day's result as a cell shows it: a gain plain, as most are, and only a
+ *  loss signed (and red); a rare four-digit one in thousands. */
 function shown(value: number): string {
   const size = Math.abs(value);
-  return `${sign(value)}${size < 1000 ? size.toLocaleString("en-GB") : `${(size / 1000).toFixed(1)}k`}`;
+  return `${value < 0 ? "−" : ""}${size < 1000 ? size.toLocaleString("en-GB") : `${(size / 1000).toFixed(1)}k`}`;
 }
 
 /** A day's result in words, for screen readers and readouts. */
@@ -44,7 +45,9 @@ export function SeasonHeatGrid({
   /** The list's name for screen readers. */
   label: string;
   /** The values are each day's net change, so a negative one is a day that
-   *  lost trophies, named by the class is-loss (it has no look of its own). */
+   *  lost trophies, named by the class is-loss, which shows its figure in red
+   *  on the two palest steps; on a richer step red can't be read, so the
+   *  minus sign alone marks it. */
   loss: boolean;
   picked?: number | null;
   onPick?: (day: number) => void;
@@ -55,7 +58,11 @@ export function SeasonHeatGrid({
       <ol className="season-heat-days" aria-label={label}>
         {cells.map((cell) => {
           const step = cell.shade === null ? null : heatStep(cell.shade);
-          const lost = loss && cell.kind === "played" && (cell.value ?? 0) < 0;
+          const lost =
+            loss &&
+            cell.kind === "played" &&
+            (cell.value ?? 0) < 0 &&
+            (step === null || step <= 1);
           const text =
             cell.kind === "today"
               ? "Today"
@@ -68,8 +75,7 @@ export function SeasonHeatGrid({
           return (
             <li
               key={cell.day}
-              // Three digits and a sign take a size down to keep their room.
-              className={`season-heat-${cell.kind}${lost ? " is-loss" : ""}${text.length > 3 && cell.kind !== "today" ? " is-long" : ""}`}
+              className={`season-heat-${cell.kind}${lost ? " is-loss" : ""}`}
               style={
                 step === null
                   ? undefined
@@ -118,10 +124,10 @@ export function HeatKey() {
   return (
     <span className="season-heat-key">
       <span className="sr-only">
-        Coloured against the player's own Season: best days green, worst red.
+        Coloured against the player's own Season: best days deep ember, worst plain.
       </span>
       <span className="season-heat-scale" aria-hidden="true">
-        Season: worst
+        vs own Season: worst
         <span className="season-heat-ramp">
           {[0, 1, 2, 3, 4].map((step) => (
             <i key={step} style={{ background: `var(--cl-heat-${step})` }} />

@@ -1,18 +1,26 @@
-import { useCallback, useState } from "react";
+import { Fragment, useCallback, useState, type CSSProperties } from "react";
 
 import { UnitArt } from "./ArmyPortraits";
 import { starRate, type ArmyRow } from "../lib/army-stats";
 
-/** Ten-point steps that hold every rate shown, with room at both ends. */
+/** A place on the plot as a CSS percentage, rounded so the server's and the
+ *  browser's last-digit float differences never change the page. */
+const place = (percent: number) => `${percent.toFixed(3)}%`;
+
+/** Every rate shown with a little room at both ends, and the round step
+ *  its labels take: the plot fits the armies, so rates bunched within a few
+ *  points spread out over its whole height. */
 function rateBand(rates: number[], average: number) {
   const all = [...rates, average].map((rate) => rate * 100);
-  const low = Math.max(0, Math.floor((Math.min(...all) - 3) / 10) * 10);
-  const high = Math.min(100, Math.ceil((Math.max(...all) + 3) / 10) * 10);
-  return { low, high: high > low ? high : low + 10 };
+  const low = Math.max(0, Math.min(...all) - 0.75);
+  const high = Math.min(100, Math.max(...all) + 0.75);
+  const span = high - low;
+  const step = span <= 6 ? 1 : span <= 12 ? 2 : span <= 30 ? 5 : 10;
+  return { low, high, step };
 }
 
-/** Round usage steps; the axis starts at the biggest one under every army. */
-const STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5];
+/** Round usage steps; the axis takes the smallest that gives at most six. */
+const STEPS = [0.01, 0.02, 0.05, 0.1, 0.2];
 
 interface Box {
   left: number;
@@ -41,17 +49,16 @@ type Side = keyof typeof SIDES;
 
 /** The four quarters the average lines make, named in their outer corners. */
 const QUARTERS = [
-  ["top-left", "Niche but strong"],
-  ["top-right", "Popular and strong"],
-  ["bottom-left", "Niche, weaker"],
-  ["bottom-right", "Popular, weaker"],
+  ["top-left", "Less used, more 3-stars"],
+  ["top-right", "More used, more 3-stars"],
+  ["bottom-left", "Less used, fewer 3-stars"],
+  ["bottom-right", "More used, fewer 3-stars"],
 ] as const;
 type Corner = (typeof QUARTERS)[number][0];
 
 type Point = {
   key: string;
   name: string;
-  number: string;
   usage: number;
   x: number;
   y: number;
@@ -64,22 +71,67 @@ type Point = {
  * most-used first: beside it if it fits, else over or under it, else level
  * with its top or bottom edge; never over the average lines or a quarter's
  * name, and kept well apart from other icons and names so each name reads
- * as its own icon's. Where its name can't go, its number from the table
- * does; with no room for that either, it waits for a point or a tap.
+ * as its own icon's. Where its name can't go, it waits for a point or a
+ * tap.
  */
 function layout(
   points: Point[],
   guides: { x: number; y: number },
   plot: { width: number; height: number; icon: number; char: number },
-  named: boolean,
 ) {
   const half = plot.icon / 2;
   const at = (point: { x: number; y: number }) => ({
     cx: (point.x / 100) * plot.width,
     cy: (point.y / 100) * plot.height,
   });
-  const icons = points.map((point) => {
-    const { cx, cy } = at(point);
+  // Icons that would cover each other are nudged apart until each shows
+  // whole, each kept as near its true spot as it can be and inside the plot.
+  const gap = plot.icon * 1.2;
+  const truth = points.map(at);
+  const moved = truth.map((spot) => ({ ...spot }));
+  for (let round = 0; round < 120; round++) {
+    for (let a = 0; a < moved.length; a++) {
+      for (let b = a + 1; b < moved.length; b++) {
+        const one = moved[a]!;
+        const two = moved[b]!;
+        let dx = two.cx - one.cx;
+        let dy = two.cy - one.cy;
+        let distance = Math.hypot(dx, dy);
+        if (distance >= gap) continue;
+        if (distance < 0.01) [dx, dy, distance] = [Math.cos(a + b), Math.sin(a + b), 1];
+        const push = (gap - distance) / 2 / distance;
+        one.cx -= dx * push;
+        one.cy -= dy * push;
+        two.cx += dx * push;
+        two.cy += dy * push;
+      }
+    }
+    moved.forEach((spot, index) => {
+      if (round < 100) {
+        spot.cx += (truth[index]!.cx - spot.cx) * 0.04;
+        spot.cy += (truth[index]!.cy - spot.cy) * 0.04;
+      }
+      spot.cx = Math.min(plot.width - half, Math.max(half, spot.cx));
+      spot.cy = Math.min(plot.height - half, Math.max(half, spot.cy));
+    });
+  }
+  // Its true spot is marked only where it shows clear of the icon.
+  const spots = new Map(
+    points.map((point, index) => {
+      const spot = moved[index]!;
+      const away = Math.hypot(spot.cx - truth[index]!.cx, spot.cy - truth[index]!.cy);
+      return [
+        point.key,
+        {
+          x: (spot.cx / plot.width) * 100,
+          y: (spot.cy / plot.height) * 100,
+          away: away > half + 4,
+        },
+      ];
+    }),
+  );
+  const icons = points.map((point, index) => {
+    const { cx, cy } = moved[index]!;
     const box = { left: cx - half, right: cx + half, top: cy - half, bottom: cy + half };
     return { key: point.key, ...box };
   });
@@ -88,11 +140,11 @@ function layout(
     { left: -1e4, right: 1e4, top: lines.cy, bottom: lines.cy },
     { left: lines.cx, right: lines.cx, top: -1e4, bottom: 1e4 },
   ];
-  // A quarter's name is small: about 5.8 pixels a letter, 14 tall, 4 in.
+  // A quarter's name is small: about 6.4 pixels a letter, 14 tall, 4 in.
   const quarters = new Set<Corner>();
   const names: Box[] = [];
   for (const [corner, words] of QUARTERS) {
-    const width = words.length * 5.8;
+    const width = words.length * 6.4;
     const left = corner.endsWith("left") ? 4 : plot.width - 4 - width;
     const top = corner.startsWith("top") ? 4 : plot.height - 18;
     const box = { left, right: left + width, top, bottom: top + 14 };
@@ -107,58 +159,95 @@ function layout(
       names.push(box);
     }
   }
-  const labels = new Map<string, { side: Side; text: string }>();
-  for (const point of named ? [...points].sort((a, b) => b.usage - a.usage) : []) {
-    const { cx, cy } = at(point);
-    for (const text of [point.name, point.number]) {
-      const width = text.length * plot.char + 4;
-      const box = ([across, height]: (typeof SIDES)[Side]): Box => {
-        const left =
-          across === "right"
-            ? cx + half + 3
-            : across === "left"
-              ? cx - half - 3 - width
-              : cx - width / 2;
-        // Over or under the icon clears it; level with an edge centres on it.
-        const middle = cy + height * (Math.abs(height) === 1 ? half + 10 : plot.icon);
-        return { left, right: left + width, top: middle - 8, bottom: middle + 8 };
-      };
-      const side = (Object.keys(SIDES) as Side[]).find((each) => {
-        const name = box(SIDES[each]);
-        return (
-          name.left >= 0 &&
-          name.right <= plot.width + 20 &&
-          name.top >= -4 &&
-          name.bottom <= plot.height + 4 &&
-          crossing.every((line) => apart(name, line, 2)) &&
-          names.every((other) => apart(name, other, 3)) &&
-          icons.every((other) => other.key === point.key || apart(name, other, 10))
-        );
-      });
-      if (side === undefined) continue;
-      names.push(box(SIDES[side]));
-      labels.set(point.key, { side, text });
-      break;
+  const labels = new Map<
+    string,
+    {
+      side: Side;
+      text: string;
+      shift: { x: number; y: number };
+      leader: { x1: number; y1: number; x2: number; y2: number } | null;
     }
+  >();
+  for (const point of [...points].sort((a, b) => b.usage - a.usage)) {
+    const { cx, cy } = moved[points.indexOf(point)]!;
+    const text = point.name;
+    const width = text.length * plot.char + 4;
+    // Where a name can go: beside its icon first, then a step further out,
+    // where a hairline leads back to the icon.
+    const shifted = (side: Side, far: number) => {
+      const [across, height] = SIDES[side];
+      return {
+        x: across === "right" ? far : across === "left" ? -far : 0,
+        y: across === "middle" ? Math.sign(height) * far : Math.sign(height) * far * 0.6,
+      };
+    };
+    const box = (side: Side, far: number): Box => {
+      const [across, height] = SIDES[side];
+      const shift = shifted(side, far);
+      const left =
+        (across === "right"
+          ? cx + half + 3
+          : across === "left"
+            ? cx - half - 3 - width
+            : cx - width / 2) + shift.x;
+      // Over or under the icon clears it; level with an edge centres on it.
+      const middle =
+        cy + height * (Math.abs(height) === 1 ? half + 10 : plot.icon) + shift.y;
+      return { left, right: left + width, top: middle - 8, bottom: middle + 8 };
+    };
+    const fits = (name: Box) =>
+      name.left >= 0 &&
+      name.right <= plot.width + 20 &&
+      name.top >= -4 &&
+      name.bottom <= plot.height + 4 &&
+      crossing.every((line) => apart(name, line, 2)) &&
+      names.every((other) => apart(name, other, 3)) &&
+      icons.every((other) => other.key === point.key || apart(name, other, 6));
+    const choice = [0, 24, 44]
+      .flatMap((far) => (Object.keys(SIDES) as Side[]).map((side) => ({ side, far })))
+      .find(({ side, far }) => fits(box(side, far)));
+    if (choice === undefined) continue;
+    const name = box(choice.side, choice.far);
+    names.push(name);
+    // The hairline runs from the icon to the nearest point of its name.
+    const to = {
+      x: Math.min(name.right, Math.max(name.left, cx)),
+      y: Math.min(name.bottom, Math.max(name.top, cy)),
+    };
+    labels.set(point.key, {
+      side: choice.side,
+      text,
+      shift: shifted(choice.side, choice.far),
+      leader:
+        choice.far === 0
+          ? null
+          : {
+              x1: (cx / plot.width) * 100,
+              y1: (cy / plot.height) * 100,
+              x2: (to.x / plot.width) * 100,
+              y2: (to.y / plot.height) * 100,
+            },
+    });
   }
-  return { labels, quarters };
+  return { labels, quarters, spots };
 }
 
 /**
- * The armies at a glance: how much each is used (across, each step a
- * multiple, so the many little-used armies spread out) against how often it
+ * The armies at a glance: how much each is used (across, from 0 in equal
+ * steps, so distance reads as usage) against how often it
  * three-stars (up), over faint lines every ten points and a dashed cross at
  * the Legend average 3-star rate and the average army's use, its four
- * quarters named. A wide screen draws each army as its troops, named beside
- * them where the name fits; a phone draws each as its number in the table
- * under the chart. Pointing at or tapping an army names it with its numbers.
+ * quarters named. Each army is drawn as its troops, named beside them where
+ * the name fits; pointing at or tapping one names it with its numbers.
+ * Phones don't show it: each row of the table under it carries the same two
+ * numbers as bars, which a 390px scatter could only repeat.
  */
 export function ArmyMap({
   rows,
   usageEnd,
   threeStar,
 }: {
-  /** Named armies only, in the table's order, numbered as the table numbers them. */
+  /** Named armies only, in the table's order. */
   rows: ArmyRow[];
   /** The usage bars' scale end, so the chart and the table end alike. */
   usageEnd: number;
@@ -171,59 +260,55 @@ export function ArmyMap({
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const measure = useCallback((plot: HTMLDivElement | null) => {
     if (plot === null) return;
-    const observer = new ResizeObserver(([entry]) =>
-      setSize({ width: entry!.contentRect.width, height: entry!.contentRect.height }),
-    );
+    // A plot not laid out yet measures 0 by 0; it keeps the sizes below.
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry!.contentRect;
+      if (width > 0 && height > 0) setSize({ width, height });
+    });
     observer.observe(plot);
     return () => observer.disconnect();
   }, []);
   const used = rows.filter((row) => row.usageRate > 0);
   if (used.length < 2 || usageEnd <= 0) return null;
-  const { low, high } = rateBand(
+  const {
+    low,
+    high,
+    step: bandStep,
+  } = rateBand(
     used.map((row) => starRate(row, 3)),
     threeStar,
   );
-  const least = Math.min(...used.map((row) => row.usageRate));
-  // Below the scale's end too, so armies all used alike still spread out.
-  const start =
-    [...STEPS].reverse().find((step) => step <= least && step < usageEnd) ?? least / 2;
-  const span = Math.log(usageEnd / start) || 1;
   // A little room at both ends so no icon sits on the edge.
-  const x = (usage: number) =>
-    3 + Math.min(1, Math.max(0, Math.log(usage / start) / span)) * 94;
+  const x = (usage: number) => 3 + Math.min(1, Math.max(0, usage / usageEnd)) * 94;
   const y = (rate: number) => ((high - rate) / (high - low)) * 100;
   const averageUse = used.reduce((sum, row) => sum + row.usageRate, 0) / used.length;
   const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
   const tick = (value: number) => `${Number((value * 100).toPrecision(2))}%`;
-  // The round steps between the ends, kept clear of the end's own label.
-  const steps = STEPS.filter((step) => step > start && step < usageEnd / 1.6);
-  const rateStep = high - low > 50 ? 20 : 10;
+  // 0, the round steps between, kept clear of the end's own label, and the end.
+  const useStep = STEPS.find((step) => usageEnd / step <= 6) ?? 0.5;
+  const steps: number[] = [];
+  for (let value = useStep; value < usageEnd - useStep / 2; value += useStep)
+    steps.push(value);
+  // At most five labels up the side.
+  const rateStep = (high - low) / bandStep > 4 ? bandStep * 2 : bandStep;
   const rates: number[] = [];
-  for (let rate = low; rate <= high; rate += rateStep) rates.push(rate);
+  for (let rate = Math.ceil(low / rateStep) * rateStep; rate <= high; rate += rateStep)
+    rates.push(rate);
   const points = used.map((row) => ({
     key: row.key,
     name: row.label,
-    number: String(rows.indexOf(row) + 1),
     usage: row.usageRate,
     x: x(row.usageRate),
     y: y(starRate(row, 3) * 100),
   }));
   const guides = { x: x(averageUse), y: y(threeStar * 100) };
-  // Until it is measured, a wide screen's plot is about 1,060 by 240
-  // pixels and a phone's 290 by 192, where each army is its number, so
-  // needs no name beside it.
-  const wide = layout(
-    points,
-    guides,
-    { width: size?.width ?? 1060, height: size?.height ?? 240, icon: 32, char: 6.7 },
-    true,
-  );
-  const narrow = layout(
-    points,
-    guides,
-    { width: size?.width ?? 290, height: size?.height ?? 192, icon: 20, char: 0 },
-    false,
-  );
+  // Until it is measured, the plot is about 1,060 by 288 pixels.
+  const wide = layout(points, guides, {
+    width: size?.width ?? 1060,
+    height: size?.height ?? 288,
+    icon: 26,
+    char: 6.7,
+  });
   return (
     <figure className="army-map">
       <figcaption>
@@ -242,7 +327,7 @@ export function ArmyMap({
       </p>
       <div className="army-map-plot" aria-hidden="true" ref={measure}>
         {rates.map((rate) => (
-          <span key={rate} className="army-map-rate" style={{ top: `${y(rate)}%` }}>
+          <span key={rate} className="army-map-rate" style={{ top: place(y(rate)) }}>
             {rate > low && rate < high ? <span className="army-map-grid" /> : null}
             <span className="army-map-tick" data-axis="rate">
               {rate}%
@@ -252,25 +337,25 @@ export function ArmyMap({
         <span
           className="army-map-cross"
           data-axis="rate"
-          style={{ top: `${guides.y}%` }}
+          style={{ top: place(guides.y) }}
         />
         <span
           className="army-map-cross"
           data-axis="use"
-          style={{ left: `${guides.x}%` }}
+          style={{ left: place(guides.x) }}
         />
-        {[start, ...steps, usageEnd].map((value) => (
+        {[0, ...steps, usageEnd].map((value) => (
           <span
             key={value}
             className="army-map-tick"
             data-axis="use"
-            style={{ left: `${x(value)}%` }}
+            style={{ left: place(x(value)) }}
           >
             {tick(value)}
           </span>
         ))}
         <span className="army-map-axis" data-axis="use">
-          Usage (log scale)
+          Usage
         </span>
         <span className="army-map-axis" data-axis="rate">
           3-star rate
@@ -281,39 +366,91 @@ export function ArmyMap({
             className="army-map-quarter"
             data-corner={corner}
             data-wide={wide.quarters.has(corner) || undefined}
-            data-narrow={narrow.quarters.has(corner) || undefined}
           >
             {words}
           </span>
         ))}
+        {/* Hairlines from icons to names set further out. */}
+        <svg
+          className="army-map-leader"
+          data-mode="wide"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+        >
+          {[...wide.labels].map(([key, placed]) =>
+            placed.leader === null ? null : (
+              <line key={key} {...placed.leader} vectorEffect="non-scaling-stroke" />
+            ),
+          )}
+        </svg>
         {used.map((row, index) => {
           const point = points[index]!;
-          const label = (mode: "wide" | "narrow") => {
-            const placed = (mode === "wide" ? wide : narrow).labels.get(row.key);
-            return placed === undefined ? null : (
-              <span className="army-map-label" data-mode={mode} data-side={placed.side}>
+          const placed = wide.labels.get(row.key);
+          const label =
+            placed === undefined ? null : (
+              <span
+                className="army-map-label"
+                data-mode="wide"
+                data-side={placed.side}
+                style={{
+                  transform: `translate(${placed.shift.x}px, ${placed.shift.y}px)`,
+                }}
+              >
                 {placed.text}
               </span>
             );
-          };
+          const spot = wide.spots.get(row.key)!;
+          const moved = spot.away ? spot : null;
           return (
-            <span
-              key={row.key}
-              className="army-map-point"
-              data-named={named === row.key || undefined}
-              // A name near either edge opens inward, so it stays on screen.
-              data-edge={point.x > 70 ? "end" : point.x < 30 ? "start" : undefined}
-              style={{ left: `${point.x}%`, top: `${point.y}%` }}
-              onClick={() => setNamed(named === row.key ? null : row.key)}
-              onMouseLeave={() => setNamed(null)}
-            >
-              <UnitArt unitKey={row.key} />
-              <span className="army-map-number">{point.number}</span>
-              {label("wide")}
-              <span className="army-map-name">
-                {row.label} · {percent(row.usageRate)} · {percent(starRate(row, 3))}
+            <Fragment key={row.key}>
+              {moved === null ? null : (
+                <svg
+                  className="army-map-leader"
+                  data-mode="wide"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                >
+                  <line
+                    x1={point.x.toFixed(3)}
+                    y1={point.y.toFixed(3)}
+                    x2={moved.x.toFixed(3)}
+                    y2={moved.y.toFixed(3)}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+              )}
+              {/* The army's exact spot, when its icon was nudged off it. */}
+              {moved === null ? null : (
+                <span
+                  className="army-map-dot"
+                  data-wide
+                  style={{ left: place(point.x), top: place(point.y) }}
+                />
+              )}
+              <span
+                className="army-map-point"
+                data-named={named === row.key || undefined}
+                // A name near either edge opens inward, so it stays on screen.
+                data-edge={point.x > 70 ? "end" : point.x < 30 ? "start" : undefined}
+                style={
+                  {
+                    "--wx": place(spot.x),
+                    "--wy": place(spot.y),
+                  } as CSSProperties
+                }
+                onClick={() => setNamed(named === row.key ? null : row.key)}
+                // A mouse moving off lets go; a finger's tap stays picked.
+                onPointerLeave={(event) => {
+                  if (event.pointerType === "mouse") setNamed(null);
+                }}
+              >
+                <UnitArt unitKey={row.key} />
+                {label}
+                <span className="army-map-name">
+                  {row.label} · {percent(row.usageRate)} · {percent(starRate(row, 3))}
+                </span>
               </span>
-            </span>
+            </Fragment>
           );
         })}
       </div>

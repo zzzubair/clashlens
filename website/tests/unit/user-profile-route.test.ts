@@ -343,12 +343,12 @@ it("shows each linked player's Season heat map and their rank's move since the R
   // The card stays compact: today's battles are on the player page.
   expect(card).not.toContain("today-slot");
   // The Season so far in the dashboard's grid, each day against the player's
-  // own: best green, worst red, and a lost day marked. One key for every card
+  // own: best deep ember, worst plain, and a lost day marked. One key for every card
   // sits beside the section's heading.
   expect(html).toMatch(
     /id="user-players-title">Clash players<\/h2><span class="season-heat-key">/,
   );
-  expect(card).not.toContain("Season: worst");
+  expect(card).not.toContain("own Season: worst");
   expect(card).toContain('<div class="linked-player-heat"><div class="season-heat">');
   expect(card).toContain('class="season-heat-played is-loss"');
   expect(card).toContain("Day 1: −20</span>");

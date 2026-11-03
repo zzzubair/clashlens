@@ -140,7 +140,7 @@
   align-items: center;
   justify-content: flex-end;
   color: var(--cl-ink);
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   font-weight: 700;
 }
@@ -243,7 +243,7 @@
 
 /* Card titles use the site's condensed heading face, as the dashboard's do. */
 .group-card-title > h3 {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.4rem;
   font-weight: 700;
   line-height: 1.1;

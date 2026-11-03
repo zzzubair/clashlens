@@ -467,10 +467,8 @@ it("counts a ranking as old once it passes 10 minutes while the page is open", a
       },
       "",
     );
-  expect(await render("2026-10-04T04:10:00Z")).not.toContain("more than 10 minutes old");
-  expect(await render("2026-10-04T04:10:01Z")).toContain(
-    "1 of 1 more than 10 minutes old",
-  );
+  expect(await render("2026-10-04T04:10:00Z")).not.toMatch(/Updated \d+ min ago/);
+  expect(await render("2026-10-04T04:10:01Z")).toContain("Updated 10 min ago");
 });
 
 function visitor(address?: string) {
@@ -694,7 +692,7 @@ it("draws the example Legend day as the dashboard does: chip, places, range and 
     /<small>Last Reset<\/small>#1,288<\/span><span class="teaser-now"><small>Now<\/small><b class="rank-mark">#1,188<\/b><\/span><span class="teaser-next"><small><i class="teaser-diamond"><\/i>Projected place<\/small>#1,140/,
   );
   expect(html).toMatch(
-    /Next Reset range<\/span>#1,105<i style="--at:41\.17[\d]*%"><\/i>#1,190/,
+    /Next Reset range<\/span><small>best <\/small>#1,105<i style="--at:41\.17[\d]*%"><\/i><small>worst <\/small>#1,190/,
   );
   // The Season in the shared heat map: 22 played days with their results,
   // the losing ones marked, Today on day 23 and 5 empty days to come.

@@ -24,7 +24,7 @@ import { signed } from "./LegendClock";
 const DEFENSE_ROWS = 5;
 /** A phone shows this many army types before Show all. */
 const PHONE_DEFENSE_ROWS = 3;
-/** Not tripled is coloured only when this many points or more from the Legends... */
+/** Held is coloured only when this many points or more from the Legends... */
 const HELD_MARGIN = 5;
 /** ...and Avg lost only when this many trophies or more. */
 const LOST_MARGIN = 3;
@@ -128,7 +128,7 @@ function Bar({ own }: { own: number | null }) {
   );
 }
 
-/** Not tripled's difference: "+10 pts", said "10 points above". */
+/** Held's difference: "+10 pts", said "10 points above". */
 function pointsDiff(diff: number | null): [string, string] {
   if (diff === null) return ["–", "no Legends average yet"];
   if (diff === 0) return ["0 pts", "same as the Legends average"];
@@ -322,7 +322,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
           )}
         </span>
         <WithLegends
-          label="Not tripled"
+          label="Held"
           own={percent(heldPercent(outcome))}
           diff={pointsDiff(
             difference(heldPercent(outcome), legends && heldPercent(legends)),
@@ -363,7 +363,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
             <InfoTip label="What the columns mean">
               <p>Usage: your share of defenses against each army.</p>
               <p>
-                Not tripled: kept the attacker under 3 stars. Per defense: trophies lost a
+                Held: kept the attacker under 3 stars. Per defense: trophies lost a
                 defense.
               </p>
               <p>
@@ -394,7 +394,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
               Army<span className="army-head-usage"> · usage</span>
             </span>
             <span>Usage</span>
-            <span>Not tripled</span>
+            <span>Held</span>
             <span>Per defense</span>
           </div>
           {listed.map((army, index) =>

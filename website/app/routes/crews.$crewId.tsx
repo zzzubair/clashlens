@@ -18,7 +18,6 @@ import {
   DefenseOrder,
   emptyBoardText,
   PeriodSwitch,
-  PlacesMeter,
   RoleChip,
 } from "../components/CrewBoards";
 import { CrewInvite } from "../components/CrewForms";
@@ -167,17 +166,20 @@ export default function CrewRoute() {
         </div>
         <div className="crew-places">
           {/* Accounts fill a crew's room; the Clashers who own them may hold
-              several each. The meter says how full, with its count beside it. */}
-          <p>{crewCount(crew.used, clashers)}</p>
-          <span className="crew-room">
-            <PlacesMeter used={crew.used} size={crew.size} />
+              several each. How full it is, in words on the same line. */}
+          <p>
+            {crewCount(crew.used, clashers)}
             <span aria-hidden="true">
-              {crew.used}/{crew.size}
+              {" · "}
+              <span className="crew-places-used">
+                {crew.used}/{crew.size} places used
+              </span>
             </span>
             <span className="sr-only">
+              {" "}
               Room for {crew.size} accounts, {open} free
             </span>
-          </span>
+          </p>
         </div>
         {myRole === null ? null : (
           <div className="crew-actions">

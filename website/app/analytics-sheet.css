@@ -124,7 +124,7 @@
   border-radius: 999px;
   font: inherit;
   font-size: 0.9rem;
-  font-weight: 800;
+  font-weight: 650;
   cursor: pointer;
 }
 .analytics-sheet-note {
@@ -160,7 +160,7 @@
 }
 .analytics-sheet-stats dd {
   margin: 0 0 0.2rem;
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.6rem;
   font-weight: 700;
   line-height: 1.1;
@@ -216,12 +216,12 @@
 }
 .analytics-variant-name {
   grid-area: name;
-  font-weight: 800;
+  font-weight: 650;
   overflow-wrap: anywhere;
 }
 .analytics-variant-share {
   grid-area: share;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.2rem;
   font-weight: 700;
   letter-spacing: 0;
@@ -303,14 +303,14 @@
 }
 .analytics-examples-share strong {
   color: var(--cl-ink);
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.2rem;
   font-weight: 700;
 }
 .analytics-example-head .battle-army {
   flex: none;
   margin: 0;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* Army portraits, sized to read on a phone. */
@@ -366,7 +366,7 @@
   background: rgb(0 0 0 / 78%);
   border-radius: 0.4rem 0 0.4rem 0;
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1rem;
   text-align: center;
 }
@@ -377,7 +377,7 @@
 .analytics-page .army-castle-label {
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 .analytics-page .army-hero {
   gap: 0.15rem;

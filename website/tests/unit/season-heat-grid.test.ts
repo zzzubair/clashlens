@@ -95,6 +95,18 @@ describe("Season heat map", () => {
     expect(heatCells(season([day(1, 40)]), "net")[0]!.shade).toBe(1);
   });
 
+  it("reds a lost day only on the palest steps, where red can be read", () => {
+    // Every day lost: the least bad is the Season's best, its richest step.
+    const data = season([day(1, -10), day(2, -120), day(3, -60)], 4);
+    const html = renderToStaticMarkup(createElement(HeatMapCard, { data }));
+    const cellOf = (n: number) =>
+      html.split("<li").find((cell) => cell.includes(`aria-label="Day ${n}: `))!;
+    expect(cellOf(1)).toContain("--cl-heat-4");
+    expect(cellOf(1)).not.toContain("is-loss");
+    expect(cellOf(2)).toContain("--cl-heat-0");
+    expect(cellOf(2)).toContain("is-loss");
+  });
+
   it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
     const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
     const lost = day(3, -304, quiet);

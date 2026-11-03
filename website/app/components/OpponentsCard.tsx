@@ -321,8 +321,6 @@ export function OpponentsCard({
                 ? "+42 pts held 42 points more often."
                 : "+8 lost 8 fewer a defense."}
             </p>
-            {/* A phone keeps the slots' key here. */}
-            <SlotsKey />
           </InfoTip>
         ) : null
       }
@@ -384,7 +382,13 @@ export function OpponentsCard({
           <span>Player</span>
           <span>Your hit</span>
           <span>Their defenses</span>
-          <span>Strength</span>
+          {/* The unit every row's signed number is in, said once. */}
+          <span>
+            Strength
+            <small>
+              {mode === "held" ? "held, pts vs avg" : "trophies a defense vs avg"}
+            </small>
+          </span>
         </div>
         {sorted.map(({ row, strength }, index) => {
           const held = row.defenses.filter((defense) => defense.stars < 3).length;

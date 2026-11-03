@@ -51,6 +51,7 @@ import "./explore.css";
 import "./appearance.css";
 import "./header-search.css";
 import "./brand.css";
+import "./quiet-glass.css";
 import "./account-menu.css";
 
 export interface RootLoaderData {
@@ -153,12 +154,11 @@ function useBarePage(): boolean {
   return useMatches().some((match) => (match.handle as BareHandle | undefined)?.bare);
 }
 
-// The files of the @font-face rules in brand.css: Inter, and the scoreboard
-// face at both weights the first screen of a page uses.
+// The files of the @font-face rules in brand.css: Archivo for words, and
+// Big Shoulders Display for titles and the scoreboard numbers.
 const FONT_FILES = [
-  "/fonts/inter-latin.woff2",
-  "/fonts/barlow-condensed-600-latin.woff2",
-  "/fonts/barlow-condensed-700-latin.woff2",
+  "/fonts/archivo-latin.woff2",
+  "/fonts/big-shoulders-display-latin.woff2",
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -220,6 +220,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </p>
           <nav aria-label="Site information">
             <a href="/blog">Blog</a>
+            <DiscordLink />
             <a href="/privacy">Privacy</a>
             <AnalyticsChoicesButton>Analytics choices</AnalyticsChoicesButton>
           </nav>
@@ -497,9 +498,6 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
             Sign in
           </Link>
         )}
-        <span className="site-nav-wide">
-          <DiscordLink />
-        </span>
       </div>
       <BottomTabs data={data} />
     </header>

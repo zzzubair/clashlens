@@ -12,6 +12,11 @@ const RING = 100;
  * kinds: attacks outside the dial, defenses inside.
  */
 const TICK = { attack: [RING + 5, RING + 17], defense: [RING - 17, RING - 5] } as const;
+/** The three hours named outside the dial, as minutes after the Reset, past the attack ticks. */
+const HOURS = [360, 720, 1080] as const;
+const HOUR_RADIUS = RING + 30;
+/** Within this many minutes of a named hour, "Now" is written on its far side. */
+const HOUR_CLEAR = 75;
 /** A mark's middle, and its button's: the middle of its ticks. */
 const MARK_RADIUS = { attack: RING + 11, defense: RING - 11 } as const;
 /** Battles sharing a mark are ticks this far apart along the dial. */
@@ -22,9 +27,9 @@ const HIT = 28;
 const MARK_GAP = 3;
 /**
  * The face's box: the dial and its attack ticks, with room on top for the
- * Reset's name, so the dial fills as much of the card as it can.
+ * Reset's name and round the sides and foot for the hours named there.
  */
-const FACE = { left: -124, top: -140, width: 248, height: 264 } as const;
+const FACE = { left: -156, top: -140, width: 312, height: 282 } as const;
 export function timeFormatter(timeZone: string): Intl.DateTimeFormat {
   return new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
@@ -88,12 +93,19 @@ function markMinutes(kind: ClockMark["kind"], count: number): number {
 
 /**
  * Where "Now" is written: outside the ring, 66 minutes ahead of the dot where
- * no battle has happened yet, so it never reads as part of the countdown; in
+ * no battle has happened yet, so it never reads as part of the countdown. In
  * the day's last 100 minutes, where ahead is the day's start, straight in
- * from the dot instead.
+ * from the dot. Near a named hour it moves 70 minutes to the side away from
+ * it, so every hour keeps its name; where an hour's name is just ahead,
+ * straight out from the dot.
  */
 function nowLabel(now: number): [number, number] {
-  return now > DAY_MINUTES - 100 ? point(now, RING - 38) : point(now + 66, RING + 10);
+  if (now > DAY_MINUTES - 100) return point(now, RING - 38);
+  const near = HOURS.find((hour) => Math.abs(now - hour) <= HOUR_CLEAR);
+  if (near !== undefined) return point(now >= near ? now + 70 : now - 70, RING + 28);
+  const ahead = now + 66;
+  const named = HOURS.some((hour) => Math.abs(ahead - hour) <= 45);
+  return named ? point(now, RING + 30) : point(ahead, RING + 10);
 }
 
 /**
@@ -371,10 +383,31 @@ export function LegendClock({
               d={`M0 ${-RING}A${RING} ${RING} 0 ${elapsed > DAY_MINUTES / 2 ? 1 : 0} 1 ${arcX.toFixed(1)} ${arcY.toFixed(1)}`}
             />
           ) : null}
-          {/* The Reset named on top, where the day starts; its time is in the middle. */}
-          <text className="clock-reset-label" y={-RING - 25}>
-            Reset
+          {/* The Reset's time on top, where the day starts, named like the
+              other three quarters; the middle says it is the Reset. */}
+          <text className="clock-hour" textAnchor="middle" y={-HOUR_RADIUS + 6}>
+            {dayStart !== null ? format.format(dayStart) : "Reset"}
           </text>
+          {/* Every six hours after the Reset named quietly outside the dial,
+              in the Clasher's own time, so a tick can be read as a time. */}
+          {dayStart !== null
+            ? HOURS.map((minutes) => {
+                const [x, y] = point(minutes, HOUR_RADIUS);
+                return (
+                  <text
+                    key={minutes}
+                    className="clock-hour"
+                    x={x.toFixed(1)}
+                    y={(minutes === 720 ? y + 10 : y + 4).toFixed(1)}
+                    textAnchor={
+                      minutes === 360 ? "start" : minutes === 1080 ? "end" : "middle"
+                    }
+                  >
+                    {format.format(dayStart + minutes * 60_000)}
+                  </text>
+                );
+              })
+            : null}
           {/* Each battle a tick at its time; a mark's battles side by side. */}
           {marks.flatMap((mark) =>
             tickMinutes(mark).map((minutes, index) => {

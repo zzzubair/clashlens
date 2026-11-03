@@ -106,18 +106,28 @@ const NO_RESULT = {
   missing: "no saved result",
 } as const;
 
-/** One line on a pointed or picked day: its number, date, result and finish. */
+/**
+ * A pointed or picked day: its number and date, quiet, then its result and
+ * finish, stronger; a phone sets the two on their own lines.
+ */
 function dayReadout(
   cell: HeatCell,
   day: SeasonDay | undefined,
   mode: HeatMode,
   date: string | null,
-): string {
+) {
   const name = date ? `Day ${cell.day} · ${date}` : `Day ${cell.day}`;
-  if (cell.kind in NO_RESULT || day === undefined)
-    return `${name} · ${NO_RESULT[cell.kind as keyof typeof NO_RESULT] ?? NO_RESULT.missing}`;
-  const result = isShieldDay(day) ? "no battles" : `${signedOr(cell.value)} ${mode}`;
-  return `${name} · ${result} · ended on ${count(day.endTrophies)}`;
+  const result =
+    cell.kind in NO_RESULT || day === undefined
+      ? (NO_RESULT[cell.kind as keyof typeof NO_RESULT] ?? NO_RESULT.missing)
+      : `${isShieldDay(day) ? "no battles" : `${signedOr(cell.value)} ${mode}`} · ended on ${count(day.endTrophies)}`;
+  return (
+    <>
+      <span className="season-heat-readout-day">{name}</span>
+      <span className="season-heat-readout-gap"> · </span>
+      <span className="season-heat-readout-result">{result}</span>
+    </>
+  );
 }
 
 const DAY_MS = 86_400_000;

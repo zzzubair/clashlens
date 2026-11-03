@@ -1147,11 +1147,7 @@ export default function ArmyAnalyticsRoute() {
               {snapshot ? (
                 `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
               ) : coveredDays.length ? (
-                // A phone drops "of 28" so the range fits beside Sort.
-                <span>
-                  Days {dayList(coveredDays)}
-                  <span className="analytics-days-of"> of 28</span>
-                </span>
+                <span>Days {dayList(coveredDays)} of 28</span>
               ) : (
                 `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`
               )}

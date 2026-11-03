@@ -43,7 +43,7 @@
   border-radius: 999px;
   font-family: var(--cl-font);
   font-size: 0.8125rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.3;
   white-space: nowrap;
   vertical-align: 0.1rem;
@@ -183,7 +183,7 @@
 .crew-stepper input {
   text-align: center;
   font-size: 1.15rem;
-  font-weight: 800;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
@@ -288,23 +288,9 @@
 .crew-places p {
   flex: 1 1 100%;
   margin: 0;
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-
-.crew-room {
-  display: flex;
-  flex: 1 1 100%;
-  gap: 0.6rem;
-  align-items: center;
   color: var(--cl-muted);
-  font-size: 0.8125rem;
-  font-weight: 700;
-}
-
-.crew-room .meter {
-  flex: 1;
-  min-width: 3rem;
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
 .crew-actions {
@@ -356,10 +342,6 @@
 
   .crew-places p {
     flex: 0 1 auto;
-  }
-
-  .crew-room {
-    flex: 1 1 6rem;
   }
 
   .crew-head > :is(.crew-actions, .crew-day) {
@@ -534,7 +516,7 @@
   }
 
   .crew-page .crew-boards .crew-board-head :is(h2, h3) {
-    font-size: 1.2rem;
+    font-size: 1rem;
   }
 }
 
@@ -683,9 +665,10 @@
 /* Card titles in the condensed heading face, as on the dashboard. */
 .crew-page .crew-board-head :is(h2, h3) {
   margin: 0;
-  font-family: var(--cl-font-heading);
-  font-size: 1.4rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 /* A board's title opens its own page: every account, and who is missing. A
@@ -802,7 +785,7 @@
 
 .crew-board-foot a:not(.button, .show-all) {
   color: var(--cl-action-text);
-  font-weight: 800;
+  font-weight: 650;
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
@@ -890,7 +873,7 @@
 .crew-who b {
   display: block;
   overflow: hidden;
-  font-weight: 800;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -913,7 +896,7 @@
 
 /* Numbers stay in the ink colour on every board; the sign says gain or loss. */
 .crew-value {
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.1;
@@ -987,7 +970,7 @@
 .crew-missing li a {
   overflow: hidden;
   color: var(--cl-ink);
-  font-weight: 800;
+  font-weight: 650;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1025,7 +1008,7 @@
 .crew-missing h2 {
   margin: 0;
   padding: 0.9rem 1rem 0.65rem;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.4rem;
   font-weight: 700;
 }
@@ -1037,7 +1020,7 @@
   padding: 0.35rem 0;
   color: var(--cl-action-text);
   font: inherit;
-  font-weight: 800;
+  font-weight: 650;
   text-decoration: underline;
   text-underline-offset: 0.18em;
   background: none;
@@ -1097,7 +1080,7 @@
   min-height: 2.75rem;
   color: var(--cl-ink);
   font-size: 1.1rem;
-  font-weight: 800;
+  font-weight: 650;
   background: var(--cl-raised);
   border: 1px solid transparent;
   border-radius: 999px;
@@ -1209,7 +1192,7 @@
 
 .crew-accounts .crew-who a {
   color: var(--cl-ink);
-  font-weight: 800;
+  font-weight: 650;
 }
 
 /* A small arrow after a Clasher's or a player's name says it opens their page. */

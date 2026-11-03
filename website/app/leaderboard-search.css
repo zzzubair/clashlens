@@ -119,7 +119,7 @@
 }
 
 .jump-rank {
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.1rem;
   font-variant-numeric: tabular-nums;
 }
@@ -211,7 +211,7 @@
 }
 
 .rank-search-results strong {
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .rank-search-results small {
@@ -355,7 +355,7 @@
 }
 
 .standings-range {
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   font-weight: 700;
 }

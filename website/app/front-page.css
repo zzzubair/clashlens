@@ -15,8 +15,8 @@
 }
 
 @media (min-width: 64rem) {
-  /* The three links follow the search, beside the example, and end level
-     with its foot, so the two columns start and end together. */
+  /* The three links follow the search, beside the example, a short step
+     under the live line rather than pushed down to the example's foot. */
   .front-grid-pitch {
     grid-template-areas:
       "hero board"
@@ -50,9 +50,9 @@
 
   .front-grid-pitch .front-more {
     grid-area: more;
-    align-self: end;
+    align-self: start;
     max-width: 34rem;
-    margin-top: 2rem;
+    margin-top: 2.5rem;
   }
 }
 
@@ -78,8 +78,10 @@
 .front-hero h1 {
   max-width: 16ch;
   margin: 0;
-  font-family: var(--cl-font-score);
-  font-size: clamp(2.6rem, 1.75rem + 3.75vw, 4rem);
+  font-family: var(--cl-font);
+  font-size: clamp(2.25rem, 1.6rem + 2.6vw, 3.25rem);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
   text-wrap: balance;
 }
 
@@ -126,7 +128,7 @@
 .teaser-example {
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 /* The example's two parts sit open on the glass, a hairline between them,
@@ -192,7 +194,9 @@
 }
 
 .teaser-score strong {
+  font-family: var(--cl-font-score);
   font-size: 2.4rem;
+  font-weight: 800;
   line-height: 0.95;
 }
 
@@ -236,9 +240,10 @@
   color: var(--cl-ink);
 }
 
-.teaser-battles-head b {
+:root .teaser-battles-head b {
   margin-left: auto;
   font-size: 0.95rem;
+  font-weight: 600;
 }
 
 /* Attacks in green, defenses in red, as on the dashboard. */
@@ -253,7 +258,7 @@
 .teaser-tiles {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 3px;
+  gap: 6px;
 }
 
 /* Stars over trophies, the dashboard's tile in miniature. Each tile is a
@@ -267,10 +272,8 @@
   gap: 0.1rem;
   min-width: 0;
   min-height: 2.3rem;
-  background: var(--cl-raised);
-  border: 1px solid transparent;
-  border-radius: 6px;
-  font: 700 0.875rem/1 var(--cl-font-score);
+  border-bottom: 2px solid color-mix(in srgb, var(--cl-ink) 24%, transparent);
+  font: 600 0.8125rem/1 var(--cl-font);
   font-variant-numeric: tabular-nums;
 }
 
@@ -285,31 +288,14 @@
   margin-left: -1px;
 }
 
-.teaser-defenses .teaser-tiles > span {
-  background: var(--cl-panel);
-}
-
-/* A three-star attack is the one to aim for: a faint gold edge. */
-.teaser-attacks [data-stars="3"] {
-  border-color: color-mix(in srgb, var(--cl-gold) 45%, transparent);
-}
-
-/* On white, a pale yellow tile with an orange edge, not tan. */
-:root:not([data-theme="dark"]) .teaser-attacks [data-stars="3"] {
-  background: #fff6d8;
-  border-color: #f2b45a;
-}
-
-/* A slot still to play is an empty dashed box. */
+/* A slot still to play is only its faint rule. */
 .teaser-tiles > .teaser-tile-empty {
-  background: transparent;
-  border: 1px dashed var(--cl-outline);
-  box-shadow: none;
+  border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
 }
 
 /* Last Reset, Now and the projected place, read as the real Legend day card
-   does: three columns split by hairlines, Now in ember, the projected place
-   lighter with its diamond, over the Next Reset range line. */
+   does: the projected place leads, biggest with the ember label and its
+   diamond, over the Next Reset range line. */
 .teaser-places {
   display: grid;
   gap: 0.45rem;
@@ -319,9 +305,9 @@
   display: grid;
   grid-template-columns: auto auto auto;
   justify-content: start;
-  font-family: var(--cl-font-score);
-  font-size: 1.05rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1rem;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -349,7 +335,7 @@
   font: 600 0.8125rem var(--cl-font);
 }
 
-.teaser-now small {
+.teaser-next small {
   color: var(--cl-action-text);
 }
 
@@ -360,13 +346,16 @@
 }
 
 .teaser-next {
-  color: var(--cl-muted);
+  color: var(--cl-ink);
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.1;
 }
 
 .teaser-diamond,
 .teaser-range i::after {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.7rem;
+  height: 0.7rem;
   background: var(--cl-action);
   transform: rotate(45deg);
 }
@@ -392,9 +381,10 @@
   min-width: 2.5rem;
   max-width: 9rem;
   height: 10px;
-  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 2px
+  background: linear-gradient(var(--range-line), var(--range-line)) center / 100% 2px
     no-repeat;
-  border-inline: 2px solid var(--cl-outline);
+  border-inline: 2px solid var(--range-line);
+  --range-line: color-mix(in srgb, var(--cl-ink) 28%, transparent);
 }
 
 .teaser-range i::after {
@@ -646,14 +636,15 @@
 
 .front-more strong {
   grid-area: title;
-  font-family: var(--cl-font-score);
-  font-size: 1.35rem;
-  line-height: 1.1;
+  font-family: var(--cl-font);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .front-more strong::after {
   margin-left: 0.3rem;
-  color: var(--cl-action-text);
+  color: var(--cl-muted);
   content: "›";
 }
 

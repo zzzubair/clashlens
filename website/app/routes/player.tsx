@@ -887,10 +887,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <h2 id="season-days-title">Daily Legend log</h2>
             {allHistory.length > 0 ? <LogBarsKey /> : null}
           </div>
-          {/* Shown only while a day in the log carries the hollow dot. */}
+          {/* Each shown only while a day in the log carries its dot. */}
           <p className="log-key" aria-hidden="true">
             <span className="day-mark log-key-dot" /> Not yet confirmed by a reading from
             the game. Open the day for why.
+          </p>
+          <p className="log-key log-key-gap" aria-hidden="true">
+            <span className="day-mark day-mark-gap log-key-dot" /> Uncertain: open the day
+            for why.
           </p>
           {selectedDay &&
           !pastDay &&

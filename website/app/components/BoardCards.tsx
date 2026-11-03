@@ -113,28 +113,38 @@ export function GoalCard({ data }: { data: GoalData }) {
       {/* The verdict in its colour and the gap to the goal line at the last
           Reset, then the two paces as bars; the chart shows both. */}
       <p className={`goal-headline goal-pace-${status}`}>
-        <b>
-          {status === "ahead" ? (
-            "Already ahead"
-          ) : status === "on" ? (
-            "On pace"
-          ) : (
-            <>
-              Behind by {Math.round(need - plan.pace)}
-              <span aria-hidden="true">/day</span>
-              <span className="sr-only"> a day</span>
-            </>
-          )}
-        </b>{" "}
-        <span>
-          <span aria-hidden="true">· </span>
-          {plan.gap === 0
-            ? `Level with ${rank}`
-            : `${Math.abs(plan.gap).toLocaleString("en-US")} ${plan.gap > 0 ? "ahead of" : "short of"} ${rank}`}
-          <small className="goal-when"> at last Reset</small>
-        </span>
+        {status === "ahead" && plan.gap > 0 ? (
+          // Ahead says it once, with the gap as the verdict.
+          <b>
+            {plan.gap.toLocaleString("en-US")} ahead of {rank}
+            <small className="goal-when"> at last Reset</small>
+          </b>
+        ) : (
+          <>
+            <b>
+              {status === "ahead" ? (
+                "Already ahead"
+              ) : status === "on" ? (
+                "On pace"
+              ) : (
+                <>
+                  Behind by {Math.round(need - plan.pace)}
+                  <span aria-hidden="true">/day</span>
+                  <span className="sr-only"> a day</span>
+                </>
+              )}
+            </b>{" "}
+            <span>
+              <span aria-hidden="true">· </span>
+              {plan.gap === 0
+                ? `Level with ${rank}`
+                : `${Math.abs(plan.gap).toLocaleString("en-US")} ${plan.gap > 0 ? "ahead of" : "short of"} ${rank}`}
+              <small className="goal-when"> at last Reset</small>
+            </span>
+          </>
+        )}
       </p>
-      <PaceBars need={Math.max(0, need)} pace={plan.pace} />
+      <PaceBars need={status === "ahead" ? null : Math.max(0, need)} pace={plan.pace} />
       <p className="sr-only">
         Doing is over {days} · {plan.daysLeft} day{plan.daysLeft === 1 ? "" : "s"} left
       </p>
@@ -186,9 +196,19 @@ function SkipPlan({
 
 /**
  * The trophies a day needed and those you're doing, as two bars from zero
- * on one scale: the need in the goal line's ink, yours in ember.
+ * on one scale: the need in the goal line's ink, yours in ember. Already
+ * ahead, nothing is needed, so yours is one line of words: a lone bar
+ * would measure against nothing.
  */
-function PaceBars({ need, pace }: { need: number; pace: number }) {
+function PaceBars({ need, pace }: { need: number | null; pace: number }) {
+  if (need === null) {
+    return (
+      <p className="goal-pace-line">
+        Current pace <b>{perDay(pace)}</b>
+        <span className="goal-pace-note"> · dashed: if this pace continues</span>
+      </p>
+    );
+  }
   const low = Math.min(0, need, pace);
   const high = Math.max(1, need, pace);
   const at = (value: number) => (100 * (value - low)) / (high - low);
@@ -260,12 +280,12 @@ function GoalChart({
   if (data.line === null || data.lineThen === null) return null;
   const { line, lineThen } = data;
   const width = 320;
-  const height = 168;
+  const height = 140;
   // The plot, with room on the left for the trophy counts, below for the
-  // days and on the right for the ends' names, "#200 6,441" at about 7 a
-  // character.
+  // days and on the right for the ends' names, "#200 6,441" at about 7.2 a
+  // character, kept 10 clear of the card's edge.
   const left = 40;
-  const right = width - 40 - 7 * Math.max(3, rank.length);
+  const right = width - 18 - 7.2 * (Math.max(3, rank.length) + 6);
   const top = 10;
   const bottom = height - 24;
   const steps = data.history.length - 1;
@@ -296,10 +316,12 @@ function GoalChart({
   const firstDay = data.finished - steps + 1;
   // Along the foot: "Last Reset" (about 67 wide) centred on its line and
   // "Season end" (about 74) under the ends, a word space apart at least;
-  // when they'd come closer, Last Reset ends at its line and Season end
-  // starts after it. The first day shows when it clears Last Reset.
+  // when they'd come closer (the Season's last days), Last Reset ends just
+  // left of its line, or, with no room there either, the dashed line alone
+  // marks it. The first day shows when it clears Last Reset.
   const apart = right - now >= 84;
-  const resetLeft = apart ? now - 34 : now - 70;
+  const resetFits = apart || now - left >= 125;
+  const resetLeft = apart ? now - 34 : resetFits ? now - 71 : now;
   const ends = [
     { name: "You", value: youEnd, you: true },
     { name: rank, value: lineEnd, you: false },
@@ -377,6 +399,16 @@ function GoalChart({
           [total, youEnd],
         ])}
       />
+      {/* The gap between the two at the last Reset, bracketed and named. */}
+      {Math.abs(y(you) - y(line)) >= 24 ? (
+        <g className="goal-gap">
+          <path d={`M${now - 4} ${y(you) + 5}H${now - 8}V${y(line) - 5}H${now - 4}`} />
+          <text x={now - 13} y={(y(you) + y(line)) / 2 + 4} textAnchor="end">
+            {you >= line ? "+" : "−"}
+            {Math.abs(Math.round(you - line)).toLocaleString("en-US")}
+          </text>
+        </g>
+      ) : null}
       {/* Where each stood at the last Reset, then where each is projected to finish. */}
       <circle className="goal-end" cx={now} cy={y(line)} r="3" />
       <circle className="goal-end goal-end-you" cx={now} cy={y(you)} r="3.5" />
@@ -387,6 +419,9 @@ function GoalChart({
         cy={y(youEnd)}
         r="4"
       />
+      {/* The ends are where each is projected to finish, at Season end
+          under them, each an estimate (≈), so neither reads as today's
+          count; the note under the chart says the dashes are a pace. */}
       {ends.map((end, index) => (
         <text
           key={end.name}
@@ -394,7 +429,7 @@ function GoalChart({
           x={right + 8}
           y={(nameY[index] as number) + 5}
         >
-          {end.name} <tspan>{Math.round(end.value).toLocaleString("en-US")}</tspan>
+          {end.name} <tspan>≈{Math.round(end.value).toLocaleString("en-US")}</tspan>
         </text>
       ))}
       {resetLeft - left >= 50 ? (
@@ -402,17 +437,19 @@ function GoalChart({
           Day {firstDay}
         </text>
       ) : null}
-      <text
-        className="goal-axis goal-axis-today"
-        x={apart ? now : now - 3}
-        y={height - 6}
-        textAnchor={apart ? "middle" : "end"}
-      >
-        Last Reset
-      </text>
+      {resetFits ? (
+        <text
+          className="goal-axis goal-axis-today"
+          x={apart ? now : now - 4}
+          y={height - 6}
+          textAnchor={apart ? "middle" : "end"}
+        >
+          Last Reset
+        </text>
+      ) : null}
       <text
         className="goal-axis"
-        x={apart ? right : Math.max(now + 3, right - 33)}
+        x={apart ? right : Math.max(now + 6, right - 33)}
         y={height - 6}
         textAnchor={apart ? "middle" : "start"}
       >
@@ -521,7 +558,7 @@ function RivalTable({
                   <span
                     className={`rival-moved ${row.moved > 0 ? "positive" : "negative"}`}
                   >
-                    {row.moved > 0 ? "▲" : "▼"}
+                    <span className="rank-move-arrow">{row.moved > 0 ? "▲" : "▼"}</span>
                     {count(Math.abs(row.moved))}
                   </span>
                 ) : null}

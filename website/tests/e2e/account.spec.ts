@@ -140,7 +140,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   expectNoPageErrors(errors);
 });
 
-test("the account name opens your profile, tools, Settings and Sign out beside Join Discord", async ({
+test("the account name opens your profile, tools, Settings and Sign out; Join Discord sits in the footer", async ({
   page,
   browser,
   baseURL,
@@ -149,7 +149,9 @@ test("the account name opens your profile, tools, Settings and Sign out beside J
   await ensureAccount(page, "lensscout", "Lens Scout");
   await page.goto("/blog");
   const header = page.getByRole("banner");
-  const discord = header.getByRole("link", { name: /^Join Discord/ });
+  const discord = page
+    .getByRole("contentinfo")
+    .getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
   await expect(discord).toHaveAttribute("target", "_blank");
   const menu = header.locator("details.account-menu");

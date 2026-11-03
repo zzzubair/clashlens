@@ -20,7 +20,7 @@
   font-size: 1.2rem;
 }
 .player-page .player-live-rank :is(.score-positive, .score-negative) {
-  font: 700 1.2rem var(--cl-font-score);
+  font: 650 1.05rem var(--cl-font);
 }
 @media (hover: hover) and (pointer: fine) {
   .player-page .player-live-rank:hover .player-live-rank-since {

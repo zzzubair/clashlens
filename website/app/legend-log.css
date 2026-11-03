@@ -7,6 +7,10 @@
    over its days, under a hairline and split by hairlines. Today stands out
    as a faint band across it: no edge, no rounding. */
 .player-page .legend-log {
+  /* Lost and gained in the numbers' own red and green, faded, so they read
+     clearly as loss and gain while the net's ember diamond leads. */
+  --log-lost: color-mix(in srgb, var(--cl-negative) 42%, transparent);
+  --log-gained: color-mix(in srgb, var(--cl-positive) 42%, transparent);
   padding: 1rem 0 0.5rem;
 }
 .player-page .log-title {
@@ -15,7 +19,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.25rem 1rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 .player-page .log-title > h2 {
   margin: 0;
@@ -41,10 +45,10 @@
   content: "";
 }
 .player-page .log-bars-lost::before {
-  background: color-mix(in srgb, var(--cl-negative) 80%, transparent);
+  background: var(--log-lost);
 }
 .player-page .log-bars-gained::before {
-  background: color-mix(in srgb, var(--cl-positive) 80%, transparent);
+  background: var(--log-gained);
 }
 .player-page .log-bars-key > .log-bars-net::before {
   width: 0.55rem;
@@ -84,7 +88,7 @@
    readers; icons, plates and colours say which number is which. */
 /* A phone's stacked rows read on their own; a wide screen names its columns. */
 .player-page .legend-log {
-  --log-zero: color-mix(in srgb, var(--cl-ink) 35%, transparent);
+  --log-zero: color-mix(in srgb, var(--cl-ink) 50%, transparent);
 }
 .player-page .log-head {
   display: none;
@@ -111,12 +115,30 @@
   .player-page .log-head > :is(:nth-child(2), :nth-child(n + 4)) {
     text-align: right;
   }
-  /* Over the bars, only their zero line, which runs on down through the
-     rows; the key beside the title names the sides. */
+  /* Over the bars, their scale's two ends and zero, whose line runs on
+     down through the rows; the key beside the title names the sides. */
   .player-page .log-head-scale {
     position: relative;
     align-self: stretch;
     margin-inline: 1.5rem 2rem;
+    color: var(--cl-faint);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .player-page .log-head-scale > span {
+    position: absolute;
+    top: 0;
+  }
+  .player-page .log-head-scale > [data-at="low"] {
+    left: 0;
+  }
+  .player-page .log-head-scale > [data-at="zero"] {
+    left: calc(var(--zero) * 100%);
+    translate: -50% 0;
+  }
+  .player-page .log-head-scale > [data-at="high"] {
+    right: 0;
   }
   /* The zero line starts here and runs on down through the rows. */
   .player-page .log-head-scale::after {
@@ -214,9 +236,9 @@
   grid-area: eod;
   justify-self: end;
   color: var(--cl-muted);
-  font-family: var(--cl-font-score);
-  font-size: 0.98rem;
-  font-weight: 600;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
+  font-weight: 500;
 }
 .player-page .log-trophies {
   --trophy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z'/%3E%3Cpath d='M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5'/%3E%3C/svg%3E");
@@ -257,9 +279,9 @@
   text-align: right;
 }
 .player-page .log-net strong {
-  font-family: var(--cl-font-score);
-  font-size: 1.45rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1.125rem;
+  font-weight: 650;
   line-height: 1;
 }
 .player-page .log-net strong.score-neutral {
@@ -281,7 +303,7 @@
   gap: 0.2rem;
   min-width: 3.6rem;
   color: var(--cl-muted);
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 0.92rem;
   font-weight: 600;
 }
@@ -301,8 +323,9 @@
   font-weight: 700;
   line-height: 1;
 }
-/* The day split at a marked zero: attacks' gain to the right in green,
-   defenses' loss to the left in red, and an ember diamond where the net
+/* The day split at a marked zero: attacks' gain to the right in soft
+   green, defenses' loss to the left in soft red, and an ember diamond, the
+   strongest mark, where the net
    lands. The track runs from the Season's biggest defense loss to its
    biggest attack gain, so every row shares one scale and one zero line. A
    phone draws it thin, across the foot of the row. */
@@ -319,9 +342,8 @@
     linear-gradient(
         90deg,
         transparent calc((var(--zero) - var(--loss)) * 100%),
-        color-mix(in srgb, var(--cl-negative) 80%, transparent) 0 calc(var(--zero) * 100%),
-        color-mix(in srgb, var(--cl-positive) 80%, transparent) 0
-          calc((var(--zero) + var(--gain)) * 100%),
+        var(--log-lost) 0 calc(var(--zero) * 100%),
+        var(--log-gained) 0 calc((var(--zero) + var(--gain)) * 100%),
         transparent 0
       )
       center / 100% var(--band) no-repeat,
@@ -346,9 +368,9 @@
   gap: 0.3rem;
   align-items: center;
   justify-content: flex-end;
-  font-family: var(--cl-font-score);
-  font-size: 1.02rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
+  font-weight: 550;
 }
 .player-page .log-battles > .log-stat:first-child {
   grid-area: att;
@@ -385,7 +407,7 @@
     align-self: stretch;
     height: auto;
     margin: -0.6rem 2rem -0.6rem 1.5rem;
-    --band: 0.75rem;
+    --band: 0.4rem;
     --mark-size: 0.75rem;
   }
   .player-page .log-end {
@@ -414,17 +436,17 @@
 
 /* Today: a card of its own that says it is live. */
 .player-page .log-day-live > .log-row {
-  grid-template-columns: minmax(0, 1fr) auto auto 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto auto 3.6rem 0.75rem;
   grid-template-areas:
-    "date att net chev"
-    "meta def net chev"
-    "swing swing swing swing";
+    "date att net . chev"
+    "meta def net . chev"
+    "swing swing swing swing swing";
 }
 .player-page .log-day-live :is(.log-end, .log-rank) {
   display: none;
 }
 .player-page .log-day-live .log-net strong {
-  font-size: 1.85rem;
+  font-size: 1.375rem;
 }
 /* Today keeps the log's columns, so its numbers sit over the days' below. */
 @media (min-width: 48rem) {
@@ -529,7 +551,7 @@
 }
 .player-page .log-facts b {
   color: var(--cl-ink);
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -662,7 +684,7 @@
 .player-page .log-more dd {
   margin: 0.1rem 0 0;
   font-size: 0.9rem;
-  font-weight: 800;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
@@ -695,10 +717,10 @@
   align-items: baseline;
   gap: 0 0.45rem;
   margin: 0;
-  font: 700 var(--head-3) var(--cl-font-heading);
+  font: 700 var(--head-3) var(--cl-font);
 }
 .player-page .battle-side h3 strong {
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
 }
 .player-page .battle-side h3 > span {
   margin-right: -0.2rem;
@@ -796,9 +818,9 @@
 }
 .player-page .battle-change {
   grid-area: change;
-  font-family: var(--cl-font-score);
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-family: var(--cl-font);
+  font-size: 1.0625rem;
+  font-weight: 650;
   text-align: right;
 }
 /* A small chevron says the line opens to the army and their log; a battle
@@ -987,7 +1009,7 @@
     font-size: 0.875rem;
   }
   .player-page .battle-switch strong {
-    font-family: var(--cl-font-score);
+    font-family: var(--cl-font);
     font-size: 1.05rem;
   }
   .player-page .battle-switch input {
@@ -1037,7 +1059,7 @@
     grid-area: def;
     justify-self: end;
     color: var(--cl-muted);
-    font: 600 0.9rem var(--cl-font-score);
+    font: 600 0.9rem var(--cl-font);
   }
   .player-page
     .log-day:not(.log-day-live)[open]
@@ -1151,7 +1173,7 @@
 /* The final rank is an ended Season's standout number. */
 .player-page .past-seasons .past-season-rank {
   color: var(--cl-action-text);
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.1rem;
 }
 

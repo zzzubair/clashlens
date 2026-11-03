@@ -25,7 +25,7 @@
    lines every ten points and a dashed cross at the averages, its quarters
    named quietly in their corners. */
 .army-map {
-  --map-h: 15rem;
+  --map-h: 18rem;
   margin: 0.75rem 0 1.5rem;
 }
 .army-map figcaption {
@@ -85,8 +85,8 @@
 .army-map-quarter {
   position: absolute;
   color: var(--cl-faint);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 .army-map-tick[data-axis="rate"] {
@@ -134,24 +134,50 @@
 }
 .army-map-point {
   position: absolute;
+  top: var(--wy);
+  left: var(--wx);
   translate: -50% -50%;
   cursor: pointer;
+}
+/* An icon nudged off its true spot to stay whole: a small dot marks the
+   spot and a hairline leads from it to the icon. */
+.army-map-dot {
+  position: absolute;
+  display: none;
+  width: 5px;
+  height: 5px;
+  background: var(--cl-muted);
+  border-radius: 50%;
+  translate: -50% -50%;
+}
+.army-map-dot[data-wide] {
+  display: block;
+}
+.army-map-leader {
+  position: absolute;
+  inset: 0;
+  display: none;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  stroke: color-mix(in srgb, var(--cl-muted) 70%, transparent);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.army-map-leader[data-mode="wide"] {
+  display: block;
 }
 .army-map-point:is(:hover, [data-named]) {
   z-index: 2;
 }
 .army-map-point .unit-art img {
-  width: 2rem;
-  height: 2rem;
+  width: 1.625rem;
+  height: 1.625rem;
   box-shadow: 0 0 0 2px var(--cl-paper);
 }
 .army-map-point .unit-art img + img {
-  width: 1.05rem;
-  height: 1.05rem;
-}
-/* A phone's stand-in for the troops: the army's number in the table. */
-.army-map-number {
-  display: none;
+  width: 0.875rem;
+  height: 0.875rem;
 }
 /* Its name beside it, on the side worked out to fit this screen: clear of
    the other icons, names and the average lines; its number where the name
@@ -164,8 +190,8 @@
   color: var(--cl-muted);
   background: var(--cl-paper);
   border-radius: 3px;
-  font-size: 0.75rem;
-  font-weight: 650;
+  font-size: 0.8125rem;
+  font-weight: 500;
   line-height: 1rem;
   white-space: nowrap;
   translate: 0 -50%;
@@ -358,7 +384,7 @@
   font: inherit;
   /* 16px or more, so a phone does not zoom in on it. */
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
@@ -625,7 +651,7 @@
   field-sizing: content;
   /* 16px or more, so a phone does not zoom in on it. */
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 650;
   appearance: none;
 }
 .analytics-sort-direction {
@@ -636,7 +662,7 @@
   padding: 0;
   color: var(--cl-action-text);
   font-size: 1.1rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 @media (hover: hover) and (pointer: fine) {
   .analytics-sort-field select:hover,
@@ -725,7 +751,7 @@
 
 /* Name: rank, unit art, the name and its variants, an arrow when it opens. */
 .analytics-results-table tbody th {
-  font-weight: 800;
+  font-weight: 650;
   text-align: left;
 }
 /* Room for a name and its variants on every row, so a row with none is
@@ -761,7 +787,7 @@
   color: var(--cl-muted);
   border: 1.5px dashed var(--cl-outline);
   border-radius: 0.5rem;
-  font-weight: 800;
+  font-weight: 650;
   content: "•••" / "";
 }
 .analytics-leftover-art[data-kind="unreadable"]::before {
@@ -783,7 +809,7 @@
   display: grid;
   min-width: 0;
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 650;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -833,25 +859,22 @@
   transform: rotate(-45deg);
 }
 
-/* Numbers: the value, then a small note under it. */
+/* Numbers: the value, then a small regular note under it. */
 .analytics-value {
   display: block;
-  font-size: 0.98rem;
-  font-weight: 800;
+  font-size: 1rem;
+  font-weight: 550;
 }
 .analytics-note-value {
   display: block;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
 }
-/* Usage and the 3-star rate are the two numbers to scan: big, Usage over
-   its ember bar and 3-star beside its difference from the average. */
-.analytics-results-table
-  :is([data-column="usage-rate"], [data-column="three-star-rate"])
-  .analytics-value {
-  font-family: var(--cl-font-heading);
+/* One big number a row: the column the table is sorted by. */
+.analytics-results-table td[data-sorted] .analytics-value {
+  font-family: var(--cl-font);
   font-size: 1.2rem;
   font-weight: 700;
   line-height: 1.1;
@@ -859,7 +882,6 @@
 }
 .analytics-results-table td .meter {
   position: relative;
-  height: 0.4rem;
   overflow: visible;
 }
 .analytics-results-table td[data-column="three-star-rate"] .meter > span {
@@ -871,8 +893,8 @@
 .analytics-difference {
   margin-left: 0.45rem;
   color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-size: 0.8125rem;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -901,16 +923,12 @@
 .analytics-phone-key {
   display: none;
 }
-.analytics-results-table
-  td[data-sorted]:not([data-column="usage-rate"], [data-column="three-star-rate"])
-  .analytics-value {
-  color: var(--cl-action-text);
-}
 
 /* ---------- Phones: each row is a small card ---------- */
 
 @media (max-width: 47.99rem) {
-  /* The Sort menu and the day range share one line above the list. */
+  /* The day range on one line over the chart; Sort under the chart, right
+     above the list it sorts. */
   .analytics-results {
     flex-flow: row wrap;
     align-items: center;
@@ -922,18 +940,12 @@
   }
 
   .analytics-results > .analytics-sort-menu {
-    order: -2;
     flex: 0 1 auto;
-    margin: 0 0 0.5rem;
+    margin: 0 0 0.75rem;
   }
 
   .analytics-results > .analytics-results-head {
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.15rem;
-    order: -1;
-    flex: 0 0 auto;
-    margin: 0 0 0.5rem auto;
+    margin: 0 0 0.25rem;
   }
 
   .analytics-controls {
@@ -956,22 +968,9 @@
     margin: 0;
   }
 
-  .analytics-days-of {
-    display: none;
-  }
-  /* Under the days, at the head's right edge, beside Sort. */
-  .analytics-days {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    row-gap: 0;
-  }
+  /* Days, then what the numbers are against, on one line. */
   .analytics-average-key {
-    flex-basis: 100%;
-    justify-content: flex-end;
-    margin-block: -0.4rem -0.5rem;
-  }
-  .analytics-average-key::before {
-    content: none;
+    margin-block: -0.4rem;
   }
 
   /* The key's rule is the list's top edge. */
@@ -1006,55 +1005,17 @@
     grid-row: 2;
     grid-column: 3;
     color: var(--cl-muted);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
   }
   /* Each army is one block with a hairline under it, not one per number. */
   .analytics-results.open-board .analytics-results-table tbody > tr > :is(td, th) {
     border-bottom: 0;
   }
-  /* The same chart across the phone, taller for its height, each army its
-     number in the table under it; a tap names it. */
+  /* No chart: each army's row below shows its use and 3-star rate as bars,
+     which a phone-sized scatter could only repeat. */
   .army-map {
-    --map-h: 12rem;
-    margin: 0.25rem 0 1rem;
-  }
-  .army-map-plot {
-    margin: 0 0.75rem 2.75rem 3.5rem;
-  }
-  .army-map-axis[data-axis="rate"] {
-    left: -2.85rem;
-  }
-  .army-map-quarter[data-wide] {
     display: none;
-  }
-  .army-map-quarter[data-narrow] {
-    display: block;
-  }
-  .army-map-point .unit-art,
-  .army-map-label[data-mode="wide"] {
-    display: none;
-  }
-  .army-map-number {
-    display: grid;
-    place-items: center;
-    width: 1.25rem;
-    height: 1.25rem;
-    color: var(--cl-ink);
-    background: var(--cl-raised);
-    border: 1px solid var(--cl-outline);
-    border-radius: 50%;
-    box-shadow: 0 0 0 1.5px var(--cl-paper);
-    font-size: 0.6875rem;
-    font-weight: 750;
-    font-variant-numeric: tabular-nums;
-  }
-  .army-map-point[data-named] .army-map-number {
-    color: var(--cl-action-text);
-    border-color: var(--cl-action-text);
-  }
-  .army-map-name {
-    font-size: 0.75rem;
   }
 
   .analytics-results-table,

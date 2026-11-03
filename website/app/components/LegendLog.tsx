@@ -155,7 +155,7 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
       {move ? (
         <span className={`log-rank-move ${valueTone(move)}`}>
           <span aria-hidden="true">
-            {move > 0 ? "▲" : "▼"}
+            <span className="rank-move-arrow">{move > 0 ? "▲" : "▼"}</span>
             {places}
           </span>
           <span className="sr-only">
@@ -183,12 +183,17 @@ export function LogHead({
       <span>Date</span>
       <span>End of day</span>
       {scale ? (
-        // The bars' zero line starts here; the key beside the title says
-        // what each side and the mark are.
+        // The bars' zero line starts here, with the scale's two ends; the key
+        // beside the title says what each side and the mark are. An end too
+        // close to zero to fit its figure leaves it out.
         <span
           className="log-head-scale"
           style={{ "--zero": zero } as React.CSSProperties}
-        />
+        >
+          {zero > 0.15 ? <span data-at="low">−{scale.down}</span> : null}
+          <span data-at="zero">0</span>
+          {zero < 0.85 ? <span data-at="high">+{scale.up}</span> : null}
+        </span>
       ) : (
         <span />
       )}
@@ -549,6 +554,7 @@ function LegendDay({
 /** What today's slots need of a Legend day. */
 export interface TodayBattles {
   dayNumber: number | null;
+  battlesComplete?: boolean;
   offense: Pick<RankedDaySummary["offense"], "attacks" | "trophyGain">;
   defense: Pick<RankedDaySummary["defense"], "defenses" | "trophyLoss">;
   offenseEvents: TodayBattle[];
@@ -576,6 +582,13 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
         <span> · today</span>
+        {/* The day's net so far, the first thing a Clasher asks of it; a day
+            with battles missing has no net to show. */}
+        {day.battlesComplete && day.offense.trophyGain !== null && defense !== null ? (
+          <b className={`today-net ${valueTone(day.offense.trophyGain + defense)}`}>
+            {formatSigned(day.offense.trophyGain + defense)}
+          </b>
+        ) : null}
       </p>
       {sides.map(([side, title, saved, total, events]) => {
         const played = [...events].sort(

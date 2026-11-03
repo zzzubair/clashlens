@@ -16,7 +16,7 @@
   white-space: nowrap;
   font-family: var(--cl-font);
   font-size: 0.9375rem;
-  font-weight: 800;
+  font-weight: 650;
   letter-spacing: 0;
 }
 
@@ -34,7 +34,7 @@
 }
 
 .crew-day-total b {
-  font-family: var(--cl-font-score);
+  font-family: var(--cl-font);
   font-size: 1.25rem;
   font-weight: 700;
 }
@@ -43,7 +43,7 @@
   display: flex;
   flex: 1;
   gap: 3px;
-  height: 0.6rem;
+  height: 0.3rem;
 }
 
 .crew-day-bar > span {
@@ -53,11 +53,11 @@
 }
 
 .crew-day-bar > [data-move="up"] {
-  background: color-mix(in srgb, var(--cl-positive) 60%, var(--cl-solid));
+  background: color-mix(in srgb, var(--cl-positive) 45%, var(--cl-solid));
 }
 
 .crew-day-bar > [data-move="down"] {
-  background: color-mix(in srgb, var(--cl-negative) 70%, var(--cl-solid));
+  background: color-mix(in srgb, var(--cl-negative) 50%, var(--cl-solid));
 }
 
 /* Up before the bar, level and down after it, in the bar's own order. */

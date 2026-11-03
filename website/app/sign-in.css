@@ -199,7 +199,6 @@
 
   .sign-in-page > .teaser-board {
     display: grid;
-    opacity: 0.9;
   }
 
   /* One column: the two ways in stacked, full width. */

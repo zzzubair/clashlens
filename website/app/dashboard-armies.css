@@ -166,8 +166,8 @@
 /* The one difference from the Legends: muted unless well clear of them. */
 .army-diff {
   color: var(--cl-muted);
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
 }
@@ -182,20 +182,20 @@
 
 .army-bar {
   position: relative;
-  height: 6px;
+  height: 4px;
   background: var(--cl-raised);
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .army-bar i {
   display: block;
   height: 100%;
-  background: var(--cl-action);
-  border-radius: 3px;
+  background: var(--cl-meter);
+  border-radius: 2px;
 }
 
 .army-own {
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -218,17 +218,17 @@
 
 .army-defense-row.is-all {
   border-top: 1px solid var(--cl-card-line);
-  font-weight: 900;
+  font-weight: 500;
 }
 
 :is(.army-defense-row, .army-offense-row) .dash-name {
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .army-offense-row b {
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 1.15rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .army-one {
@@ -256,9 +256,9 @@
 
 .army-one-big b {
   display: block;
-  font-family: var(--cl-font-heading);
+  font-family: var(--cl-font);
   font-size: 2.6rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.05;
 }
 
@@ -269,7 +269,7 @@
 
 /* A narrow card (a phone, or a Small card): one heading line shared by
    every army, then two short lines an army: its art beside its name over
-   its Usage bar, then Not tripled and Per defense, each value over its
+   its Usage bar, then Held and Per defense, each value over its
    signed difference. */
 @container (max-width: 36rem) {
   .army-defense-row {
