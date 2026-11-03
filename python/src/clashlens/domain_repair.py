@@ -314,7 +314,9 @@ def _scoped_players(connection: Any, start: datetime) -> list[int]:
             ) = 'Inconsistent'
                OR saved.player_id NOT IN (SELECT player_id FROM played) AND EXISTS (
                 SELECT 1 FROM (
-                    SELECT * FROM player_profile_versions AS profile
+                    SELECT eligibility_state, trophies, source_contract_state,
+                           current_league_season_id
+                    FROM player_profile_versions AS profile
                     WHERE profile.normalized_tag = player.normalized_tag
                     ORDER BY profile.observed_at DESC, profile.id DESC LIMIT 1
                 ) AS newest

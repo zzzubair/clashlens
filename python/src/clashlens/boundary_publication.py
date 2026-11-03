@@ -579,7 +579,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
             )
             snapshot = connection.execute(
                 """
-                SELECT id, boundary_at, version, correction_of_id, state,
+                SELECT boundary_at, version, correction_of_id, state,
                        source_ranked_day_version_id, input_hash,
                        measured_coverage, stale_entry_count,
                        fresh_entry_count, included_entry_count
@@ -613,17 +613,17 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     outcome="stale_superseded",
                 )
                 return
-            if int(snapshot[2]) != snapshot_version:
+            if int(snapshot[1]) != snapshot_version:
                 raise ValueError("analytics snapshot version does not match its input")
             if (
                 source_ranked_day_version_id is not None
-                and snapshot[5] is not None
-                and int(snapshot[5]) != source_ranked_day_version_id
+                and snapshot[4] is not None
+                and int(snapshot[4]) != source_ranked_day_version_id
             ):
                 raise ValueError(
                     "analytics ranked-day source does not match its snapshot"
                 )
-            if _text_value(snapshot[6]) != snapshot_input_hash:
+            if _text_value(snapshot[5]) != snapshot_input_hash:
                 raise ValueError(
                     "analytics snapshot input hash does not match its input"
                 )
@@ -651,7 +651,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 )
                 return
             # The board's build publishes it, before these statistics.
-            if _text_value(snapshot[4]) not in {"building", "published"}:
+            if _text_value(snapshot[3]) not in {"building", "published"}:
                 raise ValueError("frozen snapshot is not available for analytics")
 
             ranked_day = None
@@ -697,15 +697,15 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 (snapshot_id,),
             ).fetchone()
             assert entry_count is not None
-            if int(entry_count[0]) != int(snapshot[10]):
+            if int(entry_count[0]) != int(snapshot[9]):
                 raise ValueError("frozen snapshot entries are incomplete")
 
             freshness = _snapshot_freshness(
-                included_count=int(snapshot[10]),
-                fresh_count=int(snapshot[9]),
-                stale_count=int(snapshot[8]),
+                included_count=int(snapshot[9]),
+                fresh_count=int(snapshot[8]),
+                stale_count=int(snapshot[7]),
             )
-            prior_snapshot_id = int(snapshot[3]) if snapshot[3] is not None else None
+            prior_snapshot_id = int(snapshot[2]) if snapshot[2] is not None else None
             # Malformed rows, other than "no opponent, no battle" rows, and
             # rows without an army share code, counted per log that returned
             # them. A row counted here is in both lenses'
@@ -901,7 +901,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                         period_start,
                         period_end,
                         sample_size,
-                        snapshot[7],
+                        snapshot[6],
                         freshness,
                         CLASSIFICATION_VERSION,
                         CLASSIFICATION_CONFIDENCE,
@@ -1001,7 +1001,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                   AND id <> %s
                   AND state = 'published'
                 """,
-                (snapshot[1], snapshot_id),
+                (snapshot[0], snapshot_id),
             )
             if boundary_generation is not None:
                 summary_ids = [
@@ -1021,7 +1021,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                             (boundary_generation[0],),
                         ).fetchone()[0]
                     ),
-                    input_hash=_text_value(snapshot[6]),
+                    input_hash=_text_value(snapshot[5]),
                     source_identity={
                         "snapshot_id": snapshot_id,
                         "summary_ids": summary_ids,
@@ -1272,7 +1272,7 @@ def _enqueue_army_analytics(
         shared = boundary.lock_boundary_members(connection, boundary_at)
         coordinator = connection.execute(
             """
-            SELECT id, generation, snapshot_state, army_state,
+            SELECT id, snapshot_state, army_state,
                    army_manifest_id, correction_state, snapshot_manifest_id
             FROM boundary_publication_generations
             WHERE boundary_at = %s
@@ -1287,8 +1287,8 @@ def _enqueue_army_analytics(
         if shared:
             boundary.require_open_generation(
                 coordinator
-                and (coordinator[2], coordinator[3], coordinator[5],
-                     coordinator[6], coordinator[4]),
+                and (coordinator[1], coordinator[2], coordinator[4],
+                     coordinator[5], coordinator[3]),
                 boundary_at,
             )
     if coordinator is not None:
@@ -1349,12 +1349,12 @@ def _enqueue_army_analytics(
             )
         if (
             not getattr(database, "_disable_decode_corrections", False)
-            and _text_value(coordinator[3]) in {"ready", "building", "published"}
-            and coordinator[4] is not None
+            and _text_value(coordinator[2]) in {"ready", "building", "published"}
+            and coordinator[3] is not None
             and _boundary_army_manifest_needs_correction(
                 database,
                 connection,
-                manifest_id=int(coordinator[4]),
+                manifest_id=int(coordinator[3]),
                 player_ids=player_ids,
             )
         ):

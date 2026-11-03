@@ -613,8 +613,7 @@ def _season_completed(
         return False, "no_history"
     anchor = connection.execute(
         """
-        SELECT current_league_season_id, previous_league_season_id,
-               current_start, previous_start
+        SELECT current_league_season_id, previous_league_season_id, current_start
         FROM legend_season_anchors
         WHERE state = 'confirmed' AND anchor_rule_version = %s
         """,

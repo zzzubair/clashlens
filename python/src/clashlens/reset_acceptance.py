@@ -183,7 +183,13 @@ def _refresh_one(
 
 def _record(connection: Any, boundary_at: datetime) -> dict[str, Any]:
     cursor = connection.execute(
-        "SELECT * FROM reset_acceptance_records WHERE boundary_at = %s",
+        """
+        SELECT boundary_at, captured_count, membership_captured_at,
+               collected_count, not_collected_count, collection_finished_at,
+               proof_processed_at, inputs_frozen_at, published_at, readable_at,
+               board_inputs
+        FROM reset_acceptance_records WHERE boundary_at = %s
+        """,
         (boundary_at,),
     )
     row = cursor.fetchone()

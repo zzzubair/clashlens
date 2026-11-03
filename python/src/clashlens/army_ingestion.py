@@ -377,7 +377,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
                 generation_row = connection.execute(
                     """
-                    SELECT id, generation, sweep_id, snapshot_state, army_state,
+                    SELECT id, snapshot_state, army_state,
                            army_manifest_id, army_rule_version, target_at, target_rule
                     FROM boundary_publication_generations
                     WHERE boundary_at = %s AND generation = %s
@@ -386,7 +386,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if generation_row is None:
                     raise ValueError("boundary publication generation does not exist")
-                if _text_value(generation_row[4]) in {"superseded", "published"}:
+                if _text_value(generation_row[2]) in {"superseded", "published"}:
                     database._finish_claim(
                         connection,
                         claim,
@@ -395,12 +395,12 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                         outcome="stale_superseded",
                     )
                     return
-                if _text_value(generation_row[4]) not in {"ready", "building"}:
+                if _text_value(generation_row[2]) not in {"ready", "building"}:
                     raise ValueError("boundary army generation is stale or superseded")
-                if _text_value(generation_row[3]) == "superseded":
+                if _text_value(generation_row[1]) == "superseded":
                     raise ValueError("boundary publication generation is superseded")
                 manifest_id = (
-                    int(generation_row[5]) if generation_row[5] is not None else None
+                    int(generation_row[3]) if generation_row[3] is not None else None
                 )
                 if (
                     manifest_id is None
@@ -415,13 +415,13 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     manifest_digest[0]
                 ) != claim.input_json.get("manifest_digest"):
                     raise ValueError("boundary army manifest digest does not match")
-                if _text_value(generation_row[6]) != claim.analytics_rule_version:
+                if _text_value(generation_row[4]) != claim.analytics_rule_version:
                     raise ValueError("boundary army rule version does not match")
-                if _text_value(generation_row[8]) != "boundary-delay-v1":
+                if _text_value(generation_row[6]) != "boundary-delay-v1":
                     raise ValueError("unsupported boundary target rule")
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
-                if now_row[0] < generation_row[7]:
+                if now_row[0] < generation_row[5]:
                     raise ValueError("army publication target dependency is not ready")
                 manifest_digest_value = _text_value(manifest_digest[0])
                 pending_members = connection.execute(
@@ -547,7 +547,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                         {
                             "manifest_digest": manifest_digest_value,
                             "rule_versions": {
-                                "army_rule_version": _text_value(generation_row[6]),
+                                "army_rule_version": _text_value(generation_row[4]),
                                 "decoder_version": DECODER_VERSION,
                             },
                             "output": {
@@ -713,7 +713,7 @@ def _build_manifest_army_facts(
     for after_ordinal in range(0, last_ordinal or 0, ARMY_FACT_PLAYER_BATCH):
         rows = connection.execute(
             f"""
-            SELECT m.ordinal, rv.id, d.player_id, d.battles,
+            SELECT rv.id, d.player_id, d.battles,
                    d.official_season_id, d.season_day_number, rv.start_trophies,
                    m.input_identity -> 'battle_ids',
                    m.input_identity -> 'decode_ids',
@@ -749,12 +749,12 @@ def _build_manifest_army_facts(
                     for value in row[column]
                 }
             )
-            for column in (7, 8, 9)
+            for column in (6, 7, 8)
         )
         _build_army_fact_batch(
             connection,
             ranked_day_start,
-            [row[1:7] for row in rows if row[1] is not None],
+            [row[:6] for row in rows if row[0] is not None],
             battle_ids=battle_ids,
             decode_ids=decode_ids,
             evidence_ids=evidence_ids,

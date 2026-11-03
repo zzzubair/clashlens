@@ -238,9 +238,7 @@ def finalize_season_detail(
     if _table_exists(connection, "season_detail_retirements"):
         existing = connection.execute(
             """
-            SELECT status, season_start, season_end, player_summary_count,
-                   player_summary_digest, army_summary_digest, finalized_at,
-                   retired_at, progress
+            SELECT status, season_start, season_end
             FROM season_detail_retirements WHERE official_season_id = %s
             """,
             (season_id,),
@@ -505,8 +503,8 @@ def retire_season_detail(
         return {"season_id": season_id, "status": "not_finalized", "applied": False}
     record = connection.execute(
         """
-        SELECT status, season_start, season_end, player_summary_count,
-               player_summary_digest, army_summary_digest, progress
+        SELECT status, season_start, season_end,
+               player_summary_digest, army_summary_digest
         FROM season_detail_retirements WHERE official_season_id = %s
         """,
         (season_id,),
@@ -527,7 +525,7 @@ def retire_season_detail(
             "applied": False,
         }
     summary_check = _verify_stored_summaries(
-        connection, season_id, _text(record[4]), _text(record[5])
+        connection, season_id, _text(record[3]), _text(record[4])
     )
     if not summary_check["ok"]:
         return {

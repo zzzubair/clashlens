@@ -241,7 +241,13 @@ def get_player_page(
                 LIMIT 28
             ) AS day
             CROSS JOIN LATERAL (
-                SELECT * FROM api_player_daily_logs AS saved
+                SELECT ranked_day_start, ranked_day_end, official_season_id,
+                       season_day_number, version, state, coverage, confidence,
+                       attack_count, attack_three_star_count, attack_gain,
+                       defense_count, defense_three_star_count, defense_loss,
+                       net_trophy_change, adjustments, battles, partial_reasons,
+                       ranked_day_version_id, published_at
+                FROM api_player_daily_logs AS saved
                 WHERE saved.player_id = player.id
                   AND saved.ranked_day_start = day.ranked_day_start
                 ORDER BY saved.version DESC
@@ -798,7 +804,19 @@ def get_player_season_summary(
     with database.pool.connection() as connection:
         cursor = connection.execute(
             """
-            SELECT player.normalized_tag, summary.*
+            SELECT player.normalized_tag, summary.player_id, summary.official_season_id,
+                   summary.season_start, summary.season_end, summary.start_trophies,
+                   summary.end_trophies, summary.final_rank, summary.attack_count,
+                   summary.attack_gain, summary.attack_three_star_count,
+                   summary.defense_count, summary.defense_loss,
+                   summary.defense_three_star_count, summary.net_trophy_change,
+                   summary.attack_star_0, summary.attack_star_1, summary.attack_star_2,
+                   summary.attack_star_3, summary.attack_star_unknown,
+                   summary.defense_star_0, summary.defense_star_1, summary.defense_star_2,
+                   summary.defense_star_3, summary.defense_star_unknown,
+                   summary.days_observed, summary.days_missing, summary.missing_days,
+                   summary.coverage_state, summary.unresolved_flags, summary.daily_entries,
+                   summary.projection_version, summary.published_at
             FROM player_season_summaries AS summary
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s

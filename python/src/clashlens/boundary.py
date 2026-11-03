@@ -326,7 +326,7 @@ def _try_enqueue_boundary_artifacts(
     )
     generation = connection.execute(
         """
-        SELECT id, generation, sweep_id, snapshot_state, army_state,
+        SELECT generation, sweep_id, snapshot_state, army_state,
                expected_population_count, affected_artifacts, target_at, target_rule,
                ordering_rule_version
         FROM boundary_publication_generations
@@ -337,11 +337,11 @@ def _try_enqueue_boundary_artifacts(
     ).fetchone()
     if generation is None:
         return
-    generation_number = int(generation[1])
+    generation_number = int(generation[0])
     # A past Reset starts no build in the quiet window.
     if past_reset_build_waits(connection, boundary_at):
         return
-    sweep_id = int(generation[2]) if generation[2] is not None else None
+    sweep_id = int(generation[1]) if generation[1] is not None else None
     if sweep_id is None:
         return
 
@@ -363,22 +363,22 @@ def _try_enqueue_boundary_artifacts(
     member_count, snapshot_pending, army_pending, bad_snapshot, bad_army = (
         int(value) for value in classifications
     )
-    if member_count != int(generation[5]) or bad_snapshot or bad_army:
+    if member_count != int(generation[4]) or bad_snapshot or bad_army:
         return
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if _text_value(generation[8]) != "boundary-delay-v1":
+    if _text_value(generation[7]) != "boundary-delay-v1":
         return
-    target = generation[7]
+    target = generation[6]
     now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     if now < target:
         return
-    affected_artifacts = [_text_value(value) for value in (generation[6] or [])]
-    if snapshot_pending == 0 and _text_value(generation[3]) == "pending":
+    affected_artifacts = [_text_value(value) for value in (generation[5] or [])]
+    if snapshot_pending == 0 and _text_value(generation[2]) == "pending":
         connection.execute(
             "UPDATE boundary_publication_generations SET snapshot_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND snapshot_state = 'pending'",
             (generation_id,),
         )
-    if army_pending == 0 and _text_value(generation[4]) == "pending":
+    if army_pending == 0 and _text_value(generation[3]) == "pending":
         connection.execute(
             "UPDATE boundary_publication_generations SET army_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND army_state = 'pending'",
             (generation_id,),
@@ -397,7 +397,7 @@ def _try_enqueue_boundary_artifacts(
         # replacement of one that gains a board rebuild, freezes its inputs
         # under the current rule in a replacement; a generation's rule
         # cannot change once its membership is captured.
-        if _text_value(generation[9]) != SNAPSHOT_ORDERING_RULE_VERSION:
+        if _text_value(generation[8]) != SNAPSHOT_ORDERING_RULE_VERSION:
             new_id, _ = _supersede_generation(
                 database,
                 connection,

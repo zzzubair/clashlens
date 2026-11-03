@@ -90,12 +90,11 @@ def get_army_season_summary(
     with database.pool.connection() as connection:
         row = connection.execute(
             """
-            SELECT days_observed, days_missing, missing_days,
-                   coverage_state, total_attacks, usable_army_sample,
+            SELECT days_observed, coverage_state, total_attacks, usable_army_sample,
                    army_states, unknown_affected_attacks,
                    unknown_component_occurrences,
                    perspective_disagreement_count,
-                   missing_trophy_membership_evidence, result_rows,
+                   missing_trophy_membership_evidence,
                    projection_version, content_digest, unit_usage
             FROM army_season_summaries
             WHERE official_season_id = %s AND lens = %s AND category = %s
@@ -104,9 +103,9 @@ def get_army_season_summary(
         ).fetchone()
         if row is None:
             return None
-        if row[14] is None or _text(row[12]) != ARMY_HISTORY_VERSION:
+        if row[11] is None or _text(row[9]) != ARMY_HISTORY_VERSION:
             return None
-        rows = usage_rows(_json_array(row[14]), category, int(row[5]))
+        rows = usage_rows(_json_array(row[11]), category, int(row[3]))
         sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
         numeric_rows = [{key: value for key, value in item.items() if key != "label"}
@@ -115,14 +114,14 @@ def get_army_season_summary(
             numeric_rows, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest()
         army_states = {
-            _text(state): int(count) for state, count in dict(row[6] or {}).items()
+            _text(state): int(count) for state, count in dict(row[4] or {}).items()
         }
         # Summaries saved before unnamed ids counted kept old partial armies
         # apart; they count as read (army_analytics.with_unnamed_ids).
         army_states["fully_decoded"] = army_states.get(
             "fully_decoded", 0
         ) + army_states.pop("partial", 0)
-        total_attacks = int(row[4])
+        total_attacks = int(row[2])
         requested = {
             "lens": lens,
             "season": official_season_id,
@@ -142,13 +141,13 @@ def get_army_season_summary(
                            "next_offset": offset + 200 if offset + 200 < len(rows) else None},
             "selection": requested,
             "total_attacks": total_attacks,
-            "usable_army_sample": int(row[5]),
+            "usable_army_sample": int(row[3]),
             "army_states": army_states,
             "army_states_sum_confirmed": sum(army_states.values()) == total_attacks,
-            "unknown_affected_attacks": int(row[7]),
-            "unknown_component_occurrences": int(row[8]),
-            "perspective_disagreement_count": int(row[9]),
-            "missing_trophy_membership_evidence": int(row[10]),
+            "unknown_affected_attacks": int(row[5]),
+            "unknown_component_occurrences": int(row[6]),
+            "perspective_disagreement_count": int(row[7]),
+            "missing_trophy_membership_evidence": int(row[8]),
             "cohort_evidence": {
                 "cohort_players": 0,
                 "stale_or_uncertain_cohort_members": 0,
@@ -156,7 +155,7 @@ def get_army_season_summary(
                 "shielded_player_days": 0,
             },
             "collection_coverage": {
-                "state": "partial" if int(row[10]) else _text(row[3]),
+                "state": "partial" if int(row[8]) else _text(row[1]),
                 "completed_days": int(row[0]),
             },
             "freshness": {"state": "frozen"},
@@ -168,10 +167,10 @@ def get_army_season_summary(
             "versions": {
                 "decoder": DECODER_VERSION,
                 "catalog": CATALOG_VERSION,
-                "analytics": _text(row[12]),
+                "analytics": _text(row[9]),
             },
             "publication_identity": (
-                f"army-season-{publication_key[:24]}-{_text(row[13])[:16]}-{read_digest[:16]}"
+                f"army-season-{publication_key[:24]}-{_text(row[10])[:16]}-{read_digest[:16]}"
             ),
             "rows": rows[offset:offset + 200],
         }
