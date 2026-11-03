@@ -707,15 +707,15 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
       await page.locator(battles).evaluateAll((rows) => rows.map((row) => row.id)),
     ).toEqual(sent);
 
-    // A completed Refresh adds an attack to a folded day.
+    // A Refresh adds an attack to the first folded day with battles: today on Day 1.
+    const first = page.locator(battles).first();
+    const id = await first.evaluate((row) => row.closest(".log-day")!.id);
     const saved = await page.request.get("/players/%232PP.data");
     const later = decodePageData(await saved.text());
     const player = pagePlayer(later);
-    const older = player.recentDays.find(
-      (day) => day.period !== player.currentDay!.period,
-    )!;
-    for (const day of [...player.recentDays, ...player.seasonDays]) {
-      if (day.period !== older.period) continue;
+    const days = [player.currentDay!, ...player.recentDays, ...player.seasonDays];
+    for (const day of new Set(days)) {
+      if (id !== `legend-day-${day.period.slice(0, 10)}`) continue;
       day.offenseEvents.unshift({
         battleId: "after-refresh",
         battleTimestamp: new Date().toISOString(),

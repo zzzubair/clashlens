@@ -439,6 +439,10 @@ show_readiness_diagnostics() {
        LEFT JOIN player_profile_versions AS profile
          ON profile.id = player.current_profile_version_id
       WHERE player.normalized_tag = '#2PP'" 2>&1 || true
+  printf '\n[readiness Live board]\n'
+  "$PODMAN_BIN" exec "$API" python -m clashlens.cli probe \
+    --url 'http://127.0.0.1:8000/v1/leaderboards/live?limit=1' \
+    --secret-file /run/clashlens-dev/hmac-key 2>&1 | grep -o '"total_entries":[0-9]*' || true
   printf '\n[readiness private API]\n'
   "$PODMAN_BIN" exec "$API" python -m clashlens.cli probe \
     --url 'http://127.0.0.1:8000/v1/players/%232PP' \
@@ -455,11 +459,26 @@ show_readiness_diagnostics() {
 }
 
 wait_for_application() {
-  local attempt profiles
+  local attempt profiles ranked
+  # Browser tests read the Live board from the start, so their stacks also
+  # wait until the API's Live board lists every synthetic player. The API
+  # keeps one shared copy of the board for up to 30 seconds and the player
+  # page below reads it too: read sooner, it holds only the players on the
+  # board so far, those tracked yet and, on a Season's first Legend day, only
+  # those whose saved battles explain their trophies.
+  local wanted=0
+  [[ "$PROJECT" == *-e2e || "$PROJECT" == *-check ]] && wanted=$PLAYERS
   for attempt in $(seq 1 120); do
     profiles=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
       -c "SELECT count(*) FROM players WHERE normalized_tag='#2PP' AND current_profile_version_id IS NOT NULL")
-    if [[ "$profiles" == 1 ]] && "$PODMAN_BIN" exec "$WEBSITE" node -e \
+    ranked=0
+    if [[ "$profiles" == 1 ]] && ((wanted > 0)); then
+      ranked=$("$PODMAN_BIN" exec "$API" python -m clashlens.cli probe \
+        --url 'http://127.0.0.1:8000/v1/leaderboards/live?limit=1' \
+        --secret-file /run/clashlens-dev/hmac-key 2>/dev/null |
+        sed -n 's/.*"total_entries":\([0-9]*\).*/\1/p' || true)
+    fi
+    if [[ "$profiles" == 1 ]] && ((${ranked:-0} >= wanted)) && "$PODMAN_BIN" exec "$WEBSITE" node -e \
       "Promise.all([
         fetch('http://127.0.0.1:5173/players/%232PP'),
         fetch('http://127.0.0.1:8011/healthz'),

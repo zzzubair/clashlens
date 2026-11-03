@@ -426,7 +426,9 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
                 occurrence_key=key,
                 endpoint="profile",
                 body=json.dumps({**PROFILE, "tag": tag, "leagueTier": tier}).encode(),
-                observed_at=datetime.now(UTC) - timedelta(days=8),
+                # Last week, whatever the day: eight days back is two weeks
+                # back from Monday's Reset to Tuesday's.
+                observed_at=league_week.week_start(datetime.now(UTC)) - timedelta(days=1),
                 normalized_tag=tag,
             )
         database, processor = _processor(connection_info, archive_server)
@@ -464,6 +466,8 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
                 (never, observation_id),
             )
         assert unknown_tier[1] == "unknown"
+        # Drops the league week's once-a-minute progress line, if it printed.
+        capsys.readouterr()
 
         assert population.run_command(_as(connection_info, "clashlens_collector"), repair=False) == 0
         before = json.loads(capsys.readouterr().out)
