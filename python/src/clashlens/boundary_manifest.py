@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -42,6 +43,7 @@ from .domain import (
     season_is_current,
 )
 from .league_week import week_start
+from .newest_profiles import ACCEPTED_VERSIONS, ANY_VERSIONS, NEWEST_PROFILES_SQL
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -117,20 +119,28 @@ def freeze_boundary_manifest(
     failed = (work_type, Jsonb({
         "boundary_at": f"{generation[0].astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
         "generation": int(generation[1])}))
-    if connection.execute(
+    timeouts, waits = connection.execute(
         f"""
-        SELECT max(updated_at) + {retry_wait("count(*)")} > clock_timestamp()
+        SELECT count(*), max(updated_at) + {retry_wait("count(*)")} > clock_timestamp()
         FROM python_processing_jobs_worker
         WHERE state = 'failed' AND failure_category = '{FREEZE_TIMED_OUT}'
           AND work_type = %s AND input_json = %s
         """,
         failed,
-    ).fetchone()[0]:
+    ).fetchone()
+    if waits:
         return None
+    # How long each stage took, saved with the freeze's event, and which
+    # stage ran out of time when one does.
+    timing = {"generation": int(generation[1]), "earlier_timeouts": int(timeouts),
+              "stages": [("members", time.monotonic())]}
     try:
         with connection.transaction():
-            return _freeze(connection, generation_id, artifact_kind, generation)
+            return _freeze(connection, generation_id, artifact_kind, generation, timing)
     except QueryCanceled:
+        print(json.dumps({"event": "boundary_manifest_frozen", "outcome": "timed_out",
+                          "artifact_kind": artifact_kind, **_timing(timing),
+                          "stage": timing["stages"][-1][0]}), flush=True)
         connection.execute(
             f"""
             INSERT INTO python_processing_jobs_worker (
@@ -151,8 +161,17 @@ def freeze_boundary_manifest(
         return None
 
 
+def _timing(timing: dict[str, Any]) -> dict[str, Any]:
+    """The freeze's generation, earlier timeouts and seconds per stage so far."""
+    stages = [*timing["stages"], ("", time.monotonic())]
+    return {**{key: value for key, value in timing.items() if key != "stages"},
+            "seconds": {name: round(stages[index + 1][1] - start, 3)
+                        for index, (name, start) in enumerate(stages[:-1])}}
+
+
 def _freeze(
-    connection: Any, generation_id: int, artifact_kind: str, generation: Any
+    connection: Any, generation_id: int, artifact_kind: str, generation: Any,
+    timing: dict[str, Any],
 ) -> tuple[int, str]:
     members = connection.execute(
         """
@@ -164,13 +183,16 @@ def _freeze(
         """,
         (generation_id,),
     ).fetchall()
+    timing["stages"].append(("rows", time.monotonic()))
     if artifact_kind == "snapshot":
         manifest_rows = _snapshot_rows(connection, members, generation)
     else:
         manifest_rows = _army_rows(connection, members, generation)
+    timing["stages"].append(("season_inputs", time.monotonic()))
     season_inputs = (
         _season_inputs(connection, members) if artifact_kind == "army" else None
     )
+    timing["stages"].append(("store", time.monotonic()))
     rule_versions = {
         "ordering_rule_version": _text_value(generation[2]),
         "freshness_rule_version": _text_value(generation[3]),
@@ -257,8 +279,10 @@ def _freeze(
         json.dumps(
             {
                 "event": "boundary_manifest_frozen",
+                "outcome": "frozen",
                 "manifest_id": manifest_id,
                 "artifact_kind": artifact_kind,
+                **_timing(timing),
                 "base_manifest_id": base_id,
                 "rows": len(manifest_rows),
                 "rows_stored": len(stored),
@@ -549,7 +573,7 @@ def _snapshot_rows(
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            _NEWEST_PROFILES_SQL.replace("{versions}", _ACCEPTED_VERSIONS),
+            NEWEST_PROFILES_SQL.replace("{versions}", ACCEPTED_VERSIONS),
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
@@ -704,6 +728,11 @@ def _snapshot_rows(
                 # The player went missing after this reading, so its
                 # trophies no longer stand for them at the Reset.
                 identity["snapshot_quality"] = "profile_not_found"
+            elif classification == "Unavailable":
+                # A member left out unfinished, as at the board deadline,
+                # waits for their day: an older reading never ranks them
+                # (on 4 November 2026 it ranked 7 such members).
+                identity["snapshot_quality"] = "unavailable"
             else:
                 identity["snapshot_quality"] = "eligible"
         else:
@@ -743,59 +772,6 @@ def _snapshot_rows(
     return manifest_rows
 
 
-# Each player's newest accepted profile at the Reset, chosen exactly as
-# for one player, with the population in one query: the newest of each
-# profile's sightings (its effects, or the profile itself when it has
-# none) up to the Reset, ordered by time and then id. Each profile's
-# newest sighting comes from the effects' own time index and the
-# profiles from migration 0098's index, so the query reads index entries
-# instead of every profile's and sighting's row. On 10 October 2026
-# reading those rows took over 6 of the freeze's 10 minutes.
-# The same lookup of any source state lists the player's profiles from the
-# (tag, time) index instead.
-_ACCEPTED_VERSIONS = (
-    "version.player_id = member.player_id"
-    " AND version.source_contract_state = 'accepted'"
-)
-_ANY_VERSIONS = """version.normalized_tag = (
-            SELECT owner.normalized_tag FROM players AS owner
-            WHERE owner.id = member.player_id)"""
-_NEWEST_PROFILES_SQL = """
-    SELECT member.player_id, profile.id,
-           COALESCE(effect.observation_id, profile.observation_id),
-           newest.observed_at, profile.profile_json,
-           profile.normalized_tag, profile.name, profile.trophies,
-           profile.eligibility_state, profile.current_league_season_id
-    FROM unnest(%(players)s::bigint[]) AS member (player_id)
-    CROSS JOIN LATERAL (
-        SELECT version.id AS profile_id, sighting.id AS effect_id,
-               COALESCE(sighting.observed_at, version.observed_at)
-                   AS observed_at
-        FROM player_profile_versions AS version
-        LEFT JOIN LATERAL (
-            SELECT effect.id, effect.observed_at
-            FROM player_profile_effects AS effect
-            WHERE effect.profile_version_id = version.id
-              AND effect.observed_at <= %(boundary)s
-            ORDER BY effect.observed_at DESC, effect.id DESC
-            LIMIT 1
-        ) AS sighting ON true
-        WHERE {versions}
-          AND (sighting.id IS NOT NULL
-               OR version.observed_at <= %(boundary)s
-                  AND NOT EXISTS (
-                      SELECT FROM player_profile_effects AS effect
-                      WHERE effect.profile_version_id = version.id
-                  ))
-        ORDER BY COALESCE(sighting.observed_at, version.observed_at) DESC,
-                 COALESCE(sighting.id, version.id) DESC
-        LIMIT 1
-    ) AS newest
-    JOIN player_profile_versions AS profile ON profile.id = newest.profile_id
-    LEFT JOIN player_profile_effects AS effect ON effect.id = newest.effect_id
-    """
-
-
 def unplayed_profiles(
     connection: Any, boundary_at: datetime, player_ids: list[int]
 ) -> dict[int, tuple[Any, ...]]:
@@ -813,7 +789,7 @@ def unplayed_profiles(
         int(row[0]): row[1:]
         for row in connection.execute(
             f"""
-            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{versions}", _ANY_VERSIONS)})
+            SELECT newest.* FROM ({NEWEST_PROFILES_SQL.replace("{versions}", ANY_VERSIONS)})
                 AS newest (player_id, id, observation_id, observed_at,
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)

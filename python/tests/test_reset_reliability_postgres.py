@@ -184,6 +184,37 @@ def _board(database: Database) -> tuple[int, list[str]]:
     return int(row[0]), [text(tag) for (tag,) in players]
 
 
+def _first_board(database: Database) -> tuple[list[str], int, dict[str, str]]:
+    """DAY_END's first board: every player it ranks, how many it counts as
+    left out unavailable, and each member it froze as unavailable, with that
+    frozen row's quality."""
+    with database.pool.connection() as connection:
+        snapshot_id, manifest_id = connection.execute(
+            "SELECT snapshot_id, snapshot_manifest_id FROM boundary_publication_generations"
+            " WHERE boundary_at = %s AND generation = 1",
+            (DAY_END,),
+        ).fetchone()
+        ranked = connection.execute(
+            "SELECT player.normalized_tag FROM leaderboard_snapshot_entries AS entry"
+            " JOIN players AS player ON player.id = entry.player_id"
+            " WHERE entry.snapshot_id = %s ORDER BY 1",
+            (snapshot_id,),
+        ).fetchall()
+        excluded = connection.execute(
+            "SELECT excluded_unavailable_count FROM leaderboard_snapshots WHERE id = %s",
+            (snapshot_id,),
+        ).fetchone()[0]
+        frozen = connection.execute(
+            "SELECT player.normalized_tag, frozen.input_identity ->> 'snapshot_quality'"
+            " FROM boundary_publication_manifest_entries(%s) AS frozen"
+            " JOIN players AS player ON player.id = frozen.player_id"
+            " WHERE frozen.classification = 'Unavailable'",
+            (manifest_id,),
+        ).fetchall()
+    return [text(tag) for (tag,) in ranked], excluded, {
+        text(tag): text(quality) for tag, quality in frozen}
+
+
 def _members(database: Database) -> tuple[int, dict[str, str]]:
     """The newest generation for DAY_END and each member's result state."""
     with database.pool.connection() as connection:
@@ -229,6 +260,9 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             assert _members(database) == (1, {"#2PP": "complete", LATE: "unavailable"})
             _build(database, processor)
             assert _board(database) == (1, ["#2PP"])
+            # Its accepted reading from the Reset before never ranks it here;
+            # on 4 November 2026 such readings ranked 7 players left out.
+            assert _first_board(database) == (["#2PP"], 1, {LATE: "unavailable"})
 
             # Its day saves after the board published: the board is rebuilt
             # with it at once, not at the next hourly rebuild.
@@ -293,6 +327,8 @@ def test_at_0600_the_board_publishes_without_every_unfinished_player(
                 1, {"#2PP": "complete", **dict.fromkeys(late, "unavailable")})
             _build(database, processor)
             assert _board(database) == (1, ["#2PP"])
+            assert _first_board(database) == (
+                ["#2PP"], 51, dict.fromkeys(late, "unavailable"))
             assert left_out() == [int(DAY_END.timestamp()), 51]
 
             # Their days save later, and the board is rebuilt with them.
@@ -476,12 +512,12 @@ def test_a_failed_army_build_runs_again_and_a_left_out_players_day_still_joins_t
             _calculate(database, processor, "#2PP")
             background_passes(waited=False)
             assert (faults, outcomes.count("failed")) == ([], 1)
-            assert served() == [("#2PP", "confirmed"), (LATE, "uncertain")]
+            assert served() == [("#2PP", "confirmed")]
 
             # The left-out player's day saves while the army build waits.
             assert set(_calculate(database, processor, LATE)) == {"processed"}
             background_passes(waited=False)
-            assert served() == [("#2PP", "confirmed"), (LATE, "uncertain")]
+            assert served() == [("#2PP", "confirmed")]
             background_passes(waited=True)
             assert served() == [("#2PP", "confirmed"), (LATE, "confirmed")]
             assert _board(database) == (2, list(PLAYERS))
@@ -1015,5 +1051,163 @@ def test_worker_sessions_compile_no_query_code(database_url: str) -> None:
         try:
             with database.pool.connection() as connection:
                 assert connection.execute("SHOW jit").fetchone()[0] == "off"
+        finally:
+            database.close()
+
+
+# Older accepted profiles per member, and the freeze's budget, set by running
+# this on the code before the fix (docs/testing.md): there the newest-profile
+# lookup read every one of them.
+HISTORY_DEPTH = 40_000
+FREEZE_BUDGET = "250ms"
+PAGE_BUDGET = 1_000
+# Pages of saved profiles, sightings and responses, and their indexes, read
+# so far in this transaction.
+_PAGES_READ = """
+    SELECT sum(pg_stat_get_xact_blocks_fetched(oid)) FROM pg_class
+    WHERE relname LIKE ANY (ARRAY['player_profile_%', 'collector_observations%'])"""
+
+
+def _deep_history(connection_info: str, depth: int) -> int:
+    """Seed each player's ``depth`` older accepted profiles, ten minutes
+    apart before the Reset before DAY_START, each seen by its own saved
+    response and every third seen again 5 minutes later; and LATE's legacy
+    profile with no sightings at DAY_END - 15 minutes. Returns its id."""
+    key = "'history:' || player.id || ':' || n || ':' || again"
+    response = """
+        INSERT INTO collector_observations (
+            occurrence_key, player_id, normalized_tag, endpoint, request_started_at,
+            response_completed_at, http_status, response_hash, archive_reference,
+            archive_catalogue_hash, collector_version, key_label, evidence_headers,
+            request_method, request_path, request_query, paging_envelope_state,
+            source_adapter_version)
+        SELECT {key}, player.id, player.normalized_tag, 'profile', {at}, {at}, 200,
+               repeat('a', 64), 'archive', repeat('a', 64), 'seed', 'seed', '{{}}',
+               'GET', 'path', '', 'not_applicable', 'player-profile-v1'
+        FROM players AS player {rows}"""
+    profile = """
+        INSERT INTO player_profile_versions (
+            player_id, observation_id, normalized_tag, endpoint_version, schema_version,
+            parser_version, observed_at, source_http_status, name, trophies,
+            league_tier_id, league_tier_name, eligibility_state, profile_json,
+            source_contract_state, current_league_season_id)
+        SELECT response.player_id, response.id, response.normalized_tag, 'v1', 'v1',
+               'parser', response.response_completed_at, 200, {name}, 6000,
+               105000036, 'Legend I', 'eligible', '{{}}', 'accepted', (
+                   SELECT current_league_season_id FROM player_profile_versions
+                   ORDER BY id LIMIT 1)
+        FROM collector_observations AS response WHERE response.occurrence_key {match}"""
+    history = (
+        "CROSS JOIN generate_series(1, %(depth)s) AS n"
+        " CROSS JOIN generate_series(0, 1) AS again WHERE again = 0 OR n %% 3 = 0")
+    with psycopg.connect(connection_info) as connection:
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(response.format(
+            key=key, at="%(before)s - make_interval(mins => 10 * n - 5 * again)",
+            rows=history), {"depth": depth, "before": DAY_START - timedelta(days=1)})
+        connection.execute(profile.format(
+            name="'History ' || split_part(response.occurrence_key, ':', 3)",
+            match="LIKE 'history:%:0'"))
+        connection.execute(
+            """
+            INSERT INTO player_profile_effects (
+                profile_version_id, observation_id, effect_kind, observed_at,
+                source_http_status, endpoint_version, schema_version, parser_version)
+            SELECT version.id, response.id, 'current_profile',
+                   response.response_completed_at, 200, 'v1', 'v1', 'parser'
+            FROM collector_observations AS response
+            JOIN player_profile_versions AS version
+              ON version.player_id = response.player_id
+             AND version.name = 'History ' || split_part(response.occurrence_key, ':', 3)
+            WHERE response.occurrence_key LIKE 'history:%'
+            """
+        )
+        connection.execute(response.format(
+            key="'legacy'", at="%(at)s", rows="WHERE player.normalized_tag = %(tag)s"),
+            {"at": DAY_END - timedelta(minutes=15), "tag": LATE})
+        legacy = connection.execute(
+            profile.format(name="'Legacy'", match="= 'legacy'") + " RETURNING id"
+        ).fetchone()[0]
+        connection.execute("ANALYZE")
+    return int(legacy)
+
+
+def test_deep_profile_history_cannot_hold_the_board_freeze_past_its_budget(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # On 4 November 2026 the freeze's newest-profile lookup read every one of
+    # each member's profiles: it ran past the 15-minute limit, took 871
+    # seconds when tried again, and the board published at 06:09:31 UTC.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    freeze, pages = boundary_manifest._freeze, []
+
+    def budgeted(connection, *args):
+        connection.execute(f"SET LOCAL statement_timeout = '{FREEZE_BUDGET}'")
+        before = connection.execute(_PAGES_READ).fetchone()[0]
+        frozen = freeze(connection, *args)
+        pages.append(connection.execute(_PAGES_READ).fetchone()[0] - before)
+        return frozen
+
+    monkeypatch.setattr(boundary_manifest, "_freeze", budgeted)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            legacy = _deep_history(connection_info, HISTORY_DEPTH)
+            # #2PP is renamed, then seen at one time under both names, so
+            # the newer sighting of its two profiles counts; a rejected
+            # reading after them (Season 0) does not.
+            readings = {}
+            for key, minutes, name, season in (
+                ("renamed", 30, "Renamed", None), ("tied-old", 20, None, None),
+                ("tied-new", 20, "Renamed", None), ("rejected", 10, None, 0),
+            ):
+                body = json.loads(_profile(6000))
+                body.update({"name": name or body["name"]} | (
+                    {} if season is None else {"currentLeagueSeasonId": season}))
+                readings[key], job = store_observation(
+                    connection_info, archive_server, occurrence_key=key,
+                    endpoint="profile", body=json.dumps(body).encode(),
+                    observed_at=DAY_END - timedelta(minutes=minutes), normalized_tag="#2PP",
+                )
+                assert processor.process_job(job, owner=key).outcome == "processed"
+            for tag in PLAYERS:
+                assert set(_calculate(database, processor, tag)) <= {"processed"}
+            _build(database, processor)
+            with database.pool.connection() as connection:
+                timed_out = connection.execute(
+                    "SELECT count(*) FROM python_processing_jobs"
+                    " WHERE failure_category = 'freeze_timed_out'"
+                ).fetchone()[0]
+                frozen = connection.execute(
+                    """
+                    SELECT player.normalized_tag, entry.trophies,
+                           (frozen.input_identity ->> 'profile_version_id')::bigint,
+                           (frozen.input_identity #>> '{profile_snapshot,observation_id}')::bigint,
+                           version.name, version.observation_id
+                    FROM boundary_publication_generations AS generation
+                    CROSS JOIN boundary_publication_manifest_entries(
+                        generation.snapshot_manifest_id) AS frozen
+                    JOIN players AS player ON player.id = frozen.player_id
+                    JOIN player_profile_versions AS version
+                      ON version.id = (frozen.input_identity ->> 'profile_version_id')::bigint
+                    LEFT JOIN leaderboard_snapshot_entries AS entry
+                      ON entry.snapshot_id = generation.snapshot_id
+                     AND entry.player_id = frozen.player_id
+                    WHERE generation.boundary_at = %s AND generation.generation = 1
+                      AND generation.snapshot_state = 'published'
+                    ORDER BY 1
+                    """,
+                    (DAY_END,),
+                ).fetchall()
+            # On the code before the fix each board freeze read 324,258 and
+            # 325,781 pages; on the fix, 140 and 153.
+            assert (timed_out, max(pages) < PAGE_BUDGET) == (0, True), pages
+            # #2PP's newest sighting is the later of the tied two, of its
+            # renamed profile; LATE's is its legacy profile, seen by itself.
+            assert [(text(row[0]), row[1], row[3], text(row[4])) for row in frozen] == [
+                ("#2PP", 6000, readings["tied-new"], "Renamed"),
+                (LATE, 6000, frozen[1][5], "Legacy")]
+            assert frozen[1][2] == legacy
         finally:
             database.close()

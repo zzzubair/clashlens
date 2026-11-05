@@ -204,6 +204,22 @@ _SEED = [
     ) AS sighting (kind, version, seconds, seeded)
     WHERE seeded AND i %% 17 <> 0
     """,
+    # Each sighting's own saved response, at its time (ingestion.complete_profile).
+    """
+    INSERT INTO collector_observations (
+        id, occurrence_key, player_id, normalized_tag, endpoint, request_started_at,
+        response_completed_at, http_status, response_hash, archive_reference,
+        archive_catalogue_hash, collector_version, key_label, evidence_headers,
+        request_method, request_path, request_query, paging_envelope_state,
+        source_adapter_version
+    ) OVERRIDING SYSTEM VALUE
+    SELECT effect.observation_id, 'seen-' || effect.id, version.player_id,
+           version.normalized_tag, 'profile', effect.observed_at, effect.observed_at,
+           200, repeat('a', 64), 'archive', repeat('a', 64), 'seed', 'seed', '{}',
+           'GET', 'path', '', 'not_applicable', 'player-profile-v1'
+    FROM player_profile_effects AS effect
+    JOIN player_profile_versions AS version ON version.id = effect.profile_version_id
+    """,
     # Every 51st player's only profile conflicts with its source.
     """
     INSERT INTO player_profile_versions (
@@ -513,7 +529,8 @@ def per_player_inputs(
                 elif season_is_current(
                     _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
                 ):
-                    identity["snapshot_quality"] = "eligible"
+                    identity["snapshot_quality"] = (
+                        "unavailable" if classification == "Unavailable" else "eligible")
                 else:
                     # Trophies from before this player's Season reset never
                     # stand for the ended day's Season.
@@ -576,12 +593,7 @@ def per_player_inputs(
                 (version_id,),
             ).fetchone()
             if ranked_identity is not None:
-                identity.update(
-                    {
-                        "start_baseline_id": ranked_identity[0],
-                        "end_baseline_id": ranked_identity[1],
-                    }
-                )
+                identity["start_baseline_id"], identity["end_baseline_id"] = ranked_identity
             daily_log = connection.execute(
                 "SELECT id, battles FROM api_player_daily_logs WHERE ranked_day_version_id = %s ORDER BY id DESC LIMIT 1",
                 (version_id,),
@@ -625,24 +637,14 @@ def per_player_inputs(
     season_inputs = None
     if artifact_kind == "army":
         season_row = connection.execute(
-            """
-            SELECT official_season_id
-            FROM ranked_day_versions
-            WHERE id = ANY(%s::bigint[])
-            ORDER BY id
-            LIMIT 1
-            """,
+            "SELECT official_season_id FROM ranked_day_versions"
+            " WHERE id = ANY(%s::bigint[]) ORDER BY id LIMIT 1",
             ([row[1] for row in members if row[1] is not None],),
         ).fetchone()
         if season_row is not None:
             season_versions = connection.execute(
-                """
-                SELECT id
-                FROM ranked_day_versions
-                WHERE official_season_id = %s
-                  AND state = 'Complete' AND coverage_complete
-                ORDER BY id
-                """,
+                "SELECT id FROM ranked_day_versions WHERE official_season_id = %s"
+                " AND state = 'Complete' AND coverage_complete ORDER BY id",
                 (season_row[0],),
             ).fetchall()
             season_version_ids = [int(row[0]) for row in season_versions]
@@ -664,9 +666,7 @@ def per_player_inputs(
                 if isinstance(event, dict)
                 and str(event.get("battle_id", "")).isdigit()
             }
-            season_battle_ids = sorted(
-                {battle_id for battle_id, _lens in season_sides}
-            )
+            season_battle_ids = sorted({battle_id for battle_id, _lens in season_sides})
             season_evidence_ids = [
                 int(row[0])
                 for row in connection.execute(
