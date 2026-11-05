@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .army_analytics import public_army_states
+from . import army_types
+from .army_analytics import TOP_PRESETS, public_army_states
 from .army_history import HISTORY_CATEGORIES, count_usage, usage_by_category
+from .army_rank_bands import counted_boards
 
 # The completed-season gate is shared with the player summaries so both
 # slices agree on when a season is finalizable.
@@ -343,6 +345,106 @@ def materialize_army_season(
         )
         report["unchanged" if unchanged else "materialized"] += 1
         report["content_digests"][category] = digest
+    if lens == "offense":
+        # Army types count attacks only, so they publish with this lens.
+        report["army_types"] = materialize_army_type_season(connection, season_id)
+    return report
+
+
+def materialize_army_type_season(connection: Any, season_id: str) -> dict[str, Any]:
+    """Save the Season's Armies view for each Top N the Armies page offers.
+
+    The same count as the page's current-Season view: each completed Legend
+    day counts the players on that day's own board, the board its rank band
+    totals used, else the newest published one, and adds them up with
+    ``army_types.read_type_rows``. Days missing a completed record or a board
+    are left out and named by the saved days. Nothing is written until every
+    saved army has its type under the current rules; unchanged rows stay.
+    """
+    if not army_types.rules_ready(connection):
+        return {"status": "army_types_preparing", "materialized": 0, "unchanged": 0}
+    days = {
+        int(day): start
+        for day, start in connection.execute(
+            """
+            SELECT day.season_day_number, day.ranked_day_start
+            FROM army_analytics_completed_days AS day
+            WHERE day.official_season_id = %s AND EXISTS (
+                SELECT FROM api_player_daily_logs AS log
+                WHERE log.official_season_id = day.official_season_id
+                  AND log.season_day_number = day.season_day_number
+                  AND log.ranked_day_start = day.ranked_day_start
+                  AND log.state = 'Complete' AND log.coverage = 'complete')
+            """,
+            (season_id,),
+        ).fetchall()
+    }
+    boards = {
+        start: int(snapshot_id)
+        for start, snapshot_id in connection.execute(
+            """
+            SELECT DISTINCT ON (boundary_at)
+                   boundary_at - interval '1 day', id
+            FROM leaderboard_snapshots
+            WHERE snapshot_kind = 'frozen' AND state = 'published'
+              AND boundary_at = ANY(%s::timestamptz[])
+            ORDER BY boundary_at, version DESC
+            """,
+            ([start + timedelta(days=1) for start in days.values()],),
+        ).fetchall()
+    }
+    boards.update({
+        days[day]: board[0]
+        for day, board in counted_boards(connection, season_id).items()
+        if day in days
+    })
+    covered = sorted(day for day, start in days.items() if start in boards)
+    report: dict[str, Any] = {"status": "", "materialized": 0, "unchanged": 0}
+    if not covered:
+        report["status"] = "no_days"
+        return report
+    selected = {day: days[day] for day in covered}
+    day_boards = {start: boards[start] for start in selected.values()}
+    for top in sorted(TOP_PRESETS):
+        rows = army_types.read_type_rows(
+            connection, season_id=season_id, days=selected, member_ids=None,
+            trophy_range=None, boards=(day_boards, 1, top),
+        )
+        summary = {
+            "covered_days": covered,
+            "type_rows": [list(row) for row in rows],
+            "rules_version": army_types.RULES_VERSION,
+        }
+        digest = _digest(summary)
+        existing = connection.execute(
+            """
+            SELECT content_digest FROM army_type_season_summaries
+            WHERE official_season_id = %s AND population = %s FOR UPDATE
+            """,
+            (season_id, f"top-{top}"),
+        ).fetchone()
+        if existing is not None and _text(existing[0]) == digest:
+            report["unchanged"] += 1
+            continue
+        connection.execute(
+            """
+            INSERT INTO army_type_season_summaries (
+                official_season_id, population, covered_days, type_rows,
+                rules_version, content_digest
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (official_season_id, population) DO UPDATE SET
+                covered_days = EXCLUDED.covered_days,
+                type_rows = EXCLUDED.type_rows,
+                rules_version = EXCLUDED.rules_version,
+                content_digest = EXCLUDED.content_digest,
+                published_at = clock_timestamp()
+            """,
+            (season_id, f"top-{top}", covered, Jsonb(summary["type_rows"]),
+             summary["rules_version"], digest),
+        )
+        report["materialized"] += 1
+    report["status"] = "complete" if len(covered) == 28 else "partial"
+    report["covered_days"] = covered
     return report
 
 

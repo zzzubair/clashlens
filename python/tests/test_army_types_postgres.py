@@ -14,8 +14,10 @@ from domain_test_support import (
     store_observation,
     text,
 )
+from fastapi.testclient import TestClient
 from test_army_analytics_publication_postgres import (
     DAY_START,
+    SEASON_ID,
     _army_job,
     _event,
     _processor,
@@ -24,10 +26,13 @@ from test_army_analytics_publication_postgres import (
     _seed_frozen_snapshot_at,
     _selection,
 )
+from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_analytics, army_rank_bands, army_types
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsUnavailable, ArmyTypesPreparing
+from clashlens.army_season_summaries import materialize_completed_army_season
 
 # A Duke with Revenge Deck and 2 Ice Blocks; a Duke with Rocket Backpack and
 # an Earthquake.
@@ -314,6 +319,174 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             army_types.refresh_army_types(database, now=NOON)
             assert _types(api) == expected
             assert _result(api)["reproducibility"]["source_evidence_hash"] != evidence
+        finally:
+            api.close()
+            database.close()
+
+
+def test_a_past_seasons_army_types_from_saved_battles_to_its_page(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The July Season's Days 23 and 28, saved and counted while it ran,
+    built into its summaries and read back as its Armies view."""
+    with domain_database(database_url) as ci:
+        day28 = DAY_START + timedelta(days=5)
+        ts1, ts2 = DAY_START + timedelta(hours=1), DAY_START + timedelta(hours=3)
+        ts3 = day28 + timedelta(hours=2)
+        reports = (
+            ("t1", "#2PP", _row(True, "#8PP", THROWER_CODE, ts1, 3, 100), ts1),
+            ("t2", "#2PP", _row(True, "#9PP", HYDRA_CODE, ts2, 1, 50), ts2),
+            ("t3", "#8PP", _row(True, "#2PP", OTHER_THROWER_CODE, ts2, 2, 80), ts2),
+            ("t4", "#9PP", _row(True, "#2PP", HYDRA_CODE, ts3, 3, 100), ts3),
+        )
+        jobs = [
+            store_observation(
+                ci, archive_server, occurrence_key=key, endpoint="battle_log",
+                body=json.dumps({"items": [row]}).encode(),
+                observed_at=ts + timedelta(minutes=1), normalized_tag=tag,
+            )[1]
+            for key, tag, row, ts in reports
+        ]
+        database, processor = _processor(ci, archive_server, monkeypatch)
+        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        app = create_app(
+            database=api,
+            keys={("typescript-website", "current"): TS_CURRENT},
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+
+        def page(population: str, sort: str = "usage-rate"):
+            target = (
+                f"/v1/analytics/armies/seasons/{SEASON_ID}"
+                f"?category=army-types&population={population}&sort={sort}"
+            )
+            # Without its start and stop, the app leaves ``api`` open.
+            return TestClient(app).get(target, headers=signed_headers(target))
+
+        def types(population: str) -> dict[str, tuple]:
+            response = page(population)
+            assert response.status_code == 200
+            return {
+                row["label"]: (row["usage_count"], row["star_counts"],
+                               [(variant["label"], variant["usage_count"])
+                                for variant in row.get("variants", [])])
+                for row in response.json()["rows"]
+            }
+
+        try:
+            for index, job in enumerate(jobs):
+                assert processor.process_job(job, owner=f"ingest-{index}").outcome in (
+                    "processed", "processed_with_gaps",
+                )
+            with database.pool.connection() as connection:
+                battles = {
+                    (text(a), text(d)): int(b)
+                    for a, d, b in connection.execute(
+                        """
+                        SELECT atk.normalized_tag, def.normalized_tag, b.id
+                        FROM legend_battles b
+                        JOIN players atk ON atk.id = b.attacker_player_id
+                        JOIN players def ON def.id = b.defender_player_id
+                        """
+                    ).fetchall()
+                }
+                ids = {
+                    text(tag): int(player_id)
+                    for tag, player_id in connection.execute(
+                        "SELECT normalized_tag, id FROM players"
+                    ).fetchall()
+                }
+            _publish_day(database, "#2PP", [
+                _event(battles[("#2PP", "#8PP")], "offense", ts1, 3, 100, 40),
+                _event(battles[("#2PP", "#9PP")], "offense", ts2, 1, 50, 10),
+            ])
+            _publish_day(database, "#8PP", [
+                _event(battles[("#8PP", "#2PP")], "offense", ts2, 2, 80, 25),
+            ])
+            assert processor.process_job(_army_job(database), owner="army").outcome == "processed"
+            # Day 28 ends the Season.
+            _publish_day(database, "#9PP", [
+                _event(battles[("#9PP", "#2PP")], "offense", ts3, 3, 100, 40),
+            ], day_start=day28, day_number=28)
+            assert processor.process_job(_army_job(database), owner="army").outcome == "processed"
+            _seed_frozen_snapshot_at(
+                database, DAY_START + timedelta(days=1),
+                [(ids["#2PP"], 1, "fresh", "confirmed"),
+                 (ids["#8PP"], 6, "fresh", "confirmed"),
+                 (ids["#9PP"], 7, "fresh", "confirmed")],
+            )
+            _seed_frozen_snapshot_at(
+                database, day28 + timedelta(days=1),
+                [(ids["#9PP"], 1, "fresh", "confirmed"),
+                 (ids["#2PP"], 6, "fresh", "confirmed"),
+                 (ids["#8PP"], 7, "fresh", "confirmed")],
+            )
+            # While the Season ran the worker counted Day 28 only: its rank
+            # band totals and its army type counts. Day 23 is added up from
+            # its attacks and its newest board.
+            army_rank_bands.refresh_rank_band_totals(database)
+            army_types.refresh_army_types(database, now=NOON)
+            army_types.refresh_army_types(database, now=NOON)
+            with database.pool.connection() as connection:
+                assert [row[0] for row in connection.execute(
+                    "SELECT ranked_day_start FROM army_type_counted_days"
+                ).fetchall()] == [day28]
+
+            # Nothing is saved for the Season yet.
+            assert page("top-10").status_code == 404
+
+            # A preview writes nothing; the applied build saves its Armies.
+            with psycopg.connect(ci) as connection:
+                report = materialize_completed_army_season(
+                    connection, season_id=SEASON_ID, now=datetime.now(UTC)
+                )
+                connection.rollback()
+            assert report["season_completed"] is True
+            assert report["lenses"]["offense"]["army_types"] == {
+                "status": "partial", "materialized": 12, "unchanged": 0,
+                "covered_days": [23, 28],
+            }
+            assert page("top-10").status_code == 404
+            with psycopg.connect(ci) as connection:
+                materialize_completed_army_season(
+                    connection, season_id=SEASON_ID, now=datetime.now(UTC)
+                )
+                connection.commit()
+
+            served = page("top-10").json()
+            assert served["selection"] == {
+                "lens": "offense", "season": SEASON_ID, "start_day": 23,
+                "end_day": 28, "population": "top-10", "category": "army-types",
+                "sort": "usage-rate",
+            }
+            assert served["collection_coverage"] == {
+                "state": "partial", "completed_days": 2, "covered_days": [23, 28],
+            }
+            assert served["total_attacks"] == 4
+            assert types("top-10") == {
+                "Thrower": (2, [0, 0, 1, 1],
+                            [("Revenge Thrower", 1), ("Backpack Thrower", 1)]),
+                "Hydra": (2, [0, 1, 0, 1], [("Other Hydra", 2)]),
+            }
+            # Each day counts its own board's top: #2PP on Day 23, #9PP on
+            # Day 28.
+            assert types("top-5") == {
+                "Thrower": (1, [0, 0, 0, 1], [("Revenge Thrower", 1)]),
+                "Hydra": (2, [0, 1, 0, 1], [("Other Hydra", 2)]),
+            }
+            assert [row["label"] for row in page("top-5", "usage-count").json()["rows"]] == [
+                "Hydra", "Thrower",
+            ]
+
+            # The page reads the saved Season only, and takes today's names.
+            with database.pool.connection() as connection:
+                connection.execute("DELETE FROM army_package_day_counts")
+                connection.execute("DELETE FROM army_analytics_rank_band_totals")
+            monkeypatch.setitem(army_types.TYPE_NAMES, army_types.HYDRA, "Hydras")
+            assert set(types("top-10")) == {"Thrower", "Hydras"}
+            # A Top N the page does not offer is refused.
+            assert page("top-7").status_code == 422
         finally:
             api.close()
             database.close()

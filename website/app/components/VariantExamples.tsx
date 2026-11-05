@@ -23,7 +23,9 @@ export function ArmyDetail({
   variants: ArmyRow[];
   /** Whose attacks these are, such as "top-1,000 players". */
   audience: string;
-  examplesUrl: (variant: ArmyRow) => string;
+  /** Where a variant's example armies load from; without one, variants
+   * show their numbers only. */
+  examplesUrl?: (variant: ArmyRow) => string;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -112,41 +114,52 @@ export function ArmyDetail({
         <ol className="analytics-variants">
           {variants.map((variant) => {
             const open = openVariant === variant.key;
+            const numbers = (
+              <>
+                <span className="analytics-variant-name">{variant.label}</span>
+                <strong className="analytics-variant-share">
+                  {formatRate(variant.usageRate)}
+                </strong>
+                <span className="meter" aria-hidden="true">
+                  <span
+                    style={
+                      {
+                        "--value": `${shareMax && (variant.usageRate / shareMax) * 100}%`,
+                      } as CSSProperties
+                    }
+                  />
+                </span>
+                <span className="analytics-variant-stats">
+                  3-star {formatRate(starRate(variant, 3))}
+                  {variant.averageTrophies != null
+                    ? ` · ${variant.averageTrophies.toFixed(1)} trophies`
+                    : null}
+                  {` · ${battles(variant.usageCount)}`}
+                </span>
+              </>
+            );
             return (
               <li key={variant.key} className="analytics-variant" data-open={open}>
-                <button
-                  type="button"
-                  className="analytics-variant-toggle"
-                  aria-expanded={open}
-                  title={`${open ? "Hide" : "Show"} ${variant.label} armies`}
-                  onClick={(event) => {
-                    tapped.current = open ? null : event.currentTarget;
-                    setOpenVariant(open ? null : variant.key);
-                  }}
-                >
-                  <span className="analytics-variant-name">{variant.label}</span>
-                  <strong className="analytics-variant-share">
-                    {formatRate(variant.usageRate)}
-                  </strong>
-                  <span className="meter" aria-hidden="true">
-                    <span
-                      style={
-                        {
-                          "--value": `${shareMax && (variant.usageRate / shareMax) * 100}%`,
-                        } as CSSProperties
-                      }
-                    />
-                  </span>
-                  <span className="analytics-variant-stats">
-                    3-star {formatRate(starRate(variant, 3))}
-                    {variant.averageTrophies != null
-                      ? ` · ${variant.averageTrophies.toFixed(1)} trophies`
-                      : null}
-                    {` · ${battles(variant.usageCount)}`}
-                  </span>
-                  <span className="analytics-chevron" aria-hidden="true" />
-                </button>
-                {open ? (
+                {examplesUrl ? (
+                  <button
+                    type="button"
+                    className="analytics-variant-toggle"
+                    aria-expanded={open}
+                    title={`${open ? "Hide" : "Show"} ${variant.label} armies`}
+                    onClick={(event) => {
+                      tapped.current = open ? null : event.currentTarget;
+                      setOpenVariant(open ? null : variant.key);
+                    }}
+                  >
+                    {numbers}
+                    <span className="analytics-chevron" aria-hidden="true" />
+                  </button>
+                ) : (
+                  <div className="analytics-variant-toggle" data-static="">
+                    {numbers}
+                  </div>
+                )}
+                {open && examplesUrl ? (
                   <VariantExamples
                     id={variant.key}
                     label={variant.label}
