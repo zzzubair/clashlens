@@ -1,25 +1,26 @@
 """Attack alerts: a Discord DM each time one of a Clasher's players is attacked.
 
-Clashers turn alerts on per verified player on the website. Every few seconds
+Clashers turn alerts on per verified player on the website, and the site
+owner for any player from View as (migration 0139). Every few seconds
 the loop sends a short confirmation DM for each switch turned on, or Discord
 connected again, in the last 15 minutes, then asks the database for defenses
 saved in the last 15 minutes against those players, after their alerts went
 on, and sends each one once. Older ones are skipped, so a bot that was down
 does not send a flood of stale alerts when it starts again.
 
-Each DM is written to the delivery log just before it is first sent, and
-only while the switch is still on, the player still verified to the account
-and Discord still connected as the same user; every try sends the same
-Discord nonce, which Discord checks for repeats for a few minutes. A DM
-Discord did not take, whatever the cause (a 5xx or 429 answer, a network
-error, a timeout, an answer cut off), is tried again, waiting longer each
-time and at least as long as Discord asks, while those still hold, within
-the 15 minutes, and only within 2 minutes of its first try, when it was
-logged. Each try, with discord.py's own waits and tries again, is cut off at
-that limit, by a fresh clock, and a try that could only start after it is
-not made; the DM is then logged as not delivered, never sent again. A crash
-can lose an alert but never send it twice. Discord refusing a DM (bot not
-added, DMs closed, unknown user) is logged with the reason, which the
+Each DM is written to the delivery log just before it is first sent, and only
+while the switch is still on, the player still verified to the account (or the
+account still the site owner) and Discord still connected as the same user;
+every try sends the same Discord nonce, which Discord checks for repeats for a
+few minutes. A DM Discord did not take, whatever the cause (a 5xx or 429
+answer, a network error, a timeout, an answer cut off), is tried again,
+waiting longer each time and at least as long as Discord asks, while those
+still hold, within the 15 minutes, and only within 2 minutes of its first try,
+when it was logged. Each try, with discord.py's own waits and tries again, is
+cut off at that limit, by a fresh clock, and a try that could only start after
+it is not made; the DM is then logged as not delivered, never sent again. A
+crash can lose an alert but never send it twice. Discord refusing a DM (bot
+not added, DMs closed, unknown user) is logged with the reason, which the
 website shows with what the Clasher can do. That DM is not tried again.
 
 A delivered alert gets its picture of the defender's Legend day (see
@@ -45,6 +46,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from clashlens.api_db import ApiDatabase
+from clashlens.api_discord_alerts import MAY_SEND
 from clashlens.domain import ranked_day_for
 
 from . import picture, replies
@@ -99,15 +101,15 @@ _CONFIRM_COLUMNS = (
     "confirm_requested_at",
 )
 # Where a DM is still due: its switch on since before the battle was saved, or
-# still asking for this confirmation, the player still verified to the account,
-# Discord still connected as the same user, and within `WINDOW`.
+# still asking for this confirmation, the player still verified to the account
+# or the account still a site owner (`MAY_SEND`), Discord still connected as
+# the same user, and within `WINDOW`.
 _STILL_DUE = """
     FROM discord_attack_alerts AS alert
-    JOIN verified_player_links AS link
-        ON link.player_id = alert.player_id AND link.account_id = alert.account_id
     JOIN account_provider_identities AS identity
         ON identity.account_id = alert.account_id AND identity.provider = 'discord'
     WHERE alert.account_id = %(account_id)s AND alert.player_id = %(player_id)s
+      AND """ + MAY_SEND.format(alert="alert") + """
       AND identity.provider_subject = %(discord_user_id)s
       AND CASE WHEN %(battle_id)s::bigint IS NULL
                THEN alert.confirm_requested_at = %(since)s
@@ -238,14 +240,13 @@ class AlertStore:
                 SELECT alert.account_id, identity.provider_subject, alert.player_id,
                        player.normalized_tag, profile.name, alert.confirm_requested_at
                 FROM discord_attack_alerts AS alert
-                JOIN verified_player_links AS link
-                    ON link.player_id = alert.player_id AND link.account_id = alert.account_id
                 JOIN account_provider_identities AS identity
                     ON identity.account_id = alert.account_id AND identity.provider = 'discord'
                 JOIN players AS player ON player.id = alert.player_id
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
                 WHERE alert.confirm_requested_at >= clock_timestamp() - %s
+                  AND """ + MAY_SEND.format(alert="alert") + """
                   AND NOT EXISTS (
                       SELECT 1 FROM discord_attack_alert_deliveries AS sent
                       WHERE sent.account_id = alert.account_id

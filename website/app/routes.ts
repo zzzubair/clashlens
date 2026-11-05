@@ -34,6 +34,7 @@ export default [
   }),
   route("account/players/:tag/unlink", "routes/account.players.$tag.unlink.tsx"),
   route("account/discord-alerts", "routes/account.discord-alerts.tsx"),
+  route("account/view-as", "routes/account.view-as.ts"),
   route("account/obs-overlay", "routes/account.obs-overlay.tsx"),
   route("account/obs-overlay/save", "routes/account.obs-overlay.save.ts"),
   route("account/obs-overlay/preview", "routes/obs-overlay.tsx", { id: "obs-preview" }),

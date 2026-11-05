@@ -116,7 +116,8 @@ def test_only_the_recorded_owner_gets_any_players_card(site, capsys) -> None:
     # An unknown or malformed tag, or none: plainly no player.
     for tag in (None, "#9999999", "not-a-tag", "#", "8PY2QLY0", "x" * 200):
         assert _ask(client, OWNER, tag).json() == {
-            "kind": "view-as", "owner": True, "player": None,
+            "kind": "view-as", "owner": True, "player": None, "pinned": None,
+            "follow": {"attack": False, "day_summary": False},
         }
 
     # Every other account: one answer whatever it sends, so it cannot learn

@@ -15,10 +15,19 @@ import { normalizePlayerTag } from "../lib/player-tag";
 import { requestJson, type GoogleAccountIdentity } from "../services/python.server";
 import { isRecord } from "../services/python-response.server";
 
+/** The owner's own Discord switches for the viewed player. */
+export type OwnerFollow = { attack: boolean; daySummary: boolean };
+
 export type ViewAsAccess =
   | { owner: false }
-  /** `player` is null when no player has the tag asked for. */
-  | { owner: true; player: LinkedPlayerCard | null };
+  | {
+      owner: true;
+      /** Null when no player has the tag asked for. */
+      player: LinkedPlayerCard | null;
+      /** The player a plain load of the owner's dashboard opens, if pinned. */
+      pinned: string | null;
+      follow: OwnerFollow;
+    };
 
 /** What anyone the owner check cannot confirm gets: the normal dashboard. */
 const NOT_OWNER: ViewAsAccess = { owner: false };
@@ -52,9 +61,17 @@ export async function readViewAs(
       identity,
     );
     if (!isRecord(payload) || payload.owner !== true) return NOT_OWNER;
-    if (payload.player === null) return { owner: true, player: null };
+    const pinned =
+      typeof payload.pinned === "string" ? normalizePlayerTag(payload.pinned) : null;
+    const follow = isRecord(payload.follow) ? payload.follow : {};
+    const owner = {
+      owner: true,
+      pinned,
+      follow: { attack: follow.attack === true, daySummary: follow.day_summary === true },
+    } as const;
+    if (payload.player === null) return { ...owner, player: null };
     const player = mapLinkedPlayerCard(payload.player);
-    return player === null || player.tag !== tag ? NOT_OWNER : { owner: true, player };
+    return player === null || player.tag !== tag ? NOT_OWNER : { ...owner, player };
   } catch {
     return NOT_OWNER;
   }
@@ -77,4 +94,28 @@ export function refuseViewAsChanges(request: Request): Response | null {
     status: 400,
     headers: { "Cache-Control": "private, no-store", "Content-Type": "text/plain" },
   });
+}
+
+/**
+ * The owner's own writes from View as: pin a player, or unpin with null, and
+ * turn the owner's own Discord attack alerts or Legend day summary for the
+ * viewed player on or off. The Python service checks the owner again from the
+ * signed-in account and refuses anyone else the same way whatever the tag.
+ */
+export async function saveOwnerChoice(
+  identity: GoogleAccountIdentity,
+  choice:
+    | { kind: "pin"; tag: string | null }
+    | { kind: "follow"; tag: string; alert: "attack" | "day_summary"; on: boolean },
+  idempotencyKey: string,
+): Promise<void> {
+  const { kind, ...body } = choice;
+  await requestJson<unknown>(
+    `/v1/account/view-as/${kind}`,
+    "POST",
+    Buffer.from(JSON.stringify(body), "utf8"),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
 }

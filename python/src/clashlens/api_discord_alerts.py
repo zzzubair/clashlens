@@ -19,6 +19,21 @@ from . import api_db
 from .api_accounts import _verified_players
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 
+# Whether the account `alert` names may get the DMs of the player it names:
+# the player is linked to it, or it is a site owner (migrations 0138, 0139),
+# whose switches for any player api_view_as saves. The bot checks this before
+# each DM, so none goes once the link or the owner record is gone.
+MAY_SEND = """(
+    EXISTS (
+        SELECT 1 FROM verified_player_links AS link
+        WHERE link.account_id = {alert}.account_id AND link.player_id = {alert}.player_id
+    )
+    OR EXISTS (
+        SELECT 1 FROM site_owner_accounts AS owner
+        WHERE owner.account_id = {alert}.account_id
+    )
+)"""
+
 
 def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     """Each verified player with its switch, and the newest DM that could not
