@@ -634,7 +634,11 @@ describe("army analytics route historical reads", () => {
     const [unitQuery] = getArmyAnalytics.mock.lastCall as [URLSearchParams];
     expect(unitQuery.get("category")).toBe("troops");
     expect(unitQuery.get("sort")).toBe("usage-rate");
-    const getArmySeasonSummary = vi.fn().mockResolvedValue({});
+    const getArmySeasonSummary = vi
+      .fn()
+      .mockRejectedValue(
+        new PythonApiError(404, { error: "army_analytics_unavailable" }),
+      );
     mocks.createPythonClient.mockReturnValue({ getArmySeasonSummary });
     const past = await renderArmyRoute(`season=${SEASON}&sort=average-trophies`);
     await armyLoader({ request: unitUsage(past), params: {} } as never);
@@ -647,18 +651,67 @@ describe("army analytics route historical reads", () => {
     expect(pastQuery.get("sort")).toBe("usage-rate");
   });
 
-  it("says Armies are not available for a past Season, staying on Armies", async () => {
-    const getArmySeasonSummary = vi.fn();
+  it("says Armies are not available for a past Season with none saved, staying on Armies", async () => {
+    const getArmySeasonSummary = vi
+      .fn()
+      .mockRejectedValue(
+        new PythonApiError(404, { error: "army_analytics_unavailable" }),
+      );
     mocks.createPythonClient.mockReturnValue({
       getArmySeasonSummary,
       getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
     });
     const html = await renderArmyRoute(`season=${SEASON}&category=army-types`);
-    expect(getArmySeasonSummary).not.toHaveBeenCalled();
+    expect(getArmySeasonSummary.mock.calls[0][1].get("population")).toBe("top-1000");
     const text = renderedText(html);
     expect(text).toContain("Armies are not available for this season");
+    expect(text).toContain("No army types saved for this season.");
     expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
     expect(html).toMatch(new RegExp(`<option value="${SEASON}" selected="">`));
+  });
+
+  it("shows a past Season's Armies for the chosen Top N, with its saved days", async () => {
+    const thrower = {
+      key: "army-type:3",
+      label: "Thrower",
+      typeId: 3,
+      usageCount: 2,
+      usageDenominator: 3,
+      usageRate: 2 / 3,
+      starCounts: [0, 0, 1, 1],
+      starRates: [0, 0, 0.5, 0.5],
+      threeStarRate: 0.5,
+      averageStars: 2.5,
+      averageDestruction: 90,
+      averageTrophies: 33,
+      unknownExcludedAttacks: 0,
+    };
+    const analytics = currentAnalytics("top-200", [1, 2, 5], 0);
+    const getArmySeasonSummary = vi.fn().mockResolvedValue({
+      ...analytics,
+      selection: { ...analytics.selection, category: "army-types" },
+      totalAttacks: 3,
+      rows: [thrower],
+    });
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary,
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
+    });
+    const html = await renderArmyRoute(`season=${SEASON}&population=top-200`);
+    const [season, query] = getArmySeasonSummary.mock.calls[0] as [
+      string,
+      URLSearchParams,
+    ];
+    expect(season).toBe(SEASON);
+    expect(query.get("category")).toBe("army-types");
+    expect(query.get("population")).toBe("top-200");
+    const text = renderedText(html);
+    expect(text).toContain("Days 1–2, 5 of 28");
+    expect(rowNames(html)).toEqual(["Thrower"]);
+    // The Players menu offers each Top N, as this Season's does.
+    expect(html).toMatch(/<select name="population">/);
+    expect(html).toContain('<option value="top-200" selected="">');
+    expect(text).not.toContain("All players");
   });
 
   it("opens a visit with no query on armies, not the captured unit preview", async () => {

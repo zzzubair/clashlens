@@ -40,8 +40,9 @@ for deadlines and the full product map.
 
 No existing counters, coverage evidence, unknown-unit history or kept production
 data are authorised for deletion by this documentation change. Historical day
-ranges, arbitrary trophy filters, battle drilldown, destruction, combinations
-and army-type classification remain outside the new history scope.
+ranges, arbitrary trophy filters, battle drilldown, destruction and
+combinations remain outside the new history scope. Army types joined it later:
+see [Past-Season army types](#past-season-army-types).
 
 ## Implemented finalization and detail retirement
 
@@ -190,6 +191,25 @@ only: no day ranges, no population filters, no per-battle drilldown. The agreed
 Top 100 and Clan Castle additions above still need implementation. Late
 corrections refresh already-summarized seasons atomically with the day's
 facts; unchanged categories are a no-op.
+
+### Past-Season army types
+
+The same command also saves the Season's Armies view, in the same
+transaction as its attack summaries, and late corrections refresh it with
+them. Migration 0137 adds `army_type_season_summaries`: one row per Season and
+Top N the Armies page offers (Top 5 to Top 10,000), holding the attack totals
+per army type and variant and the Legend days counted. Each day counts the
+players on that day's own board, the board its rank band totals used, else
+its newest published one, through the same count the current-Season view
+uses (`army_types.read_type_rows`): saved daily counts where the day was
+counted, the day's attacks otherwise. Days without a completed record or a
+board are left out, and the page names the days it shows, such as "Days 23,
+28 of 28". Type and variant names are applied when read, so a rename reaches
+past Seasons; a rule change does not, until the Season is built again. Nothing
+is saved until every saved army has its type under the current rules
+(`army_types: army_types_preparing` in the report). About 2 KB a row, 25 KB a
+Season. Season retirement neither checks nor deletes these rows, and a retired
+Season is not rebuilt. Example armies for a variant stay current-Season only.
 
 Migration 0019 adds compact historical player-season summaries: one
 `player_season_summaries` record per player per season with typed season

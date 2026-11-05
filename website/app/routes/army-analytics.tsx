@@ -130,34 +130,41 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const client = python.createPythonClient();
     pastSeasonsRead = armySeasons(client);
-    // Army types are counted from the current Season on.
-    if (season !== "current" && category === "army-types") {
-      return data(
-        {
-          recentAvailable,
-          analytics: null,
-          error: {
-            error: {
-              code: "unavailable",
-              message: "Army types are counted from the current season on.",
-            },
-          } satisfies WebsiteErrorResponse,
-          selectionUnavailable: true,
-          armiesNotAvailable: true,
-          seasonEmpty: null,
-          historicalSummary: true,
-          requestedSeason: season,
-          pastSeasons: await pastSeasonsRead,
-        },
-        { status: 404 },
-      );
-    }
     if (season !== "current") {
       const summaryQuery = new URLSearchParams({ category, sort });
+      // A past Season's Armies keep the Top N of each day's board.
+      if (category === "army-types") summaryQuery.set("population", population);
       if (source.has("offset")) summaryQuery.set("offset", source.get("offset")!);
+      const analytics = await client
+        .getArmySeasonSummary(season, summaryQuery)
+        .catch((cause: { status?: unknown }) => {
+          if (category === "army-types" && cause.status === 404) return null;
+          throw cause;
+        });
+      if (analytics === null) {
+        return data(
+          {
+            recentAvailable,
+            analytics: null,
+            error: {
+              error: {
+                code: "unavailable",
+                message: "No army types saved for this season.",
+              },
+            } satisfies WebsiteErrorResponse,
+            selectionUnavailable: true,
+            armiesNotAvailable: true,
+            seasonEmpty: null,
+            historicalSummary: true,
+            requestedSeason: season,
+            pastSeasons: await pastSeasonsRead,
+          },
+          { status: 404 },
+        );
+      }
       return {
         recentAvailable,
-        analytics: await client.getArmySeasonSummary(season, summaryQuery),
+        analytics,
         error: null,
         seasonEmpty: null,
         historicalSummary: true,
@@ -778,6 +785,8 @@ export default function ArmyAnalyticsRoute() {
       : params.get("category")) ??
     "army-types";
   const armyTypes = category === "army-types";
+  // Past Seasons' Unit usage counts every tracked player.
+  const allPlayers = isHistorical && !armyTypes;
   const viewQuery = (view: string) => {
     const query = new URLSearchParams(params);
     // Switching views starts again from Top 1,000.
@@ -931,7 +940,7 @@ export default function ArmyAnalyticsRoute() {
   useEffect(() => {
     if (!filterForm.current || navigation.state !== "idle") return;
     const values = {
-      population: isHistorical ? "all" : population,
+      population: allPlayers ? "all" : population,
       category,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
@@ -947,7 +956,7 @@ export default function ArmyAnalyticsRoute() {
     selected,
     population,
     category,
-    isHistorical,
+    allPlayers,
     requestedSeason,
     navigation.state,
   ]);
@@ -1047,10 +1056,10 @@ export default function ArmyAnalyticsRoute() {
             <span>Players</span>
             <select
               name="population"
-              defaultValue={isHistorical ? "all" : population}
-              disabled={isHistorical}
+              defaultValue={allPlayers ? "all" : population}
+              disabled={allPlayers}
             >
-              {isHistorical ? (
+              {allPlayers ? (
                 <option value="all">All players</option>
               ) : (
                 topPlayers
@@ -1421,14 +1430,18 @@ export default function ArmyAnalyticsRoute() {
                 // A type's Other stays last.
                 .sort((a, b) => Number(a.variantId === 0) - Number(b.variantId === 0))}
               audience={populationDescription(population)}
-              examplesUrl={(variant) =>
-                `/resources/analytics/armies/examples?${new URLSearchParams({
-                  population,
-                  season: analytics.selection.season,
-                  days: coveredDays.join(","),
-                  type: String(opened.typeId),
-                  variant: String(variant.variantId),
-                })}`
+              // Example armies are read from the current Season's battles.
+              examplesUrl={
+                isHistorical
+                  ? undefined
+                  : (variant) =>
+                      `/resources/analytics/armies/examples?${new URLSearchParams({
+                        population,
+                        season: analytics.selection.season,
+                        days: coveredDays.join(","),
+                        type: String(opened.typeId),
+                        variant: String(variant.variantId),
+                      })}`
               }
               onClose={closeArmy}
             />

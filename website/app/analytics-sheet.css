@@ -206,6 +206,10 @@
   scroll-margin-top: 4.75rem;
   -webkit-tap-highlight-color: transparent;
 }
+/* A past Season's variants show their numbers only. */
+.analytics-variant-toggle[data-static] {
+  cursor: auto;
+}
 .analytics-variant[data-open="true"] .analytics-variant-toggle {
   background: var(--cl-action-soft);
 }
@@ -250,7 +254,7 @@
   }
 }
 @media (hover: hover) and (pointer: fine) {
-  .analytics-variant:not([data-open="true"]) .analytics-variant-toggle:hover {
+  .analytics-variant:not([data-open="true"]) button.analytics-variant-toggle:hover {
     background: var(--cl-panel);
   }
   .analytics-sheet-close:hover {

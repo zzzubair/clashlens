@@ -1073,32 +1073,7 @@ def type_result(
         connection, season_id=selection.season, days=days,
         member_ids=member_ids, trophy_range=trophy_range, boards=boards,
     )
-    total = sum(row[2] for row in rows)
-    unreadable = sum(row[2] for row in rows if row[0] == UNREADABLE)
-    sort_field = {
-        "usage-rate": "usage_rate", "usage-count": "usage_count",
-        "three-star-rate": "three_star_rate", "average-stars": "average_stars",
-        "average-destruction": "average_destruction",
-        "average-trophies": "average_trophies",
-    }[selection.sort]
-    result_rows = sorted(
-        type_result_rows(rows, total),
-        key=lambda row: (-row[sort_field], row["type_id"]),
-    )
-    result = {
-        "kind": "army-analytics", "total_attacks": total,
-        "usable_army_sample": total - unreadable,
-        "army_states": {"fully_decoded": total - unreadable, "unreadable": unreadable},
-        "army_states_sum_confirmed": True,
-        "unknown_affected_attacks": 0, "unknown_component_occurrences": 0,
-        "perspective_disagreement_count": 0,
-        "missing_trophy_membership_evidence": 0,
-        "collection_coverage": {"state": "complete", "completed_days": len(days)},
-        "freshness": {"state": "frozen"},
-        "versions": {"decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
-                     "analytics": RULES_VERSION},
-        "rows": result_rows,
-    }
+    result = type_view(rows, selection.sort, len(days))
     source_hash = hashlib.sha256(json.dumps(
         {"rules": RULES_VERSION, "rows": rows, "days": sorted(day_markers.items()),
          "selection": selection.as_dict(),
@@ -1107,6 +1082,38 @@ def type_result(
         separators=(",", ":"),
     ).encode()).hexdigest()
     return result, source_hash
+
+
+def type_view(rows: list[Any], sort: str, days: int) -> dict[str, Any]:
+    """The Armies page result for ``read_type_rows`` rows over ``days``
+    Legend days, sorted by ``sort``. A past Season's saved rows read back
+    through here too, so they take today's names."""
+    total = sum(row[2] for row in rows)
+    unreadable = sum(row[2] for row in rows if row[0] == UNREADABLE)
+    sort_field = {
+        "usage-rate": "usage_rate", "usage-count": "usage_count",
+        "three-star-rate": "three_star_rate", "average-stars": "average_stars",
+        "average-destruction": "average_destruction",
+        "average-trophies": "average_trophies",
+    }[sort]
+    result_rows = sorted(
+        type_result_rows(rows, total),
+        key=lambda row: (-row[sort_field], row["type_id"]),
+    )
+    return {
+        "kind": "army-analytics", "total_attacks": total,
+        "usable_army_sample": total - unreadable,
+        "army_states": {"fully_decoded": total - unreadable, "unreadable": unreadable},
+        "army_states_sum_confirmed": True,
+        "unknown_affected_attacks": 0, "unknown_component_occurrences": 0,
+        "perspective_disagreement_count": 0,
+        "missing_trophy_membership_evidence": 0,
+        "collection_coverage": {"state": "complete", "completed_days": days},
+        "freshness": {"state": "frozen"},
+        "versions": {"decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
+                     "analytics": RULES_VERSION},
+        "rows": result_rows,
+    }
 
 
 def all_counted(

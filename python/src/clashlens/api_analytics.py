@@ -72,9 +72,12 @@ def get_army_season_summary(
     lens: str,
     category: str,
     sort: str,
-    *, offset: int = 0,
+    *, offset: int = 0, population: str = "top-1000",
 ) -> dict[str, Any] | None:
     """Read one historical whole-season army aggregate from its summary.
+
+    Army types read the Season's saved Armies view for ``population``, a
+    Top N, instead (``_army_type_season_summary``).
 
     The stored row is already the complete historical record for the
     whole season (Legend days 1-28, whole-season sample): this never
@@ -85,6 +88,8 @@ def get_army_season_summary(
     """
     if not 0 <= offset <= 1_000_000:
         raise ValueError("invalid history offset")
+    if category == army_types.CATEGORY:
+        return _army_type_season_summary(database, official_season_id, population, sort)
     if category not in HISTORY_READ_CATEGORIES or sort not in HISTORY_SORTS:
         return None
     with database.pool.connection() as connection:
@@ -174,6 +179,58 @@ def get_army_season_summary(
             ),
             "rows": rows[offset:offset + 200],
         }
+
+
+def _army_type_season_summary(
+    database: ApiDatabase, season_id: str, population: str, sort: str
+) -> dict[str, Any] | None:
+    """A past Season's Armies view for one Top N, from its saved rows only,
+    or None when the Season has none saved."""
+    with database.pool.connection() as connection:
+        row = connection.execute(
+            """
+            SELECT covered_days, type_rows, rules_version, content_digest
+            FROM army_type_season_summaries
+            WHERE official_season_id = %s AND population = %s
+            """,
+            (season_id, population),
+        ).fetchone()
+    if row is None:
+        return None
+    covered = [int(day) for day in row[0]]
+    result = army_types.type_view(_json_array(row[1]), sort, len(covered))
+    selection = {
+        "lens": "offense", "season": season_id, "start_day": covered[0],
+        "end_day": covered[-1], "population": population,
+        "category": army_types.CATEGORY, "sort": sort,
+    }
+    publication_key = hashlib.sha256(
+        json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        **result,
+        "selection": selection,
+        "cohort_evidence": {
+            "cohort_players": 0,
+            "stale_or_uncertain_cohort_members": 0,
+            "streak_excluded_players": 0,
+            "shielded_player_days": 0,
+        },
+        "collection_coverage": {
+            "state": "complete" if len(covered) == 28 else "partial",
+            "completed_days": len(covered),
+            "covered_days": covered,
+        },
+        "reproducibility": {
+            "official_season_id": season_id,
+            "legend_days": [covered[0], covered[-1]],
+            "snapshot_versions": [],
+        },
+        "versions": {**result["versions"], "analytics": _text(row[2])},
+        "publication_identity": (
+            f"army-season-{publication_key[:24]}-{_text(row[3])[:16]}"
+        ),
+    }
 
 
 @contextmanager

@@ -737,26 +737,27 @@ def create_app(
         category: str = Query(default="troops", max_length=40),
         sort: str = Query(default="usage-rate", max_length=40),
         offset: int = Query(default=0, ge=0, le=1_000_000),
+        population: str = Query(default="top-1000", pattern=r"^top-\d{1,5}$"),
     ) -> JSONResponse:
         _authorize(request, "analytics.read", production_database)
         # Historical army reads cover the whole season only: no day range
-        # or population filter is accepted. The population vehicle below
-        # only satisfies selection validation; it never reaches the stored
-        # whole-season sample.
+        # is accepted. Unit usage counts every tracked player, so only army
+        # types read the population, a Top N of each day's board.
         try:
             selection = ArmyAnalyticsSelection.parse(
                 lens=lens,
                 season=season_id,
                 start_day=1,
                 end_day=28,
-                population="top-100",
+                population=population,
                 category=category,
                 sort=sort,
             )
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
         result = api_analytics.get_army_season_summary(production_database,
-            selection.season, selection.lens, selection.category, selection.sort, offset=offset
+            selection.season, selection.lens, selection.category, selection.sort,
+            offset=offset, population=selection.population,
         )
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
