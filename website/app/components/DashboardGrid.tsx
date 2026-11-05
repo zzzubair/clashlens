@@ -10,6 +10,7 @@ import { Await, Link, useFetcher, type FetcherWithComponents } from "react-route
 
 import type { BasesMode, CardId, DashboardSettings, GroupWindow } from "../lib/dashboard";
 import {
+  ACCOUNT_CARDS,
   CARDS,
   CARD_SIZE_LABELS,
   CUTOFF_LINES,
@@ -18,6 +19,7 @@ import {
   MAX_GOAL,
   addableCards,
   cardPlaces,
+  dashboardQuery,
   serializeSettings,
   shownCards,
 } from "../lib/dashboard";
@@ -46,6 +48,8 @@ import {
 interface ViewContext {
   /** The player the cards follow. */
   tag: string;
+  /** The tag the owner views the dashboard as, read only; null otherwise. */
+  viewAs: string | null;
   /** The Legend day the cards were read for has ended. */
   dayOver: boolean;
   nowMs: number | null;
@@ -106,20 +110,20 @@ const BOARD_TRIES = 3;
 function ReadAgain<Data>({
   card,
   tag,
+  viewAs,
   shown,
   children,
 }: {
   card: keyof CardReads;
   tag: string;
+  viewAs: string | null;
   shown: ReactNode;
   children: (data: Data) => ReactNode;
 }) {
   const { load, data } = useFetcher<DashboardLoaderData>();
   useEffect(() => {
-    void load(
-      `/?index&${new URLSearchParams({ player: tag, cards: card, board: "wait" })}`,
-    );
-  }, [load, tag, card]);
+    void load(dashboardQuery({ player: tag, cards: card, board: "wait" }, viewAs));
+  }, [load, tag, viewAs, card]);
   const read = (
     data?.kind === "signed-in" && data.selectedTag === tag ? data.cards[card] : null
   ) as Data | null | Promise<Data | null> | undefined;
@@ -151,6 +155,8 @@ function cardBody(
       <CardNote>{text}</CardNote>
     </>
   );
+  if (context.viewAs !== null && ACCOUNT_CARDS.includes(card))
+    return note("Your Watchlists stay off while you view as another player.");
   const failed = note(
     "This card could not be loaded right now. Reload the page to try again.",
   );
@@ -167,7 +173,12 @@ function cardBody(
   // A card read before the shared board shows what it has and asks again.
   const show = (loaded: NonNullable<Awaited<typeof read>>, tries = 0): ReactNode =>
     "boardPending" in loaded && tries < BOARD_TRIES ? (
-      <ReadAgain card={card} tag={context.tag} shown={view(loaded, context)}>
+      <ReadAgain
+        card={card}
+        tag={context.tag}
+        viewAs={context.viewAs}
+        shown={view(loaded, context)}
+      >
         {(next: typeof loaded) => show(next, tries + 1)}
       </ReadAgain>
     ) : (
@@ -233,7 +244,8 @@ function DashboardTools({
   tag: string;
   saving: boolean;
   fresh: ReactNode;
-  customise: () => void;
+  /** Null in View as, which changes nothing. */
+  customise: (() => void) | null;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -274,18 +286,20 @@ function DashboardTools({
         <Link className="dash-tool" to={canonicalPlayerPath(tag)}>
           <DashboardIcon name="open" /> Player page
         </Link>
-        <button
-          type="button"
-          className="dash-tool dash-customise"
-          aria-label="Customise dashboard"
-          disabled={saving}
-          onClick={() => {
-            setOpen(false);
-            customise();
-          }}
-        >
-          <DashboardIcon name="gear" /> Customise
-        </button>
+        {customise ? (
+          <button
+            type="button"
+            className="dash-tool dash-customise"
+            aria-label="Customise dashboard"
+            disabled={saving}
+            onClick={() => {
+              setOpen(false);
+              customise();
+            }}
+          >
+            <DashboardIcon name="gear" /> Customise
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -646,10 +660,11 @@ function FirstVisit({
  * Customise edits a draft of the card order; Done saves it. Card settings
  * and the group picked on Group watch save at once, through `fetcher`, which
  * outlives a switch to another player. A save keeps the cards already shown
- * and reads only those it changes or adds.
+ * and reads only those it changes or adds. In View as nothing saves.
  */
 export function Dashboard({
   tag,
+  viewAs = null,
   settings,
   data,
   dayOver,
@@ -657,6 +672,8 @@ export function Dashboard({
   fetcher,
 }: {
   tag: string;
+  /** The tag the owner views the dashboard as, read only; null otherwise. */
+  viewAs?: string | null;
   /** As last saved: a change reads again the cards it changes or adds. */
   settings: DashboardSettings;
   /** Null while the player's cards load. */
@@ -724,8 +741,8 @@ export function Dashboard({
   useEffect(() => {
     if (stale.length === 0 || loading) return;
     requested.current = stale;
-    void load(`/?index&${new URLSearchParams({ player: tag, cards: stale.join(",") })}`);
-  }, [stale, tag, loading, load]);
+    void load(dashboardQuery({ player: tag, cards: stale.join(",") }, viewAs));
+  }, [stale, tag, viewAs, loading, load]);
   useEffect(() => {
     const loaded = refresher.data;
     if (refresher.state !== "idle" || !loaded || merged.current === loaded) return;
@@ -756,6 +773,7 @@ export function Dashboard({
   }, [saved]);
 
   const save = (next: DashboardSettings) =>
+    viewAs === null &&
     fetcher.submit(
       {
         idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
@@ -829,6 +847,7 @@ export function Dashboard({
 
   const context: ViewContext = {
     tag,
+    viewAs,
     dayOver,
     nowMs,
     timeZone,
@@ -837,7 +856,7 @@ export function Dashboard({
     saving,
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
   };
-  const firstVisit = settings.layout === null && !editing;
+  const firstVisit = settings.layout === null && !editing && viewAs === null;
   const error = answer?.error;
 
   return (
@@ -852,10 +871,14 @@ export function Dashboard({
               <Freshness reads={reads} nowMs={nowMs} />
             )
           }
-          customise={() => {
-            setDraft(settings.layout ?? "default");
-            setStatus("");
-          }}
+          customise={
+            viewAs === null
+              ? () => {
+                  setDraft(settings.layout ?? "default");
+                  setStatus("");
+                }
+              : null
+          }
         />
       ) : null}
       {editing ? (

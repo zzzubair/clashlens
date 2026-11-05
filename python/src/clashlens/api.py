@@ -1298,6 +1298,9 @@ def create_app(
     from .api_overlays import register_overlay_routes
 
     register_overlay_routes(app, database=production_database)
+    from .api_view_as import register_view_as_routes
+
+    register_view_as_routes(app, database=production_database, current_time=current_time)
     return app
 
 

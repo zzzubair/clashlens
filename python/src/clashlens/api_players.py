@@ -609,6 +609,40 @@ def left_legend_i(
     }
 
 
+# What ``player_cards`` takes for each player, from ``players AS player``
+# joined to NEWEST_PROFILE_JOIN.
+PLAYER_ROW_COLUMNS = (
+    "player.id, player.normalized_tag, profile.name, profile.clan, profile.league"
+)
+# The player's newest saved name, clan and league. Profile parsing validates
+# the tag and name apart from Legend Season and tier evidence, so a player
+# outside Legend still has a name; an uncertain newest profile names no league.
+NEWEST_PROFILE_JOIN = """
+    LEFT JOIN LATERAL (
+        SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+               CASE WHEN version.eligibility_state <> 'uncertain'
+                    THEN version.league_tier_name END AS league,
+               version.player_id
+        FROM player_profile_versions AS version
+        CROSS JOIN LATERAL (
+            SELECT max(observed_at) AS observed_at FROM player_profile_effects
+            WHERE profile_version_id = version.id
+        ) AS effect
+        WHERE version.normalized_tag = player.normalized_tag
+        ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
+                 version.id DESC
+        LIMIT 1
+    ) AS profile ON profile.player_id = player.id
+"""
+
+
+def player_row(row: Any) -> tuple[int, str, str | None, str | None, str | None]:
+    """One PLAYER_ROW_COLUMNS row as ``player_cards`` takes it."""
+    return (int(row[0]), _text(row[1]), *(
+        None if value is None else _text(value) for value in row[2:5]
+    ))
+
+
 def player_cards(
     connection: Any,
     players: list[tuple[int, str, str | None, str | None, str | None]],

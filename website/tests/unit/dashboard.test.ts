@@ -1027,8 +1027,9 @@ describe("dashboard route", () => {
     );
     expect(none.cards["legend-day"]).toMatchObject({ projected: null });
     expect(none.cards["legend-day"]).not.toHaveProperty("boardPending");
-    // One read of today's numbers serves both cards each time.
-    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
+    // One read of today's numbers serves both cards each time (and View as's check).
+    const reads = mocks.requestJson.mock.calls.map(([path]) => path);
+    expect(reads.filter((path) => !path.startsWith("/v1/account/"))).toEqual([
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
       ...Array(3).fill(
         `/v1/players/${encodeURIComponent(MAIN)}/today?wait_for_board=true`,

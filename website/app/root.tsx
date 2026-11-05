@@ -107,8 +107,15 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   }
 }
 
-/** Restart a signed-in browser's 30 days on each visit; see login-renewal.server. */
+/**
+ * A View as address never changes anything (see view-as.server), and a
+ * signed-in browser's 30 days restart on each visit (see login-renewal.server).
+ */
 export const middleware: Route.MiddlewareFunction[] = [
+  async ({ request }, next) => {
+    const { refuseViewAsChanges } = await import("./server/view-as.server");
+    return refuseViewAsChanges(request) ?? next();
+  },
   async ({ request }, next) => {
     const { renewLoginCookie } = await import("./server/login-renewal.server");
     return renewLoginCookie(request, next);

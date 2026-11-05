@@ -375,6 +375,12 @@ export function mapPublicUser(value: unknown): PublicUser | null {
   };
 }
 
+/** One player's card on its own, as the owner's View as reads it. */
+export function mapLinkedPlayerCard(value: unknown): LinkedPlayerCard | null {
+  const player = asVerifiedPlayer(value);
+  return player === null ? null : asLinkedPlayerCard(value, player);
+}
+
 const LOOKUP_STATES: readonly PlayerLookup["state"][] = [
   "unknown",
   "checking",

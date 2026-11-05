@@ -20,6 +20,7 @@ import {
 } from "../components/FrontPage";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { SeasonStory } from "../components/SeasonStory";
+import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
@@ -27,7 +28,9 @@ import { seasonShape } from "../lib/season-shape";
 import { publicPageMeta } from "../lib/blog";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
+  ACCOUNT_CARDS,
   CARD_IDS,
+  VIEW_AS_PARAM,
   isDashboardSave,
   nextResetMs,
   parsePostedSettings,
@@ -49,7 +52,8 @@ import "../dashboard-armies.css";
 import "../front-page.css";
 import "../player.css";
 
-const NO_STORE = { "Cache-Control": "no-store" };
+// Never kept by Cloudflare or any other shared cache: View as above all.
+const NO_STORE = { "Cache-Control": "private, no-store" };
 // Cards read within this go out with the page; slower ones stream in.
 const CARD_WAIT_MS = 250;
 
@@ -69,6 +73,13 @@ export type DashboardLoaderData =
       /** The selected account's player page, when it left Legend I this Season. */
       leftPlayer: PlayerPage | null;
       idempotencyKey: string;
+      /** The signed-in account is the site owner, who may View as any player. */
+      canViewAs?: boolean;
+      /**
+       * The player the owner views the dashboard as, read only, which is then
+       * `players`' only one; "not-found" when no player has the tag asked for.
+       */
+      viewAs?: { tag: string; name: string | null } | "not-found" | null;
     };
 
 export interface DashboardActionData {
@@ -99,6 +110,8 @@ export function meta({ loaderData, matches }: Route.MetaArgs) {
  * data follows as it arrives. `?cards=goal,cutoffs` reads only those cards,
  * for a card whose settings were just saved; `&board=wait` waits a few
  * seconds for the shared board, for Legend day or Bases read before it.
+ * `?view_as=` shows the site owner, and only the owner, any player's cards,
+ * read only, in the owner's own layout (see view-as.server).
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const query = new URL(request.url).searchParams;
@@ -137,6 +150,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const dayEndsMs = nextResetMs(Date.now());
+  // Asked on every signed-in load, whatever the address says, alongside the
+  // linked players: a non-owner's page is the same with or without view_as.
+  const { readViewAs } = await import("../server/view-as.server");
+  const access = readViewAs(identity, query.get(VIEW_AS_PARAM));
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
   try {
@@ -144,24 +161,33 @@ export async function loader({ request }: Route.LoaderArgs) {
   } catch {
     playersUnavailable = true;
   }
+  const owner = await access;
+  const viewing = owner.owner && query.has(VIEW_AS_PARAM) ? owner.player : undefined;
+  if (viewing !== undefined) {
+    players = viewing === null ? [] : [viewing];
+    playersUnavailable = false;
+  }
 
   const settings = readSettings(account.preferences.dashboard);
   const requested = normalizePlayerTag(query.get("player") ?? "");
   const only = query.get("cards")?.split(",");
   const selected =
-    players.find((player) => player.tag === requested) ??
-    players.find((player) => player.state === "tracking") ??
-    players[0] ??
-    null;
+    viewing !== undefined
+      ? viewing
+      : (players.find((player) => player.tag === requested) ??
+        players.find((player) => player.state === "tracking") ??
+        players[0] ??
+        null);
 
   let cards: CardReads = {};
   if (selected?.state === "tracking") {
     const { readCards, settleWithin } = await import("../services/dashboard.server");
     cards = await settleWithin(
       readCards(
-        only
+        (only
           ? CARD_IDS.filter((card) => only.includes(card))
-          : shownCards(settings.layout),
+          : shownCards(settings.layout)
+        ).filter((card) => viewing === undefined || !ACCOUNT_CARDS.includes(card)),
         { client, selected, settings, waitForBoard: query.get("board") === "wait" },
         identity,
       ),
@@ -186,6 +212,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       dayEndsMs,
       leftPlayer,
       idempotencyKey: freshIdempotencyKey(),
+      canViewAs: owner.owner,
+      viewAs:
+        viewing === undefined
+          ? null
+          : viewing === null
+            ? "not-found"
+            : { tag: viewing.tag, name: viewing.name },
     },
     { headers: NO_STORE },
   );
@@ -304,8 +337,8 @@ export function shouldRevalidate({
   formAction,
   defaultShouldRevalidate,
 }: ShouldRevalidateFunctionArgs) {
-  if (currentUrl.searchParams.get("player") !== nextUrl.searchParams.get("player"))
-    return true;
+  for (const name of ["player", VIEW_AS_PARAM])
+    if (currentUrl.searchParams.get(name) !== nextUrl.searchParams.get(name)) return true;
   if (isDashboardSave(formMethod, formAction)) return false;
   if (
     formMethod ||
@@ -358,6 +391,8 @@ function AccountTabs({
       <span className="dash-account-track">
         {players.map((player) => {
           const next = new URLSearchParams(searchParams);
+          // Only the owner's View as reads it; nobody else's links carry it on.
+          next.delete(VIEW_AS_PARAM);
           next.set("player", player.tag);
           const net =
             !dayOver && player.state === "tracking" ? (player.today?.net ?? null) : null;
@@ -478,16 +513,26 @@ function SignedInDashboard({
     switching ??
     loaderData.players.find((player) => player.tag === loaderData.selectedTag) ??
     null;
+  const viewAs = loaderData.viewAs ?? null;
+  if (viewAs === "not-found")
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell dash-page">
+        <h1 className="sr-only">Dashboard</h1>
+        <ViewAsBar viewAs={viewAs} />
+      </main>
+    );
   return (
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
-      {loaderData.players.length > 0 ? (
+      {viewAs ? <ViewAsBar viewAs={viewAs} /> : null}
+      {!viewAs && loaderData.players.length > 0 ? (
         <AccountTabs
           players={loaderData.players}
           selectedTag={selectedTag}
           dayOver={dayOver}
         />
       ) : null}
+      {!viewAs && loaderData.canViewAs ? <ViewAsForm /> : null}
       {loaderData.playersUnavailable ? (
         <p className="notice notice-warning" role="status">
           Your linked players could not be loaded. Cards show again on the next load.
@@ -519,6 +564,7 @@ function SignedInDashboard({
           <Dashboard
             key={selected.tag}
             tag={selected.tag}
+            viewAs={viewAs?.tag ?? null}
             settings={settings}
             data={switching ? null : loaderData.cards}
             dayOver={dayOver}

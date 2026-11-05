@@ -7,6 +7,12 @@
  * never breaks a page; posted settings are checked strictly.
  */
 
+/**
+ * The dashboard address's player to view as, read only; only the site owner's
+ * dashboard reads it (see view-as.server).
+ */
+export const VIEW_AS_PARAM = "view_as";
+
 /** Small = 1 of the 3 columns, Medium = 2, Large = the full row. */
 export type CardSize = "s" | "m" | "l";
 
@@ -125,6 +131,14 @@ export type CardId = keyof typeof CARD_LIST;
 export const CARDS: Record<CardId, CardDefinition> = CARD_LIST;
 
 export const CARD_IDS = Object.keys(CARDS) as CardId[];
+
+/** Cards made from the signed-in account's own lists, never shown in View as. */
+export const ACCOUNT_CARDS: readonly CardId[] = ["group-watch"];
+
+/** The dashboard's own address with `query`, keeping View as when it is on. */
+export function dashboardQuery(query: Record<string, string>, viewAs: string | null) {
+  return `/?index&${new URLSearchParams({ ...query, ...(viewAs ? { [VIEW_AS_PARAM]: viewAs } : {}) })}`;
+}
 
 /**
  * The default layout, in order. Users on the default follow this list at
