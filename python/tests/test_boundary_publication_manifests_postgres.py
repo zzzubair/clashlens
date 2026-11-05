@@ -466,7 +466,7 @@ def test_freezing_a_seasons_army_inputs_holds_no_copy_of_them(
     freeze = boundary_manifest._freeze
     growth: dict[str, int] = {}
 
-    def measured(connection, generation_id, artifact_kind, generation):
+    def measured(connection, generation_id, artifact_kind, *args):
         status = f"/proc/{connection.info.backend_pid}/status"
 
         def peak_kb() -> int:
@@ -479,7 +479,7 @@ def test_freezing_a_seasons_army_inputs_holds_no_copy_of_them(
             return int(found[1])
 
         before = peak_kb()
-        result = freeze(connection, generation_id, artifact_kind, generation)
+        result = freeze(connection, generation_id, artifact_kind, *args)
         growth[artifact_kind] = peak_kb() - before
         return result
 

@@ -312,7 +312,10 @@ returns any manifest's complete rows exactly as a full manifest stores them,
 and the digest still covers those rows. Database triggers refuse a base that is
 not a sealed full manifest of the same Reset and kind, and a reused identity
 not stored in full. Every freeze logs a `boundary_manifest_frozen` line with
-rows and identity bytes stored and reused. Measured on a 13,000-player test
+rows and identity bytes stored and reused, its generation, its earlier
+timed-out tries and the seconds each stage took (`members`, `rows`,
+`season_inputs`, `store`); a freeze past the query limit logs the same line
+with `"outcome": "timed_out"` and the stage it stopped in. Measured on a 13,000-player test
 board, a correction manifest stored 0.3-0.4 MB of rows instead of 12 MB.
 Replaying the same rule on production's 4-8 October manifests stores about 91%
 fewer row bytes. Manifests frozen before migration 0081 stay full and unchanged.
