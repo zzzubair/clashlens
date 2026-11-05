@@ -1459,43 +1459,16 @@ def _linked_players(
 ) -> list[tuple[int, str, str | None, str | None, str | None]]:
     """Each verified player's id, tag, and newest saved name, clan and league,
     the first `limit` by tag, or all of them when it is None."""
-    # Profile parsing validates the player tag and name separately from Legend
-    # season/tier evidence. Linking a non-Legend account still exposes its name;
-    # an uncertain newest profile names no league.
     rows = connection.execute(
-        """
-        SELECT player.id, player.normalized_tag, profile.name, profile.clan,
-               profile.league
+        f"""
+        SELECT {api_players.PLAYER_ROW_COLUMNS}
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
-        LEFT JOIN LATERAL (
-            SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
-                   CASE WHEN version.eligibility_state <> 'uncertain'
-                        THEN version.league_tier_name END AS league,
-                   version.player_id
-            FROM player_profile_versions AS version
-            CROSS JOIN LATERAL (
-                SELECT max(observed_at) AS observed_at FROM player_profile_effects
-                WHERE profile_version_id = version.id
-            ) AS effect
-            WHERE version.normalized_tag = player.normalized_tag
-            ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
-                     version.id DESC
-            LIMIT 1
-        ) AS profile ON profile.player_id = player.id
+        {api_players.NEWEST_PROFILE_JOIN}
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag
         LIMIT %s
         """,
         (account_id, limit),
     ).fetchall()
-    return [
-        (
-            int(row[0]),
-            _text(row[1]),
-            None if row[2] is None else _text(row[2]),
-            None if row[3] is None else _text(row[3]),
-            None if row[4] is None else _text(row[4]),
-        )
-        for row in rows
-    ]
+    return [api_players.player_row(row) for row in rows]

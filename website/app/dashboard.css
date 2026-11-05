@@ -556,6 +556,38 @@
   margin-bottom: 1rem;
 }
 
+/* ---------- View as (site owner only) ---------- */
+
+.dash-view-as {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.dash-view-as p {
+  flex: 1 1 14rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dash-view-as-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.dash-view-as-form input {
+  width: min(100%, 12rem);
+  min-height: 2.8rem;
+  padding: 0.55rem 0.7rem;
+  /* 16px, so a phone does not zoom in on it. */
+  font-size: 1rem;
+}
+
 /* ---------- Customise ---------- */
 
 .dash-editbar {
