@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   readLoginIdentity: vi.fn(),
+  requireLogin: vi.fn(),
   createPythonClient: vi.fn(),
   requestJson: vi.fn(),
 }));
@@ -31,6 +32,10 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../app/server/actions.server")>();
   return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
 });
+
+vi.mock("../../app/server/auth-guard.server", () => ({
+  requireLogin: mocks.requireLogin,
+}));
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
@@ -47,6 +52,7 @@ import { middleware as rootMiddleware } from "../../app/root";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import { sanitizeEvent } from "../../app/lib/analytics";
 import DashboardRoute, {
+  action,
   headers,
   loader,
   shouldRevalidate,
@@ -112,6 +118,7 @@ beforeEach(() => {
   ownerSubject = OWNER.providerSubject;
   mocks.readLoginIdentity.mockReset();
   mocks.readLoginIdentity.mockResolvedValue(SOMEONE);
+  mocks.requireLogin.mockResolvedValue(SOMEONE);
   mocks.requestJson.mockReset();
   // The Python service's answer: the owner check first, from the signed-in
   // account alone; then, for the owner only, the player the tag names.
@@ -144,6 +151,7 @@ beforeEach(() => {
       displayName: "Nova",
       verifiedPlayers: [card(MINE, "Lens Main")],
     })),
+    updateAccount: vi.fn(async () => ({})),
     getPlayer: vi.fn(unavailable),
     getPlayerSeasons: vi.fn(unavailable),
     getTrackedLeaderboard: vi.fn(unavailable),
@@ -221,6 +229,30 @@ describe("who can View as", () => {
     for (const init of channels)
       expect((await load(`${ORIGIN}/`, init)).data).toEqual(plain.data);
     expect(client.getPlayer).not.toHaveBeenCalledWith(VIEWED);
+  });
+
+  it("saves a posted view_as field only as the signed-in account's own settings", async () => {
+    const answer = await action({
+      request: new Request(`${ORIGIN}/`, {
+        method: "POST",
+        headers: { Origin: ORIGIN },
+        body: new URLSearchParams({
+          idempotencyKey: "3be934b5-68fa-4741-8c7b-e03592e4ad70",
+          settings: JSON.stringify({ v: 3, layout: "default" }),
+          view_as: VIEWED,
+        }),
+      }),
+      params: {},
+      context: {},
+    } as unknown as Parameters<typeof action>[0]);
+    expect(JSON.stringify(answer)).not.toContain(VIEWED);
+    expect(mocks.createPythonClient).toHaveBeenCalledWith(SOMEONE);
+    expect(client.updateAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ username: "nova88" }),
+      expect.any(String),
+    );
+    expect(mocks.requestJson).not.toHaveBeenCalled();
+    expect(client.getPlayer).not.toHaveBeenCalled();
   });
 
   it("lets nobody View as while no owner is recorded", async () => {
