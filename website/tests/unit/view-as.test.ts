@@ -58,6 +58,7 @@ import DashboardRoute, {
   shouldRevalidate,
   type DashboardLoaderData,
 } from "../../app/routes/dashboard";
+import { action as ownerAction } from "../../app/routes/account.view-as";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { readViewAs } from "../../app/server/view-as.server";
 import { PythonApiError } from "../../app/services/python.server";
@@ -99,6 +100,9 @@ const VIEWED_PAYLOAD = {
 
 /** Who the Python service says is the owner, and the players it knows. */
 let ownerSubject: string | null;
+/** The owner's pinned player and own Discord switches, as Python saved them. */
+let pinnedTag: string | null;
+let follow: { attack: boolean; day_summary: boolean };
 let client: Record<string, ReturnType<typeof vi.fn>>;
 
 beforeEach(() => {
@@ -116,6 +120,8 @@ beforeEach(() => {
     }),
   );
   ownerSubject = OWNER.providerSubject;
+  pinnedTag = null;
+  follow = { attack: false, day_summary: false };
   mocks.readLoginIdentity.mockReset();
   mocks.readLoginIdentity.mockResolvedValue(SOMEONE);
   mocks.requireLogin.mockResolvedValue(SOMEONE);
@@ -123,16 +129,23 @@ beforeEach(() => {
   // The Python service's answer: the owner check first, from the signed-in
   // account alone; then, for the owner only, the player the tag names.
   mocks.requestJson.mockImplementation(
-    async (path: string, _method, _body, _kind, _id, identity?: typeof OWNER) => {
+    async (path: string, method, _body, _kind, _id, identity?: typeof OWNER) => {
       if (!path.startsWith("/v1/account/view-as"))
         throw new PythonApiError(503, { error: "unavailable" });
-      if (identity?.providerSubject !== ownerSubject)
-        return { kind: "view-as", owner: false, player: null };
+      const owner = identity?.providerSubject === ownerSubject;
+      // The owner's pin and follow: anyone else is refused one way.
+      if (method === "POST") {
+        if (!owner) throw new PythonApiError(404, { error: "not_found" });
+        return {};
+      }
+      if (!owner) return { kind: "view-as", owner: false, player: null };
       const tag = new URLSearchParams(path.split("?")[1] ?? "").get("tag");
       return {
         kind: "view-as",
         owner: true,
         player: tag === VIEWED ? VIEWED_PAYLOAD : null,
+        pinned: pinnedTag,
+        follow: tag === VIEWED ? follow : { attack: false, day_summary: false },
       };
     },
   );
@@ -427,6 +440,7 @@ describe("nothing leaks or changes from View as", () => {
         "/account/settings",
         "/account/players/a1/unlink",
         "/account/discord-alerts",
+        "/account/view-as",
         "/account/obs-overlay/save",
         "/account/verify-player",
         "/account/watchlists",
@@ -480,6 +494,189 @@ describe("nothing leaks or changes from View as", () => {
     ran.length = 0;
     for (const path of writes) await send(path, "", "POST", true);
     expect(ran).toEqual(writes.map((path) => `act ${path}`));
+  });
+});
+
+describe("the owner's pin and own Discord alerts", () => {
+  beforeEach(() => mocks.readLoginIdentity.mockResolvedValue(OWNER));
+
+  /** The loader's redirect for a plain load, or null when it shows a page. */
+  async function redirected(url: string) {
+    try {
+      await load(url);
+      return null;
+    } catch (thrown) {
+      if (!(thrown instanceof Response)) throw thrown;
+      return thrown;
+    }
+  }
+
+  it("opens the pinned player through View as on a plain load only", async () => {
+    pinnedTag = VIEWED;
+    const plain = await redirected(`${ORIGIN}/`);
+    expect(plain?.status).toBe(302);
+    expect(plain?.headers.get("Location")).toBe("/?view_as=%232PP8QLY0");
+    expect(plain?.headers.get("Cache-Control")).toBe("private, no-store");
+    // The owner's own dashboard, its tabs and card reads stay where they are.
+    for (const search of [
+      "?mine=1",
+      `?player=${encodeURIComponent(MINE)}`,
+      "?cards=goal",
+    ])
+      expect(await redirected(`${ORIGIN}/${search}`), search).toBeNull();
+    const own = await load(`${ORIGIN}/?mine=1`);
+    expect(own.data).toMatchObject({
+      selectedTag: MINE,
+      viewAs: null,
+      ownerChoices: { pinned: VIEWED, saved: null, discord: false },
+    });
+    const pinned = await load(viewUrl(VIEWED));
+    expect(pinned.data).toMatchObject({
+      viewAs: { tag: VIEWED },
+      players: [card(VIEWED, "Curtypie")],
+    });
+    pinnedTag = null;
+    expect(await redirected(`${ORIGIN}/`)).toBeNull();
+  });
+
+  it("never redirects or shows the owner's choices to anyone else", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(SOMEONE);
+    pinnedTag = VIEWED;
+    const plain = await load(`${ORIGIN}/`);
+    expect(plain.data).toMatchObject({ selectedTag: MINE, ownerChoices: null });
+    for (const search of ["?saved=saved", "?saved=failed", "?mine=1"])
+      expect((await load(`${ORIGIN}/${search}`)).data).toEqual(plain.data);
+    // A not-owner answer carrying a pin or switches is still not the owner.
+    mocks.requestJson.mockResolvedValue({
+      kind: "view-as",
+      owner: false,
+      player: null,
+      pinned: VIEWED,
+      follow: { attack: true, day_summary: true },
+    });
+    expect(await readViewAs(SOMEONE, null)).toEqual({ owner: false });
+    expect((await load(`${ORIGIN}/`)).data).toEqual(plain.data);
+  });
+
+  it("shows Pin and the owner's own switches in the View as bar", async () => {
+    const unpinned = await page((await load(viewUrl(VIEWED))).data);
+    expect(text(unpinned)).toContain("Pin Attack alerts Day summary");
+    expect(unpinned.match(/aria-checked="false"/g)).toHaveLength(2);
+    expect(unpinned).toContain('action="/account/view-as"');
+    expect(unpinned).toContain('href="/"');
+    expect(unpinned).not.toContain("My dashboard");
+    expect(text(unpinned)).toContain("Connect Discord to get these.");
+
+    pinnedTag = VIEWED;
+    follow = { attack: true, day_summary: false };
+    const pinned = await page((await load(`${viewUrl(VIEWED)}&saved=saved`)).data);
+    expect(text(pinned)).toContain("Saved.");
+    expect(text(pinned)).toContain("Unpin");
+    expect(pinned).toMatch(/aria-checked="true" aria-label="Attack alerts for #2PP8QLY0/);
+    expect(pinned).toContain('href="/?mine=1"');
+    expect(text(pinned)).toContain("My dashboard");
+    // Exit would only open the pinned player again.
+    expect(text(pinned)).not.toContain("Exit");
+
+    pinnedTag = MINE;
+    const other = await page((await load(viewUrl(VIEWED))).data);
+    expect(text(other)).toContain("Exit");
+    expect(text(other)).toContain("My dashboard");
+    const own = await page((await load(`${ORIGIN}/?mine=1`)).data);
+    expect(text(own)).toContain(`Pinned: ${MINE}`);
+    expect(own).toContain('href="/?view_as=%23LQ2V8PJ0"');
+    expect(own).not.toContain("Attack alerts");
+  });
+});
+
+describe("the owner's choices are saved for the owner alone", () => {
+  const KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
+  const post = (fields: Record<string, string>, init: RequestInit = {}) =>
+    ownerAction({
+      request: new Request(`${ORIGIN}/account/view-as`, {
+        method: "POST",
+        ...init,
+        headers: { Origin: ORIGIN, ...init.headers },
+        body: new URLSearchParams({ idempotencyKey: KEY, ...fields }),
+      }),
+      params: {},
+      context: {},
+    } as unknown as Parameters<typeof ownerAction>[0]);
+  const saves = () =>
+    mocks.requestJson.mock.calls.map(([path, method, body, , key, identity]) => ({
+      path,
+      method,
+      body: JSON.parse((body as Buffer).toString("utf8")) as unknown,
+      key,
+      identity,
+    }));
+  const CHOICES: Record<string, string>[] = [
+    { intent: "pin" },
+    { intent: "unpin" },
+    { intent: "attack", on: "on" },
+    { intent: "day_summary", on: "off" },
+  ];
+
+  it("saves the owner's pin and switches as the signed-in owner", async () => {
+    mocks.requireLogin.mockResolvedValue(OWNER);
+    const answers = [];
+    for (const choice of CHOICES)
+      answers.push(await post({ ...choice, tag: "2pp8qly0", view_as: MINE }));
+    for (const answer of answers) {
+      expect(answer.status).toBe(302);
+      expect(answer.headers.get("Location")).toBe("/?view_as=%232PP8QLY0&saved=saved");
+    }
+    expect(saves()).toEqual(
+      [
+        { path: "/v1/account/view-as/pin", body: { tag: VIEWED } },
+        { path: "/v1/account/view-as/pin", body: { tag: null } },
+        {
+          path: "/v1/account/view-as/follow",
+          body: { tag: VIEWED, alert: "attack", on: true },
+        },
+        {
+          path: "/v1/account/view-as/follow",
+          body: { tag: VIEWED, alert: "day_summary", on: false },
+        },
+      ].map((save) => ({ ...save, method: "POST", key: KEY, identity: OWNER })),
+    );
+  });
+
+  it("changes nothing for anyone else, the same way whatever the tag", async () => {
+    for (const tag of [VIEWED, "#9999999", MINE]) {
+      for (const choice of CHOICES) {
+        const answer = await post(
+          { ...choice, tag },
+          { headers: { "X-View-As": VIEWED, Cookie: "view_as=%232PP8QLY0" } },
+        );
+        expect(answer.status).toBe(302);
+        expect(answer.headers.get("Location")).toBe(
+          `/?${new URLSearchParams({ view_as: tag, saved: "failed" })}`,
+        );
+      }
+    }
+    // Python decided, as the signed-in account, and refused each one.
+    expect(new Set(saves().map((save) => save.identity))).toEqual(new Set([SOMEONE]));
+  });
+
+  it("refuses signed-out, cross-site and malformed requests before asking Python", async () => {
+    mocks.requireLogin.mockRejectedValue(new Response(null, { status: 302 }));
+    await expect(post({ intent: "pin", tag: VIEWED })).rejects.toBeInstanceOf(Response);
+    mocks.requireLogin.mockResolvedValue(OWNER);
+    const crossSite = await post(
+      { intent: "pin", tag: VIEWED },
+      { headers: { Origin: "https://evil.example" } },
+    );
+    expect(crossSite.status).toBe(403);
+    const malformed: Record<string, string>[] = [
+      { intent: "pin", tag: VIEWED, idempotencyKey: "x" },
+      { intent: "promote", tag: VIEWED },
+      { intent: "pin", tag: "not a tag" },
+      { intent: "attack", tag: VIEWED },
+      { intent: "attack", tag: VIEWED, on: "maybe" },
+    ];
+    for (const fields of malformed) expect((await post(fields)).status).toBe(400);
+    expect(mocks.requestJson).not.toHaveBeenCalled();
   });
 });
 

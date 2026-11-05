@@ -101,6 +101,17 @@ shows a status word
 instead of numbers also shows the next Reset as a Discord timestamp, which
 each viewer sees in their own local time.
 
+The site owner (the account in `site_owner_accounts`) can also turn on attack
+alerts and the Legend day summary for any player, linked or not, from the
+dashboard's View as bar. Those are the owner's own switches, in the same
+tables, keyed by the owner's account, so they never change the linked
+account's own switches and stay when the player's link moves between other
+accounts. The bot sends them while the account is still an owner, checked
+before each DM; removing the owner deletes the switches for players the
+owner has not linked. A followed player that is not linked to the owner uses
+Clash Lens yellow, and its "Alert settings" link opens the Discord alerts
+page, which lists only linked players, so the owner turns it off from View as.
+
 ## Legend day summary
 
 Once a minute the bot checks whether the Daily board for the latest Reset is

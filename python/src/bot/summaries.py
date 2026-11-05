@@ -4,7 +4,9 @@ players with the summary turned on.
 
 A player's summary is off until the Clasher turns it on on the website's
 Discord alerts page, separately from its attack alerts; each player turned
-on has a discord_day_summary_on row (migration 0112).
+on has a discord_day_summary_on row (migration 0112). The site owner may
+also turn it on for any player, from View as (migration 0139), and gets it
+the same way while still the owner.
 Nothing is read for a Reset until its Daily board is published, so the
 summaries never compete with the Reset's own work, and a late board only
 makes them late.
@@ -31,8 +33,8 @@ sent the same day's summary twice, across restarts too. A summary too long
 for one DM goes as several, in order, each sent as soon as the one before is
 delivered, with its own nonce. Each DM Discord did not take is tried again
 as an attack alert DM is, within 2 minutes of its own first try. A summary
-is logged only while every player it names is still verified to the account
-with its summary on, else it is read again next round; each later DM, and
+is logged only while every player it names is still verified to the account,
+or followed by it as the site owner, with its summary on, else it is read again next round; each later DM, and
 each try again, goes only while every player that DM names still is, else
 it and the DMs after it are dropped.
 """
@@ -47,6 +49,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from clashlens.api_db import ApiDatabase
+from clashlens.api_discord_alerts import MAY_SEND
 from clashlens.domain import ranked_day_for
 
 from . import replies
@@ -71,7 +74,8 @@ SUMMARY_SECONDS = 60.0
 
 # Where an account's summary, or one of its DMs, is still due: before the
 # Reset closing its Legend day, Discord still connected as the same user, and
-# every player in %(tags)s still verified to the account with its summary on.
+# every player in %(tags)s with its summary on and still verified to the
+# account, or the account still a site owner (`MAY_SEND`).
 _STILL_ON = """
     FROM clash_lens_accounts AS account
     JOIN account_provider_identities AS identity
@@ -81,12 +85,10 @@ _STILL_ON = """
       AND NOT EXISTS (
           SELECT 1 FROM unnest(%(tags)s::text[]) AS named (tag)
           WHERE NOT EXISTS (
-              SELECT 1 FROM verified_player_links AS link
-              JOIN players AS player ON player.id = link.player_id
-              JOIN discord_day_summary_on AS summary_on
-                  ON summary_on.account_id = link.account_id
-                 AND summary_on.player_id = link.player_id
-              WHERE link.account_id = account.id AND player.normalized_tag = named.tag
+              SELECT 1 FROM discord_day_summary_on AS summary_on
+              JOIN players AS player ON player.id = summary_on.player_id
+              WHERE summary_on.account_id = account.id AND player.normalized_tag = named.tag
+                AND """ + MAY_SEND.format(alert="summary_on") + """
           )
       )
 """
@@ -166,12 +168,11 @@ class Summaries:
                 FROM clash_lens_accounts AS account
                 JOIN account_provider_identities AS identity
                     ON identity.account_id = account.id AND identity.provider = 'discord'
-                JOIN verified_player_links AS link ON link.account_id = account.id
                 JOIN discord_day_summary_on AS summary_on
-                    ON summary_on.account_id = link.account_id
-                   AND summary_on.player_id = link.player_id
-                JOIN players AS player ON player.id = link.player_id
-                WHERE NOT EXISTS (
+                    ON summary_on.account_id = account.id
+                JOIN players AS player ON player.id = summary_on.player_id
+                WHERE """ + MAY_SEND.format(alert="summary_on") + """
+                  AND NOT EXISTS (
                       SELECT 1 FROM discord_day_summary_deliveries AS logged
                       WHERE logged.account_id = account.id AND logged.reset_at = %(reset)s
                   )

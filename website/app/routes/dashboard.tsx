@@ -20,7 +20,7 @@ import {
 } from "../components/FrontPage";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { SeasonStory } from "../components/SeasonStory";
-import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
+import { ViewAsBar, ViewAsForm, type OwnerChoices } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
@@ -51,6 +51,7 @@ import "../dashboard-clock.css";
 import "../dashboard-armies.css";
 import "../front-page.css";
 import "../player.css";
+import "../view-as.css";
 
 // Never kept by Cloudflare or any other shared cache: View as above all.
 const NO_STORE = { "Cache-Control": "private, no-store" };
@@ -80,6 +81,8 @@ export type DashboardLoaderData =
        * `players`' only one; "not-found" when no player has the tag asked for.
        */
       viewAs?: { tag: string; name: string | null } | "not-found" | null;
+      /** The owner's own pin and Discord switches; null for anyone else. */
+      ownerChoices?: OwnerChoices | null;
     };
 
 export interface DashboardActionData {
@@ -111,7 +114,9 @@ export function meta({ loaderData, matches }: Route.MetaArgs) {
  * for a card whose settings were just saved; `&board=wait` waits a few
  * seconds for the shared board, for Legend day or Bases read before it.
  * `?view_as=` shows the site owner, and only the owner, any player's cards,
- * read only, in the owner's own layout (see view-as.server).
+ * read only, in the owner's own layout (see view-as.server). A plain `/`
+ * opens the owner's pinned player that way, if one is pinned; `?mine=1`
+ * keeps the owner's own dashboard.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const query = new URL(request.url).searchParams;
@@ -162,6 +167,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     playersUnavailable = true;
   }
   const owner = await access;
+  // The owner's pinned player opens through the View as address, so every
+  // View as rule applies to it, on a plain load only: the owner's own tabs,
+  // card reads and My dashboard all carry something in their address.
+  if (
+    owner.owner &&
+    owner.pinned !== null &&
+    [...query.keys()].every((key) => key === "_routes")
+  ) {
+    throw redirect(`/?${new URLSearchParams({ [VIEW_AS_PARAM]: owner.pinned })}`, {
+      headers: NO_STORE,
+    });
+  }
   const viewing = owner.owner && query.has(VIEW_AS_PARAM) ? owner.player : undefined;
   if (viewing !== undefined) {
     players = viewing === null ? [] : [viewing];
@@ -201,6 +218,8 @@ export async function loader({ request }: Route.LoaderArgs) {
       ? await client.getPlayer(selected.tag).catch(() => null)
       : null;
 
+  const saved = query.get("saved");
+  const idempotencyKey = freshIdempotencyKey();
   return data<DashboardLoaderData>(
     {
       kind: "signed-in",
@@ -211,7 +230,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       cards,
       dayEndsMs,
       leftPlayer,
-      idempotencyKey: freshIdempotencyKey(),
+      idempotencyKey,
       canViewAs: owner.owner,
       viewAs:
         viewing === undefined
@@ -219,6 +238,15 @@ export async function loader({ request }: Route.LoaderArgs) {
           : viewing === null
             ? "not-found"
             : { tag: viewing.tag, name: viewing.name },
+      ownerChoices: owner.owner
+        ? {
+            pinned: owner.pinned,
+            follow: owner.follow,
+            saved: saved === "saved" || saved === "failed" ? saved : null,
+            discord: account.providers.includes("discord"),
+            idempotencyKey,
+          }
+        : null,
     },
     { headers: NO_STORE },
   );
@@ -518,13 +546,15 @@ function SignedInDashboard({
     return (
       <main id="main-content" tabIndex={-1} className="page-shell dash-page">
         <h1 className="sr-only">Dashboard</h1>
-        <ViewAsBar viewAs={viewAs} />
+        <ViewAsBar viewAs={viewAs} choices={loaderData.ownerChoices ?? null} />
       </main>
     );
   return (
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
-      {viewAs ? <ViewAsBar viewAs={viewAs} /> : null}
+      {viewAs ? (
+        <ViewAsBar viewAs={viewAs} choices={loaderData.ownerChoices ?? null} />
+      ) : null}
       {!viewAs && loaderData.players.length > 0 ? (
         <AccountTabs
           players={loaderData.players}
@@ -532,7 +562,9 @@ function SignedInDashboard({
           dayOver={dayOver}
         />
       ) : null}
-      {!viewAs && loaderData.canViewAs ? <ViewAsForm /> : null}
+      {!viewAs && loaderData.canViewAs ? (
+        <ViewAsForm pinned={loaderData.ownerChoices?.pinned ?? null} />
+      ) : null}
       {loaderData.playersUnavailable ? (
         <p className="notice notice-warning" role="status">
           Your linked players could not be loaded. Cards show again on the next load.
