@@ -350,7 +350,7 @@ describe("nothing leaks or changes from View as", () => {
     expect(JSON.stringify(event)).not.toContain("2PP8QLY0");
   });
 
-  it("refuses every route that changes something while View as is on", async () => {
+  it("refuses View as on every request but a read of the dashboard", async () => {
     // Every route the site has, read from routes.ts, so a new one is checked too.
     const ran: string[] = [];
     const built: Record<string, unknown> = {
@@ -360,28 +360,32 @@ describe("nothing leaks or changes from View as", () => {
         module: { default: () => null, middleware: rootMiddleware },
       },
     };
+    const paths: string[] = [];
     const writes: string[] = [];
     for (const entry of routes) {
       const file = `../../app/${entry.file}`;
       const module = (await import(/* @vite-ignore */ file)) as Record<string, unknown>;
-      if (typeof module.action !== "function") continue;
       const id = entry.id ?? entry.file;
       const path = entry.index
         ? "/"
         : `/${entry.path}`.replace(/:[A-Za-z]+/g, "a1").replace("*", "a1");
-      writes.push(path);
+      paths.push(path);
+      const spy = (kind: string) => () => {
+        ran.push(`${kind} ${path}`);
+        return { ran: true };
+      };
+      const stub: Record<string, unknown> = { default: () => null };
+      if (typeof module.loader === "function") stub.loader = spy("load");
+      if (typeof module.action === "function") {
+        stub.action = spy("act");
+        writes.push(path);
+      }
       built[id] = {
         id,
         parentId: "root",
         path: entry.path,
         index: entry.index,
-        module: {
-          default: () => null,
-          action: () => {
-            ran.push(path);
-            return { ran: true };
-          },
-        },
+        module: stub,
       };
     }
     // The routes that change things today, so the walk cannot quietly find none.
@@ -399,6 +403,10 @@ describe("nothing leaks or changes from View as", () => {
         "/logout",
       ]),
     );
+    // Pages whose load signs in or starts work count too.
+    expect(paths).toEqual(
+      expect.arrayContaining(["/auth/discord/callback", "/auth/google/callback"]),
+    );
     const handle = createRequestHandler({
       entry: { module: { default: () => new Response("page") } },
       routes: built,
@@ -414,25 +422,32 @@ describe("nothing leaks or changes from View as", () => {
     const send = (path: string, search: string, method: string, data: boolean) => {
       const address = data ? (path === "/" ? "/_.data" : `${path}.data`) : path;
       const query = path === "/" ? `?index${search ? `&${search}` : ""}` : `?${search}`;
+      const reads = method === "GET" || method === "HEAD";
       return handle(
         new Request(`${ORIGIN}${address}${query}`, {
           method,
-          body: new URLSearchParams({ idempotencyKey: "x" }),
+          body: reads ? undefined : new URLSearchParams({ idempotencyKey: "x" }),
         }),
         new RouterContextProvider(),
       );
     };
-    for (const path of writes)
-      for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+    const viewing = "view_as=%232PP8QLY0";
+    for (const path of paths)
+      for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
         for (const data of [false, true]) {
-          const refused = await send(path, "view_as=%232PP8QLY0", method, data);
+          if (path === "/" && (method === "GET" || method === "HEAD")) continue;
+          const refused = await send(path, viewing, method, data);
           expect(refused.status, `${method} ${path}`).toBe(400);
           expect(refused.headers.get("Cache-Control")).toBe("private, no-store");
         }
     expect(ran).toEqual([]);
-    // Without View as, each one reaches its own action.
+    // The dashboard's own read is the one thing that takes it.
+    for (const data of [false, true]) await send("/", viewing, "GET", data);
+    expect(ran).toEqual(["load /", "load /"]);
+    // Without View as, each change reaches its own action.
+    ran.length = 0;
     for (const path of writes) await send(path, "", "POST", true);
-    expect(ran).toEqual(writes);
+    expect(ran).toEqual(writes.map((path) => `act ${path}`));
   });
 });
 

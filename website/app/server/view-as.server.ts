@@ -61,17 +61,18 @@ export async function readViewAs(
 }
 
 /**
- * Root middleware: a request that could change something (any method but
- * GET and HEAD) never runs with `view_as` on its address, whoever sends it,
- * so no save, link, Crew, Watchlist, Discord or settings change can happen
- * from a viewed dashboard. No GET or HEAD reads `view_as` but the
- * dashboard's; the only ones that change anything, signing in, act on the
- * browser's own login.
+ * Root middleware: `view_as` is read by one thing only, a GET or HEAD of the
+ * dashboard (`/`, or its data at `/_.data`). Any other request carrying it is
+ * refused before any action or loader runs, whoever sends it: a save, a link,
+ * a sign-in callback, a Crew, Watchlist, Discord or settings change, or a page
+ * whose load starts work, so nothing can change from a viewed dashboard.
  */
 export function refuseViewAsChanges(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (!url.searchParams.has(VIEW_AS_PARAM)) return null;
   const method = request.method.toUpperCase();
-  if (method === "GET" || method === "HEAD") return null;
-  if (!new URL(request.url).searchParams.has(VIEW_AS_PARAM)) return null;
+  const dashboard = url.pathname === "/" || url.pathname === "/_.data";
+  if (dashboard && (method === "GET" || method === "HEAD")) return null;
   return new Response("View as is read only. Exit View as to make changes.", {
     status: 400,
     headers: { "Cache-Control": "private, no-store", "Content-Type": "text/plain" },
