@@ -228,13 +228,7 @@ class Admission:
     def _keys_idle(self) -> bool:
         """At least one key's worth of regular request slots is idle."""
         keys = self._collector.regular_keys
-        now = time.monotonic()
-        idle = sum(
-            keys.concurrency_per_key - state.active
-            for state in keys._states
-            if state.healthy and state.paused_until <= now
-        )
-        return idle >= keys.concurrency_per_key
+        return keys.free_ready_slots() >= keys.concurrency_per_key
 
     async def __call__(self) -> bool:
         """Wait for this request's start slot; False when it must not start now."""

@@ -14,6 +14,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from time import monotonic
 from typing import Any, TypeVar
 from urllib.parse import quote, urljoin, urlsplit
@@ -104,15 +105,81 @@ class _StartLimiter:
         self._recent.append(now)
 
 
+class KeyCondition(StrEnum):
+    """Whether one API key may start a request; ``_KeyState.condition`` decides.
+
+    - READY: may start, within its start rate and concurrency cap.
+    - PAUSED: a rate limit (429) paused it until ``paused_until``; it becomes
+      READY again by itself when that time passes, and a later 429 can only
+      extend the pause.
+    - QUARANTINED: the API rejected the key (401 or 403). It wins over a
+      pause and lasts until the collector restarts, which starts every key
+      READY. A provider outage never changes a key's condition.
+    """
+
+    READY = "ready"
+    PAUSED = "paused"
+    QUARANTINED = "quarantined"
+
+
 @dataclass(slots=True)
 class _KeyState:
     key: ApiKey
     limiter: _StartLimiter
     start_lock: asyncio.Lock
-    healthy: bool = True
+    quarantined: bool = False
     paused_until: float = 0.0
     starts: int = 0
-    active: int = 0
+    active: int = 0  # slots held by requests: HELD or DRAINING
+
+    def condition(self, now: float) -> KeyCondition:
+        if self.quarantined:
+            return KeyCondition.QUARANTINED
+        if self.paused_until > now:
+            return KeyCondition.PAUSED
+        return KeyCondition.READY
+
+    async def wait_out_pause(self) -> None:
+        delay = self.paused_until - monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+class SlotPhase(StrEnum):
+    """Where one reserved request slot stands: a key's or a network thread's.
+
+    - HELD: reserved by a request that is waiting to start or running.
+    - DRAINING: its caller gave up (timeout or cancellation) while the
+      blocking network call still runs; the slot stays taken until that call
+      ends, so the call keeps counting against the key and thread limits.
+    - RELEASED: handed back, exactly once.
+
+    ``_RequestSlot`` is the only owner. Slots live in memory; a restart
+    starts with none held.
+    """
+
+    HELD = "held"
+    DRAINING = "draining"
+    RELEASED = "released"
+
+
+class _RequestSlot:
+    def __init__(self, release: Callable[[], None]) -> None:
+        self.phase = SlotPhase.HELD
+        self._release = release
+
+    def release(self) -> None:
+        if self.phase is not SlotPhase.RELEASED:
+            self.phase = SlotPhase.RELEASED
+            self._release()
+
+    def end(self, error: BaseException) -> None:
+        """Release after ``error``: now, or when a detached network call ends."""
+        if isinstance(error, (_DetachedTimeout, _DetachedCancellation)):
+            self.phase = SlotPhase.DRAINING
+            error.release_when.add_done_callback(lambda _finished: self.release())
+        else:
+            self.release()
 
 
 T = TypeVar("T")
@@ -120,6 +187,37 @@ StartRequest = Callable[[], Awaitable[None]]
 
 
 _request_context = threading.local()
+
+
+class DeadlinePhase(StrEnum):
+    """Where one blocking request stands against its wall-clock budget.
+
+    - WAITING: its network thread has not begun the request.
+    - RUNNING: the thread began (``begin``); the connection it uses is
+      tracked so an expiry can interrupt it.
+    - FINISHED: it ended within the budget (``complete``) or was cleaned up
+      after running (``finish``); nothing is tracked.
+    - ABANDONED: the budget ran out, the caller was cancelled, or cleanup
+      came before the thread began; the thread will refuse to begin.
+    - INTERRUPTED: the budget ran out, or the caller was cancelled, after the
+      thread began; its connection was shut so the blocking call ends soon.
+
+    ``_RequestDeadline`` owns the phase behind one lock shared with the
+    network thread. Only ``expire`` (budget over, or cancellation once
+    running) tells the waiting caller. A caller that stops waiting on an
+    INTERRUPTED request keeps its key slot and network thread DRAINING
+    (``SlotPhase``) until the blocking call returns. A retry is a new request
+    with a new deadline; nothing survives a restart.
+    """
+
+    WAITING = "waiting"
+    RUNNING = "running"
+    FINISHED = "finished"
+    ABANDONED = "abandoned"
+    INTERRUPTED = "interrupted"
+
+
+_DEADLINE_EXPIRED = (DeadlinePhase.ABANDONED, DeadlinePhase.INTERRUPTED)
 
 
 class _RequestDeadline:
@@ -135,28 +233,39 @@ class _RequestDeadline:
         self._loop = loop
         self._timeout_reached = timeout_reached
         self._lock = threading.Lock()
+        self._phase = DeadlinePhase.WAITING
+        # Only ever set while RUNNING; every move out of RUNNING clears it.
         self._connection: HTTPConnection | socket.socket | None = None
-        self._active = True
-        self._started = False
-        self.expired = False
 
-    def begin(self) -> bool:
+    @property
+    def phase(self) -> DeadlinePhase:
         with self._lock:
-            if self.expired or not self._active:
-                return False
-            self._started = True
-            return True
+            return self._phase
 
     @property
     def started(self) -> bool:
+        return self.phase in (
+            DeadlinePhase.RUNNING,
+            DeadlinePhase.FINISHED,
+            DeadlinePhase.INTERRUPTED,
+        )
+
+    @property
+    def expired(self) -> bool:
+        return self.phase in _DEADLINE_EXPIRED
+
+    def begin(self) -> bool:
         with self._lock:
-            return self._started
+            if self._phase not in (DeadlinePhase.WAITING, DeadlinePhase.RUNNING):
+                return False
+            self._phase = DeadlinePhase.RUNNING
+            return True
 
     def register(self, connection: HTTPConnection | socket.socket) -> None:
         with self._lock:
-            if self.expired:
+            if self._phase in _DEADLINE_EXPIRED:
                 _close_connection(connection)
-            elif self._active:
+            elif self._phase is DeadlinePhase.RUNNING:
                 previous = self._connection
                 self._connection = connection
                 if isinstance(previous, socket.socket):
@@ -169,7 +278,7 @@ class _RequestDeadline:
 
     def guard_connected_socket(self, connected: socket.socket) -> None:
         with self._lock:
-            if self.expired or not self._active:
+            if self._phase is not DeadlinePhase.RUNNING:
                 _close_connection(connected)
                 raise ProviderFailure("timeout", retryable=True)
             if self._connection is connected:
@@ -184,44 +293,51 @@ class _RequestDeadline:
 
     def complete(self) -> None:
         with self._lock:
-            if self.expired or monotonic() >= self.ends_at:
-                self.expired = True
-                self._active = False
-                connection = self._connection
-                self._connection = None
-                if connection is not None:
-                    _close_connection(connection)
+            if self._phase in _DEADLINE_EXPIRED or monotonic() >= self.ends_at:
+                self._move(
+                    DeadlinePhase.ABANDONED
+                    if self._phase is DeadlinePhase.ABANDONED
+                    else DeadlinePhase.INTERRUPTED,
+                    close=True,
+                )
                 raise ProviderFailure("timeout", retryable=True)
-            self._active = False
-            self._connection = None
+            self._move(DeadlinePhase.FINISHED, close=False)
 
     def expire(self) -> None:
         with self._lock:
-            if not self._active:
+            if self._phase is DeadlinePhase.WAITING:
+                self._move(DeadlinePhase.ABANDONED, close=True)
+            elif self._phase is DeadlinePhase.RUNNING:
+                self._move(DeadlinePhase.INTERRUPTED, close=True)
+            else:
                 return
-            self.expired = True
-            self._active = False
-            connection = self._connection
-            self._connection = None
-            if connection is not None:
-                _close_connection(connection)
         self._loop.call_soon_threadsafe(self._signal_timeout)
 
     def cancel_before_start(self) -> bool:
         with self._lock:
-            if self._started:
+            if self._phase not in (DeadlinePhase.WAITING, DeadlinePhase.ABANDONED):
                 return False
-            self.expired = True
-            self._active = False
+            self._phase = DeadlinePhase.ABANDONED
             return True
 
     def finish(self) -> None:
         with self._lock:
-            self._active = False
+            if self._phase is DeadlinePhase.WAITING:
+                self._phase = DeadlinePhase.ABANDONED
+            elif self._phase is DeadlinePhase.RUNNING:
+                self._phase = DeadlinePhase.FINISHED
             connection = self._connection
             self._connection = None
             if isinstance(connection, socket.socket):
                 connection.close()
+
+    def _move(self, phase: DeadlinePhase, *, close: bool) -> None:
+        """Leave RUNNING (or stay ended), dropping the tracked connection."""
+        connection = self._connection
+        self._connection = None
+        self._phase = phase
+        if close and connection is not None:
+            _close_connection(connection)
 
     def _signal_timeout(self) -> None:
         if not self._timeout_reached.done():
@@ -407,15 +523,52 @@ class _DeadlineProxyManager(urllib3.ProxyManager):
         return pool
 
 
+class OutagePhase(StrEnum):
+    """Where the shared provider-outage pause stands; see ``ProviderOutage``."""
+
+    ANSWERING = "answering"
+    PAUSED = "paused"
+    PROBE_DUE = "probe_due"
+    PROBING = "probing"
+
+
+@dataclass(frozen=True, slots=True)
+class _Answering:
+    failures: int = 0  # server errors or transport failures in a row
+
+
+@dataclass(frozen=True, slots=True)
+class _Paused:
+    delay: float  # this pause's length; a failed probe doubles it
+    until: float  # monotonic time the recovery probe becomes due
+
+
 class ProviderOutage:
     """One pause for every key after the provider stops answering.
 
-    ``threshold`` transport failures or server errors in a row, with no other
-    answer between them, start a pause. Requests wait instead of going out.
-    When the pause ends one request goes out as a recovery probe: a server
-    error or transport failure doubles the pause up to ``max_delay``; any other
-    answer, including a rate limit or a rejected key, ends the outage. Key
-    health is untouched, so an outage never disables or pauses a key.
+    Phases (``phase()``), moved only by ``record``, ``admit`` and ``stop``:
+
+    - ANSWERING: requests go out. ``threshold`` transport failures or server
+      errors in a row, with no other answer between them, start a pause of
+      ``base_delay`` seconds.
+    - PAUSED: every request waits instead of going out.
+    - PROBE_DUE: the pause is over; the next request to ask becomes the one
+      recovery probe.
+    - PROBING: the probe is out and every other request waits for it.
+
+    Any answer from any request, including a rate limit or a rejected key,
+    ends the outage (back to ANSWERING). A probe that fails doubles the pause
+    up to ``max_delay`` (back to PAUSED); a probe that ends without an answer
+    or a failure (cancelled, or refused without retry) lets the next request
+    probe. Other requests' failures during an outage change nothing. A probe
+    can outlive its outage when another request's answer ended it; until it
+    reports, no new probe goes out, and its failure doubles a later pause.
+
+    ``stop()`` at shutdown is a latch, not a phase: from then on, while an
+    outage lasts, waiting requests fail at once as a retryable
+    ``provider_outage``. The state lives in memory only, so a restarted
+    collector starts ANSWERING. Key health is untouched, so an outage never
+    disables or pauses a key.
     """
 
     def __init__(
@@ -428,67 +581,80 @@ class ProviderOutage:
         self.threshold = threshold
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self.failures = 0
-        self.delay = 0.0
-        self.paused_until = 0.0
-        self._probing = False
-        self._stopped = False
+        self._state: _Answering | _Paused = _Answering()
+        self._probe_out = False
+        self._stopping = False
         self._changed = asyncio.Event()
+
+    def phase(self) -> OutagePhase:
+        return self._phase_at(monotonic())
+
+    def _phase_at(self, now: float) -> OutagePhase:
+        state = self._state
+        if isinstance(state, _Answering):
+            return OutagePhase.ANSWERING
+        if now < state.until:
+            return OutagePhase.PAUSED
+        return OutagePhase.PROBING if self._probe_out else OutagePhase.PROBE_DUE
 
     @property
     def active(self) -> bool:
-        return self.delay > 0
+        return isinstance(self._state, _Paused)
 
     @property
     def paused(self) -> bool:
         """Whether requests now wait; false once a recovery probe is due."""
-        return self.delay > 0 and monotonic() < self.paused_until
+        return self.phase() is OutagePhase.PAUSED
 
     async def admit(self) -> bool:
         """Wait out a pause; return whether this request is the recovery probe."""
-        while self.delay:
-            if self._stopped:
+        while True:
+            now = monotonic()
+            phase = self._phase_at(now)
+            state = self._state
+            if not isinstance(state, _Paused):
+                return False
+            if self._stopping:
                 raise ProviderFailure("provider_outage", retryable=True)
-            remaining = self.paused_until - monotonic()
-            if remaining <= 0 and not self._probing:
-                self._probing = True
+            if phase is OutagePhase.PROBE_DUE:
+                self._probe_out = True
                 return True
             changed = self._changed
             try:
                 await asyncio.wait_for(
-                    changed.wait(), remaining if remaining > 0 else None
+                    changed.wait(),
+                    state.until - now if phase is OutagePhase.PAUSED else None,
                 )
             except TimeoutError:
                 pass
-        return False
 
     def record(self, *, failed: bool | None, probe: bool) -> None:
         """Record one answer: failed, answered (False), or neither (None)."""
         if probe:
-            self._probing = False
+            self._probe_out = False
+        state = self._state
         if failed is None:
             if probe:
                 self._notify()
-            return
-        if not failed:
-            self.failures = 0
-            if self.delay:
-                self.delay = 0.0
+        elif not failed:
+            self._state = _Answering()
+            if isinstance(state, _Paused):
                 self._notify()
-            return
-        self.failures += 1
-        if probe and self.delay:
-            self.delay = min(self.max_delay, self.delay * 2)
-        elif not self.delay and self.failures >= self.threshold:
-            self.delay = self.base_delay
+        elif isinstance(state, _Paused):
+            if probe:
+                self._pause(min(self.max_delay, state.delay * 2))
+        elif state.failures + 1 >= self.threshold:
+            self._pause(self.base_delay)
         else:
-            return
-        self.paused_until = monotonic() + self.delay
-        self._notify()
+            self._state = _Answering(state.failures + 1)
 
     def stop(self) -> None:
         """Release waiting requests as retryable failures during shutdown."""
-        self._stopped = True
+        self._stopping = True
+        self._notify()
+
+    def _pause(self, delay: float) -> None:
+        self._state = _Paused(delay, monotonic() + delay)
         self._notify()
 
     def _notify(self) -> None:
@@ -497,7 +663,15 @@ class ProviderOutage:
 
 
 class KeyPool:
-    """Fair key rotation with independent start rates and concurrency caps."""
+    """Fair key rotation with independent start rates and concurrency caps.
+
+    One request's path: it queues for the pool, oldest first; ``_take``
+    reserves a slot on the next READY key (``KeyCondition``) with one free;
+    ``start_request`` waits out the key's pause and its start rate, and each
+    redirect hop waits again; then its slot is released (``SlotPhase``). A
+    key quarantined meanwhile fails the request as ``no_healthy_api_key``;
+    a key paused meanwhile makes it wait.
+    """
 
     def __init__(
         self,
@@ -530,46 +704,40 @@ class KeyPool:
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]
     ) -> T:
         state = await self._acquire()
-        release_immediately = True
+        slot = _RequestSlot(lambda: self._release(state))
         try:
-            delay = state.paused_until - monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            if not state.healthy:
+            await state.wait_out_pause()
+            if state.condition(monotonic()) is KeyCondition.QUARANTINED:
                 raise ProviderFailure("no_healthy_api_key", retryable=False)
 
             async def start_request() -> None:
                 async with state.start_lock:
                     while True:
-                        if not state.healthy:
+                        condition = state.condition(monotonic())
+                        if condition is KeyCondition.QUARANTINED:
                             raise ProviderFailure(
                                 "no_healthy_api_key", retryable=False
                             )
-                        delay = state.paused_until - monotonic()
-                        if delay > 0:
-                            await asyncio.sleep(delay)
+                        if condition is KeyCondition.PAUSED:
+                            await state.wait_out_pause()
                             continue
                         await state.limiter.wait()
-                        if not state.healthy or state.paused_until > monotonic():
+                        if state.condition(monotonic()) is not KeyCondition.READY:
                             continue
                         if self._before_start is not None:
                             await self._before_start()
-                        if not state.healthy or state.paused_until > monotonic():
+                        if state.condition(monotonic()) is not KeyCondition.READY:
                             continue
                         state.limiter.started()
                         state.starts += 1
                         return
 
-            return await request(state.key, start_request)
-        except (_DetachedTimeout, _DetachedCancellation) as error:
-            release_immediately = False
-            error.release_when.add_done_callback(
-                lambda _finished: self._release(state)
-            )
+            result = await request(state.key, start_request)
+        except BaseException as error:
+            slot.end(error)
             raise
-        finally:
-            if release_immediately:
-                self._release(state)
+        slot.release()
+        return result
 
     async def _acquire(self) -> _KeyState:
         # Requests queue for the pool, not for one key: the oldest waiting
@@ -591,10 +759,14 @@ class KeyPool:
         self._dispatch()
 
     def _dispatch(self) -> None:
+        now = monotonic()
         for waiter in self._waiters:
             if waiter.done():
                 continue
-            if not any(state.healthy for state in self._states):
+            if all(
+                state.condition(now) is KeyCondition.QUARANTINED
+                for state in self._states
+            ):
                 waiter.set_exception(
                     ProviderFailure("no_healthy_api_key", retryable=False)
                 )
@@ -612,8 +784,7 @@ class KeyPool:
             index = (self._cursor + offset) % count
             state = self._states[index]
             if (
-                state.healthy
-                and state.paused_until <= now
+                state.condition(now) is KeyCondition.READY
                 and state.active < self.concurrency_per_key
             ):
                 self._cursor = (index + 1) % count
@@ -622,7 +793,7 @@ class KeyPool:
         return None
 
     def quarantine(self, label: str) -> None:
-        self._state(label).healthy = False
+        self._state(label).quarantined = True
         self._dispatch()
 
     def pause(self, label: str, seconds: float) -> None:
@@ -642,20 +813,35 @@ class KeyPool:
         raise ValueError("unknown API key label")
 
     def health(self) -> dict[str, int]:
+        conditions = [state.condition(monotonic()) for state in self._states]
         return {
-            "configured": len(self._states),
-            "healthy": sum(state.healthy for state in self._states),
-            "paused": sum(
-                state.healthy and state.paused_until > monotonic()
-                for state in self._states
-            ),
+            "configured": len(conditions),
+            "healthy": sum(c is not KeyCondition.QUARANTINED for c in conditions),
+            "paused": conditions.count(KeyCondition.PAUSED),
         }
 
+    def free_ready_slots(self) -> int:
+        """Request slots free now on READY keys."""
+        now = monotonic()
+        return sum(
+            self.concurrency_per_key - state.active
+            for state in self._states
+            if state.condition(now) is KeyCondition.READY
+        )
+
     def key_health(self) -> list[tuple[str, bool, bool, int]]:
-        """Return each key's label, health, pause state and request starts."""
+        """Return each key's label, health, pause state and request starts.
+
+        A quarantined key still shows a pause it was given, unlike ``health``.
+        """
         now = monotonic()
         return [
-            (state.key.label, state.healthy, state.paused_until > now, state.starts)
+            (
+                state.key.label,
+                state.condition(now) is not KeyCondition.QUARANTINED,
+                state.paused_until > now,
+                state.starts,
+            )
             for state in self._states
         ]
 
@@ -902,7 +1088,7 @@ class OfficialApiClient:
 
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()
-            release_immediately = True
+            slot = _RequestSlot(self._executor_slots.release)
             sending = False
 
             async def start_sending() -> None:
@@ -914,21 +1100,14 @@ class OfficialApiClient:
                 response = await self._fetch_with_key(
                     pool, endpoint, url, key, start_sending
                 )
-            except (_DetachedTimeout, _DetachedCancellation) as error:
-                release_immediately = False
-                error.release_when.add_done_callback(
-                    lambda _finished: self._executor_slots.release()
-                )
+            except BaseException as error:
+                slot.end(error)
                 if isinstance(error, _DetachedTimeout):
                     self._count_relay("timeout")
-                raise
-            except ProviderFailure as error:
-                if sending:
+                elif isinstance(error, ProviderFailure) and sending:
                     self._count_relay(error.category)
                 raise
-            finally:
-                if release_immediately:
-                    self._executor_slots.release()
+            slot.release()
             self._count_relay("answered")
             return response
 
