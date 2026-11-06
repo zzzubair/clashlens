@@ -229,7 +229,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
                 assert time.monotonic() - started < 5
                 assert len(spool.iter_handoffs()) == 1
                 assert _sightings(connection_info)[0] == 1
-            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())
@@ -237,7 +237,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
             assert checks[0][0] is False
             assert checks[0][1] < 1
             assert collector.outcomes["commit_deferred"] == 1
-            assert not collector._handoff_recovery_required
+            assert not collector.spool_health.recovery_required
             polls, _, observations = _sightings(connection_info)
             assert (polls, observations) == (2, 1)
             assert hashlib.sha256(ignored).hexdigest() in spool.final_hashes()
@@ -290,7 +290,7 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
                 check = collector.collect_player(work, lane="ordinary")
                 assert await asyncio.wait_for(check, 15) == ["recorded"]
                 assert time.monotonic() - started < 9
-            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())

@@ -25,8 +25,8 @@ from test_collector import _Client, _collector, _Spool, _Store
 import clashlens.uploader as uploader_module
 from clashlens import collector_liveness
 from clashlens.archive import ArchiveReadError
-from clashlens.collector_uploads import UploadClaim
-from clashlens.uploader import Uploader, UploaderProcess
+from clashlens.collector_uploads import UploadClaim, WriteMayLand
+from clashlens.uploader import Uploader, UploaderProcess, UploaderProcessState
 
 
 def _uploader(spool: _Spool, store: _Store, archive: object) -> Uploader:
@@ -772,7 +772,7 @@ def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
         "token",
         datetime.now(UTC),
         attempt,
-        unresolved_write=unresolved_write,
+        unresolved_write=None if unresolved_write is None else WriteMayLand(unresolved_write),
     )
     calls = _one_claim(monkeypatch, claim)
 
@@ -809,7 +809,7 @@ def test_an_attempt_that_writes_nothing_keeps_counting_from_the_last_write(
         datetime.now(UTC),
         40,
         generation,
-        unresolved_write=31,
+        unresolved_write=WriteMayLand(31),
     )
     _one_claim(monkeypatch, claim)
     failures: list[tuple[str, str]] = []
@@ -992,7 +992,7 @@ def test_stopping_the_collector_stops_the_uploads_process(
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
     assert process.restarts == 0
-    assert process.running is False
+    assert process.state is UploaderProcessState.STOPPED
 
 
 class _UploadArchive(_FixtureS3Handler):

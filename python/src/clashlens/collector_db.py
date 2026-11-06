@@ -24,6 +24,7 @@ from . import (
     response_novelty,
 )
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
+from .raw_body import DELETABLE_SQL, RECORDED_SQL
 
 UploadClaim = collector_uploads.UploadClaim
 UploadLeaseLost = collector_uploads.UploadLeaseLost
@@ -54,17 +55,6 @@ _SPOOL_DELETE_THREADS = 16
 # response-state row for each (286 million rows, about 60 s). That state branch
 # added nothing: a copy is only marked deleted while complete, and every path
 # away from complete clears the mark, so its rows all have no mark already.
-REFERENCED_SPOOL_HASHES_SQL = """
-    SELECT response_hash
-    FROM collector_response_uploads
-    WHERE local_deleted_at IS NULL
-    UNION
-    SELECT response_hash
-    FROM collector_observations
-    WHERE archive_reference IS NULL
-"""
-
-
 @dataclass(frozen=True, slots=True)
 class CollectorWork:
     player_id: int | None
@@ -1337,7 +1327,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 connection.execute("SET LOCAL statement_timeout = '10s'")
-                rows = connection.execute(REFERENCED_SPOOL_HASHES_SQL).fetchall()
+                rows = connection.execute(RECORDED_SQL).fetchall()
         return {str(row[0]) for row in rows}
 
     def deletable_hashes(self, *, limit: int = 100) -> list[str]:
@@ -1345,20 +1335,10 @@ class CollectorDatabase:
             raise ValueError("cleanup limit must be positive")
         with self._connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT upload.response_hash
                 FROM collector_response_uploads AS upload
-                WHERE upload.state = 'complete'
-                  AND upload.local_deleted_at IS NULL
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM python_processing_jobs AS job
-                      JOIN collector_observations AS observation
-                        ON observation.id = job.observation_id
-                      WHERE job.work_type = 'process_observation'
-                        AND observation.response_hash = upload.response_hash
-                        AND job.status <> 'complete'
-                  )
+                WHERE {DELETABLE_SQL}
                 ORDER BY upload.latest_sighting_at, upload.completed_at,
                          upload.response_hash
                 LIMIT %s
@@ -1383,21 +1363,10 @@ class CollectorDatabase:
                     (hashes,),
                 )
                 eligible = connection.execute(
-                    """
+                    f"""
                     SELECT upload.response_hash
                     FROM collector_response_uploads AS upload
-                    WHERE upload.response_hash = ANY(%s)
-                      AND upload.state = 'complete'
-                      AND upload.local_deleted_at IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM python_processing_jobs AS job
-                          JOIN collector_observations AS observation
-                            ON observation.id = job.observation_id
-                          WHERE job.work_type = 'process_observation'
-                            AND observation.response_hash = upload.response_hash
-                            AND job.status <> 'complete'
-                      )
+                    WHERE upload.response_hash = ANY(%s) AND {DELETABLE_SQL}
                     FOR UPDATE
                     """,
                     (hashes,),

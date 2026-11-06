@@ -11,11 +11,7 @@ import pytest
 from domain_test_support import domain_database
 from psycopg import sql
 
-from clashlens.collector_db import (
-    REFERENCED_SPOOL_HASHES_SQL,
-    CollectorDatabase,
-    ResponseHandoff,
-)
+from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import (
     NEXT_DUE_UPLOAD_SQL,
     RELEASE_EXPIRED_UPLOADS_SQL,
@@ -26,6 +22,7 @@ from clashlens.collector_uploads import (
     release_expired_uploads,
     renew_upload,
 )
+from clashlens.raw_body import RECORDED_SQL
 
 NOW = datetime(2020, 9, 13, 4, 0, tzinfo=UTC)
 
@@ -1258,7 +1255,7 @@ def test_spool_reference_read_ignores_stale_statistics(database_url: str) -> Non
             connection.execute("SET enable_hashjoin = off")
             connection.execute("SET enable_mergejoin = off")
             plan = connection.execute(
-                "EXPLAIN (FORMAT JSON) " + REFERENCED_SPOOL_HASHES_SQL
+                "EXPLAIN (FORMAT JSON) " + RECORDED_SQL
             ).fetchone()[0][0]["Plan"]
         database = CollectorDatabase(connection_info)
         try:
@@ -1298,7 +1295,7 @@ def test_spool_reference_read_reads_kept_copies_not_the_whole_table(
                 " WHERE relname = 'collector_response_uploads'"
             ).fetchone()[0]
             plan = connection.execute(
-                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + REFERENCED_SPOOL_HASHES_SQL
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + RECORDED_SQL
             ).fetchone()[0][0]["Plan"]
 
     scan = _upload_table_scan(plan)

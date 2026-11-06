@@ -8,11 +8,13 @@ import stat
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from enum import Enum
 from pathlib import Path
 from time import time
 from typing import Any, Self
 
 from .filesystem import filesystem_capacity
+from .raw_body import may_delete, raw_body_stage
 
 
 class SpoolError(RuntimeError):
@@ -69,19 +71,51 @@ def read_readiness(root: str | Path) -> tuple[bool, str]:
     return True, "ready"
 
 
+class ReservationState(Enum):
+    """Where one spool reservation stands; only its ``Spool`` moves it.
+
+    - ``UNRESERVED``: holds no capacity: never granted, released, or its spool
+      closed.
+    - ``RESERVED``: its limit counts against the spool's byte and object limits
+      and free-space and inode floors. Granting fails with a
+      ``degraded_capacity`` error when it would pass one.
+    - ``WRITING``: its body is in a temporary file under ``tmp/``, which
+      ``cleanup_stale`` leaves alone. Publishing links that file into
+      ``sha256/`` and removes it; a failed write removes it too.
+
+    Publishing with it, ``release`` or leaving its ``with`` block return it to
+    ``UNRESERVED``. Nothing is stored on disk, so after a crash nothing is
+    held: capacity is counted again from the files, and temporary files older
+    than 60 s are removed. The state is derived from the spool's registry of
+    granted reservations and the temporary name, both changed only under the
+    spool's lock.
+    """
+
+    UNRESERVED = "unreserved"
+    RESERVED = "reserved"
+    WRITING = "writing"
+
+
 class SpoolReservation:
     def __init__(self, spool: Spool, limit: int) -> None:
         self.spool = spool
         self.limit = limit
-        self._active = False
         self._temporary_name: str | None = None
 
     @property
+    def state(self) -> ReservationState:
+        if self.spool._reservations.get(id(self)) is not self:
+            return ReservationState.UNRESERVED
+        if self._temporary_name is None:
+            return ReservationState.RESERVED
+        return ReservationState.WRITING
+
+    @property
     def active(self) -> bool:
-        return self._active
+        return self.state is not ReservationState.UNRESERVED
 
     def __enter__(self) -> Self:
-        if not self._active:
+        if not self.active:
             self.spool._activate_reservation(self)
         return self
 
@@ -95,6 +129,82 @@ class SpoolReservation:
 
     def publish(self, body: bytes, digest: str) -> None:
         self.spool.publish(body, digest, reservation=self)
+
+
+class BarrierState(Enum):
+    """Who may change ``sha256/``: saving new responses or deleting old ones.
+
+    - ``IDLE``: neither runs.
+    - ``PUBLISHING``: one or more saves run, each a body plus its sidecar.
+    - ``DRAINING``: a cleanup waits for running saves to finish; new saves
+      wait behind it, so a cleanup is never starved.
+    - ``CLEANING``: one cleanup runs; saves and other cleanups wait.
+
+    A save never overlaps a cleanup, so a cleanup that reads the sidecars and
+    the database once sees every body a save has made. ``PublicationBarrier``
+    owns the state; it lives in memory, and a crash releases it.
+    """
+
+    IDLE = "idle"
+    PUBLISHING = "publishing"
+    DRAINING = "draining"
+    CLEANING = "cleaning"
+
+
+class PublicationBarrier:
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self._publications = 0
+        self._cleaning = False
+        self._cleanup_waiters = 0
+
+    @property
+    def state(self) -> BarrierState:
+        with self.condition:
+            return self._state_locked()
+
+    def _state_locked(self) -> BarrierState:
+        if self._cleaning:
+            return BarrierState.CLEANING
+        if self._cleanup_waiters:
+            return BarrierState.DRAINING
+        if self._publications:
+            return BarrierState.PUBLISHING
+        return BarrierState.IDLE
+
+    @contextmanager
+    def publication(self) -> Iterator[None]:
+        with self.condition:
+            while self._state_locked() in {BarrierState.DRAINING, BarrierState.CLEANING}:
+                self.condition.wait()
+            self._publications += 1
+        try:
+            yield
+        finally:
+            with self.condition:
+                self._publications -= 1
+                if self._publications == 0:
+                    self.condition.notify_all()
+
+    @contextmanager
+    def cleanup(self) -> Iterator[None]:
+        with self.condition:
+            self._cleanup_waiters += 1
+            try:
+                # This cleanup counts as a waiter itself, so it waits on the
+                # parts, not on DRAINING.
+                while self._cleaning or self._publications:
+                    self.condition.wait()
+                self._cleaning = True
+            finally:
+                self._cleanup_waiters -= 1
+                self.condition.notify_all()
+        try:
+            yield
+        finally:
+            with self.condition:
+                self._cleaning = False
+                self.condition.notify_all()
 
 
 class Spool:
@@ -132,10 +242,8 @@ class Spool:
         self._root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self._capacity_mutex = threading.RLock()
         self._capacity_depth = 0
-        self._publication_condition = threading.Condition()
-        self._active_publications = 0
-        self._cleanup_active = False
-        self._cleanup_waiters = 0
+        self._barrier = PublicationBarrier()
+        # Granted reservations: those not ReservationState.UNRESERVED.
         self._reservations: dict[int, SpoolReservation] = {}
         self._actual_counts = {key: 0 for key in self._COUNT_KEYS}
         self._temporary_sizes: dict[str, int | None] = {}
@@ -190,8 +298,6 @@ class Spool:
             return
         self._closed = True
         with self._capacity_mutex:
-            for reservation in self._reservations.values():
-                reservation._active = False
             self._reservations.clear()
             os.close(self._capacity)
             os.close(self._root_fd)
@@ -361,38 +467,6 @@ class Spool:
                     fcntl.flock(self._capacity, fcntl.LOCK_UN)
 
     @contextmanager
-    def _publication(self) -> Iterator[None]:
-        with self._publication_condition:
-            while self._cleanup_active or self._cleanup_waiters:
-                self._publication_condition.wait()
-            self._active_publications += 1
-        try:
-            yield
-        finally:
-            with self._publication_condition:
-                self._active_publications -= 1
-                if self._active_publications == 0:
-                    self._publication_condition.notify_all()
-
-    @contextmanager
-    def _cleanup(self) -> Iterator[None]:
-        with self._publication_condition:
-            self._cleanup_waiters += 1
-            try:
-                while self._cleanup_active or self._active_publications:
-                    self._publication_condition.wait()
-                self._cleanup_active = True
-            finally:
-                self._cleanup_waiters -= 1
-                self._publication_condition.notify_all()
-        try:
-            yield
-        finally:
-            with self._publication_condition:
-                self._cleanup_active = False
-                self._publication_condition.notify_all()
-
-    @contextmanager
     def lock(self, digest: str, *, exclusive: bool = False) -> Iterator[None]:
         """Preserve the old locking seam while using the single spool lock."""
         self._final(digest)
@@ -401,12 +475,8 @@ class Spool:
 
     def _cached_counts_locked(self) -> dict[str, int]:
         counts = self._actual_counts.copy()
-        counts["reserved_bytes"] = sum(
-            item.limit for item in self._reservations.values() if item._active
-        )
-        counts["reserved_objects"] = sum(
-            1 for item in self._reservations.values() if item._active
-        )
+        counts["reserved_bytes"] = sum(item.limit for item in self._reservations.values())
+        counts["reserved_objects"] = len(self._reservations)
         logical = (
             counts["final_bytes"] + counts["temporary_bytes"] + counts["reserved_bytes"]
         )
@@ -527,10 +597,9 @@ class Spool:
         if reservation.limit <= 0 or reservation.limit > self.max_body_bytes:
             raise SpoolError("reservation limit exceeds configured body limit")
         with self._capacity_lock():
-            if reservation._active:
+            if reservation.active:
                 return
             self._check_reservation_locked(reservation.limit, repair=repair)
-            reservation._active = True
             self._reservations[id(reservation)] = reservation
 
     def _release_reservation(self, reservation: SpoolReservation) -> None:
@@ -538,7 +607,6 @@ class Spool:
             return
         with self._capacity_lock():
             self._reservations.pop(id(reservation), None)
-            reservation._active = False
             reservation._temporary_name = None
 
     def reserve(self, limit: int | None = None) -> SpoolReservation:
@@ -827,7 +895,7 @@ class Spool:
             with owned:
                 self._publish_reserved(body, digest, owned)
             return
-        if reservation.spool is not self or not reservation._active:
+        if reservation.spool is not self or not reservation.active:
             raise SpoolError("invalid spool reservation")
         if len(body) > reservation.limit:
             raise SpoolError("body exceeds reservation limit")
@@ -842,7 +910,7 @@ class Spool:
         payload: bytes,
         reservation: SpoolReservation,
     ) -> None:
-        with self._publication():
+        with self._barrier.publication():
             self.publish(body, digest, reservation)
             self.write_handoff(name, payload)
 
@@ -926,26 +994,35 @@ class Spool:
 
     def delete_if_unreferenced(self, digest: str) -> bool:
         self._final(digest)
-        with self._cleanup():
+        with self._barrier.cleanup():
             with self._capacity_lock():
-                if digest in self._handoff_hashes_locked():
+                stage = raw_body_stage(
+                    handed_off=digest in self._handoff_hashes_locked(),
+                    recorded=True,
+                    finished=True,
+                )
+                if not may_delete(stage):
                     return False
                 self._delete_locked(digest)
                 return True
 
     @contextmanager
     def delete_unreferenced_batch(self) -> Iterator[Callable[[str], bool]]:
-        """Hold one publication barrier across a batch of guarded deletions."""
+        """Hold one publication barrier across a batch of guarded deletions of
+        bodies the database finds deletable."""
         active = True
-        with self._cleanup():
+        with self._barrier.cleanup():
             with self._capacity_lock():
-                protected = self._handoff_hashes_locked()
+                handed_off = self._handoff_hashes_locked()
 
             def delete(digest: str) -> bool:
                 if not active:
                     raise SpoolError("spool deletion batch is no longer active")
                 self._final(digest)
-                if digest in protected:
+                stage = raw_body_stage(
+                    handed_off=digest in handed_off, recorded=True, finished=True
+                )
+                if not may_delete(stage):
                     return False
                 try:
                     prefix_fd = self._sub_dir_fd("sha256", digest[:2])
@@ -968,7 +1045,7 @@ class Spool:
                 active = False
 
     def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
-        with self._cleanup():
+        with self._barrier.cleanup():
             # Both reads happen inside the barrier, sidecars first: a hash
             # whose sidecar was removed before this scan has its upload row
             # committed already, so the later database read sees it. A
@@ -978,13 +1055,18 @@ class Spool:
             # every readiness check, in this container and the worker's, takes
             # that lock, and a slow read held it past their health checks.
             with self._capacity_lock():
-                protected = self._handoff_hashes_locked()
-            protected |= referenced()
+                handed_off = self._handoff_hashes_locked()
+            recorded = referenced()
             with self._capacity_lock():
                 orphaned = {
                     digest
                     for digest, _size in self._final_files_locked()
-                    if digest not in protected
+                    if may_delete(
+                        raw_body_stage(
+                            handed_off=digest in handed_off,
+                            recorded=digest in recorded,
+                        )
+                    )
                 }
                 return self._delete_many_locked(orphaned)
 
@@ -1062,7 +1144,7 @@ class Spool:
                 active = {
                     reservation._temporary_name
                     for reservation in self._reservations.values()
-                    if reservation._active and reservation._temporary_name
+                    if reservation.state is ReservationState.WRITING
                 }
                 for name in os.listdir(tmp_fd):
                     info = os.stat(name, dir_fd=tmp_fd, follow_symlinks=False)
@@ -1086,4 +1168,13 @@ class Spool:
         return removed
 
 
-__all__ = ["Spool", "SpoolError", "SpoolReservation", "read_readiness", "validate_root"]
+__all__ = [
+    "BarrierState",
+    "PublicationBarrier",
+    "ReservationState",
+    "Spool",
+    "SpoolError",
+    "SpoolReservation",
+    "read_readiness",
+    "validate_root",
+]

@@ -22,12 +22,12 @@ from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import (
     UNRESOLVED_WRITE_ATTEMPTS,
+    WriteMayLand,
     archived_copy,
     claim_upload,
     complete_upload,
     fail_upload,
     release_expired_uploads,
-    unresolved_write_detail,
 )
 from clashlens.spool import Spool, SpoolError
 
@@ -422,7 +422,7 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
                     " last_error_detail = %s",
                     (
                         1 + UNRESOLVED_WRITE_ATTEMPTS,
-                        unresolved_write_detail(1, "no such object"),
+                        WriteMayLand(1).failure_detail("no such object"),
                     ),
                 )
         if history == "written_after_many_failures":
@@ -550,7 +550,7 @@ def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
         while claim is not None and claim.attempt_count <= UNRESOLVED_WRITE_ATTEMPTS:
             detail = "archive marker could not be checked"
             if claim.unresolved_write is not None:
-                detail = unresolved_write_detail(claim.unresolved_write, detail)
+                detail = claim.unresolved_write.failure_detail(detail)
             fail_upload(database, claim, category="archive_unavailable", detail=detail)
             at += timedelta(minutes=2)
             claim = claim_upload(database, owner="uploader", now=at)
@@ -568,12 +568,12 @@ def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
         # Attempts finding no archived copy do not settle it until that write
         # has had its full allowance of later attempts.
         while claim is not None and claim.attempt_count <= write + UNRESOLVED_WRITE_ATTEMPTS:
-            assert claim.unresolved_write == write
+            assert claim.unresolved_write == WriteMayLand(write)
             fail_upload(
                 database,
                 claim,
                 category="archive_missing",
-                detail=unresolved_write_detail(write, "no such object"),
+                detail=WriteMayLand(write).failure_detail("no such object"),
             )
             at += timedelta(minutes=2)
             claim = claim_upload(database, owner="uploader", now=at)
@@ -583,7 +583,7 @@ def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
         assert release_expired_uploads(database, now=at) == 1
         expired = claim.attempt_count
         claim = claim_upload(database, owner="uploader", now=at)
-        assert claim is not None and claim.unresolved_write == expired
+        assert claim is not None and claim.unresolved_write == WriteMayLand(expired)
 
 
 class _FinishesAfterFirstRead:
