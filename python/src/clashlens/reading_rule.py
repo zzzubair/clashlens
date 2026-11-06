@@ -457,6 +457,24 @@ def decide(
     return Verdict("unverified", lagging[-1] if lagging else None, lagged=lagged)
 
 
+def proves_end(
+    readings: Iterable[Reading], *, end_before_loss: int, others: Iterable[int], **rule: Any,
+) -> bool:
+    """Whether the readings from the day's end Reset on prove it ended at
+    ``end_before_loss`` before its automatic loss and at none of ``others``:
+    ``decide`` verifies that end cleanly, and contradicts each other one, a
+    trustworthy reading fitting it no way. ``rule`` is ``decide``'s. A Daily
+    board ranking a day from an older reading taken while a battle may or
+    may not have shown in it has one end for each way to read it."""
+    readings = tuple(readings)
+    verdict = decide(readings, end_before_loss=end_before_loss, start_proven=False, **rule)
+    return verdict.outcome == "verified" and verdict.clean and all(
+        decide(readings, end_before_loss=other, start_proven=False, stale=False, **rule).outcome
+        == "contradicted"
+        for other in set(others) - {end_before_loss}
+    )
+
+
 def contradiction_during_day(
     readings: Iterable[Reading],
     *,

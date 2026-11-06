@@ -214,17 +214,23 @@ def _seed(info: str) -> None:
         )
 
 
-def _readings(info: str, archive_server, readings: list[tuple[str, timedelta, int]]) -> None:
+def _readings(info: str, archive_server, readings: list[tuple]) -> None:
     """The game's profile answers we saved, (tag, response completed after the
-    Reset, trophies), each processed by the real worker as it arrives."""
+    Reset, trophies), each processed by the real worker a second after it
+    arrives, or as long as a fourth item says."""
     database, processor = _processor(info, archive_server)
     try:
-        for index, (tag, after, trophies) in enumerate(readings):
-            store_observation(
+        for index, (tag, after, trophies, *saved) in enumerate(readings):
+            observation, _ = store_observation(
                 info, archive_server, occurrence_key=f"reading-{index}", endpoint="profile",
                 body=_profile(trophies, tag), observed_at=RESET + after, normalized_tag=tag,
             )
             processor.process_until_idle(owner="readings")
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE player_profile_effects SET created_at = %s WHERE observation_id = %s",
+                    (RESET + after + (saved or [timedelta(seconds=1)])[0], observation),
+                )
     finally:
         database.close()
 
@@ -301,6 +307,9 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
             ("#2GG", timedelta(minutes=6), 5300),  # the newest by the pull matches
             ("#2UU", timedelta(minutes=3), 5100),  # matches
             ("#2LL", timedelta(minutes=2), 5200),  # a stuck row, left out
+            # Arrived at 05:07:00, before the pull, but saved 10 seconds
+            # later: the newest reading by the pull is still 5,100.
+            ("#2UU", timedelta(minutes=7), 5130, timedelta(seconds=10)),
         ])
         # 05:00:40 early pull; 05:03 poll still shows yesterday's ranks.
         early, still_yesterday = _day(
@@ -323,13 +332,16 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
         with psycopg.connect(make_conninfo(info, options=options)) as connection:
             # The newest reading at or before each time; none for an unknown
             # tag or a time before any reading.
-            asked = [("#2QQ", 7), ("#2QQ", 9), ("#2GG", 0), ("#2ZZ", 9)]
-            readings = connection.execute(
-                "SELECT * FROM clashlens_game_ranking_readings(%s, %s)",
+            asked = [("#2QQ", 7), ("#2QQ", 9), ("#2GG", 0), ("#2ZZ", 9), ("#2UU", 7.1)]
+            readings, received = (connection.execute(
+                f"SELECT * FROM {lookup}(%s, %s)",
                 ([tag for tag, _ in asked],
                  [RESET + timedelta(minutes=minute) for _, minute in asked]),
-            ).fetchall()
-        assert sorted(readings) == [("#2QQ", 5300), ("#2QQ", 5310)]
+            ).fetchall() for lookup in ("clashlens_game_ranking_processed_readings",
+                                        "clashlens_game_ranking_readings"))
+        # #2UU's 05:07:00 reading arrived by 05:07:06 but was saved after it.
+        assert sorted(readings) == [("#2QQ", 5300), ("#2QQ", 5310), ("#2UU", 5100)]
+        assert sorted(received) == [("#2QQ", 5300), ("#2QQ", 5310), ("#2UU", 5130)]
         with psycopg.connect(info) as connection:
             due = connection.execute(
                 "SELECT normalized_tag FROM players"
@@ -366,6 +378,10 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     # #2PP, #2GG and #2UU match their list's trophies; #2QQ doesn't.
     assert (printed["live_trophies_compared"], printed["live_trophies_matched"]) == (4, 3)
     assert printed["s5_live_trophies_match_percent"] == 75.0
+    # By the old definition #2UU's reading saved after the pull counted too.
+    assert (printed["received_live_trophies_compared"],
+            printed["received_live_trophies_matched"]) == (4, 2)
+    assert printed["s5_received_live_trophies_match_percent"] == 50.0
     # One uncertain entry among the four left once the faults are out.
     assert (printed["s6_uncertain_percent"], printed["board_entries"]) == (25.0, 4)
     assert printed["board_measured_coverage"] == 0.6

@@ -24,7 +24,7 @@ from typing import Any
 from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
-from . import boundary_members
+from . import boundary_members, ranked_day_inputs
 from .analytics import latest_trophy_changes, unplayed_since_sql, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import (
@@ -844,6 +844,7 @@ def profiles_not_found(
 
 
 def reset_trophies(
+    database: Any,
     connection: Any,
     boundary_at: datetime,
     readings: Mapping[int, tuple[int, int, datetime, int]],
@@ -879,13 +880,17 @@ def reset_trophies(
     up to 4 minutes after the defender's report, and no battle amount the
     two players' logs disagree on. A reading proves no battle stamped before
     it, and a Partial or inferred day's start and end are calculations or
-    readings no rule judged, so that total is never proven. A day whose
+    readings no rule judged, so that total is proven only when a reading
+    from the Reset on, before the next, shows it (``reading_rule``). A day whose
     trophies don't add up still counts the battles after the reading: on
     11 October 2026 #PVVQPGRQL's reading of 5,232 missed a later defense
     for 30, and the reading plus it, 5,202, matched the game's order, where
     the reading alone broke 31 country order pairs with three other such
-    players. Without the battles' proof the total is
-    the reading alone; any total not proven is marked uncertain.
+    players. A defense or attack stamped too near the reading may or may
+    not show in it: such a reading counts only when a reading from the
+    Reset on shows it did, as no other way to read it fits. Without the
+    battles' proof the total is the reading alone; any total not proven is
+    marked uncertain.
 
     The total is taken at exactly the Reset, as the game's own Reset rank
     is: a battle whose attack ended at or after it still counts for the
@@ -927,7 +932,8 @@ def reset_trophies(
                    AND reading.observed_at
                        >= ranked.ranked_day_start + interval '15 minutes'
                    AND NOT ranked.failure_reasons ?| %s::text[]
-                   AND battles.every_battle_proven IS NOT FALSE,
+                   AND battles.every_battle_timed IS NOT FALSE,
+                   battles.ambiguous,
                    battles.after_reading, battles.after_reset,
                    battles.after_reset_after_reading, battles.end_unknown,
                    (ranked.input_evidence -> 'end_baseline_evidence'
@@ -947,14 +953,17 @@ def reset_trophies(
                        ), 0),
                        bool_and(
                            battle.stamped_at IS NOT NULL
-                           AND battle.stamped_at
-                               NOT BETWEEN observation.request_started_at
-                                           - CASE WHEN battle.lens = 'defense'
-                                                  THEN interval '4 minutes'
-                                                  ELSE interval '0' END
-                                       AND reading.observed_at
                            AND battle.disputed IS DISTINCT FROM 'true'
                        ),
+                       -- The changes the reading may or may not show.
+                       COALESCE(array_agg(battle.change) FILTER (
+                           WHERE battle.stamped_at
+                               BETWEEN observation.request_started_at
+                                       - CASE WHEN battle.lens = 'defense'
+                                              THEN interval '4 minutes'
+                                              ELSE interval '0' END
+                                   AND reading.observed_at
+                       ), '{}'),
                        COALESCE(sum(battle.change) FILTER (
                            WHERE ending.after_reset
                        ), 0),
@@ -1001,7 +1010,7 @@ def reset_trophies(
                 ) AS ending (after_reset, unknown)
                 WHERE contribution.value->>'included' = 'true'
             ) AS battles (
-                after_reading, every_battle_proven, after_reset,
+                after_reading, every_battle_timed, ambiguous, after_reset,
                 after_reset_after_reading, end_unknown
             )
             """,
@@ -1015,23 +1024,47 @@ def reset_trophies(
             ),
         ).fetchall()
     }
+    # A later reading proves the reading plus the battles after it, as it
+    # proves the day once rechecked, and one of the ways to read battles
+    # the reading may or may not show: on 31 October 2026 a defense 3
+    # minutes before #CLU28LR2's 02:54:19 reading of 4,924 kept 8 attacks
+    # after it off the board, 4,924 instead of 5,233, until 07:36 at least,
+    # where its 05:23:18 reading showed 5,233.
+    later = set()
+    for player_id, (version_id, _, _, trophies) in readings.items():
+        day = days.get(player_id)
+        if season_end or day is None or (_text_value(day[0]) == "Complete" and day[3] is not None):
+            continue
+        boundary_kind, usable, ambiguous, after_reading, end_unknown = (*day[5:9], day[11])
+        if _text_value(boundary_kind) == "season" or not usable or end_unknown:
+            continue
+        if ranked_day_inputs.later_end_proven(
+            database, connection, player_id, version_id,
+            ranked_day_for(boundary_at - RANKED_DAY_DURATION),
+            end=trophies + int(after_reading), unshown=list(ambiguous),
+        ):
+            later.add(player_id)
     return {
-        player_id: _reset_total(reading[3], days.get(player_id), season_end)
+        player_id: _reset_total(reading[3], days.get(player_id), season_end, player_id in later)
         for player_id, reading in readings.items()
     }
 
 
-def _reset_total(reading: int, day: Any, season_end: bool) -> tuple[int, bool]:
+def _reset_total(
+    reading: int, day: Any, season_end: bool, later: bool = False
+) -> tuple[int, bool]:
     """A player's trophies at the Reset and whether they are proven, from
-    their reading and their day as ``reset_trophies`` reads it."""
+    their reading and their day as ``reset_trophies`` reads it; ``later``
+    when a later reading proves the battles after the reading."""
     if day is None:
         return reading, False
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
-        battles_proven, after_reading, after_reset, after_reset_after_reading,
-        end_unknown, official,
+        battles_usable, ambiguous, after_reading, after_reset,
+        after_reset_after_reading, end_unknown, official,
     ) = day
-    total = reading + int(after_reading) if battles_proven else None
+    battles_proven = battles_usable and not ambiguous
+    total = reading + int(after_reading) if battles_proven or later else None
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
         if season_end:
@@ -1050,7 +1083,7 @@ def _reset_total(reading: int, day: Any, season_end: bool) -> tuple[int, bool]:
         ) and not end_unknown
     if total is None:
         return reading, False
-    return total - int(after_reset_after_reading), False
+    return total - int(after_reset_after_reading), later
 
 
 def _army_rows(

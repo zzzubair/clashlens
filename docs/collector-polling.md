@@ -202,9 +202,9 @@ Order comparisons still use every published board position. A
 board's own measured coverage, the share of our eligible players it holds,
 as `board_measured_coverage`, separate from S4's players in the game's lists
 missing from our board. S5 compares each board player's trophies in a country list with
-our newest saved profile reading at the moment that list was pulled, through
-one read-only lookup the collector's login may call (migration 0109); a
-player with no saved reading by then is not compared.
+our newest profile reading the worker had saved when that list was
+requested, through one read-only lookup the collector's login may call
+(migration 0140); a player with no such reading is not compared.
 
 | score | meaning | 11 Oct 2026 board |
 |---|---|---:|
@@ -212,7 +212,7 @@ player with no saved reading by then is not compared.
 | S2 | global top 200 whose Reset rank falls inside the board positions of their trophy count | 164 |
 | S3 | confirmed board entries in at least one same-country pair of two confirmed entries the game orders the other way, each counted once; a pair with an uncertain entry is not counted, since that entry may be the wrong one | not measured |
 | S4 | Legend I players in country lists not on the board, not at 5,000 with 0 attack wins | 9 at the 14:07 pull |
-| S5 | percent of board players in country lists whose list trophies equal our newest saved reading at the pull; the bar is at least 95% | not measured |
+| S5 | percent of board players in country lists whose list trophies equal our newest reading saved by the list's request; the bar is at least 95% | not measured |
 | S6 | percent of board entries, faults left out, marked uncertain | not measured |
 
 Scores saved before migration 0109 deployed used the old S3, which also
@@ -221,6 +221,13 @@ old S5, the percent of the lists' Legend I players on the board, saved as
 `s5_legend_i_on_board_percent`. They are kept as they were, not recalculated.
 Every score saved after it deploys, starting with the first Reset scored then,
 uses the definitions above and saves `s5_live_trophies_match_percent`.
+
+Until migration 0140, S5 took the newest reading whose response had arrived
+by the request, even when the worker saved it after: on 31 October 2026, 195
+readings saved up to 13.2 seconds after their list's request, which changed 4
+of 7,298 matches. Each score now also saves that definition's result as
+`s5_received_live_trophies_match_percent`, with
+`received_live_trophies_compared` and `received_live_trophies_matched`.
 
 The score also counts exact global ranks, tied pairs and how often the
 board's order inside a tie matches the game's, and how many 05:00:30 global
