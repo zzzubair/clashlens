@@ -552,7 +552,7 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
         execute = psycopg.Connection.execute
 
         def record(connection, query, params=None, **kwargs):
-            if "WITH candidates AS MATERIALIZED" in str(query):
+            if "candidates AS MATERIALIZED" in str(query):
                 queries.append((str(query), params))
             return execute(connection, query, params, **kwargs)
 

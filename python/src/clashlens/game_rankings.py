@@ -148,13 +148,16 @@ def score(
     countries: dict[int, list[Row]],
     stuck: set[str],
     readings: dict[str, int],
+    received: dict[str, int],
 ) -> dict[str, Any]:
     """Score one board, ``{tag: (position, trophies, confidence)}``, against the pulls.
 
     ``stuck`` are the game's stuck 5,000 rows; they and tags in two country
     lists are left out of every number and listed instead. Rank comparisons
     still use the published positions and trophies of the whole board.
-    ``readings`` are our newest saved trophies when each country list was pulled.
+    ``readings`` are our newest trophies the worker had saved when each
+    country list was requested; ``received``, S5's definition until 6
+    November 2026, the newest whose response had arrived by then.
     """
     value = {tag: entry[1] for tag, entry in board.items()}
     position = {tag: entry[0] for tag, entry in board.items()}
@@ -185,9 +188,12 @@ def score(
                 elif value[higher.tag] == value[lower.tag]:
                     tied += 1
                     tie_agree += position[higher.tag] < position[lower.tag]
-    live = [row for rows in countries.values() for row in rows
-            if row.legend_i and row.tag in readings]
-    live_match = sum(row.trophies == readings[row.tag] for row in live)
+    def matches(saved: dict[str, int]) -> tuple[int, int]:
+        live = [row for rows in countries.values() for row in rows
+                if row.legend_i and row.tag in saved]
+        return sum(row.trophies == saved[row.tag] for row in live), len(live)
+
+    (live_match, live), (received_match, received_live) = matches(readings), matches(received)
     missing_active = sorted({
         row.tag
         for rows in countries.values()
@@ -217,9 +223,12 @@ def score(
         "s3_confirmed_entries_contradicted": len(contradicted),
         "s4_active_legend_i_missing": len(missing_active),
         "s4_tags": missing_active,
-        "s5_live_trophies_match_percent": _percent(live_match, len(live)),
-        "live_trophies_compared": len(live),
+        "s5_live_trophies_match_percent": _percent(live_match, live),
+        "live_trophies_compared": live,
         "live_trophies_matched": live_match,
+        "s5_received_live_trophies_match_percent": _percent(received_match, received_live),
+        "received_live_trophies_compared": received_live,
+        "received_live_trophies_matched": received_match,
         "s6_uncertain_percent": _percent(uncertain, len(counted)),
         "uncertain_entries": uncertain,
         "board_entries": len(counted),
@@ -388,7 +397,7 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
                       if row.legend_i and row.trophies == 5000 and row.attack_wins == 0})
-    # Our newest saved trophies when each board player's country list was pulled.
+    # Our newest saved trophies when each board player's country list was requested.
     live = [(row.tag, pulled_at[location]) for location, rows in countries.items()
             for row in rows if row.legend_i and row.tag in board]
     with database._connection() as connection:
@@ -396,10 +405,14 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s)",
             (at_5000, ranked_day_for(boundary).season_start, boundary),
         )}
-        readings = {str(tag): int(trophies) for tag, trophies in connection.execute(
-            "SELECT * FROM clashlens_game_ranking_readings(%s, %s)",
-            ([tag for tag, _at in live], [at for _tag, at in live]),
-        )}
+        readings, received = (
+            {str(tag): int(trophies) for tag, trophies in connection.execute(
+                f"SELECT * FROM {lookup}(%s, %s)",
+                ([tag for tag, _at in live], [at for _tag, at in live]),
+            )}
+            for lookup in ("clashlens_game_ranking_processed_readings",
+                           "clashlens_game_ranking_readings")
+        )
     country_times = [pull.requested_at for pull in pulls if pull.purpose == "country"]
     result = {
         "unknown_reasons": reasons,
@@ -417,6 +430,7 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             countries,
             stuck,
             readings,
+            received,
         ),
     }
     with database._connection() as connection, connection.transaction():

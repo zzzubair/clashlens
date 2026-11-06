@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from itertools import pairwise
+from itertools import combinations, pairwise
 from typing import Any
 
 from . import battle, domain, reading_rule
@@ -16,6 +16,8 @@ from .reconciliation import (
     BattleContribution,
     CoverageObservation,
     PreviousRankedDay,
+    _deduplicate_contributions,
+    _effects,
     log_has_row_gap,
     logs_leave_gap,
 )
@@ -763,3 +765,67 @@ def load_first_reports(
         {"since": since, "new_day": new_day_from, "player": player_id, "until": until},
     ).fetchone()
     return row[0], row[1]
+
+
+def later_end_proven(
+    database: Database, connection: Any, player_id: int, version_id: int,
+    ranked_day: RankedDay, *, end: int, unshown: list[int],
+) -> bool:
+    """Whether a reading from the end Reset of the saved day ``version_id``
+    up to the next Reset proves its battles ended it at ``end`` before the
+    automatic loss, and at no end it has if the older reading ``end`` comes
+    from did not show some of the battles whose trophy changes are
+    ``unshown`` (``reading_rule.proves_end``), with the new day's battles
+    each reading may show. A day whose automatic loss only a reading can show is never
+    proven so, nor one with more than ``reading_rule.MAX_AMBIGUOUS_BATTLES``
+    such changes. Its saved battles keep their report times; a defense may
+    show for the battle's whole length."""
+    if len(unshown) > reading_rule.MAX_AMBIGUOUS_BATTLES:
+        return False
+    row = connection.execute(
+        """
+        SELECT input_evidence -> 'contributions', automatic_defense_evidence_state,
+               automatic_defense_loss,
+               defense_count + COALESCE((input_evidence ->> 'zero_result_defense_slots')::integer, 0),
+               (input_evidence ->> 'end_baseline_battle_log_observation_id')::bigint,
+               input_evidence ->> 'boundary_kind'
+        FROM ranked_day_versions WHERE id = %s AND player_id = %s
+        """,
+        (version_id, player_id),
+    ).fetchone()
+    if row is None:
+        return False
+    contributions, loss_state, loss, defense_slots, end_log, boundary_kind = row
+    if defense_slots >= MAX_DAILY_DEFENSES:
+        losses: tuple[int, ...] = ()
+    elif _text_value(loss_state) in {"calculated", "confirmed"}:
+        losses = (int(loss),) if loss else ()
+    else:
+        return False
+    new_day, _, _, malformed, inconsistent = _deduplicate_contributions(
+        load_contributions(connection, player_id, domain.ranked_day_for(ranked_day.end)))
+    if malformed or inconsistent or not isinstance(contributions, list):
+        return False
+    readings, _, _ = load_readings(
+        database, connection, player_id, ranked_day,
+        reset_profile_observation_id=None, end_battle_log_observation_id=end_log,
+    )
+    return reading_rule.proves_end(
+        readings, end_before_loss=end, reset_at=ranked_day.end,
+        others=[end + sum(changes) for count in range(1, len(unshown) + 1)
+                for changes in combinations(unshown, count)],
+        loss_candidates=losses, loss_certain=bool(losses), new_day_effects=_effects(new_day),
+        day_effects=tuple(
+            reading_rule.Effect(
+                str(item["battle_identity"]),
+                (1 if item["lens"] == "offense" else -1) * int(item["amount_used"]),
+                datetime.fromisoformat(item["battle_timestamp"]),
+                item.get("disagreement") is True,
+                timedelta(0) if item["lens"] == "offense" else reading_rule.MAX_BATTLE_LENGTH,
+            )
+            for item in contributions if item.get("included") is True
+        ),
+        unknown_from=load_unshown_reports(connection, player_id, ranked_day)[1],
+        floor=5000 if _text_value(boundary_kind) == "weekly" else None,
+    )
+

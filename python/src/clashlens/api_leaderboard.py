@@ -83,6 +83,9 @@ CROSS JOIN LATERAL (
                     AND CASE WHEN player.current_observed_at >= %(week_start)s THEN true
                              ELSE player.current_observed_at >= {_ENTERED_SQL} END, false)
            AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
+    -- Work it out once per player: copied into each use, on 26 October 2026
+    -- its league-week lookup ran 5,259 times for 4,356 players.
+    OFFSET 0
 ) AS current
 """
 # Look only for players the current profile leaves off the board or shows
@@ -144,38 +147,44 @@ _UNPLAYED_PROFILE_SQL = f"""
     JOIN player_profile_versions AS version ON version.id = newest.id
     WHERE {_UNPLAYED_SQL}
 """
-# The same profile as the worker last found it (refresh_live_unplayed), with
-# the parts the board shows: the search above reads about 16 scattered pages
-# per player, 8 s for 1,365 players on 11 October 2026, too slow for every
-# board read. A player whose current profile now ranks them at another total
-# leaves at once; one who starts qualifying, plays or changes profile waits
-# for the next refresh.
-_SAVED_UNPLAYED_PROFILE_SQL = f"""
-    SELECT saved.profile_version_id AS id, saved.name, saved.trophies, saved.clan,
-           {_unplayed_seen_sql(
-               "saved.sighted_at", "saved.profile_version_id",
-               "saved.observation_id, saved.sighting_observation_id",
-           )} AS observed_at
-    FROM live_unplayed_profiles AS saved
-    WHERE saved.player_id = player.id
-      AND saved.official_season_id = %(season_id)s
-      AND {_UNPLAYED_CANDIDATE_SQL}
-"""
-_LIVE_CANDIDATES_SQL = f"""
+
+
+def _live_candidates_sql(
+    players: str = "players",
+    saved: str = "live_unplayed_profiles",
+    tallies: str = "live_attack_tallies",
+) -> str:
+    """Each tracked player the Live board may rank, from ``players``, the
+    saved 5,000 profiles ``saved`` and the attack counts ``tallies``: the
+    tables, or copies of the rows the board can use."""
+    return f"""
 SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
        COALESCE(unplayed.trophies, profile.trophies) AS trophies,
-       COALESCE(unplayed.observed_at, greatest(
-           player.current_observed_at, player.current_profile_confirmed_at
-       )) AS observed_at,
+       CASE WHEN unplayed.player_id IS NULL
+            THEN greatest(player.current_observed_at, player.current_profile_confirmed_at)
+            ELSE {_unplayed_seen_sql(
+                "unplayed.sighted_at", "unplayed.profile_version_id",
+                "unplayed.observation_id, unplayed.sighting_observation_id",
+            )} END AS observed_at,
        player.eligibility_state,
-       CASE WHEN unplayed.id IS NULL
+       CASE WHEN unplayed.player_id IS NULL
             THEN profile.profile_json -> 'clan' ->> 'name'
             ELSE unplayed.clan END AS clan,
-       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
+       current.season_current OR unplayed.player_id IS NOT NULL AS season_current,
        tally.attacks, tally.destruction
-FROM players AS player
-{_CURRENT_PROFILE_JOINS}LEFT JOIN LATERAL ({_SAVED_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
-LEFT JOIN live_attack_tallies AS tally
+FROM {players} AS player
+{_CURRENT_PROFILE_JOINS}
+-- The same profile as the worker last found it (refresh_live_unplayed), with
+-- the parts the board shows: the search above reads about 16 scattered pages
+-- per player, 8 s for 1,365 players on 11 October 2026, too slow for every
+-- board read. A player whose current profile now ranks them at another total
+-- leaves at once; one who starts qualifying, plays or changes profile waits
+-- for the next refresh.
+LEFT JOIN {saved} AS unplayed
+  ON unplayed.player_id = player.id
+ AND unplayed.official_season_id = %(season_id)s
+ AND {_UNPLAYED_CANDIDATE_SQL}
+LEFT JOIN {tallies} AS tally
   ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
   AND (profile.name IS NOT NULL OR unplayed.name IS NOT NULL)
@@ -199,6 +208,9 @@ WHERE player.active = true
              OR checked.last_not_found_at > checked.last_success_at)
   )
 """
+
+
+_LIVE_CANDIDATES_SQL = _live_candidates_sql()
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
@@ -443,13 +455,28 @@ class _LiveBoard:
 def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
     rows = connection.execute(
         f"""
-        WITH candidates AS MATERIALIZED (
-            {_LIVE_CANDIDATES_SQL}
+        -- Each table read once, not once per player: on 26 October 2026
+        -- the board read the players twice, and looked up 13,027 players'
+        -- saved 5,000 profiles and attack counts one by one, 68,562 pages
+        -- for 965 profiles and 13,010 counts.
+        WITH tracked AS MATERIALIZED (
+            SELECT id, normalized_tag, active, current_profile_version_id,
+                   current_observed_at, current_profile_confirmed_at,
+                   eligibility_state
+            FROM players WHERE active
+        ), saved AS MATERIALIZED (
+            SELECT * FROM live_unplayed_profiles
+            WHERE official_season_id = %(season_id)s
+        ), tallies AS MATERIALIZED (
+            SELECT * FROM live_attack_tallies
+            WHERE official_season_id = %(season_id)s
+        ), candidates AS MATERIALIZED (
+            {_live_candidates_sql("tracked", "saved", "tallies")}
         ), totals AS (
             SELECT count(*)::bigint AS tracked_population,
                    (SELECT count(*) FROM candidates WHERE NOT season_current)
                        AS season_reset_pending
-            FROM players WHERE active
+            FROM tracked
         )
         SELECT totals.tracked_population, totals.season_reset_pending,
                live.normalized_tag, live.name, live.trophies, live.observed_at,
