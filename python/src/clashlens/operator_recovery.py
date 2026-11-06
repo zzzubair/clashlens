@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from enum import StrEnum
 from typing import Any
 
 import psycopg
@@ -33,6 +34,55 @@ _PROCESSING_JOB = """
     FROM python_processing_jobs AS job
     LEFT JOIN python_failed_job_acceptances AS accepted ON accepted.job_id = job.id
 """
+
+
+class Recovery(StrEnum):
+    """The way back for one failed processing job or transport failure.
+
+    A processing job that failed for good is ``REPLAY`` when its saved
+    response is a profile or battle log the worker can read again under the
+    job's own parser and rules, else ``INVESTIGATE_ONLY``. Either becomes
+    ``ACCEPTED`` once an operator records it as beyond repair, which is
+    final: the job keeps its failed state, attempts and saved response, and
+    the failed-work count stops counting it. A replay queues a new replay
+    job, and records who asked and why, but leaves the failed job as it was.
+    A transport failure is ``EVIDENCE_ONLY``: the request got no answer, so
+    there is nothing to retry. (Failed collector work and archive uploads
+    have one way back, a retry, so their items carry no such field.)
+
+    The database rows are the state, read by ``processing_recovery``;
+    ``_processing_refusal`` is the one guard on accepting or replaying.
+    Each action is previewed first and applied in one transaction that
+    re-reads its rows under lock; a lock wait over 1 second, a statement
+    over 30 seconds or a row that changed meanwhile refuses it with a
+    reason and changes nothing, so it can simply be run again.
+    """
+
+    REPLAY = "replay"
+    INVESTIGATE_ONLY = "investigate_only"
+    ACCEPTED = "accepted"
+    EVIDENCE_ONLY = "none_evidence_only"
+
+
+def processing_recovery(work_type: str, endpoint: str | None, accepted: bool) -> Recovery:
+    if accepted:
+        return Recovery.ACCEPTED
+    if work_type in {"process_observation", "replay_observation"} and endpoint in {
+        "profile", "battle_log"
+    }:
+        return Recovery.REPLAY
+    return Recovery.INVESTIGATE_ONLY
+
+
+def _processing_refusal(row: Any) -> str | None:
+    """Why a processing job row may not be accepted or replayed, if it may not."""
+    if _text(row[3]) != "failed":
+        return f"processing_job_is_{_text(row[3])}"
+    if row[12] is not None:
+        return "processing_job_already_accepted"
+    return None
+
+
 _OPERATOR = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
 # What clashlens_request_python_replay_v2 refuses one job for, by SQLSTATE.
 _REQUEST_REFUSALS = {
@@ -215,10 +265,9 @@ def accept_failed_job(
             if row is None:
                 return _refused("processing_job_not_found")
             item = _processing_item(row)
-            if _text(row[3]) != "failed":
-                return _refused(f"processing_job_is_{_text(row[3])}", item)
-            if row[12] is not None:
-                return _refused("processing_job_already_accepted", item)
+            refusal = _processing_refusal(row)
+            if refusal is not None:
+                return _refused(refusal, item)
             report = {
                 "applied": apply,
                 "outcome": "accepted" if apply else "preview",
@@ -283,10 +332,9 @@ def replay_failed_jobs(
                     entry.update(outcome="refused", reason="processing_job_not_found")
                     continue
                 entry["item"] = _processing_item(row)
-                if _text(row[3]) != "failed":
-                    entry.update(outcome="refused", reason=f"processing_job_is_{_text(row[3])}")
-                elif row[12] is not None:
-                    entry.update(outcome="refused", reason="processing_job_already_accepted")
+                refusal = _processing_refusal(row)
+                if refusal is not None:
+                    entry.update(outcome="refused", reason=refusal)
             if all("outcome" not in entry for entry in entries.values()):
                 connection.execute("SET LOCAL SESSION AUTHORIZATION clashlens_replay_request")
                 for job_id in ids:
@@ -499,19 +547,16 @@ def _processing_item(row: Any) -> dict[str, Any]:
         "failure_category": None if row[9] is None else _text(row[9]),
         "due_at": row[10],
         "updated_at": row[11],
-        "recovery": "investigate_only",
+        "recovery": processing_recovery(
+            _text(row[1]), None if row[2] is None else _text(row[2]), row[12] is not None
+        ).value,
     }
     if row[12] is not None:
-        item["recovery"] = "accepted"
         item["accepted"] = {
             "operator": _text(row[12]),
             "reason": _text(row[13]),
             "accepted_at": row[14],
         }
-    elif _text(row[1]) in {"process_observation", "replay_observation"} and _text(
-        row[2]
-    ) in {"profile", "battle_log"}:
-        item["recovery"] = "replay"
     return item
 
 
@@ -528,7 +573,7 @@ def _transport_item(row: Any) -> dict[str, Any]:
         "key_label": _text(row[6]),
         "request_started_at": row[7],
         "updated_at": row[8],
-        "recovery": "none_evidence_only",
+        "recovery": Recovery.EVIDENCE_ONLY.value,
     }
 
 

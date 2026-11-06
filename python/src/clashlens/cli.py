@@ -872,9 +872,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
         maintenance = TimedMaintenance(maintenance_database, stage_metrics)
         # Else the timer's first tick does; either way only with the permit.
-        if maintenance_database is database and (
-            maintenance.permit is None or maintenance.permit.acquire()
-        ):
+        if maintenance_database is database and maintenance.leads():
             maintenance.reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = database.stage_metrics = stage_metrics

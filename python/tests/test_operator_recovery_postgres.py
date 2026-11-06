@@ -16,7 +16,14 @@ from clashlens.collector_db import (
     TransportFailure,
 )
 from clashlens.collector_metrics import health_metrics
-from clashlens.operator_recovery import inspect_failed_items, retry_failed_item
+from clashlens.operator_recovery import (
+    Recovery,
+    accept_failed_job,
+    inspect_failed_items,
+    processing_recovery,
+    replay_failed_jobs,
+    retry_failed_item,
+)
 
 
 def _seed_failures(connection_info: str) -> tuple[int, str]:
@@ -615,3 +622,47 @@ def test_failed_jobs_replay_all_or_none_through_the_replay_function(
         assert main([*command, "--replay-job-id", str(replay_job_id), *reason]) == 1
         assert _payload(capsys)["items"][0]["reason"] == "processing_job_is_pending"
         assert len(replays()) == 1
+
+
+def test_each_failed_job_gets_its_way_back_from_its_type_and_acceptance() -> None:
+    for work_type in ("process_observation", "replay_observation"):
+        for endpoint in ("profile", "battle_log"):
+            assert processing_recovery(work_type, endpoint, False) is Recovery.REPLAY
+            assert processing_recovery(work_type, endpoint, True) is Recovery.ACCEPTED
+        assert processing_recovery(work_type, "league_history", False) is Recovery.INVESTIGATE_ONLY
+    assert processing_recovery("reconcile_ranked_day", None, False) is Recovery.INVESTIGATE_ONLY
+    assert processing_recovery("reconcile_ranked_day", None, True) is Recovery.ACCEPTED
+
+
+def test_a_replayed_job_stays_failed_until_accepted_and_then_nothing_moves_it(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("INSERT INTO players (normalized_tag) VALUES ('#2PP')")
+        job_id, _transport_id = _seed_processing_and_transport_failures(connection_info)
+        audit = {"operator": "ops:zubair", "reason": "replay the failed profile response"}
+
+        def recovery() -> str:
+            with psycopg.connect(connection_info) as connection:
+                items = inspect_failed_items(connection, limit=10)["items"]
+            return next(item["recovery"] for item in items
+                        if item.get("processing_job_id") == job_id)
+
+        with psycopg.connect(connection_info) as connection:
+            assert recovery() == Recovery.REPLAY
+            replayed = replay_failed_jobs(connection, job_ids=[job_id], apply=True, **audit)
+            assert replayed["outcome"] == "replay_enqueued"
+            # The replay is a new job; the failed one waits for a decision.
+            assert recovery() == Recovery.REPLAY
+            assert accept_failed_job(connection, job_id=job_id, apply=True, **audit)[
+                "outcome"] == "accepted"
+            assert recovery() == Recovery.ACCEPTED
+            refusals = [
+                replay_failed_jobs(connection, job_ids=[job_id], apply=True, **audit)[
+                    "items"][0]["reason"],
+                accept_failed_job(connection, job_id=job_id, apply=True, **audit)["reason"],
+            ]
+        assert refusals == ["processing_job_already_accepted"] * 2

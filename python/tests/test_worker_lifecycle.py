@@ -484,7 +484,7 @@ def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof
 
     with (
         patch.object(job_outcomes, "fail_claim", fail_claim),
-        patch.object(worker.collector_uploads, "archived_copy", lambda *_a, **_k: None),
+        patch("clashlens.collector_uploads.archived_copy", lambda *_a, **_k: None),
     ):
         result = ObservationProcessor(Database(), archive)._process_claim(
             claim, lease_seconds=30
