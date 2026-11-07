@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from domain_test_support import domain_database
+import psycopg
+from domain_test_support import domain_database, text
+from test_league_week_days_postgres import _public_days
 from test_reset_scenarios_postgres import (
     PREVIOUS_SEASON,
     SEASON,
@@ -236,3 +238,87 @@ def test_a_board_frozen_before_the_rule_rebuilds_with_the_players_read_late(
     assert list(after.items())[:2] == [(LATE_FIRST, 5020), (LATE_PROMOTED, 5000)]
     assert list(after)[2:] == [BELOW]
     assert again == []
+
+
+CUT_PROMOTED, CUT_ESTABLISHED, CUT_STEADY = "#2PP", "#8PP", "#9PP"
+
+
+def test_a_proven_promotion_whose_monday_left_the_battle_log_stays_partial_from_5000(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """CUT_PROMOTED, read twice in Legend II on Sunday, is promoted at the
+    Monday Reset and first read in Legend I at 05:20 on Tuesday, after 50
+    multiplayer battles on Monday afternoon pushed Monday's Legend battles
+    off its 50-row battle log. The saved Legend II week proves the
+    promotion, so Monday starts at 5,000 by the Season rule, but no log
+    shows its battles: the day stays Partial from 5,000, with no end, and
+    the Tuesday board publishes without it. CUT_ESTABLISHED, read in
+    Legend I on Saturday, plays the same Monday and is read at the same
+    moment: in Legend I the week before, it gets no start of 5,000, as a
+    player first found later in the week gets none
+    (``test_a_legend_i_player_found_on_thursday_gets_no_monday_from_5000``).
+    CUT_STEADY, swept at each Reset, ranks as before."""
+    saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch,
+                       CUT_PROMOTED, CUT_ESTABLISHED, CUT_STEADY)
+        cut_monday = attacks(monday, 40, 40) + defenses(monday, 30, 30) + multiplayer(
+            monday + timedelta(hours=8), 50)
+        story.players[CUT_PROMOTED].battles = multiplayer(
+            sunday + timedelta(hours=1), 2) + cut_monday
+        story.players[CUT_ESTABLISHED].battles = attacks(saturday, 40) + cut_monday
+        story.players[CUT_STEADY].battles = attacks(sunday, 40) + attacks(monday, 40)
+        story.reads(saturday + timedelta(hours=3), {CUT_ESTABLISHED: 5240})
+        story.players[CUT_PROMOTED].dropped = True
+        for hour in (2, 3):
+            story.reads(sunday + timedelta(hours=hour), {CUT_PROMOTED: 1400})
+        story.players[CUT_PROMOTED].dropped = False
+        story.reset(sunday, {CUT_STEADY: (5200, SEASON)})
+        story.reset(monday, {CUT_STEADY: (5240, SEASON)})
+        story.reads(tuesday - timedelta(minutes=10), {CUT_STEADY: 5280})
+        story.reset(tuesday, {CUT_STEADY: (5280, SEASON)})
+        story.reads(tuesday + timedelta(minutes=20), {CUT_PROMOTED: 5020, CUT_ESTABLISHED: 5260})
+        story.wait(timedelta(hours=1))
+        weeks = _weeks(connection_info, CUT_PROMOTED, CUT_ESTABLISHED)
+        mondays = {tag: story.saved_day(tag, monday) for tag in story.players}
+        public = {tag: _public_days(connection_info, tag).get(monday) for tag in story.players}
+        members = story.board_members(tuesday)
+        board = story.served_board(tuesday)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert weeks == {
+        (CUT_PROMOTED, day(1)): ("below_legend_i", None),
+        (CUT_PROMOTED, monday): ("legend_i", "promoted"),
+        (CUT_ESTABLISHED, day(1)): ("legend_i", "season_start"),
+        (CUT_ESTABLISHED, monday): ("legend_i", "stayed"),
+    }
+    assert mondays[CUT_PROMOTED] == {
+        "state": "Partial", "start": 5000, "end": None, "next_start": None,
+        "automatic_loss": None, "raise": 0, "attacks": 0, "defenses": 0, "residual": None}
+    assert "missing_start_baseline" not in public[CUT_PROMOTED]["reasons"]
+    assert (mondays[CUT_ESTABLISHED]["state"], mondays[CUT_ESTABLISHED]["start"]) == (
+        "Partial", None)
+    assert "missing_start_baseline" in public[CUT_ESTABLISHED]["reasons"]
+    assert mondays[CUT_STEADY]["state"] == "Complete"
+    assert members == {CUT_PROMOTED: "partial", CUT_ESTABLISHED: "partial",
+                       CUT_STEADY: "complete"}
+    # CUT_ESTABLISHED ranks by its last reading before the Reset, Saturday's.
+    assert _ranked(board) == {CUT_STEADY: 5280, CUT_ESTABLISHED: 5240}
+
+
+def _weeks(connection_info: str, *tags: str) -> dict[tuple[str, object], tuple[str, str | None]]:
+    """The weekly league record's league and entry for each week of ``tags``."""
+    with psycopg.connect(connection_info) as connection:
+        return {
+            (text(tag), week): (text(league), text(entry) if entry else None)
+            for tag, week, league, entry in connection.execute(
+                """
+                SELECT player.normalized_tag, week.week_start, week.league, week.entry
+                FROM player_league_weeks AS week
+                JOIN players AS player ON player.id = week.player_id
+                WHERE player.normalized_tag = ANY(%s)
+                """,
+                (list(tags),),
+            ).fetchall()
+        }
