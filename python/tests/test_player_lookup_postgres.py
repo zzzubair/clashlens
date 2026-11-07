@@ -442,15 +442,27 @@ def test_header_search_holds_names_and_refreshes_them_in_the_background(
             assert reads == [NOW, NOW]
             # Past the next Reset every read of the new Legend day fails, as
             # under the load after a Reset, yet searches answer from the last
-            # copy at once while reads are retried behind them.
+            # copy at once. After each failure no search reads again until a
+            # wait is over: a minute, then two.
             tomorrow = NOW + timedelta(days=1)
             clock[0] = 300.0
             with psycopg.connect(info) as blocker:
                 blocker.execute("LOCK TABLE players IN ACCESS EXCLUSIVE MODE")
-                for _attempt in range(2):
+                for wait in (60, 120):
                     assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
                     refreshes.pop()()
-                    assert '"status": "refresh_failed"' in capsys.readouterr().out
+                    for _search in range(20):
+                        assert found("Player", tomorrow) == [
+                            ("#2PP", 6200), ("#8PY", 6100)
+                        ]
+                    assert refreshes == []
+                    out = capsys.readouterr().out
+                    assert out.count('"status": "refresh_failed"') == 1
+                    assert f'"retry_in_seconds": {wait}' in out
+                    clock[0] += wait - 0.1
+                    assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
+                    assert refreshes == []
+                    clock[0] += 0.1
                 assert reads == [NOW, NOW, tomorrow, tomorrow]
             seed_profile(database, "#9PY", 6300)
             assert found("Player", tomorrow) == [("#2PP", 6200), ("#8PY", 6100)]
@@ -460,7 +472,7 @@ def test_header_search_holds_names_and_refreshes_them_in_the_background(
             ]
             # A day after its read, while reads keep failing, the copy is
             # no longer served and the search fails instead.
-            clock[0] = 300.0 + 24 * 60 * 60
+            clock[0] += 24 * 60 * 60
             with psycopg.connect(info) as blocker:
                 blocker.execute("LOCK TABLE players IN ACCESS EXCLUSIVE MODE")
                 with pytest.raises(psycopg.errors.LockNotAvailable):
