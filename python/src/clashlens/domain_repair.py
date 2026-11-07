@@ -163,33 +163,30 @@ class RepairReceipt:
     summaries_through: int
     players: list[int] | None
 
-    @property
-    def recalculating_days(self) -> bool:
-        """Whether the repair is in its ``days`` step: day jobs queued and
-        the boards step not begun."""
-        return self.days_queued_through > 0 and self.boards_queued_at is None
+
+def in_days_step(days_queued_through: int, boards_queued_at: datetime | None) -> bool:
+    """Whether a receipt with this progress is in its ``days`` step: day
+    jobs queued and the boards step not begun."""
+    return days_queued_through > 0 and boards_queued_at is None
 
 
-def _receipts(
-    connection: Any, season_id: str, revision: str | None = None
-) -> list[RepairReceipt]:
-    """The Season's repair receipts, or the one of ``revision``."""
-    return [
-        RepairReceipt(
-            row[0], row[1], int(row[2]), row[3], int(row[4]),
-            None if row[5] is None else [int(player) for player in row[5]],
-        )
-        for row in connection.execute(
-            """
-            SELECT before_days, before_boards, queued_through_player_id,
-                   boards_queued_at, summaries_through_player_id, players
-            FROM season_repairs
-            WHERE official_season_id = %s
-              AND (%s::text IS NULL OR rule_revision = %s)
-            """,
-            (season_id, revision, revision),
-        ).fetchall()
-    ]
+def _receipt(connection: Any, season_id: str, revision: str) -> RepairReceipt | None:
+    """The Season's repair receipt for ``revision``, if one was saved."""
+    row = connection.execute(
+        """
+        SELECT before_days, before_boards, queued_through_player_id,
+               boards_queued_at, summaries_through_player_id, players
+        FROM season_repairs
+        WHERE official_season_id = %s AND rule_revision = %s
+        """,
+        (season_id, revision),
+    ).fetchone()
+    if row is None:
+        return None
+    return RepairReceipt(
+        row[0], row[1], int(row[2]), row[3], int(row[4]),
+        None if row[5] is None else [int(player) for player in row[5]],
+    )
 
 
 def season_repair(
@@ -212,7 +209,7 @@ def season_repair(
         ).fetchone():
             # Its days can no longer be recalculated.
             return {"season": season_id, "refused": f"season {season_id} is finalized"}
-        receipt = next(iter(_receipts(connection, season_id, revision)), None)
+        receipt = _receipt(connection, season_id, revision)
         if scope and receipt is not None:
             # A scoped repair's first run saves its players with the receipt.
             players = list(receipt.players or ())
@@ -665,7 +662,14 @@ def recalculating_days(connection: Any, season_id: str) -> bool:
     Season's guard ``_queue_days`` takes until the caller's transaction ends,
     so no repair starts queueing days before then."""
     _guard_days(connection, season_id)
-    return any(receipt.recalculating_days for receipt in _receipts(connection, season_id))
+    return any(
+        in_days_step(int(through), boards)
+        for through, boards in connection.execute(
+            "SELECT queued_through_player_id, boards_queued_at FROM season_repairs"
+            " WHERE official_season_id = %s",
+            (season_id,),
+        )
+    )
 
 
 def _guard_days(connection: Any, season_id: str) -> None:

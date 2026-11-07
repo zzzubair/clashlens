@@ -69,6 +69,16 @@ class LinkState(StrEnum):
     RETIRED = "retired"
 
 
+def link_state(row: Any, link_id: str) -> LinkState:
+    """Where `link_id` stands against the overlay `row` it was looked up
+    with: ABSENT with no row, else CURRENT when it is the row's link and
+    RETIRED when not. Looked up by the id itself, no row reads like a
+    RETIRED one: nothing."""
+    if row is None:
+        return LinkState.ABSENT
+    return LinkState.CURRENT if _text(row[0]) == link_id else LinkState.RETIRED
+
+
 class OverlayBody(StrictBody):
     tag: str | None = Field(default=None, min_length=1, max_length=16)
     settings: dict[str, str] = Field(max_length=20)
@@ -93,7 +103,9 @@ def clean_settings(raw: dict[str, str]) -> dict[str, str]:
 
 
 def get_overlay(database: ApiDatabase, account_id: int) -> dict[str, Any]:
-    """The account's overlay, made on first ask, and its verified players."""
+    """The account's overlay, made on first ask (ABSENT to CURRENT,
+    `LinkState`; an overlay already made stays as it is), and its verified
+    players."""
     with database.pool.connection() as connection:
         connection.execute(
             """
@@ -165,11 +177,7 @@ def new_link(database: ApiDatabase, account_id: int, *, replaces: str) -> dict[s
         ).rowcount
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.account_id = %s",
                                  (account_id,)).fetchone()
-    was = (
-        LinkState.ABSENT if row is None
-        else LinkState.CURRENT if moved
-        else LinkState.RETIRED
-    )
+    was = LinkState.CURRENT if moved else link_state(row, replaces)
     if was is LinkState.ABSENT:
         raise ApiError(404, "overlay_not_found")
     return {"kind": "obs-overlay", **_overlay(row)}
@@ -181,8 +189,7 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.link_id = %s",
                                  (link_id,)).fetchone()
-        # Found by its id, so CURRENT; no row is a RETIRED link.
-        if row is None:
+        if link_state(row, link_id) is not LinkState.CURRENT:
             return None
         # Seen now, while a player is chosen: one write a minute per link at
         # most, as a JUST_SEEN overlay writes nothing.

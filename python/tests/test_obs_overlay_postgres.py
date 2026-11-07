@@ -264,3 +264,10 @@ def test_a_link_is_absent_then_current_then_retired_for_good(database_url: str) 
         finally:
             owner.close()
             api.close()
+
+
+def test_a_link_id_stands_against_the_overlay_row_it_was_looked_up_with() -> None:
+    row = ("A" * 22, {}, 3, None)
+    assert api_overlays.link_state(None, "A" * 22) is api_overlays.LinkState.ABSENT
+    assert api_overlays.link_state(row, "A" * 22) is api_overlays.LinkState.CURRENT
+    assert api_overlays.link_state(row, "B" * 22) is api_overlays.LinkState.RETIRED
