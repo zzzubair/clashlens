@@ -15,7 +15,7 @@ from domain_test_support import apply_migration, domain_database, store_observat
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_domain_processing_postgres import _processor
 
-from clashlens import promotion_candidates
+from clashlens import population, promotion_candidates
 
 PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 MIGRATION = Path(__file__).parents[2] / "deploy" / "migrations" / "0076_promotion_candidates.sql"
@@ -128,6 +128,39 @@ def test_processed_profiles_add_and_remove_promotion_candidates(
             assert _rows(connection_info) == []
         finally:
             database.close()
+
+
+def test_a_negative_legend_ii_count_is_saved_as_legend_ii_without_a_score(
+    database_url: str, archive_server, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The rejected production answer: Legend II, -179 trophies, Season 0.
+    payload = json.loads(_profile(LEGEND_II, -179))
+    payload.update(currentLeagueSeasonId=0, previousLeagueSeasonId=1788757200)
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _store(connection_info, archive_server, "negative", json.dumps(payload).encode(), OBSERVED_AT)
+            result = processor.process_once(owner="negative")
+        finally:
+            database.close()
+        assert result is not None and result.outcome == "processed"
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT trophies, league_tier_name, eligibility_state, source_contract_state"
+                " FROM player_profile_versions"
+            ).fetchall() == [(-179, "Legend II", "ineligible", "conflict")]
+            assert connection.execute(
+                "SELECT active, current_profile_version_id FROM players"
+            ).fetchall() == [(False, None)]
+        # Listed for the Monday re-check, with no count.
+        assert _rows(connection_info) == [("#2PP", 105000035, None, OBSERVED_AT)]
+
+        # The operator's population repair lists the player again the same way.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("DELETE FROM promotion_candidates")
+        assert population.run_command(_collector_url(connection_info), repair=True) == 0
+        assert json.loads(capsys.readouterr().out)["repair"]["promotion_rows_added"] == 1
+        assert _rows(connection_info) == [("#2PP", 105000035, None, OBSERVED_AT)]
 
 
 def test_an_unchanged_profile_answer_moves_the_listed_check_forward(

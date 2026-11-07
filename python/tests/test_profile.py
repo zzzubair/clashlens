@@ -11,6 +11,7 @@ from clashlens.profile import (
     PROFILE_PARSER_VERSION,
     RECOGNIZED_NON_LEGEND_TIERS_V1,
     SCHEMA_VERSION,
+    ProfileParseError,
     parse_profile,
 )
 
@@ -203,6 +204,61 @@ def test_profile_parser_keeps_unlisted_tiers_uncertain(tier, reason) -> None:
     assert profile.eligibility_state == "uncertain"
     assert profile.eligibility_reason == reason
     assert profile.source_contract_state == "conflict"
+
+
+def _negative_profile(changes: dict[str, object]) -> bytes:
+    # The rejected production answer's relevant values (4 November 2026).
+    payload = json.loads(FIXTURE.read_bytes())
+    payload.update(
+        trophies=-179,
+        bestTrophies=6005,
+        leagueTier={"id": 105000035, "name": "Legend II"},
+        currentLeagueSeasonId=0,
+        previousLeagueSeasonId=1788757200,
+    )
+    payload.update(changes)
+    return json.dumps({key: value for key, value in payload.items() if value is not None}).encode()
+
+
+def test_profile_parser_keeps_a_negative_lower_league_count_as_raw_evidence() -> None:
+    profile = parse_profile(
+        _negative_profile({}),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 11, 4, 4, 36, tzinfo=UTC),
+        endpoint_version="profile-v1",
+    )
+
+    assert profile.trophies == -179
+    assert profile.profile_json["trophies"] == -179
+    assert (profile.league_tier_id, profile.league_tier_name) == (105000035, "Legend II")
+    assert profile.eligibility_state == "ineligible"
+    assert profile.eligibility_reason == "confirmed_non_legend_i"
+    # Season 0 still leaves the answer unconfirmed, as for any lower league.
+    assert profile.season_anchor_state == "conflict"
+    assert profile.source_contract_state == "conflict"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"leagueTier": {"id": 105000036, "name": "Legend I"}},
+        {"leagueTier": {"id": 105000035, "name": "Changed Legend Name"}},
+        {"leagueTier": {"id": 105000000, "name": "Unranked"}},
+        {"leagueTier": None},
+        {"name": None},
+        {"expLevel": "high"},
+    ],
+)
+def test_profile_parser_rejects_a_negative_count_anywhere_else(changes) -> None:
+    with pytest.raises(ProfileParseError) as error:
+        parse_profile(
+            _negative_profile(changes),
+            expected_tag="#2PP",
+            observed_at=datetime(2026, 11, 4, 4, 36, tzinfo=UTC),
+            endpoint_version="profile-v1",
+        )
+
+    assert error.value.category == "unsupported_profile_schema"
 
 
 def test_profile_parser_preserves_invalid_season_values_as_contract_conflict() -> None:

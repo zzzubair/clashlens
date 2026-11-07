@@ -489,6 +489,25 @@ def test_an_unreadable_or_uncertain_answer_stays_due_for_a_retry(
             ).fetchall() == [("#8QQ", 105000035, LAST_WEEK), ("#9QQ", 105000035, LAST_WEEK)]
 
 
+def test_a_negative_legend_ii_count_moves_the_check_forward_and_keeps_the_count(
+    database_url: str, tmp_path: Path
+) -> None:
+    answers = {"#9QQ": (200, _profile("#9QQ", 105000035, "Legend II", -179))}
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        now = MONDAY + timedelta(minutes=70)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("DELETE FROM promotion_candidates WHERE normalized_tag <> '#9QQ'")
+        assert _check(origin, connection_info, tmp_path, now) == Counter(
+            asked=1, listed=1, failed=0, queued=0
+        )
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT league_tier_id, trophies, checked_at > %s FROM promotion_candidates",
+                (MONDAY + promotion_recheck.START_DELAY,),
+            ).fetchall() == [(105000035, 5000, True)]
+
+
 def test_players_left_due_are_asked_again_after_the_rest_of_the_list(
     database_url: str, tmp_path: Path, monkeypatch
 ) -> None:
