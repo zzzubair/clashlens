@@ -285,3 +285,19 @@ def test_operator_freshness_cache_expires_and_never_hides_refresh_failure(monkey
         failed[0] = False
         assert scrape().json()["live_leaderboard"]["age_max_seconds"] == 3
     assert len(calls) == 3
+
+
+def test_player_read_passes_a_totals_only_request_to_the_page(monkeypatch) -> None:
+    asked = []
+
+    def page(database, tag, *, now, freshness_seconds, battles):
+        asked.append((tag, battles))
+        return {"tag": tag}
+
+    monkeypatch.setattr("clashlens.api_players.get_player_page", page)
+    with TestClient(_app(FakeDatabase())) as client:
+        for target in ("/v1/players/%232PP", "/v1/players/%232PP?battles=false"):
+            response = client.get(target, headers=_signed_headers(target))
+            assert response.status_code == 200, response.text
+
+    assert asked == [("#2PP", True), ("#2PP", False)]
