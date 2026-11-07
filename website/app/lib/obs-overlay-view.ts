@@ -222,7 +222,19 @@ type LinkFollow =
  * Starting a source over (another player, the demo on or off) goes back to
  * `first`. A failed read keeps it.
  */
-type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
+export type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
+
+/** One read's battles: which are new to the screen (none on a first or
+ * `quiet` read), and what has been seen after it. */
+export function readBattles(
+  read: BattleRead,
+  battles: OverlayBattle[],
+  quiet: boolean,
+): { read: BattleRead; fresh: OverlayBattle[] } {
+  const fresh =
+    read.kind === "seen" && !quiet ? battles.filter((b) => !read.ids.has(b.id)) : [];
+  return { read: { kind: "seen", ids: new Set(battles.map((b) => b.id)) }, fresh };
+}
 
 /**
  * The battle notice (`showToast` moves it):
@@ -231,13 +243,49 @@ type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
  * - `showing`: these battles' notice shows for 6 seconds, then hides; a newer
  *   notice replaces it and starts the 6 seconds again. A redraw keeps it showing.
  */
-type Notice = { kind: "hidden" } | { kind: "showing"; battles: OverlayBattle[] };
+export type Notice = { kind: "hidden" } | { kind: "showing"; battles: OverlayBattle[] };
+
+/** The notice new battles bring, or null when there are none or pop-ups are off. */
+export function noticeFor(battles: OverlayBattle[], popup: boolean): Notice | null {
+  return popup && battles.length ? { kind: "showing", battles } : null;
+}
 
 /**
  * Whether the overlay is still mounted: `running` until the returned stop
  * function makes it `stopped`, after which no timer runs and nothing redraws.
  */
 type Mounted = "running" | "stopped";
+
+/**
+ * The overlay's timers and its `Mounted` state, their one owner: `later`
+ * runs only while `running`, and `stop` makes it `stopped` and clears every
+ * timer still waiting. Nothing restarts it; a new mount makes new timers.
+ */
+export function overlayTimers() {
+  let mounted: Mounted = "running";
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  return {
+    running: () => mounted === "running",
+    later(run: () => void, ms: number) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (mounted === "running") run();
+      }, ms);
+      timers.add(timer);
+      return timer;
+    },
+    cancel(timer: ReturnType<typeof setTimeout> | undefined) {
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timers.delete(timer);
+    },
+    stop() {
+      mounted = "stopped";
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    },
+  };
+}
 
 /**
  * Draw the overlay into `root` and keep it live, until the returned stop
@@ -259,24 +307,11 @@ export function mountOverlay(
   let freshIds = new Set<string>();
   let notice: Notice = { kind: "hidden" };
   let hidden: Part[] = [];
-  let mounted: Mounted = "running";
-  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const clock = overlayTimers();
+  const { later, cancel } = clock;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let demoTimer: ReturnType<typeof setTimeout> | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  const later = (run: () => void, ms: number) => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      if (mounted === "running") run();
-    }, ms);
-    timers.add(timer);
-    return timer;
-  };
-  const cancel = (timer: ReturnType<typeof setTimeout> | undefined) => {
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    timers.delete(timer);
-  };
 
   function squares(list: OverlayBattle[], withNumbers: boolean) {
     let html = "";
@@ -465,7 +500,7 @@ export function mountOverlay(
   }
 
   function render() {
-    if (mounted === "stopped") return;
+    if (!clock.running()) return;
     if (!cfg.w || !cfg.h) {
       stage.innerHTML = "";
       return;
@@ -546,14 +581,15 @@ export function mountOverlay(
   // One pop-up per update, shown the moment the squares change. Battles that
   // land together share one pop-up; a newer update replaces the one showing.
   function showToast(list: OverlayBattle[]) {
-    if (!cfg.popup || !list.length) return;
+    const next = noticeFor(list, cfg.popup);
+    if (!next) return;
     cancel(toastTimer);
     const el = stage.querySelector<HTMLElement>(".ov-toast");
     if (!el) return;
     const last = list[list.length - 1];
     el.className = `ov-toast ov-${last.kind} ov-${tone(last)}`;
     el.innerHTML = toastHtml(list);
-    notice = { kind: "showing", battles: list };
+    notice = next;
     void el.offsetWidth;
     el.classList.add("ov-show");
     toastTimer = later(() => {
@@ -565,10 +601,9 @@ export function mountOverlay(
   // The squares, totals and pop-up all come from this one update.
   function accept(next: View, quiet = false) {
     const battles = next.day?.battles ?? [];
-    const before = read;
-    const fresh =
-      before.kind === "seen" && !quiet ? battles.filter((b) => !before.ids.has(b.id)) : [];
-    read = { kind: "seen", ids: new Set(battles.map((b) => b.id)) };
+    const after = readBattles(read, battles, quiet);
+    read = after.read;
+    const fresh = after.fresh;
     data = next;
     fresh.forEach((b) => freshIds.add(b.id));
     render();
@@ -750,9 +785,7 @@ export function mountOverlay(
   }
 
   return () => {
-    mounted = "stopped";
-    for (const timer of timers) clearTimeout(timer);
-    timers.clear();
+    clock.stop();
     clearInterval(tick);
     window.removeEventListener("message", onMessage);
   };

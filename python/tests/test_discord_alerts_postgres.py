@@ -643,3 +643,36 @@ def test_moving_a_player_away_forgets_its_alerts(database_url: str) -> None:
             api.close()
             owner.close()
     assert players == [{"tag": "#2PP", "name": None, "on": False, "summary_on": False}]
+
+
+def test_each_switch_turns_on_and_off_and_repeating_a_turn_changes_nothing(
+    database_url: str,
+) -> None:
+    """Turning a switch on that is already on keeps when it went on, so no
+    second confirmation is owed; turning it off twice leaves it off, and on
+    again starts it from now."""
+    with _alerts_on(database_url) as (connection_info, api, mine, _player):
+        def went_on() -> tuple | None:
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                return connection.execute(
+                    "SELECT enabled_at, confirm_requested_at FROM discord_attack_alerts"
+                ).fetchone()
+
+        def shown() -> tuple[bool, bool]:
+            [player] = api_discord_alerts.get_attack_alerts(api, mine)["players"]
+            return player["on"], player["summary_on"]
+
+        first = went_on()
+        assert _switch(api, mine, "#2PP", True) == 200
+        assert went_on() == first
+        assert _summary_switch(api, mine, "#2PP", True) == 200
+        assert _summary_switch(api, mine, "#2PP", True) == 200
+        assert shown() == (True, True)
+        for _ in range(2):
+            assert _switch(api, mine, "#2PP", False) == 200
+            assert _summary_switch(api, mine, "#2PP", False) == 200
+        assert (shown(), went_on()) == ((False, False), None)
+        assert _switch(api, mine, "#2PP", True) == 200
+        again = went_on()
+        assert again is not None and again[0] > first[0]
+        assert shown() == (True, False)

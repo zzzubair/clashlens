@@ -136,7 +136,7 @@ interface Form {
   demo: boolean;
   fit: Fit;
 }
-interface Place {
+export interface Place {
   x: number;
   y: number;
   w: number;
@@ -290,7 +290,7 @@ export default function ObsOverlayRoute() {
  * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
  * their 0.3-second pause.
  */
-type SaveStatus =
+export type SaveStatus =
   "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkNotMade";
 
 const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
@@ -314,9 +314,40 @@ const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
  *   starting a second loop.
  *
  * A failed save goes back to `idle` with `saved` unchanged, so the next change
- * sends again. `OverlaySetup`'s save effect is its only writer.
+ * sends again. `runAutosave` is its only writer.
  */
-type Autosave = { phase: "idle" | "sending"; saved: string };
+export type Autosave = { phase: "idle" | "sending"; saved: string };
+
+/** The newest choices, as the save loop reads them each time round. */
+export type Choices = { json: string; tag: string | null; settings: OverlaySettings };
+
+/**
+ * One run of the save loop, 0.3 seconds after the last change: nothing while
+ * another run is sending, else send the newest choices until they are saved,
+ * then say "saved", or "notSaved" on the first failure.
+ */
+export async function runAutosave(
+  autosave: { current: Autosave },
+  latest: () => Choices,
+  send: (next: Choices) => Promise<unknown>,
+  show: (status: SaveStatus) => void,
+): Promise<void> {
+  if (autosave.current.phase === "sending") return;
+  autosave.current = { ...autosave.current, phase: "sending" };
+  try {
+    while (latest().json !== autosave.current.saved) {
+      const next = latest();
+      show("saving");
+      await send(next);
+      autosave.current = { phase: "sending", saved: next.json };
+    }
+    show("saved");
+  } catch {
+    show("notSaved");
+  } finally {
+    autosave.current = { ...autosave.current, phase: "idle" };
+  }
+}
 
 /**
  * One press on the preview's box, held until the pointer lifts: a move, or
@@ -324,13 +355,128 @@ type Autosave = { phase: "idle" | "sending"; saved: string };
  * scale when it began. `OverlaySetup`'s `drag` is it, or null with no press;
  * a pointer down sets it and a pointer up or cancel clears it.
  */
-type PointerDrag = {
+export type PointerDrag = {
   sx: number;
   sy: number;
   start: Place;
   dir: string | null;
   k: number;
 };
+
+/** The snap lines drawn while Shift is held, or null for none. */
+export type Guides = { v: number | null; h: number | null };
+
+/** A press at (`sx`, `sy`) on `place`, on `dir` if an edge or corner. */
+export function startDrag(
+  place: Place,
+  sx: number,
+  sy: number,
+  dir: string | null,
+  k: number,
+): PointerDrag {
+  return { sx, sy, start: { ...place, anchor: null }, dir, k };
+}
+
+/**
+ * Where the box goes with the pointer at (`px`, `py`): a resize keeps the
+ * opposite edge and leaves the guides as they are (`guides` null); a move
+ * stays where it is dropped, or with `shift` snaps to the edges and middle.
+ */
+export function dragTo(
+  d: PointerDrag,
+  px: number,
+  py: number,
+  shift: boolean,
+): { place: Place; guides: Guides | null } {
+  const dx = (px - d.sx) / d.k;
+  const dy = (py - d.sy) / d.k;
+  const { cw, ch } = d.start;
+  if (d.dir) {
+    // Resize from the grabbed edge or corner; the opposite edge stays put.
+    let { x, y, w, h } = d.start;
+    if (d.dir.includes("e")) w = Math.min(cw - x, Math.max(MIN_W, w + dx));
+    if (d.dir.includes("s")) h = Math.min(ch - y, Math.max(MIN_H, h + dy));
+    if (d.dir.includes("w")) {
+      const nw = Math.min(x + w, Math.max(MIN_W, w - dx));
+      x = x + w - nw;
+      w = nw;
+    }
+    if (d.dir.includes("n")) {
+      const nh = Math.min(y + h, Math.max(MIN_H, h - dy));
+      y = y + h - nh;
+      h = nh;
+    }
+    return { place: { ...d.start, x, y, w, h }, guides: null };
+  }
+  let x = d.start.x + dx;
+  let y = d.start.y + dy;
+  // Free by default: it stays exactly where it is dropped. Hold Shift to
+  // snap to the edges and the middle.
+  const snap = shift ? 14 / d.k : 0;
+  const m = margin(cw);
+  const { w, h } = d.start;
+  let v: number | null = null;
+  let hz: number | null = null;
+  if (snap) {
+    for (const [at, line] of [
+      [m, m],
+      [cw - m - w, cw - m],
+      [(cw - w) / 2, cw / 2],
+    ]) {
+      if (Math.abs(x - at) < snap) {
+        x = at;
+        v = line;
+        break;
+      }
+    }
+    for (const [at, line] of [
+      [m, m],
+      [ch - m - h, ch - m],
+      [(ch - h) / 2, ch / 2],
+    ]) {
+      if (Math.abs(y - at) < snap) {
+        y = at;
+        hz = line;
+        break;
+      }
+    }
+  }
+  return { place: clamp({ ...d.start, x, y }), guides: { v, h: hz } };
+}
+
+/**
+ * What the editor knows of the preview in its frame, from the overlay's
+ * messages (only from this page's origin and that frame):
+ *
+ * - `waiting`: no layout heard yet; the line under the preview is empty.
+ * - `shown`: the overlay said how it laid out the box (`cl-overlay-size`,
+ *   sent after each draw); `fit` is the line under the preview.
+ *
+ * `cl-overlay-ready`, sent once the overlay listens, is answered with the
+ * newest settings in either state and changes nothing; every change after
+ * that is posted at once (`cl-overlay-settings`). `OverlaySetup` owns it.
+ * Nothing is retried: a lost message leaves the last line, and the next
+ * change or draw sends again. The frame loads once per page, so coming back
+ * to the page starts `waiting` again.
+ */
+export type PreviewLink =
+  { kind: "waiting" } | { kind: "shown"; fit: { text: string; warn: boolean } };
+
+/** One message from the preview: the handshake, a new layout, or neither. */
+export function previewMessage(data: unknown): "ready" | PreviewLink | null {
+  const message = data as OverlaySize | { type?: string };
+  if (message.type === "cl-overlay-ready") return "ready";
+  if (message.type !== "cl-overlay-size") return null;
+  const size = message as OverlaySize;
+  let text = `Shown as ${SHAPE_NAME[size.layout]}.`;
+  if (size.hidden.length)
+    text += ` Left out to fit: ${size.hidden.map((part) => LEFT_OUT[part]).join(", ")}.`;
+  if (size.scale < 0.6) text += " Too small to read on stream: make it bigger.";
+  return {
+    kind: "shown",
+    fit: { text, warn: size.scale < 0.6 || size.hidden.length > 0 },
+  };
+}
 
 function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: string }) {
   const initial = useRef(fromSaved(overlay));
@@ -339,11 +485,8 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const [link, setLink] = useState(overlay.link);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("untouched");
   const [copied, setCopied] = useState(false);
-  const [fitInfo, setFitInfo] = useState<{ text: string; warn: boolean }>({
-    text: "",
-    warn: false,
-  });
-  const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({
+  const [preview, setPreview] = useState<PreviewLink>({ kind: "waiting" });
+  const [guides, setGuides] = useState<Guides>({
     v: null,
     h: null,
   });
@@ -364,7 +507,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       settings: savedSettings(initial.current.form, initial.current.place),
     }),
   });
-  const latest = useRef({ json: savedJson, tag: form.tag, settings });
+  const latest = useRef<Choices>({ json: savedJson, tag: form.tag, settings });
   latest.current = { json: savedJson, tag: form.tag, settings };
   const address = `${origin}/o/${link}`;
   const screen = form.fit === "screen";
@@ -401,21 +544,15 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         event.source !== frame.current?.contentWindow
       )
         return;
-      const message = event.data as OverlaySize | { type?: string };
-      if (message.type === "cl-overlay-ready") {
+      const answer = previewMessage(event.data);
+      if (answer === "ready") {
         frame.current?.contentWindow?.postMessage(
           { type: "cl-overlay-settings", search: `?${queryRef.current}` },
           location.origin,
         );
         return;
       }
-      if (message.type !== "cl-overlay-size") return;
-      const size = message as OverlaySize;
-      let text = `Shown as ${SHAPE_NAME[size.layout]}.`;
-      if (size.hidden.length)
-        text += ` Left out to fit: ${size.hidden.map((part) => LEFT_OUT[part]).join(", ")}.`;
-      if (size.scale < 0.6) text += " Too small to read on stream: make it bigger.";
-      setFitInfo({ text, warn: size.scale < 0.6 || size.hidden.length > 0 });
+      if (answer) setPreview(answer);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -427,26 +564,18 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
     if (savedJson === autosave.current.saved) return;
-    const timer = setTimeout(async () => {
-      if (autosave.current.phase === "sending") return;
-      autosave.current = { ...autosave.current, phase: "sending" };
-      try {
-        while (latest.current.json !== autosave.current.saved) {
-          const next = latest.current;
-          setSaveStatus("saving");
-          await post<{ version: number }>({
+    const timer = setTimeout(() => {
+      void runAutosave(
+        autosave,
+        () => latest.current,
+        (next) =>
+          post<{ version: number }>({
             intent: "save",
             tag: next.tag ?? "",
             settings: JSON.stringify(next.settings),
-          });
-          autosave.current = { phase: "sending", saved: next.json };
-        }
-        setSaveStatus("saved");
-      } catch {
-        setSaveStatus("notSaved");
-      } finally {
-        autosave.current = { ...autosave.current, phase: "idle" };
-      }
+          }),
+        setSaveStatus,
+      );
     }, 300);
     return () => clearTimeout(timer);
   }, [savedJson]);
@@ -458,75 +587,15 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     event.currentTarget.setPointerCapture(event.pointerId);
     const dir = (event.target as HTMLElement).dataset.dir ?? null;
-    setDrag({
-      sx: event.clientX,
-      sy: event.clientY,
-      start: { ...place, anchor: null },
-      dir,
-      k: scale,
-    });
+    setDrag(startDrag(place, event.clientX, event.clientY, dir, scale));
     setPlace((current) => ({ ...current, anchor: null }));
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    const d = drag;
-    if (!d) return;
-    const dx = (event.clientX - d.sx) / d.k;
-    const dy = (event.clientY - d.sy) / d.k;
-    const { cw, ch } = d.start;
-    if (d.dir) {
-      // Resize from the grabbed edge or corner; the opposite edge stays put.
-      let { x, y, w, h } = d.start;
-      if (d.dir.includes("e")) w = Math.min(cw - x, Math.max(MIN_W, w + dx));
-      if (d.dir.includes("s")) h = Math.min(ch - y, Math.max(MIN_H, h + dy));
-      if (d.dir.includes("w")) {
-        const nw = Math.min(x + w, Math.max(MIN_W, w - dx));
-        x = x + w - nw;
-        w = nw;
-      }
-      if (d.dir.includes("n")) {
-        const nh = Math.min(y + h, Math.max(MIN_H, h - dy));
-        y = y + h - nh;
-        h = nh;
-      }
-      setPlace({ ...d.start, x, y, w, h });
-      return;
-    }
-    let x = d.start.x + dx;
-    let y = d.start.y + dy;
-    // Free by default: it stays exactly where it is dropped. Hold Shift to
-    // snap to the edges and the middle.
-    const snap = event.shiftKey ? 14 / d.k : 0;
-    const m = margin(cw);
-    const { w, h } = d.start;
-    let v: number | null = null;
-    let hz: number | null = null;
-    if (snap) {
-      for (const [at, line] of [
-        [m, m],
-        [cw - m - w, cw - m],
-        [(cw - w) / 2, cw / 2],
-      ]) {
-        if (Math.abs(x - at) < snap) {
-          x = at;
-          v = line;
-          break;
-        }
-      }
-      for (const [at, line] of [
-        [m, m],
-        [ch - m - h, ch - m],
-        [(ch - h) / 2, ch / 2],
-      ]) {
-        if (Math.abs(y - at) < snap) {
-          y = at;
-          hz = line;
-          break;
-        }
-      }
-    }
-    setGuides({ v, h: hz });
-    setPlace(clamp({ ...d.start, x, y }));
+    if (!drag) return;
+    const moved = dragTo(drag, event.clientX, event.clientY, event.shiftKey);
+    if (moved.guides) setGuides(moved.guides);
+    setPlace(moved.place);
   }
 
   function endDrag() {
@@ -641,8 +710,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           <div className="obs-field">
             <span className="obs-label">Size on stream</span>
             <SizeInputs place={place} onChange={resize} />
-            <p className={`obs-fitinfo${fitInfo.warn ? " warn" : ""}`} aria-live="polite">
-              {fitInfo.text}
+            <p
+              className={`obs-fitinfo${preview.kind === "shown" && preview.fit.warn ? " warn" : ""}`}
+              aria-live="polite"
+            >
+              {preview.kind === "shown" ? preview.fit.text : ""}
             </p>
           </div>
           <div className="obs-field">
