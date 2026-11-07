@@ -46,6 +46,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Any
 
 from clashlens.api_db import ApiDatabase
@@ -58,9 +59,11 @@ from .alerts import (
     NONCE_SECONDS,
     RETRY_LONGEST_SECONDS,
     RETRY_SECONDS,
+    Finished,
+    Logged,
     Messenger,
-    Refused,
-    Unreachable,
+    after_try,
+    expected,
 )
 from .replies import Reply, Site
 from .store import Store, link_colours
@@ -92,6 +95,37 @@ _STILL_ON = """
           )
       )
 """
+
+
+class Readiness(Enum):
+    """Where one account's summary of the latest Reset stands in a round of
+    `Summaries.due`, worked out afresh each round from the database; nothing
+    about it is kept in memory, so a restart changes nothing.
+
+    Until the Reset's Daily board is published no account is read. Then each
+    account with Discord connected, a player's summary on and no delivery
+    log row for that Reset is read:
+    UNREADABLE: reading its players' days failed; it stays unlogged and is
+    read again next round.
+    NOTHING_FINISHED: none of its players has a finished day; it is logged
+    SKIPPED, with no DM.
+    DUE: it has DMs; `SummaryLoop.send` logs it SENDING, if still due, and
+    sends them.
+    Once logged, in any `Logged` state, it is never read or sent again for
+    that Reset, and from the next Reset it is no longer due.
+    """
+
+    UNREADABLE = "unreadable"
+    NOTHING_FINISHED = "nothing finished"
+    DUE = "due"
+
+
+def readiness(summary: Summary | None) -> Readiness:
+    """An account's `Readiness`, from its summary as read this round, None
+    when the read failed."""
+    if summary is None:
+        return Readiness.UNREADABLE
+    return Readiness.DUE if summary.parts else Readiness.NOTHING_FINISHED
 
 
 @dataclass
@@ -209,29 +243,40 @@ class Summaries:
             }
         due = []
         for account_id, discord_user_id, tags in accounts:
-            try:
-                with self.database.pool.connection() as connection:
-                    colours = link_colours(connection, account_id)
-                days = [
-                    day
-                    for tag in tags
-                    if (page := self.store.player_page(tag, now)) is not None
-                    and (day := replies.summary_day(page, reset, *standing[tag])) is not None
-                ]
-                self._saved_ends(reset, days)
-            except Exception:
-                # Unlogged, so the next round reads this account again.
-                log.exception("Legend day summary for account %s could not be read", account_id)
-                continue
-            summary = Summary(
-                int(account_id), str(discord_user_id), reset,
-                replies.day_summary(self.site, reset, days, colours),
-            )
-            if summary.parts:
-                due.append(summary)
-            elif (skipped := self.claim(summary)) is not None:
-                self.finish(skipped, "skipped", None)
+            summary = self._read(account_id, discord_user_id, tags, reset, standing, now)
+            match readiness(summary):
+                case Readiness.DUE:
+                    due.append(summary)
+                case Readiness.NOTHING_FINISHED:
+                    if (skipped := self.claim(summary)) is not None:
+                        self.finish(skipped, Logged.SKIPPED.value, None)
+                case Readiness.UNREADABLE:
+                    pass  # Unlogged, so the next round reads this account again.
         return due
+
+    def _read(
+        self, account_id: int, discord_user_id: str, tags: list[str], reset: datetime,
+        standing: dict[str, tuple[Any, ...]], now: datetime,
+    ) -> Summary | None:
+        """The account's summary of the Legend day `reset` ended, from each
+        of its players' `standing` on the board; None when it could not be read."""
+        try:
+            with self.database.pool.connection() as connection:
+                colours = link_colours(connection, account_id)
+            days = [
+                day
+                for tag in tags
+                if (page := self.store.player_page(tag, now)) is not None
+                and (day := replies.summary_day(page, reset, *standing[tag])) is not None
+            ]
+            self._saved_ends(reset, days)
+        except Exception:
+            log.exception("Legend day summary for account %s could not be read", account_id)
+            return None
+        return Summary(
+            int(account_id), str(discord_user_id), reset,
+            replies.day_summary(self.site, reset, days, colours),
+        )
 
     def _saved_ends(self, reset: datetime, days: list[dict[str, Any]]) -> None:
         """Set each finished day's end of day to the one the worker saved
@@ -349,26 +394,27 @@ class SummaryLoop:
         if claimed is None:
             return 0
         summary.id = claimed
-        sent, state = 0, "sent"
-        reason: str | None = None
+        sent, outcome = 0, Finished(Logged.SENT)
         for part, (reply, tags) in enumerate(summary.parts):
             if part and not await asyncio.to_thread(self.summaries.still_due, summary, tags):
-                state = "failed"
+                outcome = Finished(Logged.FAILED)
                 break
-            state, reason = await self._deliver(summary, part, reply, tags)
-            if state != "sent":
+            outcome = await self._deliver(summary, part, reply, tags)
+            if outcome.state is not Logged.SENT:
                 break
             sent += 1
-        await asyncio.to_thread(self.summaries.finish, summary.id, state, reason)
-        log.info("summary delivery=%s outcome=%s", summary.id, reason or state)
+        await asyncio.to_thread(
+            self.summaries.finish, summary.id, outcome.state.value, outcome.reason
+        )
+        log.info("summary delivery=%s outcome=%s", summary.id, outcome.reason or outcome.state)
         return sent
 
     async def _deliver(
         self, summary: Summary, part: int, reply: Reply, tags: tuple[str, ...]
-    ) -> tuple[str, str | None]:
+    ) -> Finished:
         """Try one DM until Discord takes it, cut off within `NONCE_SECONDS`
         of its first try and at the next Reset, trying again after a wait
-        while it is still due; how it went."""
+        (`after_try`) while it is still due; how it went."""
         clock = asyncio.get_running_loop()
         last = clock.time() + NONCE_SECONDS
 
@@ -377,6 +423,7 @@ class SummaryLoop:
 
         wait = 0.0
         while (time_left := left()) > 0:
+            error = None
             try:
                 await asyncio.wait_for(
                     self.messenger.send_dm(
@@ -384,21 +431,17 @@ class SummaryLoop:
                     ),
                     time_left,
                 )
-                return "sent", None
-            except Refused as refusal:
-                return "refused", refusal.reason
-            except Unreachable as outage:
-                wait = min(max(2 * wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
-                pause = max(wait, outage.retry_after)
-                if pause >= left():
-                    return "failed", None
-                log.info("summary delivery=%s part=%s waiting to try again", summary.id, part)
-                await asyncio.sleep(pause)
-                if not await asyncio.to_thread(self.summaries.still_due, summary, tags):
-                    return "failed", None
-            except TimeoutError:
-                return "failed", None
-            except Exception:
-                log.exception("summary delivery %s part %s failed", summary.id, part)
-                return "failed", None
-        return "failed", None
+            except Exception as caught:
+                error = caught
+                if not expected(caught):
+                    log.exception("summary delivery %s part %s failed", summary.id, part)
+            now = clock.time()
+            step = after_try(error, wait, left(), now, RETRY_SECONDS, RETRY_LONGEST_SECONDS)
+            if isinstance(step, Finished):
+                return step
+            log.info("summary delivery=%s part=%s waiting to try again", summary.id, part)
+            wait = step.wait
+            await asyncio.sleep(step.retry_at - now)
+            if not await asyncio.to_thread(self.summaries.still_due, summary, tags):
+                return Finished(Logged.FAILED)
+        return Finished(Logged.FAILED)

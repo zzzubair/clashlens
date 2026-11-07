@@ -18,7 +18,7 @@ CANONICAL_REPOSITORY_URL=https://github.com/zzzubair/clashlens
 declare -Ag CONFIG=()
 declare -Ag RELEASE=()
 ADMIN_SECRET_ACTIVE=false
-UP_IN_PROGRESS=false
+UP_PHASE=none
 OPS_LOCK_FD=
 TIMER_UNITS=(clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service clashlens-archive-retention.timer clashlens-archive-retention.service clashlens-ranked-day-compaction.timer clashlens-ranked-day-compaction.service clashlens-history-retention.timer clashlens-history-retention.service)
 source "$ROOT/ops-keep-running.sh"
@@ -69,7 +69,7 @@ finish() {
   local result=$?
   trap - EXIT HUP INT TERM
   cleanup_admin_secret || result=1
-  if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
+  if (( result != 0 )) && [[ "$UP_PHASE" == changing ]]; then
     (stop_units) || true
     deploy_failed_alert
   fi
@@ -1155,6 +1155,7 @@ wait_stack() {
 }
 
 up_stack() {
+  up_phase checking
   require_host
   load_release
   if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
@@ -1176,8 +1177,7 @@ up_stack() {
   try_pending_migrations
   mkdir -p "$STATE_DIR"
   stage_configuration
-  write_alert_intent stopped
-  UP_IN_PROGRESS=true
+  up_phase changing
   stop_units
   local mode_file
   mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
@@ -1211,8 +1211,7 @@ up_stack() {
   fi
   promote_active_release
   keep_running_record
-  write_alert_intent running
-  UP_IN_PROGRESS=false
+  up_phase running
   printf 'Clash Lens %s is ready at http://127.0.0.1:%s and is enabled after reboot.\n' "$MODE" "$WEBSITE_PORT"
 }
 
