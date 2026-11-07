@@ -650,3 +650,64 @@ def test_handing_over_to_someone_leaving_keeps_the_owner(site: Site) -> None:
     assert (handed.status_code, handed.payload["left_crew"]) == (200, True)
     assert site.crew("owner", crew_id) is None
     assert site.crew("stayer", crew_id)["my_role"] == "owner"
+
+
+def test_each_role_move_through_the_crew_writes(site: Site) -> None:
+    """Every crew_states.move event as a Clasher makes it: promoting and
+    demoting, an admin's own last place and leaving, and a refused move
+    answered the same when the request is repeated."""
+    crew_id = _crew_of(
+        site, {"owner": ["#2PP"], "admin": ["#8PY"], "member": ["#9QQ", "#PPP"]}
+    )
+
+    def role(name: str) -> str | None:
+        crew = site.crew(name, crew_id)
+        return None if crew is None else crew["my_role"]
+
+    def set_role(name: str, new: str) -> int:
+        return site.call(
+            "owner", api_crews.set_member_role, crew_id=crew_id, username=name, role=new
+        ).status_code
+
+    # MAKE_ADMIN twice leaves an admin an admin; MAKE_MEMBER demotes.
+    assert (set_role("admin", "admin"), set_role("admin", "admin")) == (200, 200)
+    assert role("admin") == "admin"
+    assert set_role("admin", "member") == 200
+    assert role("admin") == "member"
+    renamed = site.call("admin", api_crews.update_crew, crew_id=crew_id, name="Mine")
+    assert (renamed.status_code, renamed.payload) == (403, {"error": "crew_forbidden"})
+    assert set_role("admin", "admin") == 200
+
+    # LAST_PLACE: an admin removing their own only place is out of the crew.
+    removed = site.call("admin", api_crews.remove_player, crew_id=crew_id, tag="#8PY")
+    assert removed.payload == {"removed": True, "tag": "#8PY", "left_crew": True}
+    assert role("admin") is None
+    # A member with a place left stays in.
+    removed = site.call("member", api_crews.remove_player, crew_id=crew_id, tag="#9QQ")
+    assert (removed.payload["left_crew"], role("member")) == (False, "member")
+    # LEAVE: a member leaves; the owner is refused, the same on a repeat.
+    assert site.call("member", api_crews.leave_crew, crew_id=crew_id).status_code == 200
+    assert role("member") is None
+    request_id = str(uuid4())
+    for _ in range(2):
+        refused = site.call(
+            "owner", api_crews.leave_crew, crew_id=crew_id, request_id=request_id
+        )
+        assert (refused.status_code, refused.payload) == (
+            409, {"error": "owner_must_hand_over"},
+        )
+    assert role("owner") == "owner"
+
+
+def test_an_invite_opened_by_a_member_at_the_crew_limit_stays_usable(site: Site) -> None:
+    """AT_LIMIT counts only crews the opener is not already in."""
+    site.account("busy")
+    tags = ["#2PP", "#8PY", "#9QQ", "#PPP", "#QQQ", "#YYY"]
+    for tag in tags:
+        site.link("busy", tag)
+    crews = [site.make("busy", [tag]) for tag in tags[:5]]
+    code = site.invite("busy", crews[0])
+    preview = api_crews.get_invite(site.api, site.ids["busy"], code, now=NOW)
+    assert (preview["state"], preview["in_crew"], preview["crew_count"]) == ("ok", True, 5)
+    # Someone in the crew adds another account through its link.
+    assert site.accept("busy", code, [tags[5]]).status_code == 200

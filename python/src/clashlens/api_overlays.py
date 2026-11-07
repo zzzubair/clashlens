@@ -7,6 +7,15 @@ overlay reads every few seconds to apply the change. Making a new link
 replaces the old one in place, so the old one shows nothing from then on.
 Each read through the link marks the overlay open, at most once a minute,
 and the collector then checks its player first (collector_overlays.py).
+
+The overlay's states: none until the first `get_overlay`, which makes it
+with a link; then its one current link, which `read_link` answers; any other
+link id, replaced, never made or malformed, answers nothing for good, since
+links are random and never reused. `new_link` is the only move from one
+link to the next: given the current link it makes a new one, bumps the
+version and clears the viewer presence; given any other, such as a repeat
+of a request that already replaced it, it changes nothing. Whether OBS is
+watching is `ViewerPresence`.
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ from pydantic import Field
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
+from .collector_overlays import PRESENCE_SQL, ViewerPresence
 
 _LINK = re.compile(r"[A-Za-z0-9_-]{22}")
 # Each setting and the values it may take; numbers are stream pixels.
@@ -123,7 +133,8 @@ def save_overlay(
 
 
 def new_link(database: ApiDatabase, account_id: int, *, replaces: str) -> dict[str, Any]:
-    """Replace the account's link, when it is still `replaces`."""
+    """Replace the account's link, when it is still `replaces`, and make the
+    overlay CLOSED (`ViewerPresence`) until OBS reads the new one."""
     with database.pool.connection() as connection:
         connection.execute(
             """
@@ -148,12 +159,13 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
                                  (link_id,)).fetchone()
         if row is None:
             return None
-        # At most one write a minute per link; a no-op otherwise.
+        # Seen now, while a player is chosen: one write a minute per link at
+        # most, as a JUST_SEEN overlay writes nothing.
         connection.execute(
-            """
-            UPDATE obs_overlays SET last_seen_at = clock_timestamp()
-            WHERE link_id = %s AND player_id IS NOT NULL
-              AND (last_seen_at IS NULL OR last_seen_at < clock_timestamp() - interval '1 minute')
+            f"""
+            UPDATE obs_overlays AS overlay SET last_seen_at = clock_timestamp()
+            WHERE overlay.link_id = %s AND overlay.player_id IS NOT NULL
+              AND {PRESENCE_SQL} <> '{ViewerPresence.JUST_SEEN}'
             """,
             (link_id,),
         )

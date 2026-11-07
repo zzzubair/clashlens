@@ -7,7 +7,14 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_groups, api_leaderboard, api_player_lookup, api_players
+from . import (
+    api_db,
+    api_discord_alerts,
+    api_groups,
+    api_leaderboard,
+    api_player_lookup,
+    api_players,
+)
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -351,12 +358,8 @@ def link_provider(
                 )
             if provider == "discord":
                 # Connecting Discord again adds the bot, which then confirms
-                # each attack alert switch again; when each went on is kept.
-                connection.execute(
-                    "UPDATE discord_attack_alerts SET confirm_requested_at = clock_timestamp()"
-                    " WHERE account_id = %s",
-                    (account_id,),
-                )
+                # each attack alert switch again.
+                api_discord_alerts.ask_to_confirm_again(connection, account_id)
             providers = _account_providers(connection, account_id)
             result = OperationResult(
                 200,
