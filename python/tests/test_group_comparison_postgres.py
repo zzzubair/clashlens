@@ -544,3 +544,52 @@ def test_profiles_from_before_a_season_reset_show_no_current_trophies(
             assert average == (1, 5100)
         finally:
             database.close()
+
+
+def test_a_totals_only_player_read_keeps_every_number_and_lists_no_battles(
+    database_url: str,
+) -> None:
+    """Rivals and Watchlist cards read other players' days without their
+    battles: every total, rank and completeness flag stays as the full read
+    has it, and only the battle lists and the armies' unit names go."""
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 5300)
+            seed_day(
+                database,
+                "#2PP",
+                1,
+                net=192,
+                gained=320,
+                lost=128,
+                attacks=8,
+                defenses=8,
+                battles=[
+                    *(
+                        {**battle("offense", 3, 100, 40), "army_share_code": "u10x132-2x7s1x10"}
+                        for _ in range(8)
+                    ),
+                    *(battle("defense", 1, 45, -16) for _ in range(8)),
+                ],
+            )
+            seed_day(database, "#2PP", 2, net=10, state="Partial")
+            full, totals = (
+                api_players.get_player_page(
+                    database, "#2PP", now=NOW, freshness_seconds=900, **extra
+                )
+                for extra in ({}, {"battles": False})
+            )
+        finally:
+            database.close()
+
+    days = full["screen_ready"]["days"]
+    assert full["screen_ready"]["army_units"]
+    # A day whose battles are all listed stays complete without the list.
+    assert any(day["battles_complete"] and day["offense_events"] for day in days)
+    for day in days:
+        day["offense_events"] = day["defense_events"] = []
+    full["screen_ready"]["army_units"] = {}
+    assert totals == full
