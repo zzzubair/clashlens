@@ -276,15 +276,55 @@ export default function ObsOverlayRoute() {
   );
 }
 
+/**
+ * The line under the editor that says how saving went:
+ *
+ * - `untouched`: nothing changed since the page loaded.
+ * - `saving`: a save is on its way. Changes save 0.3 seconds after the last
+ *   one, one save at a time; changes made while one is sending go when it
+ *   lands, until the newest choices are saved.
+ * - `saved`: the newest choices are saved; OBS follows within 3 seconds.
+ * - `notSaved`: a save failed; the next change tries again.
+ * - `linkMade` / `linkNotMade`: how making a new link went.
+ *
+ * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
+ * their 0.3-second pause.
+ */
+type SaveStatus =
+  "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkNotMade";
+
+const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
+  untouched: { text: "Changes save by themselves.", ok: false },
+  saving: { text: "Saving…", ok: false },
+  saved: { text: "Saved. Your overlay in OBS updates within 3 seconds.", ok: true },
+  notSaved: { text: "Not saved. Check your connection.", ok: false },
+  linkMade: {
+    text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
+    ok: true,
+  },
+  linkNotMade: { text: "No new link made. Check your connection.", ok: false },
+};
+
+/**
+ * One press on the preview's box, held until the pointer lifts: a move, or
+ * with `dir` (the grabbed edge or corner) a resize. `k` is the preview's
+ * scale when it began. `drag` holds it for the pointer's moves and `dragging`
+ * mirrors it for drawing; both clear together.
+ */
+type PointerDrag = {
+  sx: number;
+  sy: number;
+  start: Place;
+  dir: string | null;
+  k: number;
+};
+
 function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: string }) {
   const initial = useRef(fromSaved(overlay));
   const [form, setForm] = useState<Form>(initial.current.form);
   const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
   const [link, setLink] = useState(overlay.link);
-  const [saved, setSaved] = useState<{ text: string; ok: boolean }>({
-    text: "Changes save by themselves.",
-    ok: false,
-  });
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("untouched");
   const [copied, setCopied] = useState(false);
   const [fitInfo, setFitInfo] = useState<{ text: string; warn: boolean }>({
     text: "",
@@ -298,13 +338,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const [dragging, setDragging] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
-  const drag = useRef<{
-    sx: number;
-    sy: number;
-    start: Place;
-    dir: string | null;
-    k: number;
-  } | null>(null);
+  const drag = useRef<PointerDrag | null>(null);
   const [initialQuery] = useState(() =>
     new URLSearchParams(overlayQuery(form, place)).toString(),
   );
@@ -387,7 +421,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       try {
         while (latest.current.json !== lastSaved.current) {
           const next = latest.current;
-          setSaved({ text: "Saving…", ok: false });
+          setSaveStatus("saving");
           await post<{ version: number }>({
             intent: "save",
             tag: next.tag ?? "",
@@ -395,12 +429,9 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
           });
           lastSaved.current = next.json;
         }
-        setSaved({
-          text: "Saved. Your overlay in OBS updates within 3 seconds.",
-          ok: true,
-        });
+        setSaveStatus("saved");
       } catch {
-        setSaved({ text: "Not saved. Check your connection.", ok: false });
+        setSaveStatus("notSaved");
       } finally {
         saving.current = false;
       }
@@ -521,12 +552,9 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     try {
       const made = await post<{ link: string }>({ intent: "new-link", replaces: link });
       setLink(made.link);
-      setSaved({
-        text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
-        ok: true,
-      });
+      setSaveStatus("linkMade");
     } catch {
-      setSaved({ text: "No new link made. Check your connection.", ok: false });
+      setSaveStatus("linkNotMade");
     }
   }
 
@@ -886,8 +914,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             </button>
           </div>
           <div className="obs-under">
-            <span className={`obs-saved${saved.ok ? " ok" : ""}`} role="status">
-              {saved.text}
+            <span
+              className={`obs-saved${SAVE_STATUS[saveStatus].ok ? " ok" : ""}`}
+              role="status"
+            >
+              {SAVE_STATUS[saveStatus].text}
             </span>
             {copied ? (
               <span className="obs-copied">Copied. Paste it into OBS.</span>

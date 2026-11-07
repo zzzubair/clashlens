@@ -178,10 +178,47 @@ function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
 }
 
 /**
- * Draw the overlay into `root` and keep it live. With `link`, it follows the
- * saved settings of that private link, read every 3 seconds; a replaced link
- * shows nothing. Without, it takes its settings from `search` and from the
- * page around it (the account page's preview). Returns a stop function.
+ * What the overlay shows, from its settings alone (`overlaySource`):
+ *
+ * - `none`: no player picked; it says "Pick a player".
+ * - `player`: the picked player, read every 3 seconds. A failed read keeps
+ *   the last view and marks it offline; the next read tries again.
+ * - `demo`: a made-up day that plays a battle every 12 seconds, named after
+ *   the picked player when one is read.
+ *
+ * Picking another player or turning the demo on or off starts that source
+ * over: its first read shows no battle notice, and each later read that
+ * brings new battles shows one notice for all of them, replacing any notice
+ * still showing.
+ */
+export type OverlaySource = "none" | "player" | "demo";
+
+export function overlaySource(cfg: { demo: boolean; tag: string }): OverlaySource {
+  return cfg.demo ? "demo" : cfg.tag ? "player" : "none";
+}
+
+/**
+ * How the overlay follows its private link's saved settings, read every 3
+ * seconds:
+ *
+ * - `unread`: no settings read yet; the first answer applies them afresh.
+ * - `following`: the settings of one saved version and player (`key`) show; a
+ *   new version or player applies on top of them.
+ * - `retired`: the link was replaced, so the overlay shows nothing and checks
+ *   once a minute; an answer after that applies afresh.
+ *
+ * A failed read keeps the last settings. Nothing is kept between page loads,
+ * so OBS reloading the source starts `unread`.
+ */
+type LinkFollow =
+  { kind: "unread" } | { kind: "following"; key: string } | { kind: "retired" };
+
+/**
+ * Draw the overlay into `root` and keep it live, until the returned stop
+ * function clears every timer. With `link`, it follows the saved settings of
+ * that private link (`LinkFollow`). Without, it takes its settings from
+ * `search` and from the page around it (the account page's preview). What it
+ * shows is `OverlaySource`.
  */
 export function mountOverlay(
   root: HTMLElement,
@@ -519,17 +556,20 @@ export function mountOverlay(
     return next;
   }
 
+  // Whether `tag` is still the player the overlay reads.
+  const reading = (tag: string) => overlaySource(cfg) === "player" && cfg.tag === tag;
+
   async function poll() {
     cancel(pollTimer);
-    if (cfg.demo || !cfg.tag) return;
+    if (overlaySource(cfg) !== "player") return;
     const tag = cfg.tag;
     try {
       const next = await readPlayer(tag);
-      if (tag === cfg.tag && !cfg.demo) accept(next);
+      if (reading(tag)) accept(next);
     } catch {
-      if (tag === cfg.tag && !cfg.demo) accept({ ...(data ?? {}), error: "offline" });
+      if (reading(tag)) accept({ ...(data ?? {}), error: "offline" });
     }
-    if (tag === cfg.tag && !cfg.demo) pollTimer = later(poll, PLAYER_POLL_MS);
+    if (reading(tag)) pollTimer = later(poll, PLAYER_POLL_MS);
   }
 
   // ---------- demo: a made-up day that plays a battle every 12 seconds ----------
@@ -588,14 +628,15 @@ export function mountOverlay(
       // Lay out again once the font is in, so the fit is measured with it.
       document.fonts.load(`700 24px "${FONT_FAMILY[cfg.font]}"`).then(render, () => {});
     }
-    if (cfg.demo) {
+    const wasDemo = overlaySource(prev) === "demo";
+    if (overlaySource(cfg) === "demo") {
       cancel(pollTimer);
-      if (!first && !prev.demo && prev.tag === cfg.tag && data?.name) startDemo();
-      else if (!prev.demo || first || prev.tag !== cfg.tag) {
+      if (!first && !wasDemo && prev.tag === cfg.tag && data?.name) startDemo();
+      else if (!wasDemo || first || prev.tag !== cfg.tag) {
         if (prev.tag !== cfg.tag) data = null;
         const tag = cfg.tag;
         const start = (d: View | null) => {
-          if (tag !== cfg.tag || !cfg.demo) return;
+          if (tag !== cfg.tag || overlaySource(cfg) !== "demo") return;
           if (d) data = d;
           startDemo();
         };
@@ -605,7 +646,7 @@ export function mountOverlay(
       return;
     }
     stopDemo();
-    if (first || prev.tag !== cfg.tag || prev.demo) {
+    if (first || prev.tag !== cfg.tag || wasDemo) {
       data = null;
       seen = null;
       render();
@@ -626,15 +667,14 @@ export function mountOverlay(
   window.addEventListener("message", onMessage);
   // Keep "Updated N min ago" honest.
   const tick = setInterval(() => {
-    if (data && !cfg.demo) render();
+    if (data && overlaySource(cfg) !== "demo") render();
   }, 30_000);
   void document.fonts.ready.then(render);
 
   if (link !== null) {
     // A saved link: the settings live on Clash Lens and are read again every
     // 3 seconds, so a change on the account page shows here with no new address.
-    let applied: string | null = null;
-    let started = false;
+    let followed: LinkFollow = { kind: "unread" };
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
@@ -648,8 +688,7 @@ export function mountOverlay(
           cfg = readConfig("");
           data = null;
           stage.innerHTML = "";
-          started = false;
-          applied = null;
+          followed = { kind: "retired" };
           wait = 60_000;
         } else if (res.ok) {
           const saved = (await res.json()) as {
@@ -658,14 +697,14 @@ export function mountOverlay(
             tag: string | null;
           };
           const key = `${saved.version} ${saved.tag}`;
-          if (key !== applied) {
-            applied = key;
+          if (followed.kind !== "following" || followed.key !== key) {
+            const first = followed.kind !== "following";
+            followed = { kind: "following", key };
             const query = new URLSearchParams({
               ...saved.settings,
               p: (saved.tag ?? "").replace(/^#/, ""),
             });
-            apply(`?${query}`, !started);
-            started = true;
+            apply(`?${query}`, first);
           }
         }
       } catch {

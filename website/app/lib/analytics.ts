@@ -409,12 +409,32 @@ export function pagePerformance(
   };
 }
 
-// Browser state. `queue` holds up to 50 events sent after Accept until PostHog
-// has loaded; it is dropped once PostHog has loaded or failed to.
-let client: PostHog | null = null;
-let loading: Promise<void> | null = null;
-let queue: Array<{ event: string; properties: Properties }> | null = [];
-// Whether `client` was last told to count.
+/**
+ * PostHog in this page, which loads only after Accept (`startAnalytics`):
+ *
+ * - `notLoaded`: not asked for yet.
+ * - `loading`: being fetched and set up.
+ *   Until it is `ready`, up to 50 events tracked after Accept wait in
+ *   `queue`; later ones are dropped.
+ * - `ready`: loaded. The waiting events went first, each under the choice of
+ *   that moment, and every later event goes at once.
+ * - `failed`: it could not load; events are dropped until the page loads
+ *   again, which is the only retry.
+ *
+ * Nothing survives a page load. A Decline while `loading` or `ready` is
+ * applied before any event leaves (`send`), so nothing is counted after it.
+ */
+type ClientLoad =
+  | {
+      kind: "notLoaded" | "loading";
+      queue: Array<{ event: string; properties: Properties }>;
+    }
+  | { kind: "ready"; posthog: PostHog }
+  | { kind: "failed" };
+
+let load: ClientLoad = { kind: "notLoaded", queue: [] };
+const readyClient = (): PostHog | null => (load.kind === "ready" ? load.posthog : null);
+// Whether the ready client was last told to count.
 let clientCounting = false;
 // A choice this browser could not save, kept for this page only.
 let unsavedChoice: AnalyticsChoice | undefined;
@@ -443,9 +463,25 @@ export function analyticsWithdrawals(): number {
   return withdrawals;
 }
 
+/**
+ * Where the visitor's choice stands in this tab: `undecided` (no choice
+ * saved), `accepted`, `declined`, or `reopened` (a choice was made and the
+ * question is showing again, the old choice still in force until a new one).
+ * Accept or Decline saves it in this browser, or for this page only when the
+ * browser refuses to save it; a choice saved in another tab reaches this one
+ * at once. A Decline anywhere withdraws counting here too.
+ */
+export type ConsentStage = "undecided" | "accepted" | "declined" | "reopened";
+
+export function consentStage(): ConsentStage {
+  if (reopened) return "reopened";
+  return analyticsChoice() ?? "undecided";
+}
+
 /** Whether to show the Accept or Decline question. */
 export function askingForChoice(): boolean {
-  return reopened || analyticsChoice() === null;
+  const stage = consentStage();
+  return stage === "reopened" || stage === "undecided";
 }
 
 // Deletes everything PostHog keeps in this browser: its ID and its own record
@@ -486,6 +522,7 @@ function applyChoice(
 // again before this tab heard of it.
 function notifyChoice(withdrawn = false): void {
   if (withdrawn || analyticsChoice() !== "accepted") withdrawals++;
+  const client = readyClient();
   if (client) {
     if (withdrawn) applyChoice(client, false);
     applyChoice(client);
@@ -539,8 +576,10 @@ export function setDashboardShown(shown: boolean): void {
 
 /** Loads PostHog; called only once the visitor has accepted. */
 export function startAnalytics(settings: AnalyticsSettings): void {
-  if (loading) return;
-  loading = import("posthog-js/dist/module.slim.no-external")
+  if (load.kind !== "notLoaded") return;
+  const { queue } = load;
+  load = { kind: "loading", queue };
+  void import("posthog-js/dist/module.slim.no-external")
     .then(({ default: posthog }) => {
       posthog.init(settings.token, {
         api_host: POSTHOG_HOST,
@@ -569,13 +608,12 @@ export function startAnalytics(settings: AnalyticsSettings): void {
         before_send: sanitizeEvent,
       });
       posthog._retryQueue = undefined;
-      client = posthog;
-      for (const { event, properties } of queue ?? []) send(posthog, event, properties);
+      load = { kind: "ready", posthog };
+      for (const { event, properties } of queue) send(posthog, event, properties);
       applyChoice(posthog);
-      queue = null;
     })
     .catch(() => {
-      queue = null;
+      load = { kind: "failed" };
     });
 }
 
@@ -603,6 +641,7 @@ export function track(
       properties[key] = value;
     }
   }
-  if (client) send(client, event, properties);
-  else if (queue && queue.length < 50) queue.push({ event, properties });
+  if (load.kind === "ready") send(load.posthog, event, properties);
+  else if (load.kind !== "failed" && load.queue.length < 50)
+    load.queue.push({ event, properties });
 }
