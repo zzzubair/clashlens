@@ -45,6 +45,13 @@ API_LOCK_TIMEOUT = "2s"
 # well after that is cancelled so it stops holding one of the pool's
 # connections. Army reads keep their own shorter transaction limit.
 API_STATEMENT_TIMEOUT = "10s"
+# After a shared copy's background read fails, the next waits as long as the
+# copy's own refresh interval, then twice as long after each further failure,
+# never longer than this, and no wait once a read succeeds. Each failed read
+# can hold a pool connection for the full statement timeout, so at this cap a
+# read that keeps failing costs at most 10 of every 300 seconds of one
+# connection instead of starting again as soon as the last one fails.
+SHARED_COPY_RETRY_CAP_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -441,7 +448,8 @@ class SharedCopy[Copy]:
     day or Season it was not read for), or one older than ``longest`` because
     its background reads keep failing or running late, the request reads it
     itself and its failure reaches the visitor; requests arriving meanwhile
-    wait for that one read."""
+    wait for that one read. After a background read fails, the next one waits
+    (see ``SHARED_COPY_RETRY_CAP_SECONDS``) while the copy is still served."""
 
     def __init__(
         self,
@@ -469,6 +477,10 @@ class SharedCopy[Copy]:
         # (key, clock reading when its read started, copy)
         self._copy: tuple[Hashable, float, Copy] | None = None
         self._refreshing = False
+        # No background read starts before this clock reading, which is
+        # ``_retry_delay`` seconds after the last one failed.
+        self._retry_at = float("-inf")
+        self._retry_delay = 0.0
 
     def _usable(self, key: Hashable, age_limit: float) -> Copy | None:
         copy = self._copy
@@ -483,7 +495,11 @@ class SharedCopy[Copy]:
             if fresh is not None:
                 return fresh
             served = self._usable(key, self._longest)
-            refresh = served is not None and not self._refreshing
+            refresh = (
+                served is not None
+                and not self._refreshing
+                and self._clock() >= self._retry_at
+            )
             self._refreshing = self._refreshing or refresh
         if refresh:
             self._start(lambda: self._refresh(database, now, key))
@@ -500,6 +516,8 @@ class SharedCopy[Copy]:
         copy = self._read(database, now)
         with self._lock:
             self._copy = (key, started, copy)
+            self._retry_at = float("-inf")
+            self._retry_delay = 0.0
         return copy
 
     def _refresh(self, database: Any, now: datetime, key: Hashable) -> None:
@@ -510,13 +528,21 @@ class SharedCopy[Copy]:
                     current = self._copy is not None and self._copy[0] == key
                 if current:
                     self._read_copy(database, now, key)
-        except Exception as error:  # noqa: BLE001 - the next request tries again
+        except Exception as error:  # noqa: BLE001 - a later request tries again
+            with self._lock:
+                self._retry_delay = min(
+                    2 * self._retry_delay or self._seconds,
+                    SHARED_COPY_RETRY_CAP_SECONDS,
+                )
+                self._retry_at = self._clock() + self._retry_delay
+                retry_in = self._retry_delay
             print(
                 json.dumps(
                     {
                         "event": self._name,
                         "status": "refresh_failed",
                         "error": type(error).__name__,
+                        "retry_in_seconds": retry_in,
                     }
                 ),
                 flush=True,

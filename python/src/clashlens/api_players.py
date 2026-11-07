@@ -1035,7 +1035,8 @@ class KnownPlayerNames(SharedCopy[tuple[str, list[tuple[Any, ...]]]]):
     database: read again in the background after a minute, and still served,
     across Resets too, while those reads fail or run late, but never past a
     day. A full read can outlast the statement timeout under the load after
-    a Reset, so no search waits for one while any copy is held."""
+    a Reset, so no search waits for one while any copy is held, and after one
+    fails the next waits a minute, doubling up to five minutes."""
 
     def __init__(
         self,

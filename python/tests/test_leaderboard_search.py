@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -56,26 +57,98 @@ def test_shared_copy_reaches_visitors_failures_only_once_too_old(capsys):
         start=refreshes.append,
     )
     assert copy.current(None, NOW) == 1
-    # The background read fails: the copy is still served, and tried again.
+    # The background read fails: the copy is still served, not read again
+    # before its 30-second wait is over.
     clock[0] = 31
     failing[0] = True
     assert copy.current(None, NOW) == 1
     refreshes.pop()()
     assert '"event": "test_copy", "status": "refresh_failed"' in capsys.readouterr().out
     assert copy.current(None, NOW) == 1
-    assert len(refreshes) == 1
+    assert refreshes == []
     # Too old to serve: the visitor's own read fails, as with no copy at all.
     clock[0] = 60
     with pytest.raises(RuntimeError):
         copy.current(None, NOW)
     failing[0] = False
     assert copy.current(None, NOW) == 4
+    # That read ends the wait: the copy is read again in the background
+    # once 30 seconds old.
+    clock[0] = 90
+    assert copy.current(None, NOW) == 4
+    assert len(refreshes) == 1
     # A new Legend day is read at once, even within the 30 seconds.
     assert copy.current(None, NOW + timedelta(days=1)) == 5
     # A background read started for the old day does not replace the new one.
     refreshes.pop()()
     assert copy.current(None, NOW + timedelta(days=1)) == 5
     assert len(reads) == 5
+
+
+def test_shared_copy_waits_longer_after_each_failed_background_read(capsys):
+    clock = [0.0]
+    refreshes = []
+    reads = []
+    failing = [True]
+
+    def read(_database, _now):
+        reads.append(clock[0])
+        if failing[0] and len(reads) > 1:
+            raise RuntimeError("canceling statement due to statement timeout")
+        return len(reads)
+
+    copy = SharedCopy(
+        read,
+        key=lambda _now: None,
+        seconds=60,
+        longest=24 * 60 * 60,
+        name="test_copy",
+        clock=lambda: clock[0],
+        start=refreshes.append,
+    )
+    assert copy.current(None, NOW) == 1
+
+    def failed_reads_and_waits():
+        waits = []
+        for _attempt in range(6):
+            # Every request while a read waits gets the copy and starts none.
+            while True:
+                assert copy.current(None, NOW) == 1
+                if refreshes:
+                    break
+                clock[0] += 1
+            refreshes.pop()()
+            failed_at = clock[0]
+            for _request in range(50):
+                assert copy.current(None, NOW) == 1
+            assert refreshes == []
+            out = capsys.readouterr().out
+            assert out.count('"status": "refresh_failed"') == 1
+            assert '"error": "RuntimeError"' in out and "statement" not in out
+            waits.append((failed_at, json.loads(out)["retry_in_seconds"]))
+        return waits
+
+    # Starting 60 seconds after the copy was read: 60 seconds, then double
+    # after each further failure, never more than 5 minutes.
+    clock[0] = 60
+    waits = failed_reads_and_waits()
+    assert [wait for _at, wait in waits] == [60, 120, 240, 300, 300, 300]
+    assert [at for at, _wait in waits] == [60, 120, 240, 480, 780, 1080]
+    # A read that succeeds ends the wait: the copy is fresh for 60 seconds
+    # and the next failure waits 60 seconds again.
+    failing[0] = False
+    clock[0] = 1380
+    assert copy.current(None, NOW) == 1
+    refreshes.pop()()
+    assert copy.current(None, NOW) == 8
+    clock[0] = 1439
+    assert copy.current(None, NOW) == 8 and refreshes == []
+    clock[0] = 1440
+    assert copy.current(None, NOW) == 8
+    failing[0] = True
+    refreshes.pop()()
+    assert json.loads(capsys.readouterr().out)["retry_in_seconds"] == 60
+    assert len(reads) == 9
 
 
 def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_database):
