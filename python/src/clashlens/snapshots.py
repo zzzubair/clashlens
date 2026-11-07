@@ -149,15 +149,24 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ),
                     None,
                 )
+                # A list frozen since 0081 records its newest ranked day; an
+                # older one stores all its rows, so they give it. Joining the
+                # rows to ranked days newest first walked every newer day
+                # (millions for a correction of an old Reset) and timed out.
                 source_row = connection.execute(
                     """
                     SELECT ranked.id, ranked.ranked_day_start,
                            ranked.ranked_day_end, ranked.input_hash, ranked.version
-                    FROM boundary_publication_manifest_entries(%s) AS manifest
+                    FROM boundary_publication_manifests AS manifest
                     JOIN ranked_day_versions AS ranked
-                      ON ranked.id = manifest.ranked_day_version_id
-                    ORDER BY ranked.id DESC
-                    LIMIT 1
+                      ON ranked.id = COALESCE(
+                          manifest.newest_ranked_day_version_id,
+                          (SELECT member.ranked_day_version_id
+                           FROM boundary_publication_manifest_rows AS member
+                           WHERE member.manifest_id = manifest.id
+                             AND member.ranked_day_version_id IS NOT NULL
+                           ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                    WHERE manifest.id = %s
                     """,
                     (manifest_id,),
                 ).fetchone()

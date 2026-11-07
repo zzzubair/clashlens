@@ -13,6 +13,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import psycopg
+import pytest
 from domain_test_support import domain_database
 from test_reset_scenarios_postgres import (
     SEASON,
@@ -24,7 +25,7 @@ from test_reset_scenarios_postgres import (
     day,
 )
 
-from clashlens import boundary, boundary_members
+from clashlens import boundary, boundary_members, snapshots
 
 SWEPT, HISTORY = 30, 400
 HISTORY_TABLES = ("player_profile_versions", "player_profile_effects")
@@ -125,13 +126,104 @@ def test_reset_board_reads_no_members_whole_profile_history(
     assert checking < 20, checking
 
 
-def _history_rows(plans: list[dict]) -> int:
-    """Rows the plans read from saved profiles and their sightings."""
+def test_board_build_reads_one_ranked_day_however_many_newer_days_exist(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correction rebuilds a board weeks after its Reset. Finding the
+    board's Legend day joined its input list to every saved day newest first:
+    in production on 7 November 2026 the 6 October board walked the millions
+    of days saved since against its 13,452 rows, hit the 15-minute limit on
+    every try, and held back every queued board behind it."""
+    # With enough members, PostgreSQL bets that walking days newest first
+    # finds one of theirs soon, as it did in production.
+    members, newer = 100, 6_000
+    sunday, monday = day(7), day(8)
+    tags = [f"#P{_tag(n)[1:]}" for n in range(1, members + 1)]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *tags)
+        for tag in tags:
+            story.players[tag].battles = _even(sunday) + attacks(
+                sunday + timedelta(hours=6), 40, 40)
+        story.reset(sunday, dict.fromkeys(tags, (5300, SEASON)))
+        story.reset(monday, dict.fromkeys(tags, (5380, SEASON)), run=False)
+        _seed_newer_days(connection_info, newer)
+        # Every SELECT the board build runs, explained as it runs.
+        plans: list[dict] = []
+        building = [False]
+        execute = psycopg.Connection.execute
+
+        def explained(connection, query, params=None, **kwargs):
+            if building[0] and str(query).lstrip().startswith("SELECT"):
+                plans.append(execute(
+                    connection, f"EXPLAIN (ANALYZE, FORMAT JSON) {query}", params)
+                    .fetchone()[0][0]["Plan"])
+            return execute(connection, query, params, **kwargs)
+
+        complete = snapshots.complete_snapshot
+
+        def build(database, claim):
+            # Production's statistics are current; a story's tables are new.
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("ANALYZE")
+            building[0] = True
+            try:
+                return complete(database, claim)
+            finally:
+                building[0] = False
+
+        monkeypatch.setattr(psycopg.Connection, "execute", explained)
+        monkeypatch.setattr(snapshots, "complete_snapshot", build)
+        story.run_worker()
+        unfinished = story.unfinished_jobs()
+        board = story.served_board(monday)
+    assert unfinished == []
+    assert plans, "no board was built"
+    assert _ranked(board) == dict.fromkeys(tags, 5380)
+    # The build reads its own members' days, not the newer ones.
+    read = _history_rows(plans, ("ranked_day_versions",))
+    assert read < newer // 10, read
+
+
+def _seed_newer_days(connection_info: str, count: int) -> None:
+    """``count`` saved days with ids above every day the story saves, as a
+    board rebuilt weeks after its Reset sees: copies of the story's first
+    day, dated on the days before July 2026, long before its Seasons."""
+    with psycopg.connect(connection_info, autocommit=True) as connection:
+        connection.execute("SET session_replication_role = replica")
+        columns = ", ".join(
+            row[0] for row in connection.execute(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_name = 'ranked_day_versions' AND NOT column_name = ANY(%s)",
+                (["id", "ranked_day_start", "ranked_day_end", "replaces_version_id"],),
+            ).fetchall()
+        )
+        connection.execute(
+            f"""
+            INSERT INTO ranked_day_versions
+                (id, ranked_day_start, ranked_day_end, {columns})
+            OVERRIDING SYSTEM VALUE
+            SELECT 1000000 + row_number() OVER (), start, start + interval '1 day',
+                   {columns}
+            FROM (
+                SELECT timestamptz '2026-07-01 05:00+00' - n * interval '1 day' AS start,
+                       day.*
+                FROM (SELECT * FROM ranked_day_versions ORDER BY id LIMIT 1) AS day,
+                     generate_series(1, %s) AS n
+            ) AS copy
+            """,
+            (count,),
+        )
+        connection.execute("ANALYZE ranked_day_versions")
+
+
+def _history_rows(plans: list[dict], tables: tuple[str, ...] = HISTORY_TABLES) -> int:
+    """Rows the plans read from ``tables``: by default saved profiles and
+    their sightings."""
     def nodes(plan: dict) -> list[dict]:
         return [plan, *(node for child in plan.get("Plans", []) for node in nodes(child))]
 
     return sum(
         int(node["Actual Rows"] * node["Actual Loops"])
         for plan in plans for node in nodes(plan)
-        if node.get("Relation Name") in HISTORY_TABLES
+        if node.get("Relation Name") in tables
     )
