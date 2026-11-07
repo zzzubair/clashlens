@@ -302,7 +302,7 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                                 "generation": 2,
                                 "profile_not_found": 0,
                                 "late_battles": 0,
-                                "reordered": True, "members_changed": 0,
+                                "reordered": True, "members_changed": 0, "official_order": 0,
                                 "correction": correction,
                             }
                         ]

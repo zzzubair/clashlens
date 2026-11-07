@@ -14,8 +14,10 @@ from .analytics import (
     SEASON_DESTRUCTION_ORDERING_RULE_VERSION,
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
+    follow_official_ties,
     latest_change_order_key,
     latest_trophy_changes,
+    season_end_placements,
     tie_order_key,
 )
 from .boundary_manifest import reset_trophies
@@ -437,6 +439,11 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ),
                 )
             )
+            # A Season's last board orders each tie as the game's final ranks.
+            entries = follow_official_ties(entries, season_end_placements(
+                connection, boundary_at,
+                {entry["player_id"]: int(entry["trophies"]) for entry in entries},
+            ))
 
             # A coordinated board counts its exclusions from its frozen
             # inputs below. This scan of every player's profile history,

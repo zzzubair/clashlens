@@ -283,9 +283,11 @@ class Story:
             self.read(tag, at, trophies, season)
             self.read(tag, at + timedelta(minutes=1))
 
-    def history(self, at: datetime, season_end: datetime, finals: dict[str, int]) -> None:
+    def history(self, at: datetime, season_end: datetime, finals: dict[str, int],
+                placements: dict[str, int] | None = None) -> None:
         """Each player's league history read at ``at``: the game's official
-        final total for the Season ending at ``season_end``."""
+        final total for the Season ending at ``season_end``, and their final
+        rank from ``placements``, else 10,568."""
         self._at(at)
         for tag, final in finals.items():
             store_observation(
@@ -298,7 +300,7 @@ class Story:
                 body=json.dumps({"items": [{
                     "leagueSeasonId": str(int(season_end.timestamp())),
                     "leagueTrophies": final, "leagueTierId": 105000036,
-                    "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                    "placement": (placements or {}).get(tag, 10568), "attackWins": 1, "attackLosses": 0,
                     "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
                     "defenseStars": 16, "maxBattles": 8,
                 }]}).encode(),

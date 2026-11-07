@@ -4,11 +4,12 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from fractions import Fraction
+from itertools import groupby
 from time import monotonic
 from typing import Any
 
-from .domain import SEASON_START_TROPHIES, ranked_day_for
-from .profile import normalize_player_tag
+from .domain import RANKED_DAY_DURATION, SEASON_START_TROPHIES, ranked_day_for
+from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 
 # v3 orders equal trophies by the latest trophy change first; v2 by Season
 # average attack destruction; v1 by SHA-256 of the tag alone.
@@ -117,6 +118,52 @@ def latest_trophy_changes(
             {"day_start": day_start, "cutoff": cutoff, "player_ids": player_ids},
         ).fetchall()
     }
+
+
+def season_end_placements(
+    connection: Any, boundary_at: datetime, trophies: dict[int, int]
+) -> dict[int, int]:
+    """At a Season's last Reset, the game's official final rank of each
+    player in ``trophies`` (player to board total) whose league history
+    gives that total as their official Season-end total. Elsewhere none."""
+    if ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_end != boundary_at:
+        return {}
+    rows = connection.execute(
+        """
+        SELECT player_id, league_trophies, placement
+        FROM player_league_history_entries
+        WHERE league_season_id = %s AND league_tier_id = %s
+          AND player_id = ANY(%s::bigint[]) AND placement >= 1
+        """,
+        (str(int(boundary_at.timestamp())), LEGEND_I_TIER_ID, list(trophies)),
+    ).fetchall()
+    return {
+        int(player_id): int(placement)
+        for player_id, total, placement in rows
+        if total is not None and int(total) == trophies[int(player_id)]
+    }
+
+
+# The game's order for equal trophies on a Season's last board (owner, 7
+# November 2026: "final trophies and rank shown after season should show
+# what the game says"). Inside each run of equal trophies, the players with
+# an official final rank (season_end_placements) take the places those
+# players hold, in the game's order; every other player keeps their place.
+# On 2 November 2026 the board ranked #92R8882Y9 2,083rd of a 14-way tie at
+# 5,210 that the game ranked 2,080th.
+def follow_official_ties(
+    entries: list[dict[str, Any]], placements: dict[int, int]
+) -> list[dict[str, Any]]:
+    """``entries``, sorted by trophies, with each tie in the game's order."""
+    ordered = list(entries)
+    for _, run in groupby(range(len(ordered)), key=lambda i: ordered[i]["trophies"]):
+        places = [i for i in run if ordered[i]["player_id"] in placements]
+        official = sorted(
+            (ordered[i] for i in places), key=lambda e: placements[e["player_id"]]
+        )
+        for place, entry in zip(places, official, strict=True):
+            ordered[place] = entry
+    return ordered
 
 
 def unplayed_profile_sql(profile: str) -> str:
