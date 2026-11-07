@@ -1,6 +1,7 @@
 import {
   Suspense,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -35,6 +36,14 @@ import {
 } from "./BoardCards";
 import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "./ArmyCards";
 import { DashboardIcon } from "./DashboardIcon";
+import {
+  CARDS_FROM_LOAD,
+  DASHBOARD_VIEWING,
+  cardReads,
+  cardRefreshStep,
+  dashboardEditStep,
+  outdatedCards,
+} from "./DashboardState";
 import { CardHead, CardNote, cardIcon, updatedAgo } from "./DashboardParts";
 import { LegendDayCard, dayReadAt } from "./LegendDayCard";
 import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
@@ -306,16 +315,6 @@ function DashboardTools({
 }
 
 /** The cards a save makes out of date: their numbers follow the changed settings. */
-function changedCards(before: DashboardSettings, after: DashboardSettings): CardId[] {
-  return [
-    ...(before.goal !== after.goal ? (["goal"] as const) : []),
-    ...(before.cutoffs.join() !== after.cutoffs.join() ? (["cutoffs"] as const) : []),
-    ...(before.group !== after.group || before.groupWindow !== after.groupWindow
-      ? (["group-watch"] as const)
-      : []),
-  ];
-}
-
 function deviceTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -684,21 +683,19 @@ export function Dashboard({
 }) {
   const refresher = useFetcher<DashboardLoaderData>();
   // Cards read again after a save, and cards waiting for that read.
-  const [refreshed, setRefreshed] = useState<CardReads>({});
-  const [stale, setStale] = useState<CardId[]>([]);
+  const [cardData, dispatchCards] = useReducer(cardRefreshStep, CARDS_FROM_LOAD);
+  const { stale } = cardData;
   // The cards' load and the settings they now follow.
   const readWith = useRef({ data, settings });
-  const requested = useRef<CardId[]>([]);
-  const merged = useRef<DashboardLoaderData | undefined>(undefined);
-  const [draft, setDraft] = useState<DashboardSettings["layout"] | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [editingSettings, setEditingSettings] = useState<CardId | null>(null);
+  const [edit, dispatch] = useReducer(dashboardEditStep, DASHBOARD_VIEWING);
+  const editing = edit.mode === "editing";
+  const draft = editing ? edit.draft : null;
+  const sheet = editing ? edit.sheet : null;
+  const adding = sheet?.kind === "adding";
+  const editingSettings = sheet?.kind === "settings" ? sheet.card : null;
+  const dragging = editing ? edit.dragging : null;
   // Done waits for its own save's answer, not an earlier one.
-  const [finishing, setFinishing] = useState<{
-    after: DashboardActionData | undefined;
-  } | null>(null);
-  const [status, setStatus] = useState("");
-  const [dragging, setDragging] = useState<CardId | null>(null);
+  const finishing = editing ? edit.finishing : null;
   const [nowMs, setNowMs] = useState<number | null>(null);
   const [timeZone, setTimeZone] = useState("UTC");
   const basesDay = useBasesDay(tag);
@@ -714,62 +711,37 @@ export function Dashboard({
   const saving = fetcher.state === "submitting";
   const answer = saving ? undefined : fetcher.data;
   const saved = answer?.saved === true;
-  const reads = data === null ? null : { ...data, ...refreshed };
-  for (const card of stale) if (reads) delete reads[card as keyof CardReads];
+  const reads = cardReads(data, cardData);
 
   // Saved settings read again only the cards whose numbers follow them or
   // that have no data yet. A new load's cards follow its own settings.
   useEffect(() => {
     const before = readWith.current;
     readWith.current = { data, settings };
-    if (before.data !== data) {
-      setRefreshed({});
-      setStale([]);
-      return;
+    if (before.data !== data) dispatchCards({ type: "newLoad" });
+    else if (reads !== null && before.settings !== settings) {
+      const cards = outdatedCards(before.settings, settings, reads, hasView);
+      dispatchCards({ type: "outdated", cards });
     }
-    if (reads === null || before.settings === settings) return;
-    const missing = shownCards(settings.layout).filter(
-      (card) => hasView(card) && reads[card] === undefined,
-    );
-    const next = [...changedCards(before.settings, settings), ...missing];
-    if (next.length)
-      setStale((current) => [...new Set([...current, ...next])] as CardId[]);
   }, [data, settings, reads]);
   // One read for every out-of-date card; a newer one replaces it.
   const { load } = refresher;
   const loading = data === null;
   useEffect(() => {
     if (stale.length === 0 || loading) return;
-    requested.current = stale;
+    dispatchCards({ type: "requested", cards: stale });
     void load(dashboardQuery({ player: tag, cards: stale.join(",") }, viewAs));
   }, [stale, tag, viewAs, loading, load]);
   useEffect(() => {
-    const loaded = refresher.data;
-    if (refresher.state !== "idle" || !loaded || merged.current === loaded) return;
-    merged.current = loaded;
-    // A card the answer leaves out, a failed answer, or one for another
-    // player says it could not load.
-    const cards = Object.fromEntries(
-      requested.current.map((card) => [
-        card,
-        loaded.kind === "signed-in" && loaded.selectedTag === tag
-          ? (loaded.cards[card as keyof CardReads] ?? null)
-          : null,
-      ]),
-    ) as CardReads;
-    setRefreshed((current) => ({ ...current, ...cards }));
-    setStale((current) => current.filter((card) => !requested.current.includes(card)));
+    const answer = refresher.data;
+    if (refresher.state === "idle" && answer)
+      dispatchCards({ type: "answered", answer, tag });
   }, [refresher.state, refresher.data, tag]);
   useEffect(() => {
-    if (finishing === null || saving || fetcher.data === finishing.after) return;
-    setFinishing(null);
-    if (fetcher.data?.saved) {
-      setDraft(null);
-      setAdding(false);
-    }
+    if (!saving) dispatch({ type: "answered", answer: fetcher.data });
   }, [finishing, saving, fetcher.data]);
   useEffect(() => {
-    if (saved) setEditingSettings(null);
+    if (saved) dispatch({ type: "saved" });
   }, [saved]);
 
   const save = (next: DashboardSettings) =>
@@ -782,20 +754,13 @@ export function Dashboard({
       { method: "post" },
     );
 
-  const editing = draft !== null;
   const cards = shownCards(editing ? draft : settings.layout);
   const wide = cardPlaces(cards, 3, !editing);
   const medium = cardPlaces(cards, 2, !editing);
-  const change = (next: CardId[], message: string) => {
-    setDraft(next);
-    setStatus(message);
-  };
+  const change = (next: CardId[], message: string) =>
+    dispatch({ type: "change", draft: next, status: message });
   // Cancel, or Escape with no sheet open, leaves the saved layout as it was.
-  const cancel = () => {
-    setDraft(null);
-    setAdding(false);
-    setStatus("Changes discarded");
-  };
+  const cancel = () => dispatch({ type: "cancel" });
   const sheetOpen = adding || editingSettings !== null;
   useEffect(() => {
     if (!editing || sheetOpen) return;
@@ -824,17 +789,9 @@ export function Dashboard({
       const before = stacked
         ? event.clientY < box.top + box.height / 2
         : event.clientX < box.left + box.width / 2;
-      setDraft((current) => {
-        const list = shownCards(current ?? null).filter((card) => card !== dragging);
-        list.splice(list.indexOf(over) + (before ? 0 : 1), 0, dragging);
-        const was = shownCards(current ?? null);
-        return list.join() === was.join() ? current : list;
-      });
+      dispatch({ type: "dragOver", over, before });
     };
-    const stop = () => {
-      setDragging(null);
-      setStatus(`Moved ${CARDS[dragging].title}`);
-    };
+    const stop = () => dispatch({ type: "dragEnd" });
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
@@ -873,10 +830,7 @@ export function Dashboard({
           }
           customise={
             viewAs === null
-              ? () => {
-                  setDraft(settings.layout ?? "default");
-                  setStatus("");
-                }
+              ? () => dispatch({ type: "customise", layout: settings.layout })
               : null
           }
         />
@@ -888,13 +842,13 @@ export function Dashboard({
             {draft === "default" ? "Default layout" : "Your own layout"}
           </span>
           <span className="sr-only" role="status">
-            {status}
+            {edit.status}
           </span>
           <button
             type="button"
             className="button button-secondary"
             disabled={saving}
-            onClick={() => setAdding(true)}
+            onClick={() => dispatch({ type: "openAdd" })}
           >
             <DashboardIcon name="plus" /> Add
             <span className="dash-editbar-long"> a card</span>
@@ -904,10 +858,7 @@ export function Dashboard({
             type="button"
             className="button button-secondary"
             disabled={saving || draft === "default"}
-            onClick={() => {
-              setDraft("default");
-              setStatus("Back to the default layout");
-            }}
+            onClick={() => dispatch({ type: "useDefault" })}
           >
             Use default<span className="dash-editbar-long"> layout</span>
           </button>
@@ -924,7 +875,7 @@ export function Dashboard({
             className="button button-primary"
             disabled={saving}
             onClick={() => {
-              setFinishing({ after: fetcher.data });
+              dispatch({ type: "done", after: fetcher.data });
               save({ ...settings, layout: draft });
             }}
           >
@@ -967,7 +918,7 @@ export function Dashboard({
                   onPointerDown={(event) => {
                     if (event.button > 0 || saving) return;
                     event.preventDefault();
-                    setDragging(card);
+                    dispatch({ type: "dragStart", card });
                   }}
                 >
                   ⠿
@@ -985,7 +936,7 @@ export function Dashboard({
                     className="button button-secondary dash-card-settings"
                     aria-label={`${CARDS[card].title} settings`}
                     disabled={saving}
-                    onClick={() => setEditingSettings(card)}
+                    onClick={() => dispatch({ type: "openSettings", card })}
                   >
                     <DashboardIcon name="gear" />
                     <span className="dash-card-settings-label">Settings</span>
@@ -1040,10 +991,7 @@ export function Dashboard({
           <button
             type="button"
             className="button button-primary"
-            onClick={() => {
-              if (!editing) setDraft([]);
-              setAdding(true);
-            }}
+            onClick={() => dispatch({ type: "openAdd" })}
           >
             <DashboardIcon name="plus" /> Add a card
           </button>
@@ -1053,7 +1001,7 @@ export function Dashboard({
         <AddSheet
           cards={addableCards(cards)}
           saving={saving}
-          onClose={() => setAdding(false)}
+          onClose={() => dispatch({ type: "closeAdd" })}
           onAdd={(card) =>
             change([...cards, card], `Added ${CARDS[card].title} at the end`)
           }
@@ -1066,7 +1014,7 @@ export function Dashboard({
           saving={saving}
           error={error}
           onSave={save}
-          onClose={() => setEditingSettings(null)}
+          onClose={() => dispatch({ type: "closeSettings" })}
         />
       ) : null}
       {firstVisit ? (
@@ -1075,8 +1023,7 @@ export function Dashboard({
           onPick={(choice) => {
             if (choice === "default") return save({ ...settings, layout: "default" });
             save({ ...settings, layout: [] });
-            setDraft([]);
-            setAdding(true);
+            dispatch({ type: "openAdd" });
           }}
         />
       ) : null}

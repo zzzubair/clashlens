@@ -25,7 +25,11 @@ vi.mock("react-router", () => ({
   useNavigation: () => ({ state: "idle" }),
 }));
 
-import { nextSeasonReset, useSeasonReread } from "../../app/components/SeasonReread";
+import {
+  nextSeasonReset,
+  seasonCheckReads,
+  useSeasonReread,
+} from "../../app/components/SeasonReread";
 
 let cleanup: (() => void) | undefined;
 let tab: EventTarget & { hidden: boolean };
@@ -241,4 +245,28 @@ it("schedules Reset precisely even when it is more than the browser timeout limi
   await vi.advanceTimersByTimeAsync(1);
   expect(mocks.revalidate).toHaveBeenCalledTimes(1);
   expect(mocks.expired).toHaveBeenCalledWith(AFTER);
+});
+
+it("reads only when visible and idle, and a slipped clock skips the one-minute wait", () => {
+  const check = {
+    hidden: false,
+    busy: false,
+    due: true,
+    trust: "settled" as const,
+    sinceRead: 60_000,
+  };
+  expect(seasonCheckReads(check)).toBe(true);
+  expect(seasonCheckReads({ ...check, hidden: true })).toBe(false);
+  expect(seasonCheckReads({ ...check, busy: true })).toBe(false);
+  expect(seasonCheckReads({ ...check, sinceRead: 59_999 })).toBe(false);
+  // Nothing due and a trusted clock: no read.
+  expect(seasonCheckReads({ ...check, due: false })).toBe(false);
+  // A slipped clock reads at once; an asked one waits out the minute.
+  expect(seasonCheckReads({ ...check, due: false, trust: "slipped", sinceRead: 0 })).toBe(
+    true,
+  );
+  expect(seasonCheckReads({ ...check, due: false, trust: "asked", sinceRead: 0 })).toBe(
+    false,
+  );
+  expect(seasonCheckReads({ ...check, due: false, trust: "asked" })).toBe(true);
 });

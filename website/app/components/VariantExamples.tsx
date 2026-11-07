@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 
 import { battles, formatRate, starRate, type ArmyRow } from "../lib/army-stats";
 import type { ArmyVariantExamples } from "../lib/contracts";
+import { variantExamplesRead } from "../lib/detail-reads";
 import type { VariantExamplesResponse } from "../routes/army-variant-examples";
 import { ArmyPortraits } from "./ArmyPortraits";
 
@@ -194,21 +195,21 @@ function VariantExamples({
   useEffect(() => {
     void load(url);
   }, [load, url]);
-  const examples = fetcher.data?.examples;
+  const read = variantExamplesRead(fetcher.data);
   return (
     <div
       className="analytics-examples"
       aria-live="polite"
       aria-busy={fetcher.state !== "idle"}
     >
-      {examples === undefined ? (
+      {read.phase === "loading" ? (
         <p className="analytics-examples-rule">Loading armies…</p>
-      ) : examples === null ? (
+      ) : read.phase === "failed" ? (
         <p className="analytics-examples-rule">
           These armies could not load. Close and open {label} to try again.
         </p>
       ) : (
-        <ExampleArmies id={id} label={label} attacks={attacks} examples={examples} />
+        <ExampleArmies id={id} label={label} attacks={attacks} examples={read.examples} />
       )}
     </div>
   );
